@@ -12,15 +12,8 @@ from typing import Sequence
 from execution.personal_paper_service import PersonalPaperExecutionRejected
 from paper_runtime.personal_snapshot import PersonalSnapshotError
 from research.dependency_closure import PlanDependencyClosureError
-from research.personal_base_sleeve import (
-    BASE_COHORT_ID,
-    BASE_SLEEVE_ID,
-    BASE_UNIVERSE_ID,
-    PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA,
-    PERSONAL_BASE_SLEEVE_RANKING_ROLE,
-    PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA,
-    PERSONAL_BASE_SLEEVE_ROLE,
-)
+from research.personal_base_sleeve import PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA
+from research.factor_cohorts import DEFAULT_FACTOR_COHORT_ID
 from research.personal_service import (
     DEFAULT_PERSONAL_UNIVERSE_ID,
     PERSONAL_EXECUTABLE_COHORT_IDS,
@@ -38,7 +31,9 @@ def _parser() -> argparse.ArgumentParser:
         prog="qp-research",
         description=(
             "Run deterministic DRAFT-only research against an immutable copy "
-            "of one SQLite snapshot."
+            "of one SQLite snapshot. Default factor selection is "
+            f"{DEFAULT_FACTOR_COHORT_ID} (AM-signal same-day PM-close). "
+            "Explicit legacy *-v1 cohorts remain next-close replay."
         ),
     )
     parser.add_argument("--db", required=True, type=Path)
@@ -63,7 +58,11 @@ def _parser() -> argparse.ArgumentParser:
     selection.add_argument(
         "--cohort",
         choices=PERSONAL_EXECUTABLE_COHORT_IDS,
-        help="closed four-candidate factor cohort",
+        help=(
+            "closed four-candidate factor cohort; omit with no --spec to use "
+            f"{DEFAULT_FACTOR_COHORT_ID} (AM-signal same-day PM-close). "
+            "Legacy *-v1 ids stay next-close replay"
+        ),
     )
     selection.add_argument(
         "--spec",
@@ -96,6 +95,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         specs = _load_specs(args.spec)
+        cohort_id = args.cohort
+        if specs is None and cohort_id is None:
+            cohort_id = DEFAULT_FACTOR_COHORT_ID
         result = PersonalResearchService().run(
             PersonalResearchRequest(
                 source_db=args.db,
@@ -103,7 +105,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 period_end=args.end,
                 output_root=args.output,
                 specs=specs,
-                cohort_id=args.cohort,
+                cohort_id=cohort_id,
                 universe_id=args.universe,
             )
         )
@@ -126,27 +128,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     base_sleeve_path = getattr(result, "base_sleeve_artifact_path", None)
-    base_sleeve_digest = getattr(result, "base_sleeve_artifact_digest", None)
-    base_sleeve_archive_member = getattr(
-        result, "base_sleeve_archive_member", None
-    )
-    base_sleeve_artifact = (
-        None
-        if base_sleeve_path is None
-        else {
-            "schema_version": PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA,
-            "artifact_schema_version": PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA,
-            "path": str(base_sleeve_path),
-            "archive_member": base_sleeve_archive_member,
-            "sha256": base_sleeve_digest,
-            "strategy_id": BASE_SLEEVE_ID,
-            "cohort_id": BASE_COHORT_ID,
-            "universe_id": BASE_UNIVERSE_ID,
-            "role": PERSONAL_BASE_SLEEVE_ROLE,
-            "ranking_role": PERSONAL_BASE_SLEEVE_RANKING_ROLE,
-            "candidate_count_contribution": 0,
-        }
-    )
+    returned_reference = getattr(result, "base_sleeve_artifact", None)
+    if isinstance(returned_reference, dict):
+        base_sleeve_artifact = dict(returned_reference)
+        if base_sleeve_path is not None:
+            base_sleeve_artifact["path"] = str(base_sleeve_path)
+        if base_sleeve_artifact.get("schema_version") != PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA:
+            raise PersonalResearchInputError(
+                "base sleeve reference schema mismatch"
+            )
+    elif base_sleeve_path is not None:
+        raise PersonalResearchInputError(
+            "base sleeve artifact path was emitted without its reference"
+        )
+    else:
+        base_sleeve_artifact = None
     print(
         json.dumps(
             {
@@ -163,6 +159,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "cohort_digest": result.cohort_digest,
                 "universe_id": result.universe_id,
                 "universe_rule_digest": result.universe_rule_digest,
+                "execution_mode": getattr(
+                    result, "execution_mode", "next_close"
+                ),
+                "execution_contract_digest": getattr(
+                    result, "execution_contract_digest", None
+                ),
                 "base_sleeve_artifact": base_sleeve_artifact,
                 "non_candidate_source_backtest_count": getattr(
                     result, "non_candidate_source_backtest_count", 0

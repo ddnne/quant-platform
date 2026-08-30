@@ -67,6 +67,12 @@ CREATE TABLE IF NOT EXISTS jquants_daily_bars (
     adjustment_low   REAL,
     adjustment_close REAL,
     adjustment_volume REAL,
+    morning_adjustment_close REAL,
+    morning_turnover_value REAL,
+    morning_adjustment_volume REAL,
+    afternoon_adjustment_close REAL,
+    afternoon_turnover_value REAL,
+    afternoon_adjustment_volume REAL,
     raw_payload      TEXT,
     PRIMARY KEY (source, code, date)
 );

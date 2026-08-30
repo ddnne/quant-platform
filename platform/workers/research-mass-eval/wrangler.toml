@@ -37,7 +37,7 @@ preview_urls = false
 class_name = "PersonalResearchContainer"
 image = "./Dockerfile"
 image_build_context = "../../.."
-max_instances = 2
+max_instances = 8
 instance_type = "standard-4"
 rollout_active_grace_period = 11400
 
@@ -63,8 +63,14 @@ binding = "AI_GATEWAY"
 service = "quant-platform-research-ai-gateway"
 entrypoint = "GatewayService"
 
+[[services]]
+binding = "JQUANTS_ACQUISITION"
+service = "quant-platform-ingestion-secrets"
+entrypoint = "IngestionSecretsService"
+
 [vars]
-MASS_EVAL_VERSION = "research-mass-eval/v146-direct-spawn"
+ENVIRONMENT = "production"
+MASS_EVAL_VERSION = "research-mass-eval/v149-am-pm-panels"
 MASS_EVAL_WAVE = "research-mass-eval"
 # Freezes — do not flip operational gates from this worker.
 MASS_RESEARCH = "NO-GO"
@@ -91,7 +97,7 @@ preview_urls = false
 class_name = "PersonalResearchContainer"
 image = "./Dockerfile"
 image_build_context = "../../.."
-max_instances = 2
+max_instances = 8
 instance_type = "standard-4"
 rollout_active_grace_period = 11400
 
@@ -111,8 +117,14 @@ binding = "AI_GATEWAY"
 service = "quant-platform-research-ai-gateway"
 entrypoint = "GatewayService"
 
+[[env.production.services]]
+binding = "JQUANTS_ACQUISITION"
+service = "quant-platform-ingestion-secrets"
+entrypoint = "IngestionSecretsService"
+
 [env.production.vars]
-MASS_EVAL_VERSION = "research-mass-eval/v146-direct-spawn"
+ENVIRONMENT = "production"
+MASS_EVAL_VERSION = "research-mass-eval/v149-am-pm-panels"
 MASS_EVAL_WAVE = "research-mass-eval"
 MASS_RESEARCH = "NO-GO"
 PHASE7 = "OFF"

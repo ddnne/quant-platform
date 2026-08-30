@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pit.api as api_module
 import pit.query as query_module
 import pytest
 from core.universe import load_master
@@ -257,6 +258,60 @@ def test_latest_n_is_exact_for_generic_only_compatibility_db(tmp_path: Path) -> 
     assert [(row["date"], row["close"]) for row in result.rows] == [
         ("2025-04-03", 102.0),
         ("2025-04-04", 103.0),
+    ]
+
+
+def test_latest_n_is_applied_as_sql_limit_on_catalog_partition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "catalog-limit.sqlite"
+    days = [f"2025-03-{day:02d}" for day in range(1, 21)]
+    with SqliteStore(path) as store:
+        store.upsert(
+            "jquants_records",
+            [
+                _generic_bar(
+                    day,
+                    float(100 + offset),
+                    available_at=f"{day}T15:30:00+09:00",
+                )
+                for offset, day in enumerate(days)
+            ],
+        )
+
+    catalog_calls: list[dict] = []
+    decoded_lengths: list[int] = []
+    real_catalog = api_module._catalog_partition_rows
+    real_decode = api_module._catalog_daily_bars
+
+    def spy_catalog(*args, **kwargs):
+        catalog_calls.append(dict(kwargs))
+        return real_catalog(*args, **kwargs)
+
+    def spy_decode(rows):
+        decoded_lengths.append(len(rows))
+        return real_decode(rows)
+
+    monkeypatch.setattr(api_module, "_catalog_partition_rows", spy_catalog)
+    monkeypatch.setattr(api_module, "_catalog_daily_bars", spy_decode)
+
+    unbounded = get_equity_bars_daily(as_of=AS_OF, code=CODE, db_path=path)
+    bounded = get_equity_bars_daily(
+        as_of=AS_OF, code=CODE, latest_n=2, db_path=path
+    )
+
+    limited_calls = [
+        call for call in catalog_calls if call.get("limit") is not None
+    ]
+    assert limited_calls
+    assert all(call["limit"] == 2 for call in limited_calls)
+    assert all(length <= 2 for length in decoded_lengths[-1:])
+    assert [(row["date"], row["close"]) for row in bounded.rows] == [
+        (row["date"], row["close"]) for row in unbounded.rows[-2:]
+    ]
+    assert [(row["date"], row["close"]) for row in bounded.rows] == [
+        ("2025-03-19", 118.0),
+        ("2025-03-20", 119.0),
     ]
 
 

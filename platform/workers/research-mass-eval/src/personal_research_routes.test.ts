@@ -59,4 +59,112 @@ describe("personal research HTTP route", () => {
     expect(response.status).toBe(202);
     expect(submit).toHaveBeenCalledWith(expect.anything(), BODY);
   });
+
+  it("dispatches a frozen AM cohort request", async () => {
+    const submit = vi.fn(async () => new Response("accepted", { status: 202 }));
+    const body = {
+      ...BODY,
+      cohort_id: "diverse-core-am-pm-v1",
+      job_id: "am-core-route",
+    };
+    const response = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/personal-research", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-mass-eval-token": "secret",
+        },
+        body: JSON.stringify(body),
+      }),
+      env(),
+      { ...massHandlers, submitPersonalResearch: submit },
+    );
+    expect(response.status).toBe(202);
+    expect(submit).toHaveBeenCalledWith(expect.anything(), body);
+  });
+});
+
+describe("personal snapshot and batch HTTP routes", () => {
+  it("token-gates snapshot build before dispatch", async () => {
+    const submit = vi.fn();
+    const response = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/personal-snapshot-build", {
+        method: "POST",
+        body: JSON.stringify({
+          job_id: "snap-1",
+          period_start: "2023-01-01",
+          period_end: "2024-12-31",
+        }),
+      }),
+      env(),
+      { ...massHandlers, submitPersonalSnapshotBuild: submit },
+    );
+    expect(response.status).toBe(401);
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("rejects snapshot POST bodies over 8 KiB and chunked input", async () => {
+    const submit = vi.fn();
+    const oversized = "x".repeat(8 * 1024 + 1);
+    const tooBig = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/personal-snapshot-build", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(oversized.length),
+          "x-mass-eval-token": "secret",
+        },
+        body: oversized,
+      }),
+      env(),
+      { ...massHandlers, submitPersonalSnapshotBuild: submit },
+    );
+    expect(tooBig.status).toBe(413);
+    const chunked = await dispatchMassEvalFetch(
+      {
+        method: "POST",
+        url: "https://example.test/v1/personal-snapshot-build",
+        headers: {
+          get(name: string) {
+            const key = name.toLowerCase();
+            if (key === "content-length") return null;
+            if (key === "x-mass-eval-token") return "secret";
+            if (key === "transfer-encoding") return "chunked";
+            return null;
+          },
+        },
+        arrayBuffer: async () => {
+          throw new Error("must not buffer a chunked snapshot POST");
+        },
+      } as unknown as Request,
+      env(),
+      { ...massHandlers, submitPersonalSnapshotBuild: submit },
+    );
+    expect(chunked.status).toBe(400);
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("rejects nine batch jobs before dispatch", async () => {
+    const submit = vi.fn();
+    const jobs = Array.from({ length: 9 }, (_, index) => ({
+      ...BODY,
+      job_id: `job-${index}`,
+    }));
+    const body = JSON.stringify({ jobs });
+    const response = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/personal-research-batch", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(body.length),
+          "x-mass-eval-token": "secret",
+        },
+        body,
+      }),
+      env(),
+      { ...massHandlers, submitPersonalResearchJobs: submit },
+    );
+    expect(response.status).toBe(400);
+    expect(submit).not.toHaveBeenCalled();
+  });
 });

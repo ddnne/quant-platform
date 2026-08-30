@@ -71,6 +71,17 @@ The input is closed:
 }
 ```
 
+`POST /v1/personal-snapshot-build` builds one bounded v4 personal-history SQLite
+on the Container's ephemeral disk, gzips it, and stores it immutably in R2 at
+`research/personal/snapshots/sha256=<raw-64-hex>.sqlite.gz`. The request is
+closed: `job_id`, `period_start`, `period_end`, and optional `lookback_sessions`
+(0-252). End dates must not be in the future and must fall inside a closed
+J-Quants calendar month (the governed acquisition RPC cannot serve the current
+month). Maximum span is 2,200 calendar days; do not ask for 2008-2026 in one
+object. Warmup `data_start` stays distinct from the evaluation period in the
+terminal manifest. `POST /v1/personal-research-batch` accepts 1..8 unique
+closed personal-research jobs and dispatches them concurrently.
+
 The Container independently downloads and hashes the snapshot, runs SQLite
 `quick_check`, then calls `scripts/qp-research`. Results are immutable:
 
@@ -85,9 +96,13 @@ only when every input is identical.
 
 Cost and safety bounds are structural: one `standard-4` Container runs at most
 four strategy child processes after one shared snapshot/PIT/data-quality
-preparation. `max_instances=2` is rollout headroom for legacy and runner-bound
-generations, not pre-warmed capacity; ordinary jobs still use one named
-Container and exit after terminal evidence. The base sleeve, when required, is
+preparation. Distinct cohort/window jobs use job-scoped Container names derived
+from runner version, job kind, and `job_id`, so independent jobs can occupy
+separate instances. `max_instances=8` is a hard cap on concurrent billed
+instances, not pre-warmed capacity; a ninth submitted job is rejected before
+dispatch on the batch route. Snapshot builds use one singleton Container
+because J-Quants acquisition is globally rate-limited. Every Container exits
+after terminal evidence. The base sleeve, when required, is
 computed before candidate fan-out. Candidate results are restored to registry
 order before the exact-four aggregate is written. The route retains its 4 GiB
 snapshot ceiling, 165-minute process-group timeout and 180-minute outer
@@ -112,9 +127,13 @@ current `/ready` identity. Only a positively identified
 older runner may be destroyed and re-probed once; an unavailable or malformed
 probe fails closed without destroying the instance.
 There is no Cron, Queue, model call,
-public Internet, promotion or live order. The Container can reach only the two
-personal R2 prefixes via a Worker-side streaming adapter, and R2 verifies the
-streamed result checksum before accepting it.
+public Internet, promotion or live order. The Container `enableInternet` flag
+stays false. It can reach only the personal R2 prefixes and the closed
+`history.source` acquisition host via Worker-side adapters. `history.source`
+accepts only the four personal history datasets through the existing
+`IngestionSecretsService.fetch_governed_page` Service Binding; it does not
+expose the legacy public proxy or duplicate J-Quants credentials. R2 verifies
+streamed checksums before accepting objects.
 
 `POST /v1/personal-vol-research` runs four fixed ratio-only volatility screens
 over the 2021, 2023, and 2025 immutable R2 panels. The older 2015, 2017, and

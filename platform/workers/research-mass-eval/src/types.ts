@@ -1,9 +1,11 @@
+import type { JquantsAcquisitionRpc } from "../../ingestion-secrets/src/jquants_acquisition_types";
 import type { GatewayRpc } from "../../research-ai-gateway/src/gateway_rpc";
 import type { PersonalResearchContainer } from "./personal_research_container";
 
 /** Generated bindings with typed Gateway RPC; secrets stay string-only. */
-export type Env = Omit<Cloudflare.Env, "AI_GATEWAY"> & {
+export type Env = Omit<Cloudflare.Env, "AI_GATEWAY" | "JQUANTS_ACQUISITION"> & {
   AI_GATEWAY: GatewayRpc;
+  JQUANTS_ACQUISITION?: JquantsAcquisitionRpc;
   MASS_EVAL_TOKEN?: string;
   PERSONAL_RESEARCH_CONTAINER?: DurableObjectNamespace<PersonalResearchContainer>;
 };

@@ -47,6 +47,15 @@ describe("personal vol comprehensive performance", () => {
     expect(metrics.fill_count).toBeNull();
   });
 
+  it("sums fill_count when the daily path records fills", () => {
+    const daily = points([0.01, -0.02, 0]);
+    daily[0].fill_count = 4;
+    daily[1].fill_count = 0;
+    daily[2].fill_count = 2;
+
+    expect(personalVolPerformance(daily, true).fill_count).toBe(6);
+  });
+
   it("never calls a non-contiguous stitch CAGR", () => {
     const metrics = personalVolPerformance(points([0.01, -0.005, 0.02]), false);
 

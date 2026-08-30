@@ -1,8 +1,11 @@
 import { putJsonCreateOnly, serializedJsonBytes } from "./http";
+import { personalJobContainerName } from "./personal_research_contract";
 import {
-  personalResearchContainer,
-  verifiedPersonalResearchContainer,
-} from "./personal_research_runner";
+  durablePersonalJobStatus,
+  submittedStateDocument,
+  writeSubmittedState,
+} from "./personal_job_state";
+import { verifiedPersonalResearchContainer } from "./personal_research_runner";
 import {
   PERSONAL_SVI_2023_COHORT_ID,
   PERSONAL_SVI_2023_DECISION_CUTOFF,
@@ -346,8 +349,22 @@ export async function submitPersonalSvi2023(
     });
   }
   const requestDigest = await personalSviJobRequestDigest(request, inputPut.digest);
+  const conflict = await writeSubmittedState(
+    env,
+    submittedStateDocument({
+      jobId: request.job_id,
+      requestDigest,
+      kind: "svi",
+      deploymentId: env.CF_VERSION_METADATA?.id ?? "unknown",
+      runnerVersion: PERSONAL_SVI_2023_RUNNER_VERSION,
+    }),
+  );
+  if (conflict) return conflict;
   try {
-    const target = await verifiedPersonalResearchContainer(env);
+    const target = await verifiedPersonalResearchContainer(
+      env,
+      await personalJobContainerName("svi", request.job_id),
+    );
     return await target.fetch(
       new Request("http://container/v1/run-svi-2023", {
         method: "POST",
@@ -385,26 +402,5 @@ export async function personalSvi2023Status(
   env: Env,
   jobId: string,
 ): Promise<Response> {
-  const terminal = await storedTerminal(env, jobId);
-  if (terminal) {
-    return responseJson({
-      ok: terminal.status === "COMPLETED",
-      durable: true,
-      job: terminal,
-      draft_only: true,
-      screening_only: true,
-      go: false,
-    });
-  }
-  try {
-    return await personalResearchContainer(env).fetch(
-      new Request(`http://container/v1/jobs/${encodeURIComponent(jobId)}`),
-    );
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    return responseJson(
-      { ok: false, error: "personal_svi_status_unavailable", detail, go: false },
-      503,
-    );
-  }
+  return durablePersonalJobStatus(env, "svi", jobId);
 }

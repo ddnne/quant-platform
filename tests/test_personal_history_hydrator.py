@@ -135,6 +135,12 @@ class _HistoryClient:
                     "AdjustmentVolume": 1_000 * ordinal,
                     "TurnoverValue": 1_000_000 * ordinal,
                     "MktCap": 10_000_000 * ordinal,
+                    "MAdjC": 10 + ordinal,
+                    "AAdjC": 20 + ordinal,
+                    "MVa": 100 * ordinal,
+                    "AVa": 200 * ordinal,
+                    "MAdjVo": 10 * ordinal,
+                    "AAdjVo": 20 * ordinal,
                     "Open": 90,
                     "CompanyName": "must-not-be-kept",
                 }
@@ -322,6 +328,13 @@ def test_hydrator_pit_timing_compression_compaction_and_draft_boundary(tmp_path)
         assert row["low"] is None
         assert row["close"] is not None
         assert row["market_cap"] is not None
+        ordinal = int(row["close"]) - 100
+        assert row["morning_adjustment_close"] == float(10 + ordinal)
+        assert row["afternoon_adjustment_close"] == float(20 + ordinal)
+        assert row["morning_turnover_value"] == float(100 * ordinal)
+        assert row["afternoon_turnover_value"] == float(200 * ordinal)
+        assert row["morning_adjustment_volume"] == float(10 * ordinal)
+        assert row["afternoon_adjustment_volume"] == float(20 * ordinal)
     pit_bars = get_equity_bars_daily(
         as_of="2025-01-08T15:30:00+09:00", db_path=db
     )
@@ -344,7 +357,9 @@ def test_hydrator_pit_timing_compression_compaction_and_draft_boundary(tmp_path)
     ).fetchone()
     evidence = json.loads(segment["page_evidence_json"])
     assert evidence[0]["row_count"] == 4
+    assert evidence[0]["row_count"] == segment["rows_fetched"]
     assert len(evidence[0]["sha256"]) == 64
+    assert segment["selection_evidence_json"] is None
     assert segment["completeness_claim"] == "NONE"
     assert segment["observed_ratio"] == 1.0
     assert str(segment["facts_digest"]).startswith("sha256:")
@@ -418,16 +433,23 @@ def test_resume_is_idempotent_and_refetches_only_failed_segment(tmp_path):
 def test_older_compact_format_cannot_resume_without_refetch(tmp_path) -> None:
     store = SqliteStore(tmp_path / "old-format.sqlite")
     PersonalHistoryHydrator(client=_HistoryClient(), store=store, plan=_plan())
-    store._conn.execute(
-        "UPDATE personal_history_manifest SET format='personal-draft-history/v1' "
-        "WHERE singleton=1"
-    )
-    store._conn.commit()
-
-    with pytest.raises(PersonalHistoryError, match="older compact format"):
-        PersonalHistoryHydrator(
-            client=_HistoryClient(), store=store, plan=_plan()
+    assert store._conn.execute(
+        "SELECT format FROM personal_history_manifest WHERE singleton=1"
+    ).fetchone()[0] == "personal-draft-history/v4"
+    for older in (
+        "personal-draft-history/v1",
+        "personal-draft-history/v3",
+    ):
+        store._conn.execute(
+            "UPDATE personal_history_manifest SET format=? WHERE singleton=1",
+            (older,),
         )
+        store._conn.commit()
+
+        with pytest.raises(PersonalHistoryError, match="older compact format"):
+            PersonalHistoryHydrator(
+                client=_HistoryClient(), store=store, plan=_plan()
+            )
 
     store.close()
 
@@ -447,6 +469,12 @@ def test_typed_bar_materialization_is_atomic_and_idempotent(tmp_path):
                 "Volume": 1_000,
                 "AdjustmentVolume": 900,
                 "TurnoverValue": 100_000,
+                "MAdjC": 51,
+                "AAdjC": 61,
+                "MVa": 10_000,
+                "AVa": 20_000,
+                "MAdjVo": 90,
+                "AAdjVo": 110,
             }
         ],
         trading_day="2025-01-06",
@@ -481,6 +509,12 @@ def test_typed_bar_materialization_is_atomic_and_idempotent(tmp_path):
     assert len(bars) == 1
     assert bars[0]["close"] == 101.0
     assert bars[0]["adjustment_close"] == 102.0
+    assert bars[0]["morning_adjustment_close"] == 51.0
+    assert bars[0]["afternoon_adjustment_close"] == 61.0
+    assert bars[0]["morning_turnover_value"] == 10_000.0
+    assert bars[0]["afternoon_turnover_value"] == 20_000.0
+    assert bars[0]["morning_adjustment_volume"] == 90.0
+    assert bars[0]["afternoon_adjustment_volume"] == 110.0
     assert bars[0]["raw_payload"] is None
     assert hydrator._materialize_typed_bars() == 0
     assert _typed_bars(store) == bars
@@ -504,6 +538,52 @@ def test_typed_bar_materialization_is_atomic_and_idempotent(tmp_path):
     store._conn.commit()
     with pytest.raises(PersonalHistoryError, match="revisions are forbidden"):
         hydrator._validate_draft_boundary()
+    store.close()
+
+
+def test_session_columns_do_not_fall_back_to_full_day_adjustment(tmp_path):
+    store = SqliteStore(tmp_path / "full-day-only.sqlite")
+    hydrator = PersonalHistoryHydrator(
+        client=_HistoryClient(), store=store, plan=_plan()
+    )
+    rows = _compact_bars(
+        [
+            {
+                "Code": "1001",
+                "Date": "2025-01-06",
+                "Close": 101,
+                "AdjustmentClose": 102,
+                "Volume": 1_000,
+                "TurnoverValue": 100_000,
+            }
+        ],
+        trading_day="2025-01-06",
+        scope_union=frozenset({"1001"}),
+        ingested_at="2025-01-06T16:00:00+09:00",
+    )
+    payload = json.loads(rows[0]["payload"])
+    assert "MorningAdjustmentClose" not in payload
+    assert "AfternoonAdjustmentClose" not in payload
+    store.upsert("jquants_records", rows)
+    store._conn.execute(
+        "INSERT INTO personal_history_segments ("
+        "dataset,segment_id,query_start,query_end,query_params,state,"
+        "pit_policy,rows_fetched,rows_written) "
+        "VALUES ('equities_bars_daily','bars:2025-01-06',"
+        "'2025-01-06','2025-01-06','{}','OBSERVED',?,1,1)",
+        ("canonical_session_close/v1",),
+    )
+    store._conn.commit()
+    assert hydrator._materialize_typed_bars() == 1
+    bars = _typed_bars(store)
+    assert len(bars) == 1
+    assert bars[0]["adjustment_close"] == 102.0
+    assert bars[0]["morning_adjustment_close"] is None
+    assert bars[0]["afternoon_adjustment_close"] is None
+    assert bars[0]["morning_turnover_value"] is None
+    assert bars[0]["afternoon_turnover_value"] is None
+    assert bars[0]["morning_adjustment_volume"] is None
+    assert bars[0]["afternoon_adjustment_volume"] is None
     store.close()
 
 

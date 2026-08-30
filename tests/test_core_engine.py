@@ -27,7 +27,7 @@ from core import (
     standard_cost,
     stress_cost,
 )
-from core.execution import close_as_of, open_as_of
+from core.execution import close_as_of, morning_close_as_of, open_as_of
 from core.strategies.buy_hold import BuyHold
 from core.strategy_protocol import BarContext, OrderIntent
 from core.universe import (
@@ -688,6 +688,7 @@ def test_open_and_close_as_of_helpers():
     assert close_as_of("2025-04-01") == "2025-04-01T15:30:00+09:00"
     assert close_as_of("2024-10-31") == "2024-10-31T15:00:00+09:00"
     assert open_as_of("2025-04-01") == "2025-04-01T09:00:00+09:00"
+    assert morning_close_as_of("2025-04-01") == "2025-04-01T11:30:00+09:00"
 
 
 if __name__ == "__main__":

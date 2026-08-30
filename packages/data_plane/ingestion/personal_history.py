@@ -43,7 +43,7 @@ PERSONAL_HISTORY_DATASETS: tuple[str, ...] = (
     "fins_summary",
     "equities_bars_daily",
 )
-PERSONAL_HISTORY_FORMAT = "personal-draft-history/v3"
+PERSONAL_HISTORY_FORMAT = "personal-draft-history/v4"
 PERSONAL_RESEARCH_STATE = "PERSONAL_DRAFT"
 PERSONAL_COMPLETENESS_CLAIM = "NONE"
 PERSONAL_CONTROLLED_ELIGIBILITY = "FORBIDDEN"
@@ -276,26 +276,163 @@ def _page_row_count(body: bytes) -> int:
     return 0
 
 
-def _page_evidence(fetch_result: Any) -> tuple[list[dict[str, Any]], str]:
+def _page_digest_hex(value: Any) -> str:
+    digest = str(value or "")
+    if digest.startswith("sha256:"):
+        digest = digest[7:]
+    if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+        raise PersonalHistoryError("source page digest is missing")
+    return digest
+
+
+def _source_page_descriptor(ordinal: int, page: Any) -> dict[str, Any]:
+    body = getattr(page, "response_body", None)
+    stored_digest = getattr(page, "body_digest", None)
+    if body is not None:
+        raw = bytes(body)
+        digest = hashlib.sha256(raw).hexdigest()
+        if stored_digest is not None and _page_digest_hex(stored_digest) != digest:
+            raise PersonalHistoryError("page body digest does not match bytes")
+        row_count = _page_row_count(raw)
+        declared = getattr(page, "row_count", None)
+        if declared is not None and int(declared) != row_count:
+            raise PersonalHistoryError("page row count does not match body")
+    else:
+        digest = _page_digest_hex(stored_digest)
+        declared = getattr(page, "row_count", None)
+        if declared is None or int(declared) < 0:
+            raise PersonalHistoryError("source page row count is missing")
+        row_count = int(declared)
+    descriptor = {
+        "ordinal": ordinal,
+        "sha256": digest,
+        "row_count": row_count,
+        "request_path": str(page.request_path),
+        "request_params": dict(page.request_params),
+        "response_status": int(page.response_status),
+        "pagination_in": page.pagination_in,
+        "pagination_out": page.pagination_out,
+    }
+    evidence_state = getattr(page, "evidence_state", None)
+    if evidence_state:
+        descriptor["evidence_state"] = str(evidence_state)
+    slice_date = getattr(page, "slice_date", None)
+    if slice_date:
+        descriptor["slice_date"] = str(slice_date)
+    return descriptor
+
+
+def _count_field(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return -1
+    return value
+
+
+def _selection_fields(selection: Any) -> Mapping[str, Any]:
+    if isinstance(selection, Mapping):
+        return selection
+    query = getattr(selection, "query", None)
+    if query is None:
+        raise PersonalHistoryError("selection evidence is invalid")
+    return {
+        "query": query,
+        "selected_row_count": getattr(selection, "selected_row_count", None),
+        "selected_digest": getattr(selection, "selected_digest", None),
+        "source_row_count": getattr(selection, "source_row_count", None),
+        "scanned_page_digests": getattr(selection, "scanned_page_digests", ()),
+        "completion_digest": getattr(selection, "completion_digest", None),
+        "contributing_page_digests": getattr(selection, "contributing_page_digests", ()),
+    }
+
+
+def _validated_selection(
+    selection: Mapping[str, Any],
+    source_pages: Sequence[Mapping[str, Any]],
+    selected_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    query = selection.get("query")
+    if not isinstance(query, Mapping):
+        raise PersonalHistoryError("selection query is missing")
+    source_digests = tuple(str(page["sha256"]) for page in source_pages)
+    source_digest_set = set(source_digests)
+    scanned_raw = selection.get("scanned_page_digests")
+    if scanned_raw is None:
+        scanned = source_digests
+    else:
+        scanned = tuple(_page_digest_hex(item) for item in scanned_raw)
+        if scanned != source_digests:
+            raise PersonalHistoryError(
+                "selection scanned pages do not match fetched source pages"
+            )
+    contributing = tuple(
+        _page_digest_hex(item)
+        for item in (selection.get("contributing_page_digests") or ())
+    )
+    if any(digest not in source_digest_set for digest in contributing):
+        raise PersonalHistoryError("selection cites a page that was not fetched")
+    selected_digest = _canonical_digest(list(selected_rows))
+    declared_digest = str(selection.get("selected_digest") or "")
+    if declared_digest.startswith("sha256:"):
+        declared_hex = declared_digest[7:]
+    else:
+        declared_hex = declared_digest
+    if declared_hex != selected_digest[7:]:
+        raise PersonalHistoryError("selection digest does not match selected rows")
+    selected_count = _count_field(selection.get("selected_row_count"))
+    if selected_count != len(selected_rows):
+        raise PersonalHistoryError("selection row count does not match selected rows")
+    source_row_count = sum(int(page["row_count"]) for page in source_pages)
+    declared_source = _count_field(selection.get("source_row_count"))
+    if declared_source != source_row_count:
+        raise PersonalHistoryError("selection source row count does not match pages")
+    completion = str(selection.get("completion_digest") or "")
+    expected_completion = _canonical_digest(
+        {
+            "scanned_page_digests": [f"sha256:{digest}" for digest in scanned],
+            "source_row_count": source_row_count,
+            "page_count": len(scanned),
+            "status": "COMPLETE",
+        }
+    )
+    if not completion or _page_digest_hex(completion) != _page_digest_hex(
+        expected_completion
+    ):
+        raise PersonalHistoryError("selection completion digest does not match pages")
+    return {
+        "query": dict(query),
+        "selected_row_count": selected_count,
+        "selected_digest": selected_digest,
+        "source_row_count": source_row_count,
+        "scanned_page_digests": list(scanned),
+        "completion_digest": expected_completion,
+        "contributing_page_digests": list(contributing),
+    }
+
+
+def _page_evidence(
+    fetch_result: Any,
+) -> tuple[list[dict[str, Any]], str, dict[str, Any] | None]:
     pages = tuple(getattr(fetch_result, "pages", ()) or ())
+    selected_rows = tuple(dict(row) for row in getattr(fetch_result, "rows", ()) or ())
+    selection = getattr(fetch_result, "selection", None)
     if not pages:
         raise PersonalHistoryError("J-Quants response has no page evidence")
-    evidence: list[dict[str, Any]] = []
-    for ordinal, page in enumerate(pages):
-        body = bytes(page.response_body)
-        evidence.append(
-            {
-                "ordinal": ordinal,
-                "sha256": hashlib.sha256(body).hexdigest(),
-                "row_count": _page_row_count(body),
-                "request_path": str(page.request_path),
-                "request_params": dict(page.request_params),
-                "response_status": int(page.response_status),
-                "pagination_in": page.pagination_in,
-                "pagination_out": page.pagination_out,
-            }
-        )
-    return evidence, _canonical_digest(evidence)
+    evidence = [
+        _source_page_descriptor(ordinal, page)
+        for ordinal, page in enumerate(pages)
+    ]
+    source_row_count = sum(int(page["row_count"]) for page in evidence)
+    if selection is None:
+        if source_row_count != len(selected_rows):
+            raise PersonalHistoryError(
+                f"page row count {source_row_count} != decoded {len(selected_rows)}"
+            )
+        return evidence, _canonical_digest(evidence), None
+    return (
+        evidence,
+        _canonical_digest(evidence),
+        _validated_selection(_selection_fields(selection), evidence, selected_rows),
+    )
 
 
 def _compact_calendar(
@@ -485,6 +622,12 @@ _BAR_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("TurnoverValue", ("TurnoverValue", "Va")),
     ("MarketCapitalization", ("MarketCapitalization", "MarketCap", "MktCap")),
     ("AdjustmentFactor", ("AdjustmentFactor", "AdjFactor", "AdjF")),
+    ("MorningAdjustmentClose", ("MorningAdjustmentClose", "MAdjC")),
+    ("AfternoonAdjustmentClose", ("AfternoonAdjustmentClose", "AAdjC")),
+    ("MorningTurnoverValue", ("MorningTurnoverValue", "MVa")),
+    ("AfternoonTurnoverValue", ("AfternoonTurnoverValue", "AVa")),
+    ("MorningAdjustmentVolume", ("MorningAdjustmentVolume", "MAdjVo")),
+    ("AfternoonAdjustmentVolume", ("AfternoonAdjustmentVolume", "AAdjVo")),
 )
 
 
@@ -682,6 +825,7 @@ class PersonalHistoryHydrator:
                 rows_written INTEGER NOT NULL DEFAULT 0,
                 page_count INTEGER NOT NULL DEFAULT 0,
                 page_evidence_json TEXT,
+                selection_evidence_json TEXT,
                 response_digest TEXT,
                 facts_digest TEXT,
                 membership_digest TEXT,
@@ -700,6 +844,18 @@ class PersonalHistoryHydrator:
             """
         )
         self._connection.commit()
+        columns = {
+            str(row[1])
+            for row in self._connection.execute(
+                "PRAGMA table_info(personal_history_segments)"
+            )
+        }
+        if "selection_evidence_json" not in columns:
+            self._connection.execute(
+                "ALTER TABLE personal_history_segments "
+                "ADD COLUMN selection_evidence_json TEXT"
+            )
+            self._connection.commit()
 
     def _initialize_manifest(self) -> None:
         plan_json = canonical_json(self.plan.to_dict())
@@ -715,7 +871,7 @@ class PersonalHistoryHydrator:
                 raise PersonalHistoryError(
                     "personal history database uses an older compact format; "
                     "build a new dedicated SQLite file so PIT classifications "
-                    "and market cap are fetched again"
+                    "and market cap and AM/PM session fields are fetched again"
                 )
             if str(existing["plan_digest"]) != plan_digest:
                 raise PersonalHistoryError(
@@ -871,12 +1027,7 @@ class PersonalHistoryHydrator:
         try:
             fetched = self.client.fetch_dataset_evidenced(dataset, **dict(params))
             source_rows = tuple(dict(row) for row in fetched.rows)
-            page_evidence, response_digest = _page_evidence(fetched)
-            page_rows = sum(int(page["row_count"]) for page in page_evidence)
-            if page_rows != len(source_rows):
-                raise PersonalHistoryError(
-                    f"{dataset} page row count {page_rows} != decoded {len(source_rows)}"
-                )
+            page_evidence, response_digest, selection = _page_evidence(fetched)
             transformed = transform(source_rows, now_iso())
             if isinstance(transformed, tuple):
                 rows, derived_membership = transformed
@@ -917,7 +1068,8 @@ class PersonalHistoryHydrator:
                 """
                 UPDATE personal_history_segments SET
                     state=?,rows_fetched=?,rows_written=?,page_count=?,
-                    page_evidence_json=?,response_digest=?,facts_digest=?,
+                    page_evidence_json=?,selection_evidence_json=?,
+                    response_digest=?,facts_digest=?,
                     membership_digest=?,expected_rows=?,observed_ratio=?,
                     finished_at=?,error=NULL
                 WHERE dataset=? AND segment_id=?
@@ -928,6 +1080,7 @@ class PersonalHistoryHydrator:
                     written,
                     len(page_evidence),
                     canonical_json(page_evidence),
+                    None if selection is None else canonical_json(selection),
                     response_digest,
                     facts_digest,
                     membership_digest,
@@ -1335,7 +1488,11 @@ class PersonalHistoryHydrator:
                     source,code,date,event_time,available_at,ingested_at,
                     open,high,low,close,volume,turnover_value,
                     adjustment_open,adjustment_high,adjustment_low,
-                    adjustment_close,adjustment_volume,raw_payload,market_cap
+                    adjustment_close,adjustment_volume,
+                    morning_adjustment_close,morning_turnover_value,
+                    morning_adjustment_volume,afternoon_adjustment_close,
+                    afternoon_turnover_value,afternoon_adjustment_volume,
+                    raw_payload,market_cap
                 )
                 SELECT
                     source,
@@ -1349,6 +1506,12 @@ class PersonalHistoryHydrator:
                     NULL,NULL,NULL,
                     CAST(json_extract(payload,'$.AdjustmentClose') AS REAL),
                     CAST(json_extract(payload,'$.AdjustmentVolume') AS REAL),
+                    CAST(json_extract(payload,'$.MorningAdjustmentClose') AS REAL),
+                    CAST(json_extract(payload,'$.MorningTurnoverValue') AS REAL),
+                    CAST(json_extract(payload,'$.MorningAdjustmentVolume') AS REAL),
+                    CAST(json_extract(payload,'$.AfternoonAdjustmentClose') AS REAL),
+                    CAST(json_extract(payload,'$.AfternoonTurnoverValue') AS REAL),
+                    CAST(json_extract(payload,'$.AfternoonAdjustmentVolume') AS REAL),
                     NULL,
                     CAST(json_extract(payload,'$.MarketCapitalization') AS REAL)
                 FROM jquants_records
@@ -1368,6 +1531,12 @@ class PersonalHistoryHydrator:
                     adjustment_low=excluded.adjustment_low,
                     adjustment_close=excluded.adjustment_close,
                     adjustment_volume=excluded.adjustment_volume,
+                    morning_adjustment_close=excluded.morning_adjustment_close,
+                    morning_turnover_value=excluded.morning_turnover_value,
+                    morning_adjustment_volume=excluded.morning_adjustment_volume,
+                    afternoon_adjustment_close=excluded.afternoon_adjustment_close,
+                    afternoon_turnover_value=excluded.afternoon_turnover_value,
+                    afternoon_adjustment_volume=excluded.afternoon_adjustment_volume,
                     raw_payload=NULL,
                     market_cap=excluded.market_cap
                 """
@@ -1413,6 +1582,36 @@ class PersonalHistoryHydrator:
                           AND bars.adjustment_volume IS CAST(
                               json_extract(
                                   records.payload,'$.AdjustmentVolume'
+                              ) AS REAL
+                          )
+                          AND bars.morning_adjustment_close IS CAST(
+                              json_extract(
+                                  records.payload,'$.MorningAdjustmentClose'
+                              ) AS REAL
+                          )
+                          AND bars.morning_turnover_value IS CAST(
+                              json_extract(
+                                  records.payload,'$.MorningTurnoverValue'
+                              ) AS REAL
+                          )
+                          AND bars.morning_adjustment_volume IS CAST(
+                              json_extract(
+                                  records.payload,'$.MorningAdjustmentVolume'
+                              ) AS REAL
+                          )
+                          AND bars.afternoon_adjustment_close IS CAST(
+                              json_extract(
+                                  records.payload,'$.AfternoonAdjustmentClose'
+                              ) AS REAL
+                          )
+                          AND bars.afternoon_turnover_value IS CAST(
+                              json_extract(
+                                  records.payload,'$.AfternoonTurnoverValue'
+                              ) AS REAL
+                          )
+                          AND bars.afternoon_adjustment_volume IS CAST(
+                              json_extract(
+                                  records.payload,'$.AfternoonAdjustmentVolume'
                               ) AS REAL
                           )
                           AND bars.raw_payload IS NULL

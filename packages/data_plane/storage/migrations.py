@@ -617,6 +617,24 @@ MIGRATIONS: tuple[Migration, ...] = (
         ALTER TABLE jquants_daily_bars_revisions ADD COLUMN market_cap REAL;
         """,
     ),
+    Migration(
+        15,
+        "personal_session_adjustment_bars",
+        """
+        ALTER TABLE jquants_daily_bars ADD COLUMN morning_adjustment_close REAL;
+        ALTER TABLE jquants_daily_bars ADD COLUMN morning_turnover_value REAL;
+        ALTER TABLE jquants_daily_bars ADD COLUMN morning_adjustment_volume REAL;
+        ALTER TABLE jquants_daily_bars ADD COLUMN afternoon_adjustment_close REAL;
+        ALTER TABLE jquants_daily_bars ADD COLUMN afternoon_turnover_value REAL;
+        ALTER TABLE jquants_daily_bars ADD COLUMN afternoon_adjustment_volume REAL;
+        ALTER TABLE jquants_daily_bars_revisions ADD COLUMN morning_adjustment_close REAL;
+        ALTER TABLE jquants_daily_bars_revisions ADD COLUMN morning_turnover_value REAL;
+        ALTER TABLE jquants_daily_bars_revisions ADD COLUMN morning_adjustment_volume REAL;
+        ALTER TABLE jquants_daily_bars_revisions ADD COLUMN afternoon_adjustment_close REAL;
+        ALTER TABLE jquants_daily_bars_revisions ADD COLUMN afternoon_turnover_value REAL;
+        ALTER TABLE jquants_daily_bars_revisions ADD COLUMN afternoon_adjustment_volume REAL;
+        """,
+    ),
 )
 
 
@@ -641,15 +659,36 @@ def apply_schema_migrations(conn: sqlite3.Connection) -> None:
             continue
         quoted_name = "'" + migration.name.replace("'", "''") + "'"
         try:
-            conn.executescript(
-                "BEGIN IMMEDIATE;\n"
-                + migration.sql
-                + "\nINSERT INTO schema_migrations (version, name) VALUES ("
-                + str(migration.version)
-                + ", "
-                + quoted_name
-                + ");\nCOMMIT;"
-            )
+            if migration.version == 15:
+                conn.execute("BEGIN IMMEDIATE")
+                for statement in migration.sql.split(";"):
+                    statement = statement.strip()
+                    if not statement:
+                        continue
+                    try:
+                        conn.execute(statement)
+                    except sqlite3.OperationalError as exc:
+                        # Fresh SCHEMA_SQL already includes these columns.
+                        if "duplicate column name" not in str(exc):
+                            raise
+                conn.execute(
+                    "INSERT INTO schema_migrations (version, name) VALUES ("
+                    + str(migration.version)
+                    + ", "
+                    + quoted_name
+                    + ")"
+                )
+                conn.commit()
+            else:
+                conn.executescript(
+                    "BEGIN IMMEDIATE;\n"
+                    + migration.sql
+                    + "\nINSERT INTO schema_migrations (version, name) VALUES ("
+                    + str(migration.version)
+                    + ", "
+                    + quoted_name
+                    + ");\nCOMMIT;"
+                )
         except Exception:
             conn.rollback()
             raise

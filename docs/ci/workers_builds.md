@@ -176,8 +176,9 @@ does not replace this policy — the deploy command is the switch
 `research-mass-eval` is the narrow exception: Cloudflare documents that
 `versions upload` does not update Container images. Its path-scoped production
 lane therefore uses `npx wrangler deploy --env production` after the same
-required repo-root check. `max_instances=2` is a hard ceiling that permits only
-legacy/current runner coexistence during rollout; DRAFT-only execution and all
+required repo-root check. `max_instances=8` is a hard ceiling on concurrent
+personal Container instances (job-scoped research jobs plus one snapshot-build
+singleton), not pre-warmed billing; DRAFT-only execution and all
 Mass/READY/GO freezes remain in the deployed configuration
 ([Container Builds behavior](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/#how-workers-builds-works)).
 The rollout precondition is operational and fail-closed: before changing the

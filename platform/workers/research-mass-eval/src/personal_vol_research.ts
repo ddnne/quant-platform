@@ -15,6 +15,7 @@ import type {
   PeriodSpec,
 } from "./types";
 
+/** Legacy D-close to D+1-close exact-four replay. AM/PM is a separate identity. */
 export const PERSONAL_VOL_COHORT_ID = "personal-vol-ratio-v2" as const;
 export const PERSONAL_VOL_PANELS_PREFIX =
   "research/mass_eval/panels_cache/527c1065afe14601/panels" as const;

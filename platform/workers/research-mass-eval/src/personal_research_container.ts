@@ -1,20 +1,29 @@
 import { Container, ContainerProxy } from "@cloudflare/containers";
 
 import {
+  PERSONAL_RESEARCH_MAX_CONCURRENT_JOBS,
   PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES,
   PERSONAL_RESEARCH_RUNNER_VERSION,
   type PersonalResearchRequest,
+  personalJobContainerName,
   personalResearchCohortDigest,
   personalResearchManifestKey,
   personalResearchRequestDigest,
   personalResearchResultKey,
   personalResearchUniverseRuleDigest,
 } from "./personal_research_contract";
-import { personalResearchR2Outbound } from "./personal_research_r2";
 import {
-  personalResearchContainer,
-  verifiedPersonalResearchContainer,
-} from "./personal_research_runner";
+  classifyPersonalResearchSubmit,
+  type PersonalResearchBatchItem,
+} from "./personal_research_batch";
+import { personalHistorySourceOutbound } from "./personal_history_source";
+import {
+  durablePersonalJobStatus,
+  submittedStateDocument,
+  writeSubmittedState,
+} from "./personal_job_state";
+import { personalResearchR2Outbound } from "./personal_research_r2";
+import { verifiedPersonalResearchContainer } from "./personal_research_runner";
 import type { Env } from "./types";
 
 export { ContainerProxy };
@@ -42,6 +51,7 @@ export class PersonalResearchContainer extends Container<Env> {
 // the proxy's fail-closed 520 response.
 PersonalResearchContainer.outboundByHost = {
   "research.r2": personalResearchR2Outbound,
+  "history.source": personalHistorySourceOutbound,
 };
 
 type StoredManifest = Record<string, unknown> & {
@@ -112,8 +122,19 @@ export async function submitPersonalResearch(
       413,
     );
   }
+  const submitted = submittedStateDocument({
+    jobId: request.job_id,
+    requestDigest,
+    kind: "research",
+    deploymentId: env.CF_VERSION_METADATA?.id ?? "unknown",
+  });
+  const conflict = await writeSubmittedState(env, submitted);
+  if (conflict) return conflict;
   try {
-    const target = await verifiedPersonalResearchContainer(env);
+    const target = await verifiedPersonalResearchContainer(
+      env,
+      await personalJobContainerName("research", request.job_id),
+    );
     return await target.fetch(
       new Request("http://container/v1/run", {
         method: "POST",
@@ -146,36 +167,44 @@ export async function submitPersonalResearch(
   }
 }
 
+export async function submitPersonalResearchJobs(
+  env: Env,
+  requests: PersonalResearchRequest[],
+): Promise<PersonalResearchBatchItem[]> {
+  if (requests.length > PERSONAL_RESEARCH_MAX_CONCURRENT_JOBS) {
+    throw new Error("personal research concurrency cap exceeded");
+  }
+  const settled = await Promise.allSettled(
+    requests.map(async (request) => {
+      const response = await submitPersonalResearch(env, request);
+      const classified = await classifyPersonalResearchSubmit(response);
+      return {
+        job_id: request.job_id,
+        ...classified,
+      };
+    }),
+  );
+  return settled.map((item, index) => {
+    if (item.status === "fulfilled") return item.value;
+    return {
+      job_id: requests[index]!.job_id,
+      state: "rejected" as const,
+      status: 503,
+      body: {
+        ok: false,
+        error: "personal_research_container_unavailable",
+        detail:
+          item.reason instanceof Error ? item.reason.message : String(item.reason),
+        job_id: requests[index]!.job_id,
+        go: false,
+      },
+    };
+  });
+}
+
 export async function personalResearchStatus(
   env: Env,
   jobId: string,
 ): Promise<Response> {
-  const existing = await storedManifest(env, jobId);
-  if (existing) {
-    return responseJson({
-      ok: existing.status === "COMPLETED",
-      durable: true,
-      job: existing,
-      go: false,
-      automatic_promotion: false,
-      live_orders_enabled: false,
-    });
-  }
-  try {
-    return await personalResearchContainer(env).fetch(
-      new Request(`http://container/v1/jobs/${encodeURIComponent(jobId)}`),
-    );
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    return responseJson(
-      {
-        ok: false,
-        error: "personal_research_status_unavailable",
-        detail,
-        job_id: jobId,
-        go: false,
-      },
-      503,
-    );
-  }
+  return durablePersonalJobStatus(env, "research", jobId);
 }

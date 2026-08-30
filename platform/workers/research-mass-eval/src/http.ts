@@ -7,6 +7,32 @@ export { sha256Hex } from "./sha256";
 export { authorized } from "./authorized";
 export { freezePayload } from "./freeze";
 
+export async function readBoundedJson(
+  request: Request,
+  maximum: number,
+): Promise<
+  | { ok: true; value: unknown }
+  | { ok: false; status: number; error: string }
+> {
+  const raw = request.headers.get("content-length");
+  if (!raw || !/^\d+$/.test(raw)) {
+    return { ok: false, status: 400, error: "content-length required" };
+  }
+  const length = Number(raw);
+  if (!Number.isSafeInteger(length) || length < 1 || length > maximum) {
+    return { ok: false, status: 413, error: "request body exceeds the bound" };
+  }
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (bytes.byteLength !== length) {
+    return { ok: false, status: 400, error: "content-length mismatch" };
+  }
+  try {
+    return { ok: true, value: JSON.parse(new TextDecoder().decode(bytes)) };
+  } catch {
+    return { ok: false, status: 400, error: "invalid JSON body" };
+  }
+}
+
 export function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }

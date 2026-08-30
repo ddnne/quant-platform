@@ -41,12 +41,15 @@ from .costs import (
 from .engine import CORE_ENGINE_VERSION, describe_strategy, run_backtest
 from .repo_rates import load_repo_rates_by_date_for_paper
 from .execution import (
+    AM_SIGNAL_PM_CLOSE,
     MODES,
     NEXT_CLOSE,
     SAME_DAY_CLOSE,
     ExecutionMode,
     close_as_of,
     get_mode,
+    morning_close_as_of,
+    operational_usable_by_as_of,
 )
 from .metrics import compute_metrics, max_drawdown
 from .result import BacktestResult
@@ -93,9 +96,12 @@ __all__ = [
     "ExecutionMode",
     "NEXT_CLOSE",
     "SAME_DAY_CLOSE",
+    "AM_SIGNAL_PM_CLOSE",
     "MODES",
     "get_mode",
     "close_as_of",
+    "morning_close_as_of",
+    "operational_usable_by_as_of",
     # costs / financing
     "CostModel",
     "ShortFinancingModel",

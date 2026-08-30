@@ -81,6 +81,7 @@ def test_local_schema_migrations_are_formal_and_idempotent(tmp_path):
         (12, "phase631_coverage_complete_transition_tombstones"),
         (13, "phase631_receipt_product_materializations"),
         (14, "personal_daily_market_cap"),
+        (15, "personal_session_adjustment_bars"),
     ]
     assert "market_cap" in {
         row[1]
@@ -94,12 +95,32 @@ def test_local_schema_migrations_are_formal_and_idempotent(tmp_path):
             "PRAGMA table_info(jquants_daily_bars_revisions)"
         )
     }
+    session_columns = {
+        "morning_adjustment_close",
+        "morning_turnover_value",
+        "morning_adjustment_volume",
+        "afternoon_adjustment_close",
+        "afternoon_turnover_value",
+        "afternoon_adjustment_volume",
+    }
+    assert session_columns <= {
+        row[1]
+        for row in first._conn.execute(  # noqa: SLF001
+            "PRAGMA table_info(jquants_daily_bars)"
+        )
+    }
+    assert session_columns <= {
+        row[1]
+        for row in first._conn.execute(  # noqa: SLF001
+            "PRAGMA table_info(jquants_daily_bars_revisions)"
+        )
+    }
     first.close()
 
     second = SqliteStore(path)
     assert second._conn.execute(  # noqa: SLF001
         "SELECT COUNT(*) FROM schema_migrations"
-    ).fetchone()[0] == 14
+    ).fetchone()[0] == 15
     second.close()
 
 

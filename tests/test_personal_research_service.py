@@ -32,6 +32,12 @@ from research.paper_candidate_specs import (
     build_factor_rank_strategy_spec,
     build_multi_day_hold_strategy_spec,
 )
+from research.factor_cohorts import (
+    AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT,
+    AM_SIGNAL_PM_CLOSE_EXECUTION_MODE,
+    LEGACY_NEXT_CLOSE_EXECUTION_MODE,
+    LEGACY_NEXT_CLOSE_LABEL,
+)
 from research.personal_service import (
     PERSONAL_DECISION_POLICY,
     PERSONAL_EXACT_FOUR_MAX_BACKTESTS,
@@ -48,10 +54,12 @@ from research.personal_service import (
     _canonical_bytes,
     _calendar_lookback_days,
     _closures,
+    _comparison_document,
     _evaluate_candidates_concurrently,
     _fixed_position_short_financing_evidence,
     _md_short_financing,
     _periods,
+    _resolved_execution_contract,
     _run_one,
     _short_financing_sensitivity_document,
     _validated_specs,
@@ -59,8 +67,10 @@ from research.personal_service import (
     default_personal_specs,
     get_research_cohort,
     personal_specs_for_cohort,
+    pool_or_rank_personal_comparison,
 )
 from research.personal_base_sleeve import (
+    AM_PM_BASE_SLEEVE_ID,
     BASE_SLEEVE_ID,
     PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA,
     validate_personal_base_sleeve_artifact,
@@ -1440,6 +1450,25 @@ def test_continuous_base_sleeve_is_content_addressed_and_not_a_candidate(
         validate_personal_base_sleeve_artifact(truncated)
 
 
+def test_am_and_legacy_sleeve_dispatch_is_cohort_specific() -> None:
+    from research.personal_service import _requires_index_vol_base_sleeve
+
+    am = get_research_cohort("sector-relative-ls-am-pm-v1")
+    legacy = get_research_cohort("sector-relative-ls-v1")
+    default_am = get_research_cohort("diverse-core-am-pm-v1")
+    assert _requires_index_vol_base_sleeve(am, universe_id="topix_all")
+    assert _requires_index_vol_base_sleeve(legacy, universe_id="topix_all")
+    assert not _requires_index_vol_base_sleeve(default_am, universe_id="topix_all")
+    assert not _requires_index_vol_base_sleeve(am, universe_id="topix500")
+    assert AM_PM_BASE_SLEEVE_ID != BASE_SLEEVE_ID
+    assert any(
+        spec.strategy_id == AM_PM_BASE_SLEEVE_ID for spec in am.strategy_specs
+    )
+    assert all(
+        spec.strategy_id != AM_PM_BASE_SLEEVE_ID for spec in legacy.strategy_specs
+    )
+
+
 def test_exact_four_backtest_budget_adds_only_one_base_source_run(
     personal_db: tuple[Path, str, str], tmp_path: Path
 ) -> None:
@@ -2346,3 +2375,211 @@ def test_unexpected_candidate_error_keeps_bounded_diagnostic(
         "type": "RuntimeError",
         "detail": "useful bounded diagnostic",
     }
+
+
+def test_paper_run_config_admits_am_signal_pm_close_routing_string() -> None:
+    from strategies.paper import PaperRunConfig
+
+    config = PaperRunConfig(
+        start="2024-01-04",
+        end="2024-01-05",
+        execution_mode=AM_SIGNAL_PM_CLOSE_EXECUTION_MODE,
+        price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+    )
+    assert config.execution_mode == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
+    assert config.price_basis == PERSONAL_RETROSPECTIVE_ADJUSTED
+
+
+def test_default_specs_and_am_cohort_use_am_pm_legacy_stays_next_close() -> None:
+    default_specs, default_cohort = _validated_specs(None, _policy())
+    assert default_cohort is None
+    assert len(default_specs) == 4
+    default_contract = _resolved_execution_contract(
+        default_cohort, using_default_specs=True
+    )
+    assert default_contract["execution_mode"] == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
+    assert default_contract["contract_digest"] == (
+        AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT["contract_digest"]
+    )
+    explicit_specs, explicit_cohort = _validated_specs(default_specs[:1], _policy())
+    assert explicit_cohort is None
+    explicit_contract = _resolved_execution_contract(
+        explicit_cohort, using_default_specs=False
+    )
+    assert explicit_contract["execution_mode"] == LEGACY_NEXT_CLOSE_EXECUTION_MODE
+    assert explicit_contract["label"] == LEGACY_NEXT_CLOSE_LABEL
+    am_specs, am_cohort = _validated_specs(None, _policy(), "diverse-core-am-pm-v1")
+    assert am_cohort is not None
+    assert am_cohort.cohort_id == "diverse-core-am-pm-v1"
+    assert len(am_specs) == 4
+    am_contract = _resolved_execution_contract(am_cohort, using_default_specs=False)
+    assert am_contract["execution_mode"] == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
+    legacy_specs, legacy_cohort = _validated_specs(None, _policy(), "diverse-core-v1")
+    assert legacy_cohort is not None
+    assert legacy_cohort.cohort_id == "diverse-core-v1"
+    assert len(legacy_specs) == 4
+    legacy_contract = _resolved_execution_contract(
+        legacy_cohort, using_default_specs=False
+    )
+    assert legacy_contract["execution_mode"] == LEGACY_NEXT_CLOSE_EXECUTION_MODE
+    assert legacy_contract["label"] == LEGACY_NEXT_CLOSE_LABEL
+
+
+def test_am_pm_closures_bind_contract_and_keep_full_daily_bars() -> None:
+    specs = personal_specs_for_cohort("diverse-core-am-pm-v1")
+    am = _closures(
+        specs,
+        start="2022-01-01",
+        end="2026-01-01",
+        policy=_policy(),
+        universe_selector=personal_universe_selector("topix_all"),
+        execution_contract=dict(AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT),
+    )
+    legacy = _closures(
+        specs,
+        start="2022-01-01",
+        end="2026-01-01",
+        policy=_policy(),
+        universe_selector=personal_universe_selector("topix_all"),
+    )
+    assert am[0].plan_digest != legacy[0].plan_digest
+    assert "equities_bars_daily" in am[0].required_datasets
+    assert "equities_bars_daily_am" not in am[0].required_datasets
+
+
+def test_comparison_carries_contract_identity_and_refuses_cross_contract_rank() -> None:
+    am = dict(AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT)
+    legacy = _resolved_execution_contract(None, using_default_specs=False)
+    shared = _comparison_document(
+        [
+            {
+                "strategy_id": "left",
+                "decision": "HOLD",
+                "strategy": {},
+                "validation": None,
+                "stress": None,
+                "holdout": None,
+                "performance_comparison": None,
+                "execution_contract": am,
+            },
+            {
+                "strategy_id": "right",
+                "decision": "HOLD",
+                "strategy": {},
+                "validation": None,
+                "stress": None,
+                "holdout": None,
+                "performance_comparison": None,
+                "execution_contract": am,
+            },
+        ]
+    )
+    ranked = pool_or_rank_personal_comparison(shared)
+    assert shared["comparable"] is True
+    assert [row["strategy_id"] for row in ranked] == ["left", "right"]
+    assert all(
+        row["execution_contract_id"] == am["id"]
+        and row["execution_contract_digest"] == am["contract_digest"]
+        and row["execution_contract_label"] == am["label"]
+        for row in shared["rows"]
+    )
+    mixed = _comparison_document(
+        [
+            {
+                "strategy_id": "am",
+                "decision": "HOLD",
+                "strategy": {},
+                "validation": None,
+                "stress": None,
+                "holdout": None,
+                "performance_comparison": None,
+                "execution_contract": am,
+            },
+            {
+                "strategy_id": "legacy",
+                "decision": "HOLD",
+                "strategy": {},
+                "validation": None,
+                "stress": None,
+                "holdout": None,
+                "performance_comparison": None,
+                "execution_contract": legacy,
+            },
+        ]
+    )
+    assert mixed["comparable"] is False
+    assert mixed["cross_contract_ranking"] == "forbidden"
+    assert mixed["execution_contract_column"] is True
+    assert {row["execution_contract_label"] for row in mixed["rows"]} == {
+        AM_SIGNAL_PM_CLOSE_EXECUTION_MODE,
+        LEGACY_NEXT_CLOSE_LABEL,
+    }
+    with pytest.raises(
+        PersonalResearchInputError, match="across execution contracts"
+    ):
+        pool_or_rank_personal_comparison(mixed)
+
+
+def test_am_pm_cohort_report_binds_execution_contract_without_core_mode(
+    personal_db: tuple[Path, str, str], tmp_path: Path
+) -> None:
+    source, start, end = personal_db
+    result = PersonalResearchService(policy=_policy()).run(
+        PersonalResearchRequest(
+            source_db=source,
+            period_start=start,
+            period_end=end,
+            output_root=tmp_path / "am-pm-report",
+            cohort_id="diverse-core-am-pm-v1",
+        )
+    )
+    report = json.loads(result.report_json_path.read_text(encoding="utf-8"))
+    contract = report["execution_contract"]
+    assert result.execution_mode == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
+    assert result.execution_contract_digest == contract["contract_digest"]
+    assert contract["id"]
+    assert contract["label"] == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
+    assert contract["execution_mode"] == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
+    assert report["strategy_cohort"]["cohort_id"] == "diverse-core-am-pm-v1"
+    assert report["comparison"]["execution_contract_column"] is True
+    assert all(
+        row["execution_contract_digest"] == contract["contract_digest"]
+        for row in report["comparison"]["rows"]
+    )
+    markdown = result.report_markdown_path.read_text(encoding="utf-8")
+    assert "Cohort: `diverse-core-am-pm-v1`" in markdown
+    assert "am_signal_pm_close" in markdown
+    assert "Execution contract" in markdown
+    assert "equities_bars_daily_am" not in json.dumps(report["dependency_closures"])
+    assert any(
+        "equities_bars_daily" in closure["required_datasets"]
+        for closure in report["dependency_closures"]
+    )
+
+
+def test_legacy_cohort_report_labels_next_close_without_am_timing_text(
+    personal_db: tuple[Path, str, str], tmp_path: Path
+) -> None:
+    source, start, end = personal_db
+    result = PersonalResearchService(policy=_policy()).run(
+        PersonalResearchRequest(
+            source_db=source,
+            period_start=start,
+            period_end=end,
+            output_root=tmp_path / "legacy-report",
+            cohort_id="diverse-core-v1",
+        )
+    )
+    report = json.loads(result.report_json_path.read_text(encoding="utf-8"))
+    contract = report["execution_contract"]
+    assert result.execution_mode == LEGACY_NEXT_CLOSE_EXECUTION_MODE
+    assert contract["label"] == LEGACY_NEXT_CLOSE_LABEL
+    assert contract["execution_mode"] == LEGACY_NEXT_CLOSE_EXECUTION_MODE
+    markdown = result.report_markdown_path.read_text(encoding="utf-8")
+    assert "Cohort: `diverse-core-v1`" in markdown
+    assert "am_signal_pm_close" not in markdown
+    assert "Execution contract" not in markdown
+    assert all(
+        row["execution_contract_label"] == LEGACY_NEXT_CLOSE_LABEL
+        for row in report["comparison"]["rows"]
+    )

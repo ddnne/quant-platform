@@ -10,7 +10,10 @@ import sys
 import tarfile
 import threading
 import time
+import urllib.error
+import urllib.parse
 from dataclasses import replace
+from email.message import Message
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -57,6 +60,12 @@ COHORT_DIGEST = (
 )
 LONG_SHORT_COHORT_DIGEST = (
     "sha256:584bbf0052ad1eee6ec31cacdf1298c13c8a59b9eb6928267935fc17e34289be"
+)
+AM_LONG_SHORT_COHORT_DIGEST = (
+    "sha256:e12e65393985ab8b7cc2b0b922a362a055404777a49fda7250f735d47f0b073b"
+)
+AM_EXECUTION_CONTRACT_DIGEST = (
+    "sha256:5fc214947a8fdde7005561820a9bf4b3c301154535b4dc37cff09e9d801bddac"
 )
 
 
@@ -684,6 +693,54 @@ def test_job_spec_rejects_long_short_on_a_compact_universe() -> None:
         spec.validate()
 
 
+def test_python_container_defaults_to_am_diverse_and_allows_am_ids() -> None:
+    from research.factor_cohorts import get_research_cohort
+
+    assert service.DEFAULT_PERSONAL_COHORT_ID == "diverse-core-am-pm-v1"
+    for cohort_id in (
+        "price-relative-am-pm-v1",
+        "fundamental-relative-am-pm-v1",
+        "diverse-core-am-pm-v1",
+        "compact-market-diverse-am-pm-v1",
+        "sector-relative-ls-am-pm-v1",
+        "diverse-core-v1",
+        "sector-relative-ls-v1",
+        "compact-market-diverse-v1",
+    ):
+        assert cohort_id in service.PERSONAL_EXECUTABLE_COHORT_IDS
+    am_digest = str(get_research_cohort("diverse-core-am-pm-v1").to_dict()["cohort_digest"])
+    compact_digest = str(
+        get_research_cohort("compact-market-diverse-am-pm-v1").to_dict()["cohort_digest"]
+    )
+    am = _redigest(
+        replace(
+            _job("a" * 64),
+            cohort_id="diverse-core-am-pm-v1",
+            cohort_digest=am_digest,
+        )
+    )
+    am.validate()
+    compact = _redigest(
+        replace(
+            _job("a" * 64),
+            cohort_id="compact-market-diverse-am-pm-v1",
+            cohort_digest=compact_digest,
+            universe_id="topix_core30",
+        )
+    )
+    compact.validate()
+    with pytest.raises(service.JobInputError, match="profile mismatch"):
+        replace(_job("a" * 64), universe_id="topix_core30").validate()
+    with pytest.raises(service.JobInputError, match="profile mismatch"):
+        _redigest(
+            replace(
+                _job("a" * 64),
+                cohort_id="sector-relative-ls-am-pm-v1",
+                universe_id="topix_core30",
+            )
+        ).validate()
+
+
 def test_success_archive_excludes_generated_sqlite_and_manifest_is_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -900,6 +957,109 @@ def test_long_short_archive_validates_and_preserves_non_candidate_base_source(
     assert not tuple(work.iterdir())
 
 
+def test_child_rejects_tampered_am_cohort_digest() -> None:
+    sha = "a" * 64
+    body = {
+        "cohort_digest": "sha256:" + "f" * 64,
+        "cohort_id": "sector-relative-ls-am-pm-v1",
+        "job_id": "am-tamper",
+        "period_end": "2026-08-27",
+        "period_start": "2022-04-19",
+        "runner_version": service.RUNNER_VERSION,
+        "snapshot_key": f"research/personal/snapshots/sha256={sha}.sqlite",
+        "snapshot_sha256": sha,
+        "universe_id": "topix_all",
+        "universe_rule_digest": (
+            "sha256:7b88c89520a7cf751e7b63f160c16130183dba3c7c7e9c3a56660f3149c2c048"
+        ),
+    }
+    request_digest = "sha256:" + hashlib.sha256(
+        json.dumps(
+            body,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    with pytest.raises(service.JobInputError, match="repository definition"):
+        service.JobSpec.from_document(
+            {
+                **body,
+                "request_digest": request_digest,
+                "result_key": "research/personal/jobs/job=am-tamper/result.tar.gz",
+                "manifest_key": "research/personal/jobs/job=am-tamper/manifest.json",
+            }
+        )
+
+
+def test_am_job_binds_repo_mode_and_rejects_legacy_sleeve_reference(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "fixture.sqlite"
+    sha = _sqlite(source)
+    spec = _redigest(
+        replace(
+            _job(sha, job_id="am-base-sleeve"),
+            cohort_id="sector-relative-ls-am-pm-v1",
+            cohort_digest=AM_LONG_SHORT_COHORT_DIGEST,
+        )
+    )
+    identity = service._personal_cohort_identity(spec.cohort_id)
+    assert identity["execution_mode"] == "am_signal_pm_close"
+    assert identity["execution_contract_digest"] == AM_EXECUTION_CONTRACT_DIGEST
+    assert identity["session_view_digest"].startswith("sha256:")
+    output = tmp_path / "output"
+    summary = _write_base_sleeve_output(output, spec)
+    with pytest.raises(RuntimeError, match="base sleeve reference is invalid"):
+        service._validated_base_sleeve_reference(
+            summary,
+            spec=spec,
+            output_root=output,
+        )
+
+
+def test_am_execute_job_rejects_tampered_child_execution_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "fixture.sqlite"
+    sha = _sqlite(source)
+    spec = _redigest(
+        replace(
+            _job(sha, job_id="am-mode-tamper"),
+            cohort_id="sector-relative-ls-am-pm-v1",
+            cohort_digest=AM_LONG_SHORT_COHORT_DIGEST,
+        )
+    )
+
+    def completed_source_run(args, **kwargs):
+        output = Path(args[args.index("--output") + 1])
+        summary = _write_base_sleeve_output(output, spec)
+        summary["execution_mode"] = "next_close"
+        summary["execution_contract_digest"] = "sha256:" + "c" * 64
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(summary, sort_keys=True) + "\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(service, "_run_research_process", completed_source_run)
+    work = tmp_path / "work"
+    work.mkdir()
+
+    def copy_snapshot(_spec, destination):
+        destination.write_bytes(source.read_bytes())
+
+    manifest = service.execute_job(
+        spec,
+        work_root=work,
+        command=(sys.executable, "unused.py"),
+        downloader=copy_snapshot,
+        uploader=_uploader([]),
+    )
+    assert manifest["status"] == "FAILED"
+    assert "execution_mode" in manifest["error"]
+
+
 def test_exit_two_with_no_evaluated_candidates_archives_completed_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -975,7 +1135,8 @@ def test_exit_two_with_no_evaluated_candidates_archives_completed_result(
             None,
             "fixed personal policy",
         ),
-        (1, {"evaluated_count": 0, "hold_count": 0}, None, "exited 1"),
+        (1, {"evaluated_count": 0, "hold_count": 0}, "", "exited 1"),
+        (1, {"evaluated_count": 0, "hold_count": 0}, "{\n", "exited 1"),
         (3, {"evaluated_count": 0, "hold_count": 0}, None, "exited 3"),
     ),
 )
@@ -1018,6 +1179,106 @@ def test_runner_exit_and_summary_contract_fail_closed(
     assert manifest["status"] == "FAILED"
     assert error in manifest["error"]
     assert [key for key, _, _ in uploads] == [spec.manifest_key]
+    assert not tuple(work.iterdir())
+
+
+def test_exit1_empty_stderr_preserves_candidate_diagnostic_from_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "fixture.sqlite"
+    sha = _sqlite(source)
+    spec = _job(sha)
+    detail = "candidate process exited nonzero (1)"
+
+    def failing_candidates(args, **_kwargs):
+        output = Path(args[args.index("--output") + 1])
+        reports = output / "reports"
+        reports.mkdir()
+        report = {
+            "candidates": [
+                {
+                    "strategy_id": "personal_momentum_topk_hold10",
+                    "decision": "SKIPPED",
+                    "error": {
+                        "type": "RuntimeError",
+                        "detail": detail,
+                    },
+                },
+                {
+                    "strategy_id": "personal_momentum_topk_hold5",
+                    "decision": "SKIPPED",
+                    "error": {
+                        "type": "RuntimeError",
+                        "detail": detail,
+                    },
+                },
+                {
+                    "strategy_id": "personal_reversal_topk_hold5",
+                    "decision": "SKIPPED",
+                    "error": {
+                        "type": "RuntimeError",
+                        "detail": "/secret/path/db.sqlite " + detail,
+                    },
+                },
+                {
+                    "strategy_id": "personal_value_topk_hold10",
+                    "decision": "SKIPPED",
+                    "error": {
+                        "type": "RuntimeError",
+                        "detail": detail,
+                    },
+                },
+            ],
+            "summary": {"unexpected_errors": 4, "evaluated_count": 0},
+        }
+        report_json = reports / "report.json"
+        report_md = reports / "report.md"
+        report_json.write_text(json.dumps(report), encoding="utf-8")
+        report_md.write_text("# failed candidates\n", encoding="utf-8")
+        summary = _runner_summary(
+            spec,
+            evaluated_count=0,
+            hold_count=0,
+            unexpected_errors=4,
+        )
+        summary["report_json"] = str(report_json)
+        summary["report_markdown"] = str(report_md)
+        return SimpleNamespace(
+            returncode=1,
+            stdout=json.dumps(summary) + "\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(service, "_run_research_process", failing_candidates)
+    work = tmp_path / "work"
+    work.mkdir()
+    uploads: list[tuple[str, bytes, str]] = []
+
+    def copy_snapshot(_spec, destination):
+        destination.write_bytes(source.read_bytes())
+
+    manifest = service.execute_job(
+        spec,
+        work_root=work,
+        command=(sys.executable, "unused.py"),
+        downloader=copy_snapshot,
+        uploader=_uploader(uploads),
+    )
+
+    assert manifest["status"] == "FAILED"
+    assert "go" in manifest and manifest["go"] is False
+    assert manifest.get("automatic_promotion") is False
+    error = manifest["error"]
+    assert "no diagnostic" not in error
+    assert "candidate failures" in error
+    assert "unexpected_errors=4" in error
+    assert "personal_momentum_topk_hold10" in error
+    assert "RuntimeError" in error
+    assert "exited nonzero (1)" in error
+    assert "repeated=RuntimeErrorx4" in error
+    assert "/secret/path" not in error
+    assert [key for key, _, _ in uploads] == [spec.manifest_key]
+    assert spec.result_key not in {key for key, _, _ in uploads}
     assert not tuple(work.iterdir())
 
 
@@ -1150,7 +1411,11 @@ def test_manager_allows_only_one_active_job_and_same_job_is_idempotent() -> None
             "go": False,
         }
 
-    manager = service.JobManager(runner, on_terminal=terminal.set)
+    manager = service.JobManager(
+        runner,
+        on_terminal=terminal.set,
+        terminal_uploader=lambda *args, **kwargs: None,
+    )
     first = _job("a" * 64, "job-one")
     second = _job("b" * 64, "job-two")
     manager.submit(first)
@@ -1169,6 +1434,420 @@ def test_manager_allows_only_one_active_job_and_same_job_is_idempotent() -> None
         manager.submit(second)
 
 
+def _research_period_document(period_start: str, period_end: str) -> dict:
+    template = _job("a" * 64, "bound-2200")
+    identity = {
+        "cohort_digest": template.cohort_digest,
+        "cohort_id": template.cohort_id,
+        "job_id": "bound-2200",
+        "period_end": period_end,
+        "period_start": period_start,
+        "runner_version": service.RUNNER_VERSION,
+        "snapshot_key": template.snapshot_key,
+        "snapshot_sha256": template.snapshot_sha256,
+        "universe_id": template.universe_id,
+        "universe_rule_digest": template.universe_rule_digest,
+    }
+    return {
+        **identity,
+        "manifest_key": "research/personal/jobs/job=bound-2200/manifest.json",
+        "result_key": "research/personal/jobs/job=bound-2200/result.tar.gz",
+        "request_digest": "sha256:" + hashlib.sha256(
+            json.dumps(
+                identity,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest(),
+    }
+
+
+def test_inclusive_research_period_cap_is_2200_calendar_dates() -> None:
+    service.JobSpec.from_document(
+        _research_period_document("2020-01-01", "2026-01-08")
+    )
+    with pytest.raises(service.JobInputError, match="inclusive calendar dates"):
+        service.JobSpec.from_document(
+            _research_period_document("2020-01-01", "2026-01-09")
+        )
+
+
+def test_watchdog_writes_durable_failed_terminal_before_shutdown() -> None:
+    entered = threading.Event()
+    terminal = threading.Event()
+    wrote = threading.Event()
+    uploads: list[tuple[str, dict]] = []
+
+    def runner(spec):
+        entered.set()
+        time.sleep(1)
+        return {
+            "job_id": spec.job_id,
+            "request_digest": spec.request_digest,
+            "status": "COMPLETED",
+            "go": False,
+        }
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del spec, content_digest, extra_headers
+        uploads.append((key, json.loads(data)))
+        wrote.set()
+
+    def on_terminal() -> None:
+        assert wrote.is_set()
+        terminal.set()
+
+    manager = service.JobManager(
+        runner,
+        on_terminal=on_terminal,
+        max_job_seconds=0.05,
+        terminal_uploader=uploader,
+    )
+    spec = _job("a" * 64, "watchdog-r2")
+    manager.submit(spec)
+    assert entered.wait(1)
+    assert terminal.wait(1)
+    assert uploads
+    assert uploads[0][0] == spec.manifest_key
+    assert uploads[0][1]["status"] == "FAILED"
+    assert "absolute Container lifetime" in uploads[0][1]["error"]
+    assert manager.status(spec.job_id)["status"] == "FAILED"
+
+
+def test_timeout_create_only_does_not_overwrite_completed_terminal() -> None:
+    stored: dict[str, dict] = {}
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del spec, content_digest, extra_headers
+        body = json.loads(data)
+        if key in stored:
+            raise RuntimeError("R2 upload returned 409")
+        stored[key] = body
+
+    spec = _job("a" * 64, "race-job")
+    stored[spec.manifest_key] = {
+        "job_id": spec.job_id,
+        "request_digest": spec.request_digest,
+        "status": "COMPLETED",
+    }
+    manager = service.JobManager(
+        lambda item: {
+            "job_id": item.job_id,
+            "request_digest": item.request_digest,
+            "status": "COMPLETED",
+            "go": False,
+        },
+        terminal_uploader=uploader,
+        terminal_reader=lambda item: stored.get(item.manifest_key),
+        max_job_seconds=30,
+    )
+    manager._jobs[spec.job_id] = {
+        "job_id": spec.job_id,
+        "request_digest": spec.request_digest,
+        "status": "RUNNING",
+        "submitted_at": service._now(),
+        "go": False,
+    }
+    manager._specs[spec.job_id] = spec
+    manager._active_job_id = spec.job_id
+    manager._expire(spec.job_id)
+    assert stored[spec.manifest_key]["status"] == "COMPLETED"
+    assert manager.status(spec.job_id)["status"] == "FAILED"
+
+
+def test_terminal_upload_retries_then_shuts_down() -> None:
+    attempts = {"n": 0}
+    terminal = threading.Event()
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del key, data, spec, content_digest, extra_headers
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise RuntimeError("R2 upload returned 503")
+
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        terminal_uploader=uploader,
+        retry_schedule=(0.01, 0.01),
+        max_job_seconds=30,
+    )
+    try:
+        manager.submit(_job("a" * 64, "retry-terminal"))
+        assert terminal.wait(1)
+        assert attempts["n"] == 3
+        assert manager._retry_timer is None
+        assert manager._pending_terminal is None
+        assert manager._shutdown_notified is True
+    finally:
+        if manager._retry_timer is not None:
+            manager._retry_timer.cancel()
+
+
+def test_terminal_publication_retries_below_cap_without_shutdown() -> None:
+    attempts = {"n": 0}
+    terminal = threading.Event()
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del key, data, spec, content_digest, extra_headers
+        attempts["n"] += 1
+        raise RuntimeError("R2 upload returned 429")
+
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        terminal_uploader=uploader,
+        retry_schedule=(0.01,),
+        max_job_seconds=30,
+    )
+    try:
+        manager.submit(_job("a" * 64, "retry-below-cap"))
+        deadline = time.monotonic() + 0.2
+        while attempts["n"] < 3 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert 2 <= attempts["n"] < manager._MAX_TERMINAL_PUT_ATTEMPTS
+        assert not terminal.is_set()
+        assert manager._shutdown_notified is False
+        assert manager._retry_timer is not None
+        assert manager._pending_terminal is not None
+    finally:
+        if manager._retry_timer is not None:
+            manager._retry_timer.cancel()
+        manager._pending_terminal = None
+        manager._shutdown_notified = True
+
+
+def test_terminal_publication_retry_exhaustion_shuts_down(capsys) -> None:
+    attempts = {"n": 0}
+    terminal = threading.Event()
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del key, data, spec, content_digest, extra_headers
+        attempts["n"] += 1
+        raise RuntimeError("R2 upload returned 503")
+
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        terminal_uploader=uploader,
+        retry_schedule=(0.001,),
+        max_job_seconds=30,
+    )
+    try:
+        manager.submit(_job("a" * 64, "retry-exhausted"))
+        assert terminal.wait(1)
+        assert attempts["n"] == manager._MAX_TERMINAL_PUT_ATTEMPTS
+        assert manager._retry_timer is None
+        assert manager._pending_terminal is None
+        assert manager._shutdown_notified is True
+        events = [
+            json.loads(line)
+            for line in capsys.readouterr().out.splitlines()
+            if line.startswith("{")
+        ]
+        exhausted = [
+            event
+            for event in events
+            if event.get("event") == "terminal_publication_retry_exhausted"
+        ]
+        assert len(exhausted) == 1
+        assert exhausted[0]["job_id"] == "retry-exhausted"
+        assert exhausted[0]["attempts"] == manager._MAX_TERMINAL_PUT_ATTEMPTS
+        assert exhausted[0]["go"] is False
+    finally:
+        if manager._retry_timer is not None:
+            manager._retry_timer.cancel()
+
+
+def test_terminal_publication_succeeds_on_later_retry_below_cap() -> None:
+    attempts = {"n": 0}
+    terminal = threading.Event()
+    limit = service.JobManager._MAX_TERMINAL_PUT_ATTEMPTS
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del key, data, spec, content_digest, extra_headers
+        attempts["n"] += 1
+        if attempts["n"] < limit:
+            raise RuntimeError("R2 upload returned 503")
+
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        terminal_uploader=uploader,
+        retry_schedule=(0.001,),
+        max_job_seconds=30,
+    )
+    try:
+        manager.submit(_job("a" * 64, "retry-last-ok"))
+        assert terminal.wait(1)
+        assert attempts["n"] == limit
+        assert manager._retry_timer is None
+        assert manager._pending_terminal is None
+        assert manager._shutdown_notified is True
+    finally:
+        if manager._retry_timer is not None:
+            manager._retry_timer.cancel()
+
+
+def test_failed_terminal_put_and_get_404_retries_without_shutdown(monkeypatch) -> None:
+    terminal = threading.Event()
+
+    class _MissingTerminalR2:
+        def __init__(self) -> None:
+            self.puts = 0
+            self.gets = 0
+
+        def urlopen(self, request, timeout=None):
+            del timeout
+            method = request.get_method()
+            url = request.full_url
+            if method == "PUT":
+                self.puts += 1
+                raise urllib.error.HTTPError(
+                    url, 503, "unavailable", Message(), io.BytesIO(b"")
+                )
+            if method == "GET":
+                self.gets += 1
+                raise urllib.error.HTTPError(
+                    url, 404, "not found", Message(), io.BytesIO(b"")
+                )
+            raise AssertionError(method)
+
+    fake = _MissingTerminalR2()
+    monkeypatch.setattr(service.urllib.request, "urlopen", fake.urlopen)
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        retry_schedule=(0.05, 0.05),
+        max_job_seconds=30,
+    )
+    manager.submit(_job("a" * 64, "put-fail-get-404"))
+    assert not terminal.wait(0.2)
+    assert fake.puts >= 1
+    assert fake.gets >= 1
+    assert manager._shutdown_notified is False
+    assert manager._pending_terminal is not None
+    assert manager.status("put-fail-get-404")["status"] == "FAILED"
+
+
+def test_unavailable_terminal_upload_does_not_shutdown() -> None:
+    terminal = threading.Event()
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del key, data, spec, content_digest, extra_headers
+        raise RuntimeError("R2 upload returned 503")
+
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        terminal_uploader=uploader,
+        retry_schedule=(0.05, 0.05),
+        max_job_seconds=30,
+    )
+    try:
+        manager.submit(_job("a" * 64, "no-shutdown"))
+        assert not terminal.wait(0.2)
+        assert manager.status("no-shutdown")["status"] == "FAILED"
+        with pytest.raises(service.JobBusyError):
+            manager.submit(_job("b" * 64, "other"))
+    finally:
+        if manager._retry_timer is not None:
+            manager._retry_timer.cancel()
+        manager._pending_terminal = None
+        manager._shutdown_notified = True
+
+
+def test_matching_existing_terminal_is_accepted() -> None:
+    stored: dict[str, dict] = {}
+    terminal = threading.Event()
+    spec = _job("a" * 64, "existing-ok")
+    stored[spec.manifest_key] = {
+        "job_id": spec.job_id,
+        "request_digest": spec.request_digest,
+        "runner_version": spec.runner_version,
+        "cohort_id": spec.cohort_id,
+        "universe_id": spec.universe_id,
+        "status": "FAILED",
+    }
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del data, spec, content_digest, extra_headers
+        raise RuntimeError("R2 upload returned 409")
+
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        terminal_uploader=uploader,
+        terminal_reader=lambda item: stored.get(item.manifest_key),
+        max_job_seconds=30,
+    )
+    manager.submit(spec)
+    assert terminal.wait(1)
+
+
+def test_conflicting_terminal_shuts_down_fail_closed() -> None:
+    stored: dict[str, dict] = {}
+    terminal = threading.Event()
+    spec = _job("a" * 64, "conflict-term")
+    stored[spec.manifest_key] = {
+        "job_id": spec.job_id,
+        "request_digest": "sha256:" + "c" * 64,
+        "runner_version": spec.runner_version,
+        "cohort_id": spec.cohort_id,
+        "universe_id": spec.universe_id,
+        "status": "FAILED",
+    }
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del data, spec, content_digest, extra_headers
+        raise RuntimeError("R2 upload returned 409")
+
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        terminal_uploader=uploader,
+        terminal_reader=lambda item: stored.get(item.manifest_key),
+        retry_schedule=(0.05,),
+        max_job_seconds=30,
+    )
+    manager.submit(spec)
+    assert terminal.wait(1)
+    assert manager._shutdown_notified is True
+    assert manager._retry_timer is None
+    assert manager.status(spec.job_id)["status"] == "FAILED"
+
+
+def test_watchdog_and_normal_race_keeps_one_terminal() -> None:
+    stored: dict[str, dict] = {}
+    terminal = threading.Event()
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del spec, content_digest, extra_headers
+        body = json.loads(data)
+        if key in stored:
+            raise RuntimeError("R2 upload returned 409")
+        stored[key] = body
+
+    spec = _job("a" * 64, "one-terminal")
+    manager = service.JobManager(
+        lambda item: {
+            "job_id": item.job_id,
+            "request_digest": item.request_digest,
+            "status": "COMPLETED",
+            "go": False,
+        },
+        on_terminal=terminal.set,
+        terminal_uploader=uploader,
+        terminal_reader=lambda item: stored.get(item.manifest_key),
+        max_job_seconds=0.05,
+    )
+    manager.submit(spec)
+    assert terminal.wait(1)
+    assert stored[spec.manifest_key]["status"] in {"COMPLETED", "FAILED"}
+    assert list(stored) == [spec.manifest_key]
+
+
 def test_absolute_watchdog_is_not_renewed_by_status_polling() -> None:
     release = threading.Event()
     entered = threading.Event()
@@ -1184,10 +1863,17 @@ def test_absolute_watchdog_is_not_renewed_by_status_polling() -> None:
             "go": False,
         }
 
+    uploads: list[str] = []
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del data, spec, content_digest, extra_headers
+        uploads.append(key)
+
     manager = service.JobManager(
         runner,
         on_terminal=terminal.set,
         max_job_seconds=0.05,
+        terminal_uploader=uploader,
     )
     spec = _job("a" * 64, "watchdog-job")
     manager.submit(spec)
@@ -1203,3 +1889,299 @@ def test_absolute_watchdog_is_not_renewed_by_status_polling() -> None:
     with pytest.raises(service.JobBusyError, match="shutting down"):
         manager.submit(_job("b" * 64, "second-job"))
     release.set()
+
+
+class _UrlResponse(io.BytesIO):
+    def __init__(self, status: int, body: bytes):
+        super().__init__(body)
+        self.status = status
+        self.headers = {"content-type": "application/json; charset=utf-8"}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+
+class _ProductionR2:
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.puts = 0
+        self.gets = 0
+
+    def urlopen(self, request, timeout=None):
+        del timeout
+        url = request.full_url
+        key = urllib.parse.urlparse(url).path.lstrip("/")
+        method = request.get_method()
+        headers = {name.lower(): value for name, value in request.header_items()}
+        if method == "PUT":
+            self.puts += 1
+            if key in self.objects:
+                raise urllib.error.HTTPError(
+                    url, 409, "conflict", Message(), io.BytesIO(b"")
+                )
+            payload = request.data
+            if not isinstance(payload, (bytes, bytearray)):
+                payload = payload.read()
+            self.objects[key] = bytes(payload)
+            return _UrlResponse(201, b'{"ok":true,"created":true}')
+        if method == "GET":
+            self.gets += 1
+            raw = self.objects.get(key)
+            if raw is None or not key.endswith("/manifest.json"):
+                raise urllib.error.HTTPError(
+                    url, 403, "denied", Message(), io.BytesIO(b"")
+                )
+            parsed = json.loads(raw)
+            required = {
+                "x-personal-job-id",
+                "x-personal-request-digest",
+                "x-personal-runner-version",
+                "x-personal-job-kind",
+                "x-personal-cohort-id",
+                "x-personal-universe-id",
+            }
+            personal = {name for name in headers if name.startswith("x-personal-")}
+            if personal != required:
+                raise urllib.error.HTTPError(
+                    url, 403, "denied", Message(), io.BytesIO(b"")
+                )
+            if (
+                headers.get("x-personal-job-id") != parsed.get("job_id")
+                or headers.get("x-personal-request-digest")
+                != parsed.get("request_digest")
+                or headers.get("x-personal-runner-version")
+                != parsed.get("runner_version")
+                or headers.get("x-personal-job-kind") != "research"
+                or headers.get("x-personal-cohort-id") != parsed.get("cohort_id")
+                or headers.get("x-personal-universe-id") != parsed.get("universe_id")
+            ):
+                raise urllib.error.HTTPError(
+                    url, 403, "denied", Message(), io.BytesIO(b"")
+                )
+            return _UrlResponse(200, raw)
+        raise AssertionError(method)
+
+
+def test_production_conflict_reads_matching_terminal_without_injected_reader(
+    monkeypatch,
+) -> None:
+    fake = _ProductionR2()
+    spec = _job("a" * 64, "prod-conflict")
+    existing = {
+        **service._manifest_base(
+            spec, started_at=service._now(), finished_at=service._now()
+        ),
+        "status": "FAILED",
+        "error": "absolute Container lifetime exceeded (0.05s)",
+    }
+    fake.objects[spec.manifest_key] = service._canonical_bytes(existing)
+    monkeypatch.setattr(service.urllib.request, "urlopen", fake.urlopen)
+    terminal = threading.Event()
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        retry_schedule=(0.01,),
+        max_job_seconds=30,
+    )
+    manager.submit(spec)
+    assert terminal.wait(1)
+    assert fake.puts >= 1
+    assert fake.gets >= 1
+    assert manager._shutdown_notified is True
+
+
+def test_production_mismatched_terminal_shuts_down_fail_closed(monkeypatch) -> None:
+    fake = _ProductionR2()
+    spec = _job("a" * 64, "prod-mismatch")
+    existing = {
+        **service._manifest_base(
+            spec, started_at=service._now(), finished_at=service._now()
+        ),
+        "status": "FAILED",
+        "error": "other",
+        "request_digest": "sha256:" + "c" * 64,
+    }
+    fake.objects[spec.manifest_key] = service._canonical_bytes(existing)
+    monkeypatch.setattr(service.urllib.request, "urlopen", fake.urlopen)
+    terminal = threading.Event()
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        retry_schedule=(0.05,),
+        max_job_seconds=30,
+    )
+    manager.submit(spec)
+    assert terminal.wait(1)
+    assert manager._shutdown_notified is True
+    assert manager._retry_timer is None
+    assert manager.status(spec.job_id)["status"] == "FAILED"
+
+
+def _put_then_get_404(monkeypatch, *, put_error):
+    class _MissingAfterPut:
+        def __init__(self) -> None:
+            self.puts = 0
+            self.gets = 0
+
+        def urlopen(self, request, timeout=None):
+            del timeout
+            url = request.full_url
+            method = request.get_method()
+            if method == "PUT":
+                self.puts += 1
+                raise put_error(url)
+            if method == "GET":
+                self.gets += 1
+                raise urllib.error.HTTPError(
+                    url, 404, "not found", Message(), io.BytesIO(b"")
+                )
+            raise AssertionError(method)
+
+    fake = _MissingAfterPut()
+    monkeypatch.setattr(service.urllib.request, "urlopen", fake.urlopen)
+    return fake
+
+
+@pytest.mark.parametrize("status", (400, 403))
+def test_deterministic_put_then_terminal_get_404_shuts_down_fail_closed(
+    monkeypatch, status: int
+) -> None:
+    fake = _put_then_get_404(
+        monkeypatch,
+        put_error=lambda url: urllib.error.HTTPError(
+            url, status, "denied", Message(), io.BytesIO(b"")
+        ),
+    )
+    terminal = threading.Event()
+    spec = _job("a" * 64, f"denied-put-{status}")
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        retry_schedule=(0.05, 0.05),
+        max_job_seconds=30,
+    )
+    manager.submit(spec)
+    assert terminal.wait(1)
+    assert fake.puts == 1
+    assert manager._shutdown_notified is True
+    assert manager.status(spec.job_id)["status"] == "FAILED"
+
+
+def test_failed_upload_then_terminal_get_404_retries(monkeypatch) -> None:
+    fake = _put_then_get_404(
+        monkeypatch,
+        put_error=lambda url: urllib.error.HTTPError(
+            url, 503, "unavailable", Message(), io.BytesIO(b"")
+        ),
+    )
+    terminal = threading.Event()
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        retry_schedule=(0.05, 0.05),
+        max_job_seconds=30,
+    )
+    manager.submit(_job("a" * 64, "missing-after-put"))
+    assert not terminal.wait(0.2)
+    assert fake.puts >= 2
+    assert fake.gets >= 1
+    assert manager._shutdown_notified is False
+    assert manager.status("missing-after-put")["status"] == "FAILED"
+    if manager._retry_timer is not None:
+        manager._retry_timer.cancel()
+
+
+def test_transport_error_then_terminal_get_404_retries(monkeypatch) -> None:
+    fake = _put_then_get_404(
+        monkeypatch,
+        put_error=lambda url: urllib.error.URLError("connection reset"),
+    )
+    terminal = threading.Event()
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        retry_schedule=(0.05, 0.05),
+        max_job_seconds=30,
+    )
+    manager.submit(_job("a" * 64, "transport-after-put"))
+    assert not terminal.wait(0.2)
+    assert fake.puts >= 2
+    assert fake.gets >= 1
+    assert manager._shutdown_notified is False
+    assert manager.status("transport-after-put")["status"] == "FAILED"
+    if manager._retry_timer is not None:
+        manager._retry_timer.cancel()
+
+
+def test_child_put_keeps_http_error_for_deterministic_rejection(
+    monkeypatch,
+) -> None:
+    spec = _job("a" * 64, "child-put-403")
+
+    def urlopen(request, timeout=None):
+        del timeout
+        raise urllib.error.HTTPError(
+            request.full_url, 403, "denied", Message(), io.BytesIO(b"")
+        )
+
+    monkeypatch.setattr(service.urllib.request, "urlopen", urlopen)
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        service._put(
+            spec.result_key,
+            b"{}",
+            spec=spec,
+            content_digest="sha256:" + "a" * 64,
+        )
+    assert caught.value.code == 403
+    with pytest.raises(service.TerminalReadDenied, match="terminal PUT denied HTTP 403"):
+        service._put(
+            spec.manifest_key,
+            b"{}",
+            spec=spec,
+            content_digest="sha256:" + "a" * 64,
+        )
+
+
+def _overlay_spec(job_id: str = "overlay-headers"):
+    prefix = f"research/personal/index-vol-overlay-2023/job={job_id}"
+    body = {
+        "base_job_id": "base-r2",
+        "cohort_id": "personal-index-vol-overlay-2023-v1",
+        "input_manifest_digest": "sha256:" + "b" * 64,
+        "input_manifest_key": f"{prefix}/input-manifest.json",
+        "job_id": job_id,
+        "manifest_key": f"{prefix}/manifest.json",
+        "request_digest": "sha256:" + "0" * 64,
+        "runner_version": "personal-index-vol-overlay-cloud-runner/v1",
+        "svi_job_id": "svi-r2",
+    }
+    provisional = service.PersonalIndexVolOverlay2023JobSpec(**body)
+    return service.PersonalIndexVolOverlay2023JobSpec.from_document(
+        {**body, "request_digest": provisional.derived_request_digest()}
+    )
+
+
+def test_overlay_terminal_put_uses_family_identity_headers(monkeypatch) -> None:
+    spec = _overlay_spec()
+    seen: dict[str, str] = {}
+
+    def urlopen(request, timeout=None):
+        del timeout
+        seen.update({name.lower(): value for name, value in request.header_items()})
+        return _UrlResponse(201, b'{"ok":true,"created":true}')
+
+    monkeypatch.setattr(service.urllib.request, "urlopen", urlopen)
+    service._put(
+        spec.manifest_key,
+        b"{}",
+        spec=spec,
+        content_digest="sha256:" + "a" * 64,
+    )
+    assert seen["x-overlay-job-id"] == spec.job_id
+    assert seen["x-overlay-input-manifest-key"] == spec.input_manifest_key
+    assert seen["x-overlay-input-manifest-digest"] == spec.input_manifest_digest
+    assert seen["x-personal-job-id"] == spec.job_id
+    assert seen["x-personal-request-digest"] == spec.request_digest

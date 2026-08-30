@@ -1,7 +1,4 @@
-import {
-  PERSONAL_RESEARCH_CONTAINER_NAME,
-  PERSONAL_RESEARCH_RUNNER_VERSION,
-} from "./personal_research_contract";
+import { PERSONAL_RESEARCH_RUNNER_VERSION } from "./personal_research_contract";
 import type { Env } from "./types";
 
 type PersonalResearchContainerStub = ReturnType<
@@ -37,13 +34,15 @@ function errorDetail(error: unknown): string {
 
 export function personalResearchContainer(
   env: Env,
+  name: string,
 ): PersonalResearchContainerStub {
   if (!env.PERSONAL_RESEARCH_CONTAINER) {
     throw new Error("PERSONAL_RESEARCH_CONTAINER not bound");
   }
-  return env.PERSONAL_RESEARCH_CONTAINER.getByName(
-    PERSONAL_RESEARCH_CONTAINER_NAME,
-  );
+  if (!name || name.includes("/") || name.includes("\\") || name.length > 96) {
+    throw new Error("personal container name is invalid");
+  }
+  return env.PERSONAL_RESEARCH_CONTAINER.getByName(name);
 }
 
 async function probeRunnerIdentity(
@@ -119,8 +118,9 @@ async function destroyMismatchedRunner(
 
 export async function verifiedPersonalResearchContainer(
   env: Env,
+  name: string,
 ): Promise<PersonalResearchContainerStub> {
-  const first = personalResearchContainer(env);
+  const first = personalResearchContainer(env, name);
   const firstProbe = await probeRunnerIdentity(first);
   if (firstProbe.state === "MATCH") return first;
   if (firstProbe.state === "UNKNOWN") {
@@ -128,7 +128,7 @@ export async function verifiedPersonalResearchContainer(
   }
 
   await destroyMismatchedRunner(first);
-  const replacement = personalResearchContainer(env);
+  const replacement = personalResearchContainer(env, name);
   const replacementProbe = await probeRunnerIdentity(replacement);
   if (replacementProbe.state === "MATCH") return replacement;
   if (replacementProbe.state === "UNKNOWN") {

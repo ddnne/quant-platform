@@ -1,26 +1,56 @@
 import { putJsonCreateOnly, serializedJsonBytes } from "./http";
 import {
+  PERSONAL_INDEX_AM_PM_BASE_COHORT_ID,
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_COHORT_ID,
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_RUNNER_VERSION,
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_SIGNAL_START_POLICY,
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID,
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_RUNNER_VERSION,
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_SIGNAL_START_POLICY,
+  PERSONAL_INDEX_SMILE_TRANSPORT_AM_PM_CANDIDATE_IDS,
+  PERSONAL_INDEX_SMILE_TRANSPORT_CANDIDATE_IDS,
+  PERSONAL_INDEX_SMILE_TRANSPORT_CORE_MODULE,
+  PERSONAL_INDEX_SMILE_TRANSPORT_CORE_VERSION,
+  PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID,
+  PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_RUNNER_VERSION,
+  PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_SIGNAL_START_POLICY,
   PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID,
   PERSONAL_INDEX_VOL_OVERLAY_2023_EARLIEST_DAY,
   PERSONAL_INDEX_VOL_OVERLAY_2023_INPUT_MAX_BYTES,
   PERSONAL_INDEX_VOL_OVERLAY_2023_LATEST_DAY,
   PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION,
   PERSONAL_INDEX_VOL_OVERLAY_2023_SIGNAL_START_POLICY,
-  personalIndexVolOverlay2023InputManifestKey,
+  PERSONAL_INDEX_VOL_OVERLAY_AM_PM_CANDIDATE_IDS,
+  isPersonalIndexSmileTransport2023AmPmCohort,
+  isPersonalIndexSmileTransport2023Cohort,
+  isPersonalIndexVolOverlay2023AmPmCohort,
+  personalIndexOverlayFamilyInputManifestKey,
+  personalIndexOverlayFamilyRunnerVersion,
+  personalIndexOverlayFamilyTerminalManifestKey,
   personalIndexVolOverlay2023RequestDigest,
-  personalIndexVolOverlay2023TerminalManifestKey,
   type ImmutableInputReference,
+  type PersonalIndexOverlayFamilyInputManifest,
+  type PersonalIndexSmileTransport2023AmPmInputManifest,
+  type PersonalIndexSmileTransport2023InputManifest,
+  type PersonalIndexVolOverlay2023AmPmInputManifest,
   type PersonalIndexVolOverlay2023InputManifest,
   type PersonalIndexVolOverlay2023Request,
   type SnapshotInputReference,
 } from "./personal_index_vol_overlay_2023_contract";
 import {
   PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES,
+  PERSONAL_RESEARCH_RUNNER_VERSION,
   isPersonalResearchSnapshotKey,
   personalResearchCohortDigest,
   personalResearchManifestKey,
   personalResearchResultKey,
 } from "./personal_research_contract";
+import { personalJobContainerName } from "./personal_research_contract";
+import {
+  durablePersonalJobStatus,
+  submittedStateDocument,
+  writeSubmittedState,
+} from "./personal_job_state";
 import { verifiedPersonalResearchContainer } from "./personal_research_runner";
 import {
   PERSONAL_SVI_2023_COHORT_ID,
@@ -37,6 +67,10 @@ import type { Env } from "./types";
 
 const BASE_COHORT_ID = "sector-relative-ls-v1" as const;
 const BASE_UNIVERSE_ID = "topix_all" as const;
+const AM_PM_BASE_STRATEGY_ID =
+  "personal_sector_balanced_four_factor_v1_ls_am_pm" as const;
+const AM_PM_BASE_SLEEVE_SCHEMA = "personal-base-sleeve-source-am-pm/v1" as const;
+const AM_PM_BASE_EXECUTION_MODE = "am_signal_pm_close" as const;
 const BASE_RESULT_MAX_BYTES = 512 * 1024 * 1024;
 const SVI_FEATURE_MAX_BYTES = 8 * 1024 * 1024;
 const SOURCE_MANIFEST_MAX_BYTES = 512 * 1024;
@@ -45,6 +79,8 @@ const OVERLAY_COMPATIBLE_BASE_RUNNER_VERSIONS: ReadonlySet<string> = new Set([
   "personal-cloud-runner/v9",
   "personal-cloud-runner/v10",
   "personal-cloud-runner/v11",
+  "personal-cloud-runner/v12",
+  "personal-cloud-runner/v13",
 ]);
 
 type JsonObject = Record<string, unknown>;
@@ -137,6 +173,7 @@ function sleeveReference(value: unknown): PersonalIndexVolOverlay2023InputManife
 async function baseInputs(
   bucket: R2Bucket,
   baseJobId: string,
+  family: "legacy" | "am-pm" = "legacy",
 ): Promise<PersonalIndexVolOverlay2023InputManifest["base"]> {
   const key = personalResearchManifestKey(baseJobId);
   const { document: manifest } = await boundedJson(
@@ -147,12 +184,33 @@ async function baseInputs(
   const resultDigest = String(manifest.result_sha256 ?? "");
   const resultKey = personalResearchResultKey(baseJobId);
   const snapshot = manifest.snapshot;
+  const sleeve = manifest.base_sleeve_artifact;
+  const amPmEligible =
+    family === "am-pm" &&
+    manifest.cohort_id === PERSONAL_INDEX_AM_PM_BASE_COHORT_ID &&
+    manifest.cohort_digest ===
+      personalResearchCohortDigest(PERSONAL_INDEX_AM_PM_BASE_COHORT_ID) &&
+    manifest.execution_mode === AM_PM_BASE_EXECUTION_MODE &&
+    isObject(sleeve) &&
+    sleeve.artifact_schema_version === AM_PM_BASE_SLEEVE_SCHEMA &&
+    sleeve.strategy_id === AM_PM_BASE_STRATEGY_ID &&
+    sleeve.cohort_id === PERSONAL_INDEX_AM_PM_BASE_COHORT_ID &&
+    sleeve.universe_id === BASE_UNIVERSE_ID;
+  const legacyEligible =
+    family === "legacy" &&
+    manifest.cohort_id === BASE_COHORT_ID &&
+    manifest.cohort_digest === personalResearchCohortDigest(BASE_COHORT_ID);
+  const runnerOk =
+    family === "am-pm"
+      ? String(manifest.version ?? "") === PERSONAL_RESEARCH_RUNNER_VERSION &&
+        String(manifest.runner_version ?? "") === PERSONAL_RESEARCH_RUNNER_VERSION
+      : OVERLAY_COMPATIBLE_BASE_RUNNER_VERSIONS.has(String(manifest.version ?? ""));
   if (
     manifest.status !== "COMPLETED" ||
-    !OVERLAY_COMPATIBLE_BASE_RUNNER_VERSIONS.has(String(manifest.version ?? "")) ||
+    !runnerOk ||
     manifest.job_id !== baseJobId ||
-    manifest.cohort_id !== BASE_COHORT_ID ||
-    manifest.cohort_digest !== personalResearchCohortDigest(BASE_COHORT_ID) ||
+    !amPmEligible && !legacyEligible ||
+    (family === "am-pm" && manifest.execution_mode === "next_close") ||
     manifest.universe_id !== BASE_UNIVERSE_ID ||
     manifest.result_key !== resultKey ||
     !DIGEST_RE.test(resultDigest) ||
@@ -346,15 +404,194 @@ async function sviInputs(
   };
 }
 
+const OVERLAY_AUTHORITY = {
+  draft_only: true,
+  screening_only: true,
+  ready: false,
+  mass: false,
+  promotion: false,
+  live_orders: false,
+  go: false,
+  single_stock_option_iv: "FORBIDDEN",
+} as const;
+
+const AM_PM_PROXY_MAPPING = {
+  executable_hedge_code: "13060",
+  n225_etf_if_required: "13210",
+  cash_index_executable_fill_claim: false,
+  tracking_basis_risk: true,
+} as const;
+
+const AM_PM_TEMPORAL = {
+  source_decision_cutoff_jst: "11:30:00+09:00",
+  equity_am_usable_by_jst: "12:30:00+09:00",
+  prepared_available_at: "NO_LATER_THAN_D_12_30_JST",
+  fill_timing: "d_pm_aadjc",
+  first_pnl_interval: "d_pm_to_d_plus_1_pm",
+  order_sizing: "d_am_price",
+  option_signal_as_of: "through_d_minus_1",
+  no_forward_fill: true,
+  no_full_close_fallback: true,
+  no_recovery_promotion: true,
+} as const;
+
 export async function buildPersonalIndexVolOverlay2023InputManifest(
   bucket: R2Bucket,
   request: PersonalIndexVolOverlay2023Request,
-): Promise<PersonalIndexVolOverlay2023InputManifest> {
+): Promise<PersonalIndexOverlayFamilyInputManifest> {
+  const amPmFamily =
+    isPersonalIndexVolOverlay2023AmPmCohort(request.cohort_id) ||
+    isPersonalIndexSmileTransport2023AmPmCohort(request.cohort_id);
   const [base, svi] = await Promise.all([
-    baseInputs(bucket, request.base_job_id),
+    baseInputs(bucket, request.base_job_id, amPmFamily ? "am-pm" : "legacy"),
     sviInputs(bucket, request.svi_job_id),
   ]);
-  return {
+  if (isPersonalIndexSmileTransport2023AmPmCohort(request.cohort_id)) {
+    const smile: PersonalIndexSmileTransport2023AmPmInputManifest = {
+      schema_version: "personal-index-smile-transport-2023-am-pm-input/v1",
+      job_id: request.job_id,
+      cohort_id: PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_COHORT_ID,
+      runner_version: PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_RUNNER_VERSION,
+      base,
+      svi,
+      fixed_window: {
+        start: PERSONAL_INDEX_VOL_OVERLAY_2023_EARLIEST_DAY,
+        end: PERSONAL_INDEX_VOL_OVERLAY_2023_LATEST_DAY,
+        signal_start_policy: PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_SIGNAL_START_POLICY,
+        signal_end_policy: "LAST_SESSION_MINUS_ONE",
+      },
+      temporal_contract: {
+        ...AM_PM_TEMPORAL,
+        smile_transport_pair: "d_minus_2_to_d_minus_1",
+        no_expiry_rank_substitution: true,
+        no_extrapolation: true,
+        d_minus_1_rule: "immediately_preceding_official_session",
+      },
+      candidates: {
+        ids: PERSONAL_INDEX_SMILE_TRANSPORT_AM_PM_CANDIDATE_IDS,
+        sticky_models: ["sticky_strike", "sticky_moneyness"],
+        families: ["downside_smile_term_surprise", "potential_minimum_transport"],
+        selection: "NOT_PERFORMED",
+        adaptive_model_switch: false,
+      },
+      formulas: {
+        downside_q:
+          "actual_downside_smile_term_ratio/predicted_downside_smile_term_ratio-1",
+        downside_g: "clip(1/(1+q),0.5,1.0)",
+        potential_minimum_M: "(abs(e_front)+abs(e_next))/2+abs(e_next-e_front)",
+        potential_minimum_g: "clip(1/(1+M/0.10),0.5,1.0)",
+        hedge_h: "clip(-g*beta_D,-1.5,1.5)",
+      },
+      gate: {
+        min_common_valid_signal_days: 40,
+        min_distinct_calendar_months: 4,
+        common_invalid_policy: "flatten_g0_h0_at_d_pm",
+      },
+      core: {
+        version: PERSONAL_INDEX_SMILE_TRANSPORT_CORE_VERSION,
+        module: PERSONAL_INDEX_SMILE_TRANSPORT_CORE_MODULE,
+      },
+      physical_potential: {
+        metaphor_only: true,
+        causal_claim: false,
+      },
+      svi_features_jsonl: {
+        trusted_for_transport: false,
+        reason: "lacks_exact_expiry_svi_parameters_and_fit_bands",
+      },
+      selection: "NOT_PERFORMED",
+      proxy_mapping: AM_PM_PROXY_MAPPING,
+      authority: OVERLAY_AUTHORITY,
+    };
+    return smile;
+  }
+  if (isPersonalIndexVolOverlay2023AmPmCohort(request.cohort_id)) {
+    const overlay: PersonalIndexVolOverlay2023AmPmInputManifest = {
+      schema_version: "personal-index-vol-overlay-2023-am-pm-input/v1",
+      job_id: request.job_id,
+      cohort_id: PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID,
+      runner_version: PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_RUNNER_VERSION,
+      base,
+      svi,
+      fixed_window: {
+        start: PERSONAL_INDEX_VOL_OVERLAY_2023_EARLIEST_DAY,
+        end: PERSONAL_INDEX_VOL_OVERLAY_2023_LATEST_DAY,
+        signal_start_policy: PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_SIGNAL_START_POLICY,
+        signal_end_policy: "LAST_SESSION_MINUS_ONE",
+      },
+      temporal_contract: AM_PM_TEMPORAL,
+      candidates: {
+        ids: PERSONAL_INDEX_VOL_OVERLAY_AM_PM_CANDIDATE_IDS,
+        selection: "NOT_PERFORMED",
+        adaptive_model_switch: false,
+      },
+      selection: "NOT_PERFORMED",
+      proxy_mapping: AM_PM_PROXY_MAPPING,
+      authority: OVERLAY_AUTHORITY,
+    };
+    return overlay;
+  }
+  if (isPersonalIndexSmileTransport2023Cohort(request.cohort_id)) {
+    const smile: PersonalIndexSmileTransport2023InputManifest = {
+      schema_version: "personal-index-smile-transport-2023-input/v2",
+      job_id: request.job_id,
+      cohort_id: PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID,
+      runner_version: PERSONAL_INDEX_SMILE_TRANSPORT_2023_RUNNER_VERSION,
+      base,
+      svi,
+      fixed_window: {
+        start: PERSONAL_INDEX_VOL_OVERLAY_2023_EARLIEST_DAY,
+        end: PERSONAL_INDEX_VOL_OVERLAY_2023_LATEST_DAY,
+        signal_start_policy: PERSONAL_INDEX_SMILE_TRANSPORT_2023_SIGNAL_START_POLICY,
+        signal_end_policy: "LAST_SESSION_MINUS_TWO",
+      },
+      temporal_contract: {
+        source_decision_cutoff_jst: "15:00:00+09:00",
+        prepared_available_at: "NO_EARLIER_THAN_D_23_59_59_JST",
+        fill_timing: "next_close",
+        first_pnl_interval: "fill_close_to_following_close",
+        no_forward_fill: true,
+        no_expiry_rank_substitution: true,
+        no_extrapolation: true,
+        d_minus_1_rule: "immediately_preceding_official_session",
+      },
+      candidates: {
+        ids: PERSONAL_INDEX_SMILE_TRANSPORT_CANDIDATE_IDS,
+        sticky_models: ["sticky_strike", "sticky_moneyness"],
+        families: ["downside_smile_term_surprise", "potential_minimum_transport"],
+        selection: "NOT_PERFORMED",
+        adaptive_model_switch: false,
+      },
+      formulas: {
+        downside_q:
+          "actual_downside_smile_term_ratio/predicted_downside_smile_term_ratio-1",
+        downside_g: "clip(1/(1+q),0.5,1.0)",
+        potential_minimum_M: "(abs(e_front)+abs(e_next))/2+abs(e_next-e_front)",
+        potential_minimum_g: "clip(1/(1+M/0.10),0.5,1.0)",
+        hedge_h: "clip(-g*beta_D,-1.5,1.5)",
+      },
+      gate: {
+        min_common_valid_signal_days: 40,
+        min_distinct_calendar_months: 4,
+        common_invalid_policy: "flatten_g0_h0_at_d_plus_1_close_prior",
+      },
+      core: {
+        version: PERSONAL_INDEX_SMILE_TRANSPORT_CORE_VERSION,
+        module: PERSONAL_INDEX_SMILE_TRANSPORT_CORE_MODULE,
+      },
+      physical_potential: {
+        metaphor_only: true,
+        causal_claim: false,
+      },
+      svi_features_jsonl: {
+        trusted_for_transport: false,
+        reason: "lacks_exact_expiry_svi_parameters_and_fit_bands",
+      },
+      authority: OVERLAY_AUTHORITY,
+    };
+    return smile;
+  }
+  const overlay: PersonalIndexVolOverlay2023InputManifest = {
     schema_version: "personal-index-vol-overlay-2023-input/v1",
     job_id: request.job_id,
     cohort_id: PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID,
@@ -374,27 +611,20 @@ export async function buildPersonalIndexVolOverlay2023InputManifest(
       first_pnl_interval: "fill_close_to_following_close",
       no_forward_fill: true,
     },
-    authority: {
-      draft_only: true,
-      screening_only: true,
-      ready: false,
-      mass: false,
-      promotion: false,
-      live_orders: false,
-      go: false,
-      single_stock_option_iv: "FORBIDDEN",
-    },
+    authority: OVERLAY_AUTHORITY,
   };
+  return overlay;
 }
 
 type StoredTerminal = JsonObject & {
   status?: unknown;
 };
 
-async function storedTerminal(env: Env, jobId: string): Promise<StoredTerminal | null> {
-  const object = await env.STRUCTURED_BUCKET.get(
-    personalIndexVolOverlay2023TerminalManifestKey(jobId),
-  );
+async function readTerminal(
+  env: Env,
+  key: string,
+): Promise<StoredTerminal | null> {
+  const object = await env.STRUCTURED_BUCKET.get(key);
   if (!object || object.size > 64 * 1024) return null;
   try {
     const parsed: unknown = await object.json();
@@ -402,6 +632,43 @@ async function storedTerminal(env: Env, jobId: string): Promise<StoredTerminal |
   } catch {
     return null;
   }
+}
+
+async function storedTerminal(
+  env: Env,
+  jobId: string,
+): Promise<StoredTerminal | null> {
+  const overlay = await readTerminal(
+    env,
+    personalIndexOverlayFamilyTerminalManifestKey(
+      jobId,
+      PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID,
+    ),
+  );
+  if (overlay) return overlay;
+  const smile = await readTerminal(
+    env,
+    personalIndexOverlayFamilyTerminalManifestKey(
+      jobId,
+      PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID,
+    ),
+  );
+  if (smile) return smile;
+  const overlayAmPm = await readTerminal(
+    env,
+    personalIndexOverlayFamilyTerminalManifestKey(
+      jobId,
+      PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID,
+    ),
+  );
+  if (overlayAmPm) return overlayAmPm;
+  return readTerminal(
+    env,
+    personalIndexOverlayFamilyTerminalManifestKey(
+      jobId,
+      PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_COHORT_ID,
+    ),
+  );
 }
 
 function sameRequest(
@@ -437,7 +704,7 @@ export async function submitPersonalIndexVolOverlay2023(
       go: false,
     });
   }
-  let input: PersonalIndexVolOverlay2023InputManifest;
+  let input: PersonalIndexOverlayFamilyInputManifest;
   try {
     input = await buildPersonalIndexVolOverlay2023InputManifest(
       env.STRUCTURED_BUCKET,
@@ -465,7 +732,10 @@ export async function submitPersonalIndexVolOverlay2023(
       409,
     );
   }
-  const inputKey = personalIndexVolOverlay2023InputManifestKey(request.job_id);
+  const inputKey = personalIndexOverlayFamilyInputManifestKey(
+    request.job_id,
+    request.cohort_id,
+  );
   const inputPut = await putJsonCreateOnly(env.STRUCTURED_BUCKET, inputKey, input);
   if (inputPut.conflict) {
     return responseJson(
@@ -494,8 +764,22 @@ export async function submitPersonalIndexVolOverlay2023(
     request,
     inputPut.digest,
   );
+  const conflict = await writeSubmittedState(
+    env,
+    submittedStateDocument({
+      jobId: request.job_id,
+      requestDigest,
+      kind: "overlay",
+      deploymentId: env.CF_VERSION_METADATA?.id ?? "unknown",
+      runnerVersion: personalIndexOverlayFamilyRunnerVersion(request.cohort_id),
+    }),
+  );
+  if (conflict) return conflict;
   try {
-    const target = await verifiedPersonalResearchContainer(env);
+    const target = await verifiedPersonalResearchContainer(
+      env,
+      await personalJobContainerName("overlay", request.job_id),
+    );
     return await target.fetch(
       new Request("http://container/v1/run-index-vol-overlay-2023", {
         method: "POST",
@@ -506,11 +790,14 @@ export async function submitPersonalIndexVolOverlay2023(
           input_manifest_digest: inputPut.digest,
           input_manifest_key: inputKey,
           job_id: request.job_id,
-          manifest_key: personalIndexVolOverlay2023TerminalManifestKey(
+          manifest_key: personalIndexOverlayFamilyTerminalManifestKey(
             request.job_id,
+            request.cohort_id,
           ),
           request_digest: requestDigest,
-          runner_version: PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION,
+          runner_version: personalIndexOverlayFamilyRunnerVersion(
+            request.cohort_id,
+          ),
           svi_job_id: request.svi_job_id,
         }),
       }),
@@ -534,27 +821,5 @@ export async function personalIndexVolOverlay2023Status(
   env: Env,
   jobId: string,
 ): Promise<Response> {
-  const terminal = await storedTerminal(env, jobId);
-  if (terminal) {
-    return responseJson({
-      ok: terminal.status === "COMPLETED",
-      durable: true,
-      job: terminal,
-      draft_only: true,
-      screening_only: true,
-      go: false,
-    });
-  }
-  try {
-    const target = await verifiedPersonalResearchContainer(env);
-    return await target.fetch(
-      new Request(`http://container/v1/jobs/${encodeURIComponent(jobId)}`),
-    );
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    return responseJson(
-      { ok: false, error: "personal_index_vol_overlay_status_unavailable", detail, go: false },
-      503,
-    );
-  }
+  return durablePersonalJobStatus(env, "overlay", jobId);
 }

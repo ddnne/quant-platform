@@ -51,6 +51,18 @@ def test_cli_prints_machine_readable_artifact_summary(
                 base_sleeve_artifact_path=base_sleeve,
                 base_sleeve_artifact_digest="sha256:" + "6" * 64,
                 base_sleeve_archive_member=f"base-sleeve/{'6' * 64}.json",
+                base_sleeve_artifact={
+                    "schema_version": "personal-base-sleeve-reference/v1",
+                    "artifact_schema_version": "personal-base-sleeve-source/v1",
+                    "archive_member": f"base-sleeve/{'6' * 64}.json",
+                    "sha256": "sha256:" + "6" * 64,
+                    "strategy_id": "personal_sector_balanced_four_factor_v1_ls",
+                    "cohort_id": "sector-relative-ls-v1",
+                    "universe_id": "topix_all",
+                    "role": "INDEX_VOL_OVERLAY_BASE_SOURCE",
+                    "ranking_role": "NON_CANDIDATE_NOT_RANKED",
+                    "candidate_count_contribution": 0,
+                },
                 non_candidate_source_backtest_count=1,
                 exit_code=0,
             )
@@ -95,3 +107,138 @@ def test_cli_prints_machine_readable_artifact_summary(
     assert payload["automatic_promotion"] is False
     assert payload["model_calls"] == 0
     assert payload["estimated_ai_cost_usd"] == 0.0
+
+
+def test_cli_emits_returned_am_base_sleeve_reference(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    database = tmp_path / "input.sqlite"
+    database.touch()
+    base_sleeve = tmp_path / "base-sleeve" / ("7" * 64 + ".json")
+
+    class FakeService:
+        def run(self, request):
+            assert request.cohort_id == "sector-relative-ls-am-pm-v1"
+            return SimpleNamespace(
+                report_id="sha256:" + "1" * 64,
+                report_json_path=tmp_path / "report.json",
+                report_markdown_path=tmp_path / "report.md",
+                snapshot=SimpleNamespace(
+                    snapshot_id="sha256:" + "2" * 64,
+                    logical_data_snapshot_id="sha256:" + "3" * 64,
+                ),
+                candidate_count=4,
+                evaluated_count=4,
+                hold_count=0,
+                unexpected_errors=0,
+                cohort_id="sector-relative-ls-am-pm-v1",
+                cohort_digest="sha256:" + "4" * 64,
+                universe_id="topix_all",
+                universe_rule_digest="sha256:" + "5" * 64,
+                execution_mode="am_signal_pm_close",
+                execution_contract_digest="sha256:" + "9" * 64,
+                base_sleeve_artifact_path=base_sleeve,
+                base_sleeve_artifact_digest="sha256:" + "7" * 64,
+                base_sleeve_archive_member=f"base-sleeve/{'7' * 64}.json",
+                base_sleeve_artifact={
+                    "schema_version": "personal-base-sleeve-reference/v1",
+                    "artifact_schema_version": "personal-base-sleeve-source-am-pm/v1",
+                    "archive_member": f"base-sleeve/{'7' * 64}.json",
+                    "sha256": "sha256:" + "7" * 64,
+                    "strategy_id": "personal_sector_balanced_four_factor_v1_ls_am_pm",
+                    "cohort_id": "sector-relative-ls-am-pm-v1",
+                    "universe_id": "topix_all",
+                    "role": "INDEX_VOL_OVERLAY_BASE_SOURCE",
+                    "ranking_role": "NON_CANDIDATE_NOT_RANKED",
+                    "candidate_count_contribution": 0,
+                },
+                non_candidate_source_backtest_count=1,
+                exit_code=0,
+            )
+
+    monkeypatch.setattr(personal_cli, "PersonalResearchService", FakeService)
+    code = personal_cli.main(
+        [
+            "--db",
+            str(database),
+            "--end",
+            "2026-08-27",
+            "--output",
+            str(tmp_path),
+            "--cohort",
+            "sector-relative-ls-am-pm-v1",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert payload["execution_mode"] == "am_signal_pm_close"
+    assert payload["base_sleeve_artifact"]["artifact_schema_version"] == (
+        "personal-base-sleeve-source-am-pm/v1"
+    )
+    assert payload["base_sleeve_artifact"]["strategy_id"] == (
+        "personal_sector_balanced_four_factor_v1_ls_am_pm"
+    )
+    assert payload["base_sleeve_artifact"]["cohort_id"] == "sector-relative-ls-am-pm-v1"
+
+
+def test_cli_defaults_to_am_diverse_and_keeps_explicit_legacy(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    database = tmp_path / "input.sqlite"
+    database.touch()
+    seen: list[object] = []
+
+    class FakeService:
+        def run(self, request):
+            seen.append(request)
+            return SimpleNamespace(
+                report_id="sha256:" + "1" * 64,
+                report_json_path=tmp_path / "report.json",
+                report_markdown_path=tmp_path / "report.md",
+                snapshot=SimpleNamespace(
+                    snapshot_id="sha256:" + "2" * 64,
+                    logical_data_snapshot_id="sha256:" + "3" * 64,
+                ),
+                candidate_count=4,
+                evaluated_count=0,
+                hold_count=0,
+                unexpected_errors=0,
+                cohort_id=request.cohort_id,
+                cohort_digest="sha256:" + "4" * 64,
+                universe_id="topix_all",
+                universe_rule_digest="sha256:" + "5" * 64,
+                execution_mode="am_signal_pm_close",
+                execution_contract_digest="sha256:" + "6" * 64,
+                base_sleeve_artifact_path=None,
+                base_sleeve_artifact_digest=None,
+                base_sleeve_archive_member=None,
+                non_candidate_source_backtest_count=0,
+                exit_code=2,
+            )
+
+    monkeypatch.setattr(personal_cli, "PersonalResearchService", FakeService)
+    default_code = personal_cli.main(
+        ["--db", str(database), "--end", "2026-08-27", "--output", str(tmp_path)]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert default_code == 2
+    assert seen[0].cohort_id == "diverse-core-am-pm-v1"
+    assert payload["cohort_id"] == "diverse-core-am-pm-v1"
+    assert payload["execution_mode"] == "am_signal_pm_close"
+    help_text = personal_cli._parser().format_help()
+    assert "diverse-core-am-pm-v1" in help_text
+    assert "next-close replay" in help_text
+    legacy_code = personal_cli.main(
+        [
+            "--db",
+            str(database),
+            "--end",
+            "2026-08-27",
+            "--output",
+            str(tmp_path),
+            "--cohort",
+            "diverse-core-v1",
+        ]
+    )
+    assert legacy_code == 2
+    assert seen[1].cohort_id == "diverse-core-v1"

@@ -15,7 +15,7 @@ export const OPS_TOOL_SCHEMA_META_KEY = "quant-platform/tool-schema-digest";
 export const BINDING_MANIFEST_SCHEMA_VERSION =
   "cloudflare-active-worker-bindings/v9";
 export const BINDING_MANIFEST_DIGEST =
-  "sha256:99a8f9a3802b6e37637808d6e9950286720f6e61e8c9769f82c0321df9b7c6aa";
+  "sha256:c3647b1ee0e4e1e2be2b9bfc77ae240fbe49c414186b4c64a87656b73fbefd4a";
 
 /** @param {Record<string, unknown>} schema */
 function zodFromJsonSchema(schema) {

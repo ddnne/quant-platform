@@ -1,15 +1,35 @@
 import { sha256Hex } from "./sha256";
 
-export const PERSONAL_RESEARCH_RUNNER_VERSION = "personal-cloud-runner/v11";
-export const PERSONAL_RESEARCH_CONTAINER_NAME = "personal-research-v11";
+export const PERSONAL_RESEARCH_RUNNER_VERSION = "personal-cloud-runner/v13";
+export const PERSONAL_RESEARCH_LEGACY_CONTAINER_NAME = "personal-research-v12";
+export const PERSONAL_SNAPSHOT_CONTAINER_NAME = "personal-snapshot-v13";
 export const PERSONAL_RESEARCH_MAX_PERIOD_DAYS = 2200;
+export const PERSONAL_RESEARCH_MAX_CONCURRENT_JOBS = 8;
 export const PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024 * 1024;
-export const PERSONAL_RESEARCH_COHORT_IDS = [
+export const PERSONAL_SNAPSHOT_MAX_DATABASE_BYTES = 3_758_096_384;
+export type PersonalContainerKind =
+  | "research"
+  | "svi"
+  | "overlay"
+  | "snapshot"
+  | "vol-panel";
+export const PERSONAL_RESEARCH_LEGACY_COHORT_IDS = [
   "price-relative-v1",
   "fundamental-relative-v1",
   "diverse-core-v1",
   "compact-market-diverse-v1",
   "sector-relative-ls-v1",
+] as const;
+export const PERSONAL_RESEARCH_AM_PM_COHORT_IDS = [
+  "price-relative-am-pm-v1",
+  "fundamental-relative-am-pm-v1",
+  "diverse-core-am-pm-v1",
+  "compact-market-diverse-am-pm-v1",
+  "sector-relative-ls-am-pm-v1",
+] as const;
+export const PERSONAL_RESEARCH_COHORT_IDS = [
+  ...PERSONAL_RESEARCH_LEGACY_COHORT_IDS,
+  ...PERSONAL_RESEARCH_AM_PM_COHORT_IDS,
 ] as const;
 export const PERSONAL_RESEARCH_UNIVERSE_IDS = [
   "topix_all",
@@ -26,6 +46,10 @@ const COMPACT_MARKET_UNIVERSE_IDS = new Set([
   "topix_core30",
   "topix_large70",
   "topix100",
+]);
+const COMPACT_MARKET_COHORT_IDS = new Set([
+  "compact-market-diverse-v1",
+  "compact-market-diverse-am-pm-v1",
 ]);
 const PERSONAL_RESEARCH_UNIVERSE_RULE_DIGESTS: Record<
   PersonalResearchUniverseId,
@@ -61,6 +85,16 @@ const PERSONAL_RESEARCH_COHORT_DIGESTS: Record<
     "sha256:e56ab7e48b1e59e583140ab7cf5382c93d40842cf946b6fb3bf06a75fe296682",
   "sector-relative-ls-v1":
     "sha256:584bbf0052ad1eee6ec31cacdf1298c13c8a59b9eb6928267935fc17e34289be",
+  "price-relative-am-pm-v1":
+    "sha256:34e304efb8ff848a268a1e563985d1456316edf1b9ca874eba7262377e17db93",
+  "fundamental-relative-am-pm-v1":
+    "sha256:9bc404066d3e705e085380a3c2f15bac41c8a24a931b12518ab92abbddcaf67f",
+  "diverse-core-am-pm-v1":
+    "sha256:77136481d8a6b20fb8dc8188b8d6adb2837050b8185a8f8abac92ca10811adde",
+  "compact-market-diverse-am-pm-v1":
+    "sha256:b1c96581aa3f24a9f4df65126c4dd8c443ddb965e7105f9bbea392e72e383eb0",
+  "sector-relative-ls-am-pm-v1":
+    "sha256:e12e65393985ab8b7cc2b0b922a362a055404777a49fda7250f735d47f0b073b",
 };
 
 const JOB_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -141,13 +175,13 @@ export function parsePersonalResearchRequest(
     };
   }
   const compactUniverse = COMPACT_MARKET_UNIVERSE_IDS.has(universeId);
-  const compactCohort = cohortId === "compact-market-diverse-v1";
+  const compactCohort = COMPACT_MARKET_COHORT_IDS.has(cohortId);
   if (compactUniverse !== compactCohort) {
     return {
       ok: false,
       error: compactUniverse
-        ? "compact TOPIX universes require compact-market-diverse-v1"
-        : "compact-market-diverse-v1 requires Core30, Large70, or TOPIX100",
+        ? "compact TOPIX universes require compact-market-diverse-v1 or compact-market-diverse-am-pm-v1"
+        : "compact-market-diverse cohorts require Core30, Large70, or TOPIX100",
     };
   }
   const sha =
@@ -169,11 +203,11 @@ export function parsePersonalResearchRequest(
   if (!start || !end) {
     return { ok: false, error: "period_start and period_end must be ISO dates" };
   }
-  const span = dayNumber(end) - dayNumber(start);
-  if (span <= 0 || span > PERSONAL_RESEARCH_MAX_PERIOD_DAYS) {
+  const inclusiveDays = dayNumber(end) - dayNumber(start) + 1;
+  if (inclusiveDays < 2 || inclusiveDays > PERSONAL_RESEARCH_MAX_PERIOD_DAYS) {
     return {
       ok: false,
-      error: `research period must be 1-${PERSONAL_RESEARCH_MAX_PERIOD_DAYS} days`,
+      error: `research period must be 2-${PERSONAL_RESEARCH_MAX_PERIOD_DAYS} inclusive calendar dates`,
     };
   }
   return {
@@ -243,4 +277,23 @@ export function isPersonalResearchSnapshotKey(key: string): boolean {
 
 export function isPersonalResearchJobId(value: string): boolean {
   return JOB_ID_RE.test(value);
+}
+
+export function personalSnapshotContainerName(): string {
+  return PERSONAL_SNAPSHOT_CONTAINER_NAME;
+}
+
+export async function personalJobContainerName(
+  kind: Exclude<PersonalContainerKind, "snapshot">,
+  jobId: string,
+): Promise<string> {
+  if (!JOB_ID_RE.test(jobId)) {
+    throw new Error("invalid personal container job id");
+  }
+  const digest = await sha256Hex(
+    new TextEncoder().encode(
+      `${PERSONAL_RESEARCH_RUNNER_VERSION}:${kind}:${jobId}`,
+    ),
+  );
+  return `personal-v13-${kind}-${digest.slice(0, 24)}`;
 }

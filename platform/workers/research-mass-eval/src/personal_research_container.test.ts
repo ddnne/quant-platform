@@ -22,11 +22,13 @@ vi.mock("@cloudflare/containers", () => ({
 }));
 
 import {
-  PERSONAL_RESEARCH_CONTAINER_NAME,
+  PERSONAL_RESEARCH_LEGACY_CONTAINER_NAME,
   PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES,
   PERSONAL_RESEARCH_RUNNER_VERSION,
   type PersonalResearchRequest,
+  personalJobContainerName,
 } from "./personal_research_contract";
+import { personalHistorySourceOutbound } from "./personal_history_source";
 import {
   PersonalResearchContainer,
   submitPersonalResearch,
@@ -92,6 +94,7 @@ function testEnv(
         head: vi.fn(async () =>
           snapshotSize === null ? null : snapshot(snapshotSize),
         ),
+        put: vi.fn(async (key: string) => ({ key })),
       } as unknown as R2Bucket,
       PERSONAL_RESEARCH_CONTAINER: {
         getByName: containerByName,
@@ -124,6 +127,7 @@ function sequentialRunnerEnv(
       STRUCTURED_BUCKET: {
         get: vi.fn(async () => null),
         head: vi.fn(async () => snapshot(205 * 1024 * 1024)),
+        put: vi.fn(async (key: string) => ({ key })),
       } as unknown as R2Bucket,
       PERSONAL_RESEARCH_CONTAINER: {
         getByName: containerByName,
@@ -138,6 +142,10 @@ describe("personal research Container admission", () => {
     expect(containerRegistry.outboundByHost?.["research.r2"]).toBe(
       personalResearchR2Outbound,
     );
+    expect(containerRegistry.outboundByHost?.["history.source"]).toBe(
+      personalHistorySourceOutbound,
+    );
+    expect(new PersonalResearchContainer().enableInternet).toBe(false);
     expect(
       Object.prototype.hasOwnProperty.call(
         PersonalResearchContainer,
@@ -184,7 +192,10 @@ describe("personal research Container admission", () => {
     expect(response.status).toBe(202);
     expect(containerByName).toHaveBeenCalledOnce();
     expect(containerByName).toHaveBeenCalledWith(
-      PERSONAL_RESEARCH_CONTAINER_NAME,
+      await personalJobContainerName("research", REQUEST.job_id),
+    );
+    expect(containerByName).not.toHaveBeenCalledWith(
+      PERSONAL_RESEARCH_LEGACY_CONTAINER_NAME,
     );
     expect(containerFetch).toHaveBeenCalledTimes(2);
     expect(containerDestroy).not.toHaveBeenCalled();
@@ -197,12 +208,32 @@ describe("personal research Container admission", () => {
       cohort_digest:
         "sha256:ea37baf3423e5d84e61d4c80c59bdfe8184342dd3dee28646bd339cd45085a84",
       cohort_id: "diverse-core-v1",
-      runner_version: "personal-cloud-runner/v11",
+      runner_version: "personal-cloud-runner/v13",
       snapshot_key: REQUEST.snapshot_key,
       snapshot_sha256: SHA,
       universe_id: "topix500",
       universe_rule_digest:
         "sha256:5034530267f4a358a80d9426fcfedfb1162b9f71c1024b54b4b39fe3547d53c6",
+    });
+  });
+
+  it("forwards an AM request with exact schema, mode digest, and v13 runner", async () => {
+    const request: PersonalResearchRequest = {
+      ...REQUEST,
+      cohort_id: "diverse-core-am-pm-v1",
+      job_id: "am-core-container",
+    };
+    const { env, containerFetch } = testEnv(205 * 1024 * 1024);
+    const response = await submitPersonalResearch(env, request);
+    expect(response.status).toBe(202);
+    const forwarded = containerFetch.mock.calls[1]?.[0] as Request;
+    expect(new URL(forwarded.url).pathname).toBe("/v1/run");
+    expect(await forwarded.json()).toMatchObject({
+      cohort_digest:
+        "sha256:77136481d8a6b20fb8dc8188b8d6adb2837050b8185a8f8abac92ca10811adde",
+      cohort_id: "diverse-core-am-pm-v1",
+      runner_version: "personal-cloud-runner/v13",
+      universe_id: "topix500",
     });
   });
 

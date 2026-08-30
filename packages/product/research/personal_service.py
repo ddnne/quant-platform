@@ -45,11 +45,18 @@ from research.dependency_closure import (
     build_strategy_dependency_closure,
 )
 from research.factor_cohorts import (
+    AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT,
+    AM_SIGNAL_PM_CLOSE_EXECUTION_MODE,
     COHORT_REGISTRY_VERSION,
+    LEGACY_NEXT_CLOSE_EXECUTION_MODE,
+    LEGACY_NEXT_CLOSE_LABEL,
     PERSONAL_EXECUTABLE_COHORT_IDS,
+    PERSONAL_SHORT_FINANCING_AM_PM_COHORT_ID,
     PERSONAL_SHORT_FINANCING_COHORT_ID,
     ResearchCohort,
+    execution_contract_for_cohort,
     get_research_cohort,
+    is_personal_short_financing_cohort,
     personal_specs_for_cohort,
 )
 from research.personal_metrics import (
@@ -72,15 +79,17 @@ from research.paper_candidate_specs import (
     build_multi_day_hold_strategy_spec,
 )
 from research.personal_base_sleeve import (
+    AM_PM_BASE_COHORT_ID as INDEX_VOL_AM_PM_BASE_COHORT_ID,
+    AM_PM_BASE_SLEEVE_ID as INDEX_VOL_AM_PM_BASE_SLEEVE_ID,
     BASE_COHORT_ID as INDEX_VOL_BASE_COHORT_ID,
     BASE_SLEEVE_ID as INDEX_VOL_BASE_SLEEVE_ID,
     BASE_UNIVERSE_ID as INDEX_VOL_BASE_UNIVERSE_ID,
-    PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA,
     PERSONAL_BASE_SLEEVE_COST_BPS,
     PERSONAL_BASE_SLEEVE_RANKING_ROLE,
     PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA,
     PERSONAL_BASE_SLEEVE_ROLE,
     PERSONAL_BASE_SLEEVE_SHORT_FINANCING_RATE,
+    build_personal_base_sleeve_am_pm_artifact,
     build_personal_base_sleeve_artifact,
 )
 from research.stats_metrics import sharpe_ratio
@@ -191,9 +200,12 @@ class PersonalResearchRun:
     cohort_digest: str | None = None
     universe_id: str = DEFAULT_PERSONAL_UNIVERSE_ID
     universe_rule_digest: str | None = None
+    execution_mode: str = LEGACY_NEXT_CLOSE_EXECUTION_MODE
+    execution_contract_digest: str | None = None
     base_sleeve_artifact_path: Path | None = None
     base_sleeve_artifact_digest: str | None = None
     base_sleeve_archive_member: str | None = None
+    base_sleeve_artifact: dict[str, Any] | None = None
     non_candidate_source_backtest_count: int = 0
 
     @property
@@ -258,7 +270,22 @@ _SHORT_COST = ContractDependency(
 )
 
 
-def _short_financing_policy_document() -> dict[str, Any]:
+def _short_financing_execution_timing(
+    execution_contract: Mapping[str, Any] | None,
+) -> str:
+    if (
+        isinstance(execution_contract, Mapping)
+        and execution_contract.get("execution_mode")
+        == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
+    ):
+        return "am_signal_pm_close_same_trading_date_fill"
+    return "next_close_one_session_lag_no_lookahead"
+
+
+def _short_financing_policy_document(
+    *,
+    execution_timing: str = "next_close_one_session_lag_no_lookahead",
+) -> dict[str, Any]:
     return {
         "schema_version": PERSONAL_SHORT_FINANCING_SCHEMA,
         "formula_version": PERSONAL_SHORT_FINANCING_FORMULA_VERSION,
@@ -270,7 +297,7 @@ def _short_financing_policy_document() -> dict[str, Any]:
         "caller_tunable": False,
         "formula": "daily_cost = actual_short_notional * annual_rate / 245",
         "notional_basis": "actual_post_fill_end_of_session_short_market_value",
-        "execution_timing": "next_close_one_session_lag_no_lookahead",
+        "execution_timing": execution_timing,
         "sensitivity_method": (
             "fixed_3pct_baseline_position_trace_cash_counterfactual"
         ),
@@ -380,7 +407,8 @@ def _validated_specs(
     ):
         raise PersonalResearchInputError(
             "personal short strategies require the closed "
-            f"{PERSONAL_SHORT_FINANCING_COHORT_ID!r} cohort"
+            f"{PERSONAL_SHORT_FINANCING_COHORT_ID!r} or "
+            f"{PERSONAL_SHORT_FINANCING_AM_PM_COHORT_ID!r} cohort"
         )
     identities = tuple((spec.strategy_id, spec.version) for spec in specs)
     if len(identities) != len(set(identities)):
@@ -405,6 +433,18 @@ def _validated_specs(
     return specs, cohort
 
 
+def _resolved_execution_contract(
+    cohort: ResearchCohort | None,
+    *,
+    using_default_specs: bool,
+) -> dict[str, Any]:
+    if cohort is not None:
+        return execution_contract_for_cohort(cohort)
+    if using_default_specs:
+        return dict(AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT)
+    return execution_contract_for_cohort(None)
+
+
 def _requires_index_vol_base_sleeve(
     cohort: ResearchCohort | None,
     *,
@@ -414,8 +454,9 @@ def _requires_index_vol_base_sleeve(
 
     return bool(
         cohort is not None
-        and cohort.cohort_id == INDEX_VOL_BASE_COHORT_ID
         and universe_id == INDEX_VOL_BASE_UNIVERSE_ID
+        and cohort.cohort_id
+        in {INDEX_VOL_BASE_COHORT_ID, INDEX_VOL_AM_PM_BASE_COHORT_ID}
     )
 
 
@@ -427,6 +468,7 @@ def _closures(
     policy: PersonalResearchPolicy,
     universe_selector: PersonalUniverseSelector,
     cohort_ref: dict[str, str] | None = None,
+    execution_contract: Mapping[str, Any] | None = None,
 ) -> tuple[PlanDependencyClosure, ...]:
     universe_dependency = ContractDependency(
         kind="universe",
@@ -447,9 +489,19 @@ def _closures(
             "universe": universe_selector.to_dict(),
         }
         if uses_short:
-            plan_body["short_financing"] = _short_financing_policy_document()
+            plan_body["short_financing"] = _short_financing_policy_document(
+                execution_timing=_short_financing_execution_timing(
+                    execution_contract
+                )
+            )
         if cohort_ref is not None:
             plan_body["strategy_cohort"] = cohort_ref
+        if (
+            isinstance(execution_contract, Mapping)
+            and execution_contract.get("execution_mode")
+            == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
+        ):
+            plan_body["execution_contract"] = dict(execution_contract)
         closures.append(
             build_strategy_dependency_closure(
                 plan_id=f"personal:{spec.strategy_id}:{spec_hash[7:19]}",
@@ -1008,7 +1060,11 @@ def _joined_unique(values: Sequence[str]) -> str:
     return "; ".join(dict.fromkeys(value for value in values if value))
 
 
-def _strategy_context(spec: StrategySpec) -> dict[str, Any]:
+def _strategy_context(
+    spec: StrategySpec,
+    *,
+    execution_contract: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Portable mechanics plus the declared return thesis for comparison."""
 
     rule = spec.rule.to_dict()
@@ -1046,7 +1102,11 @@ def _strategy_context(spec: StrategySpec) -> dict[str, Any]:
             f"{exposure}; " + ", ".join(leg_labels)
         )
         short_financing = (
-            _short_financing_policy_document()
+            _short_financing_policy_document(
+                execution_timing=_short_financing_execution_timing(
+                    execution_contract
+                )
+            )
             if rule.get("allow_short")
             else None
         )
@@ -1357,6 +1417,7 @@ def _paper_evidence(
     output_root: Path,
     max_drawdown: float,
     short_financing_annual_rate: float | None = None,
+    execution_contract: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[float], list[str]]:
     paper_path = _write_artifact(
         output_root, "paper", "json", _canonical_bytes(_portable_paper_document(result))
@@ -1384,6 +1445,10 @@ def _paper_evidence(
             "experiment_id": result.experiment_id,
             "period": {"start": config.start, "end": config.end},
             "cost_bps": config.cost_bps,
+            "execution_mode": config.execution_mode,
+            "execution_contract": (
+                None if execution_contract is None else dict(execution_contract)
+            ),
             "total_return_post_cost": float(
                 metrics.get("total_return_post_cost", 0.0)
             ),
@@ -1443,6 +1508,8 @@ def _run_one(
     output_root: Path,
     max_drawdown: float,
     short_financing_annual_rate: float | None = None,
+    execution_mode: str = LEGACY_NEXT_CLOSE_EXECUTION_MODE,
+    execution_contract: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[float], list[str], PaperRunResult]:
     if (
         short_financing_annual_rate is not None
@@ -1467,7 +1534,7 @@ def _run_one(
         end=period[1],
         db_path=db_path,
         universe=period_universe,
-        execution_mode="next_close",
+        execution_mode=execution_mode,
         cost_bps=cost_bps,
         starting_capital=1_000_000.0,
         lookback_days=_calendar_lookback_days(lookback_days),
@@ -1495,6 +1562,7 @@ def _run_one(
         output_root=output_root,
         max_drawdown=max_drawdown,
         short_financing_annual_rate=short_financing_annual_rate,
+        execution_contract=execution_contract,
     )
     return evidence, returns, dates, result
 
@@ -1509,9 +1577,15 @@ def _write_continuous_base_sleeve_artifact(
     source_period: tuple[str, str],
     output_root: Path,
     cohort_digest: str,
+    execution_mode: str = LEGACY_NEXT_CLOSE_EXECUTION_MODE,
+    execution_contract: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], Path, str]:
     """Execute one full-period base sleeve outside candidate selection."""
 
+    am_sleeve = (
+        execution_mode == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
+        or spec.strategy_id == INDEX_VOL_AM_PM_BASE_SLEEVE_ID
+    )
     evidence, _returns, _dates, paper_result = _run_one(
         executor,
         spec,
@@ -1526,13 +1600,24 @@ def _write_continuous_base_sleeve_artifact(
         short_financing_annual_rate=(
             PERSONAL_BASE_SLEEVE_SHORT_FINANCING_RATE
         ),
+        execution_mode=(
+            AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
+            if am_sleeve
+            else LEGACY_NEXT_CLOSE_EXECUTION_MODE
+        ),
+        execution_contract=execution_contract,
     )
     paper_membership_digest = paper_result.reproducibility.get(
         "resolved_universe_digest"
     )
     if not isinstance(paper_membership_digest, str):
         raise RuntimeError("base sleeve paper membership digest is absent")
-    document = build_personal_base_sleeve_artifact(
+    builder = (
+        build_personal_base_sleeve_am_pm_artifact
+        if am_sleeve
+        else build_personal_base_sleeve_artifact
+    )
+    document = builder(
         result=paper_result,
         evidence=evidence,
         spec=spec,
@@ -1560,12 +1645,12 @@ def _write_continuous_base_sleeve_artifact(
     artifact_digest = "sha256:" + artifact_path.stem
     reference = {
         "schema_version": PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA,
-        "artifact_schema_version": PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA,
+        "artifact_schema_version": document["schema_version"],
         "archive_member": archive_member,
         "sha256": artifact_digest,
-        "strategy_id": INDEX_VOL_BASE_SLEEVE_ID,
-        "cohort_id": INDEX_VOL_BASE_COHORT_ID,
-        "universe_id": INDEX_VOL_BASE_UNIVERSE_ID,
+        "strategy_id": document["strategy"]["strategy_id"],
+        "cohort_id": document["cohort"]["cohort_id"],
+        "universe_id": document["universe"]["universe_id"],
         "role": PERSONAL_BASE_SLEEVE_ROLE,
         "ranking_role": PERSONAL_BASE_SLEEVE_RANKING_ROLE,
         "candidate_count_contribution": 0,
@@ -1577,6 +1662,8 @@ def _short_financing_sensitivity_document(
     runs_by_rate: Mapping[float, Sequence[dict[str, Any]]],
     returns_by_rate: Mapping[float, Sequence[float]],
     dates_by_rate: Mapping[float, Sequence[str]],
+    *,
+    execution_timing: str = "next_close_one_session_lag_no_lookahead",
 ) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     for rate in PERSONAL_SHORT_FINANCING_ANNUAL_RATES:
@@ -1611,7 +1698,7 @@ def _short_financing_sensitivity_document(
         for result in results
     ]
     document = {
-        **_short_financing_policy_document(),
+        **_short_financing_policy_document(execution_timing=execution_timing),
         "results": results,
         "higher_rate_net_return_nonincreasing": all(
             left >= right for left, right in itertools.pairwise(net_returns)
@@ -1632,6 +1719,8 @@ def _candidate_evaluation(
     output_root: Path,
     policy: PersonalResearchPolicy,
     short_financing_required: bool = False,
+    execution_mode: str = LEGACY_NEXT_CLOSE_EXECUTION_MODE,
+    execution_contract: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     validation_runs: list[dict[str, Any]] = []
     pooled_returns: list[float] = []
@@ -1663,6 +1752,8 @@ def _candidate_evaluation(
             output_root=output_root,
             max_drawdown=policy.max_drawdown,
             short_financing_annual_rate=baseline_rate,
+            execution_mode=execution_mode,
+            execution_contract=execution_contract,
         )
         if short_financing_required:
             for rate in PERSONAL_SHORT_FINANCING_ANNUAL_RATES:
@@ -1696,6 +1787,9 @@ def _candidate_evaluation(
             sensitivity_runs,
             sensitivity_returns,
             sensitivity_dates,
+            execution_timing=_short_financing_execution_timing(
+                execution_contract
+            ),
         )
         if short_financing_required
         else None
@@ -1722,7 +1816,12 @@ def _candidate_evaluation(
         "strategy_spec_version": spec.version,
         "strategy_spec_digest": strategy_spec_digest(spec),
         "dependency_closure_digest": closure.closure_digest,
-        "strategy": _strategy_context(spec),
+        "strategy": _strategy_context(
+            spec, execution_contract=execution_contract
+        ),
+        "execution_contract": (
+            None if execution_contract is None else dict(execution_contract)
+        ),
         "decision": "REJECT",
         "reasons": [
             (
@@ -1771,6 +1870,8 @@ def _candidate_evaluation(
             if short_financing_required
             else None
         ),
+        execution_mode=execution_mode,
+        execution_contract=execution_contract,
     )
     stress_checks = {
         "positive_return": stress["total_return_post_cost"] > 0.0,
@@ -1806,6 +1907,8 @@ def _candidate_evaluation(
             if short_financing_required
             else None
         ),
+        execution_mode=execution_mode,
+        execution_contract=execution_contract,
     )
     holdout_checks = {
         "positive_return": holdout["total_return_post_cost"] > 0.0,
@@ -1841,6 +1944,8 @@ class _CandidateProcessTask:
     output_root: Path
     policy: PersonalResearchPolicy
     short_financing_required: bool
+    execution_mode: str = LEGACY_NEXT_CLOSE_EXECUTION_MODE
+    execution_contract: Mapping[str, Any] | None = None
 
 
 def _process_contract_dependency(
@@ -1933,6 +2038,8 @@ def _candidate_process(task: _CandidateProcessTask) -> tuple[int, dict[str, Any]
             output_root=task.output_root,
             policy=task.policy,
             short_financing_required=task.short_financing_required,
+            execution_mode=task.execution_mode,
+            execution_contract=task.execution_contract,
         )
     return task.ordinal, candidate
 
@@ -1941,6 +2048,8 @@ def _unexpected_candidate(
     spec: StrategySpec,
     closure: PlanDependencyClosure,
     error: BaseException,
+    *,
+    execution_contract: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if isinstance(error, _CandidateProcessReportedError):
         error_type = error.error_type
@@ -1953,7 +2062,12 @@ def _unexpected_candidate(
         "strategy_spec_version": spec.version,
         "strategy_spec_digest": strategy_spec_digest(spec),
         "dependency_closure_digest": closure.closure_digest,
-        "strategy": _strategy_context(spec),
+        "strategy": _strategy_context(
+            spec, execution_contract=execution_contract
+        ),
+        "execution_contract": (
+            None if execution_contract is None else dict(execution_contract)
+        ),
         "decision": "SKIPPED",
         "reasons": [f"unexpected:{error_type}"],
         "validation": None,
@@ -2264,6 +2378,7 @@ def _evaluate_candidates_concurrently(
                     spec,
                     closure,
                     error,
+                    execution_contract=task.execution_contract,
                 )
             else:
                 ordered[task.ordinal] = candidate
@@ -2289,6 +2404,7 @@ def _comparison_document(candidates: Sequence[dict[str, Any]]) -> dict[str, Any]
         )
         stress = candidate.get("stress")
         holdout = candidate.get("holdout")
+        contract = candidate.get("execution_contract")
         rows.append(
             {
                 "strategy_id": candidate["strategy_id"],
@@ -2323,23 +2439,100 @@ def _comparison_document(candidates: Sequence[dict[str, Any]]) -> dict[str, Any]
                 "short_financing_sensitivity": candidate.get(
                     "short_financing_sensitivity"
                 ),
+                "execution_contract": contract,
+                "execution_contract_id": (
+                    contract.get("id") if isinstance(contract, Mapping) else None
+                ),
+                "execution_contract_digest": (
+                    contract.get("contract_digest")
+                    if isinstance(contract, Mapping)
+                    else None
+                ),
+                "execution_contract_label": (
+                    contract.get("label")
+                    if isinstance(contract, Mapping)
+                    else None
+                ),
             }
         )
-    return {
-        "schema_version": "personal-performance-comparison/v2",
-        "metric_basis": {
-            "return_frequency": "daily_close_to_close_including_first_session",
-            "annualization_sessions": 252,
-            "return_basis": "post_cost_equity",
-            "drawdown_basis": "post_cost_equity_including_starting_capital",
-            "drawdown_duration": "peak_to_trough_sessions",
-            "drawdown_recovery": "trough_to_first_prior_peak_recovery_sessions",
-            "turnover_basis": "one_way_absolute_fill_notional_over_starting_capital",
-            "var_cvar_basis": "positive_loss_magnitude_from_daily_returns",
-            "stress_holdout_delta": "observed_minus_validation_stitched",
-        },
-        "rows": rows,
+    digests: list[str | None] = []
+    for row in rows:
+        contract = row.get("execution_contract")
+        digest = (
+            contract.get("contract_digest")
+            if isinstance(contract, Mapping)
+            else None
+        )
+        digests.append(digest if isinstance(digest, str) else None)
+    unique_digests = {digest for digest in digests if digest is not None}
+    mixed = len(set(digests)) > 1
+    am_only = (
+        not mixed
+        and rows
+        and isinstance(rows[0].get("execution_contract"), Mapping)
+        and rows[0]["execution_contract"].get("execution_mode")
+        == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
+    )
+    metric_basis = {
+        "return_frequency": (
+            "d_pm_to_next_pm_including_first_new_position"
+            if am_only
+            else "daily_close_to_close_including_first_session"
+        ),
+        "annualization_sessions": 252,
+        "return_basis": "post_cost_equity",
+        "drawdown_basis": "post_cost_equity_including_starting_capital",
+        "drawdown_duration": "peak_to_trough_sessions",
+        "drawdown_recovery": "trough_to_first_prior_peak_recovery_sessions",
+        "turnover_basis": "one_way_absolute_fill_notional_over_starting_capital",
+        "var_cvar_basis": "positive_loss_magnitude_from_daily_returns",
+        "stress_holdout_delta": "observed_minus_validation_stitched",
     }
+    document: dict[str, Any] = {
+        "schema_version": "personal-performance-comparison/v2",
+        "metric_basis": metric_basis,
+        "rows": rows,
+        "execution_contract_column": True,
+    }
+    if mixed:
+        document.update(
+            {
+                "comparable": False,
+                "cross_contract_aggregation": "forbidden",
+                "cross_contract_ranking": "forbidden",
+                "reason": "mixed_execution_contracts",
+            }
+        )
+    else:
+        document["comparable"] = True
+        if unique_digests:
+            document["execution_contract_digest"] = next(iter(unique_digests))
+    return document
+
+
+def pool_or_rank_personal_comparison(
+    document: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Refuse silent pooling or ranking across execution contracts."""
+
+    if not isinstance(document, Mapping):
+        raise PersonalResearchInputError("comparison document is required")
+    rows = document.get("rows")
+    if not isinstance(rows, list):
+        raise PersonalResearchInputError("comparison rows are required")
+    identities: list[str | None] = []
+    for row in rows:
+        contract = row.get("execution_contract") if isinstance(row, Mapping) else None
+        if isinstance(contract, Mapping):
+            digest = contract.get("contract_digest")
+            identities.append(digest if isinstance(digest, str) else None)
+        else:
+            identities.append(None)
+    if len(set(identities)) > 1 or document.get("comparable") is False:
+        raise PersonalResearchInputError(
+            "cannot rank or pool comparison rows across execution contracts"
+        )
+    return [row for row in rows if isinstance(row, Mapping)]
 
 
 def _md_text(value: Any) -> str:
@@ -2419,6 +2612,30 @@ def _markdown(report: dict[str, Any]) -> str:
     cohort = report.get("strategy_cohort")
     if isinstance(cohort, dict):
         lines.insert(6, f"- Cohort: `{cohort['cohort_id']}`")
+    execution_contract = report.get("execution_contract")
+    comparison = report.get("comparison")
+    mixed_contracts = (
+        isinstance(comparison, Mapping) and comparison.get("comparable") is False
+    )
+    am_execution = (
+        isinstance(execution_contract, Mapping)
+        and execution_contract.get("execution_mode")
+        == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
+    )
+    if am_execution:
+        insert_at = 7 if isinstance(cohort, dict) else 6
+        lines[insert_at:insert_at] = [
+            (
+                "- Execution: `am_signal_pm_close` "
+                f"(`{execution_contract.get('contract_digest')}`)"
+            ),
+            (
+                "- Timing: AM MAdjC signal / same-day PM AAdjC fill; "
+                "non-price cutoff 11:30:00+09:00; AM acquisition deadline "
+                "12:30:00+09:00 is not the cutoff; first PnL D_PM_to_next_PM; "
+                "D-1 market cap; no fallback/ffill; DRAFT retrospective only"
+            ),
+        ]
     for candidate in report["candidates"]:
         reasons = ", ".join(candidate["reasons"]) or "none"
         lines.append(
@@ -2438,63 +2655,102 @@ def _markdown(report: dict[str, Any]) -> str:
                 "holdout deltas are observed minus validation."
             ),
             "",
-            (
-                "| Strategy | Thesis | Return source | Works when | Fails when | "
-                "Evidence | Mechanics | Decision | "
-                "Short financing sensitivity | "
-                "Net return | CAGR | Volatility | Sharpe | Sortino | Max DD | "
-                "Calmar | Positive days | Positive months | Daily CVaR 95 | "
-                "Turnover / year | Cost drag | Stress Sharpe delta | "
-                "Holdout Sharpe delta |"
-            ),
-            (
-                "|---|---|---|---|---|---|---|---:|---|---:|---:|---:|---:|"
-                "---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
-            ),
         ]
     )
+    show_execution_column = bool(am_execution or mixed_contracts)
+    if mixed_contracts:
+        lines.extend(
+            [
+                "Rows include an explicit execution-contract column and are not "
+                "pooled or ranked across contracts.",
+                "",
+            ]
+        )
+    if show_execution_column:
+        lines.extend(
+            [
+                (
+                    "| Strategy | Execution contract | Thesis | Return source | "
+                    "Works when | Fails when | Evidence | Mechanics | Decision | "
+                    "Short financing sensitivity | "
+                    "Net return | CAGR | Volatility | Sharpe | Sortino | Max DD | "
+                    "Calmar | Positive days | Positive months | Daily CVaR 95 | "
+                    "Turnover / year | Cost drag | Stress Sharpe delta | "
+                    "Holdout Sharpe delta |"
+                ),
+                (
+                    "|---|---|---|---|---|---|---|---|---:|---|---:|---:|---:|"
+                    "---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+                ),
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                (
+                    "| Strategy | Thesis | Return source | Works when | Fails when | "
+                    "Evidence | Mechanics | Decision | "
+                    "Short financing sensitivity | "
+                    "Net return | CAGR | Volatility | Sharpe | Sortino | Max DD | "
+                    "Calmar | Positive days | Positive months | Daily CVaR 95 | "
+                    "Turnover / year | Cost drag | Stress Sharpe delta | "
+                    "Holdout Sharpe delta |"
+                ),
+                (
+                    "|---|---|---|---|---|---|---|---:|---|---:|---:|---:|---:|"
+                    "---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+                ),
+            ]
+        )
     for row in report["comparison"]["rows"]:
         validation = row.get("validation") or {}
         deltas = row.get("deltas") or {}
         stress_delta = deltas.get("stress_vs_validation") or {}
         holdout_delta = deltas.get("holdout_vs_validation") or {}
-        lines.append(
-            "| "
-            + " | ".join(
-                (
-                    f"`{row['strategy_id']}`",
-                    _md_text(row.get("thesis")),
-                    _md_text(row.get("return_source")),
-                    _md_text(row.get("works_when")),
-                    _md_text(row.get("fails_when")),
-                    _md_text(row.get("evidence_assessment")),
-                    _md_text(row.get("mechanics_summary")),
-                    str(row["decision"]),
-                    _md_short_financing(
-                        row.get("short_financing_sensitivity")
-                    ),
-                    _md_ratio(validation.get("total_return_net")),
-                    _md_ratio(validation.get("cagr")),
-                    _md_ratio(validation.get("annualized_volatility")),
-                    _md_number(validation.get("annualized_sharpe")),
-                    _md_number(validation.get("annualized_sortino")),
-                    _md_ratio(validation.get("max_drawdown")),
-                    _md_number(validation.get("calmar_ratio")),
-                    _md_ratio(validation.get("positive_day_rate")),
-                    _md_ratio(validation.get("positive_month_rate")),
-                    _md_ratio(
-                        validation.get("daily_conditional_value_at_risk_95")
-                    ),
-                    _md_number(
-                        validation.get("turnover_one_way_annualized_ratio")
-                    ),
-                    _md_ratio(validation.get("cost_return")),
-                    _md_number(stress_delta.get("annualized_sharpe")),
-                    _md_number(holdout_delta.get("annualized_sharpe")),
-                )
+        contract = row.get("execution_contract")
+        contract_label = LEGACY_NEXT_CLOSE_LABEL
+        if isinstance(contract, Mapping):
+            contract_label = str(
+                contract.get("label")
+                or contract.get("execution_mode")
+                or LEGACY_NEXT_CLOSE_LABEL
             )
-            + " |"
+        cells = [
+            f"`{row['strategy_id']}`",
+        ]
+        if show_execution_column:
+            cells.append(_md_text(contract_label))
+        cells.extend(
+            (
+                _md_text(row.get("thesis")),
+                _md_text(row.get("return_source")),
+                _md_text(row.get("works_when")),
+                _md_text(row.get("fails_when")),
+                _md_text(row.get("evidence_assessment")),
+                _md_text(row.get("mechanics_summary")),
+                str(row["decision"]),
+                _md_short_financing(row.get("short_financing_sensitivity")),
+                _md_ratio(validation.get("total_return_net")),
+                _md_ratio(validation.get("cagr")),
+                _md_ratio(validation.get("annualized_volatility")),
+                _md_number(validation.get("annualized_sharpe")),
+                _md_number(validation.get("annualized_sortino")),
+                _md_ratio(validation.get("max_drawdown")),
+                _md_number(validation.get("calmar_ratio")),
+                _md_ratio(validation.get("positive_day_rate")),
+                _md_ratio(validation.get("positive_month_rate")),
+                _md_ratio(
+                    validation.get("daily_conditional_value_at_risk_95")
+                ),
+                _md_number(
+                    validation.get("turnover_one_way_annualized_ratio")
+                ),
+                _md_ratio(validation.get("cost_return")),
+                _md_number(stress_delta.get("annualized_sharpe")),
+                _md_number(holdout_delta.get("annualized_sharpe")),
+            )
         )
+        lines.append("| " + " | ".join(cells) + " |")
     lines.extend(
         [
             "",
@@ -2551,6 +2807,12 @@ class PersonalResearchService:
             request.cohort_id,
             universe_selector.selector_id,
         )
+        execution_contract = _resolved_execution_contract(
+            cohort,
+            using_default_specs=request.specs is None
+            and request.cohort_id is None,
+        )
+        execution_mode = str(execution_contract["execution_mode"])
         short_financing_required = bool(
             cohort is not None and cohort.short_financing_required
         )
@@ -2560,11 +2822,12 @@ class PersonalResearchService:
         )
         if short_financing_required and (
             cohort is None
-            or cohort.cohort_id != PERSONAL_SHORT_FINANCING_COHORT_ID
+            or not is_personal_short_financing_cohort(cohort.cohort_id)
         ):
             raise PersonalResearchInputError(
                 "personal modelled short financing is closed to the "
-                f"{PERSONAL_SHORT_FINANCING_COHORT_ID!r} cohort"
+                f"{PERSONAL_SHORT_FINANCING_COHORT_ID!r} or "
+                f"{PERSONAL_SHORT_FINANCING_AM_PM_COHORT_ID!r} cohort"
             )
         if cohort is not None:
             planned_maximum = len(specs) * (self.policy.validation_folds + 2) + int(
@@ -2599,6 +2862,7 @@ class PersonalResearchService:
             policy=self.policy,
             universe_selector=universe_selector,
             cohort_ref=cohort_ref,
+            execution_contract=execution_contract,
         )
         output_root = Path(request.output_root).expanduser().resolve()
         output_root.mkdir(parents=True, exist_ok=True)
@@ -2718,7 +2982,10 @@ class PersonalResearchService:
                         "strategy_spec_version": spec.version,
                         "strategy_spec_digest": strategy_spec_digest(spec),
                         "dependency_closure_digest": closure.closure_digest,
-                        "strategy": _strategy_context(spec),
+                        "strategy": _strategy_context(
+                            spec, execution_contract=execution_contract
+                        ),
+                        "execution_contract": dict(execution_contract),
                         "decision": "SKIPPED",
                         "reasons": [reason],
                         "validation": None,
@@ -2744,7 +3011,8 @@ class PersonalResearchService:
                     matching = [
                         (spec, closure)
                         for spec, closure in zip(specs, closures, strict=True)
-                        if spec.strategy_id == INDEX_VOL_BASE_SLEEVE_ID
+                        if spec.strategy_id
+                        in {INDEX_VOL_BASE_SLEEVE_ID, INDEX_VOL_AM_PM_BASE_SLEEVE_ID}
                     ]
                     if len(matching) != 1:
                         raise RuntimeError(
@@ -2764,6 +3032,8 @@ class PersonalResearchService:
                         source_period=(fold_periods[0][0], holdout_period[1]),
                         output_root=output_root,
                         cohort_digest=cohort_ref["cohort_digest"],
+                        execution_mode=execution_mode,
+                        execution_contract=execution_contract,
                     )
             worker_count = min(len(specs), self.policy.max_parallel)
             if worker_count > 1:
@@ -2781,6 +3051,8 @@ class PersonalResearchService:
                         output_root=output_root,
                         policy=self.policy,
                         short_financing_required=short_financing_required,
+                        execution_mode=execution_mode,
+                        execution_contract=execution_contract,
                     )
                     for ordinal, (spec, closure) in enumerate(
                         zip(specs, closures, strict=True)
@@ -2819,12 +3091,19 @@ class PersonalResearchService:
                                     output_root=output_root,
                                     policy=self.policy,
                                     short_financing_required=short_financing_required,
+                                    execution_mode=execution_mode,
+                                    execution_contract=execution_contract,
                                 )
                             )
                         except Exception as error:  # report; CLI still exits 1
                             unexpected_errors += 1
                             candidates.append(
-                                _unexpected_candidate(spec, closure, error)
+                                _unexpected_candidate(
+                                    spec,
+                                    closure,
+                                    error,
+                                    execution_contract=execution_contract,
+                                )
                             )
         verify_personal_snapshot(snapshot)
         evaluated_count = sum(
@@ -2884,6 +3163,7 @@ class PersonalResearchService:
                 "lifecycle": "DRAFT_only",
                 "live_trading_eligible": False,
             },
+            "execution_contract": dict(execution_contract),
             "candidates": candidates,
             "comparison": _comparison_document(candidates),
             "base_sleeve_artifact": base_sleeve_reference,
@@ -2908,7 +3188,11 @@ class PersonalResearchService:
             body["strategy_cohort"] = cohort_ref
         if short_financing_required:
             body["short_financing_policy"] = (
-                _short_financing_policy_document()
+                _short_financing_policy_document(
+                    execution_timing=_short_financing_execution_timing(
+                        execution_contract
+                    )
+                )
             )
         report_id = _digest(body)
         report = {**body, "report_id": report_id}
@@ -2936,6 +3220,10 @@ class PersonalResearchService:
             ),
             universe_id=universe_selector.selector_id,
             universe_rule_digest=universe_selector.rule_digest,
+            execution_mode=execution_mode,
+            execution_contract_digest=str(
+                execution_contract.get("contract_digest")
+            ),
             base_sleeve_artifact_path=base_sleeve_artifact_path,
             base_sleeve_artifact_digest=base_sleeve_artifact_digest,
             base_sleeve_archive_member=(
@@ -2943,6 +3231,7 @@ class PersonalResearchService:
                 if base_sleeve_reference is None
                 else str(base_sleeve_reference["archive_member"])
             ),
+            base_sleeve_artifact=base_sleeve_reference,
             non_candidate_source_backtest_count=int(
                 base_sleeve_reference is not None
             ),
@@ -2968,4 +3257,5 @@ __all__ = [
     "PersonalResearchRun",
     "PersonalResearchService",
     "default_personal_specs",
+    "pool_or_rank_personal_comparison",
 ]

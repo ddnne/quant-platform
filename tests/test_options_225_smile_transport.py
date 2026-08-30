@@ -279,6 +279,14 @@ def test_daily_rows_expose_zero_term_surprise_for_exact_model() -> None:
     assert potential["potential_depth_term_success"] is True
     assert potential["signal_cutoff"] == "D_close"
     assert potential["execution_intent"] == "D_plus_1_or_later"
+    assert potential["coordinate_definition"] == "k=ln(strike/UnderPx_proxy)"
+    assert potential["under_px_is_trusted_forward"] is False
+    assert potential["trusted_forward_available"] is False
+    assert potential["forward_relative_minimum_log_moneyness"] is None
+    assert potential["forward_relative_minimum_strike_ratio_minus_one"] is None
+    assert potential["forward_relative_reason"] == "trusted_forward_unavailable"
+    assert potential["research_status"] == "DRAFT_DIAGNOSTIC_ONLY"
+    assert potential["pairing_rule"] == "adjacent_observation_dates_exact_same_expiry"
 
     sticky_strike_pairs = {
         int(row["maturity_rank"]): row

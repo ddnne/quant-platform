@@ -9,6 +9,8 @@ from types import SimpleNamespace
 import pytest
 
 from features import (
+    AM_SESSION_FUNDAMENTAL_RATIO_ID,
+    AM_SESSION_PRICE_RATIO_ID,
     FUNDAMENTAL_RATIO_MODES,
     PRICE_RATIO_MODES,
     PitFundamentalRatio,
@@ -123,6 +125,14 @@ def test_ratio_features_are_registered_with_closed_v1_contracts() -> None:
         "total_assets",
         "net_sales",
     }
+    am_price = get(AM_SESSION_PRICE_RATIO_ID, "1.0.0")
+    am_fund = get(AM_SESSION_FUNDAMENTAL_RATIO_ID, "1.0.0")
+    assert am_price is not RetrospectivePriceRatio
+    assert am_fund is not PitFundamentalRatio
+    assert am_price.dataset_dependencies == RetrospectivePriceRatio.dataset_dependencies
+    assert am_fund.dataset_dependencies == PitFundamentalRatio.dataset_dependencies
+    assert "equities_bars_daily_am" not in am_price.dataset_dependencies
+    assert "equities_bars_daily_am" not in am_fund.dataset_dependencies
 
 
 def test_return_and_short_long_momentum_are_zero_centered() -> None:

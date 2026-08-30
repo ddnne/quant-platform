@@ -13,26 +13,69 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from strategies.spec import FactorLeg, FeatureRef, StrategySpec
+from strategies.spec import FactorLeg, FeatureRef, StrategySpec, strategy_spec_digest
 
 from research.paper_candidate_specs import build_factor_rank_strategy_spec
 
 
 COHORT_REGISTRY_VERSION = "personal-factor-cohorts/v2"
-DEFAULT_FACTOR_COHORT_ID = "diverse-core-v1"
-COMPACT_MARKET_COHORT_ID = "compact-market-diverse-v1"
-PERSONAL_SHORT_FINANCING_COHORT_ID = "sector-relative-ls-v1"
+LEGACY_DEFAULT_FACTOR_COHORT_ID = "diverse-core-v1"
+LEGACY_COMPACT_MARKET_COHORT_ID = "compact-market-diverse-v1"
+LEGACY_PERSONAL_SHORT_FINANCING_COHORT_ID = "sector-relative-ls-v1"
+# Replay aliases: keep the historical constant names pointing at next-close ids.
+COMPACT_MARKET_COHORT_ID = LEGACY_COMPACT_MARKET_COHORT_ID
+PERSONAL_SHORT_FINANCING_COHORT_ID = LEGACY_PERSONAL_SHORT_FINANCING_COHORT_ID
+PRICE_RELATIVE_AM_PM_COHORT_ID = "price-relative-am-pm-v1"
+FUNDAMENTAL_RELATIVE_AM_PM_COHORT_ID = "fundamental-relative-am-pm-v1"
+DEFAULT_FACTOR_COHORT_ID = "diverse-core-am-pm-v1"
+COMPACT_MARKET_AM_PM_COHORT_ID = "compact-market-diverse-am-pm-v1"
+PERSONAL_SHORT_FINANCING_AM_PM_COHORT_ID = "sector-relative-ls-am-pm-v1"
+AM_PM_BASE_COHORT_ID = PERSONAL_SHORT_FINANCING_AM_PM_COHORT_ID
+AM_PM_BASE_SLEEVE_ID = "personal_sector_balanced_four_factor_v1_ls_am_pm"
+AM_PM_BASE_SLEEVE_SCHEMA = "personal-base-sleeve-source-am-pm/v1"
+AM_SIGNAL_PM_CLOSE_EXECUTION_MODE = "am_signal_pm_close"
+AM_PM_EXECUTION_MODE = AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
+TRADING_CALENDAR_DIGEST_SCHEMA = "ordered-trading-session-dates/v1"
+LEGACY_NEXT_CLOSE_EXECUTION_MODE = "next_close"
+LEGACY_NEXT_CLOSE_LABEL = "legacy_next_close"
+AM_PM_COHORT_DOCUMENT_VERSION = "personal-am-pm-cohort/v1"
+AM_SIGNAL_PM_CLOSE_CONTRACT_ID = "personal-am-signal-pm-close"
+AM_SIGNAL_PM_CLOSE_CONTRACT_VERSION = "1.0.0"
+LEGACY_NEXT_CLOSE_CONTRACT_ID = "personal-legacy-next-close"
+LEGACY_NEXT_CLOSE_CONTRACT_VERSION = "1.0.0"
 LEG_VERSION = "1.0.0"
-PERSONAL_EXECUTABLE_COHORT_IDS = (
+LEGACY_PERSONAL_EXECUTABLE_COHORT_IDS = (
     "price-relative-v1",
     "fundamental-relative-v1",
+    LEGACY_DEFAULT_FACTOR_COHORT_ID,
+    LEGACY_COMPACT_MARKET_COHORT_ID,
+    LEGACY_PERSONAL_SHORT_FINANCING_COHORT_ID,
+)
+AM_PM_PERSONAL_EXECUTABLE_COHORT_IDS = (
+    PRICE_RELATIVE_AM_PM_COHORT_ID,
+    FUNDAMENTAL_RELATIVE_AM_PM_COHORT_ID,
     DEFAULT_FACTOR_COHORT_ID,
-    COMPACT_MARKET_COHORT_ID,
-    PERSONAL_SHORT_FINANCING_COHORT_ID,
+    COMPACT_MARKET_AM_PM_COHORT_ID,
+    PERSONAL_SHORT_FINANCING_AM_PM_COHORT_ID,
+)
+PERSONAL_EXECUTABLE_COHORT_IDS = (
+    *LEGACY_PERSONAL_EXECUTABLE_COHORT_IDS,
+    *AM_PM_PERSONAL_EXECUTABLE_COHORT_IDS,
+)
+COMPACT_MARKET_COHORT_IDS = frozenset(
+    {LEGACY_COMPACT_MARKET_COHORT_ID, COMPACT_MARKET_AM_PM_COHORT_ID}
+)
+PERSONAL_SHORT_FINANCING_COHORT_IDS = frozenset(
+    {
+        LEGACY_PERSONAL_SHORT_FINANCING_COHORT_ID,
+        PERSONAL_SHORT_FINANCING_AM_PM_COHORT_ID,
+    }
 )
 COMPACT_MARKET_UNIVERSE_IDS = frozenset(
     {"topix_core30", "topix_large70", "topix100"}
@@ -46,6 +89,82 @@ SECTOR_RELATIVE_UNIVERSE_IDS = frozenset(
         "topix_small",
         "topix500",
     }
+)
+
+
+def _canonical_digest(body: Mapping[str, Any]) -> str:
+    encoded = json.dumps(
+        dict(body),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _am_signal_pm_close_execution_contract_body() -> dict[str, Any]:
+    return {
+        "id": AM_SIGNAL_PM_CLOSE_CONTRACT_ID,
+        "version": AM_SIGNAL_PM_CLOSE_CONTRACT_VERSION,
+        "label": AM_SIGNAL_PM_CLOSE_EXECUTION_MODE,
+        "execution_mode": AM_SIGNAL_PM_CLOSE_EXECUTION_MODE,
+        "information_cutoff": "11:30:00+09:00",
+        "operational_usable_by": "12:30:00+09:00",
+        "non_price_information_cutoff": "11:30:00+09:00",
+        "am_observation_acquisition_deadline": "12:30:00+09:00",
+        "am_observation_deadline_is_non_price_cutoff": False,
+        "signal_price_field": "MAdjC",
+        "signal_price_dataset": "equities_bars_daily",
+        "order_sizing": "D_MAdjC_causal",
+        "fill_valuation_field": "AAdjC",
+        "fill_valuation_session": "same_trading_date",
+        "first_new_position_pnl": "D_PM_to_next_PM",
+        "current_d_final_market_cap_forbidden": True,
+        "market_cap_lag": "D-1",
+        "fallback": False,
+        "forward_fill": False,
+        "lifecycle": "DRAFT",
+        "retrospective_only": True,
+        "live_trading_evidence": False,
+        "ready_snapshot_declared": False,
+        "go": False,
+        "automatic_promotion": False,
+    }
+
+
+def am_signal_pm_close_execution_contract() -> dict[str, Any]:
+    body = _am_signal_pm_close_execution_contract_body()
+    return {**body, "contract_digest": _canonical_digest(body)}
+
+
+def _legacy_next_close_execution_contract_body() -> dict[str, Any]:
+    return {
+        "id": LEGACY_NEXT_CLOSE_CONTRACT_ID,
+        "version": LEGACY_NEXT_CLOSE_CONTRACT_VERSION,
+        "label": LEGACY_NEXT_CLOSE_LABEL,
+        "execution_mode": LEGACY_NEXT_CLOSE_EXECUTION_MODE,
+        "lifecycle": "DRAFT",
+        "retrospective_only": True,
+        "live_trading_evidence": False,
+        "ready_snapshot_declared": False,
+        "go": False,
+        "automatic_promotion": False,
+        "replay_only": True,
+    }
+
+
+def legacy_next_close_execution_contract() -> dict[str, Any]:
+    """Service/report label for historical next-close runs; not a cohort field."""
+
+    body = _legacy_next_close_execution_contract_body()
+    return {**body, "contract_digest": _canonical_digest(body)}
+
+
+AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT: Mapping[str, Any] = MappingProxyType(
+    am_signal_pm_close_execution_contract()
+)
+LEGACY_NEXT_CLOSE_EXECUTION_CONTRACT: Mapping[str, Any] = MappingProxyType(
+    legacy_next_close_execution_contract()
 )
 
 
@@ -294,6 +413,8 @@ class ResearchCohort:
     logic_ids: tuple[str, ...] = ()
     short_financing_required: bool = False
     description: str = ""
+    document_version: str | None = None
+    execution_contract: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.backend not in {"strategy_spec", "bar_native"}:
@@ -302,6 +423,10 @@ class ResearchCohort:
             raise ValueError("cohort must declare exactly one executable surface")
         if len(self.strategy_specs or self.logic_ids) != 4:
             raise ValueError("every bounded cohort must contain exactly four candidates")
+        if self.execution_contract is not None:
+            object.__setattr__(
+                self, "execution_contract", MappingProxyType(dict(self.execution_contract))
+            )
 
     def to_dict(self) -> dict[str, Any]:
         body = {
@@ -318,6 +443,10 @@ class ResearchCohort:
             "draft_only": True,
             "automatic_promotion": False,
         }
+        if self.document_version is not None:
+            body["document_version"] = self.document_version
+        if self.execution_contract is not None:
+            body["execution_contract"] = dict(self.execution_contract)
         encoded = json.dumps(
             body, sort_keys=True, separators=(",", ":"), ensure_ascii=True
         ).encode("utf-8")
@@ -325,6 +454,15 @@ class ResearchCohort:
             **body,
             "cohort_digest": "sha256:" + hashlib.sha256(encoded).hexdigest(),
         }
+
+    @property
+    def execution_mode(self) -> str:
+        if self.execution_contract is None:
+            return LEGACY_NEXT_CLOSE_EXECUTION_MODE
+        mode = self.execution_contract.get("execution_mode")
+        if type(mode) is not str or not mode:
+            raise ValueError(f"cohort {self.cohort_id!r} execution_mode is missing")
+        return mode
 
 
 _COHORTS: dict[str, ResearchCohort] = {
@@ -359,8 +497,8 @@ _COHORTS: dict[str, ResearchCohort] = {
         strategy_specs=_fundamental_relative_specs(),
         description="Sector-relative value, quality, growth, and true size.",
     ),
-    DEFAULT_FACTOR_COHORT_ID: ResearchCohort(
-        cohort_id=DEFAULT_FACTOR_COHORT_ID,
+    LEGACY_DEFAULT_FACTOR_COHORT_ID: ResearchCohort(
+        cohort_id=LEGACY_DEFAULT_FACTOR_COHORT_ID,
         backend="strategy_spec",
         history_data_start="2008-07-07",
         warmup_sessions=253,
@@ -430,6 +568,113 @@ _COHORTS: dict[str, ResearchCohort] = {
     ),
 }
 
+
+_AM_PM_DESCRIPTION_SUFFIX = (
+    " AM-signal to same-day PM-close execution contract; DRAFT retrospective "
+    "only, not live-trading evidence."
+)
+
+
+_AM_SESSION_FEATURE_IDS = {
+    "retrospective_price_ratio": "am_session_price_ratio",
+    "pit_fundamental_ratio": "am_session_fundamental_ratio",
+}
+_AM_PM_STRATEGY_ID_SUFFIX = "_am_pm"
+
+
+def _am_pm_strategy_id(strategy_id: str) -> str:
+    """Append ``_am_pm`` after the full legacy id, including a trailing ``_ls``."""
+
+    text = str(strategy_id)
+    if text.endswith(_AM_PM_STRATEGY_ID_SUFFIX):
+        return text
+    return f"{text}{_AM_PM_STRATEGY_ID_SUFFIX}"
+
+
+def _am_session_feature_ref(ref: FeatureRef) -> FeatureRef:
+    try:
+        feature_id = _AM_SESSION_FEATURE_IDS[ref.id]
+    except KeyError as exc:
+        raise ValueError(
+            f"AM/PM cohort cannot map feature id {ref.id!r} to an AM session identity"
+        ) from exc
+    return FeatureRef(
+        id=feature_id,
+        version=ref.version,
+        params=dict(ref.params),
+    )
+
+
+def _am_session_specs(specs: tuple[StrategySpec, ...]) -> tuple[StrategySpec, ...]:
+    remapped: list[StrategySpec] = []
+    for spec in specs:
+        rule = spec.rule
+        legs = tuple(
+            FactorLeg(
+                feature=_am_session_feature_ref(leg.feature),
+                weight=leg.weight,
+                direction=leg.direction,
+            )
+            for leg in rule.legs
+        )
+        remapped.append(
+            StrategySpec(
+                strategy_id=_am_pm_strategy_id(spec.strategy_id),
+                version=spec.version,
+                rule=type(rule)(
+                    legs=legs,
+                    normalization=rule.normalization,
+                    group=rule.group,
+                    long_frac=rule.long_frac,
+                    short_frac=rule.short_frac,
+                    allow_short=rule.allow_short,
+                    min_eligible_ratio=rule.min_eligible_ratio,
+                    min_eligible_count=rule.min_eligible_count,
+                    min_group_count=rule.min_group_count,
+                ),
+                rationale=spec.rationale,
+                rebalance=spec.rebalance,
+                hold_days=spec.hold_days,
+            )
+        )
+    return tuple(remapped)
+
+
+def _am_pm_factor_cohort(
+    cohort_id: str,
+    source: ResearchCohort,
+) -> ResearchCohort:
+    return ResearchCohort(
+        cohort_id=cohort_id,
+        backend=source.backend,
+        history_data_start=source.history_data_start,
+        warmup_sessions=source.warmup_sessions,
+        dataset_dependencies=source.dataset_dependencies,
+        strategy_specs=_am_session_specs(source.strategy_specs),
+        short_financing_required=source.short_financing_required,
+        description=source.description + _AM_PM_DESCRIPTION_SUFFIX,
+        document_version=AM_PM_COHORT_DOCUMENT_VERSION,
+        execution_contract=AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT,
+    )
+
+
+_COHORTS[PRICE_RELATIVE_AM_PM_COHORT_ID] = _am_pm_factor_cohort(
+    PRICE_RELATIVE_AM_PM_COHORT_ID, _COHORTS["price-relative-v1"]
+)
+_COHORTS[FUNDAMENTAL_RELATIVE_AM_PM_COHORT_ID] = _am_pm_factor_cohort(
+    FUNDAMENTAL_RELATIVE_AM_PM_COHORT_ID, _COHORTS["fundamental-relative-v1"]
+)
+_COHORTS[DEFAULT_FACTOR_COHORT_ID] = _am_pm_factor_cohort(
+    DEFAULT_FACTOR_COHORT_ID, _COHORTS[LEGACY_DEFAULT_FACTOR_COHORT_ID]
+)
+_COHORTS[COMPACT_MARKET_AM_PM_COHORT_ID] = _am_pm_factor_cohort(
+    COMPACT_MARKET_AM_PM_COHORT_ID, _COHORTS[LEGACY_COMPACT_MARKET_COHORT_ID]
+)
+_COHORTS[PERSONAL_SHORT_FINANCING_AM_PM_COHORT_ID] = _am_pm_factor_cohort(
+    PERSONAL_SHORT_FINANCING_AM_PM_COHORT_ID,
+    _COHORTS[LEGACY_PERSONAL_SHORT_FINANCING_COHORT_ID],
+)
+
 RESEARCH_COHORTS: Mapping[str, ResearchCohort] = MappingProxyType(_COHORTS)
 
 
@@ -443,8 +688,26 @@ def get_research_cohort(cohort_id: str) -> ResearchCohort:
         ) from exc
 
 
+def is_am_pm_factor_cohort(cohort_id: str | None) -> bool:
+    return cohort_id in AM_PM_PERSONAL_EXECUTABLE_COHORT_IDS
+
+
+def is_compact_market_cohort(cohort_id: str | None) -> bool:
+    return cohort_id in COMPACT_MARKET_COHORT_IDS
+
+
+def is_personal_short_financing_cohort(cohort_id: str | None) -> bool:
+    return cohort_id in PERSONAL_SHORT_FINANCING_COHORT_IDS
+
+
+def execution_contract_for_cohort(cohort: ResearchCohort | None) -> dict[str, Any]:
+    if cohort is not None and cohort.execution_contract is not None:
+        return dict(cohort.execution_contract)
+    return dict(LEGACY_NEXT_CLOSE_EXECUTION_CONTRACT)
+
+
 def validate_personal_cohort_universe(cohort_id: str, universe_id: str) -> None:
-    if cohort_id == COMPACT_MARKET_COHORT_ID:
+    if is_compact_market_cohort(cohort_id):
         if universe_id not in COMPACT_MARKET_UNIVERSE_IDS:
             raise ValueError(
                 f"cohort {cohort_id!r} requires one of "
@@ -452,11 +715,16 @@ def validate_personal_cohort_universe(cohort_id: str, universe_id: str) -> None:
             )
         return
     if cohort_id in PERSONAL_EXECUTABLE_COHORT_IDS:
+        compact_choice = (
+            COMPACT_MARKET_AM_PM_COHORT_ID
+            if is_am_pm_factor_cohort(cohort_id)
+            else COMPACT_MARKET_COHORT_ID
+        )
         if universe_id not in SECTOR_RELATIVE_UNIVERSE_IDS:
             raise ValueError(
                 f"sector-relative cohort {cohort_id!r} requires one of "
                 f"{sorted(SECTOR_RELATIVE_UNIVERSE_IDS)}; use "
-                f"{COMPACT_MARKET_COHORT_ID!r} for compact universes"
+                f"{compact_choice!r} for compact universes"
             )
 
 
@@ -470,7 +738,7 @@ def personal_specs_for_cohort(
         )
     if (
         cohort.short_financing_required
-        and cohort_id != PERSONAL_SHORT_FINANCING_COHORT_ID
+        and not is_personal_short_financing_cohort(cohort_id)
     ):
         raise ValueError(
             f"cohort {cohort_id!r} requires an explicit short-financing policy"
@@ -485,17 +753,109 @@ def personal_specs_for_cohort(
     return cohort.strategy_specs
 
 
+def canonical_authoritative_session_dates(
+    session_dates: Sequence[str],
+) -> tuple[str, ...]:
+    """Canonicalize an independently supplied strictly increasing session vector."""
+
+    if isinstance(session_dates, (str, bytes)) or len(session_dates) < 3:
+        raise ValueError("authoritative session dates must contain at least three rows")
+    canonical: list[str] = []
+    for raw in session_dates:
+        try:
+            parsed = date.fromisoformat(raw).isoformat()
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "authoritative session dates must be canonical ISO"
+            ) from exc
+        if parsed != raw:
+            raise ValueError("authoritative session dates must be canonical ISO")
+        if canonical and raw <= canonical[-1]:
+            raise ValueError("authoritative session dates must be strictly increasing")
+        canonical.append(raw)
+    return tuple(canonical)
+
+
+def canonical_trading_calendar_digest(session_dates: Sequence[str]) -> str:
+    """Hash only the independently supplied authoritative session vector."""
+
+    canonical = canonical_authoritative_session_dates(session_dates)
+    return _canonical_digest(
+        {
+            "schema_version": TRADING_CALENDAR_DIGEST_SCHEMA,
+            "ordered_session_dates": list(canonical),
+        }
+    )
+
+
+def verified_am_pm_base_digests() -> tuple[str, str]:
+    """Return the repository AM sleeve spec/cohort digests or fail closed."""
+
+    try:
+        cohort = get_research_cohort(AM_PM_BASE_COHORT_ID)
+    except KeyError as exc:
+        raise ValueError("AM base sleeve producer identity is missing") from exc
+    spec = next(
+        (
+            item
+            for item in cohort.strategy_specs
+            if item.strategy_id == AM_PM_BASE_SLEEVE_ID
+        ),
+        None,
+    )
+    if spec is None:
+        raise ValueError("AM base sleeve producer identity is missing")
+    spec_digest = strategy_spec_digest(spec)
+    cohort_digest = str(cohort.to_dict()["cohort_digest"])
+    if not spec_digest.startswith("sha256:") or not cohort_digest.startswith("sha256:"):
+        raise ValueError("AM base sleeve producer identity is invalid")
+    return spec_digest, cohort_digest
+
+
 __all__ = [
+    "AM_PM_BASE_COHORT_ID",
+    "AM_PM_BASE_SLEEVE_ID",
+    "AM_PM_BASE_SLEEVE_SCHEMA",
+    "AM_PM_COHORT_DOCUMENT_VERSION",
+    "AM_PM_EXECUTION_MODE",
+    "AM_PM_PERSONAL_EXECUTABLE_COHORT_IDS",
+    "AM_SIGNAL_PM_CLOSE_CONTRACT_ID",
+    "AM_SIGNAL_PM_CLOSE_CONTRACT_VERSION",
+    "AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT",
+    "AM_SIGNAL_PM_CLOSE_EXECUTION_MODE",
     "COHORT_REGISTRY_VERSION",
+    "COMPACT_MARKET_AM_PM_COHORT_ID",
     "COMPACT_MARKET_COHORT_ID",
+    "COMPACT_MARKET_COHORT_IDS",
     "COMPACT_MARKET_UNIVERSE_IDS",
     "DEFAULT_FACTOR_COHORT_ID",
+    "FUNDAMENTAL_RELATIVE_AM_PM_COHORT_ID",
+    "LEGACY_COMPACT_MARKET_COHORT_ID",
+    "LEGACY_DEFAULT_FACTOR_COHORT_ID",
+    "LEGACY_NEXT_CLOSE_EXECUTION_CONTRACT",
+    "LEGACY_NEXT_CLOSE_EXECUTION_MODE",
+    "LEGACY_NEXT_CLOSE_LABEL",
+    "LEGACY_PERSONAL_EXECUTABLE_COHORT_IDS",
+    "LEGACY_PERSONAL_SHORT_FINANCING_COHORT_ID",
     "PERSONAL_EXECUTABLE_COHORT_IDS",
+    "PERSONAL_SHORT_FINANCING_AM_PM_COHORT_ID",
     "PERSONAL_SHORT_FINANCING_COHORT_ID",
+    "PERSONAL_SHORT_FINANCING_COHORT_IDS",
+    "PRICE_RELATIVE_AM_PM_COHORT_ID",
     "RESEARCH_COHORTS",
     "SECTOR_RELATIVE_UNIVERSE_IDS",
+    "TRADING_CALENDAR_DIGEST_SCHEMA",
     "ResearchCohort",
+    "am_signal_pm_close_execution_contract",
+    "canonical_authoritative_session_dates",
+    "canonical_trading_calendar_digest",
+    "execution_contract_for_cohort",
     "get_research_cohort",
+    "is_am_pm_factor_cohort",
+    "is_compact_market_cohort",
+    "is_personal_short_financing_cohort",
+    "legacy_next_close_execution_contract",
     "personal_specs_for_cohort",
     "validate_personal_cohort_universe",
+    "verified_am_pm_base_digests",
 ]

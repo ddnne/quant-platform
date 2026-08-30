@@ -60,7 +60,7 @@
     ],
     "unclassified": "REJECT"
   },
-  "manifest_digest": "sha256:99a8f9a3802b6e37637808d6e9950286720f6e61e8c9769f82c0321df9b7c6aa",
+  "manifest_digest": "sha256:c3647b1ee0e4e1e2be2b9bfc77ae240fbe49c414186b4c64a87656b73fbefd4a",
   "schema_version": "cloudflare-active-worker-bindings/v9",
   "test_harness_surfaces": {
     "ingestion-jsda": {
@@ -719,6 +719,11 @@
           "binding": "AI_GATEWAY",
           "entrypoint": "GatewayService",
           "service": "quant-platform-research-ai-gateway-test"
+        },
+        {
+          "binding": "JQUANTS_ACQUISITION",
+          "entrypoint": "IngestionSecretsService",
+          "service": "quant-platform-ingestion-secrets-governed-page-test"
         }
       ],
       "tail_consumers": [],
@@ -731,6 +736,7 @@
       },
       "vars": {
         "CONTINUOUS_PAPER": "UNARMED",
+        "ENVIRONMENT": "production",
         "MASS_EVAL_VERSION": "research-mass-eval/test",
         "MASS_EVAL_WAVE": "test",
         "MASS_RESEARCH": "NO-GO",
@@ -2863,7 +2869,7 @@
             "image": "./Dockerfile",
             "image_build_context": "../../..",
             "instance_type": "standard-4",
-            "max_instances": 2,
+            "max_instances": 8,
             "rollout_active_grace_period": 11400
           }
         ],
@@ -2925,6 +2931,11 @@
             "binding": "AI_GATEWAY",
             "entrypoint": "GatewayService",
             "service": "quant-platform-research-ai-gateway"
+          },
+          {
+            "binding": "JQUANTS_ACQUISITION",
+            "entrypoint": "IngestionSecretsService",
+            "service": "quant-platform-ingestion-secrets"
           }
         ],
         "tail_consumers": [],
@@ -2937,7 +2948,8 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
-          "MASS_EVAL_VERSION": "research-mass-eval/v146-direct-spawn",
+          "ENVIRONMENT": "production",
+          "MASS_EVAL_VERSION": "research-mass-eval/v149-am-pm-panels",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -2963,7 +2975,7 @@
             "image": "./Dockerfile",
             "image_build_context": "../../..",
             "instance_type": "standard-4",
-            "max_instances": 2,
+            "max_instances": 8,
             "rollout_active_grace_period": 11400
           }
         ],
@@ -3025,6 +3037,11 @@
             "binding": "AI_GATEWAY",
             "entrypoint": "GatewayService",
             "service": "quant-platform-research-ai-gateway"
+          },
+          {
+            "binding": "JQUANTS_ACQUISITION",
+            "entrypoint": "IngestionSecretsService",
+            "service": "quant-platform-ingestion-secrets"
           }
         ],
         "tail_consumers": [],
@@ -3037,7 +3054,8 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
-          "MASS_EVAL_VERSION": "research-mass-eval/v146-direct-spawn",
+          "ENVIRONMENT": "production",
+          "MASS_EVAL_VERSION": "research-mass-eval/v149-am-pm-panels",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -3063,7 +3081,7 @@
             "image": "./Dockerfile",
             "image_build_context": "../../..",
             "instance_type": "standard-4",
-            "max_instances": 2,
+            "max_instances": 8,
             "rollout_active_grace_period": 11400
           }
         ],
@@ -3123,6 +3141,11 @@
             "binding": "AI_GATEWAY",
             "entrypoint": "GatewayService",
             "service": "quant-platform-research-ai-gateway-staging"
+          },
+          {
+            "binding": "JQUANTS_ACQUISITION",
+            "entrypoint": "IngestionSecretsService",
+            "service": "quant-platform-ingestion-secrets-staging"
           }
         ],
         "tail_consumers": [],
@@ -3135,7 +3158,8 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
-          "MASS_EVAL_VERSION": "research-mass-eval/v146-direct-spawn",
+          "ENVIRONMENT": "staging",
+          "MASS_EVAL_VERSION": "research-mass-eval/v149-am-pm-panels",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",

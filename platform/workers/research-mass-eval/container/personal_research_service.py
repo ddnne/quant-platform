@@ -16,6 +16,7 @@ import sys
 import tarfile
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.request
 import zlib
@@ -30,28 +31,65 @@ _CONTAINER_MODULE_DIR = str(Path(__file__).resolve().parent)
 if _CONTAINER_MODULE_DIR not in sys.path:
     sys.path.insert(0, _CONTAINER_MODULE_DIR)
 
+from personal_history_source_client import PersonalHistorySourceClient
 from personal_svi_2023_job import (
     PersonalSvi2023JobSpec,
     SviJobInputError,
     execute_svi_job,
 )
 from personal_index_vol_overlay_2023_job import (
+    AM_PM_MANIFEST_SCHEMA,
+    AM_PM_SMILE_TRANSPORT_MANIFEST_SCHEMA,
+    MANIFEST_SCHEMA,
     OverlayJobInputError,
     PersonalIndexVolOverlay2023JobSpec,
+    SMILE_TRANSPORT_MANIFEST_SCHEMA,
     execute_overlay_job,
 )
+from personal_vol_am_pm_panel_job import (
+    PersonalVolAmPmPanelJobSpec,
+    VolPanelJobInputError,
+    execute_vol_am_pm_panel_job,
+)
+from ingestion.personal_history import (
+    PERSONAL_COMPLETENESS_CLAIM,
+    PERSONAL_CONTROLLED_ELIGIBILITY,
+    PERSONAL_HISTORY_FORMAT,
+    PERSONAL_HISTORY_SCOPE_DIGEST,
+    PERSONAL_HISTORY_SCOPE_ID,
+    PERSONAL_HISTORY_SCOPE_VERSION,
+    PERSONAL_RESEARCH_STATE,
+    PersonalHistoryHydrator,
+    assert_personal_history_database,
+    build_personal_history_plan,
+)
+from storage.sqlite_store import SqliteStore
+from pit.personal_retrospective_session import am_session_view_digest
+from research.factor_cohorts import (
+    AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT,
+    AM_SIGNAL_PM_CLOSE_EXECUTION_MODE,
+    LEGACY_NEXT_CLOSE_EXECUTION_MODE,
+    get_research_cohort,
+    is_am_pm_factor_cohort,
+)
 from research.personal_base_sleeve import (
+    AM_PM_BASE_COHORT_ID,
+    AM_PM_BASE_SLEEVE_ID,
     BASE_COHORT_ID,
     BASE_SLEEVE_ID,
     BASE_UNIVERSE_ID,
+    PERSONAL_BASE_SLEEVE_AM_PM_ARTIFACT_SCHEMA,
     PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA,
     PERSONAL_BASE_SLEEVE_RANKING_ROLE,
     PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA,
     PERSONAL_BASE_SLEEVE_ROLE,
+    validate_personal_base_sleeve_am_pm_artifact,
     validate_personal_base_sleeve_artifact,
 )
 
-RUNNER_VERSION = "personal-cloud-runner/v11"
+RUNNER_VERSION = "personal-cloud-runner/v13"
+SNAPSHOT_MAX_DATABASE_BYTES = 3_758_096_384
+SNAPSHOT_MINIMUM_FREE_BYTES = 256 * 1024 * 1024
 R2_ORIGIN = "http://research.r2"
 DEFAULT_TIMEOUT_SECONDS = 165 * 60
 MAX_JOB_LIFETIME_SECONDS = 180 * 60
@@ -70,9 +108,15 @@ _SINGLE_THREAD_NUMERIC_ENV = {
 _JOB_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_STRATEGY_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_ERROR_TYPE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+MAX_DIAGNOSTIC_REPORT_BYTES = 8 * 1024 * 1024
+MAX_CANDIDATE_DIAGNOSTICS = 4
+MAX_ERROR_DETAIL_CHARS = 160
 _SNAPSHOT_RE = re.compile(
     r"^research/personal/snapshots/sha256=([0-9a-f]{64})\.sqlite(?:\.gz)?$"
 )
+DEFAULT_PERSONAL_COHORT_ID = "diverse-core-am-pm-v1"
 PERSONAL_EXECUTABLE_COHORT_IDS = frozenset(
     {
         "price-relative-v1",
@@ -80,7 +124,15 @@ PERSONAL_EXECUTABLE_COHORT_IDS = frozenset(
         "diverse-core-v1",
         "compact-market-diverse-v1",
         "sector-relative-ls-v1",
+        "price-relative-am-pm-v1",
+        "fundamental-relative-am-pm-v1",
+        "diverse-core-am-pm-v1",
+        "compact-market-diverse-am-pm-v1",
+        "sector-relative-ls-am-pm-v1",
     }
+)
+COMPACT_MARKET_COHORT_IDS = frozenset(
+    {"compact-market-diverse-v1", "compact-market-diverse-am-pm-v1"}
 )
 PERSONAL_EXECUTABLE_UNIVERSE_IDS = frozenset(
     {
@@ -114,6 +166,47 @@ class JobBusyError(RuntimeError):
 
 def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _personal_cohort_identity(cohort_id: str) -> dict[str, Any]:
+    cohort = get_research_cohort(cohort_id)
+    am_pm = is_am_pm_factor_cohort(cohort_id)
+    return {
+        "cohort_id": cohort_id,
+        "cohort_digest": str(cohort.to_dict()["cohort_digest"]),
+        "am_pm": am_pm,
+        "execution_mode": (
+            AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
+            if am_pm
+            else LEGACY_NEXT_CLOSE_EXECUTION_MODE
+        ),
+        "execution_contract_digest": (
+            str(AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT["contract_digest"])
+            if am_pm
+            else None
+        ),
+        "session_view_digest": (
+            am_session_view_digest(include_morning_turnover_history=True)
+            if am_pm
+            else None
+        ),
+        "base_sleeve": cohort_id
+        in {BASE_COHORT_ID, AM_PM_BASE_COHORT_ID},
+        "base_sleeve_schema": (
+            PERSONAL_BASE_SLEEVE_AM_PM_ARTIFACT_SCHEMA
+            if cohort_id == AM_PM_BASE_COHORT_ID
+            else (
+                PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA
+                if cohort_id == BASE_COHORT_ID
+                else None
+            )
+        ),
+        "base_sleeve_strategy_id": (
+            AM_PM_BASE_SLEEVE_ID
+            if cohort_id == AM_PM_BASE_COHORT_ID
+            else (BASE_SLEEVE_ID if cohort_id == BASE_COHORT_ID else None)
+        ),
+    }
 
 
 def _canonical_bytes(value: Mapping[str, Any]) -> bytes:
@@ -197,7 +290,7 @@ class JobSpec:
         if self.universe_id not in PERSONAL_EXECUTABLE_UNIVERSE_IDS:
             raise JobInputError("universe_id is not executable by personal research")
         compact_universe = self.universe_id in COMPACT_MARKET_UNIVERSE_IDS
-        compact_cohort = self.cohort_id == "compact-market-diverse-v1"
+        compact_cohort = self.cohort_id in COMPACT_MARKET_COHORT_IDS
         if compact_universe != compact_cohort:
             raise JobInputError("cohort_id and universe_id profile mismatch")
         if _DIGEST_RE.fullmatch(self.universe_rule_digest) is None:
@@ -211,9 +304,11 @@ class JobSpec:
             raise JobInputError("snapshot key does not match its digest")
         start = _parse_day(self.period_start, "period_start")
         end = _parse_day(self.period_end, "period_end")
-        span = (end - start).days
-        if span <= 0 or span > MAX_PERIOD_DAYS:
-            raise JobInputError(f"research period must be 1-{MAX_PERIOD_DAYS} days")
+        inclusive_days = (end - start).days + 1
+        if inclusive_days < 2 or inclusive_days > MAX_PERIOD_DAYS:
+            raise JobInputError(
+                f"research period must be 2-{MAX_PERIOD_DAYS} inclusive calendar dates"
+            )
         if self.runner_version != RUNNER_VERSION:
             raise JobInputError("runner version mismatch")
         if self.result_key != (
@@ -228,6 +323,9 @@ class JobSpec:
             raise JobInputError("request_digest is invalid")
         if self.request_digest != self.derived_request_digest():
             raise JobInputError("request_digest mismatch")
+        identity = _personal_cohort_identity(self.cohort_id)
+        if self.cohort_digest != identity["cohort_digest"]:
+            raise JobInputError("cohort_digest does not match repository definition")
 
     def derived_request_digest(self) -> str:
         body = {
@@ -241,6 +339,101 @@ class JobSpec:
             "snapshot_sha256": self.snapshot_sha256,
             "universe_id": self.universe_id,
             "universe_rule_digest": self.universe_rule_digest,
+        }
+        return "sha256:" + hashlib.sha256(_canonical_bytes(body)).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class SnapshotJobSpec:
+    job_id: str
+    period_start: str
+    period_end: str
+    lookback_sessions: int
+    request_digest: str
+    manifest_key: str
+    runner_version: str
+    environment: str
+    format: str
+    max_database_bytes: int
+    deployment_id: str
+
+    @classmethod
+    def from_document(cls, document: Any) -> "SnapshotJobSpec":
+        if not isinstance(document, dict):
+            raise JobInputError("snapshot job must be a JSON object")
+        required = {
+            "deployment_id",
+            "environment",
+            "format",
+            "job_id",
+            "lookback_sessions",
+            "manifest_key",
+            "max_database_bytes",
+            "period_end",
+            "period_start",
+            "request_digest",
+            "runner_version",
+        }
+        if set(document) != required:
+            raise JobInputError("snapshot job fields are closed")
+        lookback = document["lookback_sessions"]
+        max_bytes = document["max_database_bytes"]
+        if type(lookback) is not int or not 0 <= lookback <= 252:
+            raise JobInputError("lookback_sessions is invalid")
+        if type(max_bytes) is not int or max_bytes != SNAPSHOT_MAX_DATABASE_BYTES:
+            raise JobInputError("max_database_bytes is invalid")
+        string_fields = required - {"lookback_sessions", "max_database_bytes"}
+        if not all(isinstance(document[field], str) for field in string_fields):
+            raise JobInputError("snapshot job string fields are closed")
+        spec = cls(
+            job_id=document["job_id"],
+            period_start=document["period_start"],
+            period_end=document["period_end"],
+            lookback_sessions=lookback,
+            request_digest=document["request_digest"],
+            manifest_key=document["manifest_key"],
+            runner_version=document["runner_version"],
+            environment=document["environment"],
+            format=document["format"],
+            max_database_bytes=max_bytes,
+            deployment_id=document["deployment_id"],
+        )
+        spec.validate()
+        return spec
+
+    def validate(self) -> None:
+        if _JOB_ID_RE.fullmatch(self.job_id) is None:
+            raise JobInputError("job_id is invalid")
+        start = _parse_day(self.period_start, "period_start")
+        end = _parse_day(self.period_end, "period_end")
+        inclusive_days = (end - start).days + 1
+        if inclusive_days < 1 or inclusive_days > MAX_PERIOD_DAYS:
+            raise JobInputError(
+                f"snapshot period must be 1-{MAX_PERIOD_DAYS} inclusive calendar dates"
+            )
+        if self.runner_version != RUNNER_VERSION:
+            raise JobInputError("runner version mismatch")
+        if self.environment not in {"production", "staging"}:
+            raise JobInputError("environment is invalid")
+        if self.format != PERSONAL_HISTORY_FORMAT:
+            raise JobInputError("snapshot format mismatch")
+        if self.manifest_key != (
+            f"research/personal/snapshot-builds/job={self.job_id}/manifest.json"
+        ):
+            raise JobInputError("manifest key mismatch")
+        if _DIGEST_RE.fullmatch(self.request_digest) is None:
+            raise JobInputError("request_digest is invalid")
+        if self.request_digest != self.derived_request_digest():
+            raise JobInputError("request_digest mismatch")
+
+    def derived_request_digest(self) -> str:
+        body = {
+            "format": self.format,
+            "job_id": self.job_id,
+            "lookback_sessions": self.lookback_sessions,
+            "period_end": self.period_end,
+            "period_start": self.period_start,
+            "runner_version": self.runner_version,
         }
         return "sha256:" + hashlib.sha256(_canonical_bytes(body)).hexdigest()
 
@@ -442,9 +635,9 @@ def _validated_base_sleeve_reference(
 ) -> dict[str, Any] | None:
     reference = summary.get("base_sleeve_artifact")
     source_count = summary.get("non_candidate_source_backtest_count")
+    identity = _personal_cohort_identity(spec.cohort_id)
     expected_profile = (
-        spec.cohort_id == BASE_COHORT_ID
-        and spec.universe_id == BASE_UNIVERSE_ID
+        identity["base_sleeve"] and spec.universe_id == BASE_UNIVERSE_ID
     )
     if type(source_count) is not int or source_count not in {0, 1}:
         raise RuntimeError("qp-research base sleeve source count is invalid")
@@ -473,12 +666,13 @@ def _validated_base_sleeve_reference(
     }
     if not isinstance(reference, dict) or set(reference) != expected_fields:
         raise RuntimeError("qp-research base sleeve reference is invalid")
+    expected_schema = identity["base_sleeve_schema"]
+    expected_strategy = identity["base_sleeve_strategy_id"]
     if (
         reference.get("schema_version") != PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA
-        or reference.get("artifact_schema_version")
-        != PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA
-        or reference.get("strategy_id") != BASE_SLEEVE_ID
-        or reference.get("cohort_id") != BASE_COHORT_ID
+        or reference.get("artifact_schema_version") != expected_schema
+        or reference.get("strategy_id") != expected_strategy
+        or reference.get("cohort_id") != spec.cohort_id
         or reference.get("universe_id") != BASE_UNIVERSE_ID
         or reference.get("role") != PERSONAL_BASE_SLEEVE_ROLE
         or reference.get("ranking_role") != PERSONAL_BASE_SLEEVE_RANKING_ROLE
@@ -501,7 +695,10 @@ def _validated_base_sleeve_reference(
         raise RuntimeError("qp-research base sleeve artifact digest is invalid")
     try:
         document = json.loads(artifact.read_bytes())
-        validate_personal_base_sleeve_artifact(document)
+        if identity["am_pm"]:
+            validate_personal_base_sleeve_am_pm_artifact(document)
+        else:
+            validate_personal_base_sleeve_artifact(document)
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as error:
         raise RuntimeError("qp-research base sleeve artifact is invalid") from error
     if (
@@ -515,6 +712,13 @@ def _validated_base_sleeve_reference(
         raise RuntimeError("qp-research base sleeve provenance is invalid")
     source_run = document.get("source_run")
     assert isinstance(source_run, dict)
+    if identity["am_pm"] and (
+        source_run.get("execution_mode") != identity["execution_mode"]
+        or source_run.get("execution_contract_digest")
+        != identity["execution_contract_digest"]
+        or source_run.get("session_view_digest") != identity["session_view_digest"]
+    ):
+        raise RuntimeError("qp-research AM base sleeve identities drifted")
     for field in ("paper_artifact", "risk_artifact"):
         _require_output_artifact(
             {field: str(output_root / str(source_run[field]))},
@@ -528,12 +732,16 @@ def _validated_base_sleeve_reference(
     }
 
 
+_TERMINAL_PUT_DENIED_STATUSES = frozenset({400, 401, 403, 404, 405, 413, 422})
+
+
 def _put(
     key: str,
     data: bytes | Path,
     *,
-    spec: JobSpec,
+    spec: Any,
     content_digest: str,
+    extra_headers: Mapping[str, str] | None = None,
 ) -> None:
     if isinstance(data, Path):
         length = data.stat().st_size
@@ -541,36 +749,277 @@ def _put(
     else:
         length = len(data)
         payload = data
+    headers = {
+        **_terminal_get_headers(spec),
+        "content-length": str(length),
+        "content-type": (
+            "application/gzip" if isinstance(data, Path) else "application/json"
+        ),
+        "x-content-sha256": content_digest,
+    }
+    if isinstance(
+        spec,
+        (PersonalIndexVolOverlay2023JobSpec, PersonalVolAmPmPanelJobSpec),
+    ):
+        headers.update(spec.headers())
+    if extra_headers:
+        headers.update(extra_headers)
     request = urllib.request.Request(
         f"{R2_ORIGIN}/{key}",
         data=payload,
         method="PUT",
-        headers={
-            "content-length": str(length),
-            "content-type": (
-                "application/gzip" if isinstance(data, Path) else "application/json"
-            ),
-            "x-personal-job-id": spec.job_id,
-            "x-personal-request-digest": spec.request_digest,
-            "x-content-sha256": content_digest,
-        },
+        headers=headers,
     )
     try:
-        with urllib.request.urlopen(request, timeout=300) as response:
-            if response.status not in {HTTPStatus.OK, HTTPStatus.CREATED}:
-                raise RuntimeError(f"R2 upload returned {response.status}")
+        try:
+            with urllib.request.urlopen(request, timeout=300) as response:
+                status = int(response.status)
+        except urllib.error.HTTPError as error:
+            status = int(error.code)
+            if (
+                key == spec.manifest_key
+                and status in _TERMINAL_PUT_DENIED_STATUSES
+            ):
+                raise TerminalReadDenied(
+                    f"terminal PUT denied HTTP {status}"
+                ) from error
+            raise
+        if status not in {HTTPStatus.OK, HTTPStatus.CREATED}:
+            if (
+                key == spec.manifest_key
+                and status in _TERMINAL_PUT_DENIED_STATUSES
+            ):
+                raise TerminalReadDenied(f"terminal PUT denied HTTP {status}")
+            raise RuntimeError(f"R2 upload returned {status}")
     finally:
         if isinstance(data, Path):
             payload.close()
+
+
+class TerminalReadDenied(RuntimeError):
+    """The Worker refused this terminal as identity mismatch or forbidden."""
+
+
+def _job_kind(spec: Any) -> str:
+    if isinstance(spec, SnapshotJobSpec):
+        return "snapshot"
+    if isinstance(spec, PersonalSvi2023JobSpec):
+        return "svi"
+    if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):
+        return "overlay"
+    if isinstance(spec, PersonalVolAmPmPanelJobSpec):
+        return "vol-panel"
+    return "research"
+
+
+def _terminal_get_headers(spec: Any) -> dict[str, str]:
+    headers = {
+        "x-personal-job-id": spec.job_id,
+        "x-personal-request-digest": spec.request_digest,
+        "x-personal-runner-version": spec.runner_version,
+        "x-personal-job-kind": _job_kind(spec),
+    }
+    if isinstance(spec, JobSpec):
+        headers["x-personal-cohort-id"] = spec.cohort_id
+        headers["x-personal-universe-id"] = spec.universe_id
+    elif isinstance(
+        spec,
+        (
+            PersonalSvi2023JobSpec,
+            PersonalIndexVolOverlay2023JobSpec,
+            PersonalVolAmPmPanelJobSpec,
+        ),
+    ):
+        headers["x-personal-cohort-id"] = spec.cohort_id
+    return headers
+
+
+def _terminal_body_matches_spec(spec: Any, document: Mapping[str, Any]) -> bool:
+    if (
+        document.get("job_id") != spec.job_id
+        or document.get("request_digest") != spec.request_digest
+        or document.get("runner_version") != spec.runner_version
+        or document.get("status") not in {"COMPLETED", "FAILED"}
+    ):
+        return False
+    if isinstance(spec, JobSpec) and (
+        document.get("cohort_id") != spec.cohort_id
+        or document.get("universe_id") != spec.universe_id
+    ):
+        return False
+    if isinstance(spec, PersonalSvi2023JobSpec):
+        if document.get("cohort_id") != spec.cohort_id:
+            return False
+    if isinstance(spec, PersonalVolAmPmPanelJobSpec):
+        if document.get("cohort_id") != spec.cohort_id:
+            return False
+    if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):
+        if document.get("cohort_id") != spec.cohort_id:
+            return False
+        if spec.is_am_pm_smile_transport:
+            expected_schema = AM_PM_SMILE_TRANSPORT_MANIFEST_SCHEMA
+        elif spec.is_am_pm_overlay:
+            expected_schema = AM_PM_MANIFEST_SCHEMA
+        elif spec.is_smile_transport:
+            expected_schema = SMILE_TRANSPORT_MANIFEST_SCHEMA
+        else:
+            expected_schema = MANIFEST_SCHEMA
+        if document.get("schema_version") != expected_schema:
+            return False
+    return True
+
+
+def _get_json(spec: Any) -> dict[str, Any] | None:
+    request = urllib.request.Request(
+        f"{R2_ORIGIN}/{spec.manifest_key}",
+        method="GET",
+        headers=_terminal_get_headers(spec),
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            status = int(response.status)
+            raw = response.read()
+    except urllib.error.HTTPError as error:
+        # Absent terminal is retryable. Identity mismatch / forbidden is not.
+        if error.code == 404:
+            return None
+        if error.code in {400, 403}:
+            raise TerminalReadDenied(f"terminal GET denied HTTP {error.code}") from error
+        return None
+    except (OSError, urllib.error.URLError, TimeoutError):
+        return None
+    if status == 404:
+        return None
+    if status in {400, 403}:
+        raise TerminalReadDenied(f"terminal GET denied HTTP {status}")
+    if status != HTTPStatus.OK:
+        return None
+    if len(raw) > 64 * 1024:
+        raise TerminalReadDenied("terminal exceeds the manifest bound")
+    try:
+        parsed = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise TerminalReadDenied("terminal is not JSON") from error
+    if not isinstance(parsed, dict) or not _terminal_body_matches_spec(spec, parsed):
+        raise TerminalReadDenied("terminal identity mismatch")
+    return parsed
 
 
 def _safe_detail(error: BaseException) -> str:
     return " ".join(f"{type(error).__name__}: {error}".split())[:500]
 
 
+def _stdout_summary(stdout: str) -> tuple[dict[str, Any] | None, str]:
+    lines = [line for line in stdout.splitlines() if line.strip()]
+    if not lines:
+        return None, "no_summary"
+    try:
+        parsed = json.loads(lines[-1])
+    except json.JSONDecodeError:
+        return None, "invalid_summary"
+    if not isinstance(parsed, dict):
+        return None, "invalid_summary"
+    return parsed, "ok"
+
+
+def _process_crash_message(process: subprocess.CompletedProcess[str]) -> str:
+    detail = " ".join((process.stderr or "").split())[-400:]
+    return (
+        f"qp-research exited {process.returncode}: {detail or 'no diagnostic'}"
+    )
+
+
+def _sanitize_error_detail(value: Any) -> str:
+    if not isinstance(value, str):
+        return "no detail"
+    tokens = [
+        token
+        for token in value.split()
+        if "/" not in token and "\\" not in token
+    ]
+    cleaned = " ".join(tokens)[:MAX_ERROR_DETAIL_CHARS]
+    return cleaned or "no detail"
+
+
+def _candidate_error_rows(report: Mapping[str, Any]) -> list[dict[str, str]]:
+    candidates = report.get("candidates")
+    if not isinstance(candidates, list):
+        return []
+    rows: list[dict[str, str]] = []
+    for item in candidates:
+        if not isinstance(item, Mapping):
+            continue
+        error = item.get("error")
+        if not isinstance(error, Mapping):
+            continue
+        strategy_id = item.get("strategy_id")
+        error_type = error.get("type")
+        if (
+            not isinstance(strategy_id, str)
+            or _STRATEGY_ID_RE.fullmatch(strategy_id) is None
+            or not isinstance(error_type, str)
+            or _ERROR_TYPE_RE.fullmatch(error_type) is None
+        ):
+            continue
+        rows.append(
+            {
+                "strategy_id": strategy_id,
+                "type": error_type,
+                "detail": _sanitize_error_detail(error.get("detail")),
+            }
+        )
+        if len(rows) >= MAX_CANDIDATE_DIAGNOSTICS:
+            break
+    return rows
+
+
+def _load_candidate_error_rows(
+    summary: Mapping[str, Any], output_root: Path
+) -> list[dict[str, str]]:
+    try:
+        report_path = _require_output_artifact(summary, "report_json", output_root)
+        if report_path.stat().st_size > MAX_DIAGNOSTIC_REPORT_BYTES:
+            return []
+        parsed = json.loads(report_path.read_bytes())
+    except (OSError, RuntimeError, TypeError, ValueError, json.JSONDecodeError):
+        return []
+    if not isinstance(parsed, dict):
+        return []
+    return _candidate_error_rows(parsed)
+
+
+def _candidate_failure_message(
+    summary: Mapping[str, Any],
+    output_root: Path,
+) -> str:
+    unexpected = summary.get("unexpected_errors")
+    count = unexpected if type(unexpected) is int and unexpected >= 0 else None
+    count_text = "unknown" if count is None else str(count)
+    rows = _load_candidate_error_rows(summary, output_root)
+    if not rows:
+        return (
+            f"qp-research candidate failures: unexpected_errors={count_text}; "
+            "no candidate diagnostic"
+        )
+    first = rows[0]
+    type_counts: dict[str, int] = {}
+    for row in rows:
+        type_counts[row["type"]] = type_counts.get(row["type"], 0) + 1
+    root_type, root_count = max(
+        type_counts.items(),
+        key=lambda item: (item[1], item[0]),
+    )
+    return (
+        f"qp-research candidate failures: unexpected_errors={count_text}; "
+        f"first={first['strategy_id']} {first['type']}: {first['detail']}; "
+        f"repeated={root_type}x{root_count}"
+    )
+
+
 def _manifest_base(spec: JobSpec, *, started_at: str, finished_at: str) -> dict[str, Any]:
     return {
         "version": RUNNER_VERSION,
+        "runner_version": RUNNER_VERSION,
         "job_id": spec.job_id,
         "cohort_id": spec.cohort_id,
         "cohort_digest": spec.cohort_digest,
@@ -690,21 +1139,17 @@ def execute_job(
                 raise RuntimeError(
                     f"qp-research exceeded the {limit} limit"
                 ) from exc
-            if process.returncode not in {0, 2}:
-                detail = " ".join(process.stderr.split())[-500:]
-                raise RuntimeError(
-                    f"qp-research exited {process.returncode}: "
-                    f"{detail or 'no diagnostic'}"
-                )
-            lines = [line for line in process.stdout.splitlines() if line.strip()]
-            if not lines:
-                raise RuntimeError("qp-research emitted no result document")
-            try:
-                summary = json.loads(lines[-1])
-            except json.JSONDecodeError as exc:
-                raise RuntimeError("qp-research result document is invalid") from exc
-            if not isinstance(summary, dict):
-                raise RuntimeError("qp-research result document is not an object")
+            summary, summary_status = _stdout_summary(process.stdout or "")
+            if summary is None:
+                if process.returncode not in {0, 2}:
+                    raise RuntimeError(_process_crash_message(process))
+                if summary_status == "no_summary":
+                    raise RuntimeError("qp-research emitted no result document")
+                raise RuntimeError("qp-research result document is invalid")
+            if process.returncode not in {0, 1, 2}:
+                raise RuntimeError(_process_crash_message(process))
+            if process.returncode == 1:
+                raise RuntimeError(_candidate_failure_message(summary, output))
             evaluated_count = summary.get("evaluated_count")
             hold_count = summary.get("hold_count")
             unexpected_errors = summary.get("unexpected_errors")
@@ -747,6 +1192,16 @@ def execute_job(
                 or summary.get("automatic_promotion") is not False
             ):
                 raise RuntimeError("qp-research violated the fixed personal policy")
+            identity = _personal_cohort_identity(spec.cohort_id)
+            observed_mode = summary.get("execution_mode", LEGACY_NEXT_CLOSE_EXECUTION_MODE)
+            if observed_mode != identity["execution_mode"]:
+                raise RuntimeError("qp-research execution_mode does not match repository contract")
+            if identity["am_pm"] and summary.get("execution_contract_digest") != (
+                identity["execution_contract_digest"]
+            ):
+                raise RuntimeError(
+                    "qp-research execution_contract_digest does not match repository contract"
+                )
             expected_exit_code = 0 if evaluated_count == 4 else 2
             if process.returncode != expected_exit_code:
                 raise RuntimeError(
@@ -786,6 +1241,12 @@ def execute_job(
             stable_summary["non_candidate_source_backtest_count"] = int(
                 base_sleeve_reference is not None
             )
+            if identity["am_pm"]:
+                stable_summary["execution_mode"] = identity["execution_mode"]
+                stable_summary["execution_contract_digest"] = identity[
+                    "execution_contract_digest"
+                ]
+                stable_summary["session_view_digest"] = identity["session_view_digest"]
             (output / "runner-summary.json").write_bytes(
                 _canonical_bytes(stable_summary)
             )
@@ -818,6 +1279,12 @@ def execute_job(
                     base_sleeve_reference is not None
                 ),
             }
+            if identity["am_pm"]:
+                manifest["execution_mode"] = identity["execution_mode"]
+                manifest["execution_contract_digest"] = identity[
+                    "execution_contract_digest"
+                ]
+                manifest["session_view_digest"] = identity["session_view_digest"]
         except Exception as error:
             manifest = {
                 **_manifest_base(spec, started_at=started_at, finished_at=_now()),
@@ -837,31 +1304,226 @@ def execute_job(
         shutil.rmtree(job_root, ignore_errors=True)
 
 
+def _session_coverage(connection: sqlite3.Connection) -> dict[str, Any]:
+    row = connection.execute(
+        """
+        SELECT
+            COUNT(*) AS bar_rows,
+            SUM(morning_adjustment_close IS NOT NULL) AS am_close,
+            SUM(morning_turnover_value IS NOT NULL) AS am_turnover,
+            SUM(morning_adjustment_volume IS NOT NULL) AS am_volume,
+            SUM(afternoon_adjustment_close IS NOT NULL) AS pm_close,
+            SUM(afternoon_turnover_value IS NOT NULL) AS pm_turnover,
+            SUM(afternoon_adjustment_volume IS NOT NULL) AS pm_volume
+        FROM jquants_daily_bars
+        WHERE source='jquants'
+        """
+    ).fetchone()
+    total = int(row["bar_rows"] or 0)
+    return {
+        "bar_rows": total,
+        "am": {
+            "morning_adjustment_close_non_null": int(row["am_close"] or 0),
+            "morning_turnover_value_non_null": int(row["am_turnover"] or 0),
+            "morning_adjustment_volume_non_null": int(row["am_volume"] or 0),
+        },
+        "pm": {
+            "afternoon_adjustment_close_non_null": int(row["pm_close"] or 0),
+            "afternoon_turnover_value_non_null": int(row["pm_turnover"] or 0),
+            "afternoon_adjustment_volume_non_null": int(row["pm_volume"] or 0),
+        },
+    }
+
+
+def _gzip_file(source: Path, destination: Path) -> None:
+    with destination.open("xb") as raw:
+        with gzip.GzipFile(
+            filename="",
+            mode="wb",
+            compresslevel=6,
+            fileobj=raw,
+            mtime=0,
+        ) as compressed:
+            with source.open("rb") as handle:
+                shutil.copyfileobj(handle, compressed, 1024 * 1024)
+
+
+def _snapshot_manifest_base(
+    spec: SnapshotJobSpec, *, started_at: str, finished_at: str
+) -> dict[str, Any]:
+    return {
+        "version": RUNNER_VERSION,
+        "job_id": spec.job_id,
+        "request_digest": spec.request_digest,
+        "format": PERSONAL_HISTORY_FORMAT,
+        "history_scope_id": PERSONAL_HISTORY_SCOPE_ID,
+        "history_scope_version": PERSONAL_HISTORY_SCOPE_VERSION,
+        "history_scope_digest": PERSONAL_HISTORY_SCOPE_DIGEST,
+        "period_start": spec.period_start,
+        "period_end": spec.period_end,
+        "lookback_sessions": spec.lookback_sessions,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "runner_version": RUNNER_VERSION,
+        "deployment_id": spec.deployment_id,
+        "research_state": PERSONAL_RESEARCH_STATE,
+        "completeness_claim": PERSONAL_COMPLETENESS_CLAIM,
+        "controlled_live_eligibility": PERSONAL_CONTROLLED_ELIGIBILITY,
+        "go": False,
+        "ready_snapshot_declared": False,
+        "automatic_promotion": False,
+        "live_orders_enabled": False,
+        "model_calls": 0,
+    }
+
+
+def execute_snapshot_job(
+    spec: SnapshotJobSpec,
+    *,
+    work_root: Path,
+    uploader: Callable[..., None] = _put,
+    client_factory: Callable[[SnapshotJobSpec], Any] | None = None,
+) -> dict[str, Any]:
+    started_at = _now()
+    job_root = Path(tempfile.mkdtemp(prefix=f"snapshot-{spec.job_id}-", dir=work_root))
+    gzip_key: str | None = None
+    client: Any = None
+    try:
+        try:
+            database = job_root / "personal-history.sqlite"
+            assert_personal_history_database(
+                database, governed_default=Path("/app/data/structured/ingestion.sqlite")
+            )
+            plan = build_personal_history_plan(
+                period_start=spec.period_start,
+                period_end=spec.period_end,
+                lookback_sessions=spec.lookback_sessions,
+            )
+            store = SqliteStore(database)
+            client = (client_factory or (
+                lambda job: PersonalHistorySourceClient(
+                    environment=job.environment,
+                    period_end=job.period_end,
+                    spool_path=job_root / "acquisition-spool.sqlite",
+                )
+            ))(spec)
+            hydrator = PersonalHistoryHydrator(
+                client=client,
+                store=store,
+                plan=plan,
+                max_database_bytes=spec.max_database_bytes,
+                minimum_free_bytes=SNAPSHOT_MINIMUM_FREE_BYTES,
+            )
+            summary = hydrator.hydrate()
+            coverage = _session_coverage(store._conn)
+            store._conn.close()
+            verify_sqlite(database)
+            raw_bytes = database.stat().st_size
+            if raw_bytes > spec.max_database_bytes:
+                raise RuntimeError("snapshot sqlite exceeds the 3.5 GiB builder cap")
+            raw_digest = "sha256:" + _sha256_file(database)
+            gzip_path = job_root / "personal-history.sqlite.gz"
+            _gzip_file(database, gzip_path)
+            gzip_bytes = gzip_path.stat().st_size
+            gzip_digest = "sha256:" + _sha256_file(gzip_path)
+            gzip_key = (
+                "research/personal/snapshots/sha256="
+                f"{raw_digest[7:]}.sqlite.gz"
+            )
+            uploader(
+                gzip_key,
+                gzip_path,
+                spec=spec,
+                content_digest=gzip_digest,
+                extra_headers={"x-personal-raw-sha256": raw_digest},
+            )
+            manifest = {
+                **_snapshot_manifest_base(
+                    spec, started_at=started_at, finished_at=_now()
+                ),
+                "status": "COMPLETED",
+                "data_start": summary.bar_start,
+                "calendar_start": plan.calendar_start,
+                "calendar_end": spec.period_end,
+                "dataset_segment_counts": dict(summary.segment_counts),
+                "fetched_rows": summary.fetched_rows,
+                "written_rows": summary.written_rows,
+                "am_field_non_null_coverage": coverage["am"],
+                "pm_field_non_null_coverage": coverage["pm"],
+                "bar_rows": coverage["bar_rows"],
+                "raw_bytes": raw_bytes,
+                "raw_sha256": raw_digest,
+                "gzip_bytes": gzip_bytes,
+                "gzip_sha256": gzip_digest,
+                "snapshot_key": gzip_key,
+            }
+        except Exception as error:
+            manifest = {
+                **_snapshot_manifest_base(
+                    spec, started_at=started_at, finished_at=_now()
+                ),
+                "status": "FAILED",
+                "error": _safe_detail(error),
+            }
+        manifest_bytes = _canonical_bytes(manifest)
+        manifest_digest = "sha256:" + hashlib.sha256(manifest_bytes).hexdigest()
+        uploader(
+            spec.manifest_key,
+            manifest_bytes,
+            spec=spec,
+            content_digest=manifest_digest,
+        )
+        return manifest
+    finally:
+        closer = getattr(client, "close", None)
+        if callable(closer):
+            closer()
+        shutil.rmtree(job_root, ignore_errors=True)
+
+
 JobSpecLike = (
-    JobSpec | PersonalSvi2023JobSpec | PersonalIndexVolOverlay2023JobSpec
+    JobSpec
+    | SnapshotJobSpec
+    | PersonalSvi2023JobSpec
+    | PersonalIndexVolOverlay2023JobSpec
+    | PersonalVolAmPmPanelJobSpec
 )
 Runner = Callable[[JobSpecLike], dict[str, Any]]
 TerminalCallback = Callable[[], None]
 
 
 class JobManager:
+    _RETRY_SCHEDULE = (0.05, 0.2, 0.5, 1.0, 2.0, 5.0)
+    _MAX_TERMINAL_PUT_ATTEMPTS = 12
+
     def __init__(
         self,
         runner: Runner,
         *,
         on_terminal: TerminalCallback | None = None,
         max_job_seconds: float = MAX_JOB_LIFETIME_SECONDS,
+        terminal_uploader: Callable[..., None] | None = None,
+        terminal_reader: Callable[[JobSpecLike], dict[str, Any] | None] | None = None,
+        retry_schedule: Sequence[float] | None = None,
     ) -> None:
         if max_job_seconds <= 0:
             raise ValueError("max_job_seconds must be positive")
         self._runner = runner
         self._on_terminal = on_terminal
         self._max_job_seconds = max_job_seconds
+        self._terminal_uploader = terminal_uploader or _put
+        self._terminal_reader = terminal_reader
+        self._retry_schedule = tuple(retry_schedule or self._RETRY_SCHEDULE)
         self._lock = threading.Lock()
         self._jobs: dict[str, dict[str, Any]] = {}
+        self._specs: dict[str, JobSpecLike] = {}
         self._active_job_id: str | None = None
         self._accepting = True
         self._watchdog: threading.Timer | None = None
+        self._retry_timer: threading.Timer | None = None
+        self._pending_terminal: tuple[JobSpecLike, dict[str, Any]] | None = None
+        self._retry_index = 0
+        self._shutdown_notified = False
 
     def submit(self, spec: JobSpecLike) -> dict[str, Any]:
         with self._lock:
@@ -876,8 +1538,6 @@ class JobManager:
                 raise JobBusyError(f"job {self._active_job_id} is already active")
             record = {
                 "job_id": spec.job_id,
-                "cohort_id": spec.cohort_id,
-                "cohort_digest": spec.cohort_digest,
                 "request_digest": spec.request_digest,
                 "status": "QUEUED",
                 "submitted_at": _now(),
@@ -885,9 +1545,15 @@ class JobManager:
                 "automatic_promotion": False,
                 "live_orders_enabled": False,
             }
+            if isinstance(spec, SnapshotJobSpec):
+                record["job_kind"] = "snapshot-build"
+            else:
+                record["cohort_id"] = spec.cohort_id
+                record["cohort_digest"] = spec.cohort_digest
             if isinstance(spec, JobSpec):
                 record["universe_id"] = spec.universe_id
             self._jobs[spec.job_id] = record
+            self._specs[spec.job_id] = spec
             self._active_job_id = spec.job_id
             watchdog = threading.Timer(
                 self._max_job_seconds,
@@ -906,11 +1572,264 @@ class JobManager:
             thread.start()
             return dict(record)
 
+    def _timeout_terminal(self, spec: JobSpecLike) -> dict[str, Any]:
+        finished = _now()
+        started = str(self._jobs.get(spec.job_id, {}).get("started_at") or finished)
+        error = (
+            "absolute Container lifetime exceeded "
+            f"({self._max_job_seconds:g}s)"
+        )
+        if isinstance(spec, SnapshotJobSpec):
+            return {
+                **_snapshot_manifest_base(
+                    spec, started_at=started, finished_at=finished
+                ),
+                "status": "FAILED",
+                "error": error,
+            }
+        if isinstance(spec, JobSpec):
+            return {
+                **_manifest_base(spec, started_at=started, finished_at=finished),
+                "status": "FAILED",
+                "error": error,
+            }
+        if isinstance(spec, PersonalSvi2023JobSpec):
+            return {
+                "schema_version": "personal-svi-2023-manifest/v2",
+                "status": "FAILED",
+                "job_id": spec.job_id,
+                "cohort_id": spec.cohort_id,
+                "strategy_id": spec.strategy_id,
+                "runner_version": spec.runner_version,
+                "request_digest": spec.request_digest,
+                "input_manifest_key": spec.input_manifest_key,
+                "input_manifest_digest": spec.input_manifest_digest,
+                "error": error,
+                "draft_only": True,
+                "screening_only": True,
+                "ready": False,
+                "mass": False,
+                "promotion": False,
+                "live_orders": False,
+                "go": False,
+                "not_a_pass": True,
+            }
+        if isinstance(spec, PersonalVolAmPmPanelJobSpec):
+            return {
+                "schema_version": "personal-vol-ratio-am-pm-panel-writer-manifest/v1",
+                "status": "FAILED",
+                "kind": "vol-panel",
+                "producer_id": spec.producer_id,
+                "job_id": spec.job_id,
+                "cohort_id": spec.cohort_id,
+                "runner_version": spec.runner_version,
+                "request_digest": spec.request_digest,
+                "input_manifest_key": spec.input_manifest_key,
+                "input_manifest_digest": spec.input_manifest_digest,
+                "error": error,
+                "draft_only": True,
+                "screening_only": True,
+                "ready": False,
+                "mass": False,
+                "promotion": False,
+                "live_orders": False,
+                "go": False,
+                "not_a_pass": True,
+            }
+        if spec.is_am_pm_smile_transport:
+            schema = AM_PM_SMILE_TRANSPORT_MANIFEST_SCHEMA
+        elif spec.is_am_pm_overlay:
+            schema = AM_PM_MANIFEST_SCHEMA
+        elif spec.is_smile_transport:
+            schema = SMILE_TRANSPORT_MANIFEST_SCHEMA
+        else:
+            schema = MANIFEST_SCHEMA
+        return {
+            "schema_version": schema,
+            "status": "FAILED",
+            "job_id": spec.job_id,
+            "cohort_id": spec.cohort_id,
+            "base_job_id": spec.base_job_id,
+            "svi_job_id": spec.svi_job_id,
+            "input_manifest_digest": spec.input_manifest_digest,
+            "draft_only": True,
+            "screening_only": True,
+            "ready": False,
+            "mass": False,
+            "promotion": False,
+            "live_orders": False,
+            "go": False,
+            "not_a_pass": True,
+            "single_stock_option_iv_used": False,
+            "runner_version": spec.runner_version,
+            "request_digest": spec.request_digest,
+            "error": error,
+        }
+
+    def _failure_terminal(self, spec: JobSpecLike, error: str) -> dict[str, Any]:
+        failed = self._timeout_terminal(spec)
+        failed["error"] = error
+        return failed
+
+    def _read_terminal(self, spec: JobSpecLike) -> dict[str, Any] | None:
+        reader = self._terminal_reader
+        if reader is not None:
+            try:
+                return reader(spec)
+            except TerminalReadDenied:
+                raise
+            except Exception:
+                return None
+        return _get_json(spec)
+
+    def _matching_terminal(self, spec: JobSpecLike, existing: Any) -> bool:
+        return isinstance(existing, dict) and _terminal_body_matches_spec(spec, existing)
+
+    def _conflicting_terminal(self, spec: JobSpecLike, existing: Any) -> bool:
+        return isinstance(existing, dict) and not self._matching_terminal(spec, existing)
+
+    def _record_terminal_conflict(self, spec: JobSpecLike, detail: str) -> None:
+        print(
+            json.dumps(
+                {
+                    "event": "terminal_publication_conflict",
+                    "job_id": spec.job_id,
+                    "detail": detail,
+                    "at": _now(),
+                    "go": False,
+                },
+                separators=(",", ":"),
+            ),
+            flush=True,
+        )
+
+    def _record_terminal_retry_exhausted(self, spec: JobSpecLike, attempts: int) -> None:
+        print(
+            json.dumps(
+                {
+                    "event": "terminal_publication_retry_exhausted",
+                    "job_id": spec.job_id,
+                    "attempts": attempts,
+                    "at": _now(),
+                    "go": False,
+                },
+                separators=(",", ":"),
+            ),
+            flush=True,
+        )
+
+    def _publish_verified_terminal(
+        self, spec: JobSpecLike, manifest: Mapping[str, Any]
+    ) -> str:
+        body = _canonical_bytes(manifest)
+        digest = "sha256:" + hashlib.sha256(body).hexdigest()
+        try:
+            self._terminal_uploader(
+                spec.manifest_key,
+                body,
+                spec=spec,
+                content_digest=digest,
+            )
+            return "ok"
+        except TerminalReadDenied:
+            return "conflict"
+        except Exception as error:
+            try:
+                existing = self._read_terminal(spec)
+            except TerminalReadDenied:
+                return "conflict"
+            if self._matching_terminal(spec, existing):
+                return "ok"
+            if self._conflicting_terminal(spec, existing):
+                return "conflict"
+            raise RuntimeError(_safe_detail(error)) from error
+
+    def _notify_shutdown(self) -> None:
+        with self._lock:
+            if self._shutdown_notified:
+                return
+            self._shutdown_notified = True
+            pending_retry = self._retry_timer
+            self._retry_timer = None
+            self._pending_terminal = None
+        if pending_retry is not None:
+            pending_retry.cancel()
+        if self._on_terminal is not None:
+            self._on_terminal()
+
+    def _begin_terminal_publication(
+        self, spec: JobSpecLike, manifest: dict[str, Any]
+    ) -> None:
+        with self._lock:
+            self._accepting = False
+            self._pending_terminal = (spec, manifest)
+            self._retry_index = 0
+        self._attempt_terminal_publication()
+
+    def _attempt_terminal_publication(self) -> None:
+        with self._lock:
+            if self._shutdown_notified:
+                return
+            pending = self._pending_terminal
+        if pending is None:
+            return
+        spec, manifest = pending
+        try:
+            outcome = self._publish_verified_terminal(spec, manifest)
+        except Exception:
+            self._schedule_terminal_retry()
+            return
+        if outcome == "ok":
+            self._notify_shutdown()
+            return
+        if outcome == "conflict":
+            self._record_terminal_conflict(
+                spec, "immutable terminal conflict or identity denial"
+            )
+            self._notify_shutdown()
+
+    def _schedule_terminal_retry(self) -> None:
+        exhausted_spec: JobSpecLike | None = None
+        attempts = 0
+        pending_retry: threading.Timer | None = None
+        with self._lock:
+            if self._shutdown_notified:
+                return
+            pending = self._pending_terminal
+            self._retry_index += 1
+            if (
+                pending is None
+                or self._retry_index >= self._MAX_TERMINAL_PUT_ATTEMPTS
+            ):
+                exhausted_spec = None if pending is None else pending[0]
+                attempts = self._retry_index
+                pending_retry = self._retry_timer
+                self._retry_timer = None
+            else:
+                delay = self._retry_schedule[
+                    min(self._retry_index - 1, len(self._retry_schedule) - 1)
+                ]
+                timer = threading.Timer(delay, self._attempt_terminal_publication)
+                timer.daemon = True
+                self._retry_timer = timer
+                timer.start()
+                return
+        if pending_retry is not None:
+            pending_retry.cancel()
+        if exhausted_spec is not None:
+            self._record_terminal_retry_exhausted(exhausted_spec, attempts)
+        self._notify_shutdown()
+
+    def _write_timeout_terminal(self, spec: JobSpecLike) -> None:
+        self._begin_terminal_publication(spec, self._timeout_terminal(spec))
+
     def _expire(self, job_id: str) -> None:
+        spec: JobSpecLike | None = None
         with self._lock:
             if self._active_job_id != job_id or not self._accepting:
                 return
             record = self._jobs[job_id]
+            spec = self._specs.get(job_id)
             self._jobs[job_id] = {
                 **record,
                 "status": "FAILED",
@@ -922,8 +1841,8 @@ class JobManager:
                 "go": False,
             }
             self._accepting = False
-        if self._on_terminal is not None:
-            self._on_terminal()
+        if spec is not None:
+            self._write_timeout_terminal(spec)
 
     def _execute(self, spec: JobSpecLike) -> None:
         with self._lock:
@@ -934,17 +1853,19 @@ class JobManager:
         try:
             result = self._runner(spec)
         except Exception as error:  # upload or service failure after job execution
-            result = {
-                "job_id": spec.job_id,
-                "cohort_id": spec.cohort_id,
-                "cohort_digest": spec.cohort_digest,
-                "request_digest": spec.request_digest,
-                "status": "FAILED",
-                "error": _safe_detail(error),
-                "go": False,
-            }
-            if isinstance(spec, JobSpec):
-                result["universe_id"] = spec.universe_id
+            result = self._failure_terminal(spec, _safe_detail(error))
+            with self._lock:
+                if not self._accepting:
+                    return
+                self._jobs[spec.job_id] = dict(result)
+                self._active_job_id = None
+                self._accepting = False
+                watchdog = self._watchdog
+                self._watchdog = None
+                if watchdog is not None:
+                    watchdog.cancel()
+            self._begin_terminal_publication(spec, result)
+            return
         with self._lock:
             notify = self._accepting
             if notify:
@@ -955,8 +1876,8 @@ class JobManager:
             self._watchdog = None
             if watchdog is not None:
                 watchdog.cancel()
-        if notify and self._on_terminal is not None:
-            self._on_terminal()
+        if notify:
+            self._begin_terminal_publication(spec, result)
 
     def status(self, job_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -965,10 +1886,16 @@ class JobManager:
 
 
 def default_runner(spec: JobSpecLike) -> dict[str, Any]:
+    if isinstance(spec, SnapshotJobSpec):
+        work_root = Path(os.environ.get("QP_JOB_ROOT", "/tmp/personal-research"))
+        work_root.mkdir(parents=True, exist_ok=True)
+        return execute_snapshot_job(spec, work_root=work_root)
     if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):
         return execute_overlay_job(spec)
     if isinstance(spec, PersonalSvi2023JobSpec):
         return execute_svi_job(spec)
+    if isinstance(spec, PersonalVolAmPmPanelJobSpec):
+        return execute_vol_am_pm_panel_job(spec)
     work_root = Path(os.environ.get("QP_JOB_ROOT", "/tmp/personal-research"))
     work_root.mkdir(parents=True, exist_ok=True)
     command = tuple(
@@ -1017,6 +1944,8 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
             "/v1/run",
             "/v1/run-svi-2023",
             "/v1/run-index-vol-overlay-2023",
+            "/v1/build-snapshot",
+            "/v1/build-personal-vol-am-pm-panel",
         }:
             self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
             return
@@ -1030,6 +1959,10 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
                 spec = PersonalSvi2023JobSpec.from_document(document)
             elif self.path == "/v1/run-index-vol-overlay-2023":
                 spec = PersonalIndexVolOverlay2023JobSpec.from_document(document)
+            elif self.path == "/v1/build-snapshot":
+                spec = SnapshotJobSpec.from_document(document)
+            elif self.path == "/v1/build-personal-vol-am-pm-panel":
+                spec = PersonalVolAmPmPanelJobSpec.from_document(document)
             else:
                 spec = JobSpec.from_document(document)
             record = self.manager.submit(spec)
@@ -1038,6 +1971,7 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
             JobInputError,
             SviJobInputError,
             OverlayJobInputError,
+            VolPanelJobInputError,
         ) as error:
             self._json({"error": "invalid_job", "detail": str(error)}, HTTPStatus.BAD_REQUEST)
             return
