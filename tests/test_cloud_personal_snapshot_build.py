@@ -89,6 +89,43 @@ class _FakeHydrator:
         )
 
 
+def test_inclusive_snapshot_period_cap_is_2200_calendar_dates() -> None:
+    accepted = _spec("bound-2200")
+    document = {
+        "deployment_id": accepted.deployment_id,
+        "environment": accepted.environment,
+        "format": accepted.format,
+        "job_id": "bound-2200",
+        "lookback_sessions": accepted.lookback_sessions,
+        "manifest_key": "research/personal/snapshot-builds/job=bound-2200/manifest.json",
+        "max_database_bytes": accepted.max_database_bytes,
+        "period_end": "2026-01-08",
+        "period_start": "2020-01-01",
+        "runner_version": accepted.runner_version,
+    }
+    document["request_digest"] = _digest(
+        {
+            "job_id": document["job_id"],
+            "lookback_sessions": document["lookback_sessions"],
+            "period_end": document["period_end"],
+            "period_start": document["period_start"],
+        }
+    )
+    service.SnapshotJobSpec.from_document(document)
+    over = dict(document)
+    over["period_end"] = "2026-01-09"
+    over["request_digest"] = _digest(
+        {
+            "job_id": over["job_id"],
+            "lookback_sessions": over["lookback_sessions"],
+            "period_end": over["period_end"],
+            "period_start": over["period_start"],
+        }
+    )
+    with pytest.raises(service.JobInputError, match="inclusive calendar dates"):
+        service.SnapshotJobSpec.from_document(over)
+
+
 def test_snapshot_gzip_and_manifest_last_order(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(service, "PersonalHistoryHydrator", _FakeHydrator)
     spec = _spec()

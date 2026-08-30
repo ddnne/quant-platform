@@ -87,7 +87,10 @@ describe("personal snapshot build dispatch", () => {
       ENVIRONMENT: "production",
       JQUANTS_ACQUISITION: { fetch_governed_page: vi.fn() },
       CF_VERSION_METADATA: { id: "deploy-1" },
-      STRUCTURED_BUCKET: { get: vi.fn(async () => null) },
+      STRUCTURED_BUCKET: {
+        get: vi.fn(async () => null),
+        put: vi.fn(async (key: string) => ({ key })),
+      },
       PERSONAL_RESEARCH_CONTAINER: { getByName },
     } as unknown as Env;
     const response = await submitPersonalSnapshotBuild(env, REQUEST.value);

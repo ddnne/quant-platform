@@ -10,9 +10,11 @@ import {
   personalSnapshotRequestDigest,
 } from "./personal_snapshot_contract";
 import {
-  personalResearchContainer,
-  verifiedPersonalResearchContainer,
-} from "./personal_research_runner";
+  durablePersonalJobStatus,
+  submittedStateDocument,
+  writeSubmittedState,
+} from "./personal_job_state";
+import { verifiedPersonalResearchContainer } from "./personal_research_runner";
 import type { Env } from "./types";
 
 type StoredManifest = Record<string, unknown> & {
@@ -85,6 +87,14 @@ export async function submitPersonalSnapshotBuild(
       503,
     );
   }
+  const submitted = submittedStateDocument({
+    jobId: request.job_id,
+    requestDigest,
+    kind: "snapshot",
+    deploymentId: env.CF_VERSION_METADATA?.id ?? "unknown",
+  });
+  const conflict = await writeSubmittedState(env, submitted);
+  if (conflict) return conflict;
   try {
     const target = await verifiedPersonalResearchContainer(
       env,
@@ -128,36 +138,5 @@ export async function personalSnapshotBuildStatus(
   env: Env,
   jobId: string,
 ): Promise<Response> {
-  const existing = await storedSnapshotManifest(env, jobId);
-  if (existing) {
-    return responseJson({
-      ok: existing.status === "COMPLETED",
-      durable: true,
-      job: existing,
-      go: false,
-      research_state: "PERSONAL_DRAFT",
-      completeness_claim: "NONE",
-      controlled_live_eligibility: "FORBIDDEN",
-    });
-  }
-  try {
-    return await personalResearchContainer(
-      env,
-      PERSONAL_SNAPSHOT_CONTAINER_NAME,
-    ).fetch(
-      new Request(`http://container/v1/jobs/${encodeURIComponent(jobId)}`),
-    );
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    return responseJson(
-      {
-        ok: false,
-        error: "personal_snapshot_status_unavailable",
-        detail,
-        job_id: jobId,
-        go: false,
-      },
-      503,
-    );
-  }
+  return durablePersonalJobStatus(env, "snapshot", jobId);
 }

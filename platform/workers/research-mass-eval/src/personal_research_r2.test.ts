@@ -261,6 +261,43 @@ describe("personal Container R2 capability", () => {
     expect(puts).toEqual([key]);
   });
 
+  it("reuses a content-addressed gzip object across jobs", async () => {
+    const raw = "d".repeat(64);
+    const gzipDigest = `sha256:${THREE_BYTE_SHA256}`;
+    const key = `research/personal/snapshots/sha256=${raw}.sqlite.gz`;
+    const checksum = new Uint8Array(32);
+    for (let index = 0; index < 32; index += 1) {
+      checksum[index] = Number.parseInt(THREE_BYTE_SHA256.slice(index * 2, index * 2 + 2), 16);
+    }
+    const existing = r2Object(key, new Uint8Array([1, 2, 3]), {
+      sha256: gzipDigest,
+      raw_sha256: `sha256:${raw}`,
+      format: "personal-draft-history/v4",
+    });
+    existing.checksums = { sha256: checksum.buffer } as R2Checksums;
+    const bucket = {
+      head: vi.fn(async () => existing),
+      put: vi.fn(),
+    } as unknown as R2Bucket;
+    const reused = await personalResearchR2Outbound(
+      new Request(`http://research.r2/${key}`, {
+        method: "PUT",
+        headers: {
+          "content-length": "3",
+          "x-personal-job-id": "snap-other",
+          "x-personal-request-digest": `sha256:${"c".repeat(64)}`,
+          "x-content-sha256": gzipDigest,
+          "x-personal-raw-sha256": `sha256:${raw}`,
+        },
+        body: new Uint8Array([1, 2, 3]),
+      }),
+      { STRUCTURED_BUCKET: bucket },
+    );
+    expect(reused.status).toBe(200);
+    expect(await reused.json()).toEqual({ ok: true, created: false, key });
+    expect(bucket.put).not.toHaveBeenCalled();
+  });
+
   it("publishes a FAILED snapshot document without a snapshot object", async () => {
     const requestDigest = `sha256:${"b".repeat(64)}`;
     const manifest = {

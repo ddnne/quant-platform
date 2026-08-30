@@ -45,6 +45,11 @@ import {
   personalResearchResultKey,
 } from "./personal_research_contract";
 import { personalJobContainerName } from "./personal_research_contract";
+import {
+  durablePersonalJobStatus,
+  submittedStateDocument,
+  writeSubmittedState,
+} from "./personal_job_state";
 import { verifiedPersonalResearchContainer } from "./personal_research_runner";
 import {
   PERSONAL_SVI_2023_COHORT_ID,
@@ -745,6 +750,16 @@ export async function submitPersonalIndexVolOverlay2023(
     request,
     inputPut.digest,
   );
+  const conflict = await writeSubmittedState(
+    env,
+    submittedStateDocument({
+      jobId: request.job_id,
+      requestDigest,
+      kind: "overlay",
+      deploymentId: env.CF_VERSION_METADATA?.id ?? "unknown",
+    }),
+  );
+  if (conflict) return conflict;
   try {
     const target = await verifiedPersonalResearchContainer(
       env,
@@ -791,30 +806,5 @@ export async function personalIndexVolOverlay2023Status(
   env: Env,
   jobId: string,
 ): Promise<Response> {
-  const terminal = await storedTerminal(env, jobId);
-  if (terminal) {
-    return responseJson({
-      ok: terminal.status === "COMPLETED",
-      durable: true,
-      job: terminal,
-      draft_only: true,
-      screening_only: true,
-      go: false,
-    });
-  }
-  try {
-    const target = await verifiedPersonalResearchContainer(
-      env,
-      await personalJobContainerName("overlay", jobId),
-    );
-    return await target.fetch(
-      new Request(`http://container/v1/jobs/${encodeURIComponent(jobId)}`),
-    );
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    return responseJson(
-      { ok: false, error: "personal_index_vol_overlay_status_unavailable", detail, go: false },
-      503,
-    );
-  }
+  return durablePersonalJobStatus(env, "overlay", jobId);
 }

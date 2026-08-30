@@ -173,11 +173,11 @@ export function parsePersonalResearchRequest(
   if (!start || !end) {
     return { ok: false, error: "period_start and period_end must be ISO dates" };
   }
-  const span = dayNumber(end) - dayNumber(start);
-  if (span <= 0 || span > PERSONAL_RESEARCH_MAX_PERIOD_DAYS) {
+  const inclusiveDays = dayNumber(end) - dayNumber(start) + 1;
+  if (inclusiveDays < 2 || inclusiveDays > PERSONAL_RESEARCH_MAX_PERIOD_DAYS) {
     return {
       ok: false,
-      error: `research period must be 1-${PERSONAL_RESEARCH_MAX_PERIOD_DAYS} days`,
+      error: `research period must be 2-${PERSONAL_RESEARCH_MAX_PERIOD_DAYS} inclusive calendar dates`,
     };
   }
   return {

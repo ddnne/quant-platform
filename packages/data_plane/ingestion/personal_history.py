@@ -276,26 +276,159 @@ def _page_row_count(body: bytes) -> int:
     return 0
 
 
-def _page_evidence(fetch_result: Any) -> tuple[list[dict[str, Any]], str]:
+def _page_digest_hex(value: Any) -> str:
+    digest = str(value or "")
+    if digest.startswith("sha256:"):
+        digest = digest[7:]
+    if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+        raise PersonalHistoryError("source page digest is missing")
+    return digest
+
+
+def _source_page_descriptor(ordinal: int, page: Any) -> dict[str, Any]:
+    body = getattr(page, "response_body", None)
+    stored_digest = getattr(page, "body_digest", None)
+    if body is not None:
+        raw = bytes(body)
+        digest = hashlib.sha256(raw).hexdigest()
+        if stored_digest is not None and _page_digest_hex(stored_digest) != digest:
+            raise PersonalHistoryError("page body digest does not match bytes")
+        row_count = _page_row_count(raw)
+        declared = getattr(page, "row_count", None)
+        if declared is not None and int(declared) != row_count:
+            raise PersonalHistoryError("page row count does not match body")
+    else:
+        digest = _page_digest_hex(stored_digest)
+        declared = getattr(page, "row_count", None)
+        if declared is None or int(declared) < 0:
+            raise PersonalHistoryError("source page row count is missing")
+        row_count = int(declared)
+    descriptor = {
+        "ordinal": ordinal,
+        "sha256": digest,
+        "row_count": row_count,
+        "request_path": str(page.request_path),
+        "request_params": dict(page.request_params),
+        "response_status": int(page.response_status),
+        "pagination_in": page.pagination_in,
+        "pagination_out": page.pagination_out,
+    }
+    evidence_state = getattr(page, "evidence_state", None)
+    if evidence_state:
+        descriptor["evidence_state"] = str(evidence_state)
+    slice_date = getattr(page, "slice_date", None)
+    if slice_date:
+        descriptor["slice_date"] = str(slice_date)
+    return descriptor
+
+
+def _count_field(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return -1
+    return value
+
+
+def _selection_fields(selection: Any) -> Mapping[str, Any]:
+    if isinstance(selection, Mapping):
+        return selection
+    query = getattr(selection, "query", None)
+    if query is None:
+        raise PersonalHistoryError("selection evidence is invalid")
+    return {
+        "query": query,
+        "selected_row_count": getattr(selection, "selected_row_count", None),
+        "selected_digest": getattr(selection, "selected_digest", None),
+        "source_row_count": getattr(selection, "source_row_count", None),
+        "contributing_page_digests": getattr(selection, "contributing_page_digests", ()),
+    }
+
+
+def _validated_selection(
+    selection: Mapping[str, Any],
+    source_pages: Sequence[Mapping[str, Any]],
+    selected_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    query = selection.get("query")
+    if not isinstance(query, Mapping):
+        raise PersonalHistoryError("selection query is missing")
+    contributing = tuple(
+        _page_digest_hex(item)
+        for item in (selection.get("contributing_page_digests") or ())
+    )
+    source_digests = {str(page["sha256"]) for page in source_pages}
+    if any(digest not in source_digests for digest in contributing):
+        raise PersonalHistoryError("selection cites a page that was not fetched")
+    selected_digest = _canonical_digest(list(selected_rows))
+    declared_digest = str(selection.get("selected_digest") or "")
+    if declared_digest.startswith("sha256:"):
+        declared_hex = declared_digest[7:]
+    else:
+        declared_hex = declared_digest
+    if declared_hex != selected_digest[7:]:
+        raise PersonalHistoryError("selection digest does not match selected rows")
+    selected_count = _count_field(selection.get("selected_row_count"))
+    if selected_count != len(selected_rows):
+        raise PersonalHistoryError("selection row count does not match selected rows")
+    source_row_count = sum(int(page["row_count"]) for page in source_pages)
+    declared_source = _count_field(selection.get("source_row_count"))
+    if declared_source != source_row_count:
+        raise PersonalHistoryError("selection source row count does not match pages")
+    return {
+        "query": dict(query),
+        "selected_row_count": selected_count,
+        "selected_digest": selected_digest,
+        "source_row_count": source_row_count,
+        "contributing_page_digests": list(contributing),
+    }
+
+
+def _page_evidence(
+    fetch_result: Any,
+) -> tuple[list[dict[str, Any]], str, dict[str, Any] | None]:
     pages = tuple(getattr(fetch_result, "pages", ()) or ())
+    selected_rows = tuple(dict(row) for row in getattr(fetch_result, "rows", ()) or ())
+    selection = getattr(fetch_result, "selection", None)
     if not pages:
+        fields = None
+        try:
+            fields = _selection_fields(selection) if selection is not None else None
+        except PersonalHistoryError:
+            fields = None
+        if (
+            fields is not None
+            and _count_field(fields.get("selected_row_count")) == 0
+            and len(selected_rows) == 0
+        ):
+            empty_digest = _canonical_digest([])
+            query = fields.get("query") or {}
+            return (
+                [],
+                empty_digest,
+                {
+                    "query": dict(query) if isinstance(query, Mapping) else {},
+                    "selected_row_count": 0,
+                    "selected_digest": _canonical_digest([]),
+                    "source_row_count": 0,
+                    "contributing_page_digests": [],
+                },
+            )
         raise PersonalHistoryError("J-Quants response has no page evidence")
-    evidence: list[dict[str, Any]] = []
-    for ordinal, page in enumerate(pages):
-        body = bytes(page.response_body)
-        evidence.append(
-            {
-                "ordinal": ordinal,
-                "sha256": hashlib.sha256(body).hexdigest(),
-                "row_count": _page_row_count(body),
-                "request_path": str(page.request_path),
-                "request_params": dict(page.request_params),
-                "response_status": int(page.response_status),
-                "pagination_in": page.pagination_in,
-                "pagination_out": page.pagination_out,
-            }
-        )
-    return evidence, _canonical_digest(evidence)
+    evidence = [
+        _source_page_descriptor(ordinal, page)
+        for ordinal, page in enumerate(pages)
+    ]
+    source_row_count = sum(int(page["row_count"]) for page in evidence)
+    if selection is None:
+        if source_row_count != len(selected_rows):
+            raise PersonalHistoryError(
+                f"page row count {source_row_count} != decoded {len(selected_rows)}"
+            )
+        return evidence, _canonical_digest(evidence), None
+    return (
+        evidence,
+        _canonical_digest(evidence),
+        _validated_selection(_selection_fields(selection), evidence, selected_rows),
+    )
 
 
 def _compact_calendar(
@@ -688,6 +821,7 @@ class PersonalHistoryHydrator:
                 rows_written INTEGER NOT NULL DEFAULT 0,
                 page_count INTEGER NOT NULL DEFAULT 0,
                 page_evidence_json TEXT,
+                selection_evidence_json TEXT,
                 response_digest TEXT,
                 facts_digest TEXT,
                 membership_digest TEXT,
@@ -706,6 +840,18 @@ class PersonalHistoryHydrator:
             """
         )
         self._connection.commit()
+        columns = {
+            str(row[1])
+            for row in self._connection.execute(
+                "PRAGMA table_info(personal_history_segments)"
+            )
+        }
+        if "selection_evidence_json" not in columns:
+            self._connection.execute(
+                "ALTER TABLE personal_history_segments "
+                "ADD COLUMN selection_evidence_json TEXT"
+            )
+            self._connection.commit()
 
     def _initialize_manifest(self) -> None:
         plan_json = canonical_json(self.plan.to_dict())
@@ -877,12 +1023,7 @@ class PersonalHistoryHydrator:
         try:
             fetched = self.client.fetch_dataset_evidenced(dataset, **dict(params))
             source_rows = tuple(dict(row) for row in fetched.rows)
-            page_evidence, response_digest = _page_evidence(fetched)
-            page_rows = sum(int(page["row_count"]) for page in page_evidence)
-            if page_rows != len(source_rows):
-                raise PersonalHistoryError(
-                    f"{dataset} page row count {page_rows} != decoded {len(source_rows)}"
-                )
+            page_evidence, response_digest, selection = _page_evidence(fetched)
             transformed = transform(source_rows, now_iso())
             if isinstance(transformed, tuple):
                 rows, derived_membership = transformed
@@ -923,7 +1064,8 @@ class PersonalHistoryHydrator:
                 """
                 UPDATE personal_history_segments SET
                     state=?,rows_fetched=?,rows_written=?,page_count=?,
-                    page_evidence_json=?,response_digest=?,facts_digest=?,
+                    page_evidence_json=?,selection_evidence_json=?,
+                    response_digest=?,facts_digest=?,
                     membership_digest=?,expected_rows=?,observed_ratio=?,
                     finished_at=?,error=NULL
                 WHERE dataset=? AND segment_id=?
@@ -934,6 +1076,7 @@ class PersonalHistoryHydrator:
                     written,
                     len(page_evidence),
                     canonical_json(page_evidence),
+                    None if selection is None else canonical_json(selection),
                     response_digest,
                     facts_digest,
                     membership_digest,

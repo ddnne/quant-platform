@@ -80,6 +80,47 @@ describe("personal snapshot and batch HTTP routes", () => {
     expect(submit).not.toHaveBeenCalled();
   });
 
+  it("rejects snapshot POST bodies over 8 KiB and chunked input", async () => {
+    const submit = vi.fn();
+    const oversized = "x".repeat(8 * 1024 + 1);
+    const tooBig = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/personal-snapshot-build", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(oversized.length),
+          "x-mass-eval-token": "secret",
+        },
+        body: oversized,
+      }),
+      env(),
+      { ...massHandlers, submitPersonalSnapshotBuild: submit },
+    );
+    expect(tooBig.status).toBe(413);
+    const chunked = await dispatchMassEvalFetch(
+      {
+        method: "POST",
+        url: "https://example.test/v1/personal-snapshot-build",
+        headers: {
+          get(name: string) {
+            const key = name.toLowerCase();
+            if (key === "content-length") return null;
+            if (key === "x-mass-eval-token") return "secret";
+            if (key === "transfer-encoding") return "chunked";
+            return null;
+          },
+        },
+        arrayBuffer: async () => {
+          throw new Error("must not buffer a chunked snapshot POST");
+        },
+      } as unknown as Request,
+      env(),
+      { ...massHandlers, submitPersonalSnapshotBuild: submit },
+    );
+    expect(chunked.status).toBe(400);
+    expect(submit).not.toHaveBeenCalled();
+  });
+
   it("rejects nine batch jobs before dispatch", async () => {
     const submit = vi.fn();
     const jobs = Array.from({ length: 9 }, (_, index) => ({

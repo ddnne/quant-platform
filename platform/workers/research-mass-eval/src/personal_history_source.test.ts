@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  HISTORY_SOURCE_FIXED_HEADERS,
+  HISTORY_SOURCE_HOST,
+  HISTORY_SOURCE_USER_AGENT,
+  historySourceHeadersAreClosed,
   parsePersonalHistorySourceRequest,
   personalHistorySourceOutbound,
 } from "./personal_history_source";
@@ -26,6 +30,14 @@ function governed(dataset: string) {
   };
 }
 
+function pythonGeneratedHeaders(contentLength: number): HeadersInit {
+  return {
+    ...HISTORY_SOURCE_FIXED_HEADERS,
+    "content-length": String(contentLength),
+    host: HISTORY_SOURCE_HOST,
+  };
+}
+
 describe("personal history source allowlist", () => {
   it("admits only the four personal history datasets", () => {
     expect(parsePersonalHistorySourceRequest(governed("equities_bars_daily")).ok).toBe(
@@ -39,63 +51,66 @@ describe("personal history source allowlist", () => {
     );
   });
 
-  it("rejects an arbitrary host, dataset, or extra header before RPC", async () => {
-    const fetchGoverned = vi.fn(async () => new Response("ok"));
-    const env = {
+  it("forwards the actual Python closed header set to the Service Binding", async () => {
+    const payload = governed("fins_summary");
+    const body = JSON.stringify(payload);
+    const fetchGoverned = vi.fn(async () => new Response("raw-page", { status: 200 }));
+    const request = new Request("http://history.source/v1/fetch-governed-page", {
+      method: "POST",
+      headers: pythonGeneratedHeaders(body.length),
+      body,
+    });
+    expect(historySourceHeadersAreClosed(request)).toBe(true);
+    expect(HISTORY_SOURCE_USER_AGENT).toBe("quant-personal-history/v13");
+    const response = await personalHistorySourceOutbound(request, {
       JQUANTS_ACQUISITION: { fetch_governed_page: fetchGoverned },
-    };
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("raw-page");
+    expect(fetchGoverned).toHaveBeenCalledWith(payload);
+  });
+
+  it("rejects mutated transport values, extra names, hosts, and datasets", async () => {
+    const fetchGoverned = vi.fn(async () => new Response("ok"));
+    const env = { JQUANTS_ACQUISITION: { fetch_governed_page: fetchGoverned } };
     const body = JSON.stringify(governed("equities_bars_daily"));
+    const headers = pythonGeneratedHeaders(body.length);
     const deniedHost = await personalHistorySourceOutbound(
       new Request("http://example.test/v1/fetch-governed-page", {
         method: "POST",
-        headers: { "content-type": "application/json", "content-length": String(body.length) },
+        headers,
         body,
       }),
       env,
     );
     expect(deniedHost.status).toBe(403);
+    const deniedUa = await personalHistorySourceOutbound(
+      new Request("http://history.source/v1/fetch-governed-page", {
+        method: "POST",
+        headers: { ...headers, "user-agent": "Python-urllib/3.12" },
+        body,
+      }),
+      env,
+    );
+    expect(deniedUa.status).toBe(403);
+    const deniedExtra = await personalHistorySourceOutbound(
+      new Request("http://history.source/v1/fetch-governed-page", {
+        method: "POST",
+        headers: { ...headers, authorization: "Bearer secret" },
+        body,
+      }),
+      env,
+    );
+    expect(deniedExtra.status).toBe(403);
     const deniedDataset = await personalHistorySourceOutbound(
       new Request("http://history.source/v1/fetch-governed-page", {
         method: "POST",
-        headers: { "content-type": "application/json", "content-length": String(JSON.stringify(governed("fins_details")).length) },
+        headers: pythonGeneratedHeaders(JSON.stringify(governed("fins_details")).length),
         body: JSON.stringify(governed("fins_details")),
       }),
       env,
     );
     expect(deniedDataset.status).toBe(403);
-    const deniedHeader = await personalHistorySourceOutbound(
-      new Request("http://history.source/v1/fetch-governed-page", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "content-length": String(body.length),
-          "x-arbitrary-host": "https://example.test",
-        },
-        body,
-      }),
-      env,
-    );
-    expect(deniedHeader.status).toBe(403);
     expect(fetchGoverned).not.toHaveBeenCalled();
-  });
-
-  it("forwards a closed allowed request to the Service Binding", async () => {
-    const payload = governed("fins_summary");
-    const body = JSON.stringify(payload);
-    const fetchGoverned = vi.fn(async () => new Response("raw-page", { status: 200 }));
-    const response = await personalHistorySourceOutbound(
-      new Request("http://history.source/v1/fetch-governed-page", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          "content-length": String(body.length),
-        },
-        body,
-      }),
-      { JQUANTS_ACQUISITION: { fetch_governed_page: fetchGoverned } },
-    );
-    expect(response.status).toBe(200);
-    expect(await response.text()).toBe("raw-page");
-    expect(fetchGoverned).toHaveBeenCalledWith(payload);
   });
 });

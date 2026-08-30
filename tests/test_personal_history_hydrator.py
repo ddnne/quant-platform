@@ -357,7 +357,9 @@ def test_hydrator_pit_timing_compression_compaction_and_draft_boundary(tmp_path)
     ).fetchone()
     evidence = json.loads(segment["page_evidence_json"])
     assert evidence[0]["row_count"] == 4
+    assert evidence[0]["row_count"] == segment["rows_fetched"]
     assert len(evidence[0]["sha256"]) == 64
+    assert segment["selection_evidence_json"] is None
     assert segment["completeness_claim"] == "NONE"
     assert segment["observed_ratio"] == 1.0
     assert str(segment["facts_digest"]).startswith("sha256:")

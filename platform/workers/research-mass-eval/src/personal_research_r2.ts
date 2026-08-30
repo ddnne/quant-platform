@@ -104,6 +104,18 @@ function existingMatches(
   );
 }
 
+function snapshotObjectMatches(
+  object: R2Object,
+  identity: { contentDigest: string; rawDigest: string },
+): boolean {
+  return (
+    object.customMetadata?.sha256 === identity.contentDigest &&
+    object.customMetadata?.raw_sha256 === identity.rawDigest &&
+    object.customMetadata?.format === "personal-draft-history/v4" &&
+    checksumMatches(object, identity.contentDigest)
+  );
+}
+
 async function putResult(
   request: Request,
   env: R2Env,
@@ -294,7 +306,7 @@ async function putSnapshotGzip(
   }
   const existing = await env.STRUCTURED_BUCKET.head(key);
   if (existing) {
-    return existingMatches(existing, identity)
+    return snapshotObjectMatches(existing, identity)
       ? responseJson({ ok: true, created: false, key })
       : responseJson({ error: "immutable snapshot conflict" }, 409);
   }
@@ -304,8 +316,7 @@ async function putSnapshotGzip(
       httpMetadata: { contentType: "application/gzip" },
       customMetadata: {
         plane: "personal_snapshot",
-        job_id: identity.jobId,
-        request_digest: identity.requestDigest,
+        format: "personal-draft-history/v4",
         sha256: identity.contentDigest,
         raw_sha256: identity.rawDigest,
         immutable: "true",
@@ -318,7 +329,7 @@ async function putSnapshotGzip(
   }
   if (put !== null) return responseJson({ ok: true, created: true, key }, 201);
   const raced = await env.STRUCTURED_BUCKET.head(key);
-  return raced && existingMatches(raced, identity)
+  return raced && snapshotObjectMatches(raced, identity)
     ? responseJson({ ok: true, created: false, key })
     : responseJson({ error: "immutable snapshot conflict" }, 409);
 }
@@ -392,9 +403,9 @@ async function putSnapshotManifest(
     const snapshot = await env.STRUCTURED_BUCKET.head(snapshotKey);
     if (
       !snapshot ||
-      snapshot.customMetadata?.request_digest !== identity.requestDigest ||
       snapshot.customMetadata?.sha256 !== gzipDigest ||
       snapshot.customMetadata?.raw_sha256 !== rawDigest ||
+      snapshot.customMetadata?.format !== "personal-draft-history/v4" ||
       !checksumMatches(snapshot, gzipDigest)
     ) {
       return responseJson(

@@ -17,11 +17,13 @@ import {
   type PersonalResearchBatchItem,
 } from "./personal_research_batch";
 import { personalHistorySourceOutbound } from "./personal_history_source";
-import { personalResearchR2Outbound } from "./personal_research_r2";
 import {
-  personalResearchContainer,
-  verifiedPersonalResearchContainer,
-} from "./personal_research_runner";
+  durablePersonalJobStatus,
+  submittedStateDocument,
+  writeSubmittedState,
+} from "./personal_job_state";
+import { personalResearchR2Outbound } from "./personal_research_r2";
+import { verifiedPersonalResearchContainer } from "./personal_research_runner";
 import type { Env } from "./types";
 
 export { ContainerProxy };
@@ -120,6 +122,14 @@ export async function submitPersonalResearch(
       413,
     );
   }
+  const submitted = submittedStateDocument({
+    jobId: request.job_id,
+    requestDigest,
+    kind: "research",
+    deploymentId: env.CF_VERSION_METADATA?.id ?? "unknown",
+  });
+  const conflict = await writeSubmittedState(env, submitted);
+  if (conflict) return conflict;
   try {
     const target = await verifiedPersonalResearchContainer(
       env,
@@ -196,35 +206,5 @@ export async function personalResearchStatus(
   env: Env,
   jobId: string,
 ): Promise<Response> {
-  const existing = await storedManifest(env, jobId);
-  if (existing) {
-    return responseJson({
-      ok: existing.status === "COMPLETED",
-      durable: true,
-      job: existing,
-      go: false,
-      automatic_promotion: false,
-      live_orders_enabled: false,
-    });
-  }
-  try {
-    return await personalResearchContainer(
-      env,
-      await personalJobContainerName("research", jobId),
-    ).fetch(
-      new Request(`http://container/v1/jobs/${encodeURIComponent(jobId)}`),
-    );
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    return responseJson(
-      {
-        ok: false,
-        error: "personal_research_status_unavailable",
-        detail,
-        job_id: jobId,
-        go: false,
-      },
-      503,
-    );
-  }
+  return durablePersonalJobStatus(env, "research", jobId);
 }

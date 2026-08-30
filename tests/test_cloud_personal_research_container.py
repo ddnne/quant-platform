@@ -1307,6 +1307,127 @@ def test_manager_allows_only_one_active_job_and_same_job_is_idempotent() -> None
         manager.submit(second)
 
 
+def _research_period_document(period_start: str, period_end: str) -> dict:
+    template = _job("a" * 64, "bound-2200")
+    identity = {
+        "cohort_digest": template.cohort_digest,
+        "cohort_id": template.cohort_id,
+        "job_id": "bound-2200",
+        "period_end": period_end,
+        "period_start": period_start,
+        "runner_version": service.RUNNER_VERSION,
+        "snapshot_key": template.snapshot_key,
+        "snapshot_sha256": template.snapshot_sha256,
+        "universe_id": template.universe_id,
+        "universe_rule_digest": template.universe_rule_digest,
+    }
+    return {
+        **identity,
+        "manifest_key": "research/personal/jobs/job=bound-2200/manifest.json",
+        "result_key": "research/personal/jobs/job=bound-2200/result.tar.gz",
+        "request_digest": "sha256:" + hashlib.sha256(
+            json.dumps(
+                identity,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest(),
+    }
+
+
+def test_inclusive_research_period_cap_is_2200_calendar_dates() -> None:
+    service.JobSpec.from_document(
+        _research_period_document("2020-01-01", "2026-01-08")
+    )
+    with pytest.raises(service.JobInputError, match="inclusive calendar dates"):
+        service.JobSpec.from_document(
+            _research_period_document("2020-01-01", "2026-01-09")
+        )
+
+
+def test_watchdog_writes_durable_failed_terminal_before_shutdown() -> None:
+    entered = threading.Event()
+    terminal = threading.Event()
+    wrote = threading.Event()
+    uploads: list[tuple[str, dict]] = []
+
+    def runner(spec):
+        entered.set()
+        time.sleep(1)
+        return {
+            "job_id": spec.job_id,
+            "request_digest": spec.request_digest,
+            "status": "COMPLETED",
+            "go": False,
+        }
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del spec, content_digest, extra_headers
+        uploads.append((key, json.loads(data)))
+        wrote.set()
+
+    def on_terminal() -> None:
+        assert wrote.is_set()
+        terminal.set()
+
+    manager = service.JobManager(
+        runner,
+        on_terminal=on_terminal,
+        max_job_seconds=0.05,
+        terminal_uploader=uploader,
+    )
+    spec = _job("a" * 64, "watchdog-r2")
+    manager.submit(spec)
+    assert entered.wait(1)
+    assert terminal.wait(1)
+    assert uploads
+    assert uploads[0][0] == spec.manifest_key
+    assert uploads[0][1]["status"] == "FAILED"
+    assert "absolute Container lifetime" in uploads[0][1]["error"]
+    assert manager.status(spec.job_id)["status"] == "FAILED"
+
+
+def test_timeout_create_only_does_not_overwrite_completed_terminal() -> None:
+    stored: dict[str, dict] = {}
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del spec, content_digest, extra_headers
+        body = json.loads(data)
+        if key in stored:
+            raise RuntimeError("R2 upload returned 409")
+        stored[key] = body
+
+    spec = _job("a" * 64, "race-job")
+    stored[spec.manifest_key] = {
+        "job_id": spec.job_id,
+        "request_digest": spec.request_digest,
+        "status": "COMPLETED",
+    }
+    manager = service.JobManager(
+        lambda item: {
+            "job_id": item.job_id,
+            "request_digest": item.request_digest,
+            "status": "COMPLETED",
+            "go": False,
+        },
+        terminal_uploader=uploader,
+        max_job_seconds=30,
+    )
+    manager._jobs[spec.job_id] = {
+        "job_id": spec.job_id,
+        "request_digest": spec.request_digest,
+        "status": "RUNNING",
+        "submitted_at": service._now(),
+        "go": False,
+    }
+    manager._specs[spec.job_id] = spec
+    manager._active_job_id = spec.job_id
+    manager._expire(spec.job_id)
+    assert stored[spec.manifest_key]["status"] == "COMPLETED"
+    assert manager.status(spec.job_id)["status"] == "FAILED"
+
+
 def test_absolute_watchdog_is_not_renewed_by_status_polling() -> None:
     release = threading.Event()
     entered = threading.Event()

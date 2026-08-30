@@ -89,6 +89,7 @@ describe("personal research bounded batch", () => {
       STRUCTURED_BUCKET: {
         get: vi.fn(async () => null),
         head: vi.fn(async () => ({ size: 1024 })),
+        put: vi.fn(async (key: string) => ({ key })),
       },
       PERSONAL_RESEARCH_CONTAINER: { getByName },
     } as unknown as Env;
@@ -120,6 +121,7 @@ describe("personal research bounded batch", () => {
       STRUCTURED_BUCKET: {
         get: vi.fn(async () => null),
         head: vi.fn(async () => ({ size: 2048 })),
+        put: vi.fn(async (key: string) => ({ key })),
       },
       PERSONAL_RESEARCH_CONTAINER: { getByName },
     } as unknown as Env;

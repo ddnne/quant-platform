@@ -94,6 +94,7 @@ function testEnv(
         head: vi.fn(async () =>
           snapshotSize === null ? null : snapshot(snapshotSize),
         ),
+        put: vi.fn(async (key: string) => ({ key })),
       } as unknown as R2Bucket,
       PERSONAL_RESEARCH_CONTAINER: {
         getByName: containerByName,
@@ -126,6 +127,7 @@ function sequentialRunnerEnv(
       STRUCTURED_BUCKET: {
         get: vi.fn(async () => null),
         head: vi.fn(async () => snapshot(205 * 1024 * 1024)),
+        put: vi.fn(async (key: string) => ({ key })),
       } as unknown as R2Bucket,
       PERSONAL_RESEARCH_CONTAINER: {
         getByName: containerByName,

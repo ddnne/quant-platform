@@ -11,6 +11,7 @@ import {
   isObject,
   json,
   putChildrenThenManifest,
+  readBoundedJson,
 } from "./http";
 import { parseRequest } from "./parse_request";
 import { runProposeThesis } from "./propose_thesis";
@@ -22,6 +23,7 @@ import {
   type PersonalResearchRequest,
 } from "./personal_research_contract";
 import {
+  PERSONAL_SNAPSHOT_MAX_REQUEST_BYTES,
   parsePersonalSnapshotBuildRequest,
   personalSnapshotJobIdFromPath,
   type PersonalSnapshotBuildRequest,
@@ -140,11 +142,7 @@ export async function dispatchMassEvalFetch(
     }
     const jobId = personalIndexVolOverlay2023JobIdFromPath(url.pathname);
     if (!jobId) return json({ error: "job_id is invalid" }, 400);
-    if (
-      !env.STRUCTURED_BUCKET ||
-      !env.PERSONAL_RESEARCH_CONTAINER ||
-      !handlers.personalIndexVolOverlay2023Status
-    ) {
+    if (!env.STRUCTURED_BUCKET || !handlers.personalIndexVolOverlay2023Status) {
       return json({ error: "personal index-vol overlay status unavailable" }, 503);
     }
     return handlers.personalIndexVolOverlay2023Status(env, jobId);
@@ -184,11 +182,7 @@ export async function dispatchMassEvalFetch(
     }
     const jobId = personalSviJobIdFromPath(url.pathname);
     if (!jobId) return json({ error: "job_id is invalid" }, 400);
-    if (
-      !env.STRUCTURED_BUCKET ||
-      !env.PERSONAL_RESEARCH_CONTAINER ||
-      !handlers.personalSvi2023Status
-    ) {
+    if (!env.STRUCTURED_BUCKET || !handlers.personalSvi2023Status) {
       return json({ error: "personal SVI status unavailable" }, 503);
     }
     return handlers.personalSvi2023Status(env, jobId);
@@ -311,13 +305,12 @@ export async function dispatchMassEvalFetch(
     ) {
       return json({ error: "personal snapshot bindings unavailable" }, 503);
     }
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      return json({ error: "invalid JSON body" }, 400);
-    }
-    const parsed = parsePersonalSnapshotBuildRequest(body);
+    const bounded = await readBoundedJson(
+      request,
+      PERSONAL_SNAPSHOT_MAX_REQUEST_BYTES,
+    );
+    if (!bounded.ok) return json({ error: bounded.error }, bounded.status);
+    const parsed = parsePersonalSnapshotBuildRequest(bounded.value);
     if (!parsed.ok) return json({ error: parsed.error }, 400);
     return handlers.submitPersonalSnapshotBuild(env, parsed.value);
   }
@@ -331,11 +324,7 @@ export async function dispatchMassEvalFetch(
     }
     const jobId = personalSnapshotJobIdFromPath(url.pathname);
     if (!jobId) return json({ error: "job_id is invalid" }, 400);
-    if (
-      !env.STRUCTURED_BUCKET ||
-      !env.PERSONAL_RESEARCH_CONTAINER ||
-      !handlers.personalSnapshotBuildStatus
-    ) {
+    if (!env.STRUCTURED_BUCKET || !handlers.personalSnapshotBuildStatus) {
       return json({ error: "personal snapshot status unavailable" }, 503);
     }
     return handlers.personalSnapshotBuildStatus(env, jobId);
@@ -434,11 +423,7 @@ export async function dispatchMassEvalFetch(
     }
     const jobId = personalResearchJobIdFromPath(url.pathname);
     if (!jobId) return json({ error: "job_id is invalid" }, 400);
-    if (
-      !env.STRUCTURED_BUCKET ||
-      !env.PERSONAL_RESEARCH_CONTAINER ||
-      !handlers.personalResearchStatus
-    ) {
+    if (!env.STRUCTURED_BUCKET || !handlers.personalResearchStatus) {
       return json({ error: "personal research handler unavailable" }, 503);
     }
     return handlers.personalResearchStatus(env, jobId);

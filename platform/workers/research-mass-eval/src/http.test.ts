@@ -7,6 +7,7 @@ import {
   putChildrenThenManifest,
   putImmutableJson,
   putJsonCreateOnly,
+  readBoundedJson,
   sha256Hex,
   verifyManifestChildDigest,
 } from "./http";
@@ -16,6 +17,50 @@ import type { Env } from "./types";
 function req(headers: Record<string, string>): Request {
   return new Request("https://example.test/v1/daily-path", { method: "POST", headers });
 }
+
+describe("readBoundedJson", () => {
+  it("rejects missing content-length before buffering the body", async () => {
+    const result = await readBoundedJson(
+      {
+        headers: {
+          get(name: string) {
+            return name.toLowerCase() === "content-length" ? null : "application/json";
+          },
+        },
+        arrayBuffer: async () => {
+          throw new Error("must not buffer a request without content-length");
+        },
+      } as unknown as Request,
+      8 * 1024,
+    );
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      error: "content-length required",
+    });
+  });
+
+  it("rejects oversized declared length before buffering", async () => {
+    const result = await readBoundedJson(
+      {
+        headers: {
+          get(name: string) {
+            return name.toLowerCase() === "content-length" ? "8193" : null;
+          },
+        },
+        arrayBuffer: async () => {
+          throw new Error("must not buffer an oversized declared body");
+        },
+      } as unknown as Request,
+      8 * 1024,
+    );
+    expect(result).toEqual({
+      ok: false,
+      status: 413,
+      error: "request body exceeds the bound",
+    });
+  });
+});
 
 describe("authorized fail-closed", () => {
   it("denies when expected token is missing", async () => {

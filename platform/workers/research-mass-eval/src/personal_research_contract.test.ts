@@ -106,6 +106,30 @@ describe("personal research request contract", () => {
     );
   });
 
+  it("interprets the 2200-day cap as inclusive calendar dates", () => {
+    expect(
+      parsePersonalResearchRequest({
+        ...VALID,
+        period_start: "2020-01-01",
+        period_end: "2026-01-08",
+      }).ok,
+    ).toBe(true);
+    expect(
+      parsePersonalResearchRequest({
+        ...VALID,
+        period_start: "2020-01-01",
+        period_end: "2026-01-09",
+      }).ok,
+    ).toBe(false);
+    expect(
+      parsePersonalResearchRequest({
+        ...VALID,
+        period_start: "2026-01-08",
+        period_end: "2026-01-08",
+      }).ok,
+    ).toBe(false);
+  });
+
   it("admits fixed long-short sensitivity only on broad universes", () => {
     expect(
       parsePersonalResearchRequest({

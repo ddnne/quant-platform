@@ -2,7 +2,11 @@ import {
   AcquisitionRequestRejected,
   decodeRequest,
 } from "../../ingestion-secrets/src/jquants_acquisition_registry";
-import type { JquantsAcquisitionRequestV2 } from "../../ingestion-secrets/src/jquants_acquisition_types";
+import type {
+  JquantsAcquisitionRequestV2,
+  JquantsAcquisitionRpc,
+} from "../../ingestion-secrets/src/jquants_acquisition_types";
+
 export const PERSONAL_HISTORY_DATASETS = [
   "markets_calendar",
   "equities_master",
@@ -15,32 +19,32 @@ export type PersonalHistoryDataset = (typeof PERSONAL_HISTORY_DATASETS)[number];
 const ALLOWED_DATASETS = new Set<string>(PERSONAL_HISTORY_DATASETS);
 const FETCH_PATH = "/v1/fetch-governed-page";
 const MAX_REQUEST_BYTES = 16 * 1024;
-const ALLOWED_REQUEST_HEADERS = new Set([
-  "accept",
-  "content-length",
-  "content-type",
-  "host",
-]);
+
+export const HISTORY_SOURCE_HOST = "history.source";
+export const HISTORY_SOURCE_USER_AGENT = "quant-personal-history/v13";
+export const HISTORY_SOURCE_FIXED_HEADERS: Record<string, string> = {
+  accept: "application/json",
+  "accept-encoding": "identity",
+  connection: "close",
+  "content-type": "application/json; charset=utf-8",
+  "user-agent": HISTORY_SOURCE_USER_AGENT,
+};
 
 type HistoryEnv = {
-  JQUANTS_ACQUISITION?: unknown;
+  JQUANTS_ACQUISITION?: JquantsAcquisitionRpc | Service;
 };
 
-type AcquisitionBinding = {
-  fetch_governed_page(request: JquantsAcquisitionRequestV2): Promise<Response>;
-};
-
-function acquisitionBinding(env: HistoryEnv): AcquisitionBinding | null {
-  const value = env.JQUANTS_ACQUISITION;
+function acquisitionRpc(
+  binding: HistoryEnv["JQUANTS_ACQUISITION"],
+): JquantsAcquisitionRpc | undefined {
   if (
-    typeof value !== "object" ||
-    value === null ||
-    !("fetch_governed_page" in value) ||
-    typeof value.fetch_governed_page !== "function"
+    binding !== undefined &&
+    "fetch_governed_page" in binding &&
+    typeof binding.fetch_governed_page === "function"
   ) {
-    return null;
+    return binding;
   }
-  return value as AcquisitionBinding;
+  return undefined;
 }
 
 function responseJson(value: unknown, status = 200): Response {
@@ -54,10 +58,27 @@ function headerName(name: string): string {
   return name.trim().toLowerCase();
 }
 
-function headersAreClosed(request: Request): boolean {
-  for (const [name] of request.headers) {
-    if (!ALLOWED_REQUEST_HEADERS.has(headerName(name))) return false;
+export function historySourceHeadersAreClosed(request: Request): boolean {
+  const seen = new Set<string>();
+  for (const [name, value] of request.headers) {
+    const key = headerName(name);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    if (key === "host") {
+      if (value !== HISTORY_SOURCE_HOST) return false;
+      continue;
+    }
+    if (key === "content-length") {
+      if (!/^\d+$/.test(value)) return false;
+      continue;
+    }
+    const expected = HISTORY_SOURCE_FIXED_HEADERS[key];
+    if (expected === undefined || expected !== value) return false;
   }
+  for (const required of Object.keys(HISTORY_SOURCE_FIXED_HEADERS)) {
+    if (!seen.has(required)) return false;
+  }
+  if (!seen.has("host") || !seen.has("content-length")) return false;
   return true;
 }
 
@@ -86,10 +107,7 @@ export function parsePersonalHistorySourceRequest(
       return { ok: false, error: "dataset_not_allowed" };
     }
     return { ok: true, value: request };
-  } catch (error) {
-    if (error instanceof AcquisitionRequestRejected) {
-      return { ok: false, error: "request_rejected" };
-    }
+  } catch {
     return { ok: false, error: "request_rejected" };
   }
 }
@@ -101,7 +119,7 @@ export async function personalHistorySourceOutbound(
 ): Promise<Response> {
   const url = new URL(request.url);
   if (
-    url.hostname !== "history.source" ||
+    url.hostname !== HISTORY_SOURCE_HOST ||
     url.search ||
     url.hash ||
     url.pathname !== FETCH_PATH
@@ -111,15 +129,15 @@ export async function personalHistorySourceOutbound(
   if (request.method !== "POST") {
     return responseJson({ error: "POST required" }, 405);
   }
-  if (!headersAreClosed(request)) {
+  if (!historySourceHeadersAreClosed(request)) {
     return responseJson({ error: "history source headers denied" }, 403);
   }
   const length = contentLength(request);
   if (length === null) {
     return responseJson({ error: "invalid history source length" }, 400);
   }
-  const binding = acquisitionBinding(env);
-  if (!binding) {
+  const rpc = acquisitionRpc(env.JQUANTS_ACQUISITION);
+  if (rpc === undefined) {
     return responseJson({ error: "history source binding unavailable" }, 503);
   }
   let parsed: unknown;
@@ -136,5 +154,5 @@ export async function personalHistorySourceOutbound(
   if (!decoded.ok) {
     return responseJson({ error: decoded.error }, 403);
   }
-  return binding.fetch_governed_page(decoded.value);
+  return rpc.fetch_governed_page(decoded.value);
 }

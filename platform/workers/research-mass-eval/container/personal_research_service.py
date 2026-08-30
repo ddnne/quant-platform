@@ -241,9 +241,11 @@ class JobSpec:
             raise JobInputError("snapshot key does not match its digest")
         start = _parse_day(self.period_start, "period_start")
         end = _parse_day(self.period_end, "period_end")
-        span = (end - start).days
-        if span <= 0 or span > MAX_PERIOD_DAYS:
-            raise JobInputError(f"research period must be 1-{MAX_PERIOD_DAYS} days")
+        inclusive_days = (end - start).days + 1
+        if inclusive_days < 2 or inclusive_days > MAX_PERIOD_DAYS:
+            raise JobInputError(
+                f"research period must be 2-{MAX_PERIOD_DAYS} inclusive calendar dates"
+            )
         if self.runner_version != RUNNER_VERSION:
             raise JobInputError("runner version mismatch")
         if self.result_key != (
@@ -338,9 +340,11 @@ class SnapshotJobSpec:
             raise JobInputError("job_id is invalid")
         start = _parse_day(self.period_start, "period_start")
         end = _parse_day(self.period_end, "period_end")
-        span = (end - start).days
-        if span < 0 or span > MAX_PERIOD_DAYS:
-            raise JobInputError(f"snapshot period must be 0-{MAX_PERIOD_DAYS} days")
+        inclusive_days = (end - start).days + 1
+        if inclusive_days < 1 or inclusive_days > MAX_PERIOD_DAYS:
+            raise JobInputError(
+                f"snapshot period must be 1-{MAX_PERIOD_DAYS} inclusive calendar dates"
+            )
         if self.runner_version != RUNNER_VERSION:
             raise JobInputError("runner version mismatch")
         if self.environment not in {"production", "staging"}:
@@ -1150,6 +1154,7 @@ def execute_snapshot_job(
     started_at = _now()
     job_root = Path(tempfile.mkdtemp(prefix=f"snapshot-{spec.job_id}-", dir=work_root))
     gzip_key: str | None = None
+    client: Any = None
     try:
         try:
             database = job_root / "personal-history.sqlite"
@@ -1166,6 +1171,7 @@ def execute_snapshot_job(
                 lambda job: PersonalHistorySourceClient(
                     environment=job.environment,
                     period_end=job.period_end,
+                    spool_path=job_root / "acquisition-spool.sqlite",
                 )
             ))(spec)
             hydrator = PersonalHistoryHydrator(
@@ -1236,6 +1242,9 @@ def execute_snapshot_job(
         )
         return manifest
     finally:
+        closer = getattr(client, "close", None)
+        if callable(closer):
+            closer()
         shutil.rmtree(job_root, ignore_errors=True)
 
 
@@ -1256,14 +1265,17 @@ class JobManager:
         *,
         on_terminal: TerminalCallback | None = None,
         max_job_seconds: float = MAX_JOB_LIFETIME_SECONDS,
+        terminal_uploader: Callable[..., None] | None = None,
     ) -> None:
         if max_job_seconds <= 0:
             raise ValueError("max_job_seconds must be positive")
         self._runner = runner
         self._on_terminal = on_terminal
         self._max_job_seconds = max_job_seconds
+        self._terminal_uploader = terminal_uploader or _put
         self._lock = threading.Lock()
         self._jobs: dict[str, dict[str, Any]] = {}
+        self._specs: dict[str, JobSpecLike] = {}
         self._active_job_id: str | None = None
         self._accepting = True
         self._watchdog: threading.Timer | None = None
@@ -1296,6 +1308,7 @@ class JobManager:
             if isinstance(spec, JobSpec):
                 record["universe_id"] = spec.universe_id
             self._jobs[spec.job_id] = record
+            self._specs[spec.job_id] = spec
             self._active_job_id = spec.job_id
             watchdog = threading.Timer(
                 self._max_job_seconds,
@@ -1314,11 +1327,92 @@ class JobManager:
             thread.start()
             return dict(record)
 
+    def _timeout_terminal(self, spec: JobSpecLike) -> dict[str, Any]:
+        finished = _now()
+        started = str(self._jobs.get(spec.job_id, {}).get("started_at") or finished)
+        error = (
+            "absolute Container lifetime exceeded "
+            f"({self._max_job_seconds:g}s)"
+        )
+        if isinstance(spec, SnapshotJobSpec):
+            return {
+                **_snapshot_manifest_base(
+                    spec, started_at=started, finished_at=finished
+                ),
+                "status": "FAILED",
+                "error": error,
+            }
+        if isinstance(spec, JobSpec):
+            return {
+                **_manifest_base(spec, started_at=started, finished_at=finished),
+                "status": "FAILED",
+                "error": error,
+            }
+        if isinstance(spec, PersonalSvi2023JobSpec):
+            return {
+                "schema_version": "personal-svi-2023-manifest/v2",
+                "status": "FAILED",
+                "job_id": spec.job_id,
+                "cohort_id": spec.cohort_id,
+                "strategy_id": spec.strategy_id,
+                "runner_version": spec.runner_version,
+                "request_digest": spec.request_digest,
+                "input_manifest_key": spec.input_manifest_key,
+                "input_manifest_digest": spec.input_manifest_digest,
+                "error": error,
+                "draft_only": True,
+                "screening_only": True,
+                "ready": False,
+                "mass": False,
+                "promotion": False,
+                "live_orders": False,
+                "go": False,
+                "not_a_pass": True,
+            }
+        return {
+            "schema_version": (
+                "personal-index-smile-transport-manifest/v2"
+                if spec.is_smile_transport
+                else "personal-index-vol-overlay-manifest/v1"
+            ),
+            "status": "FAILED",
+            "job_id": spec.job_id,
+            "cohort_id": spec.cohort_id,
+            "base_job_id": spec.base_job_id,
+            "svi_job_id": spec.svi_job_id,
+            "input_manifest_digest": spec.input_manifest_digest,
+            "draft_only": True,
+            "screening_only": True,
+            "ready": False,
+            "mass": False,
+            "promotion": False,
+            "live_orders": False,
+            "go": False,
+            "not_a_pass": True,
+            "single_stock_option_iv_used": False,
+            "runner_version": spec.runner_version,
+            "request_digest": spec.request_digest,
+            "error": error,
+        }
+
+    def _write_timeout_terminal(self, spec: JobSpecLike) -> None:
+        manifest = self._timeout_terminal(spec)
+        body = _canonical_bytes(manifest)
+        digest = "sha256:" + hashlib.sha256(body).hexdigest()
+        self._terminal_uploader(
+            spec.manifest_key,
+            body,
+            spec=spec,
+            content_digest=digest,
+        )
+
     def _expire(self, job_id: str) -> None:
+        spec: JobSpecLike | None = None
         with self._lock:
             if self._active_job_id != job_id or not self._accepting:
                 return
             record = self._jobs[job_id]
+            spec = self._specs.get(job_id)
             self._jobs[job_id] = {
                 **record,
                 "status": "FAILED",
@@ -1330,6 +1424,11 @@ class JobManager:
                 "go": False,
             }
             self._accepting = False
+        if spec is not None:
+            try:
+                self._write_timeout_terminal(spec)
+            except Exception:
+                pass
         if self._on_terminal is not None:
             self._on_terminal()
 
