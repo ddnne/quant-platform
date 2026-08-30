@@ -13,6 +13,7 @@ from datetime import date
 from pathlib import Path
 
 from core.universe import RawFixedUniverseError, ResolvedDailyUniverse
+from paper_runtime.personal_prepared_frame import _active_personal_prepared_frame
 from paper_runtime.personal_read_session import _personal_paper_read_session
 from paper_runtime.snapshot_identity import data_snapshot_id
 from strategies.paper import Lifecycle, PaperRunConfig, PaperRunResult, run_paper
@@ -155,6 +156,15 @@ class PersonalPaperExecutionService:
         if before != expected_snapshot:
             raise PersonalPaperExecutionRejected(
                 "database snapshot does not match expected_snapshot_id"
+            )
+        prepared_frame = _active_personal_prepared_frame(db_path)
+        if (
+            prepared_frame is not None
+            and prepared_frame.snapshot_id != expected_snapshot
+        ):
+            raise PersonalPaperExecutionRejected(
+                "personal prepared frame snapshot does not match "
+                "expected_snapshot_id"
             )
 
         strategy = interpret_strategy_spec(spec)

@@ -15,6 +15,13 @@ from typing import Any, Mapping
 
 import features
 import pit
+from paper_runtime.code_fingerprints import feature_definition_hashes
+from paper_runtime.personal_prepared_frame import (
+    PreparedFeatureValue,
+    PreparedPriceRows,
+    _active_personal_prepared_frame,
+    _is_cache_miss,
+)
 from pit.query import resolve_db_path
 from price_basis import (
     PERSONAL_RETROSPECTIVE_ADJUSTED,
@@ -41,6 +48,23 @@ CORE_ENGINE_VERSION = "0.7.0"
 # J-Quants HolidayDivision: "1" == trading day (exchange open).
 _TRADING_HOLIDAY_DIVISION = "1"
 
+_PREPARED_BAR_FIELDS = (
+    "source",
+    "code",
+    "date",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "adjustment_open",
+    "adjustment_high",
+    "adjustment_low",
+    "adjustment_close",
+    "adjustment_volume",
+)
+_ADJUSTMENT_VALIDATION_PURPOSE = "retrospective-adjustment-validation"
+
 
 def describe_strategy(strategy: Any) -> tuple[str, dict[str, Any]]:
     """``strategy_id`` / ``params`` for metadata; class name / {} if omitted."""
@@ -59,22 +83,74 @@ def _params_hash(params: dict[str, Any]) -> str:
 
 def _make_feature_accessor(as_of: str, db_path: Any):
     """Bind the trusted PIT scope used by one decision context."""
+
+    prepared_frame = _active_personal_prepared_frame(db_path)
+
     def compute_feature(
         feature_id: str, *, version: str | None = None, **inputs: Any
     ) -> Any:
         # Pin ``version`` when given so a later registry add cannot change a
         # persisted StrategySpec. Omit version = follow latest (hand-written).
-        definition = (
-            features.get(feature_id, version=version)
-            if version is not None
-            else feature_id
-        )
-        return features.compute(
-            definition,
+        definition = features.get(feature_id, version=version)
+        definition_digest: str | None = None
+        if prepared_frame is not None:
+            try:
+                def _exact_definition_digest() -> str:
+                    metadata_digest = features.feature_definition_digest(definition)
+                    implementation_digest = feature_definition_hashes(
+                        {definition.id: str(definition.version)}
+                    )[definition.id]
+                    payload = (
+                        metadata_digest + "\0" + implementation_digest
+                    ).encode("ascii")
+                    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+                definition_digest = prepared_frame.definition_digest(
+                    definition,
+                    _exact_definition_digest,
+                )
+                prepared = prepared_frame.load_feature(
+                    as_of=as_of,
+                    feature_id=definition.id,
+                    feature_version=str(definition.version),
+                    definition_digest=definition_digest,
+                    inputs=inputs,
+                )
+            except (KeyError, TypeError, ValueError):
+                # A future feature may accept a non-JSON input. The prepared
+                # frame is only an optimization; such a feature must retain
+                # the public live-compute behavior unchanged.
+                definition_digest = None
+            else:
+                if not _is_cache_miss(prepared):
+                    if not isinstance(prepared, PreparedFeatureValue):
+                        raise RuntimeError("invalid personal prepared feature value")
+                    return features.FeatureOutput(
+                        value=prepared.value,
+                        metadata=dict(prepared.metadata),
+                    )
+
+        completed = features.compute(
+            definition if version is not None else feature_id,
             as_of=as_of,
             db_path=db_path,
             **inputs,
         )
+        if prepared_frame is not None and definition_digest is not None:
+            try:
+                prepared_frame.store_feature(
+                    as_of=as_of,
+                    feature_id=definition.id,
+                    feature_version=str(definition.version),
+                    definition_digest=definition_digest,
+                    inputs=inputs,
+                    value=completed.value,
+                    metadata=completed.metadata,
+                )
+            except (TypeError, ValueError):
+                # Key encoding is best effort for the same reason as above.
+                pass
+        return completed
 
     return compute_feature
 
@@ -188,6 +264,177 @@ def _load_snapshot(
             _bar_price(bars[-1], price_basis=price_basis) if bars else None
         )
     return snapshot
+
+
+def _prepared_bar_rows(
+    *,
+    as_of: str,
+    codes: set[str],
+    from_event: str,
+    to_event: str,
+    db_path: Any,
+) -> tuple[dict[str, Any], ...]:
+    """Read one bounded bar window and reuse it inside the active job frame."""
+
+    ordered_codes = tuple(sorted(codes))
+    if not ordered_codes:
+        return ()
+    frame = _active_personal_prepared_frame(db_path)
+    if frame is not None:
+        prepared = frame.load_price_rows(
+            as_of=as_of,
+            from_event=from_event,
+            to_event=to_event,
+            codes=ordered_codes,
+        )
+        if not _is_cache_miss(prepared):
+            if not isinstance(prepared, PreparedPriceRows):
+                raise RuntimeError("invalid personal prepared price rows")
+            return prepared.rows
+
+    result = pit.get_equity_bars_daily(
+        as_of=as_of,
+        from_event=from_event,
+        to_event=to_event,
+        codes=ordered_codes,
+        db_path=db_path,
+    )
+    rows = tuple(
+        {
+            field: row.get(field)
+            for field in _PREPARED_BAR_FIELDS
+            if field in row
+        }
+        for row in result.rows
+    )
+    if frame is not None:
+        frame.store_price_rows(
+            as_of=as_of,
+            from_event=from_event,
+            to_event=to_event,
+            codes=ordered_codes,
+            rows=rows,
+        )
+    return rows
+
+
+def _load_prepared_strategy_snapshot(
+    as_of: str,
+    codes: set[str],
+    to_date: str,
+    lookback_days: int,
+    *,
+    db_path: Any,
+    price_basis: PriceBasis,
+) -> dict[str, dict[str, Any]]:
+    """Compact snapshot for a StrategySpec that never consumes ``ctx.bars``.
+
+    Exact-session bars cover fills, marks, and almost every decision price.
+    Only codes missing an exact-session bar pay for the original historical
+    fallback needed to preserve ``last close within lookback`` behavior.
+    """
+
+    snapshot: dict[str, dict[str, Any]] = {
+        code: {"close": None, "bars": []} for code in codes
+    }
+    if not codes:
+        return snapshot
+
+    if price_basis == PERSONAL_RETROSPECTIVE_ADJUSTED:
+        _validate_prepared_adjustment_window(
+            as_of=as_of,
+            codes=codes,
+            from_event=_shift_date(to_date, -lookback_days),
+            to_event=to_date,
+            db_path=db_path,
+        )
+
+    exact_rows = _prepared_bar_rows(
+        as_of=as_of,
+        codes=codes,
+        from_event=to_date,
+        to_event=to_date,
+        db_path=db_path,
+    )
+    exact_codes: set[str] = set()
+    for row in exact_rows:
+        code = str(row.get("code") or "")
+        if code not in snapshot:
+            continue
+        exact_codes.add(code)
+        snapshot[code]["bars"].append(
+            _bar_from_row(row, price_basis=price_basis)
+        )
+
+    missing = codes - exact_codes
+    if missing:
+        from_date = _shift_date(to_date, -lookback_days)
+        for row in _prepared_bar_rows(
+            as_of=as_of,
+            codes=missing,
+            from_event=from_date,
+            to_event=to_date,
+            db_path=db_path,
+        ):
+            code = str(row.get("code") or "")
+            if code not in snapshot:
+                continue
+            snapshot[code]["bars"].append(
+                _bar_from_row(row, price_basis=price_basis)
+            )
+
+    for entry in snapshot.values():
+        bars = entry["bars"]
+        entry["close"] = (
+            _bar_price(bars[-1], price_basis=price_basis) if bars else None
+        )
+    return snapshot
+
+
+def _validate_prepared_adjustment_window(
+    *,
+    as_of: str,
+    codes: set[str],
+    from_event: str,
+    to_event: str,
+    db_path: Any,
+) -> None:
+    """Retain the original lookback-wide adjusted-close fail-closed check."""
+
+    ordered_codes = tuple(sorted(codes))
+    frame = _active_personal_prepared_frame(db_path)
+    if frame is not None:
+        prepared = frame.load_price_rows(
+            as_of=as_of,
+            from_event=from_event,
+            to_event=to_event,
+            codes=ordered_codes,
+            purpose=_ADJUSTMENT_VALIDATION_PURPOSE,
+        )
+        if not _is_cache_miss(prepared):
+            if not isinstance(prepared, PreparedPriceRows) or prepared.rows:
+                raise RuntimeError("invalid prepared adjustment validation marker")
+            return
+
+    result = pit.get_equity_bars_daily(
+        as_of=as_of,
+        from_event=from_event,
+        to_event=to_event,
+        codes=ordered_codes,
+        db_path=db_path,
+    )
+    for row in result.rows:
+        _required_adjusted_close(row)
+
+    if frame is not None:
+        frame.store_price_rows(
+            as_of=as_of,
+            from_event=from_event,
+            to_event=to_event,
+            codes=ordered_codes,
+            rows=(),
+            purpose=_ADJUSTMENT_VALIDATION_PURPOSE,
+        )
 
 
 def _session_prices(
@@ -547,6 +794,11 @@ def run_backtest(
     marks: dict[str, tuple[float, str]] = {}
     # next_close only: orders decided on day D fill on day D+1.
     pending: dict[str, Any] | None = None
+    prepared_strategy_frame = bool(
+        mode.fill_offset == 1
+        and _active_personal_prepared_frame(resolved_db_path) is not None
+        and getattr(strategy, "personal_prepared_frame_eligible", False) is True
+    )
 
     for d in days:
         decision_as_of = mode.decision_as_of(d)
@@ -568,7 +820,12 @@ def run_backtest(
         )
         held = set(shares) | set(universe_d)
 
-        snap_close = _load_snapshot(
+        snapshot_loader = (
+            _load_prepared_strategy_snapshot
+            if prepared_strategy_frame
+            else _load_snapshot
+        )
+        snap_close = snapshot_loader(
             close_as_of(d),
             held,
             d,
