@@ -2384,8 +2384,10 @@ def test_paper_run_config_admits_am_signal_pm_close_routing_string() -> None:
         start="2024-01-04",
         end="2024-01-05",
         execution_mode=AM_SIGNAL_PM_CLOSE_EXECUTION_MODE,
+        price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
     )
     assert config.execution_mode == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
+    assert config.price_basis == PERSONAL_RETROSPECTIVE_ADJUSTED
 
 
 def test_default_specs_and_am_cohort_use_am_pm_legacy_stays_next_close() -> None:
