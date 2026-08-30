@@ -32,13 +32,26 @@ from research.options_225_smile_transport import (
 from research.options_225_vol_series import DATASET_ID, build_daily_basevol_series
 from research.personal_base_sleeve import validate_personal_base_sleeve_artifact
 from research.personal_index_vol_overlay import (
+    AM_PM_BASE_COHORT_ID,
+    AM_PM_BASE_SLEEVE_ID,
+    AM_PM_BASE_SLEEVE_SCHEMA,
+    AM_PM_EXECUTION_MODE,
     BETA_MIN_RETURNS,
+    IndexVolOverlayAmPmObservation,
     IndexVolOverlayObservation,
+    OVERLAY_AM_PM_CANDIDATE_IDS,
+    SMILE_TRANSPORT_AM_PM_CANDIDATE_IDS,
     SMILE_TRANSPORT_CANDIDATE_IDS,
     SMILE_TRANSPORT_CORE_MODULE,
+    TOPIX_ETF_CODE,
+    am_pm_proxy_mapping,
+    am_pm_temporal_contract_digest,
+    build_prepared_am_pm_panel_manifest,
     build_prepared_panel_manifest,
     evaluate_index_smile_transport_overlays,
+    evaluate_index_smile_transport_overlays_am_pm,
     evaluate_index_vol_overlays,
+    evaluate_index_vol_overlays_am_pm,
     smile_transport_core_digest,
 )
 
@@ -61,20 +74,46 @@ from personal_svi_2023_job import (
 R2_ORIGIN = "http://research.r2"
 COHORT_ID = "personal-index-vol-overlay-2023-v1"
 SMILE_TRANSPORT_COHORT_ID = "personal-index-smile-transport-2023-v1"
+AM_PM_COHORT_ID = "personal-index-vol-overlay-2023-am-pm-v1"
+AM_PM_SMILE_TRANSPORT_COHORT_ID = "personal-index-smile-transport-2023-am-pm-v1"
 RUNNER_VERSION = "personal-index-vol-overlay-cloud-runner/v1"
 SMILE_TRANSPORT_RUNNER_VERSION = "personal-index-smile-transport-cloud-runner/v1"
+AM_PM_RUNNER_VERSION = "personal-index-vol-overlay-am-pm-cloud-runner/v1"
+AM_PM_SMILE_TRANSPORT_RUNNER_VERSION = (
+    "personal-index-smile-transport-am-pm-cloud-runner/v1"
+)
 EARLIEST_DAY = "2023-01-04"
 LATEST_DAY = "2023-10-13"
 INPUT_SCHEMA = "personal-index-vol-overlay-2023-input/v1"
 SMILE_TRANSPORT_INPUT_SCHEMA = "personal-index-smile-transport-2023-input/v2"
+AM_PM_INPUT_SCHEMA = "personal-index-vol-overlay-2023-am-pm-input/v1"
+AM_PM_SMILE_TRANSPORT_INPUT_SCHEMA = (
+    "personal-index-smile-transport-2023-am-pm-input/v1"
+)
 PANEL_SCHEMA = "personal-index-vol-overlay-prepared-panel/v1"
 SMILE_TRANSPORT_PANEL_SCHEMA = "personal-index-smile-transport-prepared-panel/v2"
+AM_PM_PANEL_SCHEMA = "personal-index-vol-overlay-am-pm-prepared-panel/v1"
+AM_PM_SMILE_TRANSPORT_PANEL_SCHEMA = (
+    "personal-index-smile-transport-am-pm-prepared-panel/v1"
+)
 REPORT_SCHEMA = "personal-index-vol-overlay-report/v1"
 SMILE_TRANSPORT_REPORT_SCHEMA = "personal-index-smile-transport-report/v2"
+AM_PM_REPORT_SCHEMA = "personal-index-vol-overlay-am-pm-report/v1"
+AM_PM_SMILE_TRANSPORT_REPORT_SCHEMA = (
+    "personal-index-smile-transport-am-pm-report/v1"
+)
 MANIFEST_SCHEMA = "personal-index-vol-overlay-manifest/v1"
 SMILE_TRANSPORT_MANIFEST_SCHEMA = "personal-index-smile-transport-manifest/v2"
+AM_PM_MANIFEST_SCHEMA = "personal-index-vol-overlay-am-pm-manifest/v1"
+AM_PM_SMILE_TRANSPORT_MANIFEST_SCHEMA = (
+    "personal-index-smile-transport-am-pm-manifest/v1"
+)
 OVERLAY_R2_PREFIX = "research/personal/index-vol-overlay-2023"
 SMILE_TRANSPORT_R2_PREFIX = "research/personal/index-smile-transport-2023"
+AM_PM_R2_PREFIX = "research/personal/index-vol-overlay-2023-am-pm"
+AM_PM_SMILE_TRANSPORT_R2_PREFIX = (
+    "research/personal/index-smile-transport-2023-am-pm"
+)
 _FITTED_SLICE_FIELDS = (
     "date",
     "expiry",
@@ -171,6 +210,59 @@ _TEMPORAL = {
     "first_pnl_interval": "fill_close_to_following_close",
     "no_forward_fill": True,
 }
+_AM_PM_WINDOW = {
+    "start": EARLIEST_DAY,
+    "end": LATEST_DAY,
+    "signal_start_policy": (
+        "D_MINUS_1_OPTION_HISTORY_PLUS_D_AM_BETA_AND_D_PLUS_1_PM"
+    ),
+    "signal_end_policy": "LAST_SESSION_MINUS_ONE",
+}
+_AM_PM_SMILE_WINDOW = {
+    "start": EARLIEST_DAY,
+    "end": LATEST_DAY,
+    "signal_start_policy": "BETA_MIN_63_PAIRS_PLUS_OFFICIAL_D_MINUS_2_AND_D_PLUS_1_PM",
+    "signal_end_policy": "LAST_SESSION_MINUS_ONE",
+}
+_AM_PM_TEMPORAL = {
+    "source_decision_cutoff_jst": "11:30:00+09:00",
+    "equity_am_usable_by_jst": "12:30:00+09:00",
+    "prepared_available_at": "NO_LATER_THAN_D_12_30_JST",
+    "fill_timing": "d_pm_aadjc",
+    "first_pnl_interval": "d_pm_to_d_plus_1_pm",
+    "order_sizing": "d_am_price",
+    "option_signal_as_of": "through_d_minus_1",
+    "no_forward_fill": True,
+    "no_full_close_fallback": True,
+    "no_recovery_promotion": True,
+}
+_AM_PM_SMILE_TEMPORAL = {
+    **_AM_PM_TEMPORAL,
+    "smile_transport_pair": "d_minus_2_to_d_minus_1",
+    "no_expiry_rank_substitution": True,
+    "no_extrapolation": True,
+    "d_minus_1_rule": "immediately_preceding_official_session",
+}
+_AM_PM_OVERLAY_CANDIDATES = {
+    "ids": list(OVERLAY_AM_PM_CANDIDATE_IDS),
+    "selection": "NOT_PERFORMED",
+    "adaptive_model_switch": False,
+}
+_AM_PM_SMILE_CANDIDATES = {
+    "ids": list(SMILE_TRANSPORT_AM_PM_CANDIDATE_IDS),
+    "sticky_models": ["sticky_strike", "sticky_moneyness"],
+    "families": [
+        "downside_smile_term_surprise",
+        "potential_minimum_transport",
+    ],
+    "selection": "NOT_PERFORMED",
+    "adaptive_model_switch": False,
+}
+_AM_PM_SMILE_GATE = {
+    "min_common_valid_signal_days": 40,
+    "min_distinct_calendar_months": 4,
+    "common_invalid_policy": "flatten_g0_h0_at_d_pm",
+}
 _INPUT_AUTHORITY = {
     "draft_only": True,
     "screening_only": True,
@@ -195,6 +287,13 @@ def _closed_identity(cohort_id: str, runner_version: str) -> str:
         and runner_version == SMILE_TRANSPORT_RUNNER_VERSION
     ):
         return SMILE_TRANSPORT_R2_PREFIX
+    if cohort_id == AM_PM_COHORT_ID and runner_version == AM_PM_RUNNER_VERSION:
+        return AM_PM_R2_PREFIX
+    if (
+        cohort_id == AM_PM_SMILE_TRANSPORT_COHORT_ID
+        and runner_version == AM_PM_SMILE_TRANSPORT_RUNNER_VERSION
+    ):
+        return AM_PM_SMILE_TRANSPORT_R2_PREFIX
     raise OverlayJobInputError("overlay fixed identity mismatch")
 
 
@@ -226,6 +325,14 @@ class PersonalIndexVolOverlay2023JobSpec:
     @property
     def is_smile_transport(self) -> bool:
         return self.cohort_id == SMILE_TRANSPORT_COHORT_ID
+
+    @property
+    def is_am_pm_overlay(self) -> bool:
+        return self.cohort_id == AM_PM_COHORT_ID
+
+    @property
+    def is_am_pm_smile_transport(self) -> bool:
+        return self.cohort_id == AM_PM_SMILE_TRANSPORT_COHORT_ID
 
     @property
     def cohort_digest(self) -> str:
@@ -347,6 +454,33 @@ def load_input_manifest(
             or parsed.get("svi_features_jsonl") != _SMILE_TRANSPORT_SVI_FEATURES
         ):
             raise RuntimeError("overlay input manifest closed contract mismatch")
+    elif spec.is_am_pm_smile_transport:
+        if (
+            not shared_ok
+            or parsed.get("schema_version") != AM_PM_SMILE_TRANSPORT_INPUT_SCHEMA
+            or parsed.get("fixed_window") != _AM_PM_SMILE_WINDOW
+            or parsed.get("temporal_contract") != _AM_PM_SMILE_TEMPORAL
+            or parsed.get("candidates") != _AM_PM_SMILE_CANDIDATES
+            or parsed.get("formulas") != _SMILE_TRANSPORT_FORMULAS
+            or parsed.get("gate") != _AM_PM_SMILE_GATE
+            or parsed.get("core") != _SMILE_TRANSPORT_CORE
+            or parsed.get("physical_potential") != _SMILE_TRANSPORT_PHYSICAL
+            or parsed.get("svi_features_jsonl") != _SMILE_TRANSPORT_SVI_FEATURES
+            or parsed.get("selection") != "NOT_PERFORMED"
+        ):
+            raise RuntimeError("overlay input manifest closed contract mismatch")
+        _reject_legacy_am_pm_input(parsed)
+    elif spec.is_am_pm_overlay:
+        if (
+            not shared_ok
+            or parsed.get("schema_version") != AM_PM_INPUT_SCHEMA
+            or parsed.get("fixed_window") != _AM_PM_WINDOW
+            or parsed.get("temporal_contract") != _AM_PM_TEMPORAL
+            or parsed.get("candidates") != _AM_PM_OVERLAY_CANDIDATES
+            or parsed.get("selection") != "NOT_PERFORMED"
+        ):
+            raise RuntimeError("overlay input manifest closed contract mismatch")
+        _reject_legacy_am_pm_input(parsed)
     elif (
         not shared_ok
         or parsed.get("schema_version") != INPUT_SCHEMA
@@ -355,6 +489,22 @@ def load_input_manifest(
     ):
         raise RuntimeError("overlay input manifest closed contract mismatch")
     return parsed
+
+
+def _reject_legacy_am_pm_input(parsed: Mapping[str, Any]) -> None:
+    if parsed.get("schema_version") in {INPUT_SCHEMA, SMILE_TRANSPORT_INPUT_SCHEMA}:
+        raise RuntimeError("old next-close overlay schema is invalid for AM/PM")
+    if parsed.get("temporal_contract", {}).get("fill_timing") == "next_close":
+        raise RuntimeError("old next-close base sleeve is invalid for AM/PM overlay")
+    base = parsed.get("base")
+    if isinstance(base, Mapping):
+        cohort = base.get("cohort_id")
+        execution = base.get("execution_mode")
+        schema = base.get("artifact_schema_version") or base.get("schema_version")
+        if cohort == BASE_COHORT_ID or execution == "next_close":
+            raise RuntimeError("old next-close base sleeve is invalid for AM/PM overlay")
+        if schema == "personal-base-sleeve-source/v1":
+            raise RuntimeError("old next-close base sleeve is invalid for AM/PM overlay")
 
 
 def _download(
@@ -453,6 +603,93 @@ def load_base_sleeve_from_archive(
         raise RuntimeError("base sleeve archive member digest mismatch")
     document = json.loads(raw)
     validate_personal_base_sleeve_artifact(document)
+    if not isinstance(document, dict):
+        raise RuntimeError("base sleeve artifact is not an object")
+    return document
+
+
+def validate_am_pm_base_sleeve_artifact(document: Any) -> None:
+    """Reject the next-close overlay sleeve on the AM/PM family."""
+
+    if not isinstance(document, Mapping):
+        raise TypeError("AM/PM base sleeve artifact must be an object")
+    if document.get("schema_version") in {
+        "personal-base-sleeve-source/v1",
+        "personal-base-sleeve-reference/v1",
+    }:
+        raise RuntimeError("old next-close base sleeve is invalid for AM/PM overlay")
+    if document.get("schema_version") != AM_PM_BASE_SLEEVE_SCHEMA:
+        raise RuntimeError("AM/PM base sleeve artifact schema mismatch")
+    cohort = document.get("cohort")
+    strategy = document.get("strategy")
+    source = document.get("source_run")
+    if not all(isinstance(value, Mapping) for value in (cohort, strategy, source)):
+        raise RuntimeError("AM/PM base sleeve provenance is incomplete")
+    assert isinstance(cohort, Mapping)
+    assert isinstance(strategy, Mapping)
+    assert isinstance(source, Mapping)
+    if cohort.get("cohort_id") != AM_PM_BASE_COHORT_ID:
+        raise RuntimeError("AM/PM overlay requires sector-relative-ls-am-pm-v1")
+    if cohort.get("cohort_id") == BASE_COHORT_ID:
+        raise RuntimeError("old next-close base sleeve is invalid for AM/PM overlay")
+    if strategy.get("strategy_id") != AM_PM_BASE_SLEEVE_ID:
+        raise RuntimeError("AM/PM overlay requires the AM/PM frozen base strategy")
+    if source.get("execution_mode") == "next_close":
+        raise RuntimeError("old next-close base sleeve is invalid for AM/PM overlay")
+    if source.get("execution_mode") != AM_PM_EXECUTION_MODE:
+        raise RuntimeError("AM/PM base sleeve must use am_pm execution")
+    daily_path = document.get("daily_path")
+    if not isinstance(daily_path, list) or not daily_path:
+        raise RuntimeError("AM/PM base sleeve daily path is invalid")
+    for row in daily_path:
+        if not isinstance(row, Mapping):
+            raise RuntimeError("AM/PM base sleeve daily path is invalid")
+        if "equity" in row and "am_nav" not in row:
+            raise RuntimeError("old next-close base sleeve is invalid for AM/PM overlay")
+        if _number(row.get("am_nav"), positive=True) is None:
+            raise RuntimeError("AM/PM base sleeve missing exact morning NAV")
+        if _number(row.get("pm_nav"), positive=True) is None:
+            raise RuntimeError("AM/PM base sleeve missing exact afternoon NAV")
+
+
+def load_am_pm_base_sleeve_from_archive(
+    archive_path: Path,
+    reference: Mapping[str, Any],
+) -> dict[str, Any]:
+    member_name = reference.get("archive_member")
+    expected_digest = reference.get("sha256")
+    if (
+        not isinstance(member_name, str)
+        or not isinstance(expected_digest, str)
+        or _DIGEST_RE.fullmatch(expected_digest) is None
+    ):
+        raise RuntimeError("base sleeve archive reference is invalid")
+    member_path = PurePosixPath(member_name)
+    if (
+        member_path.is_absolute()
+        or ".." in member_path.parts
+        or member_name
+        != f"base-sleeve/{expected_digest.removeprefix('sha256:')}.json"
+    ):
+        raise RuntimeError("base sleeve archive member is unsafe")
+    matches: list[tarfile.TarInfo] = []
+    with tarfile.open(archive_path, mode="r:gz") as archive:
+        for member in archive:
+            if member.name == member_name:
+                matches.append(member)
+        if len(matches) != 1 or not matches[0].isreg():
+            raise RuntimeError("base sleeve archive member is missing or ambiguous")
+        member = matches[0]
+        if not 0 < member.size <= MAX_BASE_ARTIFACT_BYTES:
+            raise RuntimeError("base sleeve archive member size denied")
+        extracted = archive.extractfile(member)
+        if extracted is None:
+            raise RuntimeError("base sleeve archive member cannot be read")
+        raw = extracted.read(member.size + 1)
+    if len(raw) != member.size or _sha256(raw) != expected_digest:
+        raise RuntimeError("base sleeve archive member digest mismatch")
+    document = json.loads(raw)
+    validate_am_pm_base_sleeve_artifact(document)
     if not isinstance(document, dict):
         raise RuntimeError("base sleeve artifact is not an object")
     return document
@@ -748,6 +985,132 @@ def build_observations(
     return observations
 
 
+def _etf_ma_from_snapshot(
+    snapshot: Path,
+    session_dates: Sequence[str],
+    *,
+    code: str = TOPIX_ETF_CODE,
+) -> dict[str, tuple[float, float]]:
+    result = pit.get_equity_bars_daily(
+        as_of=f"{LATEST_DAY}T23:59:59+09:00",
+        code=code,
+        from_event=EARLIEST_DAY,
+        to_event=LATEST_DAY,
+        db_path=snapshot,
+    )
+    prices: dict[str, tuple[float, float]] = {}
+    for row in result.rows:
+        payload = row if isinstance(row, Mapping) else getattr(row, "__dict__", {})
+        day = str(payload.get("date") or "")[:10]
+        morning = _number(
+            payload.get("morning_adjustment_close") or payload.get("MAdjC"),
+            positive=True,
+        )
+        afternoon = _number(
+            payload.get("afternoon_adjustment_close") or payload.get("AAdjC"),
+            positive=True,
+        )
+        if not day:
+            continue
+        if morning is None or afternoon is None:
+            raise RuntimeError(
+                f"ETF {code} missing exact M/A observations on {day}"
+            )
+        if day in prices:
+            raise RuntimeError(f"ETF {code} date is duplicated")
+        prices[day] = (morning, afternoon)
+    missing = [day for day in session_dates if day not in prices]
+    if missing:
+        raise RuntimeError(
+            f"ETF {code} missing exact M/A observations on {missing[0]}"
+        )
+    return {day: prices[day] for day in session_dates}
+
+
+def build_am_pm_observations(
+    *,
+    session_dates: Sequence[str],
+    base_artifact: Mapping[str, Any],
+    etf_ma: Mapping[str, tuple[float, float]],
+    topix_closes: Mapping[str, float],
+    n225_closes: Mapping[str, float] | None = None,
+    base_vol_percent: Mapping[str, float],
+    feature_rows: Mapping[str, Mapping[str, Any]],
+) -> list[IndexVolOverlayAmPmObservation]:
+    validate_am_pm_base_sleeve_artifact(base_artifact)
+    base_rows = base_artifact.get("daily_path")
+    if not isinstance(base_rows, list):
+        raise RuntimeError("overlay base daily path is invalid")
+    fixed_window_rows = [
+        row
+        for row in base_rows
+        if isinstance(row, Mapping) and EARLIEST_DAY <= str(row.get("date")) <= LATEST_DAY
+    ]
+    if [str(row["date"]) for row in fixed_window_rows] != list(session_dates):
+        raise RuntimeError(
+            "overlay base daily path does not exactly match authoritative dates"
+        )
+    realized = _realized_vol_20(session_dates, topix_closes)
+    observations: list[IndexVolOverlayAmPmObservation] = []
+    for day in session_dates:
+        option = option_feature_values(feature_rows.get(day))
+        raw_base_vol = _number(base_vol_percent.get(day), positive=True)
+        etf = etf_ma.get(day)
+        if etf is None:
+            raise RuntimeError(f"ETF {TOPIX_ETF_CODE} missing exact M/A observations")
+        source = next(row for row in fixed_window_rows if str(row["date"]) == day)
+        observations.append(
+            IndexVolOverlayAmPmObservation(
+                date=day,
+                available_at=f"{day}T12:30:00+09:00",
+                base_sleeve_am_nav=_number(source.get("am_nav"), positive=True),
+                base_sleeve_pm_nav=_number(source.get("pm_nav"), positive=True),
+                topix_etf_13060_madjc=etf[0],
+                topix_etf_13060_aadjc=etf[1],
+                topix_cash_close=topix_closes.get(day),
+                n225_cash_close=(n225_closes or {}).get(day),
+                n225_base_vol=(raw_base_vol / 100.0 if raw_base_vol else None),
+                n225_atm_iv=option["n225_atm_iv"],
+                topix_realized_vol_20=realized.get(day),
+                n225_front_atm_iv=option["front_atm"],
+                n225_next_atm_iv=option["next_atm"],
+                n225_front_downside_wing_iv=option["front_downside"],
+                n225_next_downside_wing_iv=option["next_downside"],
+                svi_equivalent_atm_term_ratio=option["svi_atm_term_ratio"],
+                svi_equivalent_downside_smile_term_ratio=option[
+                    "svi_downside_term_ratio"
+                ],
+            )
+        )
+    return observations
+
+
+def remap_smile_transport_features_for_am_pm(
+    rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    remapped: list[dict[str, Any]] = []
+    for row in rows:
+        copy = dict(row)
+        candidate_id = str(copy.get("candidate_id") or "")
+        if candidate_id.endswith("_v1") and not candidate_id.endswith("_am_pm_v1"):
+            copy["source_candidate_id"] = candidate_id
+            copy["candidate_id"] = candidate_id[:-3] + "_am_pm_v1"
+        remapped.append(copy)
+    return remapped
+
+
+def _am_pm_base_digests(base_artifact: Mapping[str, Any]) -> tuple[str, str]:
+    strategy = base_artifact.get("strategy")
+    cohort = base_artifact.get("cohort")
+    if not isinstance(strategy, Mapping) or not isinstance(cohort, Mapping):
+        raise RuntimeError("AM/PM base sleeve provenance is incomplete")
+    spec_digest = str(strategy.get("strategy_spec_digest") or "")
+    cohort_digest = str(cohort.get("cohort_digest") or "")
+    if _DIGEST_RE.fullmatch(spec_digest) is None or _DIGEST_RE.fullmatch(cohort_digest) is None:
+        raise RuntimeError("AM/PM base sleeve digests are invalid")
+    return spec_digest, cohort_digest
+
+
 def _authority(spec: PersonalIndexVolOverlay2023JobSpec) -> dict[str, Any]:
     return {
         "job_id": spec.job_id,
@@ -880,6 +1243,20 @@ def execute_overlay_job(
     svi_opener: Callable[[PersonalSvi2023JobSpec, str], Any] | None = None,
     uploader: Callable[[PersonalIndexVolOverlay2023JobSpec, str, bytes], str] = _put_bytes,
 ) -> dict[str, Any]:
+    if spec.is_am_pm_smile_transport:
+        return execute_am_pm_smile_transport_job(
+            spec,
+            overlay_opener=overlay_opener,
+            svi_opener=svi_opener,
+            uploader=uploader,
+        )
+    if spec.is_am_pm_overlay:
+        return execute_am_pm_overlay_job(
+            spec,
+            overlay_opener=overlay_opener,
+            svi_opener=svi_opener,
+            uploader=uploader,
+        )
     if spec.is_smile_transport:
         return execute_smile_transport_job(
             spec,
@@ -1320,7 +1697,460 @@ def execute_smile_transport_job(
     return terminal
 
 
+def _open_am_pm_sources(
+    spec: PersonalIndexVolOverlay2023JobSpec,
+    *,
+    overlay_opener: Callable[[PersonalIndexVolOverlay2023JobSpec, str], Any],
+    svi_opener: Callable[[PersonalSvi2023JobSpec, str], Any] | None,
+) -> dict[str, Any]:
+    input_manifest = load_input_manifest(spec, opener=overlay_opener)
+    base = input_manifest["base"]
+    svi = input_manifest["svi"]
+    if not isinstance(base, Mapping) or not isinstance(svi, Mapping):
+        raise RuntimeError("overlay base references are invalid")
+    if (
+        base.get("cohort_id") == BASE_COHORT_ID
+        or base.get("execution_mode") == "next_close"
+        or str(base.get("artifact_schema_version") or "")
+        == "personal-base-sleeve-source/v1"
+    ):
+        raise RuntimeError("old next-close base sleeve is invalid for AM/PM overlay")
+    result_reference = base.get("result")
+    snapshot_reference = base.get("snapshot")
+    sleeve_reference = base.get("sleeve_artifact")
+    if not all(
+        isinstance(value, Mapping)
+        for value in (result_reference, snapshot_reference, sleeve_reference)
+    ):
+        raise RuntimeError("overlay base references are invalid")
+    return {
+        "input_manifest": input_manifest,
+        "base": base,
+        "svi": svi,
+        "result_reference": result_reference,
+        "snapshot_reference": snapshot_reference,
+        "sleeve_reference": sleeve_reference,
+        "svi_opener": svi_opener,
+    }
+
+
+def execute_am_pm_overlay_job(
+    spec: PersonalIndexVolOverlay2023JobSpec,
+    *,
+    overlay_opener: Callable[[PersonalIndexVolOverlay2023JobSpec, str], Any] = _open_overlay,
+    svi_opener: Callable[[PersonalSvi2023JobSpec, str], Any] | None = None,
+    uploader: Callable[[PersonalIndexVolOverlay2023JobSpec, str, bytes], str] = _put_bytes,
+) -> dict[str, Any]:
+    try:
+        opened = _open_am_pm_sources(
+            spec, overlay_opener=overlay_opener, svi_opener=svi_opener
+        )
+        with tempfile.TemporaryDirectory(prefix=f"overlay-{spec.job_id}-") as root:
+            root_path = Path(root)
+            archive = root_path / "base-result.tar.gz"
+            _download(
+                spec,
+                opened["result_reference"],
+                archive,
+                maximum=MAX_RESULT_BYTES,
+                expected_digest=str(opened["result_reference"].get("sha256") or ""),
+                opener=overlay_opener,
+            )
+            base_artifact = load_am_pm_base_sleeve_from_archive(
+                archive, opened["sleeve_reference"]
+            )
+            archive.unlink()
+            snapshot_key = str(opened["snapshot_reference"].get("key") or "")
+            transport = root_path / (
+                "source.sqlite.gz" if snapshot_key.endswith(".gz") else "source.transport"
+            )
+            snapshot = root_path / "source.sqlite"
+            _download(
+                spec,
+                opened["snapshot_reference"],
+                transport,
+                maximum=MAX_SNAPSHOT_BYTES,
+                expected_digest=None,
+                opener=overlay_opener,
+            )
+            _expand_snapshot(
+                transport,
+                snapshot,
+                str(opened["snapshot_reference"].get("raw_sha256") or ""),
+            )
+            transport.unlink()
+            authoritative_dates = _calendar_dates(snapshot)
+            source_svi_spec = _svi_spec(opened["input_manifest"])
+
+            def admitted_svi_opener(_source_spec: PersonalSvi2023JobSpec, key: str) -> Any:
+                return overlay_opener(spec, key)
+
+            source_svi_opener = opened["svi_opener"] or admitted_svi_opener
+            svi_manifest = load_svi_input_manifest(
+                source_svi_spec, opener=source_svi_opener
+            )
+            source_options = svi_manifest.get("options")
+            exact_inventory = {
+                "panel": svi_manifest.get("panel"),
+                "options": {
+                    field: source_options.get(field)
+                    for field in ("days", "object_count", "total_bytes")
+                }
+                if isinstance(source_options, Mapping)
+                else None,
+            }
+            if exact_inventory != {
+                "panel": opened["svi"].get("panel"),
+                "options": opened["svi"].get("options"),
+            }:
+                raise RuntimeError(
+                    "overlay input inventory does not match immutable SVI manifest"
+                )
+            panel = load_svi_panel(
+                source_svi_spec, svi_manifest, opener=source_svi_opener
+            )
+            feature_reference = opened["svi"].get("feature")
+            if not isinstance(feature_reference, Mapping):
+                raise RuntimeError("overlay SVI feature reference is invalid")
+            features = _load_feature_rows(
+                spec, feature_reference, opener=overlay_opener
+            )
+            feature_by_date: dict[str, Mapping[str, Any]] = {}
+            for row in features:
+                day = str(row.get("date") or "")
+                if day in feature_by_date:
+                    raise RuntimeError("overlay SVI feature date is duplicated")
+                feature_by_date[day] = row
+            options = svi_manifest.get("options")
+            if not isinstance(options, Mapping) or not isinstance(options.get("days"), list):
+                raise RuntimeError("overlay SVI option manifest is invalid")
+            option_dates = [str(entry.get("date") or "") for entry in options["days"]]
+            topix = _topix_closes(panel)
+            etf_ma = _etf_ma_from_snapshot(snapshot, option_dates)
+            authoritative_dates = require_exact_calendar(
+                authoritative_dates, option_dates, list(etf_ma)
+            )
+            base_vol_percent: dict[str, float] = {}
+            for entry in options["days"]:
+                day_rows, _audit = load_one_options_day(
+                    source_svi_spec, entry, opener=source_svi_opener
+                )
+                built = build_daily_basevol_series(day_rows)
+                if len(built) == 1 and built[0].get("date") == entry.get("date"):
+                    value = _number(built[0].get("base_vol"), positive=True)
+                    if value is not None:
+                        base_vol_percent[str(entry["date"])] = value
+            observations = build_am_pm_observations(
+                session_dates=authoritative_dates,
+                base_artifact=base_artifact,
+                etf_ma=etf_ma,
+                topix_closes=topix,
+                base_vol_percent=base_vol_percent,
+                feature_rows=feature_by_date,
+            )
+            spec_digest, cohort_digest = _am_pm_base_digests(base_artifact)
+            prepared_manifest = build_prepared_am_pm_panel_manifest(
+                observations,
+                authoritative_session_dates=authoritative_dates,
+                snapshot_digest=str(opened["snapshot_reference"].get("raw_sha256") or ""),
+                base_report_digest=str(opened["sleeve_reference"].get("sha256") or ""),
+                strategy_spec_digest=spec_digest,
+                cohort_digest=cohort_digest,
+            )
+            result = evaluate_index_vol_overlays_am_pm(
+                observations,
+                manifest=prepared_manifest,
+                authoritative_session_dates=authoritative_dates,
+                signal_start=authoritative_dates[146],
+                signal_end=authoritative_dates[-2],
+            )
+        panel_document = {
+            "schema_version": AM_PM_PANEL_SCHEMA,
+            **_authority(spec),
+            "runner_version": AM_PM_RUNNER_VERSION,
+            "prepared_panel_manifest": asdict(prepared_manifest),
+            "observations": [asdict(row) for row in observations],
+            "temporal_contract_digest": am_pm_temporal_contract_digest(),
+            "proxy_mapping": am_pm_proxy_mapping(),
+            "selection": "NOT_PERFORMED",
+            "unit_policy": {
+                "jquants_base_vol_input": "percent",
+                "prepared_iv_and_rv": "annualized_decimal",
+                "base_vol_conversion": "percent_divided_by_100",
+            },
+            "calendar_source": "pit.get_market_calendar",
+            "calendar_alignment": "EXACT_ORDERED_DATE_MATCH",
+            "no_forward_fill": True,
+            "cash_index_executable_fill_claim": False,
+        }
+        panel_bytes = _canonical_bytes(panel_document)
+        panel_digest = _sha256(panel_bytes)
+        panel_key = _artifact_key("prepared-panel", panel_digest, prefix=spec.r2_prefix)
+        if uploader(spec, panel_key, panel_bytes) != panel_digest:
+            raise RuntimeError("overlay prepared-panel upload digest mismatch")
+        report_document = {
+            "schema_version": AM_PM_REPORT_SCHEMA,
+            **_authority(spec),
+            "runner_version": AM_PM_RUNNER_VERSION,
+            "prepared_panel_key": panel_key,
+            "prepared_panel_sha256": panel_digest,
+            "selection": "NOT_PERFORMED",
+            "result": result,
+        }
+        report_bytes = _canonical_bytes(report_document)
+        report_digest = _sha256(report_bytes)
+        report_key = _artifact_key("report", report_digest, prefix=spec.r2_prefix)
+        if uploader(spec, report_key, report_bytes) != report_digest:
+            raise RuntimeError("overlay report upload digest mismatch")
+        terminal = {
+            "schema_version": AM_PM_MANIFEST_SCHEMA,
+            "status": "COMPLETED",
+            **_authority(spec),
+            "runner_version": AM_PM_RUNNER_VERSION,
+            "request_digest": spec.request_digest,
+            "prepared_panel_key": panel_key,
+            "prepared_panel_sha256": panel_digest,
+            "report_key": report_key,
+            "report_sha256": report_digest,
+            "candidate_status": result.get("status"),
+            "candidate_count": 4,
+            "post_result_selection": "NOT_PERFORMED",
+            "selection": "NOT_PERFORMED",
+        }
+    except Exception as error:
+        terminal = {
+            "schema_version": AM_PM_MANIFEST_SCHEMA,
+            "status": "FAILED",
+            **_authority(spec),
+            "runner_version": AM_PM_RUNNER_VERSION,
+            "request_digest": spec.request_digest,
+            "error": _safe_detail(error),
+        }
+    terminal_bytes = _canonical_bytes(terminal)
+    uploader(spec, spec.manifest_key, terminal_bytes)
+    return terminal
+
+
+def execute_am_pm_smile_transport_job(
+    spec: PersonalIndexVolOverlay2023JobSpec,
+    *,
+    overlay_opener: Callable[[PersonalIndexVolOverlay2023JobSpec, str], Any] = _open_overlay,
+    svi_opener: Callable[[PersonalSvi2023JobSpec, str], Any] | None = None,
+    uploader: Callable[[PersonalIndexVolOverlay2023JobSpec, str, bytes], str] = _put_bytes,
+) -> dict[str, Any]:
+    try:
+        opened = _open_am_pm_sources(
+            spec, overlay_opener=overlay_opener, svi_opener=svi_opener
+        )
+        with tempfile.TemporaryDirectory(prefix=f"overlay-{spec.job_id}-") as root:
+            root_path = Path(root)
+            archive = root_path / "base-result.tar.gz"
+            _download(
+                spec,
+                opened["result_reference"],
+                archive,
+                maximum=MAX_RESULT_BYTES,
+                expected_digest=str(opened["result_reference"].get("sha256") or ""),
+                opener=overlay_opener,
+            )
+            base_artifact = load_am_pm_base_sleeve_from_archive(
+                archive, opened["sleeve_reference"]
+            )
+            archive.unlink()
+            snapshot_key = str(opened["snapshot_reference"].get("key") or "")
+            transport = root_path / (
+                "source.sqlite.gz" if snapshot_key.endswith(".gz") else "source.transport"
+            )
+            snapshot = root_path / "source.sqlite"
+            _download(
+                spec,
+                opened["snapshot_reference"],
+                transport,
+                maximum=MAX_SNAPSHOT_BYTES,
+                expected_digest=None,
+                opener=overlay_opener,
+            )
+            _expand_snapshot(
+                transport,
+                snapshot,
+                str(opened["snapshot_reference"].get("raw_sha256") or ""),
+            )
+            transport.unlink()
+            authoritative_dates = _calendar_dates(snapshot)
+            source_svi_spec = _svi_spec(opened["input_manifest"])
+
+            def admitted_svi_opener(_source_spec: PersonalSvi2023JobSpec, key: str) -> Any:
+                return overlay_opener(spec, key)
+
+            source_svi_opener = opened["svi_opener"] or admitted_svi_opener
+            svi_manifest = load_svi_input_manifest(
+                source_svi_spec, opener=source_svi_opener
+            )
+            source_options = svi_manifest.get("options")
+            exact_inventory = {
+                "panel": svi_manifest.get("panel"),
+                "options": {
+                    field: source_options.get(field)
+                    for field in ("days", "object_count", "total_bytes")
+                }
+                if isinstance(source_options, Mapping)
+                else None,
+            }
+            if exact_inventory != {
+                "panel": opened["svi"].get("panel"),
+                "options": opened["svi"].get("options"),
+            }:
+                raise RuntimeError(
+                    "overlay input inventory does not match immutable SVI manifest"
+                )
+            panel = load_svi_panel(
+                source_svi_spec, svi_manifest, opener=source_svi_opener
+            )
+            options = svi_manifest.get("options")
+            if not isinstance(options, Mapping) or not isinstance(options.get("days"), list):
+                raise RuntimeError("overlay SVI option manifest is invalid")
+            option_dates = [str(entry.get("date") or "") for entry in options["days"]]
+            topix = _topix_closes(panel)
+            etf_ma = _etf_ma_from_snapshot(snapshot, option_dates)
+            authoritative_dates = require_exact_calendar(
+                authoritative_dates, option_dates, list(etf_ma)
+            )
+            fitted_slices, parse_audit = _parse_official_options_days_once(
+                spec, source_svi_spec, options, opener=source_svi_opener
+            )
+            transport_features = remap_smile_transport_features_for_am_pm(
+                build_daily_svi_smile_transport_features(fitted_slices)
+            )
+            observations = build_am_pm_observations(
+                session_dates=authoritative_dates,
+                base_artifact=base_artifact,
+                etf_ma=etf_ma,
+                topix_closes=topix,
+                base_vol_percent={},
+                feature_rows={},
+            )
+            spec_digest, cohort_digest = _am_pm_base_digests(base_artifact)
+            prepared_manifest = build_prepared_am_pm_panel_manifest(
+                observations,
+                authoritative_session_dates=authoritative_dates,
+                snapshot_digest=str(opened["snapshot_reference"].get("raw_sha256") or ""),
+                base_report_digest=str(opened["sleeve_reference"].get("sha256") or ""),
+                strategy_spec_digest=spec_digest,
+                cohort_digest=cohort_digest,
+            )
+            core_digest = smile_transport_core_digest()
+            result = evaluate_index_smile_transport_overlays_am_pm(
+                observations,
+                transport_features,
+                manifest=prepared_manifest,
+                authoritative_session_dates=authoritative_dates,
+                signal_start=authoritative_dates[BETA_MIN_RETURNS],
+                signal_end=authoritative_dates[-2],
+                core_digest=core_digest,
+            )
+            inventory_digest = _sha256(
+                _canonical_bytes(
+                    {
+                        "panel": opened["svi"].get("panel"),
+                        "options": opened["svi"].get("options"),
+                    }
+                )
+            )
+        panel_document = {
+            "schema_version": AM_PM_SMILE_TRANSPORT_PANEL_SCHEMA,
+            **_authority(spec),
+            "runner_version": AM_PM_SMILE_TRANSPORT_RUNNER_VERSION,
+            "prepared_panel_manifest": asdict(prepared_manifest),
+            "market_observations": [
+                {
+                    "date": row.date,
+                    "available_at": row.available_at,
+                    "base_sleeve_am_nav": row.base_sleeve_am_nav,
+                    "base_sleeve_pm_nav": row.base_sleeve_pm_nav,
+                    "topix_etf_13060_madjc": row.topix_etf_13060_madjc,
+                    "topix_etf_13060_aadjc": row.topix_etf_13060_aadjc,
+                    "topix_cash_close": row.topix_cash_close,
+                }
+                for row in observations
+            ],
+            "transport_rows": transport_features,
+            "common_validity": result["common_validity_gate"],
+            "raw_inventory_digest": inventory_digest,
+            "calendar_digest": prepared_manifest.trading_calendar_digest,
+            "base_report_digest": prepared_manifest.base_report_digest,
+            "temporal_contract_digest": am_pm_temporal_contract_digest(),
+            "proxy_mapping": am_pm_proxy_mapping(),
+            "core_version": OPTIONS_225_SMILE_TRANSPORT_VERSION,
+            "core_digest": core_digest,
+            "parse_once": {
+                "official_days": len(parse_audit),
+                "raw_day_passes": len(parse_audit),
+                "fitted_slices_retained": len(fitted_slices),
+                "days": parse_audit,
+            },
+            "svi_features_jsonl": _SMILE_TRANSPORT_SVI_FEATURES,
+            "calendar_source": "pit.get_market_calendar",
+            "calendar_alignment": "EXACT_ORDERED_DATE_MATCH",
+            "no_forward_fill": True,
+            "selection": "NOT_PERFORMED",
+            "physical_potential": _SMILE_TRANSPORT_PHYSICAL,
+            "cash_index_executable_fill_claim": False,
+        }
+        panel_bytes = _canonical_bytes(panel_document)
+        panel_digest = _sha256(panel_bytes)
+        panel_key = _artifact_key("prepared-panel", panel_digest, prefix=spec.r2_prefix)
+        if uploader(spec, panel_key, panel_bytes) != panel_digest:
+            raise RuntimeError("overlay prepared-panel upload digest mismatch")
+        report_document = {
+            "schema_version": AM_PM_SMILE_TRANSPORT_REPORT_SCHEMA,
+            **_authority(spec),
+            "runner_version": AM_PM_SMILE_TRANSPORT_RUNNER_VERSION,
+            "prepared_panel_key": panel_key,
+            "prepared_panel_sha256": panel_digest,
+            "selection": "NOT_PERFORMED",
+            "result": result,
+        }
+        report_bytes = _canonical_bytes(report_document)
+        report_digest = _sha256(report_bytes)
+        report_key = _artifact_key("report", report_digest, prefix=spec.r2_prefix)
+        if uploader(spec, report_key, report_bytes) != report_digest:
+            raise RuntimeError("overlay report upload digest mismatch")
+        terminal = {
+            "schema_version": AM_PM_SMILE_TRANSPORT_MANIFEST_SCHEMA,
+            "status": "COMPLETED",
+            **_authority(spec),
+            "runner_version": AM_PM_SMILE_TRANSPORT_RUNNER_VERSION,
+            "request_digest": spec.request_digest,
+            "prepared_panel_key": panel_key,
+            "prepared_panel_sha256": panel_digest,
+            "report_key": report_key,
+            "report_sha256": report_digest,
+            "candidate_status": result.get("status"),
+            "candidate_count": 4,
+            "post_result_selection": "NOT_PERFORMED",
+            "selection": "NOT_PERFORMED",
+            "core_version": OPTIONS_225_SMILE_TRANSPORT_VERSION,
+            "core_digest": core_digest,
+        }
+    except Exception as error:
+        terminal = {
+            "schema_version": AM_PM_SMILE_TRANSPORT_MANIFEST_SCHEMA,
+            "status": "FAILED",
+            **_authority(spec),
+            "runner_version": AM_PM_SMILE_TRANSPORT_RUNNER_VERSION,
+            "request_digest": spec.request_digest,
+            "error": _safe_detail(error),
+        }
+    terminal_bytes = _canonical_bytes(terminal)
+    uploader(spec, spec.manifest_key, terminal_bytes)
+    return terminal
+
+
 __all__ = [
+    "AM_PM_COHORT_ID",
+    "AM_PM_RUNNER_VERSION",
+    "AM_PM_SMILE_TRANSPORT_COHORT_ID",
+    "AM_PM_SMILE_TRANSPORT_RUNNER_VERSION",
     "COHORT_ID",
     "RUNNER_VERSION",
     "SMILE_TRANSPORT_COHORT_ID",
@@ -1328,11 +2158,17 @@ __all__ = [
     "OverlayJobInputError",
     "PersonalIndexVolOverlay2023JobSpec",
     "bounded_fitted_svi_slice",
+    "build_am_pm_observations",
     "build_observations",
+    "execute_am_pm_overlay_job",
+    "execute_am_pm_smile_transport_job",
     "execute_overlay_job",
     "execute_smile_transport_job",
+    "load_am_pm_base_sleeve_from_archive",
     "load_base_sleeve_from_archive",
     "load_input_manifest",
     "option_feature_values",
+    "remap_smile_transport_features_for_am_pm",
     "require_exact_calendar",
+    "validate_am_pm_base_sleeve_artifact",
 ]

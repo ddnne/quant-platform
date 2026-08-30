@@ -400,3 +400,127 @@ def test_bounded_fitted_slice_rejects_single_stock_and_drops_failed_fits() -> No
                 "svi_parameters": {"a": 0.01},
             }
         )
+
+
+def test_am_pm_job_spec_uses_distinct_prefix_and_rejects_legacy_identity() -> None:
+    job_id = "overlay-am-pm"
+    prefix = f"research/personal/index-vol-overlay-2023-am-pm/job={job_id}"
+    body = {
+        "base_job_id": "base-am-pm",
+        "cohort_id": overlay.AM_PM_COHORT_ID,
+        "input_manifest_digest": "sha256:" + "b" * 64,
+        "input_manifest_key": f"{prefix}/input-manifest.json",
+        "job_id": job_id,
+        "manifest_key": f"{prefix}/manifest.json",
+        "request_digest": "sha256:" + "0" * 64,
+        "runner_version": overlay.AM_PM_RUNNER_VERSION,
+        "svi_job_id": "svi-am-pm",
+    }
+    provisional = overlay.PersonalIndexVolOverlay2023JobSpec(**body)
+    body["request_digest"] = provisional.derived_request_digest()
+    spec = overlay.PersonalIndexVolOverlay2023JobSpec.from_document(body)
+    assert spec.is_am_pm_overlay is True
+    assert spec.is_smile_transport is False
+    assert spec.r2_prefix == "research/personal/index-vol-overlay-2023-am-pm"
+    with pytest.raises(overlay.OverlayJobInputError, match="identity"):
+        overlay.PersonalIndexVolOverlay2023JobSpec.from_document(
+            {**body, "runner_version": overlay.RUNNER_VERSION}
+        )
+    smile_body = {
+        **body,
+        "cohort_id": overlay.AM_PM_SMILE_TRANSPORT_COHORT_ID,
+        "runner_version": overlay.AM_PM_SMILE_TRANSPORT_RUNNER_VERSION,
+        "input_manifest_key": (
+            f"research/personal/index-smile-transport-2023-am-pm/job={job_id}/"
+            "input-manifest.json"
+        ),
+        "manifest_key": (
+            f"research/personal/index-smile-transport-2023-am-pm/job={job_id}/"
+            "manifest.json"
+        ),
+    }
+    smile_body["request_digest"] = overlay.PersonalIndexVolOverlay2023JobSpec(
+        **smile_body
+    ).derived_request_digest()
+    smile = overlay.PersonalIndexVolOverlay2023JobSpec.from_document(smile_body)
+    assert smile.is_am_pm_smile_transport is True
+    assert smile.r2_prefix == "research/personal/index-smile-transport-2023-am-pm"
+
+
+def test_am_pm_base_sleeve_rejects_next_close_artifact() -> None:
+    next_close = _base_sleeve_document(_job("a" * 64))
+    with pytest.raises(RuntimeError, match="old next-close base sleeve"):
+        overlay.validate_am_pm_base_sleeve_artifact(next_close)
+    am_pm = {
+        "schema_version": overlay.AM_PM_BASE_SLEEVE_SCHEMA
+        if hasattr(overlay, "AM_PM_BASE_SLEEVE_SCHEMA")
+        else "personal-base-sleeve-source-am-pm/v1",
+        "strategy": {
+            "strategy_id": "personal_sector_balanced_four_factor_v1_ls_am_pm",
+            "strategy_spec_digest": "sha256:" + "c" * 64,
+        },
+        "cohort": {
+            "cohort_id": "sector-relative-ls-am-pm-v1",
+            "cohort_digest": "sha256:" + "d" * 64,
+        },
+        "source_run": {"execution_mode": "am_pm"},
+        "daily_path": [
+            {"date": "2023-01-04", "am_nav": 100.0, "pm_nav": 100.1},
+            {"date": "2023-01-05", "am_nav": 101.0, "pm_nav": 101.2},
+        ],
+    }
+    overlay.validate_am_pm_base_sleeve_artifact(am_pm)
+    with pytest.raises(RuntimeError, match="old next-close"):
+        overlay.validate_am_pm_base_sleeve_artifact(
+            {**am_pm, "source_run": {"execution_mode": "next_close"}}
+        )
+
+
+def test_am_pm_observations_keep_native_option_dates_and_etf_ma() -> None:
+    dates = _dates(5)
+    base = {
+        "schema_version": "personal-base-sleeve-source-am-pm/v1",
+        "strategy": {
+            "strategy_id": "personal_sector_balanced_four_factor_v1_ls_am_pm",
+            "strategy_spec_digest": "sha256:" + "c" * 64,
+        },
+        "cohort": {
+            "cohort_id": "sector-relative-ls-am-pm-v1",
+            "cohort_digest": "sha256:" + "d" * 64,
+        },
+        "source_run": {"execution_mode": "am_pm"},
+        "daily_path": [
+            {"date": day, "am_nav": 100.0 + index, "pm_nav": 100.5 + index}
+            for index, day in enumerate(dates)
+        ],
+    }
+    etf = {day: (1000.0 + index, 1001.0 + index) for index, day in enumerate(dates)}
+    closes = {day: 2000.0 + index for index, day in enumerate(dates)}
+    features = {day: {"date": day, **_feature()} for day in dates}
+    features[dates[2]] = {**features[dates[2]], "observed_atm_iv_decimal": 0.40}
+    rows = overlay.build_am_pm_observations(
+        session_dates=dates,
+        base_artifact=base,
+        etf_ma=etf,
+        topix_closes=closes,
+        base_vol_percent={day: 20.0 for day in dates},
+        feature_rows=features,
+    )
+    assert rows[2].n225_atm_iv == pytest.approx(0.40)
+    assert rows[1].n225_atm_iv == pytest.approx(0.25)
+    assert rows[2].topix_etf_13060_madjc == pytest.approx(1002.0)
+    assert rows[2].available_at == f"{dates[2]}T12:30:00+09:00"
+    remapped = overlay.remap_smile_transport_features_for_am_pm(
+        [
+            {
+                "candidate_id": "n225_sticky_strike_downside_smile_term_surprise_v1",
+                "date": dates[1],
+            }
+        ]
+    )
+    assert remapped[0]["candidate_id"] == (
+        "n225_sticky_strike_downside_smile_term_surprise_am_pm_v1"
+    )
+    assert remapped[0]["source_candidate_id"] == (
+        "n225_sticky_strike_downside_smile_term_surprise_v1"
+    )

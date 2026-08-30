@@ -1,27 +1,41 @@
 import { putBytesCreateOnly } from "./http";
 import {
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_COHORT_ID,
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_RUNNER_VERSION,
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_SIGNAL_START_POLICY,
   PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID,
   PERSONAL_INDEX_SMILE_TRANSPORT_2023_RUNNER_VERSION,
   PERSONAL_INDEX_SMILE_TRANSPORT_2023_SIGNAL_START_POLICY,
+  PERSONAL_INDEX_SMILE_TRANSPORT_AM_PM_CANDIDATE_IDS,
   PERSONAL_INDEX_SMILE_TRANSPORT_CANDIDATE_IDS,
   PERSONAL_INDEX_SMILE_TRANSPORT_CORE_MODULE,
   PERSONAL_INDEX_SMILE_TRANSPORT_CORE_VERSION,
+  PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID,
+  PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_RUNNER_VERSION,
+  PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_SIGNAL_START_POLICY,
   PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID,
   PERSONAL_INDEX_VOL_OVERLAY_2023_INPUT_MAX_BYTES,
   PERSONAL_INDEX_VOL_OVERLAY_2023_RESULT_MAX_BYTES,
   PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION,
   PERSONAL_INDEX_VOL_OVERLAY_2023_SIGNAL_START_POLICY,
   PERSONAL_INDEX_VOL_OVERLAY_2023_TERMINAL_MAX_BYTES,
+  PERSONAL_INDEX_VOL_OVERLAY_AM_PM_CANDIDATE_IDS,
+  isPersonalIndexSmileTransport2023AmPmCohort,
   isPersonalIndexSmileTransport2023Cohort,
+  isPersonalIndexVolOverlay2023AmPmCohort,
   isPersonalIndexVolOverlay2023Digest,
   isPersonalIndexVolOverlay2023JobId,
   personalIndexOverlayFamilyArtifactKey,
   personalIndexOverlayFamilyTerminalManifestKey,
+  personalIndexSmileTransport2023AmPmInputManifestKey,
   personalIndexSmileTransport2023InputManifestKey,
+  personalIndexVolOverlay2023AmPmInputManifestKey,
   personalIndexVolOverlay2023InputManifestKey,
   type ImmutableInputReference,
   type PersonalIndexOverlayFamilyInputManifest,
+  type PersonalIndexSmileTransport2023AmPmInputManifest,
   type PersonalIndexSmileTransport2023InputManifest,
+  type PersonalIndexVolOverlay2023AmPmInputManifest,
   type PersonalIndexVolOverlay2023CohortId,
   type PersonalIndexVolOverlay2023InputManifest,
   type SnapshotInputReference,
@@ -72,6 +86,22 @@ function identity(request: Request): Identity | null {
       inputKey,
       inputDigest,
       cohortId: PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID,
+    };
+  }
+  if (inputKey === personalIndexVolOverlay2023AmPmInputManifestKey(jobId)) {
+    return {
+      jobId,
+      inputKey,
+      inputDigest,
+      cohortId: PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID,
+    };
+  }
+  if (inputKey === personalIndexSmileTransport2023AmPmInputManifestKey(jobId)) {
+    return {
+      jobId,
+      inputKey,
+      inputDigest,
+      cohortId: PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_COHORT_ID,
     };
   }
   return null;
@@ -132,7 +162,8 @@ function sharedInputShape(value: JsonObject, expected: Identity): boolean {
     isObject(value.fixed_window) &&
     value.fixed_window.start === "2023-01-04" &&
     value.fixed_window.end === "2023-10-13" &&
-    value.fixed_window.signal_end_policy === "LAST_SESSION_MINUS_TWO" &&
+    (value.fixed_window.signal_end_policy === "LAST_SESSION_MINUS_TWO" ||
+      value.fixed_window.signal_end_policy === "LAST_SESSION_MINUS_ONE") &&
     isObject(value.temporal_contract) &&
     value.temporal_contract.no_forward_fill === true &&
     isObject(authority) &&
@@ -160,7 +191,8 @@ function overlayInputShape(
     value.runner_version === PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION &&
     isObject(value.fixed_window) &&
     value.fixed_window.signal_start_policy ===
-      PERSONAL_INDEX_VOL_OVERLAY_2023_SIGNAL_START_POLICY
+      PERSONAL_INDEX_VOL_OVERLAY_2023_SIGNAL_START_POLICY &&
+    value.fixed_window.signal_end_policy === "LAST_SESSION_MINUS_TWO"
   );
 }
 
@@ -188,6 +220,7 @@ function smileTransportInputShape(
     isObject(value.fixed_window) &&
     value.fixed_window.signal_start_policy ===
       PERSONAL_INDEX_SMILE_TRANSPORT_2023_SIGNAL_START_POLICY &&
+    value.fixed_window.signal_end_policy === "LAST_SESSION_MINUS_TWO" &&
     isObject(temporal) &&
     temporal.prepared_available_at === "NO_EARLIER_THAN_D_23_59_59_JST" &&
     temporal.no_expiry_rank_substitution === true &&
@@ -215,11 +248,83 @@ function smileTransportInputShape(
   );
 }
 
+function overlayAmPmInputShape(
+  value: unknown,
+  expected: Identity,
+): value is PersonalIndexVolOverlay2023AmPmInputManifest {
+  if (!isObject(value) || expected.cohortId !== PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID) {
+    return false;
+  }
+  const temporal = value.temporal_contract;
+  const candidates = value.candidates;
+  const proxy = value.proxy_mapping;
+  return (
+    sharedInputShape(value, expected) &&
+    value.schema_version === "personal-index-vol-overlay-2023-am-pm-input/v1" &&
+    value.runner_version === PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_RUNNER_VERSION &&
+    isObject(value.fixed_window) &&
+    value.fixed_window.signal_start_policy ===
+      PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_SIGNAL_START_POLICY &&
+    value.fixed_window.signal_end_policy === "LAST_SESSION_MINUS_ONE" &&
+    isObject(temporal) &&
+    temporal.source_decision_cutoff_jst === "11:30:00+09:00" &&
+    temporal.fill_timing === "d_pm_aadjc" &&
+    isObject(candidates) &&
+    JSON.stringify(candidates.ids) === JSON.stringify(PERSONAL_INDEX_VOL_OVERLAY_AM_PM_CANDIDATE_IDS) &&
+    candidates.selection === "NOT_PERFORMED" &&
+    value.selection === "NOT_PERFORMED" &&
+    isObject(proxy) &&
+    proxy.executable_hedge_code === "13060" &&
+    proxy.cash_index_executable_fill_claim === false
+  );
+}
+
+function smileTransportAmPmInputShape(
+  value: unknown,
+  expected: Identity,
+): value is PersonalIndexSmileTransport2023AmPmInputManifest {
+  if (
+    !isObject(value) ||
+    expected.cohortId !== PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_COHORT_ID
+  ) {
+    return false;
+  }
+  const temporal = value.temporal_contract;
+  const candidates = value.candidates;
+  const proxy = value.proxy_mapping;
+  return (
+    sharedInputShape(value, expected) &&
+    value.schema_version === "personal-index-smile-transport-2023-am-pm-input/v1" &&
+    value.runner_version === PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_RUNNER_VERSION &&
+    isObject(value.fixed_window) &&
+    value.fixed_window.signal_start_policy ===
+      PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_SIGNAL_START_POLICY &&
+    value.fixed_window.signal_end_policy === "LAST_SESSION_MINUS_ONE" &&
+    isObject(temporal) &&
+    temporal.source_decision_cutoff_jst === "11:30:00+09:00" &&
+    temporal.fill_timing === "d_pm_aadjc" &&
+    temporal.smile_transport_pair === "d_minus_2_to_d_minus_1" &&
+    isObject(candidates) &&
+    JSON.stringify(candidates.ids) ===
+      JSON.stringify(PERSONAL_INDEX_SMILE_TRANSPORT_AM_PM_CANDIDATE_IDS) &&
+    candidates.selection === "NOT_PERFORMED" &&
+    value.selection === "NOT_PERFORMED" &&
+    isObject(proxy) &&
+    proxy.executable_hedge_code === "13060" &&
+    proxy.cash_index_executable_fill_claim === false
+  );
+}
+
 function inputShape(
   value: unknown,
   expected: Identity,
 ): value is PersonalIndexOverlayFamilyInputManifest {
-  return overlayInputShape(value, expected) || smileTransportInputShape(value, expected);
+  return (
+    overlayInputShape(value, expected) ||
+    smileTransportInputShape(value, expected) ||
+    overlayAmPmInputShape(value, expected) ||
+    smileTransportAmPmInputShape(value, expected)
+  );
 }
 
 async function readInput(
@@ -427,9 +532,23 @@ async function putOutput(
     report: "personal-index-smile-transport-report/v2",
     manifest: "personal-index-smile-transport-manifest/v2",
   } as const;
-  const schemas = isPersonalIndexSmileTransport2023Cohort(expected.cohortId)
-    ? smileSchemas
-    : overlaySchemas;
+  const overlayAmPmSchemas = {
+    "prepared-panel": "personal-index-vol-overlay-am-pm-prepared-panel/v1",
+    report: "personal-index-vol-overlay-am-pm-report/v1",
+    manifest: "personal-index-vol-overlay-am-pm-manifest/v1",
+  } as const;
+  const smileAmPmSchemas = {
+    "prepared-panel": "personal-index-smile-transport-am-pm-prepared-panel/v1",
+    report: "personal-index-smile-transport-am-pm-report/v1",
+    manifest: "personal-index-smile-transport-am-pm-manifest/v1",
+  } as const;
+  const schemas = isPersonalIndexSmileTransport2023AmPmCohort(expected.cohortId)
+    ? smileAmPmSchemas
+    : isPersonalIndexVolOverlay2023AmPmCohort(expected.cohortId)
+      ? overlayAmPmSchemas
+      : isPersonalIndexSmileTransport2023Cohort(expected.cohortId)
+        ? smileSchemas
+        : overlaySchemas;
   if (!isObject(document) || document.schema_version !== schemas[kind] || !authority(document, expected, input.manifest)) {
     return json({ error: "overlay output contract mismatch" }, 400);
   }
@@ -453,9 +572,13 @@ async function putOutput(
       digest,
       contentType: "application/json; charset=utf-8",
       customMetadata: {
-        plane: isPersonalIndexSmileTransport2023Cohort(expected.cohortId)
-          ? "personal_index_smile_transport_2023"
-          : "personal_index_vol_overlay_2023",
+        plane: isPersonalIndexSmileTransport2023AmPmCohort(expected.cohortId)
+          ? "personal_index_smile_transport_2023_am_pm"
+          : isPersonalIndexVolOverlay2023AmPmCohort(expected.cohortId)
+            ? "personal_index_vol_overlay_2023_am_pm"
+            : isPersonalIndexSmileTransport2023Cohort(expected.cohortId)
+              ? "personal_index_smile_transport_2023"
+              : "personal_index_vol_overlay_2023",
         kind,
         job_id: expected.jobId,
         input_manifest_digest: expected.inputDigest,
@@ -479,6 +602,8 @@ export function isPersonalIndexVolOverlayOutboundRequest(
 ): boolean {
   return key.startsWith("research/personal/index-vol-overlay-2023/") ||
     key.startsWith("research/personal/index-smile-transport-2023/") ||
+    key.startsWith("research/personal/index-vol-overlay-2023-am-pm/") ||
+    key.startsWith("research/personal/index-smile-transport-2023-am-pm/") ||
     request.headers.has("x-overlay-job-id");
 }
 
