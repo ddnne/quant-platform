@@ -5,6 +5,11 @@ import {
   personalResearchResultKey,
 } from "./personal_research_contract";
 import {
+  isPersonalSnapshotManifestKey,
+  personalSnapshotManifestKey,
+  personalSnapshotObjectKey,
+} from "./personal_snapshot_contract";
+import {
   isPersonalSviOutboundRequest,
   personalSviR2Outbound,
 } from "./personal_svi_r2";
@@ -16,7 +21,9 @@ import { sha256Hex } from "./sha256";
 
 const RESULT_MAX_BYTES = 512 * 1024 * 1024;
 const MANIFEST_MAX_BYTES = 64 * 1024;
+const SNAPSHOT_GZIP_MAX_BYTES = 3_758_096_384;
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
+const SHA_HEX_RE = /^[0-9a-f]{64}$/;
 
 type R2Env = { STRUCTURED_BUCKET: R2Bucket };
 
@@ -49,6 +56,20 @@ function outputIdentity(
     return null;
   }
   return { jobId, requestDigest, contentDigest };
+}
+
+function snapshotGzipIdentity(
+  request: Request,
+): {
+  jobId: string;
+  requestDigest: string;
+  contentDigest: string;
+  rawDigest: string;
+} | null {
+  const identity = outputIdentity(request);
+  const rawDigest = request.headers.get("x-personal-raw-sha256") ?? "";
+  if (!identity || !DIGEST_RE.test(rawDigest)) return null;
+  return { ...identity, rawDigest };
 }
 
 function digestBytes(digest: string): Uint8Array {
@@ -253,6 +274,173 @@ async function getSnapshot(
   return new Response(body, { status: 200, headers });
 }
 
+async function putSnapshotGzip(
+  request: Request,
+  env: R2Env,
+  key: string,
+): Promise<Response> {
+  const identity = snapshotGzipIdentity(request);
+  const rawHex = identity?.rawDigest.slice("sha256:".length) ?? "";
+  if (
+    !identity ||
+    !SHA_HEX_RE.test(rawHex) ||
+    key !== personalSnapshotObjectKey(rawHex)
+  ) {
+    return responseJson({ error: "invalid snapshot identity" }, 400);
+  }
+  const length = contentLength(request, SNAPSHOT_GZIP_MAX_BYTES);
+  if (length === null || request.body === null) {
+    return responseJson({ error: "invalid snapshot length" }, 400);
+  }
+  const existing = await env.STRUCTURED_BUCKET.head(key);
+  if (existing) {
+    return existingMatches(existing, identity)
+      ? responseJson({ ok: true, created: false, key })
+      : responseJson({ error: "immutable snapshot conflict" }, 409);
+  }
+  let put: R2Object | null;
+  try {
+    put = await env.STRUCTURED_BUCKET.put(key, request.body, {
+      httpMetadata: { contentType: "application/gzip" },
+      customMetadata: {
+        plane: "personal_snapshot",
+        job_id: identity.jobId,
+        request_digest: identity.requestDigest,
+        sha256: identity.contentDigest,
+        raw_sha256: identity.rawDigest,
+        immutable: "true",
+      },
+      sha256: digestBytes(identity.contentDigest),
+      onlyIf: { etagDoesNotMatch: "*" },
+    });
+  } catch {
+    return responseJson({ error: "snapshot upload checksum rejected" }, 502);
+  }
+  if (put !== null) return responseJson({ ok: true, created: true, key }, 201);
+  const raced = await env.STRUCTURED_BUCKET.head(key);
+  return raced && existingMatches(raced, identity)
+    ? responseJson({ ok: true, created: false, key })
+    : responseJson({ error: "immutable snapshot conflict" }, 409);
+}
+
+function snapshotManifestForbidsSecrets(manifest: Record<string, unknown>): boolean {
+  const serialized = JSON.stringify(manifest).toLowerCase();
+  return !["api_key", "jquants_api_key", "authorization", "secret", "password"].some(
+    (token) => serialized.includes(token),
+  );
+}
+
+async function putSnapshotManifest(
+  request: Request,
+  env: R2Env,
+  key: string,
+): Promise<Response> {
+  const identity = outputIdentity(request);
+  if (!identity || key !== personalSnapshotManifestKey(identity.jobId)) {
+    return responseJson({ error: "invalid snapshot manifest identity" }, 400);
+  }
+  const length = contentLength(request, MANIFEST_MAX_BYTES);
+  if (length === null) {
+    return responseJson({ error: "invalid snapshot manifest length" }, 400);
+  }
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (bytes.byteLength !== length) {
+    return responseJson({ error: "snapshot manifest length mismatch" }, 400);
+  }
+  const actualDigest = `sha256:${await sha256Hex(bytes)}`;
+  if (actualDigest !== identity.contentDigest) {
+    return responseJson({ error: "snapshot manifest digest mismatch" }, 400);
+  }
+  let manifest: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error("not object");
+    }
+    manifest = parsed as Record<string, unknown>;
+  } catch {
+    return responseJson({ error: "snapshot manifest must be JSON object" }, 400);
+  }
+  const status = manifest.status;
+  if (
+    manifest.job_id !== identity.jobId ||
+    manifest.request_digest !== identity.requestDigest ||
+    (status !== "COMPLETED" && status !== "FAILED") ||
+    manifest.research_state !== "PERSONAL_DRAFT" ||
+    manifest.completeness_claim !== "NONE" ||
+    manifest.controlled_live_eligibility !== "FORBIDDEN" ||
+    !snapshotManifestForbidsSecrets(manifest)
+  ) {
+    return responseJson({ error: "snapshot manifest identity mismatch" }, 400);
+  }
+  if (status === "COMPLETED") {
+    const rawDigest =
+      typeof manifest.raw_sha256 === "string" ? manifest.raw_sha256 : "";
+    const gzipDigest =
+      typeof manifest.gzip_sha256 === "string" ? manifest.gzip_sha256 : "";
+    const snapshotKey =
+      typeof manifest.snapshot_key === "string" ? manifest.snapshot_key : "";
+    const rawHex = rawDigest.startsWith("sha256:") ? rawDigest.slice(7) : "";
+    if (
+      !DIGEST_RE.test(rawDigest) ||
+      !DIGEST_RE.test(gzipDigest) ||
+      !SHA_HEX_RE.test(rawHex) ||
+      snapshotKey !== personalSnapshotObjectKey(rawHex)
+    ) {
+      return responseJson({ error: "completed snapshot identity is invalid" }, 400);
+    }
+    const snapshot = await env.STRUCTURED_BUCKET.head(snapshotKey);
+    if (
+      !snapshot ||
+      snapshot.customMetadata?.request_digest !== identity.requestDigest ||
+      snapshot.customMetadata?.sha256 !== gzipDigest ||
+      snapshot.customMetadata?.raw_sha256 !== rawDigest ||
+      !checksumMatches(snapshot, gzipDigest)
+    ) {
+      return responseJson(
+        { error: "completed snapshot manifest has no matching object" },
+        409,
+      );
+    }
+  } else if (
+    manifest.snapshot_key != null ||
+    manifest.gzip_sha256 != null ||
+    manifest.raw_sha256 != null
+  ) {
+    return responseJson({ error: "failed snapshot must not publish an object" }, 400);
+  }
+
+  const existing = await env.STRUCTURED_BUCKET.head(key);
+  if (existing) {
+    return existingMatches(existing, identity)
+      ? responseJson({ ok: true, created: false, key })
+      : responseJson({ error: "immutable snapshot manifest conflict" }, 409);
+  }
+  let put: R2Object | null;
+  try {
+    put = await env.STRUCTURED_BUCKET.put(key, bytes, {
+      httpMetadata: { contentType: "application/json; charset=utf-8" },
+      customMetadata: {
+        plane: "personal_snapshot",
+        job_id: identity.jobId,
+        request_digest: identity.requestDigest,
+        sha256: identity.contentDigest,
+        status,
+        immutable: "true",
+      },
+      sha256: digestBytes(identity.contentDigest),
+      onlyIf: { etagDoesNotMatch: "*" },
+    });
+  } catch {
+    return responseJson({ error: "snapshot manifest upload checksum rejected" }, 502);
+  }
+  if (put !== null) return responseJson({ ok: true, created: true, key }, 201);
+  const raced = await env.STRUCTURED_BUCKET.head(key);
+  return raced && existingMatches(raced, identity)
+    ? responseJson({ ok: true, created: false, key })
+    : responseJson({ error: "immutable snapshot manifest conflict" }, 409);
+}
+
 /** Narrow R2 capability exposed only to the private Container virtual host. */
 export async function personalResearchR2Outbound(
   request: Request,
@@ -272,6 +460,12 @@ export async function personalResearchR2Outbound(
   if ((request.method === "GET" || request.method === "HEAD") &&
       isPersonalResearchSnapshotKey(key)) {
     return getSnapshot(request, env, key);
+  }
+  if (request.method === "PUT" && isPersonalResearchSnapshotKey(key) && key.endsWith(".sqlite.gz")) {
+    return putSnapshotGzip(request, env, key);
+  }
+  if (request.method === "PUT" && isPersonalSnapshotManifestKey(key)) {
+    return putSnapshotManifest(request, env, key);
   }
   if (request.method === "PUT" && /\/result\.tar\.gz$/.test(key)) {
     return putResult(request, env, key);

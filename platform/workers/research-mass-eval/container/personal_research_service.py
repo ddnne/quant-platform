@@ -30,6 +30,7 @@ _CONTAINER_MODULE_DIR = str(Path(__file__).resolve().parent)
 if _CONTAINER_MODULE_DIR not in sys.path:
     sys.path.insert(0, _CONTAINER_MODULE_DIR)
 
+from personal_history_source_client import PersonalHistorySourceClient
 from personal_svi_2023_job import (
     PersonalSvi2023JobSpec,
     SviJobInputError,
@@ -40,6 +41,19 @@ from personal_index_vol_overlay_2023_job import (
     PersonalIndexVolOverlay2023JobSpec,
     execute_overlay_job,
 )
+from ingestion.personal_history import (
+    PERSONAL_COMPLETENESS_CLAIM,
+    PERSONAL_CONTROLLED_ELIGIBILITY,
+    PERSONAL_HISTORY_FORMAT,
+    PERSONAL_HISTORY_SCOPE_DIGEST,
+    PERSONAL_HISTORY_SCOPE_ID,
+    PERSONAL_HISTORY_SCOPE_VERSION,
+    PERSONAL_RESEARCH_STATE,
+    PersonalHistoryHydrator,
+    assert_personal_history_database,
+    build_personal_history_plan,
+)
+from storage.sqlite_store import SqliteStore
 from research.personal_base_sleeve import (
     BASE_COHORT_ID,
     BASE_SLEEVE_ID,
@@ -51,7 +65,9 @@ from research.personal_base_sleeve import (
     validate_personal_base_sleeve_artifact,
 )
 
-RUNNER_VERSION = "personal-cloud-runner/v12"
+RUNNER_VERSION = "personal-cloud-runner/v13"
+SNAPSHOT_MAX_DATABASE_BYTES = 3_758_096_384
+SNAPSHOT_MINIMUM_FREE_BYTES = 256 * 1024 * 1024
 R2_ORIGIN = "http://research.r2"
 DEFAULT_TIMEOUT_SECONDS = 165 * 60
 MAX_JOB_LIFETIME_SECONDS = 180 * 60
@@ -255,6 +271,99 @@ class JobSpec:
             "snapshot_sha256": self.snapshot_sha256,
             "universe_id": self.universe_id,
             "universe_rule_digest": self.universe_rule_digest,
+        }
+        return "sha256:" + hashlib.sha256(_canonical_bytes(body)).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class SnapshotJobSpec:
+    job_id: str
+    period_start: str
+    period_end: str
+    lookback_sessions: int
+    request_digest: str
+    manifest_key: str
+    runner_version: str
+    environment: str
+    format: str
+    max_database_bytes: int
+    deployment_id: str
+
+    @classmethod
+    def from_document(cls, document: Any) -> "SnapshotJobSpec":
+        if not isinstance(document, dict):
+            raise JobInputError("snapshot job must be a JSON object")
+        required = {
+            "deployment_id",
+            "environment",
+            "format",
+            "job_id",
+            "lookback_sessions",
+            "manifest_key",
+            "max_database_bytes",
+            "period_end",
+            "period_start",
+            "request_digest",
+            "runner_version",
+        }
+        if set(document) != required:
+            raise JobInputError("snapshot job fields are closed")
+        lookback = document["lookback_sessions"]
+        max_bytes = document["max_database_bytes"]
+        if type(lookback) is not int or not 0 <= lookback <= 252:
+            raise JobInputError("lookback_sessions is invalid")
+        if type(max_bytes) is not int or max_bytes != SNAPSHOT_MAX_DATABASE_BYTES:
+            raise JobInputError("max_database_bytes is invalid")
+        string_fields = required - {"lookback_sessions", "max_database_bytes"}
+        if not all(isinstance(document[field], str) for field in string_fields):
+            raise JobInputError("snapshot job string fields are closed")
+        spec = cls(
+            job_id=document["job_id"],
+            period_start=document["period_start"],
+            period_end=document["period_end"],
+            lookback_sessions=lookback,
+            request_digest=document["request_digest"],
+            manifest_key=document["manifest_key"],
+            runner_version=document["runner_version"],
+            environment=document["environment"],
+            format=document["format"],
+            max_database_bytes=max_bytes,
+            deployment_id=document["deployment_id"],
+        )
+        spec.validate()
+        return spec
+
+    def validate(self) -> None:
+        if _JOB_ID_RE.fullmatch(self.job_id) is None:
+            raise JobInputError("job_id is invalid")
+        start = _parse_day(self.period_start, "period_start")
+        end = _parse_day(self.period_end, "period_end")
+        span = (end - start).days
+        if span < 0 or span > MAX_PERIOD_DAYS:
+            raise JobInputError(f"snapshot period must be 0-{MAX_PERIOD_DAYS} days")
+        if self.runner_version != RUNNER_VERSION:
+            raise JobInputError("runner version mismatch")
+        if self.environment not in {"production", "staging"}:
+            raise JobInputError("environment is invalid")
+        if self.format != PERSONAL_HISTORY_FORMAT:
+            raise JobInputError("snapshot format mismatch")
+        if self.manifest_key != (
+            f"research/personal/snapshot-builds/job={self.job_id}/manifest.json"
+        ):
+            raise JobInputError("manifest key mismatch")
+        if _DIGEST_RE.fullmatch(self.request_digest) is None:
+            raise JobInputError("request_digest is invalid")
+        if self.request_digest != self.derived_request_digest():
+            raise JobInputError("request_digest mismatch")
+
+    def derived_request_digest(self) -> str:
+        body = {
+            "format": self.format,
+            "job_id": self.job_id,
+            "lookback_sessions": self.lookback_sessions,
+            "period_end": self.period_end,
+            "period_start": self.period_start,
+            "runner_version": self.runner_version,
         }
         return "sha256:" + hashlib.sha256(_canonical_bytes(body)).hexdigest()
 
@@ -546,8 +655,9 @@ def _put(
     key: str,
     data: bytes | Path,
     *,
-    spec: JobSpec,
+    spec: Any,
     content_digest: str,
+    extra_headers: Mapping[str, str] | None = None,
 ) -> None:
     if isinstance(data, Path):
         length = data.stat().st_size
@@ -555,19 +665,22 @@ def _put(
     else:
         length = len(data)
         payload = data
+    headers = {
+        "content-length": str(length),
+        "content-type": (
+            "application/gzip" if isinstance(data, Path) else "application/json"
+        ),
+        "x-personal-job-id": spec.job_id,
+        "x-personal-request-digest": spec.request_digest,
+        "x-content-sha256": content_digest,
+    }
+    if extra_headers:
+        headers.update(extra_headers)
     request = urllib.request.Request(
         f"{R2_ORIGIN}/{key}",
         data=payload,
         method="PUT",
-        headers={
-            "content-length": str(length),
-            "content-type": (
-                "application/gzip" if isinstance(data, Path) else "application/json"
-            ),
-            "x-personal-job-id": spec.job_id,
-            "x-personal-request-digest": spec.request_digest,
-            "x-content-sha256": content_digest,
-        },
+        headers=headers,
     )
     try:
         with urllib.request.urlopen(request, timeout=300) as response:
@@ -954,8 +1067,183 @@ def execute_job(
         shutil.rmtree(job_root, ignore_errors=True)
 
 
+def _session_coverage(connection: sqlite3.Connection) -> dict[str, Any]:
+    row = connection.execute(
+        """
+        SELECT
+            COUNT(*) AS bar_rows,
+            SUM(morning_adjustment_close IS NOT NULL) AS am_close,
+            SUM(morning_turnover_value IS NOT NULL) AS am_turnover,
+            SUM(morning_adjustment_volume IS NOT NULL) AS am_volume,
+            SUM(afternoon_adjustment_close IS NOT NULL) AS pm_close,
+            SUM(afternoon_turnover_value IS NOT NULL) AS pm_turnover,
+            SUM(afternoon_adjustment_volume IS NOT NULL) AS pm_volume
+        FROM jquants_daily_bars
+        WHERE source='jquants'
+        """
+    ).fetchone()
+    total = int(row["bar_rows"] or 0)
+    return {
+        "bar_rows": total,
+        "am": {
+            "morning_adjustment_close_non_null": int(row["am_close"] or 0),
+            "morning_turnover_value_non_null": int(row["am_turnover"] or 0),
+            "morning_adjustment_volume_non_null": int(row["am_volume"] or 0),
+        },
+        "pm": {
+            "afternoon_adjustment_close_non_null": int(row["pm_close"] or 0),
+            "afternoon_turnover_value_non_null": int(row["pm_turnover"] or 0),
+            "afternoon_adjustment_volume_non_null": int(row["pm_volume"] or 0),
+        },
+    }
+
+
+def _gzip_file(source: Path, destination: Path) -> None:
+    with destination.open("xb") as raw:
+        with gzip.GzipFile(
+            filename="",
+            mode="wb",
+            compresslevel=6,
+            fileobj=raw,
+            mtime=0,
+        ) as compressed:
+            with source.open("rb") as handle:
+                shutil.copyfileobj(handle, compressed, 1024 * 1024)
+
+
+def _snapshot_manifest_base(
+    spec: SnapshotJobSpec, *, started_at: str, finished_at: str
+) -> dict[str, Any]:
+    return {
+        "version": RUNNER_VERSION,
+        "job_id": spec.job_id,
+        "request_digest": spec.request_digest,
+        "format": PERSONAL_HISTORY_FORMAT,
+        "history_scope_id": PERSONAL_HISTORY_SCOPE_ID,
+        "history_scope_version": PERSONAL_HISTORY_SCOPE_VERSION,
+        "history_scope_digest": PERSONAL_HISTORY_SCOPE_DIGEST,
+        "period_start": spec.period_start,
+        "period_end": spec.period_end,
+        "lookback_sessions": spec.lookback_sessions,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "runner_version": RUNNER_VERSION,
+        "deployment_id": spec.deployment_id,
+        "research_state": PERSONAL_RESEARCH_STATE,
+        "completeness_claim": PERSONAL_COMPLETENESS_CLAIM,
+        "controlled_live_eligibility": PERSONAL_CONTROLLED_ELIGIBILITY,
+        "go": False,
+        "ready_snapshot_declared": False,
+        "automatic_promotion": False,
+        "live_orders_enabled": False,
+        "model_calls": 0,
+    }
+
+
+def execute_snapshot_job(
+    spec: SnapshotJobSpec,
+    *,
+    work_root: Path,
+    uploader: Callable[..., None] = _put,
+    client_factory: Callable[[SnapshotJobSpec], Any] | None = None,
+) -> dict[str, Any]:
+    started_at = _now()
+    job_root = Path(tempfile.mkdtemp(prefix=f"snapshot-{spec.job_id}-", dir=work_root))
+    gzip_key: str | None = None
+    try:
+        try:
+            database = job_root / "personal-history.sqlite"
+            assert_personal_history_database(
+                database, governed_default=Path("/app/data/structured/ingestion.sqlite")
+            )
+            plan = build_personal_history_plan(
+                period_start=spec.period_start,
+                period_end=spec.period_end,
+                lookback_sessions=spec.lookback_sessions,
+            )
+            store = SqliteStore(database)
+            client = (client_factory or (
+                lambda job: PersonalHistorySourceClient(
+                    environment=job.environment,
+                    period_end=job.period_end,
+                )
+            ))(spec)
+            hydrator = PersonalHistoryHydrator(
+                client=client,
+                store=store,
+                plan=plan,
+                max_database_bytes=spec.max_database_bytes,
+                minimum_free_bytes=SNAPSHOT_MINIMUM_FREE_BYTES,
+            )
+            summary = hydrator.hydrate()
+            coverage = _session_coverage(store._conn)
+            store._conn.close()
+            verify_sqlite(database)
+            raw_bytes = database.stat().st_size
+            if raw_bytes > spec.max_database_bytes:
+                raise RuntimeError("snapshot sqlite exceeds the 3.5 GiB builder cap")
+            raw_digest = "sha256:" + _sha256_file(database)
+            gzip_path = job_root / "personal-history.sqlite.gz"
+            _gzip_file(database, gzip_path)
+            gzip_bytes = gzip_path.stat().st_size
+            gzip_digest = "sha256:" + _sha256_file(gzip_path)
+            gzip_key = (
+                "research/personal/snapshots/sha256="
+                f"{raw_digest[7:]}.sqlite.gz"
+            )
+            uploader(
+                gzip_key,
+                gzip_path,
+                spec=spec,
+                content_digest=gzip_digest,
+                extra_headers={"x-personal-raw-sha256": raw_digest},
+            )
+            manifest = {
+                **_snapshot_manifest_base(
+                    spec, started_at=started_at, finished_at=_now()
+                ),
+                "status": "COMPLETED",
+                "data_start": summary.bar_start,
+                "calendar_start": plan.calendar_start,
+                "calendar_end": spec.period_end,
+                "dataset_segment_counts": dict(summary.segment_counts),
+                "fetched_rows": summary.fetched_rows,
+                "written_rows": summary.written_rows,
+                "am_field_non_null_coverage": coverage["am"],
+                "pm_field_non_null_coverage": coverage["pm"],
+                "bar_rows": coverage["bar_rows"],
+                "raw_bytes": raw_bytes,
+                "raw_sha256": raw_digest,
+                "gzip_bytes": gzip_bytes,
+                "gzip_sha256": gzip_digest,
+                "snapshot_key": gzip_key,
+            }
+        except Exception as error:
+            manifest = {
+                **_snapshot_manifest_base(
+                    spec, started_at=started_at, finished_at=_now()
+                ),
+                "status": "FAILED",
+                "error": _safe_detail(error),
+            }
+        manifest_bytes = _canonical_bytes(manifest)
+        manifest_digest = "sha256:" + hashlib.sha256(manifest_bytes).hexdigest()
+        uploader(
+            spec.manifest_key,
+            manifest_bytes,
+            spec=spec,
+            content_digest=manifest_digest,
+        )
+        return manifest
+    finally:
+        shutil.rmtree(job_root, ignore_errors=True)
+
+
 JobSpecLike = (
-    JobSpec | PersonalSvi2023JobSpec | PersonalIndexVolOverlay2023JobSpec
+    JobSpec
+    | SnapshotJobSpec
+    | PersonalSvi2023JobSpec
+    | PersonalIndexVolOverlay2023JobSpec
 )
 Runner = Callable[[JobSpecLike], dict[str, Any]]
 TerminalCallback = Callable[[], None]
@@ -993,8 +1281,6 @@ class JobManager:
                 raise JobBusyError(f"job {self._active_job_id} is already active")
             record = {
                 "job_id": spec.job_id,
-                "cohort_id": spec.cohort_id,
-                "cohort_digest": spec.cohort_digest,
                 "request_digest": spec.request_digest,
                 "status": "QUEUED",
                 "submitted_at": _now(),
@@ -1002,6 +1288,11 @@ class JobManager:
                 "automatic_promotion": False,
                 "live_orders_enabled": False,
             }
+            if isinstance(spec, SnapshotJobSpec):
+                record["job_kind"] = "snapshot-build"
+            else:
+                record["cohort_id"] = spec.cohort_id
+                record["cohort_digest"] = spec.cohort_digest
             if isinstance(spec, JobSpec):
                 record["universe_id"] = spec.universe_id
             self._jobs[spec.job_id] = record
@@ -1053,13 +1344,16 @@ class JobManager:
         except Exception as error:  # upload or service failure after job execution
             result = {
                 "job_id": spec.job_id,
-                "cohort_id": spec.cohort_id,
-                "cohort_digest": spec.cohort_digest,
                 "request_digest": spec.request_digest,
                 "status": "FAILED",
                 "error": _safe_detail(error),
                 "go": False,
             }
+            if isinstance(spec, SnapshotJobSpec):
+                result["job_kind"] = "snapshot-build"
+            else:
+                result["cohort_id"] = spec.cohort_id
+                result["cohort_digest"] = spec.cohort_digest
             if isinstance(spec, JobSpec):
                 result["universe_id"] = spec.universe_id
         with self._lock:
@@ -1082,6 +1376,10 @@ class JobManager:
 
 
 def default_runner(spec: JobSpecLike) -> dict[str, Any]:
+    if isinstance(spec, SnapshotJobSpec):
+        work_root = Path(os.environ.get("QP_JOB_ROOT", "/tmp/personal-research"))
+        work_root.mkdir(parents=True, exist_ok=True)
+        return execute_snapshot_job(spec, work_root=work_root)
     if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):
         return execute_overlay_job(spec)
     if isinstance(spec, PersonalSvi2023JobSpec):
@@ -1134,6 +1432,7 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
             "/v1/run",
             "/v1/run-svi-2023",
             "/v1/run-index-vol-overlay-2023",
+            "/v1/build-snapshot",
         }:
             self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
             return
@@ -1147,6 +1446,8 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
                 spec = PersonalSvi2023JobSpec.from_document(document)
             elif self.path == "/v1/run-index-vol-overlay-2023":
                 spec = PersonalIndexVolOverlay2023JobSpec.from_document(document)
+            elif self.path == "/v1/build-snapshot":
+                spec = SnapshotJobSpec.from_document(document)
             else:
                 spec = JobSpec.from_document(document)
             record = self.manager.submit(spec)

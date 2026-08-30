@@ -1,9 +1,13 @@
 import { sha256Hex } from "./sha256";
 
-export const PERSONAL_RESEARCH_RUNNER_VERSION = "personal-cloud-runner/v12";
-export const PERSONAL_RESEARCH_CONTAINER_NAME = "personal-research-v12";
+export const PERSONAL_RESEARCH_RUNNER_VERSION = "personal-cloud-runner/v13";
+export const PERSONAL_RESEARCH_LEGACY_CONTAINER_NAME = "personal-research-v12";
+export const PERSONAL_SNAPSHOT_CONTAINER_NAME = "personal-snapshot-v13";
 export const PERSONAL_RESEARCH_MAX_PERIOD_DAYS = 2200;
+export const PERSONAL_RESEARCH_MAX_CONCURRENT_JOBS = 8;
 export const PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024 * 1024;
+export const PERSONAL_SNAPSHOT_MAX_DATABASE_BYTES = 3_758_096_384;
+export type PersonalContainerKind = "research" | "svi" | "overlay" | "snapshot";
 export const PERSONAL_RESEARCH_COHORT_IDS = [
   "price-relative-v1",
   "fundamental-relative-v1",
@@ -243,4 +247,23 @@ export function isPersonalResearchSnapshotKey(key: string): boolean {
 
 export function isPersonalResearchJobId(value: string): boolean {
   return JOB_ID_RE.test(value);
+}
+
+export function personalSnapshotContainerName(): string {
+  return PERSONAL_SNAPSHOT_CONTAINER_NAME;
+}
+
+export async function personalJobContainerName(
+  kind: Exclude<PersonalContainerKind, "snapshot">,
+  jobId: string,
+): Promise<string> {
+  if (!JOB_ID_RE.test(jobId)) {
+    throw new Error("invalid personal container job id");
+  }
+  const digest = await sha256Hex(
+    new TextEncoder().encode(
+      `${PERSONAL_RESEARCH_RUNNER_VERSION}:${kind}:${jobId}`,
+    ),
+  );
+  return `personal-v13-${kind}-${digest.slice(0, 24)}`;
 }

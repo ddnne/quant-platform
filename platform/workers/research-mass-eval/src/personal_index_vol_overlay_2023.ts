@@ -44,6 +44,7 @@ import {
   personalResearchManifestKey,
   personalResearchResultKey,
 } from "./personal_research_contract";
+import { personalJobContainerName } from "./personal_research_contract";
 import { verifiedPersonalResearchContainer } from "./personal_research_runner";
 import {
   PERSONAL_SVI_2023_COHORT_ID,
@@ -69,6 +70,7 @@ const OVERLAY_COMPATIBLE_BASE_RUNNER_VERSIONS: ReadonlySet<string> = new Set([
   "personal-cloud-runner/v10",
   "personal-cloud-runner/v11",
   "personal-cloud-runner/v12",
+  "personal-cloud-runner/v13",
 ]);
 
 type JsonObject = Record<string, unknown>;
@@ -744,7 +746,10 @@ export async function submitPersonalIndexVolOverlay2023(
     inputPut.digest,
   );
   try {
-    const target = await verifiedPersonalResearchContainer(env);
+    const target = await verifiedPersonalResearchContainer(
+      env,
+      await personalJobContainerName("overlay", request.job_id),
+    );
     return await target.fetch(
       new Request("http://container/v1/run-index-vol-overlay-2023", {
         method: "POST",
@@ -798,7 +803,10 @@ export async function personalIndexVolOverlay2023Status(
     });
   }
   try {
-    const target = await verifiedPersonalResearchContainer(env);
+    const target = await verifiedPersonalResearchContainer(
+      env,
+      await personalJobContainerName("overlay", jobId),
+    );
     return await target.fetch(
       new Request(`http://container/v1/jobs/${encodeURIComponent(jobId)}`),
     );

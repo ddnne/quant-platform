@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { dispatchMassEvalFetch } from "./http_routes";
 import {
-  PERSONAL_RESEARCH_CONTAINER_NAME,
   PERSONAL_RESEARCH_RUNNER_VERSION,
+  personalJobContainerName,
 } from "./personal_research_contract";
 import {
   buildPersonalSviInputManifest,
@@ -378,7 +378,7 @@ describe("fixed personal SVI 2023 admission", () => {
     expect(response.status).toBe(202);
     expect(containerByName).toHaveBeenCalledOnce();
     expect(containerByName).toHaveBeenCalledWith(
-      PERSONAL_RESEARCH_CONTAINER_NAME,
+      await personalJobContainerName("svi", "svi-container-bound"),
     );
     const inputKey =
       "research/personal/svi-2023/job=svi-container-bound/input-manifest.json";

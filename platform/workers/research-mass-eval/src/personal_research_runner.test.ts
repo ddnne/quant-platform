@@ -1,11 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  PERSONAL_RESEARCH_CONTAINER_NAME,
-  PERSONAL_RESEARCH_RUNNER_VERSION,
-} from "./personal_research_contract";
+import { PERSONAL_RESEARCH_RUNNER_VERSION } from "./personal_research_contract";
 import { verifiedPersonalResearchContainer } from "./personal_research_runner";
 import type { Env } from "./types";
+
+const RUNNER_NAME = "personal-v13-research-exact-four-test";
 
 function readyResponse(service: string): Response {
   const body = JSON.stringify({ ok: true, service });
@@ -40,10 +39,11 @@ describe("personal research runner identity gate", () => {
     const current = runnerStub(PERSONAL_RESEARCH_RUNNER_VERSION);
     const { env, getByName } = runnerEnv(current);
 
-    await expect(verifiedPersonalResearchContainer(env)).resolves.toBe(current);
+    await expect(verifiedPersonalResearchContainer(env, RUNNER_NAME)).resolves.toBe(current);
 
     expect(getByName).toHaveBeenCalledOnce();
-    expect(getByName).toHaveBeenCalledWith(PERSONAL_RESEARCH_CONTAINER_NAME);
+    expect(getByName).toHaveBeenCalledWith(RUNNER_NAME);
+    expect(getByName).not.toHaveBeenCalledWith("personal-research-v12");
     expect(current.destroy).not.toHaveBeenCalled();
   });
 
@@ -52,7 +52,7 @@ describe("personal research runner identity gate", () => {
     const current = runnerStub(PERSONAL_RESEARCH_RUNNER_VERSION);
     const { env, getByName } = runnerEnv(old, current);
 
-    await expect(verifiedPersonalResearchContainer(env)).resolves.toBe(current);
+    await expect(verifiedPersonalResearchContainer(env, RUNNER_NAME)).resolves.toBe(current);
 
     expect(getByName).toHaveBeenCalledTimes(2);
     expect(old.destroy).toHaveBeenCalledOnce();
@@ -64,7 +64,7 @@ describe("personal research runner identity gate", () => {
     const staleReplacement = runnerStub("personal-cloud-runner/v6");
     const { env } = runnerEnv(old, staleReplacement);
 
-    await expect(verifiedPersonalResearchContainer(env)).rejects.toThrow(
+    await expect(verifiedPersonalResearchContainer(env, RUNNER_NAME)).rejects.toThrow(
       "runner identity mismatch persisted after one replacement",
     );
 
@@ -82,7 +82,7 @@ describe("personal research runner identity gate", () => {
       PERSONAL_RESEARCH_CONTAINER: { getByName },
     } as unknown as Env;
 
-    await expect(verifiedPersonalResearchContainer(env)).rejects.toThrow(
+    await expect(verifiedPersonalResearchContainer(env, RUNNER_NAME)).rejects.toThrow(
       "runner readiness unknown: probe returned HTTP 503",
     );
 
@@ -102,7 +102,7 @@ describe("personal research runner identity gate", () => {
     };
     const { env } = runnerEnv(old, replacement);
 
-    await expect(verifiedPersonalResearchContainer(env)).rejects.toThrow(
+    await expect(verifiedPersonalResearchContainer(env, RUNNER_NAME)).rejects.toThrow(
       "runner readiness reprobe unknown: probe returned HTTP 503",
     );
 

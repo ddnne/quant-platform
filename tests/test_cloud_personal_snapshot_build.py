@@ -1,0 +1,179 @@
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+import sys
+from types import SimpleNamespace
+
+import pytest
+
+from ingestion.personal_history import (
+    PERSONAL_HISTORY_FORMAT,
+    PERSONAL_HISTORY_SCOPE_DIGEST,
+)
+
+ROOT = Path(__file__).resolve().parents[1]
+MODULE_PATH = (
+    ROOT
+    / "platform"
+    / "workers"
+    / "research-mass-eval"
+    / "container"
+    / "personal_research_service.py"
+)
+SPEC = importlib.util.spec_from_file_location(
+    "cloud_personal_snapshot_service", MODULE_PATH
+)
+assert SPEC is not None and SPEC.loader is not None
+service = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = service
+SPEC.loader.exec_module(service)
+
+
+def _digest(request: dict) -> str:
+    body = {
+        "format": PERSONAL_HISTORY_FORMAT,
+        "job_id": request["job_id"],
+        "lookback_sessions": request["lookback_sessions"],
+        "period_end": request["period_end"],
+        "period_start": request["period_start"],
+        "runner_version": service.RUNNER_VERSION,
+    }
+    return "sha256:" + hashlib.sha256(
+        json.dumps(body, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _spec(job_id: str = "snap-build") -> service.SnapshotJobSpec:
+    request = {
+        "job_id": job_id,
+        "lookback_sessions": 10,
+        "period_end": "2024-12-31",
+        "period_start": "2024-01-01",
+        "runner_version": service.RUNNER_VERSION,
+        "format": PERSONAL_HISTORY_FORMAT,
+    }
+    return service.SnapshotJobSpec.from_document(
+        {
+            **request,
+            "deployment_id": "test-deploy",
+            "environment": "production",
+            "manifest_key": f"research/personal/snapshot-builds/job={job_id}/manifest.json",
+            "max_database_bytes": service.SNAPSHOT_MAX_DATABASE_BYTES,
+            "request_digest": _digest(request),
+        }
+    )
+
+
+class _FakeHydrator:
+    def __init__(self, **kwargs):
+        self.store = kwargs["store"]
+        self.plan = kwargs["plan"]
+        self.max_database_bytes = kwargs["max_database_bytes"]
+
+    def hydrate(self):
+        self.store._conn.execute(
+            "INSERT OR IGNORE INTO jquants_daily_bars("
+            "source,code,date,event_time,available_at,ingested_at,close) "
+            "VALUES ('jquants','1001','2024-01-04','2024-01-04T15:00:00+09:00',"
+            "'2024-01-04T15:00:00+09:00','2024-01-04T16:00:00+09:00',100)"
+        )
+        self.store._conn.commit()
+        return SimpleNamespace(
+            bar_start="2024-01-04",
+            segment_counts={"markets_calendar": 1, "equities_master": 1},
+            fetched_rows=2,
+            written_rows=2,
+        )
+
+
+def test_snapshot_gzip_and_manifest_last_order(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(service, "PersonalHistoryHydrator", _FakeHydrator)
+    spec = _spec()
+    uploads: list[str] = []
+
+    def upload(key, data, *, spec, content_digest, extra_headers=None):
+        del spec, content_digest, extra_headers
+        uploads.append(key)
+        if isinstance(data, Path):
+            assert data.exists()
+
+    manifest = service.execute_snapshot_job(
+        spec, work_root=tmp_path, uploader=upload, client_factory=lambda _spec: object()
+    )
+    assert manifest["status"] == "COMPLETED"
+    assert uploads == [
+        manifest["snapshot_key"],
+        spec.manifest_key,
+    ]
+    assert manifest["snapshot_key"].endswith(".sqlite.gz")
+    assert manifest["raw_sha256"].startswith("sha256:")
+    assert manifest["gzip_sha256"].startswith("sha256:")
+    assert manifest["raw_sha256"] != manifest["gzip_sha256"]
+    assert manifest["data_start"] == "2024-01-04"
+    assert manifest["period_start"] == "2024-01-01"
+    assert manifest["research_state"] == "PERSONAL_DRAFT"
+    assert manifest["completeness_claim"] == "NONE"
+    assert manifest["controlled_live_eligibility"] == "FORBIDDEN"
+    assert manifest["history_scope_digest"] == PERSONAL_HISTORY_SCOPE_DIGEST
+    assert "api_key" not in json.dumps(manifest).lower()
+    assert "secret" not in json.dumps(manifest).lower()
+
+
+def test_size_failure_does_not_publish_snapshot(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(service, "PersonalHistoryHydrator", _FakeHydrator)
+    spec = _spec("snap-oversize")
+    uploads: list[tuple[str, dict]] = []
+
+    def upload(key, data, *, spec, content_digest, extra_headers=None):
+        del spec, content_digest, extra_headers
+        body = data.read_bytes() if isinstance(data, Path) else bytes(data)
+        uploads.append((key, json.loads(body) if key.endswith("manifest.json") else {"bytes": len(body)}))
+
+    original_stat = Path.stat
+
+    def huge_stat(self, *args, **kwargs):
+        result = original_stat(self, *args, **kwargs)
+        if self.name == "personal-history.sqlite":
+            return result._replace(st_size=service.SNAPSHOT_MAX_DATABASE_BYTES + 1)
+        return result
+
+    monkeypatch.setattr(Path, "stat", huge_stat)
+    manifest = service.execute_snapshot_job(
+        spec, work_root=tmp_path, uploader=upload, client_factory=lambda _spec: object()
+    )
+    assert manifest["status"] == "FAILED"
+    assert [key for key, _ in uploads] == [spec.manifest_key]
+    assert manifest.get("snapshot_key") is None
+
+
+def test_crash_before_manifest_retries_without_success_publish(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(service, "PersonalHistoryHydrator", _FakeHydrator)
+    spec = _spec("snap-retry")
+    attempts: list[list[str]] = []
+
+    def flaky(key, data, *, spec, content_digest, extra_headers=None):
+        del spec, content_digest, extra_headers, data
+        current = attempts[-1]
+        current.append(key)
+        if key.endswith("manifest.json") and len(attempts) == 1:
+            raise RuntimeError("crash after gzip")
+
+    attempts.append([])
+    with pytest.raises(RuntimeError, match="crash after gzip"):
+        service.execute_snapshot_job(
+            spec, work_root=tmp_path, uploader=flaky, client_factory=lambda _spec: object()
+        )
+    assert attempts[0] and attempts[0][0].endswith(".sqlite.gz")
+    assert not any(key.endswith("manifest.json") and False for key in attempts[0])
+
+    attempts.append([])
+    second = service.execute_snapshot_job(
+        spec, work_root=tmp_path, uploader=flaky, client_factory=lambda _spec: object()
+    )
+    assert second["status"] == "COMPLETED"
+    assert attempts[1] == [second["snapshot_key"], spec.manifest_key]

@@ -60,3 +60,47 @@ describe("personal research HTTP route", () => {
     expect(submit).toHaveBeenCalledWith(expect.anything(), BODY);
   });
 });
+
+describe("personal snapshot and batch HTTP routes", () => {
+  it("token-gates snapshot build before dispatch", async () => {
+    const submit = vi.fn();
+    const response = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/personal-snapshot-build", {
+        method: "POST",
+        body: JSON.stringify({
+          job_id: "snap-1",
+          period_start: "2023-01-01",
+          period_end: "2024-12-31",
+        }),
+      }),
+      env(),
+      { ...massHandlers, submitPersonalSnapshotBuild: submit },
+    );
+    expect(response.status).toBe(401);
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("rejects nine batch jobs before dispatch", async () => {
+    const submit = vi.fn();
+    const jobs = Array.from({ length: 9 }, (_, index) => ({
+      ...BODY,
+      job_id: `job-${index}`,
+    }));
+    const body = JSON.stringify({ jobs });
+    const response = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/personal-research-batch", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(body.length),
+          "x-mass-eval-token": "secret",
+        },
+        body,
+      }),
+      env(),
+      { ...massHandlers, submitPersonalResearchJobs: submit },
+    );
+    expect(response.status).toBe(400);
+    expect(submit).not.toHaveBeenCalled();
+  });
+});

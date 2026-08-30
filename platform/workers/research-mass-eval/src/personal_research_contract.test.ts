@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  PERSONAL_RESEARCH_CONTAINER_NAME,
+  PERSONAL_RESEARCH_LEGACY_CONTAINER_NAME,
   PERSONAL_RESEARCH_RUNNER_VERSION,
+  PERSONAL_SNAPSHOT_CONTAINER_NAME,
   parsePersonalResearchRequest,
+  personalJobContainerName,
   personalResearchCohortDigest,
   personalResearchJobIdFromPath,
   personalResearchRequestDigest,
   personalResearchUniverseRuleDigest,
+  personalSnapshotContainerName,
 } from "./personal_research_contract";
 
 const SHA = "a".repeat(64);
@@ -26,9 +29,17 @@ const VALID_GZIP = {
 };
 
 describe("personal research request contract", () => {
-  it("pins the runner-bound Container identity", () => {
-    expect(PERSONAL_RESEARCH_CONTAINER_NAME).toBe("personal-research-v12");
-    expect(PERSONAL_RESEARCH_RUNNER_VERSION).toBe("personal-cloud-runner/v12");
+  it("pins the runner-bound Container identity", async () => {
+    expect(PERSONAL_RESEARCH_RUNNER_VERSION).toBe("personal-cloud-runner/v13");
+    expect(PERSONAL_SNAPSHOT_CONTAINER_NAME).toBe("personal-snapshot-v13");
+    expect(personalSnapshotContainerName()).toBe("personal-snapshot-v13");
+    expect(PERSONAL_RESEARCH_LEGACY_CONTAINER_NAME).toBe("personal-research-v12");
+    const first = await personalJobContainerName("research", VALID.job_id);
+    const second = await personalJobContainerName("research", "other-job");
+    expect(first).toMatch(/^personal-v13-research-[0-9a-f]{24}$/);
+    expect(first).not.toBe(PERSONAL_RESEARCH_LEGACY_CONTAINER_NAME);
+    expect(second).not.toBe(first);
+    expect(await personalJobContainerName("svi", VALID.job_id)).not.toBe(first);
   });
 
   it("accepts one content-addressed bounded exact-four request", async () => {

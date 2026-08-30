@@ -22,8 +22,8 @@ import {
   personalIndexVolOverlay2023InputManifestKey,
 } from "./personal_index_vol_overlay_2023_contract";
 import {
-  PERSONAL_RESEARCH_CONTAINER_NAME,
   PERSONAL_RESEARCH_RUNNER_VERSION,
+  personalJobContainerName,
   personalResearchCohortDigest,
   personalResearchManifestKey,
   personalResearchResultKey,
@@ -303,6 +303,7 @@ describe("fixed personal index-vol overlay admission", () => {
     ["legacy v10", "personal-cloud-runner/v10"],
     ["legacy v11", "personal-cloud-runner/v11"],
     ["current v12", "personal-cloud-runner/v12"],
+    ["current v13", "personal-cloud-runner/v13"],
   ])("accepts the explicitly compatible %s base runner manifest", async (_label, baseVersion) => {
     const fixed = await sources(baseVersion);
     await expect(
@@ -321,7 +322,7 @@ describe("fixed personal index-vol overlay admission", () => {
   it.each([
     ["missing", null],
     ["stale v8", "personal-cloud-runner/v8"],
-    ["unknown future v13", "personal-cloud-runner/v13"],
+    ["unknown future v14", "personal-cloud-runner/v14"],
   ])("rejects a %s base runner manifest", async (_label, baseVersion) => {
     const fixed = await sources(baseVersion);
     await expect(
@@ -359,7 +360,9 @@ describe("fixed personal index-vol overlay admission", () => {
       svi_job_id: fixed.sviJobId,
     });
     expect(response.status).toBe(202);
-    expect(env.PERSONAL_RESEARCH_CONTAINER!.getByName).toHaveBeenCalledWith(PERSONAL_RESEARCH_CONTAINER_NAME);
+    expect(env.PERSONAL_RESEARCH_CONTAINER!.getByName).toHaveBeenCalledWith(
+      await personalJobContainerName("overlay", "overlay-dispatch"),
+    );
     expect(fixed.mem.values.has(personalIndexVolOverlay2023InputManifestKey("overlay-dispatch"))).toBe(true);
     const forwarded = container.fetch.mock.calls[1]?.[0] as Request;
     expect(new URL(forwarded.url).pathname).toBe("/v1/run-index-vol-overlay-2023");

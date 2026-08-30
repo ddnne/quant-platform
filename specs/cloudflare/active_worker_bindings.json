@@ -60,7 +60,7 @@
     ],
     "unclassified": "REJECT"
   },
-  "manifest_digest": "sha256:bf5a94c94e0809f8317143bae6f5c92f9e306f0f9413942d025361252224c1d2",
+  "manifest_digest": "sha256:1f4654a504436c54e6e09241062f527dbe7daf7500c26495069ca2df8e178c4d",
   "schema_version": "cloudflare-active-worker-bindings/v9",
   "test_harness_surfaces": {
     "ingestion-jsda": {
@@ -719,6 +719,11 @@
           "binding": "AI_GATEWAY",
           "entrypoint": "GatewayService",
           "service": "quant-platform-research-ai-gateway-test"
+        },
+        {
+          "binding": "JQUANTS_ACQUISITION",
+          "entrypoint": "IngestionSecretsService",
+          "service": "quant-platform-ingestion-secrets-test"
         }
       ],
       "tail_consumers": [],
@@ -731,6 +736,7 @@
       },
       "vars": {
         "CONTINUOUS_PAPER": "UNARMED",
+        "ENVIRONMENT": "production",
         "MASS_EVAL_VERSION": "research-mass-eval/test",
         "MASS_EVAL_WAVE": "test",
         "MASS_RESEARCH": "NO-GO",
@@ -2863,7 +2869,7 @@
             "image": "./Dockerfile",
             "image_build_context": "../../..",
             "instance_type": "standard-4",
-            "max_instances": 2,
+            "max_instances": 8,
             "rollout_active_grace_period": 11400
           }
         ],
@@ -2925,6 +2931,11 @@
             "binding": "AI_GATEWAY",
             "entrypoint": "GatewayService",
             "service": "quant-platform-research-ai-gateway"
+          },
+          {
+            "binding": "JQUANTS_ACQUISITION",
+            "entrypoint": "IngestionSecretsService",
+            "service": "quant-platform-ingestion-secrets"
           }
         ],
         "tail_consumers": [],
@@ -2937,7 +2948,8 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
-          "MASS_EVAL_VERSION": "research-mass-eval/v147-smile-transport",
+          "ENVIRONMENT": "production",
+          "MASS_EVAL_VERSION": "research-mass-eval/v148-cloud-snapshot",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -2963,7 +2975,7 @@
             "image": "./Dockerfile",
             "image_build_context": "../../..",
             "instance_type": "standard-4",
-            "max_instances": 2,
+            "max_instances": 8,
             "rollout_active_grace_period": 11400
           }
         ],
@@ -3025,6 +3037,11 @@
             "binding": "AI_GATEWAY",
             "entrypoint": "GatewayService",
             "service": "quant-platform-research-ai-gateway"
+          },
+          {
+            "binding": "JQUANTS_ACQUISITION",
+            "entrypoint": "IngestionSecretsService",
+            "service": "quant-platform-ingestion-secrets"
           }
         ],
         "tail_consumers": [],
@@ -3037,7 +3054,8 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
-          "MASS_EVAL_VERSION": "research-mass-eval/v147-smile-transport",
+          "ENVIRONMENT": "production",
+          "MASS_EVAL_VERSION": "research-mass-eval/v148-cloud-snapshot",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -3063,7 +3081,7 @@
             "image": "./Dockerfile",
             "image_build_context": "../../..",
             "instance_type": "standard-4",
-            "max_instances": 2,
+            "max_instances": 8,
             "rollout_active_grace_period": 11400
           }
         ],
@@ -3123,6 +3141,11 @@
             "binding": "AI_GATEWAY",
             "entrypoint": "GatewayService",
             "service": "quant-platform-research-ai-gateway-staging"
+          },
+          {
+            "binding": "JQUANTS_ACQUISITION",
+            "entrypoint": "IngestionSecretsService",
+            "service": "quant-platform-ingestion-secrets-staging"
           }
         ],
         "tail_consumers": [],
@@ -3135,7 +3158,8 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
-          "MASS_EVAL_VERSION": "research-mass-eval/v147-smile-transport",
+          "ENVIRONMENT": "staging",
+          "MASS_EVAL_VERSION": "research-mass-eval/v148-cloud-snapshot",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",

@@ -13,7 +13,13 @@ binding = "AI_GATEWAY"
 service = "quant-platform-research-ai-gateway-test"
 entrypoint = "GatewayService"
 
+[[services]]
+binding = "JQUANTS_ACQUISITION"
+service = "quant-platform-ingestion-secrets-test"
+entrypoint = "IngestionSecretsService"
+
 [vars]
+ENVIRONMENT = "production"
 MASS_EVAL_VERSION = "research-mass-eval/test"
 MASS_EVAL_WAVE = "test"
 MASS_RESEARCH = "NO-GO"

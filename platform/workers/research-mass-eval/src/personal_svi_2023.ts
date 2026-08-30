@@ -1,4 +1,5 @@
 import { putJsonCreateOnly, serializedJsonBytes } from "./http";
+import { personalJobContainerName } from "./personal_research_contract";
 import {
   personalResearchContainer,
   verifiedPersonalResearchContainer,
@@ -347,7 +348,10 @@ export async function submitPersonalSvi2023(
   }
   const requestDigest = await personalSviJobRequestDigest(request, inputPut.digest);
   try {
-    const target = await verifiedPersonalResearchContainer(env);
+    const target = await verifiedPersonalResearchContainer(
+      env,
+      await personalJobContainerName("svi", request.job_id),
+    );
     return await target.fetch(
       new Request("http://container/v1/run-svi-2023", {
         method: "POST",
@@ -397,7 +401,10 @@ export async function personalSvi2023Status(
     });
   }
   try {
-    return await personalResearchContainer(env).fetch(
+    return await personalResearchContainer(
+      env,
+      await personalJobContainerName("svi", jobId),
+    ).fetch(
       new Request(`http://container/v1/jobs/${encodeURIComponent(jobId)}`),
     );
   } catch (error) {

@@ -22,11 +22,13 @@ vi.mock("@cloudflare/containers", () => ({
 }));
 
 import {
-  PERSONAL_RESEARCH_CONTAINER_NAME,
+  PERSONAL_RESEARCH_LEGACY_CONTAINER_NAME,
   PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES,
   PERSONAL_RESEARCH_RUNNER_VERSION,
   type PersonalResearchRequest,
+  personalJobContainerName,
 } from "./personal_research_contract";
+import { personalHistorySourceOutbound } from "./personal_history_source";
 import {
   PersonalResearchContainer,
   submitPersonalResearch,
@@ -138,6 +140,10 @@ describe("personal research Container admission", () => {
     expect(containerRegistry.outboundByHost?.["research.r2"]).toBe(
       personalResearchR2Outbound,
     );
+    expect(containerRegistry.outboundByHost?.["history.source"]).toBe(
+      personalHistorySourceOutbound,
+    );
+    expect(new PersonalResearchContainer().enableInternet).toBe(false);
     expect(
       Object.prototype.hasOwnProperty.call(
         PersonalResearchContainer,
@@ -184,7 +190,10 @@ describe("personal research Container admission", () => {
     expect(response.status).toBe(202);
     expect(containerByName).toHaveBeenCalledOnce();
     expect(containerByName).toHaveBeenCalledWith(
-      PERSONAL_RESEARCH_CONTAINER_NAME,
+      await personalJobContainerName("research", REQUEST.job_id),
+    );
+    expect(containerByName).not.toHaveBeenCalledWith(
+      PERSONAL_RESEARCH_LEGACY_CONTAINER_NAME,
     );
     expect(containerFetch).toHaveBeenCalledTimes(2);
     expect(containerDestroy).not.toHaveBeenCalled();
@@ -197,7 +206,7 @@ describe("personal research Container admission", () => {
       cohort_digest:
         "sha256:ea37baf3423e5d84e61d4c80c59bdfe8184342dd3dee28646bd339cd45085a84",
       cohort_id: "diverse-core-v1",
-      runner_version: "personal-cloud-runner/v12",
+      runner_version: "personal-cloud-runner/v13",
       snapshot_key: REQUEST.snapshot_key,
       snapshot_sha256: SHA,
       universe_id: "topix500",

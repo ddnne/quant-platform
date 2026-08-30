@@ -1193,15 +1193,50 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
                         f"{worker}/staging: {table}.environment must be staging"
                     )
 
-    service = workers["research-mass-eval"]["production"]["services"]
-    if service != [
-        {
-            "binding": "AI_GATEWAY",
-            "entrypoint": "GatewayService",
-            "service": "quant-platform-research-ai-gateway",
-        }
-    ]:
-        raise ValueError("mass-eval must use the typed GatewayService binding")
+    mass_eval_services = {
+        "base": [
+            {
+                "binding": "AI_GATEWAY",
+                "entrypoint": "GatewayService",
+                "service": "quant-platform-research-ai-gateway",
+            },
+            {
+                "binding": "JQUANTS_ACQUISITION",
+                "entrypoint": "IngestionSecretsService",
+                "service": "quant-platform-ingestion-secrets",
+            },
+        ],
+        "production": [
+            {
+                "binding": "AI_GATEWAY",
+                "entrypoint": "GatewayService",
+                "service": "quant-platform-research-ai-gateway",
+            },
+            {
+                "binding": "JQUANTS_ACQUISITION",
+                "entrypoint": "IngestionSecretsService",
+                "service": "quant-platform-ingestion-secrets",
+            },
+        ],
+        "staging": [
+            {
+                "binding": "AI_GATEWAY",
+                "entrypoint": "GatewayService",
+                "service": "quant-platform-research-ai-gateway-staging",
+            },
+            {
+                "binding": "JQUANTS_ACQUISITION",
+                "entrypoint": "IngestionSecretsService",
+                "service": "quant-platform-ingestion-secrets-staging",
+            },
+        ],
+    }
+    for environment, expected_services in mass_eval_services.items():
+        if workers["research-mass-eval"][environment]["services"] != expected_services:
+            raise ValueError(
+                f"research-mass-eval/{environment}: GatewayService and "
+                "IngestionSecretsService bindings are required"
+            )
 
     personal_container = [
         {
@@ -1209,7 +1244,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             "image": "./Dockerfile",
             "image_build_context": "../../..",
             "instance_type": "standard-4",
-            "max_instances": 2,
+            "max_instances": 8,
             "rollout_active_grace_period": 11400,
         }
     ]

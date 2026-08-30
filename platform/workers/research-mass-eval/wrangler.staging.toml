@@ -11,7 +11,7 @@ preview_urls = false
 class_name = "PersonalResearchContainer"
 image = "./Dockerfile"
 image_build_context = "../../.."
-max_instances = 2
+max_instances = 8
 instance_type = "standard-4"
 rollout_active_grace_period = 11400
 
@@ -24,7 +24,8 @@ tag = "personal-research-container-v1"
 new_sqlite_classes = ["PersonalResearchContainer"]
 
 [vars]
-MASS_EVAL_VERSION = "research-mass-eval/v147-smile-transport"
+ENVIRONMENT = "staging"
+MASS_EVAL_VERSION = "research-mass-eval/v148-cloud-snapshot"
 MASS_EVAL_WAVE = "research-mass-eval"
 MASS_RESEARCH = "NO-GO"
 PHASE7 = "OFF"
@@ -41,6 +42,11 @@ bucket_name = "quant-structured-staging"
 binding = "AI_GATEWAY"
 service = "quant-platform-research-ai-gateway-staging"
 entrypoint = "GatewayService"
+
+[[services]]
+binding = "JQUANTS_ACQUISITION"
+service = "quant-platform-ingestion-secrets-staging"
+entrypoint = "IngestionSecretsService"
 
 [observability]
 enabled = true

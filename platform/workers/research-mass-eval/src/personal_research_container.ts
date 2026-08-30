@@ -1,15 +1,22 @@
 import { Container, ContainerProxy } from "@cloudflare/containers";
 
 import {
+  PERSONAL_RESEARCH_MAX_CONCURRENT_JOBS,
   PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES,
   PERSONAL_RESEARCH_RUNNER_VERSION,
   type PersonalResearchRequest,
+  personalJobContainerName,
   personalResearchCohortDigest,
   personalResearchManifestKey,
   personalResearchRequestDigest,
   personalResearchResultKey,
   personalResearchUniverseRuleDigest,
 } from "./personal_research_contract";
+import {
+  classifyPersonalResearchSubmit,
+  type PersonalResearchBatchItem,
+} from "./personal_research_batch";
+import { personalHistorySourceOutbound } from "./personal_history_source";
 import { personalResearchR2Outbound } from "./personal_research_r2";
 import {
   personalResearchContainer,
@@ -42,6 +49,7 @@ export class PersonalResearchContainer extends Container<Env> {
 // the proxy's fail-closed 520 response.
 PersonalResearchContainer.outboundByHost = {
   "research.r2": personalResearchR2Outbound,
+  "history.source": personalHistorySourceOutbound,
 };
 
 type StoredManifest = Record<string, unknown> & {
@@ -113,7 +121,10 @@ export async function submitPersonalResearch(
     );
   }
   try {
-    const target = await verifiedPersonalResearchContainer(env);
+    const target = await verifiedPersonalResearchContainer(
+      env,
+      await personalJobContainerName("research", request.job_id),
+    );
     return await target.fetch(
       new Request("http://container/v1/run", {
         method: "POST",
@@ -146,6 +157,41 @@ export async function submitPersonalResearch(
   }
 }
 
+export async function submitPersonalResearchJobs(
+  env: Env,
+  requests: PersonalResearchRequest[],
+): Promise<PersonalResearchBatchItem[]> {
+  if (requests.length > PERSONAL_RESEARCH_MAX_CONCURRENT_JOBS) {
+    throw new Error("personal research concurrency cap exceeded");
+  }
+  const settled = await Promise.allSettled(
+    requests.map(async (request) => {
+      const response = await submitPersonalResearch(env, request);
+      const classified = await classifyPersonalResearchSubmit(response);
+      return {
+        job_id: request.job_id,
+        ...classified,
+      };
+    }),
+  );
+  return settled.map((item, index) => {
+    if (item.status === "fulfilled") return item.value;
+    return {
+      job_id: requests[index]!.job_id,
+      state: "rejected" as const,
+      status: 503,
+      body: {
+        ok: false,
+        error: "personal_research_container_unavailable",
+        detail:
+          item.reason instanceof Error ? item.reason.message : String(item.reason),
+        job_id: requests[index]!.job_id,
+        go: false,
+      },
+    };
+  });
+}
+
 export async function personalResearchStatus(
   env: Env,
   jobId: string,
@@ -162,7 +208,10 @@ export async function personalResearchStatus(
     });
   }
   try {
-    return await personalResearchContainer(env).fetch(
+    return await personalResearchContainer(
+      env,
+      await personalJobContainerName("research", jobId),
+    ).fetch(
       new Request(`http://container/v1/jobs/${encodeURIComponent(jobId)}`),
     );
   } catch (error) {

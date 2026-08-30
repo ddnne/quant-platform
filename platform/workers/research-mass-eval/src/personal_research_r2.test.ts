@@ -197,4 +197,104 @@ describe("personal Container R2 capability", () => {
       error: "result upload checksum rejected",
     });
   });
+
+  it("uploads gzip first and rejects a successful snapshot manifest without that object", async () => {
+    const raw = "d".repeat(64);
+    const gzipDigest = `sha256:${THREE_BYTE_SHA256}`;
+    const requestDigest = `sha256:${"b".repeat(64)}`;
+    const key = `research/personal/snapshots/sha256=${raw}.sqlite.gz`;
+    const puts: string[] = [];
+    const bucket = {
+      head: vi.fn(async () => null),
+      put: vi.fn(async (putKey: string) => {
+        puts.push(putKey);
+        return { key: putKey };
+      }),
+    } as unknown as R2Bucket;
+    const gzip = await personalResearchR2Outbound(
+      new Request(`http://research.r2/${key}`, {
+        method: "PUT",
+        headers: {
+          "content-length": "3",
+          "x-personal-job-id": "snap-1",
+          "x-personal-request-digest": requestDigest,
+          "x-content-sha256": gzipDigest,
+          "x-personal-raw-sha256": `sha256:${raw}`,
+        },
+        body: new Uint8Array([1, 2, 3]),
+      }),
+      { STRUCTURED_BUCKET: bucket },
+    );
+    expect(gzip.status).toBe(201);
+    expect(puts).toEqual([key]);
+
+    const manifest = {
+      job_id: "snap-1",
+      request_digest: requestDigest,
+      status: "COMPLETED",
+      research_state: "PERSONAL_DRAFT",
+      completeness_claim: "NONE",
+      controlled_live_eligibility: "FORBIDDEN",
+      raw_sha256: `sha256:${raw}`,
+      gzip_sha256: gzipDigest,
+      snapshot_key: key,
+    };
+    const bytes = new TextEncoder().encode(JSON.stringify(manifest));
+    const digest = `sha256:${await (await import("./sha256")).sha256Hex(bytes)}`;
+    const missing = await personalResearchR2Outbound(
+      new Request(
+        "http://research.r2/research/personal/snapshot-builds/job=snap-1/manifest.json",
+        {
+          method: "PUT",
+          headers: {
+            "content-length": String(bytes.byteLength),
+            "x-personal-job-id": "snap-1",
+            "x-personal-request-digest": requestDigest,
+            "x-content-sha256": digest,
+          },
+          body: bytes,
+        },
+      ),
+      { STRUCTURED_BUCKET: bucket },
+    );
+    expect(missing.status).toBe(409);
+    expect(puts).toEqual([key]);
+  });
+
+  it("publishes a FAILED snapshot document without a snapshot object", async () => {
+    const requestDigest = `sha256:${"b".repeat(64)}`;
+    const manifest = {
+      job_id: "snap-fail",
+      request_digest: requestDigest,
+      status: "FAILED",
+      research_state: "PERSONAL_DRAFT",
+      completeness_claim: "NONE",
+      controlled_live_eligibility: "FORBIDDEN",
+      error: "oversized",
+    };
+    const bytes = new TextEncoder().encode(JSON.stringify(manifest));
+    const digest = `sha256:${await (await import("./sha256")).sha256Hex(bytes)}`;
+    const bucket = {
+      head: vi.fn(async () => null),
+      put: vi.fn(async (key: string) => ({ key })),
+    } as unknown as R2Bucket;
+    const response = await personalResearchR2Outbound(
+      new Request(
+        "http://research.r2/research/personal/snapshot-builds/job=snap-fail/manifest.json",
+        {
+          method: "PUT",
+          headers: {
+            "content-length": String(bytes.byteLength),
+            "x-personal-job-id": "snap-fail",
+            "x-personal-request-digest": requestDigest,
+            "x-content-sha256": digest,
+          },
+          body: bytes,
+        },
+      ),
+      { STRUCTURED_BUCKET: bucket },
+    );
+    expect(response.status).toBe(201);
+    expect(bucket.put).toHaveBeenCalledOnce();
+  });
 });

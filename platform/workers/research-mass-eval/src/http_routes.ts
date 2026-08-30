@@ -15,10 +15,22 @@ import {
 import { parseRequest } from "./parse_request";
 import { runProposeThesis } from "./propose_thesis";
 import {
+  PERSONAL_RESEARCH_MAX_CONCURRENT_JOBS,
+  isPersonalResearchJobId,
   parsePersonalResearchRequest,
   personalResearchJobIdFromPath,
   type PersonalResearchRequest,
 } from "./personal_research_contract";
+import {
+  parsePersonalSnapshotBuildRequest,
+  personalSnapshotJobIdFromPath,
+  type PersonalSnapshotBuildRequest,
+} from "./personal_snapshot_contract";
+import {
+  PERSONAL_RESEARCH_BATCH_MAX_BYTES,
+  parsePersonalResearchBatchRequest,
+  personalResearchBatchJobIdsFromUrl,
+} from "./personal_research_batch";
 import {
   parsePersonalVolResearchRequest,
   type PersonalVolResearchRequest,
@@ -70,6 +82,19 @@ export type MassEvalFetchHandlers = {
   personalIndexVolOverlay2023Status?: (
     env: Env,
     jobId: string,
+  ) => Promise<Response>;
+  submitPersonalSnapshotBuild?: (
+    env: Env,
+    request: PersonalSnapshotBuildRequest,
+  ) => Promise<Response>;
+  personalSnapshotBuildStatus?: (env: Env, jobId: string) => Promise<Response>;
+  submitPersonalResearchJobs?: (
+    env: Env,
+    requests: PersonalResearchRequest[],
+  ) => Promise<Response>;
+  personalResearchBatchStatus?: (
+    env: Env,
+    jobIds: string[],
   ) => Promise<Response>;
 };
 
@@ -270,6 +295,110 @@ export async function dispatchMassEvalFetch(
         500,
       );
     }
+  }
+
+  if (url.pathname === "/v1/personal-snapshot-build") {
+    if (request.method !== "POST") {
+      return json({ error: "POST required" }, 405);
+    }
+    if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    if (
+      !env.STRUCTURED_BUCKET ||
+      !env.PERSONAL_RESEARCH_CONTAINER ||
+      !handlers.submitPersonalSnapshotBuild
+    ) {
+      return json({ error: "personal snapshot bindings unavailable" }, 503);
+    }
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "invalid JSON body" }, 400);
+    }
+    const parsed = parsePersonalSnapshotBuildRequest(body);
+    if (!parsed.ok) return json({ error: parsed.error }, 400);
+    return handlers.submitPersonalSnapshotBuild(env, parsed.value);
+  }
+
+  if (url.pathname.startsWith("/v1/personal-snapshot-build/")) {
+    if (request.method !== "GET") {
+      return json({ error: "GET required" }, 405);
+    }
+    if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    const jobId = personalSnapshotJobIdFromPath(url.pathname);
+    if (!jobId) return json({ error: "job_id is invalid" }, 400);
+    if (
+      !env.STRUCTURED_BUCKET ||
+      !env.PERSONAL_RESEARCH_CONTAINER ||
+      !handlers.personalSnapshotBuildStatus
+    ) {
+      return json({ error: "personal snapshot status unavailable" }, 503);
+    }
+    return handlers.personalSnapshotBuildStatus(env, jobId);
+  }
+
+  if (url.pathname === "/v1/personal-research-batch") {
+    if (request.method === "GET") {
+      if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
+        return json({ error: "unauthorized" }, 401);
+      }
+      const jobIds = personalResearchBatchJobIdsFromUrl(url);
+      if (!jobIds || jobIds.length < 1) {
+        return json({ error: "job_id query is required" }, 400);
+      }
+      if (jobIds.length > PERSONAL_RESEARCH_MAX_CONCURRENT_JOBS) {
+        return json(
+          {
+            error: `batch status must contain 1-${PERSONAL_RESEARCH_MAX_CONCURRENT_JOBS} job ids`,
+          },
+          400,
+        );
+      }
+      if (jobIds.some((jobId) => !isPersonalResearchJobId(jobId))) {
+        return json({ error: "job_id is invalid" }, 400);
+      }
+      if (
+        !env.STRUCTURED_BUCKET ||
+        !handlers.personalResearchBatchStatus
+      ) {
+        return json({ error: "personal research batch status unavailable" }, 503);
+      }
+      return handlers.personalResearchBatchStatus(env, jobIds);
+    }
+    if (request.method !== "POST") {
+      return json({ error: "POST or GET required" }, 405);
+    }
+    if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    const rawLength = request.headers.get("content-length") ?? "";
+    if (
+      !/^\d+$/.test(rawLength) ||
+      Number(rawLength) < 1 ||
+      Number(rawLength) > PERSONAL_RESEARCH_BATCH_MAX_BYTES
+    ) {
+      return json({ error: "batch request is too large" }, 413);
+    }
+    if (
+      !env.STRUCTURED_BUCKET ||
+      !env.PERSONAL_RESEARCH_CONTAINER ||
+      !handlers.submitPersonalResearchJobs
+    ) {
+      return json({ error: "personal research bindings unavailable" }, 503);
+    }
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "invalid JSON body" }, 400);
+    }
+    const parsed = parsePersonalResearchBatchRequest(body);
+    if (!parsed.ok) return json({ error: parsed.error }, 400);
+    return handlers.submitPersonalResearchJobs(env, parsed.value);
   }
 
   if (url.pathname === "/v1/personal-research") {

@@ -13,6 +13,7 @@ import {
 import type { Env, MassEvalJobResult, MassEvalRequest } from "./types";
 import {
   freezePayload,
+  json,
   putChildrenThenManifest,
   putImmutableJson,
 } from "./http";
@@ -23,7 +24,13 @@ import {
   PersonalResearchContainer,
   personalResearchStatus,
   submitPersonalResearch,
+  submitPersonalResearchJobs,
 } from "./personal_research_container";
+import { personalResearchBatchStatus } from "./personal_research_batch";
+import {
+  personalSnapshotBuildStatus,
+  submitPersonalSnapshotBuild,
+} from "./personal_snapshot";
 import { runPersonalVolResearch } from "./personal_vol_research";
 import { runPersonalVolAmPmResearch } from "./personal_vol_am_pm";
 import {
@@ -34,6 +41,7 @@ import {
   personalIndexVolOverlay2023Status,
   submitPersonalIndexVolOverlay2023,
 } from "./personal_index_vol_overlay_2023";
+import type { PersonalResearchRequest } from "./personal_research_contract";
 
 export { ContainerProxy } from "./personal_research_container";
 export { PersonalResearchContainer };
@@ -340,6 +348,22 @@ export default {
       personalSvi2023Status,
       submitPersonalIndexVolOverlay2023,
       personalIndexVolOverlay2023Status,
+      submitPersonalSnapshotBuild,
+      personalSnapshotBuildStatus,
+      submitPersonalResearchJobs: async (
+        env: Env,
+        requests: PersonalResearchRequest[],
+      ) => {
+        const jobs = await submitPersonalResearchJobs(env, requests);
+        return json({
+          ok: jobs.every((job) => job.state !== "rejected"),
+          jobs,
+          go: false,
+          automatic_promotion: false,
+          live_orders_enabled: false,
+        });
+      },
+      personalResearchBatchStatus,
     });
   },
 };
