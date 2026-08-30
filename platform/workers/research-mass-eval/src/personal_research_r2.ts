@@ -51,6 +51,10 @@ import {
   isPersonalOptionSidecarOutboundRequest,
   personalOptionSidecarR2Outbound,
 } from "./personal_option_sidecar_r2";
+import {
+  isPersonalAcquisitionCacheOutboundRequest,
+  personalAcquisitionCacheR2Outbound,
+} from "./personal_acquisition_cache_r2";
 import { sha256Hex } from "./sha256";
 
 const RESULT_MAX_BYTES = 512 * 1024 * 1024;
@@ -740,6 +744,9 @@ export async function personalResearchR2Outbound(
   }
   if (isPersonalOptionSidecarOutboundRequest(request, key)) {
     return personalOptionSidecarR2Outbound(request, env, key);
+  }
+  if (isPersonalAcquisitionCacheOutboundRequest(request, key)) {
+    return personalAcquisitionCacheR2Outbound(request, env, key);
   }
   if ((request.method === "GET" || request.method === "HEAD") &&
       isPersonalResearchSnapshotKey(key)) {

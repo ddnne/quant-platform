@@ -1359,6 +1359,23 @@ def _gzip_file(source: Path, destination: Path) -> None:
                 shutil.copyfileobj(handle, compressed, 1024 * 1024)
 
 
+def _snapshot_cache_metrics(client: Any) -> dict[str, int]:
+    getter = getattr(client, "cache_metrics", None) if client is not None else None
+    if not callable(getter):
+        return {}
+    try:
+        payload = getter()
+        return {
+            "cache_hits": int(payload["cache_hits"]),
+            "cache_misses": int(payload["cache_misses"]),
+            "cache_published": int(payload["cache_published"]),
+            "cache_unavailable": int(payload["cache_unavailable"]),
+            "live_fetch_calls": int(payload["live_fetch_calls"]),
+        }
+    except (TypeError, ValueError, KeyError):
+        return {}
+
+
 def _snapshot_manifest_base(
     spec: SnapshotJobSpec, *, started_at: str, finished_at: str
 ) -> dict[str, Any]:
@@ -1416,6 +1433,7 @@ def execute_snapshot_job(
                     environment=job.environment,
                     period_end=job.period_end,
                     spool_path=job_root / "acquisition-spool.sqlite",
+                    r2_opener=urllib.request,
                 )
             ))(spec)
             hydrator = PersonalHistoryHydrator(
@@ -1476,6 +1494,7 @@ def execute_snapshot_job(
                 "status": "FAILED",
                 "error": _safe_detail(error),
             }
+        manifest = {**manifest, **_snapshot_cache_metrics(client)}
         manifest_bytes = _canonical_bytes(manifest)
         manifest_digest = "sha256:" + hashlib.sha256(manifest_bytes).hexdigest()
         uploader(

@@ -159,6 +159,76 @@ def test_snapshot_gzip_and_manifest_last_order(tmp_path: Path, monkeypatch) -> N
     assert "secret" not in json.dumps(manifest).lower()
 
 
+class _MetricsClient:
+    def cache_metrics(self):
+        return {
+            "cache_hits": 4,
+            "cache_misses": 1,
+            "cache_published": 3,
+            "cache_unavailable": 0,
+            "live_fetch_calls": 2,
+        }
+
+    def close(self):
+        return None
+
+
+def test_snapshot_manifest_includes_cache_metrics_on_completion(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(service, "PersonalHistoryHydrator", _FakeHydrator)
+    spec = _spec("snap-metrics")
+    uploads: list[str] = []
+
+    def upload(key, data, *, spec, content_digest, extra_headers=None):
+        del spec, content_digest, extra_headers, data
+        uploads.append(key)
+
+    manifest = service.execute_snapshot_job(
+        spec,
+        work_root=tmp_path,
+        uploader=upload,
+        client_factory=lambda _spec: _MetricsClient(),
+    )
+    assert manifest["status"] == "COMPLETED"
+    assert manifest["cache_hits"] == 4
+    assert manifest["cache_misses"] == 1
+    assert manifest["cache_published"] == 3
+    assert manifest["cache_unavailable"] == 0
+    assert manifest["live_fetch_calls"] == 2
+    assert "authorization" not in json.dumps(manifest).lower()
+
+
+def test_snapshot_manifest_includes_cache_metrics_on_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    class BoomHydrator(_FakeHydrator):
+        def hydrate(self):
+            raise RuntimeError("hydrate exploded")
+
+    monkeypatch.setattr(service, "PersonalHistoryHydrator", BoomHydrator)
+    spec = _spec("snap-metrics-fail")
+    uploads: list[tuple[str, dict]] = []
+
+    def upload(key, data, *, spec, content_digest, extra_headers=None):
+        del spec, content_digest, extra_headers
+        body = data.read_bytes() if isinstance(data, Path) else bytes(data)
+        uploads.append((key, json.loads(body) if key.endswith("manifest.json") else {}))
+
+    manifest = service.execute_snapshot_job(
+        spec,
+        work_root=tmp_path,
+        uploader=upload,
+        client_factory=lambda _spec: _MetricsClient(),
+    )
+    assert manifest["status"] == "FAILED"
+    assert manifest["cache_hits"] == 4
+    assert manifest["live_fetch_calls"] == 2
+    assert uploads[-1][0] == spec.manifest_key
+    assert uploads[-1][1]["cache_misses"] == 1
+    assert "api_key" not in json.dumps(manifest).lower()
+
+
 def test_size_failure_does_not_publish_snapshot(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(service, "PersonalHistoryHydrator", _FakeHydrator)
     spec = _spec("snap-oversize")
