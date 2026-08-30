@@ -439,6 +439,10 @@ def _validated_base_sleeve_reference(
     if reference is None:
         if source_count != 0:
             raise RuntimeError("qp-research base sleeve reference is missing")
+        if expected_profile and summary.get("evaluated_count") != 0:
+            raise RuntimeError(
+                "qp-research evaluated long-short result requires a base sleeve source"
+            )
         return None
     if not expected_profile or source_count != 1:
         raise RuntimeError("qp-research emitted an unexpected base sleeve source")

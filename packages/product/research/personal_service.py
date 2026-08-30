@@ -1523,6 +1523,11 @@ def _write_continuous_base_sleeve_artifact(
             PERSONAL_BASE_SLEEVE_SHORT_FINANCING_RATE
         ),
     )
+    paper_membership_digest = paper_result.reproducibility.get(
+        "resolved_universe_digest"
+    )
+    if not isinstance(paper_membership_digest, str):
+        raise RuntimeError("base sleeve paper membership digest is absent")
     document = build_personal_base_sleeve_artifact(
         result=paper_result,
         evidence=evidence,
@@ -1531,7 +1536,7 @@ def _write_continuous_base_sleeve_artifact(
         cohort_digest=cohort_digest,
         universe_id=INDEX_VOL_BASE_UNIVERSE_ID,
         universe_rule_digest=universe.rule_digest,
-        resolved_membership_digest=universe.resolved_membership_digest,
+        resolved_membership_digest=paper_membership_digest,
         snapshot_id=snapshot.snapshot_id,
         logical_data_snapshot_id=snapshot.logical_data_snapshot_id,
         source_period=source_period,

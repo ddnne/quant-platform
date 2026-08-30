@@ -1297,6 +1297,19 @@ def test_continuous_base_sleeve_is_content_addressed_and_not_a_candidate(
     snapshot_digest = data_snapshot_id(source)
     output_root = tmp_path / "continuous-base-sleeve"
     output_root.mkdir()
+    source_period = (universe.decision_memberships[5][0], period[1])
+    source_membership = PersonalResolvedUniverseMembership(
+        period_start=source_period[0],
+        period_end=source_period[1],
+        decision_memberships=tuple(
+            (day, codes)
+            for day, codes in universe.decision_memberships
+            if source_period[0] <= day <= source_period[1]
+        ),
+        rule_id=universe.rule_id,
+        rule_version=universe.rule_version,
+        rule_digest=universe.rule_digest,
+    )
 
     reference, artifact_path, artifact_digest = (
         _write_continuous_base_sleeve_artifact(
@@ -1309,7 +1322,7 @@ def test_continuous_base_sleeve_is_content_addressed_and_not_a_candidate(
                 logical_data_snapshot_id=snapshot_digest,
             ),
             universe=universe,
-            source_period=period,
+            source_period=source_period,
             output_root=output_root,
             cohort_digest=str(cohort_document["cohort_digest"]),
         )
@@ -1336,11 +1349,17 @@ def test_continuous_base_sleeve_is_content_addressed_and_not_a_candidate(
     )
     assert document["wrapper_entry_cost_applied_to_source"] is False
     assert document["wrapper_liquidation_cost_applied_to_source"] is False
+    assert document["universe"]["resolved_membership_digest"] == (
+        source_membership.resolved_membership_digest
+    )
+    assert document["universe"]["resolved_membership_digest"] != (
+        universe.resolved_membership_digest
+    )
     assert document["lifecycle"] == "DRAFT"
     assert document["go"] is False
     assert document["automatic_promotion"] is False
     assert document["live_orders_enabled"] is False
-    assert len(document["daily_path"]) == len(universe.decision_memberships)
+    assert len(document["daily_path"]) == len(source_membership.decision_memberships)
     inconsistent = json.loads(json.dumps(document))
     inconsistent["daily_path"][0]["base_sleeve_return"] += 0.01
     with pytest.raises(ValueError, match="NAV and return are inconsistent"):

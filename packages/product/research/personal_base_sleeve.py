@@ -191,6 +191,12 @@ def build_personal_base_sleeve_artifact(
     if end < start:
         raise ValueError("base sleeve source period is reversed")
     _require_exact_execution(result, evidence, source_period=(start, end))
+    if resolved_membership_digest != result.reproducibility.get(
+        "resolved_universe_digest"
+    ):
+        raise ValueError(
+            "base sleeve membership digest does not match its paper run"
+        )
     daily_path = _daily_path(
         result,
         starting_capital=PERSONAL_BASE_SLEEVE_STARTING_CAPITAL,

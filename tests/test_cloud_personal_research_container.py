@@ -758,6 +758,40 @@ def test_base_sleeve_reference_is_independent_of_candidate_evaluation_count(
     assert reference["candidate_count_contribution"] == 0
 
 
+def test_evaluated_long_short_result_requires_base_sleeve_source(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "fixture.sqlite"
+    sha = _sqlite(source)
+    spec = _redigest(
+        replace(
+            _job(sha, job_id="base-sleeve-required"),
+            cohort_id="sector-relative-ls-v1",
+            cohort_digest=LONG_SHORT_COHORT_DIGEST,
+        )
+    )
+    output = tmp_path / "output"
+    output.mkdir()
+    evaluated = _runner_summary(spec, evaluated_count=4, hold_count=0)
+
+    with pytest.raises(RuntimeError, match="requires a base sleeve source"):
+        service._validated_base_sleeve_reference(
+            evaluated,
+            spec=spec,
+            output_root=output,
+        )
+
+    no_analysis = _runner_summary(spec, evaluated_count=0, hold_count=0)
+    assert (
+        service._validated_base_sleeve_reference(
+            no_analysis,
+            spec=spec,
+            output_root=output,
+        )
+        is None
+    )
+
+
 def test_long_short_archive_validates_and_preserves_non_candidate_base_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
