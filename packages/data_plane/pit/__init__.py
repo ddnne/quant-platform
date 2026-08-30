@@ -24,6 +24,7 @@ Quick example::
 from __future__ import annotations
 
 from .api import (
+    first_invalid_adjusted_close,
     get_equity_bars_daily,
     get_equity_master,
     get_jsda_bond_trades,
@@ -45,6 +46,7 @@ __all__ = [
     # public reads
     "get_equity_master",
     "get_equity_bars_daily",
+    "first_invalid_adjusted_close",
     "get_market_calendar",
     "get_jquants_records",
     "get_jsda_bond_trades",

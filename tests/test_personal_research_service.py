@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import paper_runtime.personal_prepared_frame as prepared_frame_module
 import pit
@@ -38,13 +40,22 @@ from research.personal_service import (
     PersonalResearchRequest,
     PersonalResearchService,
     _calendar_lookback_days,
+    _closures,
     _fixed_position_short_financing_evidence,
     _md_short_financing,
     _periods,
     _run_one,
     _short_financing_sensitivity_document,
     _validated_specs,
+    _write_continuous_base_sleeve_artifact,
     default_personal_specs,
+    get_research_cohort,
+    personal_specs_for_cohort,
+)
+from research.personal_base_sleeve import (
+    BASE_SLEEVE_ID,
+    PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA,
+    validate_personal_base_sleeve_artifact,
 )
 from research.personal_universe import (
     PersonalResolvedUniverseMembership,
@@ -556,15 +567,17 @@ def test_prepared_first_pass_stores_only_exact_session_bar_rows(
     assert prepared_reads
     assert any(from_event != to_event for from_event, to_event, _ in uncached_reads)
     assert any(from_event == to_event for from_event, to_event, _ in prepared_reads)
-    # Full lookbacks are read only for fail-closed adjustment validation. They
-    # are represented by empty markers; the cache persists exact-session rows.
+    # Each successful SQL validity probe stores one empty decision-window
+    # marker; only exact-session price rows are persisted in the cache.
     assert int(stats["price_rows_written"]) * 5 < sum(
         rows for _, _, rows in uncached_reads
     )
     assert int(stats["price_rows_written"]) == 4 * len(
         universe.decision_memberships
     )
-    assert int(stats["price_window_writes"]) == len(prepared_reads)
+    assert int(stats["price_window_writes"]) == (
+        len(prepared_reads) + len(universe.decision_memberships)
+    )
 
 
 def test_prepared_frame_preserves_missing_reason_and_halves_pit_queries(
@@ -975,6 +988,7 @@ def test_personal_research_runs_real_paper_and_is_idempotent(
         "evaluated_count": 1,
         "hold_count": 1,
         "unexpected_errors": 0,
+        "non_candidate_source_backtest_count": 0,
     }
     assert report["candidates"][0]["decision"] == "HOLD"
     assert report["candidates"][0]["stress"] is not None
@@ -1251,13 +1265,122 @@ def test_fixed_short_financing_monotonically_lowers_return(
     )
 
 
-def test_exact_four_backtest_budget_is_hard_capped_at_twenty_four(
+def test_continuous_base_sleeve_is_content_addressed_and_not_a_candidate(
+    personal_db: tuple[Path, str, str], tmp_path: Path
+) -> None:
+    source, start, end = personal_db
+    universe, period = _prepared_frame_case(source, start, end)
+    selector = personal_universe_selector("topix_all")
+    cohort = get_research_cohort("sector-relative-ls-v1")
+    cohort_document = cohort.to_dict()
+    cohort_ref = {
+        "registry_version": cohort_document["version"],
+        "cohort_id": cohort.cohort_id,
+        "cohort_digest": cohort_document["cohort_digest"],
+    }
+    specs = tuple(
+        personal_specs_for_cohort("sector-relative-ls-v1", universe_id="topix_all")
+    )
+    closures = _closures(
+        specs,
+        start=period[0],
+        end=period[1],
+        policy=_policy(),
+        universe_selector=selector,
+        cohort_ref=cohort_ref,
+    )
+    spec, closure = next(
+        (candidate, dependency)
+        for candidate, dependency in zip(specs, closures, strict=True)
+        if candidate.strategy_id == BASE_SLEEVE_ID
+    )
+    snapshot_digest = data_snapshot_id(source)
+    output_root = tmp_path / "continuous-base-sleeve"
+    output_root.mkdir()
+    source_period = (universe.decision_memberships[5][0], period[1])
+    source_membership = PersonalResolvedUniverseMembership(
+        period_start=source_period[0],
+        period_end=source_period[1],
+        decision_memberships=tuple(
+            (day, codes)
+            for day, codes in universe.decision_memberships
+            if source_period[0] <= day <= source_period[1]
+        ),
+        rule_id=universe.rule_id,
+        rule_version=universe.rule_version,
+        rule_digest=universe.rule_digest,
+    )
+
+    reference, artifact_path, artifact_digest = (
+        _write_continuous_base_sleeve_artifact(
+            PersonalPaperExecutionService(),
+            spec,
+            closure,
+            snapshot=SimpleNamespace(
+                db_path=source,
+                snapshot_id=snapshot_digest,
+                logical_data_snapshot_id=snapshot_digest,
+            ),
+            universe=universe,
+            source_period=source_period,
+            output_root=output_root,
+            cohort_digest=str(cohort_document["cohort_digest"]),
+        )
+    )
+
+    assert artifact_path.is_file()
+    assert artifact_digest == "sha256:" + hashlib.sha256(
+        artifact_path.read_bytes()
+    ).hexdigest()
+    assert artifact_path.name == f"{artifact_digest[7:]}.json"
+    assert reference["archive_member"] == artifact_path.relative_to(
+        output_root
+    ).as_posix()
+    assert reference["candidate_count_contribution"] == 0
+    assert reference["ranking_role"] == "NON_CANDIDATE_NOT_RANKED"
+    document = json.loads(artifact_path.read_text(encoding="utf-8"))
+    validate_personal_base_sleeve_artifact(document)
+    assert document["schema_version"] == PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA
+    assert document["source_run"]["execution_mode"] == "next_close"
+    assert document["source_run"]["stock_one_way_cost_bps"] == 10.0
+    assert document["source_run"]["short_financing_annual_rate"] == 0.03
+    assert document["source_run"]["terminal_positions"] == (
+        "NOT_FORCE_LIQUIDATED_BY_SOURCE_RUN"
+    )
+    assert document["wrapper_entry_cost_applied_to_source"] is False
+    assert document["wrapper_liquidation_cost_applied_to_source"] is False
+    assert document["universe"]["resolved_membership_digest"] == (
+        source_membership.resolved_membership_digest
+    )
+    assert document["universe"]["resolved_membership_digest"] != (
+        universe.resolved_membership_digest
+    )
+    assert document["lifecycle"] == "DRAFT"
+    assert document["go"] is False
+    assert document["automatic_promotion"] is False
+    assert document["live_orders_enabled"] is False
+    assert len(document["daily_path"]) == len(source_membership.decision_memberships)
+    inconsistent = json.loads(json.dumps(document))
+    inconsistent["daily_path"][0]["base_sleeve_return"] += 0.01
+    with pytest.raises(ValueError, match="NAV and return are inconsistent"):
+        validate_personal_base_sleeve_artifact(inconsistent)
+    outside_period = json.loads(json.dumps(document))
+    outside_period["daily_path"][0]["date"] = "2000-01-01"
+    with pytest.raises(ValueError, match="outside its period"):
+        validate_personal_base_sleeve_artifact(outside_period)
+    truncated = json.loads(json.dumps(document))
+    truncated["daily_path"].pop(len(truncated["daily_path"]) // 2)
+    with pytest.raises(ValueError, match="source session count"):
+        validate_personal_base_sleeve_artifact(truncated)
+
+
+def test_exact_four_backtest_budget_adds_only_one_base_source_run(
     personal_db: tuple[Path, str, str], tmp_path: Path
 ) -> None:
     source, start, end = personal_db
     assert PersonalResearchPolicy().validation_folds == 4
     assert 4 * (PersonalResearchPolicy().validation_folds + 2) == 24
-    assert PERSONAL_EXACT_FOUR_MAX_BACKTESTS == 24
+    assert PERSONAL_EXACT_FOUR_MAX_BACKTESTS == 25
     request = PersonalResearchRequest(
         source_db=source,
         period_start=start,
@@ -1266,7 +1389,7 @@ def test_exact_four_backtest_budget_is_hard_capped_at_twenty_four(
         cohort_id="diverse-core-v1",
     )
 
-    with pytest.raises(PersonalResearchInputError, match="24-backtest budget"):
+    with pytest.raises(PersonalResearchInputError, match="25-backtest budget"):
         PersonalResearchService(policy=_policy(validation_folds=5)).run(request)
 
 

@@ -28,6 +28,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
 from datetime import date, timedelta
 from typing import Any, Mapping
 
@@ -45,11 +46,17 @@ from storage.schema import CATALOG_CODE_SQL
 
 from .errors import InvalidDataset
 from .models import PIT_API_VERSION, PitResult
-from .query import _NOT_GIVEN, normalize_as_of, run_query
+from .query import (
+    _NOT_GIVEN,
+    _probe_standalone_typed_adjustment_candidates,
+    normalize_as_of,
+    run_query,
+)
 
 __all__ = [
     "get_equity_master",
     "get_equity_bars_daily",
+    "first_invalid_adjusted_close",
     "get_market_calendar",
     "get_jquants_records",
     "get_jsda_bond_trades",
@@ -535,6 +542,72 @@ def get_equity_bars_daily(
             {"latest_n": latest_n} if latest_n is not None else None
         ),
     )
+
+
+def _valid_adjusted_close(value: Any) -> bool:
+    """Mirror the retrospective engine's accepted adjusted-close domain."""
+
+    if value is None:
+        return False
+    try:
+        price = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(price) and price > 0.0
+
+
+def first_invalid_adjusted_close(
+    as_of: Any = _NOT_GIVEN,
+    *,
+    codes: tuple[str, ...] | list[str] | set[str],
+    from_event: Any = None,
+    to_event: Any = None,
+    db_path: Any = None,
+) -> dict[str, Any] | None:
+    """Return the first invalid adjusted-close row in one PIT-visible window.
+
+    The result is exactly the first offending row that would be encountered
+    by :func:`get_equity_bars_daily` for the same multi-code bounds, ordered by
+    ``(code, date)``, or ``None`` when every visible row has a positive finite
+    numeric ``adjustment_close``.
+
+    Personal snapshots normally contain only the curated typed bar table. For
+    that proven shape, SQLite excludes ordinary valid rows and Python sees
+    only suspicious candidates.  Catalog-backed, revised, or multi-source DB
+    shapes deliberately fall back to the full public PIT read so revision
+    ranking, JSON normalization, and cross-store latest-visible selection are
+    never approximated by this optimization.
+    """
+
+    as_of_iso = normalize_as_of(as_of)
+    requested_codes = tuple(sorted({str(value) for value in codes}))
+    from_date = _date_bound(from_event) if from_event is not None else None
+    to_date = _date_bound(to_event) if to_event is not None else None
+
+    exact, candidates = _probe_standalone_typed_adjustment_candidates(
+        db_path,
+        as_of=as_of_iso,
+        codes=requested_codes,
+        from_event=from_date,
+        to_event=to_date,
+    )
+    if exact:
+        for row in candidates:
+            if not _valid_adjusted_close(row.get("adjustment_close")):
+                return row
+        return None
+
+    result = get_equity_bars_daily(
+        as_of=as_of_iso,
+        codes=requested_codes,
+        from_event=from_date,
+        to_event=to_date,
+        db_path=db_path,
+    )
+    for row in result.rows:
+        if not _valid_adjusted_close(row.get("adjustment_close")):
+            return row
+    return None
 
 
 def get_market_calendar(

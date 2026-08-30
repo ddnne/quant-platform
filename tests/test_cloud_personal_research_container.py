@@ -15,7 +15,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
+from research.personal_base_sleeve import (
+    EXPECTED_BASE_COHORT_DIGEST,
+    EXPECTED_BASE_STRATEGY_SPEC_DIGEST,
+)
+from research.personal_index_vol_overlay import canonical_trading_calendar_digest
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = (
@@ -165,6 +169,8 @@ def _runner_summary(
         "evaluated_count": evaluated_count,
         "hold_count": hold_count,
         "unexpected_errors": unexpected_errors,
+        "base_sleeve_artifact": None,
+        "non_candidate_source_backtest_count": 0,
         "model_calls": 0,
         "estimated_ai_cost_usd": 0.0,
         "go": False,
@@ -172,6 +178,128 @@ def _runner_summary(
         "live_orders_enabled": False,
         "automatic_promotion": False,
     }
+
+
+def _base_sleeve_document(spec) -> dict[str, object]:
+    source_dates = (spec.period_start, "2024-01-04", spec.period_end)
+    return {
+        "schema_version": "personal-base-sleeve-source/v1",
+        "role": "INDEX_VOL_OVERLAY_BASE_SOURCE",
+        "ranking_role": "NON_CANDIDATE_NOT_RANKED",
+        "candidate_count_contribution": 0,
+        "strategy": {
+            "strategy_id": "personal_sector_balanced_four_factor_v1_ls",
+            "strategy_spec_version": "1.0.0",
+            "strategy_spec_digest": EXPECTED_BASE_STRATEGY_SPEC_DIGEST,
+            "dependency_closure_digest": "sha256:" + "6" * 64,
+        },
+        "cohort": {
+            "cohort_id": "sector-relative-ls-v1",
+            "cohort_digest": EXPECTED_BASE_COHORT_DIGEST,
+        },
+        "universe": {
+            "universe_id": "topix_all",
+            "universe_rule_digest": spec.universe_rule_digest,
+            "resolved_membership_digest": "sha256:" + "7" * 64,
+        },
+        "snapshot": {
+            "snapshot_id": "sha256:" + "2" * 64,
+            "logical_data_snapshot_id": "sha256:" + "3" * 64,
+        },
+        "source_run": {
+            "experiment_id": "base-source-experiment",
+            "run_id": "base-source-run",
+            "period": {"start": spec.period_start, "end": spec.period_end},
+            "execution_mode": "next_close",
+            "starting_capital": 1_000_000.0,
+            "stock_one_way_cost_bps": 10.0,
+            "short_financing_annual_rate": 0.03,
+            "short_financing_trace_digest": "sha256:" + "8" * 64,
+            "source_session_count": len(source_dates),
+            "source_session_dates_digest": canonical_trading_calendar_digest(
+                source_dates
+            ),
+            "paper_artifact": "paper/base.json",
+            "risk_artifact": "risk/base.json",
+            "terminal_positions": "NOT_FORCE_LIQUIDATED_BY_SOURCE_RUN",
+        },
+        "return_semantics": (
+            "NET_AFTER_STOCK_EXECUTION_COSTS_AND_SHORT_FINANCING"
+        ),
+        "base_nav_semantics": "CONTINUOUS_PRE_EXISTING_INVESTABLE_NAV",
+        "source_slice_wrapper_cost_semantics": (
+            "EXCLUDES_NAV_WRAPPER_ENTRY_AND_LIQUIDATION"
+        ),
+        "wrapper_entry_cost_applied_to_source": False,
+        "wrapper_liquidation_cost_applied_to_source": False,
+        "daily_path": [
+            {
+                "date": source_dates[0],
+                "equity": 999_000.0,
+                "base_sleeve_return": -0.001,
+            },
+            {
+                "date": source_dates[1],
+                "equity": 1_000_000.0,
+                "base_sleeve_return": 1_000_000.0 / 999_000.0 - 1.0,
+            },
+            {
+                "date": source_dates[2],
+                "equity": 1_001_000.0,
+                "base_sleeve_return": 1_001_000.0 / 1_000_000.0 - 1.0,
+            },
+        ],
+        "performance": {"schema_version": "personal-performance/v1"},
+        "lifecycle": "DRAFT",
+        "ready_snapshot_declared": False,
+        "go": False,
+        "automatic_promotion": False,
+        "live_orders_enabled": False,
+    }
+
+
+def _write_base_sleeve_output(output: Path, spec) -> dict[str, object]:
+    (output / "reports").mkdir(parents=True)
+    (output / "paper").mkdir()
+    (output / "risk").mkdir()
+    (output / "base-sleeve").mkdir()
+    (output / "reports" / "report.json").write_text('{"ok":true}')
+    (output / "reports" / "report.md").write_text("# report")
+    (output / "paper" / "base.json").write_text('{"paper":true}')
+    (output / "risk" / "base.json").write_text('{"risk":true}')
+    artifact_bytes = json.dumps(
+        _base_sleeve_document(spec),
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    artifact_sha = hashlib.sha256(artifact_bytes).hexdigest()
+    archive_member = f"base-sleeve/{artifact_sha}.json"
+    artifact_path = output / archive_member
+    artifact_path.write_bytes(artifact_bytes)
+    summary = _runner_summary(spec)
+    summary.update(
+        {
+            "report_json": str(output / "reports" / "report.json"),
+            "report_markdown": str(output / "reports" / "report.md"),
+            "base_sleeve_artifact": {
+                "schema_version": "personal-base-sleeve-reference/v1",
+                "artifact_schema_version": "personal-base-sleeve-source/v1",
+                "path": str(artifact_path),
+                "archive_member": archive_member,
+                "sha256": f"sha256:{artifact_sha}",
+                "strategy_id": "personal_sector_balanced_four_factor_v1_ls",
+                "cohort_id": "sector-relative-ls-v1",
+                "universe_id": "topix_all",
+                "role": "INDEX_VOL_OVERLAY_BASE_SOURCE",
+                "ranking_role": "NON_CANDIDATE_NOT_RANKED",
+                "candidate_count_contribution": 0,
+            },
+            "non_candidate_source_backtest_count": 1,
+        }
+    )
+    return summary
 
 
 def test_snapshot_digest_mismatch_is_a_durable_failure(tmp_path: Path) -> None:
@@ -545,6 +673,8 @@ print(json.dumps({
   'evaluated_count': 4,
   'hold_count': 0,
   'unexpected_errors': 0,
+  'base_sleeve_artifact': None,
+  'non_candidate_source_backtest_count': 0,
   'model_calls': 0,
   'estimated_ai_cost_usd': 0.0,
   'go': False,
@@ -599,6 +729,127 @@ print(json.dumps({
     assert all(not name.endswith(".sqlite") for name in names)
     assert runner_summary["go"] is False
     assert runner_summary["ready_snapshot_declared"] is False
+    assert not tuple(work.iterdir())
+
+
+def test_base_sleeve_reference_is_independent_of_candidate_evaluation_count(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "fixture.sqlite"
+    sha = _sqlite(source)
+    spec = _redigest(
+        replace(
+            _job(sha, job_id="base-sleeve-independent"),
+            cohort_id="sector-relative-ls-v1",
+            cohort_digest=LONG_SHORT_COHORT_DIGEST,
+        )
+    )
+    output = tmp_path / "output"
+    summary = _write_base_sleeve_output(output, spec)
+    summary["evaluated_count"] = 1
+
+    reference = service._validated_base_sleeve_reference(
+        summary,
+        spec=spec,
+        output_root=output,
+    )
+
+    assert reference is not None
+    assert reference["candidate_count_contribution"] == 0
+
+
+def test_evaluated_long_short_result_requires_base_sleeve_source(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "fixture.sqlite"
+    sha = _sqlite(source)
+    spec = _redigest(
+        replace(
+            _job(sha, job_id="base-sleeve-required"),
+            cohort_id="sector-relative-ls-v1",
+            cohort_digest=LONG_SHORT_COHORT_DIGEST,
+        )
+    )
+    output = tmp_path / "output"
+    output.mkdir()
+    evaluated = _runner_summary(spec, evaluated_count=4, hold_count=0)
+
+    with pytest.raises(RuntimeError, match="requires a base sleeve source"):
+        service._validated_base_sleeve_reference(
+            evaluated,
+            spec=spec,
+            output_root=output,
+        )
+
+    no_analysis = _runner_summary(spec, evaluated_count=0, hold_count=0)
+    assert (
+        service._validated_base_sleeve_reference(
+            no_analysis,
+            spec=spec,
+            output_root=output,
+        )
+        is None
+    )
+
+
+def test_long_short_archive_validates_and_preserves_non_candidate_base_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "fixture.sqlite"
+    sha = _sqlite(source)
+    spec = _redigest(
+        replace(
+            _job(sha, job_id="base-sleeve-source"),
+            cohort_id="sector-relative-ls-v1",
+            cohort_digest=LONG_SHORT_COHORT_DIGEST,
+        )
+    )
+
+    def completed_source_run(args, **_kwargs):
+        output = Path(args[args.index("--output") + 1])
+        summary = _write_base_sleeve_output(output, spec)
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(summary, sort_keys=True) + "\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(service.subprocess, "run", completed_source_run)
+    work = tmp_path / "work"
+    work.mkdir()
+    uploads: list[tuple[str, bytes, str]] = []
+
+    def copy_snapshot(_spec, destination):
+        destination.write_bytes(source.read_bytes())
+
+    manifest = service.execute_job(
+        spec,
+        work_root=work,
+        command=(sys.executable, "unused.py"),
+        downloader=copy_snapshot,
+        uploader=_uploader(uploads),
+    )
+
+    assert manifest["status"] == "COMPLETED"
+    assert manifest["candidate_count"] == 4
+    assert manifest["non_candidate_source_backtest_count"] == 1
+    assert "path" not in manifest["base_sleeve_artifact"]
+    archive_path = tmp_path / "base-sleeve-result.tar.gz"
+    archive_path.write_bytes(uploads[0][1])
+    with tarfile.open(archive_path, "r:gz") as archive:
+        base_members = [
+            name for name in archive.getnames() if name.startswith("base-sleeve/")
+        ]
+        assert len(base_members) == 1
+        runner_summary_file = archive.extractfile("runner-summary.json")
+        assert runner_summary_file is not None
+        runner_summary = json.load(runner_summary_file)
+    assert runner_summary["candidate_count"] == 4
+    assert runner_summary["non_candidate_source_backtest_count"] == 1
+    assert runner_summary["base_sleeve_artifact"]["archive_member"] == (
+        base_members[0]
+    )
+    assert "path" not in runner_summary["base_sleeve_artifact"]
     assert not tuple(work.iterdir())
 
 

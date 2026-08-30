@@ -1,7 +1,7 @@
 import { sha256Hex } from "./sha256";
 
-export const PERSONAL_RESEARCH_RUNNER_VERSION = "personal-cloud-runner/v7";
-export const PERSONAL_RESEARCH_CONTAINER_NAME = "personal-research-v7";
+export const PERSONAL_RESEARCH_RUNNER_VERSION = "personal-cloud-runner/v8";
+export const PERSONAL_RESEARCH_CONTAINER_NAME = "personal-research-v8";
 export const PERSONAL_RESEARCH_MAX_PERIOD_DAYS = 2200;
 export const PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024 * 1024;
 export const PERSONAL_RESEARCH_COHORT_IDS = [

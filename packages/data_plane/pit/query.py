@@ -176,6 +176,16 @@ def _thread_read_scopes() -> dict[str, tuple[sqlite3.Connection, int]]:
     return scopes
 
 
+def _thread_adjustment_probe_shapes() -> dict[str, bool]:
+    """Per-read-scope cache for the immutable personal DB shape probe."""
+
+    shapes = getattr(_READ_SCOPE_STATE, "adjustment_probe_shapes", None)
+    if shapes is None:
+        shapes = {}
+        _READ_SCOPE_STATE.adjustment_probe_shapes = shapes
+    return shapes
+
+
 @contextmanager
 def _readonly_connection_scope(db_path: Any) -> Iterator[None]:
     """Reuse one read-only connection for one explicit synchronous scope.
@@ -196,6 +206,9 @@ def _readonly_connection_scope(db_path: Any) -> Iterator[None]:
     if active is None:
         connection = connect_readonly(Path(key))
         scopes[key] = (connection, 1)
+        # A prior scope for the same pathname must never lend shape authority
+        # to a newly opened SQLite generation.
+        _thread_adjustment_probe_shapes().pop(key, None)
     else:
         connection, depth = active
         scopes[key] = (connection, depth + 1)
@@ -207,6 +220,9 @@ def _readonly_connection_scope(db_path: Any) -> Iterator[None]:
             scopes[key] = (current[0], current[1] - 1)
         elif current is not None:
             scopes.pop(key, None)
+            shapes = getattr(_READ_SCOPE_STATE, "adjustment_probe_shapes", None)
+            if shapes is not None:
+                shapes.pop(key, None)
             try:
                 current[0].rollback()
             finally:
@@ -216,6 +232,10 @@ def _readonly_connection_scope(db_path: Any) -> Iterator[None]:
                     if not scopes:
                         try:
                             del _READ_SCOPE_STATE.connections
+                        except AttributeError:
+                            pass
+                        try:
+                            del _READ_SCOPE_STATE.adjustment_probe_shapes
                         except AttributeError:
                             pass
 
@@ -354,6 +374,149 @@ def run_query(
             bound.append(limit)
         cur = conn.execute(sql, bound)
         return [_decode_row(r) for r in cur.fetchall()]
+    finally:
+        try:
+            conn.rollback()
+        finally:
+            if close_connection:
+                conn.close()
+
+
+def _probe_standalone_typed_adjustment_candidates(
+    db_path: Any,
+    *,
+    as_of: str,
+    codes: tuple[str, ...],
+    from_event: str | None,
+    to_event: str | None,
+) -> tuple[bool, list[dict[str, Any]]]:
+    """Return narrow typed-bar candidates when that result is provably exact.
+
+    ``get_equity_bars_daily`` merges the curated table, its revision history,
+    and the generic catalog partition.  Pushing an invalid-value predicate
+    below either revision ranking or that cross-store merge can resurrect an
+    older invalid value that the public PIT result has superseded.  The fast
+    path is therefore deliberately limited to the common personal-snapshot
+    shape: one ``jquants`` curated table, no bar revisions, and no generic
+    ``equities_bars_daily`` rows.  The caller must use the public full read
+    whenever ``exact`` is false.
+
+    Candidate classification is intentionally broad.  SQLite values with a
+    non-numeric storage class are returned for Python to apply the canonical
+    ``float`` semantics (for example a numeric-looking TEXT/BLOB may still be
+    valid).  Ordinary positive finite REAL/INTEGER rows never leave SQLite.
+    Shape checks and the candidate read share one read transaction.
+    """
+
+    key = _read_scope_key(db_path)
+    conn = _scoped_read_connection(db_path)
+    scoped_connection = conn is not None
+    close_connection = conn is None
+    if conn is None:
+        conn = connect_readonly(db_path)
+    try:
+        cached_shape = None
+        if scoped_connection:
+            cached_shape = _thread_adjustment_probe_shapes().get(key)
+            if cached_shape is False:
+                return False, []
+        conn.execute("BEGIN")
+
+        def _table_exists(table: str) -> bool:
+            return (
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                    (table,),
+                ).fetchone()
+                is not None
+            )
+
+        # Any revision changes where the invalid predicate must be applied:
+        # after visible-version ranking, not before it.  Preserve the existing
+        # public API exactly by declining the optimization for that DB shape.
+        if cached_shape is None:
+            shape_exact = True
+            if _table_exists("jquants_daily_bars_revisions") and (
+                conn.execute(
+                    "SELECT 1 FROM jquants_daily_bars_revisions LIMIT 1"
+                ).fetchone()
+                is not None
+            ):
+                shape_exact = False
+
+            # Generic bar rows participate in a second revision-aware merge
+            # and are normalized from JSON in Python. SQL JSON coercion is not
+            # a proven substitute, so any such partition forces fallback.
+            if shape_exact:
+                for table in ("jquants_records", "jquants_records_revisions"):
+                    if _table_exists(table) and (
+                        conn.execute(
+                            f"SELECT 1 FROM {table} WHERE dataset=? LIMIT 1",
+                            ("equities_bars_daily",),
+                        ).fetchone()
+                        is not None
+                    ):
+                        shape_exact = False
+                        break
+
+            # Ascending/descending PK-index edge probes are O(1) and detect
+            # both a non-jquants source and a nullable-source compatibility
+            # schema without scanning a canonical all-jquants table.
+            if shape_exact:
+                source_edges = [
+                    conn.execute(
+                        "SELECT source FROM jquants_daily_bars "
+                        f"ORDER BY source {direction} LIMIT 1"
+                    ).fetchone()
+                    for direction in ("ASC", "DESC")
+                ]
+                if any(
+                    row is not None and row[0] != "jquants"
+                    for row in source_edges
+                ):
+                    shape_exact = False
+
+            if scoped_connection:
+                _thread_adjustment_probe_shapes()[key] = shape_exact
+            if not shape_exact:
+                return False, []
+
+        where = [
+            "available_at IS NOT NULL",
+            "available_at <= ?",
+            "source = 'jquants'",
+        ]
+        bound: list[Any] = [as_of]
+        if codes:
+            placeholders = ",".join("?" for _ in codes)
+            where.append(f"code IN ({placeholders})")
+            bound.extend(codes)
+        else:
+            where.append("0")
+        if from_event is not None:
+            where.append("date >= ?")
+            bound.append(from_event)
+        if to_event is not None:
+            where.append("date <= ?")
+            bound.append(to_event)
+
+        # This superset contains every value that can fail the canonical
+        # Python check: NULL, non-numeric storage, non-positive, NaN (where
+        # supported), and infinities outside the finite IEEE-754 range.
+        where.append(
+            "(adjustment_close IS NULL "
+            "OR typeof(adjustment_close) NOT IN ('integer','real') "
+            "OR adjustment_close <= 0 "
+            "OR adjustment_close != adjustment_close "
+            "OR adjustment_close > 1.7976931348623157e308)"
+        )
+        cursor = conn.execute(
+            "SELECT * FROM jquants_daily_bars WHERE "
+            + " AND ".join(where)
+            + " ORDER BY code, date",
+            bound,
+        )
+        return True, [_decode_row(row) for row in cursor.fetchall()]
     finally:
         try:
             conn.rollback()
