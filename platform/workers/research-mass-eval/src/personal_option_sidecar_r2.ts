@@ -2,6 +2,7 @@ import { putBytesCreateOnly } from "./http";
 import {
   PERSONAL_OPTION_SIDECAR_AUTHORITY,
   PERSONAL_OPTION_SIDECAR_COHORT_ID,
+  PERSONAL_OPTION_SIDECAR_DATASET,
   PERSONAL_OPTION_SIDECAR_INPUT_SCHEMA,
   PERSONAL_OPTION_SIDECAR_KIND,
   PERSONAL_OPTION_SIDECAR_MANIFEST_SCHEMA,
@@ -9,9 +10,11 @@ import {
   PERSONAL_OPTION_SIDECAR_MAX_INPUT_BYTES,
   PERSONAL_OPTION_SIDECAR_MAX_OBJECT_BYTES,
   PERSONAL_OPTION_SIDECAR_MAX_OUTPUT_BYTES,
+  PERSONAL_OPTION_SIDECAR_OBJECT_SCHEMA,
   PERSONAL_OPTION_SIDECAR_PERIODS,
   PERSONAL_OPTION_SIDECAR_PRODUCER_ID,
   PERSONAL_OPTION_SIDECAR_RUNNER_VERSION,
+  PERSONAL_OPTION_SIDECAR_SOURCE_VERSION,
   PERSONAL_OPTION_SIDECAR_TERMINAL_MAX_BYTES,
   calendarDayFromKey,
   isPersonalOptionSidecarDigest,
@@ -20,6 +23,7 @@ import {
   personalOptionSidecarObjectKey,
   personalOptionSidecarRequestDigest,
   personalOptionSidecarTerminalKey,
+  type OptionSidecarPeriodLock,
   type PersonalOptionSidecarInputManifest,
   type StructuredObjectRef,
 } from "./personal_option_sidecar_producer_contract";
@@ -33,6 +37,41 @@ type Identity = {
   inputDigest: string;
 };
 
+export type OptionSidecarTerminalIdentity = {
+  jobId: string;
+  inputKey: string;
+  inputDigest: string;
+  requestDigest: string;
+};
+
+const SIDECAR_REF_KEYS = [
+  "calendar_digest",
+  "key",
+  "period_end",
+  "period_id",
+  "period_start",
+  "raw_input_digest",
+  "sha256",
+  "size",
+  "year",
+] as const;
+
+const CHILD_KEYS = [
+  "opt225_regime",
+  "period_end",
+  "period_id",
+  "period_start",
+  "schema_version",
+  "year",
+] as const;
+
+const SOURCE_KEYS = [
+  "calendar_digest",
+  "dataset",
+  "raw_input_digest",
+  "version",
+] as const;
+
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
     status,
@@ -42,6 +81,14 @@ function json(value: unknown, status = 200): Response {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function exactKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && keys.every((key) => key in value);
 }
 
 function identity(request: Request): Identity | null {
@@ -228,19 +275,131 @@ function authority(document: Record<string, unknown>): boolean {
   );
 }
 
-async function completedChildrenMatch(
-  env: R2Env,
+export function optionSidecarTerminalIdentityMatches(
+  parsed: Record<string, unknown>,
+  expected: OptionSidecarTerminalIdentity,
+): boolean {
+  return (
+    parsed.schema_version === PERSONAL_OPTION_SIDECAR_MANIFEST_SCHEMA &&
+    parsed.job_id === expected.jobId &&
+    parsed.input_manifest_digest === expected.inputDigest &&
+    parsed.input_manifest_key === expected.inputKey &&
+    parsed.request_digest === expected.requestDigest &&
+    parsed.kind === PERSONAL_OPTION_SIDECAR_KIND &&
+    parsed.producer_id === PERSONAL_OPTION_SIDECAR_PRODUCER_ID &&
+    parsed.cohort_id === PERSONAL_OPTION_SIDECAR_COHORT_ID &&
+    parsed.runner_version === PERSONAL_OPTION_SIDECAR_RUNNER_VERSION &&
+    authority(parsed) &&
+    (parsed.status === "COMPLETED" || parsed.status === "FAILED")
+  );
+}
+
+function childSourceMatches(
+  regime: Record<string, unknown>,
+  expected: {
+    raw_input_digest: string;
+    calendar_digest: string;
+  },
+): boolean {
+  if (!isObject(regime.source) || !exactKeys(regime.source, SOURCE_KEYS)) {
+    return false;
+  }
+  if (
+    typeof regime.dataset === "string" &&
+    regime.dataset !== PERSONAL_OPTION_SIDECAR_DATASET
+  ) {
+    return false;
+  }
+  if (
+    typeof regime.version === "string" &&
+    regime.version !== PERSONAL_OPTION_SIDECAR_SOURCE_VERSION
+  ) {
+    return false;
+  }
+  return (
+    regime.source.dataset === PERSONAL_OPTION_SIDECAR_DATASET &&
+    regime.source.version === PERSONAL_OPTION_SIDECAR_SOURCE_VERSION &&
+    regime.source.raw_input_digest === expected.raw_input_digest &&
+    regime.source.calendar_digest === expected.calendar_digest &&
+    typeof expected.raw_input_digest === "string" &&
+    isPersonalOptionSidecarDigest(expected.raw_input_digest) &&
+    typeof expected.calendar_digest === "string" &&
+    isPersonalOptionSidecarDigest(expected.calendar_digest)
+  );
+}
+
+async function childBodyMatches(
+  bucket: R2Bucket,
+  digest: string,
+  size: number,
+  period: (typeof PERSONAL_OPTION_SIDECAR_PERIODS)[number],
+  locked: OptionSidecarPeriodLock,
+): Promise<boolean> {
+  const key = personalOptionSidecarObjectKey(digest);
+  const object = await bucket.get(key);
+  if (
+    !object ||
+    object.size !== size ||
+    object.size < 1 ||
+    object.size > PERSONAL_OPTION_SIDECAR_MAX_OUTPUT_BYTES
+  ) {
+    return false;
+  }
+  if (object.customMetadata?.sha256 && object.customMetadata.sha256 !== digest) {
+    return false;
+  }
+  if (object.checksums?.sha256 && !checksumMatches(object, digest)) {
+    return false;
+  }
+  const bytes = new Uint8Array(await object.arrayBuffer());
+  if (
+    bytes.byteLength !== size ||
+    `sha256:${await sha256Hex(bytes)}` !== digest
+  ) {
+    return false;
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return false;
+  }
+  if (!isObject(body) || !exactKeys(body, CHILD_KEYS) || !isObject(body.opt225_regime)) {
+    return false;
+  }
+  return (
+    body.schema_version === PERSONAL_OPTION_SIDECAR_OBJECT_SCHEMA &&
+    body.period_id === period.period_id &&
+    body.year === period.year &&
+    body.period_start === period.period_start &&
+    body.period_end === period.period_end &&
+    childSourceMatches(body.opt225_regime, {
+      raw_input_digest: locked.raw_input_digest,
+      calendar_digest: locked.calendar_digest,
+    })
+  );
+}
+
+/** Strict COMPLETE child gate: sequential GET of the three period objects. */
+export async function optionSidecarCompletedChildrenValid(
+  bucket: R2Bucket,
   parsed: Record<string, unknown>,
   manifest: PersonalOptionSidecarInputManifest,
 ): Promise<boolean> {
   if (!isObject(parsed.sidecars)) return false;
   const ids = Object.keys(parsed.sidecars).sort();
-  const expected = PERSONAL_OPTION_SIDECAR_PERIODS.map((period) => period.period_id).sort();
+  const expected = PERSONAL_OPTION_SIDECAR_PERIODS.map(
+    (period) => period.period_id,
+  ).sort();
   if (JSON.stringify(ids) !== JSON.stringify(expected)) return false;
+  const seenKeys = new Set<string>();
+  const seenDigests = new Set<string>();
   for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
     const row = parsed.sidecars[period.period_id];
     const locked = manifest.periods[period.period_id];
-    if (!isObject(row) || !locked) return false;
+    if (!isObject(row) || !locked || !exactKeys(row, SIDECAR_REF_KEYS)) {
+      return false;
+    }
     const digest = row.sha256;
     const size = row.size;
     if (
@@ -260,10 +419,12 @@ async function completedChildrenMatch(
     ) {
       return false;
     }
-    const head = await env.STRUCTURED_BUCKET.head(
-      personalOptionSidecarObjectKey(digest),
-    );
-    if (!head || !headMatches(head, digest, size)) return false;
+    if (seenKeys.has(row.key) || seenDigests.has(digest)) return false;
+    seenKeys.add(row.key);
+    seenDigests.add(digest);
+    if (!(await childBodyMatches(bucket, digest, size, period, locked))) {
+      return false;
+    }
   }
   return true;
 }
@@ -313,23 +474,22 @@ async function putOutput(
       expected.inputDigest,
     );
     if (
-      parsed.schema_version !== PERSONAL_OPTION_SIDECAR_MANIFEST_SCHEMA ||
-      parsed.job_id !== expected.jobId ||
-      parsed.input_manifest_digest !== expected.inputDigest ||
-      parsed.input_manifest_key !== expected.inputKey ||
-      parsed.request_digest !== requestDigest ||
-      parsed.kind !== PERSONAL_OPTION_SIDECAR_KIND ||
-      parsed.producer_id !== PERSONAL_OPTION_SIDECAR_PRODUCER_ID ||
-      parsed.cohort_id !== PERSONAL_OPTION_SIDECAR_COHORT_ID ||
-      parsed.runner_version !== PERSONAL_OPTION_SIDECAR_RUNNER_VERSION ||
-      !authority(parsed) ||
-      (parsed.status !== "COMPLETED" && parsed.status !== "FAILED")
+      !optionSidecarTerminalIdentityMatches(parsed, {
+        jobId: expected.jobId,
+        inputKey: expected.inputKey,
+        inputDigest: expected.inputDigest,
+        requestDigest,
+      })
     ) {
       return json({ error: "option sidecar manifest contract mismatch" }, 400);
     }
     if (
       parsed.status === "COMPLETED" &&
-      !(await completedChildrenMatch(env, parsed, input.manifest))
+      !(await optionSidecarCompletedChildrenValid(
+        env.STRUCTURED_BUCKET,
+        parsed,
+        input.manifest,
+      ))
     ) {
       return json({ error: "option sidecar manifest children mismatch" }, 409);
     }

@@ -50,6 +50,10 @@ import {
   type StructuredDayLock,
   type StructuredObjectRef,
 } from "./personal_option_sidecar_producer_contract";
+import {
+  optionSidecarCompletedChildrenValid,
+  optionSidecarTerminalIdentityMatches,
+} from "./personal_option_sidecar_r2";
 import { sha256Hex } from "./sha256";
 import type { Env } from "./types";
 
@@ -447,19 +451,28 @@ async function storedTerminal(
   }
 }
 
-function matchingClosedTerminal(
+async function existingTerminalAcceptable(
+  bucket: R2Bucket,
   terminal: StoredTerminal,
   request: PersonalOptionSidecarProduceRequest,
-  inputDigest?: string,
-): boolean {
+  locked: { manifest: PersonalOptionSidecarInputManifest; digest: string },
+): Promise<boolean> {
+  const requestDigest = await personalOptionSidecarRequestDigest(
+    request,
+    locked.digest,
+  );
   if (
-    terminal.job_id !== request.job_id ||
-    terminal.producer_id !== PERSONAL_OPTION_SIDECAR_PRODUCER_ID ||
-    terminal.cohort_id !== PERSONAL_OPTION_SIDECAR_COHORT_ID
+    !optionSidecarTerminalIdentityMatches(terminal, {
+      jobId: request.job_id,
+      inputKey: personalOptionSidecarInputKey(request.job_id),
+      inputDigest: locked.digest,
+      requestDigest,
+    })
   ) {
     return false;
   }
-  return inputDigest === undefined || terminal.input_manifest_digest === inputDigest;
+  if (terminal.status !== "COMPLETED") return terminal.status === "FAILED";
+  return optionSidecarCompletedChildrenValid(bucket, terminal, locked.manifest);
 }
 
 function inputMatchesRequest(
@@ -555,7 +568,12 @@ export async function submitPersonalOptionSidecarProduce(
     const locked = await loadLockedInput(env.STRUCTURED_BUCKET, request);
     if (
       !locked ||
-      !matchingClosedTerminal(terminalBeforeAdmission, request, locked.digest)
+      !(await existingTerminalAcceptable(
+        env.STRUCTURED_BUCKET,
+        terminalBeforeAdmission,
+        request,
+        locked,
+      ))
     ) {
       return responseJson(
         { ok: false, error: "job_id_conflict", job_id: request.job_id, go: false },
@@ -623,7 +641,20 @@ export async function submitPersonalOptionSidecarProduce(
   }
   const existing = await storedTerminal(env, request.job_id);
   if (existing) {
-    if (!matchingClosedTerminal(existing, request, inputDigest)) {
+    const lockedForExisting = await loadLockedInput(
+      env.STRUCTURED_BUCKET,
+      request,
+    );
+    if (
+      !lockedForExisting ||
+      lockedForExisting.digest !== inputDigest ||
+      !(await existingTerminalAcceptable(
+        env.STRUCTURED_BUCKET,
+        existing,
+        request,
+        lockedForExisting,
+      ))
+    ) {
       return responseJson(
         { ok: false, error: "job_id_conflict", job_id: request.job_id, go: false },
         409,

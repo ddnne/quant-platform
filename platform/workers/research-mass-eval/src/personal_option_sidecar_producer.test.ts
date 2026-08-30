@@ -7,6 +7,7 @@ import {
 } from "./personal_research_contract";
 import { serializedJsonBytes } from "./http";
 import {
+  PERSONAL_OPTION_SIDECAR_AUTHORITY,
   PERSONAL_OPTION_SIDECAR_CALENDAR_ROOT,
   PERSONAL_OPTION_SIDECAR_COHORT_ID,
   PERSONAL_OPTION_SIDECAR_DATASET,
@@ -24,16 +25,21 @@ import {
   PERSONAL_OPTION_SIDECAR_MAX_OPTIONS_BYTES,
   PERSONAL_OPTION_SIDECAR_MAX_OPTIONS_OBJECTS,
   PERSONAL_OPTION_SIDECAR_MAX_OPTIONS_ROWS,
+  PERSONAL_OPTION_SIDECAR_MANIFEST_SCHEMA,
+  PERSONAL_OPTION_SIDECAR_OBJECT_SCHEMA,
   PERSONAL_OPTION_SIDECAR_OPTIONS_ROOT,
   PERSONAL_OPTION_SIDECAR_PERIODS,
   PERSONAL_OPTION_SIDECAR_PRODUCER_ID,
   PERSONAL_OPTION_SIDECAR_RECORDS_SCHEMA,
+  PERSONAL_OPTION_SIDECAR_SOURCE_VERSION,
   addIsoDays,
   calendarRootPrefix,
   isoDaysInclusive,
   monthStartDay,
   parsePersonalOptionSidecarProduceRequest,
   personalOptionSidecarInputKey,
+  personalOptionSidecarObjectKey,
+  personalOptionSidecarRequestDigest,
   personalOptionSidecarTerminalKey,
   samplePinnedDates,
   splitFrozenSessions,
@@ -284,6 +290,73 @@ async function seedPeriod(
 }
 
 const REQUEST = { job_id: "sidecar-one" };
+
+function validChild(
+  period: (typeof PERSONAL_OPTION_SIDECAR_PERIODS)[number],
+  locked: { raw_input_digest: string; calendar_digest: string },
+) {
+  return {
+    schema_version: PERSONAL_OPTION_SIDECAR_OBJECT_SCHEMA,
+    period_id: period.period_id,
+    year: period.year,
+    period_start: period.period_start,
+    period_end: period.period_end,
+    opt225_regime: {
+      source: {
+        dataset: PERSONAL_OPTION_SIDECAR_DATASET,
+        version: PERSONAL_OPTION_SIDECAR_SOURCE_VERSION,
+        raw_input_digest: locked.raw_input_digest,
+        calendar_digest: locked.calendar_digest,
+      },
+    },
+  };
+}
+
+async function seedCompletedSidecar(
+  mem: MemoryR2,
+  input: Awaited<ReturnType<typeof buildPersonalOptionSidecarInputManifest>>,
+) {
+  const inputKey = personalOptionSidecarInputKey(REQUEST.job_id);
+  const stored = mem.values.get(inputKey);
+  if (!stored) throw new Error("input manifest must be seeded first");
+  const inputDigest = `sha256:${await sha256Hex(stored.bytes)}`;
+  const sidecars: Record<string, Record<string, unknown>> = {};
+  for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
+    const locked = input.periods[period.period_id];
+    const child = validChild(period, locked);
+    const bytes = new TextEncoder().encode(JSON.stringify(child));
+    const digest = `sha256:${await sha256Hex(bytes)}`;
+    const key = personalOptionSidecarObjectKey(digest);
+    mem.seed(key, bytes);
+    sidecars[period.period_id] = {
+      period_id: period.period_id,
+      year: period.year,
+      period_start: period.period_start,
+      period_end: period.period_end,
+      key,
+      sha256: digest,
+      size: bytes.byteLength,
+      raw_input_digest: locked.raw_input_digest,
+      calendar_digest: locked.calendar_digest,
+    };
+  }
+  const terminal = {
+    schema_version: PERSONAL_OPTION_SIDECAR_MANIFEST_SCHEMA,
+    status: "COMPLETED",
+    kind: PERSONAL_OPTION_SIDECAR_KIND,
+    producer_id: PERSONAL_OPTION_SIDECAR_PRODUCER_ID,
+    job_id: REQUEST.job_id,
+    cohort_id: PERSONAL_OPTION_SIDECAR_COHORT_ID,
+    runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
+    request_digest: await personalOptionSidecarRequestDigest(REQUEST, inputDigest),
+    input_manifest_key: inputKey,
+    input_manifest_digest: inputDigest,
+    sidecars,
+    ...PERSONAL_OPTION_SIDECAR_AUTHORITY,
+  };
+  mem.seed(personalOptionSidecarTerminalKey(REQUEST.job_id), terminal);
+  return { terminal, inputDigest };
+}
 
 describe("frozen option sidecar calendar closure", () => {
   it("pins 61 predecessor sessions and the frozen evaluation counts", () => {
@@ -541,7 +614,7 @@ describe("option sidecar admission", () => {
     });
   });
 
-  it("is idempotent for a matching terminal", async () => {
+  it("rejects a skeletal fake COMPLETE terminal without valid children", async () => {
     const mem = new MemoryR2();
     for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
       await seedPeriod(mem, period);
@@ -564,8 +637,70 @@ describe("option sidecar admission", () => {
       { STRUCTURED_BUCKET: mem.asBucket() } as Env,
       REQUEST,
     );
+    expect(again.status).toBe(409);
+    expect(await again.json()).toMatchObject({
+      ok: false,
+      error: "job_id_conflict",
+      go: false,
+    });
+  });
+
+  it("is idempotent for a matching COMPLETE terminal after revalidating children", async () => {
+    const mem = new MemoryR2();
+    for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
+      await seedPeriod(mem, period);
+    }
+    const input = await buildPersonalOptionSidecarInputManifest(
+      mem.asBucket(),
+      REQUEST,
+    );
+    const inputKey = personalOptionSidecarInputKey(REQUEST.job_id);
+    mem.seed(inputKey, input);
+    const { terminal } = await seedCompletedSidecar(mem, input);
+    const again = await submitPersonalOptionSidecarProduce(
+      { STRUCTURED_BUCKET: mem.asBucket() } as Env,
+      REQUEST,
+    );
     expect(again.status).toBe(200);
-    expect(await again.json()).toMatchObject({ ok: true, idempotent: true });
+    expect(await again.json()).toMatchObject({
+      ok: true,
+      idempotent: true,
+      go: false,
+      job: { status: "COMPLETED", request_digest: terminal.request_digest },
+    });
+  });
+
+  it("rejects an existing COMPLETE terminal that reuses one child for all periods", async () => {
+    const mem = new MemoryR2();
+    for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
+      await seedPeriod(mem, period);
+    }
+    const input = await buildPersonalOptionSidecarInputManifest(
+      mem.asBucket(),
+      REQUEST,
+    );
+    mem.seed(personalOptionSidecarInputKey(REQUEST.job_id), input);
+    const { terminal } = await seedCompletedSidecar(mem, input);
+    const first = terminal.sidecars.y2021_full;
+    for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
+      terminal.sidecars[period.period_id] = {
+        ...terminal.sidecars[period.period_id],
+        key: first.key,
+        sha256: first.sha256,
+        size: first.size,
+      };
+    }
+    mem.seed(personalOptionSidecarTerminalKey(REQUEST.job_id), terminal);
+    const again = await submitPersonalOptionSidecarProduce(
+      { STRUCTURED_BUCKET: mem.asBucket() } as Env,
+      REQUEST,
+    );
+    expect(again.status).toBe(409);
+    expect(await again.json()).toMatchObject({
+      ok: false,
+      error: "job_id_conflict",
+      go: false,
+    });
   });
 });
 
