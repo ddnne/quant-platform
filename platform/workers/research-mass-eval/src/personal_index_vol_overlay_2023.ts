@@ -771,6 +771,7 @@ export async function submitPersonalIndexVolOverlay2023(
       jobId: request.job_id,
       requestDigest,
       kind: "overlay",
+      cohortId: request.cohort_id,
       deploymentId: env.CF_VERSION_METADATA?.id ?? "unknown",
       runnerVersion: personalIndexOverlayFamilyRunnerVersion(request.cohort_id),
     }),

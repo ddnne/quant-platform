@@ -9,7 +9,16 @@ import {
 } from "./personal_job_state";
 import { PERSONAL_RESEARCH_RUNNER_VERSION } from "./personal_research_contract";
 import { PERSONAL_SVI_2023_RUNNER_VERSION } from "./personal_svi_2023_contract";
-import { PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION } from "./personal_index_vol_overlay_2023_contract";
+import {
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_COHORT_ID,
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_RUNNER_VERSION,
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID,
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_RUNNER_VERSION,
+  PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID,
+  PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_RUNNER_VERSION,
+  PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID,
+  PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION,
+} from "./personal_index_vol_overlay_2023_contract";
 import { PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION } from "./personal_vol_am_pm_panel_writer_contract";
 import { PERSONAL_OPTION_SIDECAR_RUNNER_VERSION } from "./personal_option_sidecar_producer_contract";
 import type { Env } from "./types";
@@ -132,6 +141,19 @@ describe("durable personal job state", () => {
         runnerVersion: PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION,
       }).runner_version,
     ).toBe(PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION);
+    expect(
+      submittedStateDocument({
+        jobId: "overlay-am-pm-one",
+        requestDigest: DIGEST_A,
+        kind: "overlay",
+        cohortId: PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID,
+        deploymentId: "deploy-1",
+        runnerVersion: PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_RUNNER_VERSION,
+      }),
+    ).toMatchObject({
+      runner_version: PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_RUNNER_VERSION,
+      cohort_id: PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID,
+    });
     expect(
       submittedStateDocument({
         jobId: "research-one",
@@ -273,6 +295,157 @@ describe("durable personal job state", () => {
         kind: "option-sidecar",
       },
     });
+  });
+
+  it("reads completed AM/PM overlay terminals from their exact family paths", async () => {
+    const mem = new MemoryR2();
+    const env = mem.asEnv();
+    for (const [jobId, cohortId] of [
+      [
+        "overlay-am-pm-complete",
+        PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID,
+      ],
+      [
+        "smile-am-pm-complete",
+        PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_COHORT_ID,
+      ],
+    ] as const) {
+      mem.seed(personalJobTerminalKey("overlay", jobId, cohortId), {
+        job_id: jobId,
+        cohort_id: cohortId,
+        request_digest: DIGEST_A,
+        status: "COMPLETED",
+      });
+      const response = await durablePersonalJobStatus(env, "overlay", jobId);
+      expect(await response.json()).toMatchObject({
+        ok: true,
+        durable: true,
+        job: { job_id: jobId, cohort_id: cohortId, status: "COMPLETED" },
+      });
+    }
+  });
+
+  it("finalizes an expired AM/PM overlay in its exact family path", async () => {
+    const mem = new MemoryR2();
+    const env = mem.asEnv();
+    const jobId = "overlay-am-pm-expired";
+    const cohortId = PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID;
+    mem.seed(personalJobStateKey("overlay", jobId), {
+      job_id: jobId,
+      request_digest: DIGEST_A,
+      kind: "overlay",
+      cohort_id: cohortId,
+      status: "SUBMITTED",
+      submitted_at: "2026-08-30T00:00:00.000Z",
+      expires_at: "2026-08-30T00:01:00.000Z",
+      runner_version: PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_RUNNER_VERSION,
+      deployment_id: "deploy-1",
+    });
+    const response = await durablePersonalJobStatus(
+      env,
+      "overlay",
+      jobId,
+      new Date("2026-08-30T03:01:00.000Z"),
+    );
+    expect(await response.json()).toMatchObject({
+      ok: false,
+      durable: true,
+      job: {
+        status: "FAILED",
+        schema_version: "personal-index-vol-overlay-am-pm-manifest/v1",
+        cohort_id: cohortId,
+      },
+    });
+    expect(
+      await mem.get(personalJobTerminalKey("overlay", jobId, cohortId)),
+    ).not.toBeNull();
+    expect(await mem.get(personalJobTerminalKey("overlay", jobId))).toBeNull();
+  });
+
+  it("recovers all four overlay families from pre-cohort runner state", async () => {
+    for (const [slug, cohortId, runnerVersion, schemaVersion] of [
+      [
+        "legacy-vol",
+        PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID,
+        PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION,
+        "personal-index-vol-overlay-manifest/v1",
+      ],
+      [
+        "legacy-smile",
+        PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID,
+        PERSONAL_INDEX_SMILE_TRANSPORT_2023_RUNNER_VERSION,
+        "personal-index-smile-transport-manifest/v2",
+      ],
+      [
+        "am-pm-vol",
+        PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID,
+        PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_RUNNER_VERSION,
+        "personal-index-vol-overlay-am-pm-manifest/v1",
+      ],
+      [
+        "am-pm-smile",
+        PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_COHORT_ID,
+        PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_RUNNER_VERSION,
+        "personal-index-smile-transport-am-pm-manifest/v1",
+      ],
+    ] as const) {
+      const mem = new MemoryR2();
+      const env = mem.asEnv();
+      const jobId = `overlay-expired-${slug}`;
+      mem.seed(personalJobStateKey("overlay", jobId), {
+        job_id: jobId,
+        request_digest: DIGEST_A,
+        kind: "overlay",
+        status: "SUBMITTED",
+        submitted_at: "2026-08-30T00:00:00.000Z",
+        expires_at: "2026-08-30T00:01:00.000Z",
+        runner_version: runnerVersion,
+        deployment_id: "deploy-1",
+      });
+      const response = await durablePersonalJobStatus(
+        env,
+        "overlay",
+        jobId,
+        new Date("2026-08-30T03:01:00.000Z"),
+      );
+      expect(await response.json()).toMatchObject({
+        job: {
+          status: "FAILED",
+          schema_version: schemaVersion,
+          cohort_id: cohortId,
+        },
+      });
+      expect(
+        await mem.get(personalJobTerminalKey("overlay", jobId, cohortId)),
+      ).not.toBeNull();
+    }
+  });
+
+  it("keeps the generic timeout shape when an old overlay family is unknowable", async () => {
+    const mem = new MemoryR2();
+    const env = mem.asEnv();
+    const jobId = "overlay-expired-unknown-runner";
+    mem.seed(personalJobStateKey("overlay", jobId), {
+      job_id: jobId,
+      request_digest: DIGEST_A,
+      kind: "overlay",
+      status: "SUBMITTED",
+      submitted_at: "2026-08-30T00:00:00.000Z",
+      expires_at: "2026-08-30T00:01:00.000Z",
+      runner_version: "unknown-overlay-runner/v0",
+      deployment_id: "deploy-1",
+    });
+    const response = await durablePersonalJobStatus(
+      env,
+      "overlay",
+      jobId,
+      new Date("2026-08-30T03:01:00.000Z"),
+    );
+    const body = (await response.json()) as { job: Record<string, unknown> };
+    expect(body.job).toMatchObject({ status: "FAILED" });
+    expect(body.job).not.toHaveProperty("schema_version");
+    expect(body.job).not.toHaveProperty("cohort_id");
+    expect(await mem.get(personalJobTerminalKey("overlay", jobId))).not.toBeNull();
   });
 
   it("does not overwrite an existing terminal when expiry races with completion", async () => {
