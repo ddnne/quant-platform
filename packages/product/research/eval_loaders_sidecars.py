@@ -32,7 +32,7 @@ from research.eval_loaders import (
     _period_year,
 )
 from research.eval_universe import DEFAULT_SQLITE
-from research.unique_logic.constants import (
+from research.fins_summary_keys import (
     FINS_SUMMARY_EQ_KEY,
     FINS_SUMMARY_EQAR_KEY,
     FINS_SUMMARY_OFFICIAL_KEYS,

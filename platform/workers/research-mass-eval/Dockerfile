@@ -14,7 +14,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 COPY pyproject.toml uv.lock README.md qp_paths.py qp_ofd_continuity.py ./
 COPY packages ./packages
 COPY specs ./specs
-COPY artifacts/replay/legacy_strategy_catalog ./artifacts/replay/legacy_strategy_catalog
 COPY scripts/qp-research ./scripts/qp-research
 COPY platform/workers/research-mass-eval/container ./platform/workers/research-mass-eval/container
 

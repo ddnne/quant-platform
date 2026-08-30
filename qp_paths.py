@@ -10,31 +10,43 @@ import os
 from pathlib import Path
 
 _CACHED: Path | None = None
+_CACHED_ENV_STATE: tuple[bool, str | None] | None = None
 _REPO_ROOT_ENV = "QP_REPO_ROOT"
+
+
+def _env_state() -> tuple[bool, str | None]:
+    if _REPO_ROOT_ENV in os.environ:
+        return (True, os.environ[_REPO_ROOT_ENV])
+    return (False, None)
 
 
 def repo_root() -> Path:
     """Return the quant-platform repository root.
 
-    ``QP_REPO_ROOT``, when set, is fail-closed: the resolved path must contain
-    ``pyproject.toml`` and runtime layout (``packages/``). ``tests/`` is not
+    ``QP_REPO_ROOT``, when set, is fail-closed and preferred over any cached
+    discovery. The resolved path must contain ``pyproject.toml``,
+    ``qp_paths.py``, and ``packages/product/research``. ``tests/`` is not
     required. An invalid explicit value is never ignored.
 
     When the environment variable is unset, walk from this file and then CWD
-    for a checkout that has ``pyproject.toml`` and ``tests/``.
+    for a checkout that has ``pyproject.toml`` and ``tests/``. Cache is reused
+    only while the env presence and raw value stay the same.
     """
-    global _CACHED
-    if _CACHED is not None:
+    global _CACHED, _CACHED_ENV_STATE
+    state = _env_state()
+    if _CACHED is not None and _CACHED_ENV_STATE == state:
         return _CACHED
-    if _REPO_ROOT_ENV in os.environ:
-        _CACHED = _explicit_repo_root(os.environ[_REPO_ROOT_ENV])
-        return _CACHED
-    discovered = _discover_checkout_root()
-    if discovered is None:
-        raise RuntimeError(
-            "quant-platform repo root not found (no pyproject.toml + tests/)"
-        )
-    _CACHED = discovered
+    if state[0]:
+        root = _explicit_repo_root(os.environ[_REPO_ROOT_ENV])
+    else:
+        discovered = _discover_checkout_root()
+        if discovered is None:
+            raise RuntimeError(
+                "quant-platform repo root not found (no pyproject.toml + tests/)"
+            )
+        root = discovered
+    _CACHED = root
+    _CACHED_ENV_STATE = state
     return _CACHED
 
 
@@ -59,8 +71,10 @@ def _runtime_root_errors(root: Path) -> list[str]:
         return errors
     if not (root / "pyproject.toml").is_file():
         errors.append("missing pyproject.toml")
-    if not (root / "packages").is_dir():
-        errors.append("missing packages/")
+    if not (root / "qp_paths.py").is_file():
+        errors.append("missing qp_paths.py")
+    if not (root / "packages" / "product" / "research").is_dir():
+        errors.append("missing packages/product/research")
     return errors
 
 
