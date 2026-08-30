@@ -18,6 +18,7 @@ from typing import Any, BinaryIO, Callable, Mapping, Sequence
 
 from research.options_225_smile_features import (
     OPTIONS_225_SMILE_FEATURE_VERSION,
+    OPTIONS_225_SMILE_SOURCE_DATASET_ID,
     build_daily_options_225_smile_features,
 )
 from research.personal_metrics import summarize_performance
@@ -467,7 +468,9 @@ def build_feature_sidecar(
     for day_entry in options["days"]:
         day = str(day_entry["date"])
         day_rows, audit = load_one_options_day(spec, day_entry, opener=opener)
-        built = build_daily_options_225_smile_features(day_rows)
+        built = build_daily_options_225_smile_features(
+            day_rows, dataset_id=OPTIONS_225_SMILE_SOURCE_DATASET_ID
+        )
         matching = [row for row in built if row.get("date") == day]
         if len(matching) == 1:
             feature = dict(matching[0])
