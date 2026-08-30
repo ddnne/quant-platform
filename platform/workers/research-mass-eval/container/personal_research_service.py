@@ -51,6 +51,11 @@ from personal_vol_am_pm_panel_job import (
     VolPanelJobInputError,
     execute_vol_am_pm_panel_job,
 )
+from personal_option_sidecar_job import (
+    OptionSidecarJobInputError,
+    PersonalOptionSidecarJobSpec,
+    execute_option_sidecar_job,
+)
 from ingestion.personal_history import (
     PERSONAL_COMPLETENESS_CLAIM,
     PERSONAL_CONTROLLED_ELIGIBILITY,
@@ -87,7 +92,7 @@ from research.personal_base_sleeve import (
     validate_personal_base_sleeve_artifact,
 )
 
-RUNNER_VERSION = "personal-cloud-runner/v13"
+RUNNER_VERSION = "personal-cloud-runner/v14"
 SNAPSHOT_MAX_DATABASE_BYTES = 3_758_096_384
 SNAPSHOT_MINIMUM_FREE_BYTES = 256 * 1024 * 1024
 R2_ORIGIN = "http://research.r2"
@@ -809,6 +814,8 @@ def _job_kind(spec: Any) -> str:
         return "overlay"
     if isinstance(spec, PersonalVolAmPmPanelJobSpec):
         return "vol-panel"
+    if isinstance(spec, PersonalOptionSidecarJobSpec):
+        return "option-sidecar"
     return "research"
 
 
@@ -828,6 +835,7 @@ def _terminal_get_headers(spec: Any) -> dict[str, str]:
             PersonalSvi2023JobSpec,
             PersonalIndexVolOverlay2023JobSpec,
             PersonalVolAmPmPanelJobSpec,
+            PersonalOptionSidecarJobSpec,
         ),
     ):
         headers["x-personal-cohort-id"] = spec.cohort_id
@@ -851,6 +859,9 @@ def _terminal_body_matches_spec(spec: Any, document: Mapping[str, Any]) -> bool:
         if document.get("cohort_id") != spec.cohort_id:
             return False
     if isinstance(spec, PersonalVolAmPmPanelJobSpec):
+        if document.get("cohort_id") != spec.cohort_id:
+            return False
+    if isinstance(spec, PersonalOptionSidecarJobSpec):
         if document.get("cohort_id") != spec.cohort_id:
             return False
     if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):
@@ -1487,6 +1498,7 @@ JobSpecLike = (
     | PersonalSvi2023JobSpec
     | PersonalIndexVolOverlay2023JobSpec
     | PersonalVolAmPmPanelJobSpec
+    | PersonalOptionSidecarJobSpec
 )
 Runner = Callable[[JobSpecLike], dict[str, Any]]
 TerminalCallback = Callable[[], None]
@@ -1619,6 +1631,28 @@ class JobManager:
                 "schema_version": "personal-vol-ratio-am-pm-panel-writer-manifest/v1",
                 "status": "FAILED",
                 "kind": "vol-panel",
+                "producer_id": spec.producer_id,
+                "job_id": spec.job_id,
+                "cohort_id": spec.cohort_id,
+                "runner_version": spec.runner_version,
+                "request_digest": spec.request_digest,
+                "input_manifest_key": spec.input_manifest_key,
+                "input_manifest_digest": spec.input_manifest_digest,
+                "error": error,
+                "draft_only": True,
+                "screening_only": True,
+                "ready": False,
+                "mass": False,
+                "promotion": False,
+                "live_orders": False,
+                "go": False,
+                "not_a_pass": True,
+            }
+        if isinstance(spec, PersonalOptionSidecarJobSpec):
+            return {
+                "schema_version": "personal-n225-option-sidecar-manifest/v1",
+                "status": "FAILED",
+                "kind": "option-sidecar",
                 "producer_id": spec.producer_id,
                 "job_id": spec.job_id,
                 "cohort_id": spec.cohort_id,
@@ -1896,6 +1930,8 @@ def default_runner(spec: JobSpecLike) -> dict[str, Any]:
         return execute_svi_job(spec)
     if isinstance(spec, PersonalVolAmPmPanelJobSpec):
         return execute_vol_am_pm_panel_job(spec)
+    if isinstance(spec, PersonalOptionSidecarJobSpec):
+        return execute_option_sidecar_job(spec)
     work_root = Path(os.environ.get("QP_JOB_ROOT", "/tmp/personal-research"))
     work_root.mkdir(parents=True, exist_ok=True)
     command = tuple(
@@ -1946,6 +1982,7 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
             "/v1/run-index-vol-overlay-2023",
             "/v1/build-snapshot",
             "/v1/build-personal-vol-am-pm-panel",
+            "/v1/produce-option-sidecar",
         }:
             self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
             return
@@ -1963,6 +2000,8 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
                 spec = SnapshotJobSpec.from_document(document)
             elif self.path == "/v1/build-personal-vol-am-pm-panel":
                 spec = PersonalVolAmPmPanelJobSpec.from_document(document)
+            elif self.path == "/v1/produce-option-sidecar":
+                spec = PersonalOptionSidecarJobSpec.from_document(document)
             else:
                 spec = JobSpec.from_document(document)
             record = self.manager.submit(spec)
@@ -1972,6 +2011,7 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
             SviJobInputError,
             OverlayJobInputError,
             VolPanelJobInputError,
+            OptionSidecarJobInputError,
         ) as error:
             self._json({"error": "invalid_job", "detail": str(error)}, HTTPStatus.BAD_REQUEST)
             return

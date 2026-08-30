@@ -1,8 +1,17 @@
 import { putBytesCreateOnly } from "./http";
 import {
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_COHORT_ID,
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_RUNNER_VERSION,
   PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID,
+  PERSONAL_INDEX_SMILE_TRANSPORT_2023_RUNNER_VERSION,
+  PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID,
+  PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_RUNNER_VERSION,
   PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID,
+  PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION,
+  isPersonalIndexOverlayFamilyCohort,
+  personalIndexOverlayFamilyTerminalSchema,
   personalIndexOverlayFamilyTerminalManifestKey,
+  type PersonalIndexVolOverlay2023CohortId,
 } from "./personal_index_vol_overlay_2023_contract";
 import {
   PERSONAL_RESEARCH_RUNNER_VERSION,
@@ -10,11 +19,22 @@ import {
   personalResearchManifestKey,
 } from "./personal_research_contract";
 import { personalSnapshotManifestKey } from "./personal_snapshot_contract";
+import {
+  PERSONAL_OPTION_SIDECAR_KIND,
+  PERSONAL_OPTION_SIDECAR_RUNNER_VERSION,
+  personalOptionSidecarTerminalKey,
+} from "./personal_option_sidecar_producer_contract";
 import { personalVolAmPmPanelBuildTerminalKey } from "./personal_vol_am_pm_panel_writer_contract";
 import { sha256Hex } from "./sha256";
 import type { Env } from "./types";
 
-export type PersonalJobKind = "research" | "snapshot" | "svi" | "overlay" | "vol-panel";
+export type PersonalJobKind =
+  | "research"
+  | "snapshot"
+  | "svi"
+  | "overlay"
+  | "vol-panel"
+  | "option-sidecar";
 
 export const PERSONAL_JOB_TTL_MS = 180 * 60 * 1000;
 const STATE_MAX_BYTES = 8 * 1024;
@@ -24,12 +44,36 @@ export type PersonalJobState = {
   job_id: string;
   request_digest: string;
   kind: PersonalJobKind;
+  cohort_id?: PersonalIndexVolOverlay2023CohortId;
   status: "SUBMITTED";
   submitted_at: string;
   expires_at: string;
   runner_version: string;
   deployment_id: string;
 };
+
+function overlayCohortFromState(
+  document: Pick<PersonalJobState, "cohort_id" | "runner_version">,
+): PersonalIndexVolOverlay2023CohortId | null {
+  if (
+    typeof document.cohort_id === "string" &&
+    isPersonalIndexOverlayFamilyCohort(document.cohort_id)
+  ) {
+    return document.cohort_id;
+  }
+  switch (document.runner_version) {
+    case PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION:
+      return PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID;
+    case PERSONAL_INDEX_SMILE_TRANSPORT_2023_RUNNER_VERSION:
+      return PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID;
+    case PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_RUNNER_VERSION:
+      return PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID;
+    case PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_RUNNER_VERSION:
+      return PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_COHORT_ID;
+    default:
+      return null;
+  }
+}
 
 function responseJson(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
@@ -54,19 +98,31 @@ export function personalJobStateKey(kind: PersonalJobKind, jobId: string): strin
   if (kind === "vol-panel") {
     return `research/personal/vol-ratio-am-pm-v1/panel-builds/job=${jobId}/state.json`;
   }
+  if (kind === PERSONAL_OPTION_SIDECAR_KIND) {
+    return `research/personal/option-sidecar/job=${jobId}/state.json`;
+  }
   return `research/personal/jobs/job=${jobId}/state.json`;
 }
 
-export function personalJobTerminalKey(kind: PersonalJobKind, jobId: string): string {
+export function personalJobTerminalKey(
+  kind: PersonalJobKind,
+  jobId: string,
+  overlayCohortId?: PersonalIndexVolOverlay2023CohortId,
+): string {
   if (kind === "snapshot") return personalSnapshotManifestKey(jobId);
   if (kind === "svi") {
     return `research/personal/svi-2023/job=${jobId}/manifest.json`;
   }
   if (kind === "overlay") {
-    return `research/personal/index-vol-overlay-2023/job=${jobId}/manifest.json`;
+    return overlayCohortId
+      ? personalIndexOverlayFamilyTerminalManifestKey(jobId, overlayCohortId)
+      : `research/personal/index-vol-overlay-2023/job=${jobId}/manifest.json`;
   }
   if (kind === "vol-panel") {
     return personalVolAmPmPanelBuildTerminalKey(jobId);
+  }
+  if (kind === PERSONAL_OPTION_SIDECAR_KIND) {
+    return personalOptionSidecarTerminalKey(jobId);
   }
   return personalResearchManifestKey(jobId);
 }
@@ -112,6 +168,7 @@ export function submittedStateDocument(input: {
   jobId: string;
   requestDigest: string;
   kind: PersonalJobKind;
+  cohortId?: PersonalIndexVolOverlay2023CohortId;
   now?: Date;
   deploymentId: string;
   runnerVersion?: string;
@@ -123,6 +180,7 @@ export function submittedStateDocument(input: {
     job_id: input.jobId,
     request_digest: input.requestDigest,
     kind: input.kind,
+    ...(input.cohortId === undefined ? {} : { cohort_id: input.cohortId }),
     status: "SUBMITTED",
     submitted_at: now.toISOString(),
     expires_at: new Date(now.getTime() + ttlMs).toISOString(),
@@ -160,6 +218,9 @@ export async function writeSubmittedState(
       job_id: document.job_id,
       request_digest: document.request_digest,
       kind: document.kind,
+      ...(document.cohort_id === undefined
+        ? {}
+        : { cohort_id: document.cohort_id }),
     },
   );
   if (put.conflict) {
@@ -220,8 +281,15 @@ export function timeoutFailedTerminal(
     };
   }
   if (document.kind === "overlay") {
+    const cohortId = overlayCohortFromState(document);
     return {
       ...base,
+      ...(cohortId === null
+        ? {}
+        : {
+            schema_version: personalIndexOverlayFamilyTerminalSchema(cohortId),
+            cohort_id: cohortId,
+          }),
       draft_only: true,
       screening_only: true,
       ready: false,
@@ -248,6 +316,23 @@ export function timeoutFailedTerminal(
       not_a_pass: true,
     };
   }
+  if (document.kind === PERSONAL_OPTION_SIDECAR_KIND) {
+    return {
+      ...base,
+      schema_version: "personal-n225-option-sidecar-manifest/v1",
+      kind: PERSONAL_OPTION_SIDECAR_KIND,
+      producer_id: "personal-n225-option-sidecar-producer/v1",
+      cohort_id: "personal-n225-option-sidecar/v1",
+      runner_version: document.runner_version || PERSONAL_OPTION_SIDECAR_RUNNER_VERSION,
+      draft_only: true,
+      screening_only: true,
+      ready: false,
+      mass: false,
+      promotion: false,
+      live_orders: false,
+      not_a_pass: true,
+    };
+  }
   return base;
 }
 
@@ -260,6 +345,8 @@ async function readTerminalDocument(
     for (const cohort of [
       PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID,
       PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID,
+      PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID,
+      PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_COHORT_ID,
     ] as const) {
       const found = await readSmallJson(
         env.STRUCTURED_BUCKET,
@@ -293,13 +380,16 @@ export async function finalizeExpiredFailed(
   if (!state || state.status !== "SUBMITTED") return null;
   const expiresAt = Date.parse(String(state.expires_at ?? ""));
   if (!Number.isFinite(expiresAt) || expiresAt > now.getTime()) return null;
-  const failed = timeoutFailedTerminal(state as unknown as PersonalJobState, {
+  const submitted = state as unknown as PersonalJobState;
+  const failed = timeoutFailedTerminal(submitted, {
     error: "personal job exceeded its durable lifetime without a terminal manifest",
     now,
   });
+  const overlayCohortId =
+    kind === "overlay" ? overlayCohortFromState(submitted) : null;
   await putCreateOnlyJson(
     env.STRUCTURED_BUCKET,
-    personalJobTerminalKey(kind, jobId),
+    personalJobTerminalKey(kind, jobId, overlayCohortId ?? undefined),
     failed,
     {
       plane: kind === "snapshot" ? "personal_snapshot" : "personal_research",

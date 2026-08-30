@@ -41,6 +41,10 @@ HISTORY_SOURCE_FIXED_HEADERS = MappingProxyType(
     }
 )
 _MAX_PAGES_PER_MONTH = 8192
+_MAX_POST_ATTEMPTS = 4
+_RETRY_AFTER_MIN_S = 1
+_RETRY_AFTER_MAX_S = 120
+_RETRY_AFTER_SECONDS_RE = __import__("re").compile(r"^[0-9]+$")
 # 20 GiB Container disk: 3.5 GiB sqlite + ~3.5 GiB gzip + 256 MiB reserve.
 # Keep the ephemeral spool under 8 GiB so a full snapshot still fits.
 MAX_SPOOL_PAGES = 32_768
@@ -114,6 +118,37 @@ def closed_history_source_headers(*, content_length: int, host: str) -> dict[str
         "content-length": str(content_length),
         "host": host,
     }
+
+
+def _header_get(headers: Any, name: str) -> str | None:
+    getter = getattr(headers, "get", None)
+    if not callable(getter):
+        return None
+    value = getter(name)
+    if value is None:
+        value = getter(name.lower())
+    return value if isinstance(value, str) else None
+
+
+def _bounded_retry_after_seconds(headers: Any) -> int | None:
+    raw = _header_get(headers, "Retry-After")
+    if raw is None or _RETRY_AFTER_SECONDS_RE.fullmatch(raw) is None:
+        return None
+    delay = int(raw)
+    if delay < _RETRY_AFTER_MIN_S or delay > _RETRY_AFTER_MAX_S:
+        return None
+    return delay
+
+
+def _close_http_error(error: urllib.error.HTTPError) -> None:
+    try:
+        error.read()
+    except Exception:
+        pass
+    try:
+        error.close()
+    except Exception:
+        pass
 
 
 def build_history_source_request(body: bytes, *, origin: str = HISTORY_SOURCE_ORIGIN) -> urllib.request.Request:
@@ -667,6 +702,8 @@ class PersonalHistorySourceClient:
         spool_path: Path,
         origin: str = HISTORY_SOURCE_ORIGIN,
         opener: Any = None,
+        _sleep: Any = None,
+        _max_attempts: int | None = None,
     ) -> None:
         if environment not in {"production", "staging"}:
             raise PersonalHistoryError("acquisition environment is invalid")
@@ -674,6 +711,8 @@ class PersonalHistorySourceClient:
         self.period_end = period_end
         self.origin = origin.rstrip("/")
         self._opener = opener
+        self._sleep = time.sleep if _sleep is None else _sleep
+        self._max_attempts = _MAX_POST_ATTEMPTS if _max_attempts is None else _max_attempts
         self._registry = acquisition._target_registry()
         self.spool = AcquisitionSpool(spool_path)
         self.fetch_calls = 0
@@ -745,15 +784,29 @@ class PersonalHistorySourceClient:
         ).encode("utf-8")
         request = build_history_source_request(body, origin=self.origin)
         opener = self._opener or urllib.request
-        try:
-            with opener.urlopen(request, timeout=120) as response:
-                raw = response.read()
-                headers = {key.lower(): value for key, value in response.headers.items()}
-                return raw, headers, int(response.status)
-        except urllib.error.HTTPError as error:
-            raise PersonalHistoryError(
-                f"history.source returned HTTP {error.code}"
-            ) from error
+        attempts = self._max_attempts
+        for attempt in range(attempts):
+            try:
+                with opener.urlopen(request, timeout=120) as response:
+                    raw = response.read()
+                    headers = {key.lower(): value for key, value in response.headers.items()}
+                    return raw, headers, int(response.status)
+            except urllib.error.HTTPError as error:
+                code = int(error.code)
+                retry_after = (
+                    _bounded_retry_after_seconds(error.headers) if code == 429 else None
+                )
+                _close_http_error(error)
+                if code != 429:
+                    raise PersonalHistoryError(
+                        f"history.source returned HTTP {code}"
+                    ) from error
+                if retry_after is None or attempt + 1 >= attempts:
+                    raise PersonalHistoryError(
+                        "history.source returned HTTP 429"
+                    ) from error
+                self._sleep(retry_after)
+        raise PersonalHistoryError("history.source returned HTTP 429")
 
     def _refresh_progress(self) -> None:
         pages, size = self.spool.usage()

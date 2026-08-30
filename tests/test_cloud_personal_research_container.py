@@ -1722,13 +1722,23 @@ def test_failed_terminal_put_and_get_404_retries_without_shutdown(monkeypatch) -
         retry_schedule=(0.05, 0.05),
         max_job_seconds=30,
     )
-    manager.submit(_job("a" * 64, "put-fail-get-404"))
-    assert not terminal.wait(0.2)
-    assert fake.puts >= 1
-    assert fake.gets >= 1
-    assert manager._shutdown_notified is False
-    assert manager._pending_terminal is not None
-    assert manager.status("put-fail-get-404")["status"] == "FAILED"
+    try:
+        manager.submit(_job("a" * 64, "put-fail-get-404"))
+        assert not terminal.wait(0.2)
+        assert fake.puts >= 1
+        assert fake.gets >= 1
+        assert manager._shutdown_notified is False
+        assert manager._pending_terminal is not None
+        assert manager.status("put-fail-get-404")["status"] == "FAILED"
+    finally:
+        with manager._lock:
+            manager._shutdown_notified = True
+            retry_timer = manager._retry_timer
+            manager._retry_timer = None
+            manager._pending_terminal = None
+        if retry_timer is not None:
+            retry_timer.cancel()
+            retry_timer.join(timeout=1)
 
 
 def test_unavailable_terminal_upload_does_not_shutdown() -> None:

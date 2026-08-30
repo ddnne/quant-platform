@@ -1,6 +1,6 @@
 import { putJsonCreateOnly, serializedJsonBytes } from "./http";
 import {
-  PERSONAL_RESEARCH_RUNNER_VERSION,
+  isPersonalSnapshotSourceRunnerVersion,
   personalJobContainerName,
 } from "./personal_research_contract";
 import {
@@ -15,7 +15,6 @@ import {
   PERSONAL_VOL_AM_PM_EVALUATION_PERIODS,
   PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
   PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_INPUT_BYTES,
-  PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_LEGACY_PANEL_BYTES,
   PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_SNAPSHOT_MANIFEST_BYTES,
   PERSONAL_VOL_AM_PM_PANEL_BUILD_TERMINAL_MAX_BYTES,
   PERSONAL_VOL_AM_PM_PANEL_TIMEOUT_GRACE_MS,
@@ -26,17 +25,29 @@ import {
   PERSONAL_VOL_AM_PM_REQUIRED_LOOKBACK_SESSIONS,
   PERSONAL_VOL_AM_PM_SELECTION_PERIOD,
   inputManifestMatchesRequest,
-  personalVolAmPmLegacyOptionPanelKey,
   personalVolAmPmPanelBuildInputKey,
   personalVolAmPmPanelBuildRequestDigest,
   personalVolAmPmPanelBuildTerminalKey,
   type ImmutableObjectRef,
-  type OptionSidecarLock,
-  type PersonalVolAmPmEvaluationPeriodId,
   type PersonalVolAmPmPanelBuildRequest,
   type PersonalVolAmPmPanelWriterInputManifest,
   type SnapshotInputLock,
 } from "./personal_vol_am_pm_panel_writer_contract";
+import {
+  PERSONAL_OPTION_SIDECAR_COHORT_ID,
+  PERSONAL_OPTION_SIDECAR_DATASET,
+  PERSONAL_OPTION_SIDECAR_KIND,
+  PERSONAL_OPTION_SIDECAR_MANIFEST_SCHEMA,
+  PERSONAL_OPTION_SIDECAR_MAX_OUTPUT_BYTES,
+  PERSONAL_OPTION_SIDECAR_OBJECT_SCHEMA,
+  PERSONAL_OPTION_SIDECAR_PERIODS,
+  PERSONAL_OPTION_SIDECAR_PRODUCER_ID,
+  PERSONAL_OPTION_SIDECAR_SOURCE_VERSION,
+  PERSONAL_OPTION_SIDECAR_TERMINAL_MAX_BYTES,
+  isPersonalOptionSidecarDigest,
+  personalOptionSidecarObjectKey,
+  personalOptionSidecarTerminalKey,
+} from "./personal_option_sidecar_producer_contract";
 import { sha256Hex } from "./sha256";
 import type { Env } from "./types";
 
@@ -63,16 +74,6 @@ function fail(code: string): never {
 
 function isDigest(value: unknown): value is `sha256:${string}` {
   return typeof value === "string" && DIGEST_RE.test(value);
-}
-
-function hexSha256(bytes: ArrayBuffer): `sha256:${string}` {
-  return `sha256:${[...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
-}
-
-function headDigest(object: R2Object): string | null {
-  if (isDigest(object.customMetadata?.sha256)) return object.customMetadata.sha256;
-  const checksum = object.checksums?.sha256;
-  return checksum ? hexSha256(checksum) : null;
 }
 
 async function boundedManifest(
@@ -154,11 +155,12 @@ async function lockSnapshot(
   }
   if (!isObject(parsed)) fail("vol_am_pm_panel_snapshot_manifest_invalid");
   const lookback = parsed.lookback_sessions;
+  const sourceRunner = parsed.runner_version;
   if (
     parsed.status !== "COMPLETED" ||
     parsed.job_id !== jobId ||
     parsed.format !== "personal-draft-history/v4" ||
-    parsed.runner_version !== PERSONAL_RESEARCH_RUNNER_VERSION ||
+    !isPersonalSnapshotSourceRunnerVersion(sourceRunner) ||
     parsed.period_start !== expected.period_start ||
     parsed.period_end !== expected.period_end ||
     typeof lookback !== "number" ||
@@ -192,33 +194,134 @@ async function lockSnapshot(
     period_end: expected.period_end,
     lookback_sessions: lookback,
     format: "personal-draft-history/v4",
-    runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
+    runner_version: sourceRunner,
     manifest,
     snapshot,
   };
 }
 
-async function lockOptionSidecar(
+async function lockGovernedSidecars(
   bucket: R2Bucket,
-  periodId: PersonalVolAmPmEvaluationPeriodId,
-): Promise<OptionSidecarLock> {
-  const key = personalVolAmPmLegacyOptionPanelKey(periodId);
-  const head = await bucket.head(key);
-  if (!head) fail("vol_am_pm_panel_source_missing");
-  if (
-    head.size < 1 ||
-    head.size > PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_LEGACY_PANEL_BYTES
-  ) {
-    fail("vol_am_pm_panel_source_size_denied");
+  producerJobId: string,
+): Promise<{
+  producer: PersonalVolAmPmPanelWriterInputManifest["sidecar_producer"];
+  option_sidecars: PersonalVolAmPmPanelWriterInputManifest["option_sidecars"];
+}> {
+  const terminalKey = personalOptionSidecarTerminalKey(producerJobId);
+  const loaded = await boundedManifest(
+    bucket,
+    terminalKey,
+    PERSONAL_OPTION_SIDECAR_TERMINAL_MAX_BYTES,
+  );
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(loaded.bytes));
+  } catch {
+    fail("vol_am_pm_panel_sidecar_terminal_invalid_json");
   }
-  const digest = headDigest(head);
-  if (!digest) fail("vol_am_pm_panel_option_sidecar_checksum_missing");
+  if (
+    !isObject(parsed) ||
+    parsed.status !== "COMPLETED" ||
+    parsed.schema_version !== PERSONAL_OPTION_SIDECAR_MANIFEST_SCHEMA ||
+    parsed.kind !== PERSONAL_OPTION_SIDECAR_KIND ||
+    parsed.producer_id !== PERSONAL_OPTION_SIDECAR_PRODUCER_ID ||
+    parsed.cohort_id !== PERSONAL_OPTION_SIDECAR_COHORT_ID ||
+    parsed.job_id !== producerJobId ||
+    !isObject(parsed.sidecars)
+  ) {
+    fail("vol_am_pm_panel_sidecar_terminal_identity_mismatch");
+  }
+  const option_sidecars =
+    {} as PersonalVolAmPmPanelWriterInputManifest["option_sidecars"];
+  const seen = new Set<string>();
+  for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
+    const row = parsed.sidecars[period.period_id];
+    if (
+      !isObject(row) ||
+      row.period_id !== period.period_id ||
+      row.year !== period.year ||
+      row.period_start !== period.period_start ||
+      row.period_end !== period.period_end ||
+      typeof row.key !== "string" ||
+      typeof row.sha256 !== "string" ||
+      !isPersonalOptionSidecarDigest(row.sha256) ||
+      row.key !== personalOptionSidecarObjectKey(row.sha256) ||
+      typeof row.size !== "number" ||
+      !Number.isInteger(row.size) ||
+      row.size < 1 ||
+      row.size > PERSONAL_OPTION_SIDECAR_MAX_OUTPUT_BYTES ||
+      typeof row.raw_input_digest !== "string" ||
+      !isDigest(row.raw_input_digest) ||
+      typeof row.calendar_digest !== "string" ||
+      !isDigest(row.calendar_digest)
+    ) {
+      fail("vol_am_pm_panel_sidecar_ref_invalid");
+    }
+    if (seen.has(row.key) || seen.has(row.sha256)) {
+      fail("vol_am_pm_panel_sidecar_child_reused");
+    }
+    seen.add(row.key);
+    seen.add(row.sha256);
+    const child = await boundedManifest(
+      bucket,
+      row.key,
+      PERSONAL_OPTION_SIDECAR_MAX_OUTPUT_BYTES,
+    );
+    if (child.object.size !== row.size || child.digest !== row.sha256) {
+      fail("vol_am_pm_panel_sidecar_child_mismatch");
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse(new TextDecoder().decode(child.bytes));
+    } catch {
+      fail("vol_am_pm_panel_sidecar_child_invalid_json");
+    }
+    if (!isObject(body) || !isObject(body.opt225_regime) || !isObject(body.opt225_regime.source)) {
+      fail("vol_am_pm_panel_sidecar_child_identity_mismatch");
+    }
+    const source = body.opt225_regime.source;
+    if (
+      body.schema_version !== PERSONAL_OPTION_SIDECAR_OBJECT_SCHEMA ||
+      body.period_id !== period.period_id ||
+      body.year !== period.year ||
+      body.period_start !== period.period_start ||
+      body.period_end !== period.period_end ||
+      source.dataset !== PERSONAL_OPTION_SIDECAR_DATASET ||
+      source.version !== PERSONAL_OPTION_SIDECAR_SOURCE_VERSION ||
+      source.raw_input_digest !== row.raw_input_digest ||
+      source.calendar_digest !== row.calendar_digest
+    ) {
+      fail("vol_am_pm_panel_sidecar_child_period_mismatch");
+    }
+    option_sidecars[period.period_id] = {
+      period_id: period.period_id,
+      year: period.year,
+      period_start: period.period_start,
+      period_end: period.period_end,
+      schema_version: PERSONAL_OPTION_SIDECAR_OBJECT_SCHEMA,
+      source_key: row.key,
+      etag: child.object.etag,
+      size: child.object.size,
+      sha256: row.sha256,
+      source: {
+        dataset: PERSONAL_OPTION_SIDECAR_DATASET,
+        version: PERSONAL_OPTION_SIDECAR_SOURCE_VERSION,
+        raw_input_digest: row.raw_input_digest,
+        calendar_digest: row.calendar_digest,
+      },
+    };
+  }
   return {
-    period_id: periodId,
-    source_key: key,
-    etag: head.etag,
-    size: head.size,
-    sha256: digest,
+    producer: {
+      job_id: producerJobId,
+      terminal: {
+        key: terminalKey,
+        etag: loaded.object.etag,
+        size: loaded.object.size,
+        sha256: loaded.digest,
+      },
+    },
+    option_sidecars,
   };
 }
 
@@ -238,8 +341,6 @@ export async function buildPersonalVolAmPmPanelInputManifest(
     },
   );
   const periods = {} as PersonalVolAmPmPanelWriterInputManifest["periods"];
-  const option_sidecars =
-    {} as PersonalVolAmPmPanelWriterInputManifest["option_sidecars"];
   for (const period of PERSONAL_VOL_AM_PM_EVALUATION_PERIODS) {
     const start = period.period_start || "";
     const end = period.period_end || "";
@@ -255,11 +356,11 @@ export async function buildPersonalVolAmPmPanelInputManifest(
         minimum_lookback: PERSONAL_VOL_AM_PM_REQUIRED_LOOKBACK_SESSIONS,
       },
     );
-    option_sidecars[period.period_id] = await lockOptionSidecar(
-      bucket,
-      period.period_id,
-    );
   }
+  const governed = await lockGovernedSidecars(
+    bucket,
+    request.sidecar_producer_job_id,
+  );
   return {
     schema_version: PERSONAL_VOL_AM_PM_PANEL_WRITER_INPUT_SCHEMA,
     producer_id: PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID,
@@ -270,7 +371,8 @@ export async function buildPersonalVolAmPmPanelInputManifest(
     required_lookback_sessions: PERSONAL_VOL_AM_PM_REQUIRED_LOOKBACK_SESSIONS,
     selection,
     periods,
-    option_sidecars,
+    sidecar_producer: governed.producer,
+    option_sidecars: governed.option_sidecars,
   };
 }
 

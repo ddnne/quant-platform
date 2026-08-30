@@ -97,6 +97,7 @@ function listedRef(
   manifest: PersonalVolAmPmPanelWriterInputManifest,
   key: string,
 ): { etag: string; size: number } | null {
+  if (key.startsWith("research/mass_eval/panels_cache/")) return null;
   if (key === manifest.selection.snapshot.key) return manifest.selection.snapshot;
   for (const period of PERSONAL_VOL_AM_PM_EVALUATION_PERIODS) {
     const locked = manifest.periods[period.period_id];
@@ -121,6 +122,7 @@ function inputShape(
     parsed.panel_schema === PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION &&
     isObject(parsed.selection) &&
     isObject(parsed.periods) &&
+    isObject(parsed.sidecar_producer) &&
     isObject(parsed.option_sidecars)
   );
 }

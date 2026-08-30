@@ -1,8 +1,16 @@
 import { sha256Hex } from "./sha256";
 
-export const PERSONAL_RESEARCH_RUNNER_VERSION = "personal-cloud-runner/v13";
+export const PERSONAL_RESEARCH_RUNNER_VERSION = "personal-cloud-runner/v14";
+export const PERSONAL_RESEARCH_RUNNER_SLOT = "v14";
 export const PERSONAL_RESEARCH_LEGACY_CONTAINER_NAME = "personal-research-v12";
-export const PERSONAL_SNAPSHOT_CONTAINER_NAME = "personal-snapshot-v13";
+export const PERSONAL_SNAPSHOT_CONTAINER_NAME =
+  `personal-snapshot-${PERSONAL_RESEARCH_RUNNER_SLOT}`;
+export const PERSONAL_SNAPSHOT_SOURCE_RUNNER_VERSIONS = [
+  "personal-cloud-runner/v13",
+  "personal-cloud-runner/v14",
+] as const;
+export type PersonalSnapshotSourceRunnerVersion =
+  (typeof PERSONAL_SNAPSHOT_SOURCE_RUNNER_VERSIONS)[number];
 export const PERSONAL_RESEARCH_MAX_PERIOD_DAYS = 2200;
 export const PERSONAL_RESEARCH_MAX_CONCURRENT_JOBS = 8;
 export const PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024 * 1024;
@@ -12,7 +20,8 @@ export type PersonalContainerKind =
   | "svi"
   | "overlay"
   | "snapshot"
-  | "vol-panel";
+  | "vol-panel"
+  | "option-sidecar";
 export const PERSONAL_RESEARCH_LEGACY_COHORT_IDS = [
   "price-relative-v1",
   "fundamental-relative-v1",
@@ -295,5 +304,14 @@ export async function personalJobContainerName(
       `${PERSONAL_RESEARCH_RUNNER_VERSION}:${kind}:${jobId}`,
     ),
   );
-  return `personal-v13-${kind}-${digest.slice(0, 24)}`;
+  return `personal-${PERSONAL_RESEARCH_RUNNER_SLOT}-${kind}-${digest.slice(0, 24)}`;
+}
+
+export function isPersonalSnapshotSourceRunnerVersion(
+  value: unknown,
+): value is PersonalSnapshotSourceRunnerVersion {
+  return (
+    value === "personal-cloud-runner/v13" ||
+    value === "personal-cloud-runner/v14"
+  );
 }

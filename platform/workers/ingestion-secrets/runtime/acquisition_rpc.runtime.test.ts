@@ -649,6 +649,7 @@ describe("governed J-Quants WorkerEntrypoint RPC", () => {
     expect(cancelCalls).toBe(1);
     expect(response.status).toBe(502);
     expect(JSON.parse(responseBody)).toEqual({ error: "upstream_failed" });
+    expect(response.headers.get("Retry-After")).toBeNull();
     expect(meta).toMatchObject({
       evidence_state: "FAILED",
       body_kind: "TARGET_ERROR_JSON",
@@ -780,5 +781,39 @@ describe("governed J-Quants WorkerEntrypoint RPC", () => {
     );
     expect(response.headers.get("server")).toBeNull();
     expect(response.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("sets Retry-After 60 only for the internal governed rate limiter 429", async () => {
+    const fetchMock = installFetch(async () => upstream('{"data":[]}'));
+    const request = await requestFor("indices_bars_daily_topix");
+    const limited = await fetchGovernedPage(request, {
+      ENVIRONMENT: "production",
+      JQUANTS_API_KEY: API_KEY,
+      JQUANTS_RPC_CURSOR_HMAC_KEY: HMAC_KEY,
+      PROXY_RATE_LIMITER: {
+        limit: async () => ({ success: false }),
+      } as unknown as RateLimit,
+    } as AcquisitionEnv, new Date("2026-08-26T00:00:00.000Z"));
+    const limitedBody = await limited.clone().json();
+    const limitedMeta = await metadata(limited);
+    expect(limited.status).toBe(429);
+    expect(limitedBody).toEqual({ error: "rate_limited" });
+    expect(limited.headers.get("Retry-After")).toBe("60");
+    expect(limitedMeta).toMatchObject({
+      evidence_state: "FAILED",
+      body_kind: "TARGET_ERROR_JSON",
+      dataset_id: "indices_bars_daily_topix",
+      upstream_http_status: null,
+      continuation_token: null,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const rejected = await rpc.fetch_governed_page({
+      ...request,
+      acquisition_nonce: "too-short",
+    });
+    expect(rejected.status).toBe(400);
+    expect(await rejected.json()).toEqual({ error: "request_rejected" });
+    expect(rejected.headers.get("Retry-After")).toBeNull();
   });
 });

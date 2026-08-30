@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { PERSONAL_RESEARCH_RUNNER_VERSION } from "./personal_research_contract";
 import { personalResearchR2Outbound } from "./personal_research_r2";
 
 vi.stubGlobal(
@@ -342,7 +343,7 @@ describe("personal Container R2 capability", () => {
     const manifest = {
       job_id: jobId,
       request_digest: requestDigest,
-      runner_version: "personal-cloud-runner/v13",
+      runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
       status: "FAILED",
       cohort_id: "diverse-core-v1",
       universe_id: "topix_all",
@@ -360,7 +361,7 @@ describe("personal Container R2 capability", () => {
         headers: {
           "x-personal-job-id": jobId,
           "x-personal-request-digest": requestDigest,
-          "x-personal-runner-version": "personal-cloud-runner/v13",
+          "x-personal-runner-version": PERSONAL_RESEARCH_RUNNER_VERSION,
           "x-personal-job-kind": "research",
           "x-personal-cohort-id": "diverse-core-v1",
           "x-personal-universe-id": "topix_all",
@@ -380,7 +381,7 @@ describe("personal Container R2 capability", () => {
     const manifest = {
       job_id: jobId,
       request_digest: requestDigest,
-      runner_version: "personal-cloud-runner/v13",
+      runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
       status: "FAILED",
       cohort_id: "personal-vol-ratio-am-pm-v1",
       kind: "vol-panel",
@@ -398,7 +399,7 @@ describe("personal Container R2 capability", () => {
         headers: {
           "x-personal-job-id": jobId,
           "x-personal-request-digest": requestDigest,
-          "x-personal-runner-version": "personal-cloud-runner/v13",
+          "x-personal-runner-version": PERSONAL_RESEARCH_RUNNER_VERSION,
           "x-personal-job-kind": "vol-panel",
           "x-personal-cohort-id": "personal-vol-ratio-am-pm-v1",
         },
@@ -416,7 +417,7 @@ describe("personal Container R2 capability", () => {
     const manifest = {
       job_id: jobId,
       request_digest: requestDigest,
-      runner_version: "personal-cloud-runner/v13",
+      runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
       status: "FAILED",
       cohort_id: "diverse-core-v1",
       universe_id: "topix_all",
@@ -432,7 +433,7 @@ describe("personal Container R2 capability", () => {
         headers: {
           "x-personal-job-id": jobId,
           "x-personal-request-digest": requestDigest,
-          "x-personal-runner-version": "personal-cloud-runner/v13",
+          "x-personal-runner-version": PERSONAL_RESEARCH_RUNNER_VERSION,
           "x-personal-job-kind": "research",
           "x-personal-cohort-id": "diverse-core-v1",
           "x-personal-universe-id": "topix_all",
@@ -448,7 +449,7 @@ describe("personal Container R2 capability", () => {
         headers: {
           "x-personal-job-id": jobId,
           "x-personal-request-digest": `sha256:${"c".repeat(64)}`,
-          "x-personal-runner-version": "personal-cloud-runner/v13",
+          "x-personal-runner-version": PERSONAL_RESEARCH_RUNNER_VERSION,
           "x-personal-job-kind": "research",
           "x-personal-cohort-id": "diverse-core-v1",
           "x-personal-universe-id": "topix_all",
@@ -464,7 +465,7 @@ describe("personal Container R2 capability", () => {
         headers: {
           "x-personal-job-id": jobId,
           "x-personal-request-digest": requestDigest,
-          "x-personal-runner-version": "personal-cloud-runner/v13",
+          "x-personal-runner-version": PERSONAL_RESEARCH_RUNNER_VERSION,
           "x-personal-job-kind": "research",
           "x-personal-cohort-id": "diverse-core-v1",
           "x-personal-universe-id": "topix_all",

@@ -1,4 +1,4 @@
-"""Governed N225 vol-ratio AM/PM panel writer on the existing v13 runner."""
+"""Governed N225 vol-ratio AM/PM panel writer on the v14 runner."""
 
 from __future__ import annotations
 
@@ -25,7 +25,13 @@ from research.fins_summary_keys import FINS_SUMMARY_EQAR_KEY, FINS_SUMMARY_TA_KE
 R2_ORIGIN = "http://research.r2"
 PRODUCER_ID = "personal-vol-ratio-am-pm-panel-writer/v1"
 COHORT_ID = "personal-vol-ratio-am-pm-v1"
-RUNNER_VERSION = "personal-cloud-runner/v13"
+RUNNER_VERSION = "personal-cloud-runner/v14"
+SNAPSHOT_SOURCE_RUNNER_VERSIONS = frozenset(
+    {
+        "personal-cloud-runner/v13",
+        "personal-cloud-runner/v14",
+    }
+)
 INPUT_SCHEMA = "personal-vol-ratio-am-pm-panel-writer-input/v1"
 MANIFEST_SCHEMA = "personal-vol-ratio-am-pm-panel-writer-manifest/v1"
 PANEL_SCHEMA = "personal-vol-ratio-am-pm-panel/v1"
@@ -230,19 +236,21 @@ def _request_digest_from_manifest(spec: PersonalVolAmPmPanelJobSpec, manifest: M
         row["period_id"]: periods[row["period_id"]]["job_id"]
         for row in EVALUATION_PERIODS
     }
-    return _sha256(
-        _canonical_bytes(
-            {
-                "input_manifest_digest": spec.input_manifest_digest,
-                "input_manifest_key": spec.input_manifest_key,
-                "job_id": spec.job_id,
-                "period_snapshot_job_ids": period_ids,
-                "producer_id": PRODUCER_ID,
-                "runner_version": RUNNER_VERSION,
-                "selection_snapshot_job_id": selection["job_id"],
-            }
-        )
+    producer = manifest.get("sidecar_producer")
+    producer_job_id = (
+        producer.get("job_id") if isinstance(producer, Mapping) else None
     )
+    payload: dict[str, Any] = {
+        "input_manifest_digest": spec.input_manifest_digest,
+        "input_manifest_key": spec.input_manifest_key,
+        "job_id": spec.job_id,
+        "period_snapshot_job_ids": period_ids,
+        "producer_id": PRODUCER_ID,
+        "runner_version": RUNNER_VERSION,
+        "selection_snapshot_job_id": selection["job_id"],
+        "sidecar_producer_job_id": producer_job_id,
+    }
+    return _sha256(_canonical_bytes(payload))
 
 
 def _open_input(spec: PersonalVolAmPmPanelJobSpec, key: str, *, timeout: float = 120):
@@ -585,6 +593,40 @@ def _contains_individual_stock_maps(value: Any) -> bool:
     return False
 
 
+def _digest_value(value: Any) -> bool:
+    return isinstance(value, str) and _DIGEST_RE.fullmatch(value) is not None
+
+
+def assert_sidecar_child_matches_lock(raw: Any, lock: Mapping[str, Any], period: Mapping[str, Any]) -> None:
+    if not isinstance(raw, dict):
+        raise RuntimeError(OPTION_REBUILD_ERROR)
+    source = None
+    regime = raw.get("opt225_regime")
+    if isinstance(regime, dict) and isinstance(regime.get("source"), dict):
+        source = regime["source"]
+    if (
+        raw.get("schema_version") != lock.get("schema_version")
+        or raw.get("period_id") != period["period_id"]
+        or raw.get("year") != period["year"]
+        or raw.get("period_start") != period["period_start"]
+        or raw.get("period_end") != period["period_end"]
+        or lock.get("period_id") != period["period_id"]
+        or lock.get("year") != period["year"]
+        or lock.get("period_start") != period["period_start"]
+        or lock.get("period_end") != period["period_end"]
+        or not isinstance(source, dict)
+        or source.get("dataset") != OPTION_DATASET
+        or source.get("version") not in SUPPORTED_OPTION_VERSIONS
+        or source.get("dataset") != (lock.get("source") or {}).get("dataset")
+        or source.get("version") != (lock.get("source") or {}).get("version")
+        or source.get("raw_input_digest") != (lock.get("source") or {}).get("raw_input_digest")
+        or source.get("calendar_digest") != (lock.get("source") or {}).get("calendar_digest")
+        or not _digest_value(source.get("raw_input_digest"))
+        or not _digest_value(source.get("calendar_digest"))
+    ):
+        raise RuntimeError("option sidecar child identity mismatch")
+
+
 def _extract_opt225_regime(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict) or "opt225_regime" not in raw:
         raise RuntimeError(OPTION_REBUILD_ERROR)
@@ -731,6 +773,15 @@ def _common_valid_rows(
     return rows
 
 
+def _require_snapshot_source_lock(lock: Any) -> None:
+    if not isinstance(lock, dict):
+        raise RuntimeError("snapshot lock is invalid")
+    if lock.get("format") != "personal-draft-history/v4":
+        raise RuntimeError("snapshot is not personal-draft-history/v4")
+    if lock.get("runner_version") not in SNAPSHOT_SOURCE_RUNNER_VERSIONS:
+        raise RuntimeError("snapshot source runner is outside the closed v4 allowlist")
+
+
 def load_input_manifest(
     spec: PersonalVolAmPmPanelJobSpec,
     *,
@@ -752,10 +803,15 @@ def load_input_manifest(
         or not isinstance(parsed.get("selection"), dict)
         or not isinstance(parsed.get("periods"), dict)
         or not isinstance(parsed.get("option_sidecars"), dict)
+        or not isinstance(parsed.get("sidecar_producer"), dict)
+        or not parsed["sidecar_producer"].get("job_id")
     ):
         raise RuntimeError("input manifest identity mismatch")
     if spec.request_digest != _request_digest_from_manifest(spec, parsed):
         raise RuntimeError("request digest does not match locked snapshot job ids")
+    _require_snapshot_source_lock(parsed["selection"])
+    for period in EVALUATION_PERIODS:
+        _require_snapshot_source_lock(parsed["periods"].get(period["period_id"]))
     return parsed
 
 
@@ -821,10 +877,17 @@ def execute_vol_am_pm_panel_job(
                 _canonical_bytes({"codes": membership, "schema_version": MEMBERSHIP_SCHEMA})
             )
             period_out: dict[str, Any] = {}
+            seen_sidecars: set[str] = set()
             for period in EVALUATION_PERIODS:
                 period_id = period["period_id"]
                 lock = manifest["periods"][period_id]
                 sidecar_lock = manifest["option_sidecars"][period_id]
+                child_key = str(sidecar_lock.get("source_key") or "")
+                child_digest = str(sidecar_lock.get("sha256") or "")
+                if child_key in seen_sidecars or child_digest in seen_sidecars:
+                    raise RuntimeError("option sidecar child reused across periods")
+                seen_sidecars.add(child_key)
+                seen_sidecars.add(child_digest)
 
                 def _period_extract(connection: sqlite3.Connection, locked=lock) -> tuple:
                     dates, calendar_meta = _calendar_from_snapshot(connection)
@@ -842,6 +905,7 @@ def execute_vol_am_pm_panel_job(
                 sidecar_json = json.loads(sidecar_bytes)
                 if not isinstance(sidecar_json, dict):
                     raise RuntimeError(OPTION_REBUILD_ERROR)
+                assert_sidecar_child_matches_lock(sidecar_json, sidecar_lock, period)
                 opt225 = _extract_opt225_regime(sidecar_json)
                 panel = {
                     "schema_version": PANEL_SCHEMA,
@@ -938,7 +1002,9 @@ def execute_vol_am_pm_panel_job(
 
 __all__ = [
     "PersonalVolAmPmPanelJobSpec",
+    "SNAPSHOT_SOURCE_RUNNER_VERSIONS",
     "VolPanelJobInputError",
     "execute_vol_am_pm_panel_job",
+    "load_input_manifest",
     "with_locked_snapshot",
 ]

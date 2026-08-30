@@ -81,6 +81,7 @@ const OVERLAY_COMPATIBLE_BASE_RUNNER_VERSIONS: ReadonlySet<string> = new Set([
   "personal-cloud-runner/v11",
   "personal-cloud-runner/v12",
   "personal-cloud-runner/v13",
+  "personal-cloud-runner/v14",
 ]);
 
 type JsonObject = Record<string, unknown>;
@@ -770,6 +771,7 @@ export async function submitPersonalIndexVolOverlay2023(
       jobId: request.job_id,
       requestDigest,
       kind: "overlay",
+      cohortId: request.cohort_id,
       deploymentId: env.CF_VERSION_METADATA?.id ?? "unknown",
       runnerVersion: personalIndexOverlayFamilyRunnerVersion(request.cohort_id),
     }),

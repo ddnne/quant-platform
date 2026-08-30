@@ -57,6 +57,12 @@ import {
   personalVolAmPmPanelBuildJobIdFromPath,
   type PersonalVolAmPmPanelBuildRequest,
 } from "./personal_vol_am_pm_panel_writer_contract";
+import {
+  PERSONAL_OPTION_SIDECAR_MAX_REQUEST_BYTES,
+  parsePersonalOptionSidecarProduceRequest,
+  personalOptionSidecarJobIdFromPath,
+  type PersonalOptionSidecarProduceRequest,
+} from "./personal_option_sidecar_producer_contract";
 import type { Env, MassEvalJobResult, MassEvalRequest } from "./types";
 
 export type MassEvalFetchHandlers = {
@@ -101,6 +107,14 @@ export type MassEvalFetchHandlers = {
     request: PersonalVolAmPmPanelBuildRequest,
   ) => Promise<Response>;
   personalVolAmPmPanelBuildStatus?: (env: Env, jobId: string) => Promise<Response>;
+  submitPersonalOptionSidecarProduce?: (
+    env: Env,
+    request: PersonalOptionSidecarProduceRequest,
+  ) => Promise<Response>;
+  personalOptionSidecarProduceStatus?: (
+    env: Env,
+    jobId: string,
+  ) => Promise<Response>;
   submitPersonalResearchJobs?: (
     env: Env,
     requests: PersonalResearchRequest[],
@@ -197,6 +211,45 @@ export async function dispatchMassEvalFetch(
       return json({ error: "personal SVI status unavailable" }, 503);
     }
     return handlers.personalSvi2023Status(env, jobId);
+  }
+
+  if (url.pathname === "/v1/personal-option-sidecar-produce") {
+    if (request.method !== "POST") {
+      return json({ error: "POST required" }, 405);
+    }
+    if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    if (
+      !env.STRUCTURED_BUCKET ||
+      !env.PERSONAL_RESEARCH_CONTAINER ||
+      !handlers.submitPersonalOptionSidecarProduce
+    ) {
+      return json({ error: "personal option sidecar produce unavailable" }, 503);
+    }
+    const bounded = await readBoundedJson(
+      request,
+      PERSONAL_OPTION_SIDECAR_MAX_REQUEST_BYTES,
+    );
+    if (!bounded.ok) return json({ error: bounded.error }, bounded.status);
+    const parsed = parsePersonalOptionSidecarProduceRequest(bounded.value);
+    if (!parsed.ok) return json({ error: parsed.error }, 400);
+    return handlers.submitPersonalOptionSidecarProduce(env, parsed.value);
+  }
+
+  if (url.pathname.startsWith("/v1/personal-option-sidecar-produce/jobs/")) {
+    if (request.method !== "GET") {
+      return json({ error: "GET required" }, 405);
+    }
+    if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    const jobId = personalOptionSidecarJobIdFromPath(url.pathname);
+    if (!jobId) return json({ error: "job_id is invalid" }, 400);
+    if (!env.STRUCTURED_BUCKET || !handlers.personalOptionSidecarProduceStatus) {
+      return json({ error: "personal option sidecar status unavailable" }, 503);
+    }
+    return handlers.personalOptionSidecarProduceStatus(env, jobId);
   }
 
   if (url.pathname === "/v1/personal-vol-am-pm-panel-build") {

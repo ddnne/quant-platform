@@ -4,7 +4,7 @@ import { PERSONAL_RESEARCH_RUNNER_VERSION } from "./personal_research_contract";
 import { verifiedPersonalResearchContainer } from "./personal_research_runner";
 import type { Env } from "./types";
 
-const RUNNER_NAME = "personal-v13-research-exact-four-test";
+const RUNNER_NAME = "personal-v14-research-exact-four-test";
 
 function readyResponse(service: string): Response {
   const body = JSON.stringify({ ok: true, service });
@@ -55,6 +55,20 @@ describe("personal research runner identity gate", () => {
     await expect(verifiedPersonalResearchContainer(env, RUNNER_NAME)).resolves.toBe(current);
 
     expect(getByName).toHaveBeenCalledTimes(2);
+    expect(old.destroy).toHaveBeenCalledOnce();
+    expect(current.destroy).not.toHaveBeenCalled();
+  });
+
+  it("treats a live v13 /ready identity as a positive mismatch and replaces once", async () => {
+    const old = runnerStub("personal-cloud-runner/v13");
+    const current = runnerStub(PERSONAL_RESEARCH_RUNNER_VERSION);
+    const { env, getByName } = runnerEnv(old, current);
+
+    await expect(verifiedPersonalResearchContainer(env, RUNNER_NAME)).resolves.toBe(current);
+
+    expect(getByName).toHaveBeenCalledTimes(2);
+    expect(getByName).toHaveBeenNthCalledWith(1, RUNNER_NAME);
+    expect(getByName).toHaveBeenNthCalledWith(2, RUNNER_NAME);
     expect(old.destroy).toHaveBeenCalledOnce();
     expect(current.destroy).not.toHaveBeenCalled();
   });

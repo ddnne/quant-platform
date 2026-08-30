@@ -208,7 +208,7 @@ describe("personal research Container admission", () => {
       cohort_digest:
         "sha256:ea37baf3423e5d84e61d4c80c59bdfe8184342dd3dee28646bd339cd45085a84",
       cohort_id: "diverse-core-v1",
-      runner_version: "personal-cloud-runner/v13",
+      runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
       snapshot_key: REQUEST.snapshot_key,
       snapshot_sha256: SHA,
       universe_id: "topix500",
@@ -217,7 +217,7 @@ describe("personal research Container admission", () => {
     });
   });
 
-  it("forwards an AM request with exact schema, mode digest, and v13 runner", async () => {
+  it("forwards an AM request with exact schema, mode digest, and v14 runner", async () => {
     const request: PersonalResearchRequest = {
       ...REQUEST,
       cohort_id: "diverse-core-am-pm-v1",
@@ -232,7 +232,7 @@ describe("personal research Container admission", () => {
       cohort_digest:
         "sha256:77136481d8a6b20fb8dc8188b8d6adb2837050b8185a8f8abac92ca10811adde",
       cohort_id: "diverse-core-am-pm-v1",
-      runner_version: "personal-cloud-runner/v13",
+      runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
       universe_id: "topix500",
     });
   });
