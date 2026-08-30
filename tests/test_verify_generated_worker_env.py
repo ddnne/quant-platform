@@ -99,9 +99,13 @@ def test_every_active_worker_environment_is_covered_without_generic_erasure() ->
 
 def test_typed_service_and_durable_object_refinements_are_required() -> None:
     mass = expected_types("research-mass-eval", "production")
+    mass_staging = expected_types("research-mass-eval", "staging")
     gateway = expected_types("research-ai-gateway", "production")
     secrets = expected_types("ingestion-secrets", "production")
     assert mass["AI_GATEWAY"] == "Service"
+    assert mass["MASS_EVAL_TOKEN"] == "string"
+    assert mass_staging["MASS_EVAL_TOKEN"] == "string"
+    assert mass_staging["ENVIRONMENT"] == '"staging"'
     assert gateway["BUDGET_LEDGER"] == (
         'DurableObjectNamespace<import("./src/index").BudgetLedger>'
     )

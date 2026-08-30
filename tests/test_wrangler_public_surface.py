@@ -2,7 +2,8 @@
 
 Internal product workers must keep workers_dev false (and preview_urls false).
 Documented exceptions may keep workers_dev true. Staging must use different
-names and physically distinct binding IDs/resources.
+names and physically distinct binding IDs/resources. research-mass-eval
+staging is the token-gated workers.dev exception; preview_urls stay false.
 """
 
 from __future__ import annotations
@@ -134,7 +135,10 @@ def test_staging_uses_distinct_names_and_resources() -> None:
         staging_name = str(staging["name"])
         assert staging_name != prod_name, name
         assert staging_name.endswith("-staging"), staging_name
-        assert staging.get("workers_dev") is False, name
+        if name == "research-mass-eval":
+            assert staging.get("workers_dev") is True, name
+        else:
+            assert staging.get("workers_dev") is False, name
         assert staging.get("preview_urls") is False, name
         for banned in PRODUCTION_BINDING_IDS:
             assert banned not in _strings(staging), f"{staging_path} binds {banned}"
@@ -175,3 +179,29 @@ def test_staging_uses_distinct_names_and_resources() -> None:
     secrets = _load(_staging_toml("ingestion-secrets"))
     assert secrets.get("workers_dev") is False
     assert secrets.get("preview_urls") is False
+
+
+def test_research_mass_eval_staging_is_token_gated_workers_dev_only() -> None:
+    production = _load(_worker_toml("research-mass-eval"))
+    production_env = _env_production(production)
+    assert production_env is not None
+    staging = _load(_staging_toml("research-mass-eval"))
+
+    assert production.get("workers_dev") is True
+    assert production.get("preview_urls") is False
+    assert production.get("secrets") == {"required": ["MASS_EVAL_TOKEN"]}
+    assert production_env.get("workers_dev") is True
+    assert production_env.get("preview_urls") is False
+    assert production_env.get("secrets") == {"required": ["MASS_EVAL_TOKEN"]}
+    assert production.get("route") is None
+    assert production.get("routes") in (None, [])
+    assert production_env.get("route") is None
+    assert production_env.get("routes") in (None, [])
+
+    assert staging["name"] == "quant-platform-research-mass-eval-staging"
+    assert staging.get("workers_dev") is True
+    assert staging.get("preview_urls") is False
+    assert staging.get("secrets") == {"required": ["MASS_EVAL_TOKEN"]}
+    assert staging.get("route") is None
+    assert staging.get("routes") in (None, [])
+    assert "env" not in staging or "production" not in (staging.get("env") or {})

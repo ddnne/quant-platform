@@ -67,7 +67,9 @@ The operational-closure lane created empty, staging-only resources on
 Queues. `platform/workers/*/wrangler.staging.toml` binds only those resources.
 No production secret was copied. The staging secrets proxy is private
 (`workers_dev=false`, `preview_urls=false`) until a service-binding consumer is
-available.
+available. `research-mass-eval` staging is the token-gated personal DRAFT
+exception: `workers_dev=true`, `preview_urls=false`, `MASS_EVAL_TOKEN`
+required, no custom domain. Do not treat that hostname as network privacy.
 
 ---
 

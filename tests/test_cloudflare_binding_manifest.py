@@ -950,13 +950,60 @@ def test_staging_surfaces_have_exact_workers_dev_and_secret_policy() -> None:
     for worker, environments in manifest["workers"].items():
         staging = environments["staging"]
         assert staging["workers_dev"] is (
-            worker == "receipt-activation-observer"
+            worker in {"receipt-activation-observer", "research-mass-eval"}
         )
         assert staging["preview_urls"] is False
         assert staging["secret_names"] == sorted(
             manifest_module.STAGING_SECRET_NAMES.get(worker, ())
         )
         assert staging["name"].endswith("-staging")
+
+
+def test_research_mass_eval_staging_workers_dev_secret_and_production_unchanged() -> None:
+    manifest = manifest_module.build_manifest()
+    production = manifest["workers"]["research-mass-eval"]["production"]
+    staging = manifest["workers"]["research-mass-eval"]["staging"]
+    frozen = json.loads(manifest_module.MANIFEST.read_text(encoding="utf-8"))
+
+    assert production["name"] == "quant-platform-research-mass-eval"
+    assert production["workers_dev"] is True
+    assert production["preview_urls"] is False
+    assert production["secret_names"] == ["MASS_EVAL_TOKEN"]
+    assert production["route"] is None
+    assert production["routes"] == []
+    assert production["r2_buckets"] == [
+        {"binding": "STRUCTURED_BUCKET", "bucket_name": "quant-structured"}
+    ]
+
+    assert staging["name"] == "quant-platform-research-mass-eval-staging"
+    assert staging["workers_dev"] is True
+    assert staging["preview_urls"] is False
+    assert staging["secret_names"] == ["MASS_EVAL_TOKEN"]
+    assert staging["route"] is None
+    assert staging["routes"] == []
+    assert staging["r2_buckets"] == [
+        {"binding": "STRUCTURED_BUCKET", "bucket_name": "quant-structured-staging"}
+    ]
+
+    assert frozen == manifest
+    assert frozen["workers"]["research-mass-eval"]["production"] == production
+
+    drifted = copy.deepcopy(manifest)
+    drifted["workers"]["research-mass-eval"]["staging"]["workers_dev"] = False
+    with pytest.raises(ValueError, match="token-gated personal route missing"):
+        manifest_module.validate_manifest(drifted)
+
+    secret_drifted = copy.deepcopy(manifest)
+    secret_drifted["workers"]["research-mass-eval"]["staging"]["secret_names"] = []
+    with pytest.raises(ValueError, match="secrets.required drifted"):
+        manifest_module.validate_manifest(secret_drifted)
+
+    production_drifted = copy.deepcopy(manifest)
+    production_drifted["workers"]["research-mass-eval"]["production"][
+        "workers_dev"
+    ] = False
+    with pytest.raises(ValueError, match="token-gated personal route missing"):
+        manifest_module.validate_manifest(production_drifted)
 
 
 def test_declared_production_secret_names_are_exact_policy() -> None:
