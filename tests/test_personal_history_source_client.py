@@ -605,6 +605,47 @@ def _two_page_client(tmp_path: Path):
     return client
 
 
+def _wrap_verified_complete_month(client):
+    calls: list[tuple[str, str]] = []
+    original = client.spool.verified_complete_month
+
+    def wrapped(dataset: str, month: str):
+        calls.append((dataset, month))
+        return original(dataset, month)
+
+    client.spool.verified_complete_month = wrapped
+    return calls
+
+
+def _wrap_assert_verified_complete(client):
+    scans: list[tuple[str, str]] = []
+    original = client.spool._assert_verified_complete
+
+    def wrapped(state, pages, dataset: str, month: str):
+        scans.append((dataset, month))
+        return original(state, pages, dataset, month)
+
+    client.spool._assert_verified_complete = wrapped
+    return scans
+
+
+def _fins_client(tmp_path: Path, *, spool_path: Path | None = None):
+    class Opener:
+        def urlopen(self, request, timeout=120):
+            month = json.loads(request.data.decode())["segment_id"]
+            raw = json.dumps(
+                {"data": _fins_month(month)}, separators=(",", ":")
+            ).encode()
+            return _Response(raw, _page_headers("EXHAUSTED", "NONE", "NONE"))
+
+    return client_mod.PersonalHistorySourceClient(
+        environment="production",
+        period_end="2024-03-31",
+        spool_path=spool_path or (tmp_path / "spool.sqlite"),
+        opener=Opener(),
+    )
+
+
 def test_verified_complete_month_accepts_untouched_pages(tmp_path: Path) -> None:
     client = _two_page_client(tmp_path)
     pages = client.spool.verified_complete_month("equities_bars_daily", "2024-03")
@@ -712,6 +753,135 @@ def test_duplicate_and_gapped_ordinals_are_rejected(tmp_path: Path) -> None:
             state, duplicated, "equities_bars_daily", "2024-03"
         )
     client.close()
+
+
+def test_fins_codes_reuse_verified_source_page_scan(tmp_path: Path) -> None:
+    client = _fins_client(tmp_path)
+    verifies = _wrap_verified_complete_month(client)
+    scans = _wrap_assert_verified_complete(client)
+    progress = {"n": 0}
+    original_progress = client._refresh_progress
+
+    def wrapped_progress() -> None:
+        progress["n"] += 1
+        original_progress()
+
+    client._refresh_progress = wrapped_progress
+
+    first = client.fetch_dataset_evidenced("fins_summary", code="1001")
+    after_first_verifies = len(verifies)
+    after_first_scans = len(scans)
+    after_first_progress = progress["n"]
+    assert after_first_scans > 0
+    assert after_first_verifies >= after_first_scans
+
+    second = client.fetch_dataset_evidenced("fins_summary", code="1002")
+    assert len(verifies) == after_first_verifies
+    assert len(scans) == after_first_scans
+    assert progress["n"] == after_first_progress
+    assert client.fetch_calls == after_first_scans
+
+    assert first.selection is not None and second.selection is not None
+    assert [row["Code"] for row in first.rows] == ["1001"] * len(first.rows)
+    assert [row["Code"] for row in second.rows] == ["1002"] * len(second.rows)
+    assert first.rows != second.rows
+    assert first.selection.selected_digest != second.selection.selected_digest
+    assert first.selection.query == {"code": "1001"}
+    assert second.selection.query == {"code": "1002"}
+    assert first.selection.selected_row_count == len(first.rows)
+    assert second.selection.selected_row_count == len(second.rows)
+    assert first.selection.scanned_page_digests == second.selection.scanned_page_digests
+    assert first.selection.completion_digest == second.selection.completion_digest
+    assert first.selection.source_row_count == second.selection.source_row_count
+    assert tuple(page.body_digest for page in first.pages) == tuple(
+        page.body_digest for page in second.pages
+    )
+    assert first.selection.contributing_page_digests
+    assert second.selection.contributing_page_digests
+    again = client.fetch_dataset_evidenced("fins_summary", code="1001")
+    assert again.rows == first.rows
+    assert again.selection == first.selection
+    _, _, first_selection = _page_evidence(first)
+    _, _, second_selection = _page_evidence(second)
+    assert first_selection is not None and second_selection is not None
+    assert first_selection["scanned_page_digests"] == second_selection["scanned_page_digests"]
+    assert first_selection["completion_digest"] == second_selection["completion_digest"]
+    assert first_selection["source_row_count"] == second_selection["source_row_count"]
+    assert first_selection["selected_digest"] != second_selection["selected_digest"]
+    client.close()
+
+
+def test_incomplete_or_tampered_month_fails_before_cache_creation(
+    tmp_path: Path,
+) -> None:
+    client = _fins_client(tmp_path)
+    client.spool.begin_month(
+        "fins_summary",
+        "2024-03",
+        {"dataset_id": "fins_summary", "segment_id": "2024-03"},
+    )
+    verifies = _wrap_verified_complete_month(client)
+    assert client.spool._cached_verified_month("fins_summary", "2024-03") is None
+    assert ("fins_summary", "2024-03") not in client.spool._verified_pages
+    incomplete_calls = len(verifies)
+    assert incomplete_calls == 1
+    assert client.spool._cached_verified_month("fins_summary", "2024-03") is None
+    assert len(verifies) == incomplete_calls + 1
+    assert ("fins_summary", "2024-03") not in client.spool._verified_pages
+    client.close()
+
+    seeded = _two_page_client(tmp_path / "tamper")
+    spool_path = seeded.spool.path
+    seeded.close()
+    tampered = client_mod.PersonalHistorySourceClient(
+        environment="production",
+        period_end="2024-03-31",
+        spool_path=spool_path,
+        opener=_two_page_opener(),
+    )
+    tampered.spool._conn.execute(
+        "UPDATE month_state SET completion_digest=? WHERE dataset=? AND month=?",
+        ("sha256:" + "f" * 64, "equities_bars_daily", "2024-03"),
+    )
+    tampered.spool._conn.commit()
+    tamper_verifies = _wrap_verified_complete_month(tampered)
+    assert tampered.spool._cached_verified_month("equities_bars_daily", "2024-03") is None
+    assert ("equities_bars_daily", "2024-03") not in tampered.spool._verified_pages
+    assert tamper_verifies == [("equities_bars_daily", "2024-03")]
+    assert tampered.spool._cached_verified_month("equities_bars_daily", "2024-03") is None
+    assert len(tamper_verifies) == 2
+    assert ("equities_bars_daily", "2024-03") not in tampered.spool._verified_pages
+    tampered.close()
+
+
+def test_verified_page_cache_does_not_cross_client_or_job(tmp_path: Path) -> None:
+    spool = tmp_path / "spool.sqlite"
+    first = _fins_client(tmp_path, spool_path=spool)
+    first_one = first.fetch_dataset_evidenced("fins_summary", code="1001")
+    first_two = first.fetch_dataset_evidenced("fins_summary", code="1002")
+    first.close()
+
+    second = _fins_client(tmp_path, spool_path=spool)
+    verifies = _wrap_verified_complete_month(second)
+    scans = _wrap_assert_verified_complete(second)
+    selected = second.fetch_dataset_evidenced("fins_summary", code="1002")
+    assert scans
+    assert verifies
+    assert selected.rows == first_two.rows
+    assert selected.selection is not None and first_two.selection is not None
+    assert selected.selection == first_two.selection
+    assert first_one.selection is not None
+    assert selected.selection.selected_digest != first_one.selection.selected_digest
+    assert selected.selection.scanned_page_digests == first_one.selection.scanned_page_digests
+    second.close()
+
+    other_job = _fins_client(tmp_path, spool_path=tmp_path / "other-job.sqlite")
+    other_verifies = _wrap_verified_complete_month(other_job)
+    other = other_job.fetch_dataset_evidenced("fins_summary", code="1002")
+    assert other_verifies
+    assert other.selection is not None
+    assert other.selection.selected_digest == first_two.selection.selected_digest
+    other_job.close()
 
 
 def _http_error(
