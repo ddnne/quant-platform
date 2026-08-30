@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID,
   PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION,
+  PERSONAL_INDEX_VOL_OVERLAY_2023_SIGNAL_START_POLICY,
   personalIndexVolOverlay2023ArtifactKey,
   personalIndexVolOverlay2023InputManifestKey,
   personalIndexVolOverlay2023TerminalManifestKey,
@@ -92,7 +93,7 @@ async function fixture() {
       panel: { key: "research/mass_eval/panels_cache/panel.json", etag: "panel", size: 1, sha256: digest("8") },
       options: { days: [{ date: "2023-01-04", objects: [{ key: rawKey, etag: "raw", size: raw.byteLength, sha256: digest("9") }] }], object_count: 1, total_bytes: raw.byteLength },
     },
-    fixed_window: { start: "2023-01-04", end: "2023-10-13", signal_start_policy: "MAX_126_SESSION_LOOKBACK", signal_end_policy: "LAST_SESSION_MINUS_TWO" },
+    fixed_window: { start: "2023-01-04", end: "2023-10-13", signal_start_policy: PERSONAL_INDEX_VOL_OVERLAY_2023_SIGNAL_START_POLICY, signal_end_policy: "LAST_SESSION_MINUS_TWO" },
     temporal_contract: { source_decision_cutoff_jst: "15:00:00+09:00", prepared_available_at: "SAME_DAY_23_59_59_JST", fill_timing: "next_close", first_pnl_interval: "fill_close_to_following_close", no_forward_fill: true },
     authority: { draft_only: true, screening_only: true, ready: false, mass: false, promotion: false, live_orders: false, go: false, single_stock_option_iv: "FORBIDDEN" },
   };

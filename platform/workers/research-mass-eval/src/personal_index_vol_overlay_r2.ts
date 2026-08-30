@@ -4,6 +4,7 @@ import {
   PERSONAL_INDEX_VOL_OVERLAY_2023_INPUT_MAX_BYTES,
   PERSONAL_INDEX_VOL_OVERLAY_2023_RESULT_MAX_BYTES,
   PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION,
+  PERSONAL_INDEX_VOL_OVERLAY_2023_SIGNAL_START_POLICY,
   PERSONAL_INDEX_VOL_OVERLAY_2023_TERMINAL_MAX_BYTES,
   isPersonalIndexVolOverlay2023Digest,
   isPersonalIndexVolOverlay2023JobId,
@@ -104,6 +105,9 @@ function inputShape(
     isObject(value.fixed_window) &&
     value.fixed_window.start === "2023-01-04" &&
     value.fixed_window.end === "2023-10-13" &&
+    value.fixed_window.signal_start_policy ===
+      PERSONAL_INDEX_VOL_OVERLAY_2023_SIGNAL_START_POLICY &&
+    value.fixed_window.signal_end_policy === "LAST_SESSION_MINUS_TWO" &&
     isObject(value.temporal_contract) &&
     value.temporal_contract.no_forward_fill === true &&
     isObject(authority) &&

@@ -93,7 +93,7 @@ def test_adapter_converts_percent_basevol_but_preserves_decimal_iv_and_rv() -> N
 def test_pit_calendar_is_independent_and_one_removed_row_is_rejected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    dates = _dates(128)
+    dates = _dates(148)
     calls: list[dict[str, Any]] = []
 
     def calendar(**kwargs):
@@ -116,6 +116,70 @@ def test_pit_calendar_is_independent_and_one_removed_row_is_rejected(
     assert overlay.require_exact_calendar(dates, dates, dates) == dates
     with pytest.raises(RuntimeError, match="exactly match"):
         overlay.require_exact_calendar(dates, dates[:64] + dates[65:], dates)
+    with pytest.raises(RuntimeError, match="exactly match"):
+        overlay.require_exact_calendar(dates[:-1], dates[:-1], dates[:-1])
+
+
+def test_complete_193_session_window_evaluates_all_four_candidates() -> None:
+    dates = _dates(193)
+    base, closes, base_vol, features = _sources(dates)
+    observations = overlay.build_observations(
+        session_dates=dates,
+        base_artifact=base,
+        topix_closes=closes,
+        base_vol_percent=base_vol,
+        feature_rows=features,
+    )
+    manifest = build_prepared_panel_manifest(
+        observations,
+        authoritative_session_dates=dates,
+        snapshot_digest="sha256:" + "1" * 64,
+        base_report_digest="sha256:" + "2" * 64,
+    )
+    report = evaluate_index_vol_overlays(
+        observations,
+        manifest=manifest,
+        authoritative_session_dates=dates,
+        signal_start=dates[145],
+        signal_end=dates[-3],
+    )
+    assert report["status"] == "EVALUATED"
+    assert report["candidate_policy"]["evaluated_count"] == 4
+    assert [row["status"] for row in report["candidates"]] == [
+        "EVALUATED",
+        "EVALUATED",
+        "EVALUATED",
+        "EVALUATED",
+    ]
+
+
+def test_base_daily_path_missing_rv_warmup_date_is_rejected() -> None:
+    dates = _dates(193)
+    base, closes, base_vol, features = _sources(dates)
+    base["daily_path"].insert(
+        0, {"date": "2022-12-30", "base_sleeve_return": 0.0}
+    )
+    base["daily_path"].append(
+        {"date": "2023-10-14", "base_sleeve_return": 0.0}
+    )
+    assert len(
+        overlay.build_observations(
+            session_dates=dates,
+            base_artifact=base,
+            topix_closes=closes,
+            base_vol_percent=base_vol,
+            feature_rows=features,
+        )
+    ) == 193
+    del base["daily_path"][21]
+    with pytest.raises(RuntimeError, match="exactly match authoritative dates"):
+        overlay.build_observations(
+            session_dates=dates,
+            base_artifact=base,
+            topix_closes=closes,
+            base_vol_percent=base_vol,
+            feature_rows=features,
+        )
 
 
 def test_missing_svi_feature_row_becomes_not_evaluated_without_forward_fill() -> None:

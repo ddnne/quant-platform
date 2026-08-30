@@ -7,6 +7,7 @@ import {
 } from "./personal_index_vol_overlay_2023";
 import {
   PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID,
+  PERSONAL_INDEX_VOL_OVERLAY_2023_SIGNAL_START_POLICY,
   parsePersonalIndexVolOverlay2023Request,
   personalIndexVolOverlay2023InputManifestKey,
 } from "./personal_index_vol_overlay_2023_contract";
@@ -98,7 +99,9 @@ class MemoryR2 {
   }
 }
 
-async function sources() {
+async function sources(
+  baseVersion: string | null = PERSONAL_RESEARCH_RUNNER_VERSION,
+) {
   const mem = new MemoryR2();
   const baseJobId = "base-continuous-2023";
   const sviJobId = "svi-existing-2023";
@@ -108,7 +111,7 @@ async function sources() {
   const snapshotKey = `research/personal/snapshots/sha256=${"2".repeat(64)}.sqlite`;
   mem.seed(resultKey, new Uint8Array([1]), { sha256: resultDigest });
   mem.seed(snapshotKey, new Uint8Array([2]));
-  mem.seed(personalResearchManifestKey(baseJobId), {
+  const baseManifest: Record<string, unknown> = {
     status: "COMPLETED",
     job_id: baseJobId,
     cohort_id: "sector-relative-ls-v1",
@@ -129,7 +132,9 @@ async function sources() {
       ranking_role: "NON_CANDIDATE_NOT_RANKED",
       candidate_count_contribution: 0,
     },
-  });
+  };
+  if (baseVersion !== null) baseManifest.version = baseVersion;
+  mem.seed(personalResearchManifestKey(baseJobId), baseManifest);
 
   const optionKey = "structured/jsonl/derivatives_bars_daily_options_225/dt=2023-01-04/source.jsonl";
   const sviInput = {
@@ -204,7 +209,26 @@ describe("fixed personal index-vol overlay admission", () => {
     );
     expect(manifest.svi.input_manifest.key).toBe(personalSviInputManifestKey(fixed.sviJobId));
     expect(manifest.svi.options.days[0]?.objects[0]?.key).toBe(fixed.optionKey);
+    expect(manifest.fixed_window.signal_start_policy).toBe(PERSONAL_INDEX_VOL_OVERLAY_2023_SIGNAL_START_POLICY);
     expect(manifest.authority).toMatchObject({ draft_only: true, ready: false, mass: false, live_orders: false, single_stock_option_iv: "FORBIDDEN" });
+  });
+
+  it.each([
+    ["missing", null],
+    ["stale v8", "personal-cloud-runner/v8"],
+  ])("rejects a %s base runner manifest", async (_label, baseVersion) => {
+    const fixed = await sources(baseVersion);
+    await expect(
+      buildPersonalIndexVolOverlay2023InputManifest(
+        fixed.mem.asBucket(),
+        {
+          job_id: "overlay-base-version-denied",
+          cohort_id: PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID,
+          base_job_id: fixed.baseJobId,
+          svi_job_id: fixed.sviJobId,
+        },
+      ),
+    ).rejects.toThrow("overlay_base_job_not_eligible");
   });
 
   it("writes the immutable input before dispatching the existing verified container", async () => {

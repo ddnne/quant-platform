@@ -70,7 +70,9 @@ _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _WINDOW = {
     "start": EARLIEST_DAY,
     "end": LATEST_DAY,
-    "signal_start_policy": "MAX_126_SESSION_LOOKBACK",
+    "signal_start_policy": (
+        "RV20_20_RETURN_WARMUP_PLUS_INCLUSIVE_126_RATIO_HISTORY"
+    ),
     "signal_end_policy": "LAST_SESSION_MINUS_TWO",
 }
 _TEMPORAL = {
@@ -560,7 +562,7 @@ def require_exact_calendar(
     if (
         authoritative != list(option_dates)
         or authoritative != list(topix_dates)
-        or len(authoritative) < 128
+        or len(authoritative) < 148
     ):
         raise RuntimeError(
             "PIT market calendar does not exactly match overlay observations"
@@ -577,12 +579,23 @@ def build_observations(
     feature_rows: Mapping[str, Mapping[str, Any]],
 ) -> list[IndexVolOverlayObservation]:
     base_rows = base_artifact.get("daily_path")
-    if not isinstance(base_rows, list):
-        raise RuntimeError("overlay base daily path is invalid")
-    base_returns = {
-        str(row.get("date")): _number(row.get("base_sleeve_return"))
+    if not isinstance(base_rows, list) or any(
+        not isinstance(row, Mapping) or not isinstance(row.get("date"), str)
         for row in base_rows
-        if isinstance(row, Mapping)
+    ):
+        raise RuntimeError("overlay base daily path is invalid")
+    fixed_window_rows = [
+        row
+        for row in base_rows
+        if EARLIEST_DAY <= str(row["date"]) <= LATEST_DAY
+    ]
+    if [str(row["date"]) for row in fixed_window_rows] != list(session_dates):
+        raise RuntimeError(
+            "overlay base daily path does not exactly match authoritative dates"
+        )
+    base_returns = {
+        str(row["date"]): _number(row.get("base_sleeve_return"))
+        for row in fixed_window_rows
     }
     realized = _realized_vol_20(session_dates, topix_closes)
     observations: list[IndexVolOverlayObservation] = []
@@ -663,6 +676,7 @@ def execute_overlay_job(
                 opener=overlay_opener,
             )
             base_artifact = load_base_sleeve_from_archive(archive, sleeve_reference)
+            archive.unlink()
 
             snapshot_key = str(snapshot_reference.get("key") or "")
             transport = root_path / (
@@ -682,6 +696,7 @@ def execute_overlay_job(
                 snapshot,
                 str(snapshot_reference.get("raw_sha256") or ""),
             )
+            transport.unlink()
             authoritative_dates = _calendar_dates(snapshot)
 
             source_svi_spec = _svi_spec(input_manifest)
@@ -771,7 +786,7 @@ def execute_overlay_job(
                 observations,
                 manifest=prepared_manifest,
                 authoritative_session_dates=authoritative_dates,
-                signal_start=authoritative_dates[125],
+                signal_start=authoritative_dates[145],
                 signal_end=authoritative_dates[-3],
             )
 

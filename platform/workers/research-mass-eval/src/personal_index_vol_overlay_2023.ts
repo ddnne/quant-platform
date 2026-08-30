@@ -5,6 +5,7 @@ import {
   PERSONAL_INDEX_VOL_OVERLAY_2023_INPUT_MAX_BYTES,
   PERSONAL_INDEX_VOL_OVERLAY_2023_LATEST_DAY,
   PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION,
+  PERSONAL_INDEX_VOL_OVERLAY_2023_SIGNAL_START_POLICY,
   personalIndexVolOverlay2023InputManifestKey,
   personalIndexVolOverlay2023RequestDigest,
   personalIndexVolOverlay2023TerminalManifestKey,
@@ -15,6 +16,7 @@ import {
 } from "./personal_index_vol_overlay_2023_contract";
 import {
   PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES,
+  PERSONAL_RESEARCH_RUNNER_VERSION,
   isPersonalResearchSnapshotKey,
   personalResearchCohortDigest,
   personalResearchManifestKey,
@@ -143,6 +145,7 @@ async function baseInputs(
   const snapshot = manifest.snapshot;
   if (
     manifest.status !== "COMPLETED" ||
+    manifest.version !== PERSONAL_RESEARCH_RUNNER_VERSION ||
     manifest.job_id !== baseJobId ||
     manifest.cohort_id !== BASE_COHORT_ID ||
     manifest.cohort_digest !== personalResearchCohortDigest(BASE_COHORT_ID) ||
@@ -357,7 +360,7 @@ export async function buildPersonalIndexVolOverlay2023InputManifest(
     fixed_window: {
       start: PERSONAL_INDEX_VOL_OVERLAY_2023_EARLIEST_DAY,
       end: PERSONAL_INDEX_VOL_OVERLAY_2023_LATEST_DAY,
-      signal_start_policy: "MAX_126_SESSION_LOOKBACK",
+      signal_start_policy: PERSONAL_INDEX_VOL_OVERLAY_2023_SIGNAL_START_POLICY,
       signal_end_policy: "LAST_SESSION_MINUS_TWO",
     },
     temporal_contract: {
