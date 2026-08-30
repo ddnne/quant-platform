@@ -24,8 +24,14 @@ from statistics import mean, median
 from typing import Any, Final, Mapping, Sequence
 
 from research.factor_cohorts import (
+    AM_PM_BASE_COHORT_ID,
+    AM_PM_BASE_SLEEVE_ID,
+    AM_PM_BASE_SLEEVE_SCHEMA,
     AM_SIGNAL_PM_CLOSE_EXECUTION_MODE,
+    canonical_authoritative_session_dates as _canonical_authoritative_session_dates,
+    canonical_trading_calendar_digest,
     get_research_cohort,
+    verified_am_pm_base_digests,
 )
 from research.options_225_smile_features import OPTIONS_225_SMILE_SURFACE_SCOPE
 from research import options_225_smile_transport as _smile_transport_core
@@ -58,7 +64,6 @@ SOURCE_SLICE_WRAPPER_COST_SEMANTICS: Final = (
     "EXCLUDES_NAV_WRAPPER_ENTRY_AND_LIQUIDATION"
 )
 PANEL_OBSERVATION_DIGEST_SCHEMA: Final = "index-vol-overlay-observations/v1"
-TRADING_CALENDAR_DIGEST_SCHEMA: Final = "ordered-trading-session-dates/v1"
 CONSERVATIVE_EXECUTION_CUTOFF_JST: Final = "15:00:00+09:00"
 LIFECYCLE_STAGE: Final = "DRAFT_DIAGNOSTIC"
 PERSONAL_INDEX_SMILE_TRANSPORT_SCHEMA: Final = (
@@ -190,39 +195,6 @@ def canonical_prepared_panel_digest(
         {
             "schema_version": PANEL_OBSERVATION_DIGEST_SCHEMA,
             "rows": [asdict(row) for row in observations],
-        }
-    )
-
-
-def _canonical_authoritative_session_dates(
-    session_dates: Sequence[str],
-) -> tuple[str, ...]:
-    if isinstance(session_dates, (str, bytes)) or len(session_dates) < 3:
-        raise ValueError("authoritative session dates must contain at least three rows")
-    canonical: list[str] = []
-    for raw in session_dates:
-        try:
-            parsed = date.fromisoformat(raw).isoformat()
-        except (TypeError, ValueError) as exc:
-            raise ValueError(
-                "authoritative session dates must be canonical ISO"
-            ) from exc
-        if parsed != raw:
-            raise ValueError("authoritative session dates must be canonical ISO")
-        if canonical and raw <= canonical[-1]:
-            raise ValueError("authoritative session dates must be strictly increasing")
-        canonical.append(raw)
-    return tuple(canonical)
-
-
-def canonical_trading_calendar_digest(session_dates: Sequence[str]) -> str:
-    """Hash only the independently supplied authoritative session vector."""
-
-    canonical = _canonical_authoritative_session_dates(session_dates)
-    return _canonical_digest(
-        {
-            "schema_version": TRADING_CALENDAR_DIGEST_SCHEMA,
-            "ordered_session_dates": list(canonical),
         }
     )
 
@@ -1984,9 +1956,6 @@ AM_PM_SMILE_TRANSPORT_PANEL_DIGEST_SCHEMA: Final = (
 AM_PM_TEMPORAL_CONTRACT_DIGEST_SCHEMA: Final = (
     "index-vol-overlay-am-pm-temporal-contract/v1"
 )
-AM_PM_BASE_COHORT_ID: Final = "sector-relative-ls-am-pm-v1"
-AM_PM_BASE_SLEEVE_ID: Final = "personal_sector_balanced_four_factor_v1_ls_am_pm"
-AM_PM_BASE_SLEEVE_SCHEMA: Final = "personal-base-sleeve-source-am-pm/v1"
 AM_PM_EXECUTION_MODE: Final = AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
 AM_PM_NON_PRICE_CUTOFF_JST: Final = "11:30:00+09:00"
 AM_PM_EQUITY_USABLE_BY_JST: Final = "12:30:00+09:00"
@@ -2115,55 +2084,6 @@ class AmPmBaseProducerUnavailable(ValueError):
 
     def __init__(self) -> None:
         super().__init__(AM_PM_BASE_PRODUCER_UNAVAILABLE)
-
-
-def _am_pm_repo_bindings() -> tuple[str, str] | None:
-    try:
-        cohort = get_research_cohort(AM_PM_BASE_COHORT_ID)
-    except KeyError:
-        return None
-    spec = next(
-        (
-            item
-            for item in cohort.strategy_specs
-            if item.strategy_id == AM_PM_BASE_SLEEVE_ID
-        ),
-        None,
-    )
-    if spec is None:
-        return None
-    return strategy_spec_digest(spec), str(cohort.to_dict()["cohort_digest"])
-
-
-def am_pm_base_producer_unavailable_reason() -> str | None:
-    try:
-        verified_am_pm_base_digests()
-    except AmPmBaseProducerUnavailable:
-        return AM_PM_BASE_PRODUCER_UNAVAILABLE
-    return None
-
-
-def verified_am_pm_base_digests() -> tuple[str, str]:
-    """Resolve only the repository AM producer binding; fail closed otherwise."""
-
-    repo = _am_pm_repo_bindings()
-    if repo is None:
-        raise AmPmBaseProducerUnavailable()
-    spec, cohort = repo
-    if (
-        spec == EXPECTED_BASE_STRATEGY_SPEC_DIGEST
-        or cohort == EXPECTED_BASE_COHORT_DIGEST
-        or not _canonical_sha256(spec)
-        or not _canonical_sha256(cohort)
-    ):
-        raise AmPmBaseProducerUnavailable()
-    return spec, cohort
-
-
-def resolve_am_pm_base_digests() -> tuple[str, str]:
-    """Return the repository AM producer spec/cohort digests or fail closed."""
-
-    return verified_am_pm_base_digests()
 
 
 def _am_pm_parse_timestamp(value: str, *, label: str) -> datetime:
@@ -4176,7 +4096,6 @@ __all__ = [
     "SOURCE_SLICE_WRAPPER_COST_SEMANTICS",
     "TOPIX_ETF_CODE",
     "TOPIX_PROXY_DATASET",
-    "am_pm_base_producer_unavailable_reason",
     "am_pm_proxy_mapping",
     "am_pm_proxy_mapping_digest",
     "am_pm_temporal_contract_digest",
@@ -4184,7 +4103,7 @@ __all__ = [
     "canonical_am_pm_fill_outcome_evidence_digest",
     "canonical_am_pm_lagged_feature_evidence_digest",
     "canonical_am_pm_signal_evidence_digest",
-    "resolve_am_pm_base_digests",
+    "verified_am_pm_base_digests",
     "build_prepared_panel_manifest",
     "canonical_prepared_am_pm_panel_digest",
     "canonical_prepared_panel_digest",

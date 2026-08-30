@@ -12,10 +12,10 @@ import {
   personalSnapshotObjectKey,
 } from "./personal_snapshot_contract";
 import {
-  PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID,
-  PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID,
-  personalIndexOverlayFamilyTerminalManifestKey,
+  isPersonalIndexOverlayFamilyCohort,
   personalIndexOverlayFamilyRunnerVersion,
+  personalIndexOverlayFamilyTerminalManifestKey,
+  personalIndexOverlayFamilyTerminalSchema,
   type PersonalIndexVolOverlay2023CohortId,
 } from "./personal_index_vol_overlay_2023_contract";
 import {
@@ -473,7 +473,7 @@ function parseTerminalManifestKey(
     ["research", /^research\/personal\/jobs\/job=([a-z0-9][a-z0-9._-]{0,63})\/manifest\.json$/],
     ["snapshot", /^research\/personal\/snapshot-builds\/job=([a-z0-9][a-z0-9._-]{0,63})\/manifest\.json$/],
     ["svi", /^research\/personal\/svi-2023\/job=([a-z0-9][a-z0-9._-]{0,63})\/manifest\.json$/],
-    ["overlay", /^research\/personal\/(?:index-vol-overlay-2023|index-smile-transport-2023)\/job=([a-z0-9][a-z0-9._-]{0,63})\/manifest\.json$/],
+    ["overlay", /^research\/personal\/(?:index-vol-overlay-2023|index-smile-transport-2023)(?:-am-pm)?\/job=([a-z0-9][a-z0-9._-]{0,63})\/manifest\.json$/],
   ];
   for (const [kind, pattern] of patterns) {
     const match = pattern.exec(key);
@@ -491,10 +491,7 @@ function expectedTerminalManifestKey(
   if (kind === "research") return personalResearchManifestKey(jobId);
   if (kind === "snapshot") return personalSnapshotManifestKey(jobId);
   if (kind === "svi") return personalSviTerminalManifestKey(jobId);
-  if (
-    cohortId === PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID ||
-    cohortId === PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID
-  ) {
+  if (isPersonalIndexOverlayFamilyCohort(cohortId)) {
     return personalIndexOverlayFamilyTerminalManifestKey(
       jobId,
       cohortId as PersonalIndexVolOverlay2023CohortId,
@@ -525,13 +522,8 @@ function expectedRunnerVersion(
     return PERSONAL_RESEARCH_RUNNER_VERSION;
   }
   if (kind === "svi") return PERSONAL_SVI_2023_RUNNER_VERSION;
-  if (
-    cohortId === PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID ||
-    cohortId === PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID
-  ) {
-    return personalIndexOverlayFamilyRunnerVersion(
-      cohortId as PersonalIndexVolOverlay2023CohortId,
-    );
+  if (isPersonalIndexOverlayFamilyCohort(cohortId)) {
+    return personalIndexOverlayFamilyRunnerVersion(cohortId);
   }
   return null;
 }
@@ -612,6 +604,13 @@ async function getTerminalManifest(
   if (
     (parsedKey.kind === "svi" || parsedKey.kind === "overlay") &&
     manifest.cohort_id !== cohortId
+  ) {
+    return responseJson({ error: "terminal identity mismatch" }, 403);
+  }
+  if (
+    parsedKey.kind === "overlay" &&
+    isPersonalIndexOverlayFamilyCohort(cohortId) &&
+    manifest.schema_version !== personalIndexOverlayFamilyTerminalSchema(cohortId)
   ) {
     return responseJson({ error: "terminal identity mismatch" }, 403);
   }

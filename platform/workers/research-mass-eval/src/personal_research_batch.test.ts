@@ -137,4 +137,43 @@ describe("personal research bounded batch", () => {
       runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
     });
   });
+
+  it("forwards an AM cohort onto the closed /v1/run envelope", async () => {
+    const request: PersonalResearchRequest = {
+      ...job("am-core-batch"),
+      cohort_id: "diverse-core-am-pm-v1",
+    };
+    const fetch = vi.fn(async (incoming: Request) =>
+      new URL(incoming.url).pathname === "/ready"
+        ? ready()
+        : new Response(JSON.stringify({ accepted: true }), { status: 202 }),
+    );
+    const getByName = vi.fn(() => ({ destroy: vi.fn(), fetch }));
+    const env = {
+      STRUCTURED_BUCKET: {
+        get: vi.fn(async () => null),
+        head: vi.fn(async () => ({ size: 2048 })),
+        put: vi.fn(async (key: string) => ({ key })),
+      },
+      PERSONAL_RESEARCH_CONTAINER: { getByName },
+    } as unknown as Env;
+    const parsed = parsePersonalResearchBatchRequest({ jobs: [request] });
+    expect(parsed.ok).toBe(true);
+    const response = await submitPersonalResearch(env, request);
+    expect(response.status).toBe(202);
+    const posted = fetch.mock.calls.find(
+      (call) => new URL((call[0] as Request).url).pathname === "/v1/run",
+    )?.[0] as Request;
+    expect(await posted.json()).toEqual({
+      ...request,
+      cohort_digest:
+        "sha256:77136481d8a6b20fb8dc8188b8d6adb2837050b8185a8f8abac92ca10811adde",
+      request_digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      result_key: `research/personal/jobs/job=${request.job_id}/result.tar.gz`,
+      manifest_key: `research/personal/jobs/job=${request.job_id}/manifest.json`,
+      runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
+      universe_rule_digest:
+        "sha256:7b88c89520a7cf751e7b63f160c16130183dba3c7c7e9c3a56660f3149c2c048",
+    });
+  });
 });

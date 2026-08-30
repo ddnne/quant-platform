@@ -4,7 +4,11 @@ import hashlib
 import io
 import json
 import tarfile
+import threading
+import urllib.error
+import urllib.parse
 from datetime import date, timedelta
+from email.message import Message
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -568,3 +572,187 @@ def test_am_pm_consumer_rejects_non_comparable_and_fixture_artifacts() -> None:
     }
     with pytest.raises(RuntimeError):
         overlay.validate_am_pm_base_sleeve_artifact(fixture)
+
+
+def _am_family_spec(*, job_id: str, smile: bool = False):
+    prefix = (
+        overlay.AM_PM_SMILE_TRANSPORT_R2_PREFIX
+        if smile
+        else overlay.AM_PM_R2_PREFIX
+    )
+    body = {
+        "base_job_id": "base-am",
+        "cohort_id": (
+            overlay.AM_PM_SMILE_TRANSPORT_COHORT_ID
+            if smile
+            else overlay.AM_PM_COHORT_ID
+        ),
+        "input_manifest_digest": "sha256:" + "b" * 64,
+        "input_manifest_key": f"{prefix}/job={job_id}/input-manifest.json",
+        "job_id": job_id,
+        "manifest_key": f"{prefix}/job={job_id}/manifest.json",
+        "request_digest": "sha256:" + "0" * 64,
+        "runner_version": (
+            overlay.AM_PM_SMILE_TRANSPORT_RUNNER_VERSION
+            if smile
+            else overlay.AM_PM_RUNNER_VERSION
+        ),
+        "svi_job_id": "svi-am",
+    }
+    body["request_digest"] = overlay.PersonalIndexVolOverlay2023JobSpec(
+        **body
+    ).derived_request_digest()
+    return overlay.PersonalIndexVolOverlay2023JobSpec.from_document(body)
+
+
+def test_timeout_terminal_uses_am_overlay_and_smile_schemas() -> None:
+    manager = service.JobManager(
+        lambda spec: {},
+        terminal_uploader=lambda *args, **kwargs: None,
+        max_job_seconds=30,
+    )
+    overlay_spec = _am_family_spec(job_id="am-overlay-timeout")
+    smile_spec = _am_family_spec(job_id="am-smile-timeout", smile=True)
+    overlay_terminal = manager._timeout_terminal(overlay_spec)
+    smile_terminal = manager._timeout_terminal(smile_spec)
+    assert overlay_terminal["schema_version"] == overlay.AM_PM_MANIFEST_SCHEMA
+    assert overlay_terminal["runner_version"] == overlay.AM_PM_RUNNER_VERSION
+    assert smile_terminal["schema_version"] == overlay.AM_PM_SMILE_TRANSPORT_MANIFEST_SCHEMA
+    assert smile_terminal["runner_version"] == overlay.AM_PM_SMILE_TRANSPORT_RUNNER_VERSION
+    assert overlay_terminal["schema_version"] != overlay.MANIFEST_SCHEMA
+    assert smile_terminal["schema_version"] != overlay.SMILE_TRANSPORT_MANIFEST_SCHEMA
+
+
+class _UrlResponse(io.BytesIO):
+    def __init__(self, status: int, body: bytes):
+        super().__init__(body)
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+
+class _ProductionOverlayR2:
+    def __init__(self, spec) -> None:
+        self.spec = spec
+        self.objects: dict[str, bytes] = {}
+        self.puts = 0
+        self.gets = 0
+
+    def urlopen(self, request, timeout=None):
+        del timeout
+        url = request.full_url
+        key = urllib.parse.urlparse(url).path.lstrip("/")
+        method = request.get_method()
+        headers = {name.lower(): value for name, value in request.header_items()}
+        if method == "PUT":
+            self.puts += 1
+            if key in self.objects:
+                raise urllib.error.HTTPError(
+                    url, 409, "conflict", Message(), io.BytesIO(b"")
+                )
+            payload = request.data
+            if not isinstance(payload, (bytes, bytearray)):
+                payload = payload.read()
+            self.objects[key] = bytes(payload)
+            return _UrlResponse(201, b'{"ok":true,"created":true}')
+        if method == "GET":
+            self.gets += 1
+            raw = self.objects.get(key)
+            if raw is None:
+                raise urllib.error.HTTPError(
+                    url, 403, "denied", Message(), io.BytesIO(b"")
+                )
+            parsed = json.loads(raw)
+            required = {
+                "x-personal-job-id",
+                "x-personal-request-digest",
+                "x-personal-runner-version",
+                "x-personal-job-kind",
+                "x-personal-cohort-id",
+            }
+            personal = {name for name in headers if name.startswith("x-personal-")}
+            expected_schema = (
+                overlay.AM_PM_SMILE_TRANSPORT_MANIFEST_SCHEMA
+                if self.spec.is_am_pm_smile_transport
+                else overlay.AM_PM_MANIFEST_SCHEMA
+            )
+            if (
+                personal != required
+                or headers.get("x-personal-job-id") != parsed.get("job_id")
+                or headers.get("x-personal-request-digest")
+                != parsed.get("request_digest")
+                or headers.get("x-personal-runner-version")
+                != parsed.get("runner_version")
+                or headers.get("x-personal-job-kind") != "overlay"
+                or headers.get("x-personal-cohort-id") != parsed.get("cohort_id")
+                or parsed.get("schema_version") != expected_schema
+                or key != self.spec.manifest_key
+            ):
+                raise urllib.error.HTTPError(
+                    url, 403, "denied", Message(), io.BytesIO(b"")
+                )
+            return _UrlResponse(200, raw)
+        raise AssertionError(method)
+
+
+@pytest.mark.parametrize("smile", (False, True))
+def test_am_family_conflict_get_verifies_identity_and_shuts_down(
+    monkeypatch, smile: bool
+) -> None:
+    spec = _am_family_spec(
+        job_id="am-smile-term" if smile else "am-overlay-term",
+        smile=smile,
+    )
+    fake = _ProductionOverlayR2(spec)
+    existing = service.JobManager(
+        lambda item: {},
+        terminal_uploader=lambda *args, **kwargs: None,
+        max_job_seconds=30,
+    )._timeout_terminal(spec)
+    fake.objects[spec.manifest_key] = service._canonical_bytes(existing)
+    monkeypatch.setattr(service.urllib.request, "urlopen", fake.urlopen)
+    terminal = threading.Event()
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        retry_schedule=(0.01,),
+        max_job_seconds=30,
+    )
+    manager.submit(spec)
+    assert terminal.wait(1)
+    assert fake.puts >= 1
+    assert fake.gets >= 1
+    assert manager._shutdown_notified is True
+
+
+@pytest.mark.parametrize("smile", (False, True))
+def test_am_family_wrong_schema_or_digest_does_not_shutdown(
+    monkeypatch, smile: bool
+) -> None:
+    spec = _am_family_spec(
+        job_id="am-smile-deny" if smile else "am-overlay-deny",
+        smile=smile,
+    )
+    fake = _ProductionOverlayR2(spec)
+    existing = service.JobManager(
+        lambda item: {},
+        terminal_uploader=lambda *args, **kwargs: None,
+        max_job_seconds=30,
+    )._timeout_terminal(spec)
+    existing["schema_version"] = overlay.MANIFEST_SCHEMA
+    fake.objects[spec.manifest_key] = service._canonical_bytes(existing)
+    monkeypatch.setattr(service.urllib.request, "urlopen", fake.urlopen)
+    terminal = threading.Event()
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        retry_schedule=(0.05,),
+        max_job_seconds=30,
+    )
+    manager.submit(spec)
+    assert not terminal.wait(0.2)
+    assert manager._shutdown_notified is False

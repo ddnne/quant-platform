@@ -30,23 +30,18 @@ from research.options_225_smile_transport import (
     build_daily_svi_smile_transport_features,
 )
 from research.options_225_vol_series import DATASET_ID, build_daily_basevol_series
+from research.factor_cohorts import AM_PM_EXECUTION_MODE, verified_am_pm_base_digests
 from research.personal_base_sleeve import (
     validate_personal_base_sleeve_am_pm_artifact,
     validate_personal_base_sleeve_artifact,
 )
 from research.personal_index_vol_overlay import (
-    AM_PM_BASE_COHORT_ID,
-    AM_PM_BASE_SLEEVE_ID,
-    AM_PM_BASE_SLEEVE_SCHEMA,
-    AM_PM_EXECUTION_MODE,
     AmPmFillOutcomeEvidence,
     AmPmLaggedFeatureEvidence,
     AmPmSignalEvidence,
     BETA_MIN_RETURNS,
     IndexVolOverlayAmPmObservation,
     IndexVolOverlayObservation,
-    am_pm_base_producer_unavailable_reason,
-    verified_am_pm_base_digests,
     OVERLAY_AM_PM_CANDIDATE_IDS,
     SMILE_TRANSPORT_AM_PM_CANDIDATE_IDS,
     SMILE_TRANSPORT_CANDIDATE_IDS,
@@ -577,9 +572,10 @@ def _expand_snapshot(transport: Path, destination: Path, raw_digest: str) -> Non
         raise RuntimeError("expanded overlay snapshot sha256 mismatch")
 
 
-def load_base_sleeve_from_archive(
+def _load_sleeve_from_archive(
     archive_path: Path,
     reference: Mapping[str, Any],
+    validator: Callable[[Any], None],
 ) -> dict[str, Any]:
     member_name = reference.get("archive_member")
     expected_digest = reference.get("sha256")
@@ -614,10 +610,19 @@ def load_base_sleeve_from_archive(
     if len(raw) != member.size or _sha256(raw) != expected_digest:
         raise RuntimeError("base sleeve archive member digest mismatch")
     document = json.loads(raw)
-    validate_personal_base_sleeve_artifact(document)
+    validator(document)
     if not isinstance(document, dict):
         raise RuntimeError("base sleeve artifact is not an object")
     return document
+
+
+def load_base_sleeve_from_archive(
+    archive_path: Path,
+    reference: Mapping[str, Any],
+) -> dict[str, Any]:
+    return _load_sleeve_from_archive(
+        archive_path, reference, validate_personal_base_sleeve_artifact
+    )
 
 
 def validate_am_pm_base_sleeve_artifact(document: Any) -> None:
@@ -627,66 +632,18 @@ def validate_am_pm_base_sleeve_artifact(document: Any) -> None:
         validate_personal_base_sleeve_am_pm_artifact(document)
     except (TypeError, ValueError) as error:
         raise RuntimeError(str(error)) from error
-    if not isinstance(document, Mapping):
-        raise RuntimeError("AM/PM base sleeve artifact must be an object")
-    quality = document.get("data_quality")
+    quality = document.get("data_quality") if isinstance(document, Mapping) else None
     if not isinstance(quality, Mapping) or quality.get("comparable") is not True:
         raise RuntimeError("AM/PM overlay requires a comparable base sleeve")
-    expected_spec, expected_cohort = verified_am_pm_base_digests()
-    strategy = document.get("strategy")
-    cohort = document.get("cohort")
-    source = document.get("source_run")
-    if not all(isinstance(value, Mapping) for value in (strategy, cohort, source)):
-        raise RuntimeError("AM/PM base sleeve provenance is incomplete")
-    if (
-        strategy.get("strategy_spec_digest") != expected_spec
-        or cohort.get("cohort_digest") != expected_cohort
-        or source.get("execution_mode") != AM_PM_EXECUTION_MODE
-    ):
-        raise RuntimeError("AM/PM base sleeve does not match the repository producer")
 
 
 def load_am_pm_base_sleeve_from_archive(
     archive_path: Path,
     reference: Mapping[str, Any],
 ) -> dict[str, Any]:
-    member_name = reference.get("archive_member")
-    expected_digest = reference.get("sha256")
-    if (
-        not isinstance(member_name, str)
-        or not isinstance(expected_digest, str)
-        or _DIGEST_RE.fullmatch(expected_digest) is None
-    ):
-        raise RuntimeError("base sleeve archive reference is invalid")
-    member_path = PurePosixPath(member_name)
-    if (
-        member_path.is_absolute()
-        or ".." in member_path.parts
-        or member_name
-        != f"base-sleeve/{expected_digest.removeprefix('sha256:')}.json"
-    ):
-        raise RuntimeError("base sleeve archive member is unsafe")
-    matches: list[tarfile.TarInfo] = []
-    with tarfile.open(archive_path, mode="r:gz") as archive:
-        for member in archive:
-            if member.name == member_name:
-                matches.append(member)
-        if len(matches) != 1 or not matches[0].isreg():
-            raise RuntimeError("base sleeve archive member is missing or ambiguous")
-        member = matches[0]
-        if not 0 < member.size <= MAX_BASE_ARTIFACT_BYTES:
-            raise RuntimeError("base sleeve archive member size denied")
-        extracted = archive.extractfile(member)
-        if extracted is None:
-            raise RuntimeError("base sleeve archive member cannot be read")
-        raw = extracted.read(member.size + 1)
-    if len(raw) != member.size or _sha256(raw) != expected_digest:
-        raise RuntimeError("base sleeve archive member digest mismatch")
-    document = json.loads(raw)
-    validate_am_pm_base_sleeve_artifact(document)
-    if not isinstance(document, dict):
-        raise RuntimeError("base sleeve artifact is not an object")
-    return document
+    return _load_sleeve_from_archive(
+        archive_path, reference, validate_am_pm_base_sleeve_artifact
+    )
 
 
 def _svi_spec(manifest: Mapping[str, Any]) -> PersonalSvi2023JobSpec:
@@ -1712,31 +1669,6 @@ def execute_smile_transport_job(
     return terminal
 
 
-def _am_pm_producer_unavailable_terminal(
-    spec: PersonalIndexVolOverlay2023JobSpec,
-) -> dict[str, Any] | None:
-    unavailable = am_pm_base_producer_unavailable_reason()
-    if unavailable is None:
-        return None
-    return {
-        "schema_version": (
-            AM_PM_SMILE_TRANSPORT_MANIFEST_SCHEMA
-            if spec.is_am_pm_smile_transport
-            else AM_PM_MANIFEST_SCHEMA
-        ),
-        "status": "FAILED",
-        **_authority(spec),
-        "runner_version": spec.runner_version,
-        "request_digest": spec.request_digest,
-        "error": unavailable,
-        "producer_dependency": {
-            "required_cohort_id": AM_PM_BASE_COHORT_ID,
-            "required_strategy_id": AM_PM_BASE_SLEEVE_ID,
-            "required_schema": AM_PM_BASE_SLEEVE_SCHEMA,
-        },
-    }
-
-
 def _open_am_pm_sources(
     spec: PersonalIndexVolOverlay2023JobSpec,
     *,
@@ -1781,10 +1713,6 @@ def execute_am_pm_overlay_job(
     svi_opener: Callable[[PersonalSvi2023JobSpec, str], Any] | None = None,
     uploader: Callable[[PersonalIndexVolOverlay2023JobSpec, str, bytes], str] = _put_bytes,
 ) -> dict[str, Any]:
-    unavailable = _am_pm_producer_unavailable_terminal(spec)
-    if unavailable is not None:
-        uploader(spec, spec.manifest_key, _canonical_bytes(unavailable))
-        return unavailable
     try:
         opened = _open_am_pm_sources(
             spec, overlay_opener=overlay_opener, svi_opener=svi_opener
@@ -1982,10 +1910,6 @@ def execute_am_pm_smile_transport_job(
     svi_opener: Callable[[PersonalSvi2023JobSpec, str], Any] | None = None,
     uploader: Callable[[PersonalIndexVolOverlay2023JobSpec, str, bytes], str] = _put_bytes,
 ) -> dict[str, Any]:
-    unavailable = _am_pm_producer_unavailable_terminal(spec)
-    if unavailable is not None:
-        uploader(spec, spec.manifest_key, _canonical_bytes(unavailable))
-        return unavailable
     try:
         opened = _open_am_pm_sources(
             spec, overlay_opener=overlay_opener, svi_opener=svi_opener

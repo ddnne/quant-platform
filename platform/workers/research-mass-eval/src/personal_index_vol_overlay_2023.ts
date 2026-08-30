@@ -39,6 +39,7 @@ import {
 } from "./personal_index_vol_overlay_2023_contract";
 import {
   PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES,
+  PERSONAL_RESEARCH_RUNNER_VERSION,
   isPersonalResearchSnapshotKey,
   personalResearchCohortDigest,
   personalResearchManifestKey,
@@ -183,7 +184,8 @@ async function baseInputs(
   const amPmEligible =
     family === "am-pm" &&
     manifest.cohort_id === PERSONAL_INDEX_AM_PM_BASE_COHORT_ID &&
-    DIGEST_RE.test(String(manifest.cohort_digest ?? "")) &&
+    manifest.cohort_digest ===
+      personalResearchCohortDigest(PERSONAL_INDEX_AM_PM_BASE_COHORT_ID) &&
     manifest.execution_mode === "am_signal_pm_close" &&
     isObject(sleeve) &&
     sleeve.artifact_schema_version === "personal-base-sleeve-source-am-pm/v1";
@@ -191,9 +193,13 @@ async function baseInputs(
     family === "legacy" &&
     manifest.cohort_id === BASE_COHORT_ID &&
     manifest.cohort_digest === personalResearchCohortDigest(BASE_COHORT_ID);
+  const runnerOk =
+    family === "am-pm"
+      ? String(manifest.version ?? "") === PERSONAL_RESEARCH_RUNNER_VERSION
+      : OVERLAY_COMPATIBLE_BASE_RUNNER_VERSIONS.has(String(manifest.version ?? ""));
   if (
     manifest.status !== "COMPLETED" ||
-    !OVERLAY_COMPATIBLE_BASE_RUNNER_VERSIONS.has(String(manifest.version ?? "")) ||
+    !runnerOk ||
     manifest.job_id !== baseJobId ||
     !amPmEligible && !legacyEligible ||
     (family === "am-pm" && manifest.execution_mode === "next_close") ||

@@ -9,14 +9,19 @@ import pytest
 from core.result import BacktestResult
 from pit.personal_retrospective_session import am_session_view_digest
 from research.factor_cohorts import (
+    AM_PM_EXECUTION_MODE,
     AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT,
     PERSONAL_SHORT_FINANCING_AM_PM_COHORT_ID,
+    canonical_trading_calendar_digest,
     get_research_cohort,
     personal_specs_for_cohort,
+    verified_am_pm_base_digests,
 )
 from research.personal_base_sleeve import (
     AM_PM_BASE_COHORT_ID,
     AM_PM_BASE_SLEEVE_ID,
+    EXPECTED_BASE_COHORT_DIGEST,
+    EXPECTED_BASE_STRATEGY_SPEC_DIGEST,
     PERSONAL_BASE_SLEEVE_AM_PM_ARTIFACT_SCHEMA,
     PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA,
     PERSONAL_BASE_SLEEVE_COST_BPS,
@@ -24,13 +29,6 @@ from research.personal_base_sleeve import (
     build_personal_base_sleeve_am_pm_artifact,
     validate_personal_base_sleeve_am_pm_artifact,
     validate_personal_base_sleeve_artifact,
-)
-from research.personal_index_vol_overlay import (
-    AM_PM_EXECUTION_MODE,
-    EXPECTED_BASE_COHORT_DIGEST,
-    EXPECTED_BASE_STRATEGY_SPEC_DIGEST,
-    canonical_trading_calendar_digest,
-    verified_am_pm_base_digests,
 )
 from strategies.paper import Lifecycle, PaperRunResult
 from strategies.spec import strategy_spec_digest
@@ -118,7 +116,7 @@ def _paper_result(
         ),
         reproducibility={
             "execution_mode": "am_signal_pm_close",
-            "period": {"start": DATES[0], "end": DATES[-1]},
+            "period": {"start": rows[0]["date"], "end": rows[-1]["date"]},
             "starting_capital": 1_000_000.0,
             "strategy_id": AM_PM_BASE_SLEEVE_ID,
             "resolved_universe_digest": DIGEST,
@@ -148,6 +146,7 @@ def _build(
     rows: list[dict[str, Any]] | None = None,
     *,
     quality: dict[str, Any] | None = None,
+    session_dates: tuple[str, ...] = DATES,
 ) -> dict[str, Any]:
     if rows is None:
         rows = [
@@ -180,8 +179,8 @@ def _build(
         resolved_membership_digest=DIGEST,
         snapshot_id=DIGEST,
         logical_data_snapshot_id=DIGEST,
-        source_period=(DATES[0], DATES[-1]),
-        source_session_dates=DATES,
+        source_period=(session_dates[0], session_dates[-1]),
+        source_session_dates=session_dates,
     )
 
 
@@ -257,6 +256,47 @@ def test_missing_m_and_a_stay_null_and_non_comparable() -> None:
     assert last["base_sleeve_pm_return"] is None
     assert document["data_quality"]["comparable"] is False
     assert document["data_quality"]["selection_eligible"] is False
+
+
+def test_missing_a_rebases_pm_return_on_the_next_valid_afternoon() -> None:
+    four = ("2023-01-04", "2023-01-05", "2023-01-06", "2023-01-07")
+    rows = [
+        {"date": four[0], "equity": 1_000_000.0, "signal_equity": 1_000_000.0},
+        {"date": four[1], "equity": None, "signal_equity": 1_050_000.0},
+        {"date": four[2], "equity": 1_200_000.0, "signal_equity": 1_150_000.0},
+        {"date": four[3], "equity": 1_212_000.0, "signal_equity": 1_180_000.0},
+    ]
+    document = _build(
+        rows,
+        quality=_quality(incomplete=(four[1],)),
+        session_dates=four,
+    )
+    first, gap, recovered, nxt = document["daily_path"]
+    assert first["pm_nav"] == 1_000_000.0
+    assert gap["fill_valuation_valid"] is False
+    assert gap["pm_nav"] is None
+    assert gap["base_sleeve_pm_return"] is None
+    assert recovered["fill_valuation_valid"] is True
+    assert recovered["pm_nav"] == 1_200_000.0
+    assert recovered["base_sleeve_pm_return"] is None
+    assert nxt["fill_valuation_valid"] is True
+    assert nxt["base_sleeve_pm_return"] == pytest.approx(0.01)
+    validate_personal_base_sleeve_am_pm_artifact(document)
+
+
+def test_missing_fill_dates_are_not_valid_pm_valuations() -> None:
+    rows = [
+        {"date": DATES[0], "equity": 1_000_000.0, "signal_equity": 1_000_000.0},
+        {"date": DATES[1], "equity": 1_050_000.0, "signal_equity": 1_020_000.0},
+        {"date": DATES[2], "equity": 1_080_000.0, "signal_equity": 1_060_000.0},
+    ]
+    document = _build(rows, quality=_quality(missing_fill=(DATES[1],)))
+    mid = document["daily_path"][1]
+    assert mid["fill_valuation_valid"] is False
+    assert mid["pm_nav"] is None
+    assert mid["base_sleeve_pm_return"] is None
+    assert document["data_quality"]["missing_fill_dates"] == [DATES[1]]
+    validate_personal_base_sleeve_am_pm_artifact(document)
 
 
 def test_am_validator_rejects_legacy_schema_invented_mode_and_arbitrary_digest() -> None:

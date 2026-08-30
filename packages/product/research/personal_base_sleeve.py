@@ -16,27 +16,43 @@ from typing import Any, Final
 
 from pit.personal_retrospective_session import am_session_view_digest
 from research.factor_cohorts import (
-    AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT,
-    AM_SIGNAL_PM_CLOSE_EXECUTION_MODE,
-)
-from strategies.paper import Lifecycle, PaperRunResult
-from strategies.spec import StrategySpec, strategy_spec_digest
-
-from research.personal_index_vol_overlay import (
     AM_PM_BASE_COHORT_ID,
     AM_PM_BASE_SLEEVE_ID,
     AM_PM_BASE_SLEEVE_SCHEMA,
     AM_PM_EXECUTION_MODE,
-    BASE_COHORT_ID,
-    BASE_NAV_SEMANTICS,
-    BASE_RETURN_SEMANTICS,
-    BASE_SLEEVE_ID,
-    BASE_UNIVERSE_ID,
-    EXPECTED_BASE_COHORT_DIGEST,
-    EXPECTED_BASE_STRATEGY_SPEC_DIGEST,
-    SOURCE_SLICE_WRAPPER_COST_SEMANTICS,
+    AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT,
+    AM_SIGNAL_PM_CLOSE_EXECUTION_MODE,
     canonical_trading_calendar_digest,
+    get_research_cohort,
     verified_am_pm_base_digests,
+)
+from strategies.paper import Lifecycle, PaperRunResult
+from strategies.spec import StrategySpec, strategy_spec_digest
+
+BASE_SLEEVE_ID: Final = "personal_sector_balanced_four_factor_v1_ls"
+BASE_UNIVERSE_ID: Final = "topix_all"
+BASE_COHORT_ID: Final = "sector-relative-ls-v1"
+BASE_RETURN_SEMANTICS: Final = (
+    "NET_AFTER_STOCK_EXECUTION_COSTS_AND_SHORT_FINANCING"
+)
+BASE_NAV_SEMANTICS: Final = "CONTINUOUS_PRE_EXISTING_INVESTABLE_NAV"
+SOURCE_SLICE_WRAPPER_COST_SEMANTICS: Final = (
+    "EXCLUDES_NAV_WRAPPER_ENTRY_AND_LIQUIDATION"
+)
+_LEGACY_BASE_COHORT = get_research_cohort(BASE_COHORT_ID)
+_LEGACY_BASE_SPEC = next(
+    (
+        spec
+        for spec in _LEGACY_BASE_COHORT.strategy_specs
+        if spec.strategy_id == BASE_SLEEVE_ID
+    ),
+    None,
+)
+if _LEGACY_BASE_SPEC is None:  # pragma: no cover - import-time drift guard
+    raise RuntimeError("frozen base strategy is absent from its declared cohort")
+EXPECTED_BASE_STRATEGY_SPEC_DIGEST: Final = strategy_spec_digest(_LEGACY_BASE_SPEC)
+EXPECTED_BASE_COHORT_DIGEST: Final = str(
+    _LEGACY_BASE_COHORT.to_dict()["cohort_digest"]
 )
 
 PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA: Final = "personal-base-sleeve-source/v1"
@@ -591,6 +607,9 @@ def _am_pm_daily_path(
             quality.get("incomplete_valuation_dates"), label="incomplete"
         )
     )
+    missing_fill = set(
+        _iso_date_list(quality.get("missing_fill_dates"), label="missing_fill")
+    )
     previous_day: str | None = None
     previous_pm_valid = True
     rows: list[dict[str, Any]] = []
@@ -599,7 +618,7 @@ def _am_pm_daily_path(
         if previous_day is not None and day <= previous_day:
             raise ValueError("base sleeve dates must be strictly increasing")
         decision_valid = day not in skipped
-        fill_valuation_valid = day not in incomplete
+        fill_valuation_valid = day not in incomplete and day not in missing_fill
         am_nav = _optional_positive(source.get("signal_equity"))
         if decision_valid:
             if am_nav is None:
@@ -613,9 +632,10 @@ def _am_pm_daily_path(
             pm_nav = None
         if fill_valuation_valid and previous_pm_valid and pm_nav is not None:
             pm_return: float | None = pm_nav / previous_equity - 1.0
-            previous_equity = pm_nav
         else:
             pm_return = None
+        if fill_valuation_valid and pm_nav is not None:
+            previous_equity = pm_nav
         previous_pm_valid = fill_valuation_valid and pm_nav is not None
         rows.append(
             {
@@ -924,6 +944,7 @@ def validate_personal_base_sleeve_am_pm_artifact(document: Any) -> None:
         raise ValueError("base sleeve artifact source session count is invalid")
     skipped = set(quality["skipped_decision_dates"])
     incomplete = set(quality["incomplete_valuation_dates"])
+    missing_fill = set(quality["missing_fill_dates"])
     prior_day: str | None = None
     prior_equity = PERSONAL_BASE_SLEEVE_STARTING_CAPITAL
     prior_pm_valid = True
@@ -941,7 +962,8 @@ def validate_personal_base_sleeve_am_pm_artifact(document: Any) -> None:
         )
         if decision_valid is (day in skipped):
             raise ValueError("AM decision_valid does not match quality codes")
-        if fill_valuation_valid is (day in incomplete):
+        expected_fill_valid = day not in incomplete and day not in missing_fill
+        if fill_valuation_valid is not expected_fill_valid:
             raise ValueError("AM fill_valuation_valid does not match quality codes")
         am_nav = _optional_positive(row.get("am_nav"))
         pm_nav = _optional_positive(row.get("pm_nav"))
@@ -963,12 +985,11 @@ def validate_personal_base_sleeve_am_pm_artifact(document: Any) -> None:
                 abs_tol=1.0e-12,
             ):
                 raise ValueError("base sleeve artifact NAV and return are inconsistent")
+        elif observed_return is not None:
+            raise ValueError("non-comparable PM session must not carry a return")
+        if fill_valuation_valid and pm_nav is not None:
             prior_equity = pm_nav
-            prior_pm_valid = True
-        else:
-            if observed_return is not None:
-                raise ValueError("non-comparable PM session must not carry a return")
-            prior_pm_valid = False
+        prior_pm_valid = fill_valuation_valid and pm_nav is not None
         prior_day = day
     ordered_session_dates = tuple(str(row["date"]) for row in rows)
     if (
@@ -1003,7 +1024,6 @@ __all__ = [
     "PERSONAL_BASE_SLEEVE_ROLE",
     "PERSONAL_BASE_SLEEVE_SHORT_FINANCING_RATE",
     "SOURCE_SLICE_WRAPPER_COST_SEMANTICS",
-    "build_personal_base_sleeve_am_pm_artifact",
     "build_personal_base_sleeve_artifact",
     "validate_personal_base_sleeve_am_pm_artifact",
     "validate_personal_base_sleeve_artifact",

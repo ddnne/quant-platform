@@ -371,6 +371,17 @@ export function isPersonalIndexSmileTransport2023AmPmCohort(
   return cohortId === PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_COHORT_ID;
 }
 
+export function isPersonalIndexOverlayFamilyCohort(
+  cohortId: string,
+): cohortId is PersonalIndexVolOverlay2023CohortId {
+  return (
+    cohortId === PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID ||
+    cohortId === PERSONAL_INDEX_SMILE_TRANSPORT_2023_COHORT_ID ||
+    cohortId === PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID ||
+    cohortId === PERSONAL_INDEX_SMILE_TRANSPORT_2023_AM_PM_COHORT_ID
+  );
+}
+
 function checkedJobId(jobId: string): string {
   if (!JOB_ID_RE.test(jobId)) throw new Error("invalid index-vol overlay job id");
   return jobId;
@@ -515,6 +526,20 @@ export function personalIndexOverlayFamilyRunnerVersion(
   return isPersonalIndexSmileTransport2023Cohort(cohortId)
     ? PERSONAL_INDEX_SMILE_TRANSPORT_2023_RUNNER_VERSION
     : PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION;
+}
+
+export function personalIndexOverlayFamilyTerminalSchema(
+  cohortId: PersonalIndexVolOverlay2023CohortId,
+): string {
+  if (isPersonalIndexSmileTransport2023AmPmCohort(cohortId)) {
+    return "personal-index-smile-transport-am-pm-manifest/v1";
+  }
+  if (isPersonalIndexVolOverlay2023AmPmCohort(cohortId)) {
+    return "personal-index-vol-overlay-am-pm-manifest/v1";
+  }
+  return isPersonalIndexSmileTransport2023Cohort(cohortId)
+    ? "personal-index-smile-transport-manifest/v2"
+    : "personal-index-vol-overlay-manifest/v1";
 }
 
 export function personalIndexVolOverlay2023JobIdFromPath(

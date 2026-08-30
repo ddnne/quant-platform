@@ -38,8 +38,12 @@ from personal_svi_2023_job import (
     execute_svi_job,
 )
 from personal_index_vol_overlay_2023_job import (
+    AM_PM_MANIFEST_SCHEMA,
+    AM_PM_SMILE_TRANSPORT_MANIFEST_SCHEMA,
+    MANIFEST_SCHEMA,
     OverlayJobInputError,
     PersonalIndexVolOverlay2023JobSpec,
+    SMILE_TRANSPORT_MANIFEST_SCHEMA,
     execute_overlay_job,
 )
 from ingestion.personal_history import (
@@ -1549,12 +1553,16 @@ class JobManager:
                 "go": False,
                 "not_a_pass": True,
             }
+        if spec.is_am_pm_smile_transport:
+            schema = AM_PM_SMILE_TRANSPORT_MANIFEST_SCHEMA
+        elif spec.is_am_pm_overlay:
+            schema = AM_PM_MANIFEST_SCHEMA
+        elif spec.is_smile_transport:
+            schema = SMILE_TRANSPORT_MANIFEST_SCHEMA
+        else:
+            schema = MANIFEST_SCHEMA
         return {
-            "schema_version": (
-                "personal-index-smile-transport-manifest/v2"
-                if spec.is_smile_transport
-                else "personal-index-vol-overlay-manifest/v1"
-            ),
+            "schema_version": schema,
             "status": "FAILED",
             "job_id": spec.job_id,
             "cohort_id": spec.cohort_id,

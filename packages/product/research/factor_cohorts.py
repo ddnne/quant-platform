@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from strategies.spec import FactorLeg, FeatureRef, StrategySpec
+from strategies.spec import FactorLeg, FeatureRef, StrategySpec, strategy_spec_digest
 
 from research.paper_candidate_specs import build_factor_rank_strategy_spec
 
@@ -34,7 +36,12 @@ FUNDAMENTAL_RELATIVE_AM_PM_COHORT_ID = "fundamental-relative-am-pm-v1"
 DEFAULT_FACTOR_COHORT_ID = "diverse-core-am-pm-v1"
 COMPACT_MARKET_AM_PM_COHORT_ID = "compact-market-diverse-am-pm-v1"
 PERSONAL_SHORT_FINANCING_AM_PM_COHORT_ID = "sector-relative-ls-am-pm-v1"
+AM_PM_BASE_COHORT_ID = PERSONAL_SHORT_FINANCING_AM_PM_COHORT_ID
+AM_PM_BASE_SLEEVE_ID = "personal_sector_balanced_four_factor_v1_ls_am_pm"
+AM_PM_BASE_SLEEVE_SCHEMA = "personal-base-sleeve-source-am-pm/v1"
 AM_SIGNAL_PM_CLOSE_EXECUTION_MODE = "am_signal_pm_close"
+AM_PM_EXECUTION_MODE = AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
+TRADING_CALENDAR_DIGEST_SCHEMA = "ordered-trading-session-dates/v1"
 LEGACY_NEXT_CLOSE_EXECUTION_MODE = "next_close"
 LEGACY_NEXT_CLOSE_LABEL = "legacy_next_close"
 AM_PM_COHORT_DOCUMENT_VERSION = "personal-am-pm-cohort/v1"
@@ -746,8 +753,71 @@ def personal_specs_for_cohort(
     return cohort.strategy_specs
 
 
+def canonical_authoritative_session_dates(
+    session_dates: Sequence[str],
+) -> tuple[str, ...]:
+    """Canonicalize an independently supplied strictly increasing session vector."""
+
+    if isinstance(session_dates, (str, bytes)) or len(session_dates) < 3:
+        raise ValueError("authoritative session dates must contain at least three rows")
+    canonical: list[str] = []
+    for raw in session_dates:
+        try:
+            parsed = date.fromisoformat(raw).isoformat()
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "authoritative session dates must be canonical ISO"
+            ) from exc
+        if parsed != raw:
+            raise ValueError("authoritative session dates must be canonical ISO")
+        if canonical and raw <= canonical[-1]:
+            raise ValueError("authoritative session dates must be strictly increasing")
+        canonical.append(raw)
+    return tuple(canonical)
+
+
+def canonical_trading_calendar_digest(session_dates: Sequence[str]) -> str:
+    """Hash only the independently supplied authoritative session vector."""
+
+    canonical = canonical_authoritative_session_dates(session_dates)
+    return _canonical_digest(
+        {
+            "schema_version": TRADING_CALENDAR_DIGEST_SCHEMA,
+            "ordered_session_dates": list(canonical),
+        }
+    )
+
+
+def verified_am_pm_base_digests() -> tuple[str, str]:
+    """Return the repository AM sleeve spec/cohort digests or fail closed."""
+
+    try:
+        cohort = get_research_cohort(AM_PM_BASE_COHORT_ID)
+    except KeyError as exc:
+        raise ValueError("AM base sleeve producer identity is missing") from exc
+    spec = next(
+        (
+            item
+            for item in cohort.strategy_specs
+            if item.strategy_id == AM_PM_BASE_SLEEVE_ID
+        ),
+        None,
+    )
+    if spec is None:
+        raise ValueError("AM base sleeve producer identity is missing")
+    spec_digest = strategy_spec_digest(spec)
+    cohort_digest = str(cohort.to_dict()["cohort_digest"])
+    if not spec_digest.startswith("sha256:") or not cohort_digest.startswith("sha256:"):
+        raise ValueError("AM base sleeve producer identity is invalid")
+    return spec_digest, cohort_digest
+
+
 __all__ = [
+    "AM_PM_BASE_COHORT_ID",
+    "AM_PM_BASE_SLEEVE_ID",
+    "AM_PM_BASE_SLEEVE_SCHEMA",
     "AM_PM_COHORT_DOCUMENT_VERSION",
+    "AM_PM_EXECUTION_MODE",
     "AM_PM_PERSONAL_EXECUTABLE_COHORT_IDS",
     "AM_SIGNAL_PM_CLOSE_CONTRACT_ID",
     "AM_SIGNAL_PM_CLOSE_CONTRACT_VERSION",
@@ -774,8 +844,11 @@ __all__ = [
     "PRICE_RELATIVE_AM_PM_COHORT_ID",
     "RESEARCH_COHORTS",
     "SECTOR_RELATIVE_UNIVERSE_IDS",
+    "TRADING_CALENDAR_DIGEST_SCHEMA",
     "ResearchCohort",
     "am_signal_pm_close_execution_contract",
+    "canonical_authoritative_session_dates",
+    "canonical_trading_calendar_digest",
     "execution_contract_for_cohort",
     "get_research_cohort",
     "is_am_pm_factor_cohort",
@@ -784,4 +857,5 @@ __all__ = [
     "legacy_next_close_execution_contract",
     "personal_specs_for_cohort",
     "validate_personal_cohort_universe",
+    "verified_am_pm_base_digests",
 ]

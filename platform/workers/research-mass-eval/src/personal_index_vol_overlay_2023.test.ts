@@ -194,14 +194,16 @@ async function sources(
   return { mem, baseJobId, sviJobId, optionKey };
 }
 
-async function amPmSources() {
-  const fixed = await sources();
+async function amPmSources(
+  baseVersion: string | null = PERSONAL_RESEARCH_RUNNER_VERSION,
+) {
+  const fixed = await sources(baseVersion);
   const manifestKey = personalResearchManifestKey(fixed.baseJobId);
   const stored = await fixed.mem.get(manifestKey);
   if (!stored) throw new Error("missing base manifest");
   const document = JSON.parse(new TextDecoder().decode(await stored.arrayBuffer())) as Record<string, unknown>;
   document.cohort_id = "sector-relative-ls-am-pm-v1";
-  document.cohort_digest = `sha256:${"a".repeat(64)}`;
+  document.cohort_digest = personalResearchCohortDigest("sector-relative-ls-am-pm-v1");
   document.execution_mode = "am_signal_pm_close";
   const sleeve = isObject(document.base_sleeve_artifact)
     ? { ...document.base_sleeve_artifact, artifact_schema_version: "personal-base-sleeve-source-am-pm/v1", cohort_id: "sector-relative-ls-am-pm-v1" }
@@ -317,6 +319,45 @@ describe("fixed personal index-vol overlay admission", () => {
         },
       ),
     ).resolves.toMatchObject({ base: { job_id: fixed.baseJobId } });
+  });
+
+  it("requires the current v13 runner and frozen AM digest for AM/PM bases", async () => {
+    const current = await amPmSources();
+    await expect(
+      buildPersonalIndexVolOverlay2023InputManifest(current.mem.asBucket(), {
+        job_id: "overlay-am-pm-v13",
+        cohort_id: PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID,
+        base_job_id: current.baseJobId,
+        svi_job_id: current.sviJobId,
+      }),
+    ).resolves.toMatchObject({
+      cohort_id: PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID,
+      base: { job_id: current.baseJobId },
+    });
+    const legacy = await amPmSources("personal-cloud-runner/v12");
+    await expect(
+      buildPersonalIndexVolOverlay2023InputManifest(legacy.mem.asBucket(), {
+        job_id: "overlay-am-pm-v12",
+        cohort_id: PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID,
+        base_job_id: legacy.baseJobId,
+        svi_job_id: legacy.sviJobId,
+      }),
+    ).rejects.toThrow("overlay_base_job_not_eligible");
+    const arbitrary = await amPmSources();
+    const manifestKey = personalResearchManifestKey(arbitrary.baseJobId);
+    const stored = await arbitrary.mem.get(manifestKey);
+    if (!stored) throw new Error("missing AM base manifest");
+    const document = JSON.parse(new TextDecoder().decode(await stored.arrayBuffer())) as Record<string, unknown>;
+    document.cohort_digest = `sha256:${"a".repeat(64)}`;
+    arbitrary.mem.seed(manifestKey, document);
+    await expect(
+      buildPersonalIndexVolOverlay2023InputManifest(arbitrary.mem.asBucket(), {
+        job_id: "overlay-am-pm-arbitrary",
+        cohort_id: PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID,
+        base_job_id: arbitrary.baseJobId,
+        svi_job_id: arbitrary.sviJobId,
+      }),
+    ).rejects.toThrow("overlay_base_job_not_eligible");
   });
 
   it.each([

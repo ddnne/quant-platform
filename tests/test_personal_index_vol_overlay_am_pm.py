@@ -6,7 +6,6 @@ from dataclasses import replace
 from datetime import date, timedelta
 from typing import Any, Mapping, Sequence
 import pytest
-import research.personal_index_vol_overlay as overlay_mod
 
 from research.options_225_smile_features import OPTIONS_225_SMILE_SURFACE_SCOPE
 from research.options_225_smile_transport import (
@@ -44,7 +43,6 @@ from research.personal_index_vol_overlay import (
     SMILE_TRANSPORT_AM_PM_CANDIDATE_IDS,
     SMILE_TRANSPORT_CANDIDATE_IDS,
     TOPIX_ETF_CODE,
-    am_pm_base_producer_unavailable_reason,
     am_pm_temporal_contract_digest,
     verified_am_pm_base_digests,
     build_prepared_am_pm_panel_manifest,
@@ -416,7 +414,6 @@ def test_missing_definition_and_legacy_digest_fail_for_the_same_reason() -> None
     dates = _dates(8)
     rows = _am_pm_rows(dates)
     spec, cohort = verified_am_pm_base_digests()
-    assert am_pm_base_producer_unavailable_reason() is None
     assert spec == (
         "sha256:54a59cb980f38c37ac5879f979bd26a635bf23a95974413f2f24358ef936be4d"
     )
@@ -1072,9 +1069,6 @@ def test_arbitrary_digests_cannot_construct_validate_or_evaluate() -> None:
     rows = _am_pm_rows(dates)
     arbitrary_spec = "sha256:" + "1" * 64
     arbitrary_cohort = "sha256:" + "2" * 64
-    assert not hasattr(overlay_mod, "am_pm_verified_base_binding")
-    assert not hasattr(overlay_mod, "am_pm_fixture_base_definition")
-    assert "am_pm_verified_base_binding" not in overlay_mod.__all__
     with pytest.raises(AmPmBaseProducerUnavailable, match=AM_PM_BASE_PRODUCER_UNAVAILABLE):
         build_prepared_am_pm_panel_manifest(
             rows,

@@ -217,6 +217,26 @@ describe("personal research Container admission", () => {
     });
   });
 
+  it("forwards an AM request with exact schema, mode digest, and v13 runner", async () => {
+    const request: PersonalResearchRequest = {
+      ...REQUEST,
+      cohort_id: "diverse-core-am-pm-v1",
+      job_id: "am-core-container",
+    };
+    const { env, containerFetch } = testEnv(205 * 1024 * 1024);
+    const response = await submitPersonalResearch(env, request);
+    expect(response.status).toBe(202);
+    const forwarded = containerFetch.mock.calls[1]?.[0] as Request;
+    expect(new URL(forwarded.url).pathname).toBe("/v1/run");
+    expect(await forwarded.json()).toMatchObject({
+      cohort_digest:
+        "sha256:77136481d8a6b20fb8dc8188b8d6adb2837050b8185a8f8abac92ca10811adde",
+      cohort_id: "diverse-core-am-pm-v1",
+      runner_version: "personal-cloud-runner/v13",
+      universe_id: "topix500",
+    });
+  });
+
   it("preserves an active matching runner when POST reports busy", async () => {
     const { env, containerDestroy, containerFetch } = testEnv(
       205 * 1024 * 1024,

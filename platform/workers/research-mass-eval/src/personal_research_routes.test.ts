@@ -59,6 +59,29 @@ describe("personal research HTTP route", () => {
     expect(response.status).toBe(202);
     expect(submit).toHaveBeenCalledWith(expect.anything(), BODY);
   });
+
+  it("dispatches a frozen AM cohort request", async () => {
+    const submit = vi.fn(async () => new Response("accepted", { status: 202 }));
+    const body = {
+      ...BODY,
+      cohort_id: "diverse-core-am-pm-v1",
+      job_id: "am-core-route",
+    };
+    const response = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/personal-research", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-mass-eval-token": "secret",
+        },
+        body: JSON.stringify(body),
+      }),
+      env(),
+      { ...massHandlers, submitPersonalResearch: submit },
+    );
+    expect(response.status).toBe(202);
+    expect(submit).toHaveBeenCalledWith(expect.anything(), body);
+  });
 });
 
 describe("personal snapshot and batch HTTP routes", () => {
