@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { PERSONAL_RESEARCH_RUNNER_VERSION } from "./personal_research_contract";
 import { personalResearchR2Outbound } from "./personal_research_r2";
+import { PERSONAL_SNAPSHOT_FORMAT } from "./personal_snapshot_contract";
 
 vi.stubGlobal(
   "FixedLengthStream",
@@ -273,7 +274,7 @@ describe("personal Container R2 capability", () => {
     const existing = r2Object(key, new Uint8Array([1, 2, 3]), {
       sha256: gzipDigest,
       raw_sha256: `sha256:${raw}`,
-      format: "personal-draft-history/v4",
+      format: PERSONAL_SNAPSHOT_FORMAT,
     });
     existing.checksums = { sha256: checksum.buffer } as R2Checksums;
     const bucket = {

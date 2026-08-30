@@ -43,7 +43,7 @@ PERSONAL_HISTORY_DATASETS: tuple[str, ...] = (
     "fins_summary",
     "equities_bars_daily",
 )
-PERSONAL_HISTORY_FORMAT = "personal-draft-history/v4"
+PERSONAL_HISTORY_FORMAT = "personal-draft-history/v5"
 PERSONAL_RESEARCH_STATE = "PERSONAL_DRAFT"
 PERSONAL_COMPLETENESS_CLAIM = "NONE"
 PERSONAL_CONTROLLED_ELIGIBILITY = "FORBIDDEN"
@@ -256,6 +256,18 @@ def _pick(row: Mapping[str, Any], *names: str) -> Any:
 def _canonical_digest(value: Any) -> str:
     payload = canonical_json(value).encode("utf-8")
     return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _estimated_fact_write_bytes(rows: Sequence[Mapping[str, Any]]) -> int:
+    """Conservative SQLite write estimate used by the size guard.
+
+    Payload JSON dominates fins facts.  Page evidence stays on the
+    acquisition spool and is not part of this estimate.
+    """
+    return sum(
+        len(str(row.get("payload") or "").encode("utf-8")) + 400
+        for row in rows
+    ) * 3
 
 
 def _page_row_count(body: bytes) -> int:
@@ -551,6 +563,55 @@ def _compact_master(
     return normalized, digest
 
 
+# Immutable personal-fins research projection.  Canonical statement identity
+# plus the exact aliases consumed by current personal AM/PM factor features.
+# Full J-Quants source rows remain on the acquisition spool for page/selection
+# evidence; they must not be copied into the research SQLite payload.
+_PERSONAL_FINS_FEATURE_ALIASES: tuple[tuple[str, ...], ...] = (
+    ("BPS", "BookValuePerShare"),
+    ("EPS", "EarningsPerShare"),
+    ("ROE", "ReturnOnEquity"),
+    ("Sales", "NetSales"),
+    ("NP", "Profit"),
+    ("TA", "TotalAssets"),
+    ("Eq", "Equity"),
+    ("EqAR", "EquityToAssetRatio"),
+    ("CurPerType", "TypeOfCurrentPeriod"),
+    ("CurPerEn", "CurrentPeriodEndDate"),
+    ("DocType", "TypeOfDocument"),
+    ("DiscDate", "DisclosedDate"),
+    ("DiscTime", "DisclosedTime"),
+)
+
+
+def _personal_fins_projection(
+    source: Mapping[str, Any],
+    *,
+    code: str,
+    disc_date: str,
+    disc_time: str,
+    disc_no: str,
+) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "Code": code,
+        "DiscDate": disc_date,
+        "DiscNo": disc_no,
+    }
+    if disc_time:
+        item["DiscTime"] = disc_time
+    for aliases in _PERSONAL_FINS_FEATURE_ALIASES:
+        if aliases == ("DiscTime", "DisclosedTime") and not disc_time:
+            continue
+        for key in aliases:
+            if key in item:
+                continue
+            value = source.get(key)
+            if value is None or value == "":
+                continue
+            item[key] = value
+    return item
+
+
 def _compact_fins(
     rows: Sequence[Mapping[str, Any]],
     ingested_at: str,
@@ -588,21 +649,19 @@ def _compact_fins(
             )
         if disc_date > period_end:
             continue
-        item = dict(source)
-        # Bind aliases to the canonical contract fields without retaining a
-        # second verbatim copy in raw_payload.
-        item["Code"] = code
-        item["DiscDate"] = disc_date
+        item = _personal_fins_projection(
+            source,
+            code=code,
+            disc_date=disc_date,
+            disc_time=disc_time,
+            disc_no=disc_no,
+        )
         if disc_time:
-            item["DiscTime"] = disc_time
             available_at = f"{disc_date}T{disc_time}+09:00"
         else:
-            item.pop("DiscTime", None)
-            item.pop("DisclosedTime", None)
             available_at = (
                 date.fromisoformat(disc_date) + timedelta(days=1)
             ).isoformat() + "T00:00:00+09:00"
-        item["DiscNo"] = disc_no
         one = JN.normalize_generic(
             [item],
             dataset="fins_summary",
@@ -870,8 +929,9 @@ class PersonalHistoryHydrator:
             if str(existing["format"]) != PERSONAL_HISTORY_FORMAT:
                 raise PersonalHistoryError(
                     "personal history database uses an older compact format; "
-                    "build a new dedicated SQLite file so PIT classifications "
-                    "and market cap and AM/PM session fields are fetched again"
+                    "build a new dedicated SQLite file so PIT classifications, "
+                    "market cap, AM/PM session fields, and the compact "
+                    "personal-fins projection are fetched again"
                 )
             if str(existing["plan_digest"]) != plan_digest:
                 raise PersonalHistoryError(
@@ -1054,10 +1114,7 @@ class PersonalHistoryHydrator:
                     key=lambda row: str(row["natural_key"]),
                 )
             )
-            estimated_write_bytes = sum(
-                len(str(row.get("payload") or "").encode("utf-8")) + 400
-                for row in rows
-            ) * 3
+            estimated_write_bytes = _estimated_fact_write_bytes(rows)
             self._guard_capacity(
                 phase=f"before commit {segment_id}",
                 additional_bytes=estimated_write_bytes,

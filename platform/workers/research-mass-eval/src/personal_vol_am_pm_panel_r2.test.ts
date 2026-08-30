@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { PERSONAL_RESEARCH_RUNNER_VERSION } from "./personal_research_contract";
+import { PERSONAL_SNAPSHOT_FORMAT } from "./personal_snapshot_contract";
 import { PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION } from "./personal_vol_am_pm_panel";
 import {
   PERSONAL_VOL_AM_PM_EVALUATION_PERIODS,
@@ -152,7 +153,7 @@ function snapshotLock(jobId: string, digit: string, periodId: string, start: str
     period_start: start,
     period_end: end,
     lookback_sessions: periodId === "y2019_selection" ? 0 : 61,
-    format: "personal-draft-history/v4" as const,
+    format: PERSONAL_SNAPSHOT_FORMAT,
     runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
     manifest: { key: manifestKey, etag: `man-${digit}`, size: 8, sha256: digestDigit(digit) },
     snapshot: ref,

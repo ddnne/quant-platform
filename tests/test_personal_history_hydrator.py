@@ -9,20 +9,29 @@ import json
 from pathlib import Path
 import subprocess
 import sys
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
+from typing import Mapping, Sequence
 
 import pytest
 
+from data_contracts.identity import canonical_json
+from features import FUNDAMENTAL_RATIO_MODES, PitFundamentalRatio
+from features.ratio_features import _FINS_ALIASES
+from ingestion.jquants.normalize import normalize_generic
 from ingestion.personal_history import (
     MASTER_AVAILABILITY_POLICY,
+    PERSONAL_HISTORY_FORMAT,
     PERSONAL_HISTORY_SCOPE_DIGEST,
     PERSONAL_HISTORY_SCOPE_ID,
     PERSONAL_HISTORY_SCOPE_VERSION,
     PersonalHistoryError,
     PersonalHistoryHydrator,
+    _PERSONAL_FINS_FEATURE_ALIASES,
     _compact_bars,
     _compact_calendar,
+    _compact_fins,
     _compact_master,
+    _estimated_fact_write_bytes,
     assert_personal_history_database,
     build_personal_history_plan,
 )
@@ -117,6 +126,7 @@ class _HistoryClient:
                 "DiscTime": clock,
                 "DiscNo": f"disc-{code}",
                 "EarningsPerShare": 123.4,
+                "Narrative": "must-not-be-kept",
             }
         ]
 
@@ -341,12 +351,20 @@ def test_hydrator_pit_timing_compression_compaction_and_draft_boundary(tmp_path)
     assert len(pit_bars.rows) == len(bars)
     assert all(row["raw_payload"] is None for row in pit_bars.rows)
     assert all(row["raw_payload"] is None for row in _rows(store, "fins_summary"))
+    for row in _rows(store, "fins_summary"):
+        payload = json.loads(row["payload"])
+        assert "Narrative" not in payload
+        assert payload["Code"] in {"1001", "1002", "1003"}
+        assert "DiscDate" in payload
+        assert "DiscNo" in payload
+        assert "EarningsPerShare" in payload
     missing_time = next(
         row
         for row in _rows(store, "fins_summary")
         if json.loads(row["payload"])["Code"] == "1002"
     )
     assert missing_time["available_at"] == "2025-01-04T00:00:00+09:00"
+    assert "DiscTime" not in json.loads(missing_time["payload"])
     assert manifest["fins_availability_policy"].startswith(
         "explicit_disc_timestamp_else_next_calendar_day"
     )
@@ -435,10 +453,11 @@ def test_older_compact_format_cannot_resume_without_refetch(tmp_path) -> None:
     PersonalHistoryHydrator(client=_HistoryClient(), store=store, plan=_plan())
     assert store._conn.execute(
         "SELECT format FROM personal_history_manifest WHERE singleton=1"
-    ).fetchone()[0] == "personal-draft-history/v4"
+    ).fetchone()[0] == PERSONAL_HISTORY_FORMAT
     for older in (
         "personal-draft-history/v1",
         "personal-draft-history/v3",
+        "personal-draft-history/v4",
     ):
         store._conn.execute(
             "UPDATE personal_history_manifest SET format=? WHERE singleton=1",
@@ -816,3 +835,252 @@ for name in (
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+_FINS_INGESTED = "2026-01-15T00:00:00+09:00"
+_FINS_PERIOD_END = "2025-12-31"
+_DROPPED_FINS_FIELDS = frozenset(
+    {
+        "CompanyName",
+        "CoName",
+        "CurrentFiscalYearStartDate",
+        "NetAssets",
+        "OperatingProfit",
+        "Narrative",
+    }
+)
+_RATIO_BARS = tuple(
+    {
+        "code": "8697",
+        "date": day,
+        "close": 100.0,
+        "adjustment_close": 100.0,
+        "volume": 1_000.0,
+        "adjustment_volume": 1_000.0,
+    }
+    for day in ("2025-03-28", "2025-05-12")
+)
+
+
+def _fat_fins(**overrides: object) -> dict[str, object]:
+    body: dict[str, object] = {
+        "Code": "8697",
+        "DiscDate": "2025-05-02",
+        "DisclosedDate": "2025-05-02",
+        "DiscTime": "15:00:00",
+        "DisclosedTime": "15:00:00",
+        "DiscNo": "disc-1",
+        "BPS": 80.0,
+        "BookValuePerShare": 80.0,
+        "EPS": 12.0,
+        "EarningsPerShare": 12.0,
+        "ROE": 0.11,
+        "ReturnOnEquity": 0.11,
+        "Sales": 130.0,
+        "NetSales": 130.0,
+        "NP": 20.0,
+        "Profit": 20.0,
+        "TA": 440.0,
+        "TotalAssets": 440.0,
+        "Eq": 200.0,
+        "Equity": 200.0,
+        "EqAR": 0.45,
+        "EquityToAssetRatio": 0.45,
+        "CurPerType": "1Q",
+        "TypeOfCurrentPeriod": "1Q",
+        "CurPerEn": "2025-03-31",
+        "CurrentPeriodEndDate": "2025-03-31",
+        "DocType": "1QFinancialStatements_Consolidated_JP",
+        "TypeOfDocument": "1QFinancialStatements_Consolidated_JP",
+        "CompanyName": "must-not-be-kept",
+        "CoName": "must-not-be-kept",
+        "CurrentFiscalYearStartDate": "2025-01-01",
+        "NetAssets": 999.0,
+        "OperatingProfit": 50.0,
+    }
+    body.update(overrides)
+    return body
+
+
+def _legacy_full_copy_fins(source: Mapping[str, object]) -> dict:
+    disc_date = str(source.get("DiscDate") or source.get("DisclosedDate") or "")[:10]
+    disc_time = str(source.get("DiscTime") or source.get("DisclosedTime") or "").strip()
+    item = dict(source)
+    item["Code"] = str(source.get("Code") or "").strip()
+    item["DiscDate"] = disc_date
+    item["DiscNo"] = str(source.get("DiscNo") or "").strip()
+    if disc_time:
+        item["DiscTime"] = disc_time
+        available_at = f"{disc_date}T{disc_time}+09:00"
+    else:
+        item.pop("DiscTime", None)
+        item.pop("DisclosedTime", None)
+        available_at = (
+            date.fromisoformat(disc_date) + timedelta(days=1)
+        ).isoformat() + "T00:00:00+09:00"
+    one = normalize_generic(
+        [item],
+        dataset="fins_summary",
+        ingested_at=_FINS_INGESTED,
+        available_at=available_at,
+    )[0]
+    one["raw_payload"] = None
+    return one
+
+
+def _compact_one(source: Mapping[str, object]) -> dict:
+    rows = _compact_fins(
+        [source],
+        _FINS_INGESTED,
+        expected_code=str(source["Code"]),
+        period_end=_FINS_PERIOD_END,
+    )
+    assert len(rows) == 1
+    return rows[0]
+
+
+def _payload(row: Mapping[str, object]) -> dict:
+    return json.loads(str(row["payload"]))
+
+
+def _identity(row: Mapping[str, object]) -> tuple[object, object, object]:
+    return row["natural_key"], row["available_at"], row["event_time"]
+
+
+def _assert_stored_fractions(row: Mapping[str, object]) -> dict:
+    raw = str(row["payload"])
+    payload = _payload(row)
+    assert '"EqAR":0.45' in raw
+    assert '"ROE":0.11' in raw
+    assert payload["EqAR"] == 0.45
+    assert payload["ROE"] == 0.11
+    return payload
+
+
+def _ratio_from_stored(mode: str, stored: list[dict], bars: Sequence[dict]):
+    fins = [
+        {
+            "payload": _payload(row),
+            "event_time": row["event_time"],
+            "available_at": row["available_at"],
+            "natural_key": row["natural_key"],
+        }
+        for row in stored
+    ]
+
+    def _bars(**kwargs):
+        rows = list(bars)
+        start = kwargs.get("from_event")
+        end = kwargs.get("to_event")
+        if start:
+            rows = [row for row in rows if str(row.get("date"))[:10] >= start]
+        if end:
+            rows = [row for row in rows if str(row.get("date"))[:10] <= end]
+        if kwargs.get("latest_n") is not None:
+            rows = rows[-int(kwargs["latest_n"]) :]
+        return SimpleNamespace(rows=rows)
+
+    return PitFundamentalRatio.compute(
+        SimpleNamespace(
+            get_input=lambda name, default=None: {
+                "code": "8697",
+                "mode": mode,
+            }.get(name, default),
+            get_equity_bars_daily=_bars,
+            get_jquants_records=lambda **kwargs: SimpleNamespace(rows=list(fins)),
+        )
+    )
+
+
+def test_compact_fins_keeps_research_surface_and_drops_source_bloat() -> None:
+    kept = {key for aliases in _PERSONAL_FINS_FEATURE_ALIASES for key in aliases}
+    kept.update({"Code", "DiscDate", "DiscTime", "DiscNo"})
+    assert {key for aliases in _FINS_ALIASES.values() for key in aliases} <= kept
+
+    entropy = "".join(f"{index:08x}" for index in range(25_000))
+    source = _fat_fins(Narrative=entropy)
+    compact = _compact_one(source)
+    legacy = _legacy_full_copy_fins(source)
+    payload = _assert_stored_fractions(compact)
+    legacy_payload = _assert_stored_fractions(legacy)
+
+    assert set(payload) == kept
+    assert _DROPPED_FINS_FIELDS.isdisjoint(payload)
+    assert compact["raw_payload"] is None
+    assert _identity(compact) == _identity(legacy)
+    assert compact["natural_key"] == canonical_json(
+        {"Code": "8697", "DiscDate": "2025-05-02", "DiscNo": "disc-1"}
+    )
+    assert compact["available_at"] == "2025-05-02T15:00:00+09:00"
+    assert {key: legacy_payload[key] for key in payload} == payload
+    assert "Narrative" in legacy_payload
+    compact_estimate = _estimated_fact_write_bytes([compact])
+    assert compact_estimate == _estimated_fact_write_bytes([_compact_one(_fat_fins())])
+    assert compact_estimate < len(entropy) < _estimated_fact_write_bytes([legacy])
+    assert compact_estimate * 8 < _estimated_fact_write_bytes([legacy])
+
+    missing_time = _fat_fins()
+    del missing_time["DiscTime"]
+    del missing_time["DisclosedTime"]
+    compact_missing = _compact_one(missing_time)
+    missing_payload = _payload(compact_missing)
+    assert _identity(compact_missing) == _identity(_legacy_full_copy_fins(missing_time))
+    assert compact_missing["available_at"] == "2025-05-03T00:00:00+09:00"
+    assert "DiscTime" not in missing_payload
+    assert "DisclosedTime" not in missing_payload
+    _assert_stored_fractions(compact_missing)
+
+    v1_only = {
+        "Code": "8697",
+        "DisclosedDate": "2025-02-01",
+        "DisclosedTime": "09:00:00",
+        "DiscNo": "n1",
+        "BookValuePerShare": 80.0,
+        "EarningsPerShare": 12.0,
+        "ReturnOnEquity": 0.11,
+        "NetSales": 200.0,
+        "Profit": 20.0,
+        "TotalAssets": 400.0,
+        "Equity": 180.0,
+        "EquityToAssetRatio": 0.45,
+        "TypeOfCurrentPeriod": "FY",
+        "CurrentPeriodEndDate": "2024-12-31",
+        "TypeOfDocument": "FYFinancialStatements_Consolidated_JP",
+        "CompanyName": "drop-me",
+    }
+    v1_payload = _payload(_compact_one(v1_only))
+    assert v1_payload["DiscDate"] == "2025-02-01"
+    assert v1_payload["DiscTime"] == "09:00:00"
+    assert v1_payload["BookValuePerShare"] == 80.0
+    assert v1_payload["EquityToAssetRatio"] == 0.45
+    assert v1_payload["ReturnOnEquity"] == 0.11
+    assert "BPS" not in v1_payload
+    assert v1_payload["NetSales"] == 200.0
+    assert "CompanyName" not in v1_payload
+
+
+def test_fundamental_ratio_modes_match_compact_and_full_copy_stored_rows() -> None:
+    prior = _fat_fins(
+        DiscDate="2024-05-01",
+        DisclosedDate="2024-05-01",
+        DiscNo="disc-0",
+        Sales=100.0,
+        NetSales=100.0,
+        TA=400.0,
+        TotalAssets=400.0,
+        CurPerEn="2024-03-31",
+        CurrentPeriodEndDate="2024-03-31",
+    )
+    current = _fat_fins()
+    compact_rows = [_compact_one(source) for source in (prior, current)]
+    legacy_rows = [_legacy_full_copy_fins(source) for source in (prior, current)]
+    _assert_stored_fractions(compact_rows[-1])
+    _assert_stored_fractions(legacy_rows[-1])
+    for mode in sorted(FUNDAMENTAL_RATIO_MODES):
+        compact = _ratio_from_stored(mode, compact_rows, _RATIO_BARS)
+        legacy = _ratio_from_stored(mode, legacy_rows, _RATIO_BARS)
+        assert compact.value == legacy.value, mode
+        assert compact.value is not None, mode
+        assert compact.metadata["statement_available_at"] == legacy.metadata[
+            "statement_available_at"
+        ]

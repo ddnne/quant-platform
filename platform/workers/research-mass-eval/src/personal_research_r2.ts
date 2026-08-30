@@ -7,6 +7,7 @@ import {
   type PersonalContainerKind,
 } from "./personal_research_contract";
 import {
+  PERSONAL_SNAPSHOT_FORMAT,
   isPersonalSnapshotManifestKey,
   personalSnapshotManifestKey,
   personalSnapshotObjectKey,
@@ -144,7 +145,7 @@ function snapshotObjectMatches(
   return (
     object.customMetadata?.sha256 === identity.contentDigest &&
     object.customMetadata?.raw_sha256 === identity.rawDigest &&
-    object.customMetadata?.format === "personal-draft-history/v4" &&
+    object.customMetadata?.format === PERSONAL_SNAPSHOT_FORMAT &&
     checksumMatches(object, identity.contentDigest)
   );
 }
@@ -349,7 +350,7 @@ async function putSnapshotGzip(
       httpMetadata: { contentType: "application/gzip" },
       customMetadata: {
         plane: "personal_snapshot",
-        format: "personal-draft-history/v4",
+        format: PERSONAL_SNAPSHOT_FORMAT,
         sha256: identity.contentDigest,
         raw_sha256: identity.rawDigest,
         immutable: "true",
@@ -438,7 +439,7 @@ async function putSnapshotManifest(
       !snapshot ||
       snapshot.customMetadata?.sha256 !== gzipDigest ||
       snapshot.customMetadata?.raw_sha256 !== rawDigest ||
-      snapshot.customMetadata?.format !== "personal-draft-history/v4" ||
+      snapshot.customMetadata?.format !== PERSONAL_SNAPSHOT_FORMAT ||
       !checksumMatches(snapshot, gzipDigest)
     ) {
       return responseJson(
