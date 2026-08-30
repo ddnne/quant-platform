@@ -167,7 +167,7 @@ function admittedContainer() {
 function structuredRecord(args: {
   dataset: string;
   date: string;
-  payload: Record<string, unknown>;
+  payload: unknown;
   naturalKey: Record<string, string>;
   ingestedAt?: string;
 }) {
@@ -208,7 +208,12 @@ async function jsonlObject(
 async function seedPeriod(
   mem: MemoryR2,
   period: (typeof PERSONAL_OPTION_SIDECAR_PERIODS)[number],
-  options?: { omitOptionsDay?: string; badShaDay?: string; extraOptionsDay?: string },
+  options?: {
+    omitOptionsDay?: string;
+    badShaDay?: string;
+    extraOptionsDay?: string;
+    calendarPayloadOverride?: { day: string; payload: unknown };
+  },
 ) {
   const warmup = samplePinnedDates(
     period.raw_start,
@@ -236,7 +241,10 @@ async function seedPeriod(
         dataset: "markets_calendar",
         date: day,
         naturalKey: { Date: day },
-        payload: { Date: day, HolidayDivision: trading.has(day) ? "1" : "0" },
+        payload:
+          options?.calendarPayloadOverride?.day === day
+            ? options.calendarPayloadOverride.payload
+            : JSON.stringify({ Date: day, HolDiv: trading.has(day) ? "1" : "0" }),
       }),
     );
     const calendar = await jsonlObject("markets_calendar", month, records, `cal-${month}`);
@@ -443,10 +451,66 @@ describe("option sidecar admission", () => {
     ).rejects.toMatchObject({ code: "option_sidecar_source_sha256_missing" });
   });
 
-  it("locks monthly calendar range objects covering 2+ days without day×calendar refs", async () => {
+  it("fails closed when a structured calendar payload is malformed JSON", async () => {
     const mem = new MemoryR2();
+    const target = PERSONAL_OPTION_SIDECAR_PERIODS[0]!;
     for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
-      await seedPeriod(mem, period);
+      await seedPeriod(
+        mem,
+        period,
+        period.period_id === target.period_id
+          ? {
+              calendarPayloadOverride: {
+                day: target.raw_start,
+                payload: '{"Date":',
+              },
+            }
+          : undefined,
+      );
+    }
+    await expect(
+      buildPersonalOptionSidecarInputManifest(mem.asBucket(), REQUEST),
+    ).rejects.toMatchObject({ code: "option_sidecar_calendar_row_invalid" });
+  });
+
+  it("fails closed when canonical HolDiv is outside the reviewed domain", async () => {
+    const mem = new MemoryR2();
+    const target = PERSONAL_OPTION_SIDECAR_PERIODS[0]!;
+    for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
+      await seedPeriod(
+        mem,
+        period,
+        period.period_id === target.period_id
+          ? {
+              calendarPayloadOverride: {
+                day: target.raw_start,
+                payload: JSON.stringify({ Date: target.raw_start, HolDiv: "4" }),
+              },
+            }
+          : undefined,
+      );
+    }
+    await expect(
+      buildPersonalOptionSidecarInputManifest(mem.asBucket(), REQUEST),
+    ).rejects.toMatchObject({ code: "option_sidecar_calendar_row_invalid" });
+  });
+
+  it("accepts production JSON payloads and exact-key object compatibility", async () => {
+    const mem = new MemoryR2();
+    const target = PERSONAL_OPTION_SIDECAR_PERIODS[0]!;
+    for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
+      await seedPeriod(
+        mem,
+        period,
+        period.period_id === target.period_id
+          ? {
+              calendarPayloadOverride: {
+                day: target.raw_start,
+                payload: { Date: target.raw_start, HolDiv: "1" },
+              },
+            }
+          : undefined,
+      );
     }
     const input = await buildPersonalOptionSidecarInputManifest(mem.asBucket(), REQUEST);
     expect(mem.listed.some((prefix) => prefix === calendarRootPrefix())).toBe(true);
