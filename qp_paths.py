@@ -6,28 +6,78 @@ Physical packages live under ``packages/*``; never assume a fixed
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 _CACHED: Path | None = None
+_REPO_ROOT_ENV = "QP_REPO_ROOT"
 
 
 def repo_root() -> Path:
-    """Return the quant-platform repository root (directory with pyproject.toml + tests/)."""
+    """Return the quant-platform repository root.
+
+    ``QP_REPO_ROOT``, when set, is fail-closed: the resolved path must contain
+    ``pyproject.toml`` and runtime layout (``packages/``). ``tests/`` is not
+    required. An invalid explicit value is never ignored.
+
+    When the environment variable is unset, walk from this file and then CWD
+    for a checkout that has ``pyproject.toml`` and ``tests/``.
+    """
     global _CACHED
     if _CACHED is not None:
         return _CACHED
+    if _REPO_ROOT_ENV in os.environ:
+        _CACHED = _explicit_repo_root(os.environ[_REPO_ROOT_ENV])
+        return _CACHED
+    discovered = _discover_checkout_root()
+    if discovered is None:
+        raise RuntimeError(
+            "quant-platform repo root not found (no pyproject.toml + tests/)"
+        )
+    _CACHED = discovered
+    return _CACHED
+
+
+def _explicit_repo_root(raw: str) -> Path:
+    stripped = raw.strip()
+    if not stripped:
+        raise RuntimeError(f"{_REPO_ROOT_ENV} is set but empty")
+    root = Path(stripped).expanduser().resolve()
+    missing = _runtime_root_errors(root)
+    if missing:
+        raise RuntimeError(
+            f"{_REPO_ROOT_ENV} is not a quant-platform runtime root ({root}): "
+            + "; ".join(missing)
+        )
+    return root
+
+
+def _runtime_root_errors(root: Path) -> list[str]:
+    errors: list[str] = []
+    if not root.is_dir():
+        errors.append("path is not a directory")
+        return errors
+    if not (root / "pyproject.toml").is_file():
+        errors.append("missing pyproject.toml")
+    if not (root / "packages").is_dir():
+        errors.append("missing packages/")
+    return errors
+
+
+def _discover_checkout_root() -> Path | None:
     here = Path(__file__).resolve()
     for parent in [here.parent, *here.parents]:
-        if (parent / "pyproject.toml").is_file() and (parent / "tests").is_dir():
-            _CACHED = parent
+        if _is_checkout_root(parent):
             return parent
-    # Fallback: walk from CWD (scripts/tests sometimes invoked oddly)
     cwd = Path.cwd().resolve()
     for parent in [cwd, *cwd.parents]:
-        if (parent / "pyproject.toml").is_file() and (parent / "tests").is_dir():
-            _CACHED = parent
+        if _is_checkout_root(parent):
             return parent
-    raise RuntimeError("quant-platform repo root not found (no pyproject.toml + tests/)")
+    return None
+
+
+def _is_checkout_root(parent: Path) -> bool:
+    return (parent / "pyproject.toml").is_file() and (parent / "tests").is_dir()
 
 
 def package_dir(import_name: str) -> Path:
