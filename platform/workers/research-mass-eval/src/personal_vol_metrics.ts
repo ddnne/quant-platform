@@ -4,6 +4,7 @@ export type PersonalVolDailyPoint = {
   cost_return?: number;
   turnover_one_way?: number;
   invalid_equity_observations?: number;
+  fill_count?: number;
   net_return: number;
   equity: number;
 };
@@ -58,7 +59,7 @@ export type PersonalVolPerformance = {
   turnover_one_way_amount: number;
   turnover_one_way_ratio: number;
   turnover_one_way_annualized_ratio: number | null;
-  fill_count: null;
+  fill_count: number | null;
   round_trip_trade_metrics: {
     status: "UNAVAILABLE";
     trade_win_rate: null;
@@ -261,6 +262,16 @@ export function personalVolPerformance(
         ? Math.trunc(Number(count))
         : 0);
   }, 0);
+  const fillCount = points.reduce((total, point) => {
+    const count = point.fill_count;
+    return total +
+      (Number.isFinite(count) && Number(count) > 0
+        ? Math.trunc(Number(count))
+        : 0);
+  }, 0);
+  const reportedFillCount = points.some((point) => Number.isFinite(point.fill_count))
+    ? fillCount
+    : null;
   const yearMetrics: Array<Record<string, unknown>> = [];
   if (includeYearMetrics) {
     const byYear = new Map<string, PersonalVolDailyPoint[]>();
@@ -337,7 +348,7 @@ export function personalVolPerformance(
     turnover_one_way_ratio: turnoverRatio,
     turnover_one_way_annualized_ratio:
       returns.length === 0 ? null : (turnoverRatio * 252) / returns.length,
-    fill_count: null,
+    fill_count: reportedFillCount,
     round_trip_trade_metrics: {
       status: "UNAVAILABLE",
       trade_win_rate: null,

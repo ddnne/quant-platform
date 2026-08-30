@@ -105,6 +105,15 @@ describe("closed personal vol request", () => {
     expect(
       parsePersonalVolResearchRequest({
         job_id: "vol-ratio-1",
+        cohort_id: "personal-vol-ratio-am-pm-v1",
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: "cohort_id must be personal-vol-ratio-v2",
+    });
+    expect(
+      parsePersonalVolResearchRequest({
+        job_id: "vol-ratio-1",
         threshold: 0,
       }),
     ).toMatchObject({ ok: false, error: expect.stringContaining("unknown") });
@@ -640,6 +649,8 @@ describe("personal vol immutable artifact", () => {
     );
     const prefix = "research/personal/vol-ratio-v2/job=immutable-vol";
 
+    expect(result.schema_version).toBe("personal-vol-ratio-report/v2");
+    expect(result.cohort_id).toBe(PERSONAL_VOL_COHORT_ID);
     expect(result.go).toBe(false);
     expect(result.automatic_promotion).toBe(false);
     expect(result.live_orders).toBe(false);

@@ -25,6 +25,7 @@ import {
   submitPersonalResearch,
 } from "./personal_research_container";
 import { runPersonalVolResearch } from "./personal_vol_research";
+import { runPersonalVolAmPmResearch } from "./personal_vol_am_pm";
 import {
   personalSvi2023Status,
   submitPersonalSvi2023,
@@ -334,6 +335,7 @@ export default {
       submitPersonalResearch,
       personalResearchStatus,
       runPersonalVolResearch,
+      runPersonalVolAmPmResearch,
       submitPersonalSvi2023,
       personalSvi2023Status,
       submitPersonalIndexVolOverlay2023,

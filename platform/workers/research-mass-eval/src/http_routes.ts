@@ -24,6 +24,10 @@ import {
   type PersonalVolResearchRequest,
 } from "./personal_vol_research";
 import {
+  parsePersonalVolAmPmResearchRequest,
+  type PersonalVolAmPmResearchRequest,
+} from "./personal_vol_am_pm";
+import {
   parsePersonalSvi2023Request,
   personalSviJobIdFromPath,
   type PersonalSvi2023Request,
@@ -49,6 +53,10 @@ export type MassEvalFetchHandlers = {
   runPersonalVolResearch?: (
     env: Env,
     request: PersonalVolResearchRequest,
+  ) => Promise<Record<string, unknown>>;
+  runPersonalVolAmPmResearch?: (
+    env: Env,
+    request: PersonalVolAmPmResearchRequest,
   ) => Promise<Record<string, unknown>>;
   submitPersonalSvi2023?: (
     env: Env,
@@ -159,6 +167,59 @@ export async function dispatchMassEvalFetch(
       return json({ error: "personal SVI status unavailable" }, 503);
     }
     return handlers.personalSvi2023Status(env, jobId);
+  }
+
+  if (url.pathname === "/v1/personal-vol-am-pm-research") {
+    if (request.method !== "POST") {
+      return json({ error: "POST required" }, 405);
+    }
+    if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    if (!env.STRUCTURED_BUCKET || !handlers.runPersonalVolAmPmResearch) {
+      return json({ error: "personal vol AM/PM research unavailable" }, 503);
+    }
+    let amPmBody: unknown;
+    try {
+      amPmBody = await request.json();
+    } catch {
+      return json({ error: "invalid JSON body" }, 400);
+    }
+    const amPmParsed = parsePersonalVolAmPmResearchRequest(amPmBody);
+    if (!amPmParsed.ok) return json({ error: amPmParsed.error }, 400);
+    try {
+      const result = await handlers.runPersonalVolAmPmResearch(
+        env,
+        amPmParsed.value,
+      );
+      return json({ ok: true, ...result });
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (code === "artifact_conflict") {
+        return json(
+          {
+            ok: false,
+            error: "artifact_conflict",
+            job_id: amPmParsed.value.job_id,
+            go: false,
+            not_a_pass: true,
+          },
+          409,
+        );
+      }
+      const detail =
+        error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      return json(
+        {
+          ok: false,
+          error: "personal_vol_am_pm_research_failed",
+          detail,
+          go: false,
+          not_a_pass: true,
+        },
+        500,
+      );
+    }
   }
 
   if (url.pathname === "/v1/personal-vol-research") {

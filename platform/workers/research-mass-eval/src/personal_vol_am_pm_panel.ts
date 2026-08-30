@@ -1,0 +1,438 @@
+import type { Opt225RegimeBundle, PeriodSpec } from "./types";
+
+export const PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION =
+  "personal-vol-ratio-am-pm-panel/v1" as const;
+export const PERSONAL_VOL_AM_PM_PANELS_PREFIX =
+  "research/personal/vol-ratio-am-pm-v1/panels" as const;
+
+export const PERSONAL_VOL_AM_PM_TEMPORAL_CONTRACT = {
+  non_price_cutoff_jst: "11:30:00+09:00",
+  am_equity_admission_jst: "12:30:00+09:00",
+  am_equity_admission_widens_non_price_cutoff: false,
+  option_observations_asof: "native_session",
+  signal_option_lag_sessions: 1,
+  equity_cross_section: "D_MAdjC_with_prior_history",
+  order_sizing_price: "D_MAdjC",
+  fill: "D_AAdjC",
+  eod_valuation: "D_AAdjC",
+  first_pnl: "D_AAdjC_to_next_AAdjC",
+  no_adjc_fallback: true,
+  no_ffill: true,
+  no_signal_date_option_values: true,
+} as const;
+
+export const PERSONAL_VOL_AM_PM_SESSION_CALENDAR_ROLE =
+  "diagnostic_session_calendar_only" as const;
+
+export const PERSONAL_VOL_AM_PM_PRODUCER_DEPENDENCY = {
+  required: true,
+  producer_id: "personal-vol-ratio-am-pm-panel-writer/v1",
+  panel_schema: PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION,
+  panels_prefix: PERSONAL_VOL_AM_PM_PANELS_PREFIX,
+  ineligible_source: {
+    schema: "PeriodPanel",
+    prefix: "research/mass_eval/panels_cache/527c1065afe14601/panels",
+    loader: "loadR2Panels",
+    reason:
+      "PeriodPanel carries one close per code and cannot host MAdjC/AAdjC or the D-1 option as-of contract",
+  },
+  required_equity_fields: ["MAdjC", "AAdjC"],
+  required_option_observations: "native_session_including_predecessor",
+  source_preservation:
+    "packages/data_plane/ingestion/personal_history.py MorningAdjustmentClose/AfternoonAdjustmentClose",
+  forbidden: [
+    "AdjC_fallback",
+    "ffill",
+    "signal_date_option_values",
+    "legacy_PeriodPanel_reinterpretation",
+    "single_stock_iv",
+    "cash_index_executable_fill",
+  ],
+} as const;
+
+const CASH_INDEX_FILL_ALIASES = new Set([
+  "TOPIX",
+  "NKY",
+  "NK225",
+  "N225",
+  "NIKKEI",
+  "NIKKEI225",
+  "__NKY_PROXY__",
+  "__TOPIX__",
+  "__NK225F__",
+  "__INDEX__",
+]);
+
+export type AmPmEquityBar = {
+  date: string;
+  MAdjC: number;
+  AAdjC: number;
+};
+
+export type PersonalVolAmPmSessionCalendar = {
+  dataset: string;
+  label: string;
+  role: typeof PERSONAL_VOL_AM_PM_SESSION_CALENDAR_ROLE;
+  dates: string[];
+};
+
+export type PersonalVolAmPmTradableHedge = {
+  etf_code: string;
+  dataset: string;
+  bars: AmPmEquityBar[];
+};
+
+export type PersonalVolAmPmPanel = {
+  schema_version: typeof PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION;
+  period_id: string;
+  year: number;
+  period_start: string;
+  period_end: string;
+  status: "ok" | "data_missing";
+  source: string;
+  temporal_contract: typeof PERSONAL_VOL_AM_PM_TEMPORAL_CONTRACT;
+  session_calendar: PersonalVolAmPmSessionCalendar;
+  bars: Record<string, AmPmEquityBar[]>;
+  opt225_regime: Opt225RegimeBundle | null;
+  tradable_hedge: PersonalVolAmPmTradableHedge | null;
+};
+
+export type PersonalVolAmPmPanelParseFailure = {
+  ok: false;
+  error: string;
+  legacy: boolean;
+};
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isIsoDate(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function sameTemporalContract(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  const expected = PERSONAL_VOL_AM_PM_TEMPORAL_CONTRACT;
+  const keys = Object.keys(expected) as Array<keyof typeof expected>;
+  if (Object.keys(value).sort().join(",") !== keys.slice().sort().join(",")) {
+    return false;
+  }
+  return keys.every((key) => value[key] === expected[key]);
+}
+
+function looksLikeCloseTuple(point: unknown): boolean {
+  return (
+    Array.isArray(point) &&
+    point.length >= 2 &&
+    (typeof point[1] === "number" || typeof point[1] === "string")
+  );
+}
+
+export function isLegacyPersonalVolPanel(raw: unknown): boolean {
+  if (!isObject(raw)) return false;
+  if (raw.schema_version === PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION) {
+    return false;
+  }
+  const bars = raw.bars;
+  if (isObject(bars)) {
+    for (const series of Object.values(bars)) {
+      if (!Array.isArray(series) || series.length === 0) continue;
+      if (series.some((point) => looksLikeCloseTuple(point))) return true;
+    }
+  }
+  return (
+    typeof raw.period_id === "string" &&
+    isObject(raw.bars) &&
+    raw.schema_version !== PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION
+  );
+}
+
+function parseAmPmBar(point: unknown): AmPmEquityBar | "legacy" | null {
+  if (looksLikeCloseTuple(point)) return "legacy";
+  if (!isObject(point)) return null;
+  const date = String(point.date ?? point.Date ?? "").slice(0, 10);
+  const morning = Number(point.MAdjC ?? point.MorningAdjustmentClose);
+  const afternoon = Number(point.AAdjC ?? point.AfternoonAdjustmentClose);
+  if (!isIsoDate(date)) return null;
+  if (
+    !Number.isFinite(morning) ||
+    morning <= 0 ||
+    !Number.isFinite(afternoon) ||
+    afternoon <= 0
+  ) {
+    return null;
+  }
+  return { date, MAdjC: morning, AAdjC: afternoon };
+}
+
+function parseAmPmBars(
+  raw: unknown,
+): { bars: Record<string, AmPmEquityBar[]>; legacy: boolean } {
+  if (!isObject(raw)) return { bars: {}, legacy: false };
+  const bars: Record<string, AmPmEquityBar[]> = {};
+  for (const [code, series] of Object.entries(raw)) {
+    if (!Array.isArray(series)) continue;
+    const points: AmPmEquityBar[] = [];
+    for (const point of series) {
+      const parsed = parseAmPmBar(point);
+      if (parsed === "legacy") return { bars: {}, legacy: true };
+      if (parsed) points.push(parsed);
+    }
+    points.sort((left, right) => (left.date < right.date ? -1 : 1));
+    if (points.length) bars[code] = points;
+  }
+  return { bars, legacy: false };
+}
+
+function parseSessionCalendar(
+  raw: unknown,
+): PersonalVolAmPmSessionCalendar | null {
+  if (!isObject(raw)) return null;
+  const dataset = typeof raw.dataset === "string" ? raw.dataset : "";
+  const label = typeof raw.label === "string" ? raw.label : "";
+  const role = raw.role;
+  if (
+    !dataset ||
+    !label ||
+    role !== PERSONAL_VOL_AM_PM_SESSION_CALENDAR_ROLE
+  ) {
+    return null;
+  }
+  if (
+    /tradable|fill|executable/i.test(dataset) ||
+    /tradable|fill|executable/i.test(label)
+  ) {
+    return null;
+  }
+  if (!Array.isArray(raw.dates)) return null;
+  const dates = [
+    ...new Set(
+      raw.dates
+        .map((date) => String(date).slice(0, 10))
+        .filter((date) => isIsoDate(date)),
+    ),
+  ].sort();
+  return { dataset, label, role, dates };
+}
+
+function parseTradableHedge(
+  raw: unknown,
+): PersonalVolAmPmTradableHedge | null | "invalid" {
+  if (raw === null || raw === undefined) return null;
+  if (!isObject(raw)) return "invalid";
+  const etfCode = String(raw.etf_code ?? "").trim();
+  const dataset = typeof raw.dataset === "string" ? raw.dataset : "";
+  if (
+    !etfCode ||
+    CASH_INDEX_FILL_ALIASES.has(etfCode.toUpperCase()) ||
+    etfCode.startsWith("__") ||
+    !dataset ||
+    /indices_bars_daily/.test(dataset)
+  ) {
+    return "invalid";
+  }
+  const parsedBars = parseAmPmBars(raw.bars ? { [etfCode]: raw.bars } : {});
+  if (parsedBars.legacy) return "invalid";
+  const bars = parsedBars.bars[etfCode] || [];
+  if (!bars.length) return "invalid";
+  return { etf_code: etfCode, dataset, bars };
+}
+
+export function parsePersonalVolAmPmPanel(
+  raw: unknown,
+): { ok: true; value: PersonalVolAmPmPanel } | PersonalVolAmPmPanelParseFailure {
+  if (!isObject(raw)) {
+    return { ok: false, error: "panel must be a JSON object", legacy: false };
+  }
+  if (isLegacyPersonalVolPanel(raw)) {
+    return {
+      ok: false,
+      error: "legacy_period_panel_rejected",
+      legacy: true,
+    };
+  }
+  if (raw.schema_version !== PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION) {
+    return {
+      ok: false,
+      error: "am_pm_panel_schema_missing_or_mismatch",
+      legacy: false,
+    };
+  }
+  if (!sameTemporalContract(raw.temporal_contract)) {
+    return {
+      ok: false,
+      error: "am_pm_temporal_contract_missing_or_mismatch",
+      legacy: false,
+    };
+  }
+  const sessionCalendar = parseSessionCalendar(raw.session_calendar);
+  if (!sessionCalendar) {
+    return {
+      ok: false,
+      error: "session_calendar_missing_or_invalid",
+      legacy: false,
+    };
+  }
+  const parsedBars = parseAmPmBars(raw.bars);
+  if (parsedBars.legacy) {
+    return {
+      ok: false,
+      error: "legacy_period_panel_rejected",
+      legacy: true,
+    };
+  }
+  const hedge = parseTradableHedge(raw.tradable_hedge);
+  if (hedge === "invalid") {
+    return {
+      ok: false,
+      error: "cash_index_executable_fill_rejected",
+      legacy: false,
+    };
+  }
+  const periodId = typeof raw.period_id === "string" ? raw.period_id : "";
+  const periodStart =
+    typeof raw.period_start === "string" ? raw.period_start.slice(0, 10) : "";
+  const periodEnd =
+    typeof raw.period_end === "string" ? raw.period_end.slice(0, 10) : "";
+  if (!periodId || !isIsoDate(periodStart) || !isIsoDate(periodEnd)) {
+    return { ok: false, error: "period_bounds_invalid", legacy: false };
+  }
+  const status = raw.status === "data_missing" ? "data_missing" : "ok";
+  const opt225 = isObject(raw.opt225_regime)
+    ? (raw.opt225_regime as Opt225RegimeBundle)
+    : null;
+  return {
+    ok: true,
+    value: {
+      schema_version: PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION,
+      period_id: periodId,
+      year: Number(raw.year ?? 0),
+      period_start: periodStart,
+      period_end: periodEnd,
+      status,
+      source: typeof raw.source === "string" ? raw.source : "am_pm_panel",
+      temporal_contract: PERSONAL_VOL_AM_PM_TEMPORAL_CONTRACT,
+      session_calendar: sessionCalendar,
+      bars: parsedBars.bars,
+      opt225_regime: opt225,
+      tradable_hedge: hedge,
+    },
+  };
+}
+
+export function equityCodes(panel: PersonalVolAmPmPanel): string[] {
+  return Object.keys(panel.bars)
+    .filter((code) => !code.startsWith("__"))
+    .sort();
+}
+
+export function barMaps(panel: PersonalVolAmPmPanel): {
+  morning: Record<string, Record<string, number>>;
+  afternoon: Record<string, Record<string, number>>;
+} {
+  const morning: Record<string, Record<string, number>> = {};
+  const afternoon: Record<string, Record<string, number>> = {};
+  for (const code of equityCodes(panel)) {
+    morning[code] = {};
+    afternoon[code] = {};
+    for (const point of panel.bars[code] || []) {
+      morning[code][point.date] = point.MAdjC;
+      afternoon[code][point.date] = point.AAdjC;
+    }
+  }
+  return { morning, afternoon };
+}
+
+function placeholderPanel(
+  period: PeriodSpec,
+  source: string,
+): PersonalVolAmPmPanel {
+  return {
+    schema_version: PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION,
+    period_id: String(period.period_id),
+    year: Number(period.year ?? 0),
+    period_start: period.period_start || "",
+    period_end: period.period_end || "",
+    status: "data_missing",
+    source,
+    temporal_contract: PERSONAL_VOL_AM_PM_TEMPORAL_CONTRACT,
+    session_calendar: {
+      dataset: "indices_bars_daily_topix",
+      label: "TOPIX",
+      role: PERSONAL_VOL_AM_PM_SESSION_CALENDAR_ROLE,
+      dates: [],
+    },
+    bars: {},
+    opt225_regime: null,
+    tradable_hedge: null,
+  };
+}
+
+export async function loadPersonalVolAmPmPanels(
+  bucket: R2Bucket,
+  periods: readonly PeriodSpec[],
+): Promise<{ panels: PersonalVolAmPmPanel[]; notes: string[] }> {
+  const panels: PersonalVolAmPmPanel[] = [];
+  const notes: string[] = [];
+  for (const period of periods) {
+    const key = `${PERSONAL_VOL_AM_PM_PANELS_PREFIX}/${period.period_id}.json`;
+    const obj = await bucket.get(key);
+    if (!obj) {
+      notes.push(`missing:${key}`);
+      panels.push(placeholderPanel(period, "am_pm_panel_missing"));
+      continue;
+    }
+    let raw: unknown;
+    try {
+      raw = await obj.json();
+    } catch (error) {
+      notes.push(`parse_error:${key}:${String(error)}`);
+      panels.push(placeholderPanel(period, "am_pm_panel_parse_error"));
+      continue;
+    }
+    const parsed = parsePersonalVolAmPmPanel(raw);
+    if (!parsed.ok) {
+      notes.push(
+        parsed.legacy
+          ? `legacy_period_panel_rejected:${key}`
+          : `${parsed.error}:${key}`,
+      );
+      panels.push(
+        placeholderPanel(
+          period,
+          parsed.legacy
+            ? "legacy_period_panel_rejected"
+            : `am_pm_panel_${parsed.error}`,
+        ),
+      );
+      continue;
+    }
+    if (
+      parsed.value.period_id !== String(period.period_id) ||
+      parsed.value.year !== Number(period.year ?? 0) ||
+      parsed.value.period_start !== (period.period_start || "") ||
+      parsed.value.period_end !== (period.period_end || "")
+    ) {
+      notes.push(`metadata_mismatch:${key}`);
+      panels.push(placeholderPanel(period, "am_pm_panel_metadata_mismatch"));
+      continue;
+    }
+    if (
+      parsed.value.status !== "ok" ||
+      equityCodes(parsed.value).length === 0
+    ) {
+      notes.push(`empty_or_missing_equity:${key}`);
+      panels.push({
+        ...parsed.value,
+        status: "data_missing",
+        bars: {},
+        source: "am_pm_panel_empty",
+      });
+      continue;
+    }
+    panels.push({ ...parsed.value, source: parsed.value.source || `r2:${key}` });
+    notes.push(`loaded:${key}:codes=${equityCodes(parsed.value).length}`);
+  }
+  return { panels, notes };
+}
