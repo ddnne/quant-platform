@@ -5,8 +5,10 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date, timedelta
 from typing import Any, Mapping, Sequence
+from unittest.mock import patch
 
 import pytest
+import research.personal_index_vol_overlay as overlay_mod
 
 from research.options_225_smile_features import OPTIONS_225_SMILE_SURFACE_SCOPE
 from research.options_225_smile_transport import (
@@ -45,9 +47,7 @@ from research.personal_index_vol_overlay import (
     SMILE_TRANSPORT_CANDIDATE_IDS,
     TOPIX_ETF_CODE,
     am_pm_base_producer_unavailable_reason,
-    am_pm_fixture_base_definition,
     am_pm_temporal_contract_digest,
-    am_pm_verified_base_binding,
     build_prepared_am_pm_panel_manifest,
     build_prepared_panel_manifest,
     canonical_am_pm_lagged_feature_evidence_digest,
@@ -61,10 +61,26 @@ from research.personal_index_vol_overlay import (
 
 AM_PM_SPEC = "sha256:" + "c" * 64
 AM_PM_COHORT = "sha256:" + "d" * 64
-AM_PM_FIXTURE = am_pm_fixture_base_definition(
-    strategy_spec_digest=AM_PM_SPEC,
-    cohort_digest=AM_PM_COHORT,
-)
+
+
+class _TestAmPmRepoBinding:
+    """Test-only mock of the private repo resolver. Not a product API."""
+
+    def __init__(self, spec: str = AM_PM_SPEC, cohort: str = AM_PM_COHORT) -> None:
+        self.spec = spec
+        self.cohort = cohort
+        self._patch = patch.object(
+            overlay_mod,
+            "_am_pm_repo_bindings",
+            lambda: (spec, cohort),
+        )
+
+    def __enter__(self) -> "_TestAmPmRepoBinding":
+        self._patch.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._patch.stop()
 
 
 def _dates(count: int, *, start: date = date(2023, 1, 4)) -> list[str]:
@@ -168,15 +184,15 @@ def _am_pm_manifest(
     rows: Sequence[IndexVolOverlayAmPmObservation],
 ) -> Any:
     dates = [row.date for row in rows]
-    return build_prepared_am_pm_panel_manifest(
-        rows,
-        authoritative_session_dates=dates,
-        snapshot_digest="sha256:" + "3" * 64,
-        base_report_digest="sha256:" + "4" * 64,
-        strategy_spec_digest=AM_PM_SPEC,
-        cohort_digest=AM_PM_COHORT,
-        fixture_definition=AM_PM_FIXTURE,
-    )
+    with _TestAmPmRepoBinding():
+        return build_prepared_am_pm_panel_manifest(
+            rows,
+            authoritative_session_dates=dates,
+            snapshot_digest="sha256:" + "3" * 64,
+            base_report_digest="sha256:" + "4" * 64,
+            strategy_spec_digest=AM_PM_SPEC,
+            cohort_digest=AM_PM_COHORT,
+        )
 
 
 def _evaluate_overlay(
@@ -184,7 +200,7 @@ def _evaluate_overlay(
     **kwargs: Any,
 ) -> dict[str, Any]:
     dates = [row.date for row in rows]
-    with am_pm_verified_base_binding(AM_PM_FIXTURE):
+    with _TestAmPmRepoBinding():
         return evaluate_index_vol_overlays_am_pm(
             rows,
             manifest=_am_pm_manifest(rows),
@@ -336,7 +352,7 @@ def _evaluate_transport(
     signal_end: str | None = None,
 ) -> dict[str, Any]:
     dates = [row.date for row in rows]
-    with am_pm_verified_base_binding(AM_PM_FIXTURE):
+    with _TestAmPmRepoBinding():
         return evaluate_index_smile_transport_overlays_am_pm(
             rows,
             features,
@@ -433,28 +449,24 @@ def test_missing_definition_and_legacy_digest_fail_for_the_same_reason() -> None
             strategy_spec_digest=AM_PM_SPEC,
             cohort_digest=AM_PM_COHORT,
         )
-    with pytest.raises(AmPmBaseProducerUnavailable, match=AM_PM_BASE_PRODUCER_UNAVAILABLE):
-        build_prepared_am_pm_panel_manifest(
+    with _TestAmPmRepoBinding():
+        with pytest.raises(AmPmBaseProducerUnavailable, match=AM_PM_BASE_PRODUCER_UNAVAILABLE):
+            build_prepared_am_pm_panel_manifest(
+                rows,
+                authoritative_session_dates=dates,
+                snapshot_digest="sha256:" + "3" * 64,
+                base_report_digest="sha256:" + "4" * 64,
+                strategy_spec_digest=EXPECTED_BASE_STRATEGY_SPEC_DIGEST,
+                cohort_digest=EXPECTED_BASE_COHORT_DIGEST,
+            )
+        manifest = build_prepared_am_pm_panel_manifest(
             rows,
             authoritative_session_dates=dates,
             snapshot_digest="sha256:" + "3" * 64,
             base_report_digest="sha256:" + "4" * 64,
-            strategy_spec_digest=EXPECTED_BASE_STRATEGY_SPEC_DIGEST,
-            cohort_digest=EXPECTED_BASE_COHORT_DIGEST,
-            fixture_definition=am_pm_fixture_base_definition(
-                strategy_spec_digest=EXPECTED_BASE_STRATEGY_SPEC_DIGEST,
-                cohort_digest=EXPECTED_BASE_COHORT_DIGEST,
-            ),
+            strategy_spec_digest=AM_PM_SPEC,
+            cohort_digest=AM_PM_COHORT,
         )
-    manifest = build_prepared_am_pm_panel_manifest(
-        rows,
-        authoritative_session_dates=dates,
-        snapshot_digest="sha256:" + "3" * 64,
-        base_report_digest="sha256:" + "4" * 64,
-        strategy_spec_digest=AM_PM_SPEC,
-        cohort_digest=AM_PM_COHORT,
-        fixture_definition=AM_PM_FIXTURE,
-    )
     assert manifest.strategy_spec_digest == AM_PM_SPEC
     assert manifest.cohort_digest == AM_PM_COHORT
 
@@ -976,7 +988,7 @@ def test_same_d_close_cannot_enter_d_morning_signal_evidence() -> None:
             feature_available_at=f"{dates[1]}T12:30:00+09:00",
             n225_atm_iv=0.40,
         )
-    with pytest.raises(ValueError, match="source session date"):
+    with pytest.raises(ValueError, match="source session JST date"):
         AmPmLaggedFeatureEvidence(
             source_session_date=dates[1],
             feature_available_at=f"{dates[2]}T15:00:00+09:00",
@@ -1072,21 +1084,52 @@ def test_smile_lagged_pair_carries_honest_d_minus_2_and_d_minus_1() -> None:
     )
 
 
-def test_am_pm_evaluation_requires_verified_producer_binding() -> None:
+def test_arbitrary_digests_cannot_construct_validate_or_evaluate() -> None:
     dates = _dates(8)
     rows = _am_pm_rows(dates)
-    manifest = _am_pm_manifest(rows)
+    arbitrary_spec = "sha256:" + "1" * 64
+    arbitrary_cohort = "sha256:" + "2" * 64
+    assert not hasattr(overlay_mod, "am_pm_verified_base_binding")
+    assert not hasattr(overlay_mod, "am_pm_fixture_base_definition")
+    assert "am_pm_verified_base_binding" not in overlay_mod.__all__
     with pytest.raises(AmPmBaseProducerUnavailable, match=AM_PM_BASE_PRODUCER_UNAVAILABLE):
-        evaluate_index_vol_overlays_am_pm(
+        build_prepared_am_pm_panel_manifest(
             rows,
-            manifest=manifest,
             authoritative_session_dates=dates,
-            signal_start=dates[3],
-            signal_end=dates[3],
+            snapshot_digest="sha256:" + "3" * 64,
+            base_report_digest="sha256:" + "4" * 64,
+            strategy_spec_digest=arbitrary_spec,
+            cohort_digest=arbitrary_cohort,
+        )
+    with pytest.raises(TypeError):
+        build_prepared_am_pm_panel_manifest(
+            rows,
+            authoritative_session_dates=dates,
+            snapshot_digest="sha256:" + "3" * 64,
+            base_report_digest="sha256:" + "4" * 64,
+            strategy_spec_digest=arbitrary_spec,
+            cohort_digest=arbitrary_cohort,
+            fixture_definition={
+                "strategy_id": AM_PM_BASE_SLEEVE_ID,
+                "cohort_id": AM_PM_BASE_COHORT_ID,
+                "schema_version": "personal-base-sleeve-source-am-pm/v1",
+                "strategy_spec_digest": arbitrary_spec,
+                "cohort_digest": arbitrary_cohort,
+            },
+        )
+    with pytest.raises(TypeError):
+        build_prepared_am_pm_panel_manifest(
+            rows,
+            authoritative_session_dates=dates,
+            snapshot_digest="sha256:" + "3" * 64,
+            base_report_digest="sha256:" + "4" * 64,
+            strategy_spec_digest=arbitrary_spec,
+            cohort_digest=arbitrary_cohort,
+            verified_binding=(arbitrary_spec, arbitrary_cohort),
         )
     payload = dict(
-        strategy_spec_digest=AM_PM_SPEC,
-        cohort_digest=AM_PM_COHORT,
+        strategy_spec_digest=arbitrary_spec,
+        cohort_digest=arbitrary_cohort,
         snapshot_digest="sha256:" + "3" * 64,
         base_report_digest="sha256:" + "4" * 64,
         trading_calendar_digest="sha256:" + "5" * 64,
@@ -1102,15 +1145,33 @@ def test_am_pm_evaluation_requires_verified_producer_binding() -> None:
     )
     with pytest.raises(AmPmBaseProducerUnavailable, match=AM_PM_BASE_PRODUCER_UNAVAILABLE):
         PreparedIndexVolOverlayAmPmPanelManifest(**payload)
-    with am_pm_verified_base_binding(AM_PM_FIXTURE):
-        with pytest.raises(AmPmBaseProducerUnavailable, match=AM_PM_BASE_PRODUCER_UNAVAILABLE):
-            PreparedIndexVolOverlayAmPmPanelManifest(
-                **{
-                    **payload,
-                    "strategy_spec_digest": "sha256:" + "e" * 64,
-                    "cohort_digest": "sha256:" + "f" * 64,
-                }
-            )
+    manifest = _am_pm_manifest(rows)
+    with pytest.raises(AmPmBaseProducerUnavailable, match=AM_PM_BASE_PRODUCER_UNAVAILABLE):
+        evaluate_index_vol_overlays_am_pm(
+            rows,
+            manifest=manifest,
+            authoritative_session_dates=dates,
+            signal_start=dates[3],
+            signal_end=dates[3],
+        )
+    with pytest.raises(TypeError):
+        evaluate_index_vol_overlays_am_pm(
+            rows,
+            manifest=manifest,
+            authoritative_session_dates=dates,
+            signal_start=dates[3],
+            signal_end=dates[3],
+            fixture_definition={"strategy_spec_digest": arbitrary_spec},
+        )
+    with pytest.raises(TypeError):
+        evaluate_index_vol_overlays_am_pm(
+            rows,
+            manifest=manifest,
+            authoritative_session_dates=dates,
+            signal_start=dates[3],
+            signal_end=dates[3],
+            verified_binding=(arbitrary_spec, arbitrary_cohort),
+        )
 
 
 def test_daily_path_net_return_matches_consecutive_equity_ratio() -> None:
@@ -1154,3 +1215,116 @@ def test_fill_outcome_rejects_outcome_before_fill() -> None:
         topix_etf_13060_aadjc=1000.0,
     )
     assert equal.outcome_available_at == equal.fill_available_at
+
+
+def test_am_pm_timestamps_reject_minus_12_z_and_naive() -> None:
+    dates = _dates(8)
+    day = dates[1]
+    previous = dates[0]
+    illegal = (
+        f"{day}T23:59:59-12:00",
+        f"{day}T03:30:00Z",
+        f"{day}T12:30:00",
+        f"{day}T12:30:00+00:00",
+    )
+    for stamp in illegal:
+        with pytest.raises(ValueError, match=r"\+09:00"):
+            AmPmSignalEvidence(
+                date=day,
+                signal_available_at=stamp,
+                base_sleeve_am_nav=100.0,
+                topix_etf_13060_madjc=1000.0,
+            )
+        with pytest.raises(ValueError, match=r"\+09:00"):
+            AmPmLaggedFeatureEvidence(
+                source_session_date=day,
+                feature_available_at=stamp,
+                prior_source_session_date=previous,
+                prior_feature_available_at=f"{previous}T15:00:00+09:00",
+            )
+        with pytest.raises(ValueError, match=r"\+09:00"):
+            AmPmFillOutcomeEvidence(
+                date=day,
+                fill_available_at=stamp,
+                outcome_available_at=stamp if stamp.endswith("+09:00") else stamp,
+                base_sleeve_pm_nav=100.0,
+                topix_etf_13060_aadjc=1000.0,
+            )
+
+
+def test_ordinary_and_smile_reject_minus_12_offset_repros() -> None:
+    dates = _dates(150)
+    rows = _am_pm_rows(dates)
+    with pytest.raises(ValueError, match=r"\+09:00"):
+        _replace_lagged(
+            rows[129],
+            feature_available_at=f"{dates[129]}T23:59:59-12:00",
+        )
+    with pytest.raises(ValueError, match=r"\+09:00"):
+        _replace_fill(
+            rows[130],
+            fill_available_at=f"{dates[130]}T23:59:59-12:00",
+            outcome_available_at=f"{dates[130]}T23:59:59-12:00",
+        )
+    with pytest.raises(ValueError, match=r"\+09:00"):
+        _replace_signal(
+            rows[130],
+            signal_available_at=f"{dates[130]}T23:59:59-12:00",
+        )
+    smile_rows, _features, smile_dates, chosen = _april_smile_gate()
+    signal = sorted(chosen)[5]
+    index = smile_dates.index(signal)
+    with pytest.raises(ValueError, match=r"\+09:00"):
+        _replace_lagged(
+            smile_rows[index - 1],
+            feature_available_at=f"{smile_dates[index - 1]}T23:59:59-12:00",
+        )
+    with pytest.raises(ValueError, match=r"\+09:00"):
+        _replace_fill(
+            smile_rows[index],
+            fill_available_at=f"{signal}T23:59:59-12:00",
+            outcome_available_at=f"{signal}T23:59:59-12:00",
+        )
+
+
+def test_valid_jst_boundary_timestamps_remain_causal() -> None:
+    dates = _dates(150)
+    rows = _am_pm_rows(dates)
+    rows[129] = _replace_lagged(
+        rows[129], feature_available_at=f"{dates[129]}T23:59:59+09:00"
+    )
+    rows[130] = _replace_signal(
+        rows[130], signal_available_at=f"{dates[130]}T12:30:00+09:00"
+    )
+    rows[130] = _replace_fill(
+        rows[130],
+        fill_available_at=f"{dates[130]}T15:00:00+09:00",
+        outcome_available_at=f"{dates[130]}T23:59:59+09:00",
+    )
+    report = _evaluate_overlay(rows, signal_start=dates[130], signal_end=dates[130])
+    assert report["status"] == "EVALUATED"
+    smile_rows, features, smile_dates, chosen = _april_smile_gate()
+    signal = sorted(chosen)[5]
+    index = smile_dates.index(signal)
+    smile_rows[index - 1] = _replace_lagged(
+        smile_rows[index - 1],
+        feature_available_at=f"{smile_dates[index - 1]}T23:59:59+09:00",
+    )
+    smile_rows[index] = _replace_signal(
+        smile_rows[index], signal_available_at=f"{signal}T11:30:00+09:00"
+    )
+    smile_rows[index] = _replace_fill(
+        smile_rows[index],
+        fill_available_at=f"{signal}T15:00:00+09:00",
+        outcome_available_at=f"{signal}T15:00:00+09:00",
+    )
+    smile = _evaluate_transport(
+        smile_rows, features, signal_start=smile_dates[BETA_MIN_RETURNS]
+    )
+    assert smile["status"] == "EVALUATED"
+    path = next(
+        row
+        for row in _by_id(smile, SMILE_TRANSPORT_AM_PM_CANDIDATE_IDS[0])["daily_path"]
+        if row["signal_date"] == signal
+    )
+    assert path["signal_date"] == signal

@@ -17,13 +17,11 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from contextlib import contextmanager
-from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from statistics import mean, median
-from typing import Any, Final, Iterator, Mapping, Sequence
+from typing import Any, Final, Mapping, Sequence
 
 from research.factor_cohorts import get_research_cohort
 from research.options_225_smile_features import OPTIONS_225_SMILE_SURFACE_SCOPE
@@ -2105,9 +2103,8 @@ AM_PM_LAGGED_FEATURE_EVIDENCE_DIGEST_SCHEMA: Final = (
     "index-vol-overlay-am-pm-lagged-feature-evidence/v1"
 )
 _AM_PM_PM_CLOSE_TIME = time(hour=15, minute=0, second=0, tzinfo=_JST)
-_AM_PM_VERIFIED_BINDING: ContextVar[tuple[str, str] | None] = ContextVar(
-    "am_pm_verified_binding", default=None
-)
+_AM_PM_JST_OFFSET: Final = timedelta(hours=9)
+_AM_PM_JST_OFFSET_SUFFIX: Final = "+09:00"
 
 
 class AmPmBaseProducerUnavailable(ValueError):
@@ -2115,20 +2112,6 @@ class AmPmBaseProducerUnavailable(ValueError):
 
     def __init__(self) -> None:
         super().__init__(AM_PM_BASE_PRODUCER_UNAVAILABLE)
-
-
-def am_pm_fixture_base_definition(
-    *,
-    strategy_spec_digest: str,
-    cohort_digest: str,
-) -> dict[str, str]:
-    return {
-        "strategy_id": AM_PM_BASE_SLEEVE_ID,
-        "cohort_id": AM_PM_BASE_COHORT_ID,
-        "schema_version": AM_PM_BASE_SLEEVE_SCHEMA,
-        "strategy_spec_digest": strategy_spec_digest,
-        "cohort_digest": cohort_digest,
-    }
 
 
 def _am_pm_repo_bindings() -> tuple[str, str] | None:
@@ -2157,16 +2140,15 @@ def am_pm_base_producer_unavailable_reason() -> str | None:
     return None
 
 
-def _validated_am_pm_fixture_digests(
-    fixture_definition: Mapping[str, str],
-) -> tuple[str, str]:
-    spec = str(fixture_definition.get("strategy_spec_digest") or "")
-    cohort = str(fixture_definition.get("cohort_digest") or "")
+def verified_am_pm_base_digests() -> tuple[str, str]:
+    """Resolve only the repository AM producer binding; fail closed otherwise."""
+
+    repo = _am_pm_repo_bindings()
+    if repo is None:
+        raise AmPmBaseProducerUnavailable()
+    spec, cohort = repo
     if (
-        fixture_definition.get("strategy_id") != AM_PM_BASE_SLEEVE_ID
-        or fixture_definition.get("cohort_id") != AM_PM_BASE_COHORT_ID
-        or fixture_definition.get("schema_version") != AM_PM_BASE_SLEEVE_SCHEMA
-        or spec == EXPECTED_BASE_STRATEGY_SPEC_DIGEST
+        spec == EXPECTED_BASE_STRATEGY_SPEC_DIGEST
         or cohort == EXPECTED_BASE_COHORT_DIGEST
         or not _canonical_sha256(spec)
         or not _canonical_sha256(cohort)
@@ -2175,53 +2157,32 @@ def _validated_am_pm_fixture_digests(
     return spec, cohort
 
 
-def resolve_am_pm_base_digests(
-    *,
-    fixture_definition: Mapping[str, str] | None = None,
-) -> tuple[str, str]:
-    """Return the AM/PM spec/cohort digests or fail closed."""
+def resolve_am_pm_base_digests() -> tuple[str, str]:
+    """Return the repository AM producer spec/cohort digests or fail closed."""
 
-    repo = _am_pm_repo_bindings()
-    if repo is not None:
-        return repo
-    installed = _AM_PM_VERIFIED_BINDING.get()
-    if installed is not None:
-        return installed
-    if fixture_definition is None:
-        raise AmPmBaseProducerUnavailable()
-    return _validated_am_pm_fixture_digests(fixture_definition)
-
-
-def verified_am_pm_base_digests() -> tuple[str, str]:
-    """Require a live AM producer/repo binding or a verified test fixture."""
-
-    return resolve_am_pm_base_digests()
-
-
-@contextmanager
-def am_pm_verified_base_binding(
-    fixture_definition: Mapping[str, str],
-) -> Iterator[tuple[str, str]]:
-    """Install a narrow verified AM producer binding for tests."""
-
-    spec, cohort = _validated_am_pm_fixture_digests(fixture_definition)
-    token = _AM_PM_VERIFIED_BINDING.set((spec, cohort))
-    try:
-        yield spec, cohort
-    finally:
-        _AM_PM_VERIFIED_BINDING.reset(token)
+    return verified_am_pm_base_digests()
 
 
 def _am_pm_parse_timestamp(value: str, *, label: str) -> datetime:
+    if not isinstance(value, str) or value.endswith(("Z", "z")):
+        raise ValueError(f"{label} must use exact JST +09:00 offset")
+    if not value.endswith(_AM_PM_JST_OFFSET_SUFFIX):
+        raise ValueError(f"{label} must use exact JST +09:00 offset")
     try:
         parsed = datetime.fromisoformat(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{label} must be canonical ISO: {value!r}") from exc
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError(f"{label} must include a UTC offset")
+    if parsed.utcoffset() != _AM_PM_JST_OFFSET:
+        raise ValueError(f"{label} must use exact JST +09:00 offset")
     if parsed.microsecond != 0 or parsed.isoformat(timespec="seconds") != value:
         raise ValueError(f"{label} must use canonical whole seconds")
     return parsed
+
+
+def _am_pm_session_instant(day: str, clock: time) -> datetime:
+    return datetime.combine(date.fromisoformat(day), clock)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2294,7 +2255,7 @@ class AmPmLaggedFeatureEvidence:
         post_close = datetime.combine(source, _AM_PM_PM_CLOSE_TIME)
         if available.date() != source:
             raise ValueError(
-                "lagged feature availability must fall on the source session date"
+                "lagged feature availability must fall on the source session JST date"
             )
         if available < post_close:
             raise ValueError(
@@ -2322,7 +2283,7 @@ class AmPmLaggedFeatureEvidence:
             prior_close = datetime.combine(prior, _AM_PM_PM_CLOSE_TIME)
             if prior_available.date() != prior:
                 raise ValueError(
-                    "lagged prior availability must fall on the prior source session"
+                    "lagged prior availability must fall on the prior source JST date"
                 )
             if prior_available < prior_close:
                 raise ValueError(
@@ -2347,6 +2308,7 @@ class AmPmFillOutcomeEvidence:
             raise ValueError("fill outcome date must be canonical ISO") from exc
         if session.isoformat() != self.date:
             raise ValueError("fill outcome date must be canonical ISO")
+        usable_by = datetime.combine(session, _AM_PM_EQUITY_USABLE_BY_TIME)
         pm_open = datetime.combine(session, _AM_PM_PM_CLOSE_TIME)
         fill_at = _am_pm_parse_timestamp(
             self.fill_available_at, label="fill_available_at"
@@ -2358,10 +2320,12 @@ class AmPmFillOutcomeEvidence:
             ("fill_available_at", fill_at),
             ("outcome_available_at", outcome_at),
         ):
-            if available.date() != session or available < pm_open:
+            if available.date() != session:
+                raise ValueError("PM outcome evidence must fall on JST date D")
+            if available <= usable_by or available < pm_open:
                 raise ValueError(
-                    "PM outcome evidence must be timestamped at D PM close, "
-                    "not a morning timestamp"
+                    "PM outcome evidence must be after D morning usable-by "
+                    "and timestamped at D PM close, not a morning timestamp"
                 )
         if outcome_at < fill_at:
             raise ValueError(
@@ -2567,7 +2531,8 @@ def _validate_am_pm_observations(
     if len(observations) < 3:
         raise ValueError("at least three ordered sessions are required")
     previous: str | None = None
-    for row in observations:
+    rows = list(observations)
+    for row in rows:
         if not isinstance(row, IndexVolOverlayAmPmObservation):
             raise TypeError(
                 "AM/PM observations must be IndexVolOverlayAmPmObservation values"
@@ -2591,6 +2556,51 @@ def _validate_am_pm_observations(
         if previous is not None and row.date <= previous:
             raise ValueError("observation dates must be unique and strictly increasing")
         previous = row.date
+    for index, row in enumerate(rows):
+        usable_by = _am_pm_session_instant(row.date, _AM_PM_EQUITY_USABLE_BY_TIME)
+        if index >= 1:
+            lagged = rows[index - 1].lagged_features
+            if lagged is not None:
+                lagged_at = _am_pm_parse_timestamp(
+                    lagged.feature_available_at, label="feature_available_at"
+                )
+                if lagged_at > usable_by:
+                    raise ValueError(
+                        "lagged feature instant must be available by D 12:30 JST"
+                    )
+                if lagged.prior_feature_available_at is not None:
+                    prior_at = _am_pm_parse_timestamp(
+                        lagged.prior_feature_available_at,
+                        label="prior_feature_available_at",
+                    )
+                    if prior_at > usable_by:
+                        raise ValueError(
+                            "D-2 lagged feature instant must be available by D 12:30 JST"
+                        )
+        if index >= 2 and rows[index - 2].lagged_features is not None:
+            older = rows[index - 2].lagged_features
+            assert older is not None
+            older_at = _am_pm_parse_timestamp(
+                older.feature_available_at, label="feature_available_at"
+            )
+            if older_at > usable_by:
+                raise ValueError(
+                    "D-2 lagged feature instant must be available by D 12:30 JST"
+                )
+        if row.fill_outcome is not None and index + 1 < len(rows):
+            next_usable = _am_pm_session_instant(
+                rows[index + 1].date, _AM_PM_EQUITY_USABLE_BY_TIME
+            )
+            fill_at = _am_pm_parse_timestamp(
+                row.fill_outcome.fill_available_at, label="fill_available_at"
+            )
+            outcome_at = _am_pm_parse_timestamp(
+                row.fill_outcome.outcome_available_at, label="outcome_available_at"
+            )
+            if fill_at >= next_usable or outcome_at >= next_usable:
+                raise ValueError(
+                    "PM fill/outcome must be before the next decision 12:30 JST instant"
+                )
 
 
 def _validate_am_pm_manifest(
@@ -2661,13 +2671,10 @@ def build_prepared_am_pm_panel_manifest(
     base_report_digest: str,
     strategy_spec_digest: str,
     cohort_digest: str,
-    fixture_definition: Mapping[str, str] | None = None,
 ) -> PreparedIndexVolOverlayAmPmPanelManifest:
     """Build the AM/PM manifest; never bind the next-close overlay panel."""
 
-    expected_spec, expected_cohort = resolve_am_pm_base_digests(
-        fixture_definition=fixture_definition
-    )
+    expected_spec, expected_cohort = verified_am_pm_base_digests()
     if (
         strategy_spec_digest != expected_spec
         or cohort_digest != expected_cohort
@@ -2683,7 +2690,7 @@ def build_prepared_am_pm_panel_manifest(
         raise ValueError(
             "observation dates must exactly match authoritative session dates"
         )
-    payload = dict(
+    return PreparedIndexVolOverlayAmPmPanelManifest(
         strategy_spec_digest=strategy_spec_digest,
         cohort_digest=cohort_digest,
         snapshot_digest=snapshot_digest,
@@ -2703,10 +2710,6 @@ def build_prepared_am_pm_panel_manifest(
         session_date_end=authoritative[-1],
         session_count=len(authoritative),
     )
-    if fixture_definition is None:
-        return PreparedIndexVolOverlayAmPmPanelManifest(**payload)
-    with am_pm_verified_base_binding(fixture_definition):
-        return PreparedIndexVolOverlayAmPmPanelManifest(**payload)
 
 
 def _nav_return(
@@ -4169,8 +4172,6 @@ __all__ = [
     "TOPIX_ETF_CODE",
     "TOPIX_PROXY_DATASET",
     "am_pm_base_producer_unavailable_reason",
-    "am_pm_fixture_base_definition",
-    "am_pm_verified_base_binding",
     "am_pm_proxy_mapping",
     "am_pm_proxy_mapping_digest",
     "am_pm_temporal_contract_digest",
