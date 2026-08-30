@@ -83,10 +83,15 @@ The generated `snapshots/*.sqlite` copy is excluded from `result.tar.gz`; the
 small snapshot manifest remains. Reusing a completed `job_id` is idempotent
 only when every input is identical.
 
-Cost and safety bounds are structural: `standard-2`, `max_instances=2` only so
-the legacy and runner-bound generations can coexist during rollout, one active
-job per named Container, a 4 GiB snapshot ceiling, 165-minute subprocess
-timeout and a 180-minute outer Container activity window. Exact-four is also capped at 24
+Cost and safety bounds are structural: one `standard-4` Container runs at most
+four strategy child processes after one shared snapshot/PIT/data-quality
+preparation. `max_instances=2` is rollout headroom for legacy and runner-bound
+generations, not pre-warmed capacity; ordinary jobs still use one named
+Container and exit after terminal evidence. The base sleeve, when required, is
+computed before candidate fan-out. Candidate results are restored to registry
+order before the exact-four aggregate is written. The route retains its 4 GiB
+snapshot ceiling, 165-minute process-group timeout and 180-minute outer
+Container activity window. Exact-four is also capped at 24
 actual backtests (four validation folds, one stress, and one holdout per
 candidate); financing sensitivity does not multiply that execution count. A
 single request is limited to
@@ -102,9 +107,8 @@ a deployment from replacing an accepted legacy or current-generation Container
 before that watchdog ends.
 Before changing the runner-bound name, every accepted job on the prior name must
 have a terminal R2 manifest; do not resubmit the same `job_id` during the
-two-generation migration window. For the v6-to-v7 migration, the known SVI,
-volatility and price paths were verified terminal before rollover. Every new
-POST first requires an exact v7 `/ready` identity. Only a positively identified
+two-generation migration window. Every new POST first requires the exact
+current `/ready` identity. Only a positively identified
 older runner may be destroyed and re-probed once; an unavailable or malformed
 probe fails closed without destroying the instance.
 There is no Cron, Queue, model call,

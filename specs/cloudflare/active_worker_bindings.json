@@ -60,7 +60,7 @@
     ],
     "unclassified": "REJECT"
   },
-  "manifest_digest": "sha256:d65f25cff1f54d1916da84608b86b98233f2e8ef3de10baf0c3ce3f48d4f10d4",
+  "manifest_digest": "sha256:71090f5a5b5e43e191093f00d709e90e5296e43ade8be37a198cd6b24fdbe011",
   "schema_version": "cloudflare-active-worker-bindings/v9",
   "test_harness_surfaces": {
     "ingestion-jsda": {
@@ -2862,7 +2862,7 @@
             "class_name": "PersonalResearchContainer",
             "image": "./Dockerfile",
             "image_build_context": "../../..",
-            "instance_type": "standard-2",
+            "instance_type": "standard-4",
             "max_instances": 2,
             "rollout_active_grace_period": 11400
           }
@@ -2937,7 +2937,7 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
-          "MASS_EVAL_VERSION": "research-mass-eval/v144.4-container-rollover",
+          "MASS_EVAL_VERSION": "research-mass-eval/v145-strategy-parallel",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -2962,7 +2962,7 @@
             "class_name": "PersonalResearchContainer",
             "image": "./Dockerfile",
             "image_build_context": "../../..",
-            "instance_type": "standard-2",
+            "instance_type": "standard-4",
             "max_instances": 2,
             "rollout_active_grace_period": 11400
           }
@@ -3037,7 +3037,7 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
-          "MASS_EVAL_VERSION": "research-mass-eval/v144.4-container-rollover",
+          "MASS_EVAL_VERSION": "research-mass-eval/v145-strategy-parallel",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -3062,7 +3062,7 @@
             "class_name": "PersonalResearchContainer",
             "image": "./Dockerfile",
             "image_build_context": "../../..",
-            "instance_type": "standard-2",
+            "instance_type": "standard-4",
             "max_instances": 2,
             "rollout_active_grace_period": 11400
           }
@@ -3135,7 +3135,7 @@
         },
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
-          "MASS_EVAL_VERSION": "research-mass-eval/v144.4-container-rollover",
+          "MASS_EVAL_VERSION": "research-mass-eval/v145-strategy-parallel",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",

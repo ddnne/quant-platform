@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from concurrent.futures import Future
 from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -39,8 +40,10 @@ from research.personal_service import (
     PersonalResearchPolicy,
     PersonalResearchRequest,
     PersonalResearchService,
+    _CandidateProcessTask,
     _calendar_lookback_days,
     _closures,
+    _evaluate_candidates_concurrently,
     _fixed_position_short_financing_evidence,
     _md_short_financing,
     _periods,
@@ -982,6 +985,13 @@ def test_personal_research_runs_real_paper_and_is_idempotent(
     report = json.loads(first.report_json_path.read_text(encoding="utf-8"))
     assert report["version"] == PERSONAL_RESEARCH_REPORT_VERSION
     assert report["decision_policy"] == PERSONAL_DECISION_POLICY
+    assert report["candidate_execution"] == {
+        "model": "serial",
+        "worker_processes": 1,
+        "max_parallel": 1,
+        "shared_snapshot_and_quality_preparation": True,
+        "base_sleeve_before_fanout": False,
+    }
     assert report["summary"] == {
         "analysis_status": "COMPLETED",
         "candidate_count": 1,
@@ -1379,6 +1389,7 @@ def test_exact_four_backtest_budget_adds_only_one_base_source_run(
 ) -> None:
     source, start, end = personal_db
     assert PersonalResearchPolicy().validation_folds == 4
+    assert PersonalResearchPolicy().max_parallel == 4
     assert 4 * (PersonalResearchPolicy().validation_folds + 2) == 24
     assert PERSONAL_EXACT_FOUR_MAX_BACKTESTS == 25
     request = PersonalResearchRequest(
@@ -1391,6 +1402,93 @@ def test_exact_four_backtest_budget_adds_only_one_base_source_run(
 
     with pytest.raises(PersonalResearchInputError, match="25-backtest budget"):
         PersonalResearchService(policy=_policy(validation_folds=5)).run(request)
+
+
+def test_candidate_process_fanout_uses_four_workers_restores_order_and_bounds_failure(
+    tmp_path: Path,
+) -> None:
+    policy = _policy(max_parallel=4)
+    specs = personal_specs_for_cohort("diverse-core-v1")
+    closures = _closures(
+        specs,
+        start="2022-01-01",
+        end="2026-01-01",
+        policy=policy,
+        universe_selector=personal_universe_selector("topix_all"),
+    )
+    tasks = tuple(
+        _CandidateProcessTask(
+            ordinal=ordinal,
+            spec=spec,
+            closure=closure,
+            snapshot=SimpleNamespace(),
+            universe=SimpleNamespace(),
+            fold_periods=(("2022-01-01", "2022-12-31"),),
+            holdout_period=("2025-01-01", "2026-01-01"),
+            output_root=tmp_path,
+            policy=policy,
+            short_financing_required=False,
+        )
+        for ordinal, (spec, closure) in enumerate(zip(specs, closures, strict=True))
+    )
+    submitted: list[int] = []
+    selected_workers: list[int] = []
+
+    class GuardedFuture(Future):
+        def result(self, timeout=None):
+            assert submitted == [0, 1, 2, 3]
+            return super().result(timeout)
+
+    class FakePool:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def submit(self, _worker, task):
+            submitted.append(task.ordinal)
+            future = GuardedFuture()
+            if task.ordinal == 2:
+                future.set_exception(RuntimeError("bounded child failure"))
+            else:
+                future.set_result(
+                    (
+                        task.ordinal,
+                        {
+                            "strategy_id": task.spec.strategy_id,
+                            "decision": "REJECT",
+                        },
+                    )
+                )
+            return future
+
+    def factory(max_workers: int):
+        selected_workers.append(max_workers)
+        return FakePool()
+
+    candidates, unexpected_errors = _evaluate_candidates_concurrently(
+        tasks,
+        max_workers=4,
+        pool_factory=factory,
+    )
+
+    assert selected_workers == [4]
+    assert submitted == [0, 1, 2, 3]
+    assert [candidate["strategy_id"] for candidate in candidates] == [
+        spec.strategy_id for spec in specs
+    ]
+    assert unexpected_errors == 1
+    assert candidates[2]["error"] == {
+        "type": "RuntimeError",
+        "detail": "bounded child failure",
+    }
+
+
+@pytest.mark.parametrize("max_parallel", (0, 5))
+def test_personal_research_parallelism_is_capped_at_four(max_parallel: int) -> None:
+    with pytest.raises(ValueError, match="parallelism"):
+        PersonalResearchPolicy(max_parallel=max_parallel)
 
 
 def test_short_financing_markdown_exposes_monotonicity_failure() -> None:

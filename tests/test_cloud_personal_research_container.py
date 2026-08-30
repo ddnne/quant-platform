@@ -589,6 +589,50 @@ def test_default_timeout_keeps_room_for_durable_terminal_evidence() -> None:
     assert service.DEFAULT_TIMEOUT_SECONDS < service.MAX_JOB_LIFETIME_SECONDS
 
 
+def test_research_process_timeout_kills_the_entire_new_process_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[object] = []
+
+    class FakeProcess:
+        pid = 4321
+        returncode = -9
+
+        def communicate(self, timeout=None):
+            calls.append(("communicate", timeout))
+            if timeout is not None:
+                raise service.subprocess.TimeoutExpired(["qp-research"], timeout)
+            return "bounded stdout", "bounded stderr"
+
+    def fake_popen(args, **kwargs):
+        calls.append(("popen", tuple(args), kwargs))
+        return FakeProcess()
+
+    monkeypatch.setattr(service.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        service.os,
+        "killpg",
+        lambda process_group, used_signal: calls.append(
+            ("killpg", process_group, used_signal)
+        ),
+    )
+
+    with pytest.raises(service.subprocess.TimeoutExpired) as raised:
+        service._run_research_process(
+            ("qp-research",),
+            cwd="/app",
+            env={"PYTHONUNBUFFERED": "1"},
+            timeout=0.25,
+        )
+
+    popen = next(call for call in calls if call[0] == "popen")
+    assert popen[2]["start_new_session"] is True
+    assert ("killpg", 4321, service.signal.SIGKILL) in calls
+    assert ("communicate", None) in calls
+    assert raised.value.output == "bounded stdout"
+    assert raised.value.stderr == "bounded stderr"
+
+
 def _redigest(spec):
     return replace(spec, request_digest=spec.derived_request_digest())
 
@@ -805,7 +849,10 @@ def test_long_short_archive_validates_and_preserves_non_candidate_base_source(
         )
     )
 
-    def completed_source_run(args, **_kwargs):
+    def completed_source_run(args, **kwargs):
+        assert {
+            key: kwargs["env"][key] for key in service._SINGLE_THREAD_NUMERIC_ENV
+        } == service._SINGLE_THREAD_NUMERIC_ENV
         output = Path(args[args.index("--output") + 1])
         summary = _write_base_sleeve_output(output, spec)
         return SimpleNamespace(
@@ -814,7 +861,7 @@ def test_long_short_archive_validates_and_preserves_non_candidate_base_source(
             stderr="",
         )
 
-    monkeypatch.setattr(service.subprocess, "run", completed_source_run)
+    monkeypatch.setattr(service, "_run_research_process", completed_source_run)
     work = tmp_path / "work"
     work.mkdir()
     uploads: list[tuple[str, bytes, str]] = []
@@ -945,8 +992,8 @@ def test_runner_exit_and_summary_contract_fail_closed(
     spec = _job(sha)
     summary = {**_runner_summary(spec), **summary_changes}
     monkeypatch.setattr(
-        service.subprocess,
-        "run",
+        service,
+        "_run_research_process",
         lambda *_args, **_kwargs: SimpleNamespace(
             returncode=returncode,
             stdout=(json.dumps(summary) + "\n" if stdout is None else stdout),
@@ -996,7 +1043,7 @@ def test_completed_summary_requires_report_artifacts_inside_output(
             stderr="",
         )
 
-    monkeypatch.setattr(service.subprocess, "run", missing_report_artifacts)
+    monkeypatch.setattr(service, "_run_research_process", missing_report_artifacts)
     work = tmp_path / "work"
     work.mkdir()
     uploads: list[tuple[str, bytes, str]] = []
@@ -1043,8 +1090,8 @@ def test_runner_summary_must_remain_within_fixed_policy(
     summary = _runner_summary(spec)
     summary[field] = invalid_value
     monkeypatch.setattr(
-        service.subprocess,
-        "run",
+        service,
+        "_run_research_process",
         lambda *_args, **_kwargs: SimpleNamespace(
             returncode=0,
             stdout=json.dumps(summary) + "\n",
