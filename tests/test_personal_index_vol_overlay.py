@@ -71,15 +71,22 @@ def _by_id(report: dict, candidate_id: str) -> dict:
 def _manifest(
     rows: list[IndexVolOverlayObservation],
 ) -> PreparedIndexVolOverlayPanelManifest:
+    authoritative_session_dates = [row.date for row in rows]
     return build_prepared_panel_manifest(
         rows,
+        authoritative_session_dates=authoritative_session_dates,
         snapshot_digest="sha256:" + "3" * 64,
         base_report_digest="sha256:" + "4" * 64,
     )
 
 
 def _evaluate(rows: list[IndexVolOverlayObservation], **kwargs: Any) -> dict:
-    return evaluate_index_vol_overlays(rows, manifest=_manifest(rows), **kwargs)
+    return evaluate_index_vol_overlays(
+        rows,
+        manifest=_manifest(rows),
+        authoritative_session_dates=[row.date for row in rows],
+        **kwargs,
+    )
 
 
 def test_scope_is_frozen_to_one_sleeve_four_index_vol_candidates() -> None:
@@ -113,6 +120,7 @@ def test_prepared_panel_provenance_and_draft_lifecycle_are_required() -> None:
     report = evaluate_index_vol_overlays(
         rows,
         manifest=manifest,
+        authoritative_session_dates=dates,
         signal_start=dates[130],
         signal_end=dates[130],
     )
@@ -150,6 +158,7 @@ def test_prepared_panel_provenance_and_draft_lifecycle_are_required() -> None:
         evaluate_index_vol_overlays(
             rows,
             manifest=replace(manifest, session_count=len(rows) - 1),
+            authoritative_session_dates=dates,
             signal_start=dates[130],
             signal_end=dates[130],
         )
@@ -161,7 +170,7 @@ def test_repo_definition_and_canonical_panel_digests_reject_drift() -> None:
     rows, dates = _panel()
     manifest = _manifest(rows)
     assert manifest.prepared_panel_digest == canonical_prepared_panel_digest(rows)
-    assert manifest.trading_calendar_digest == canonical_trading_calendar_digest(rows)
+    assert manifest.trading_calendar_digest == canonical_trading_calendar_digest(dates)
 
     with pytest.raises(ValueError, match="repo definition"):
         replace(manifest, strategy_spec_digest="sha256:" + "a" * 64)
@@ -174,6 +183,7 @@ def test_repo_definition_and_canonical_panel_digests_reject_drift() -> None:
         evaluate_index_vol_overlays(
             mutated,
             manifest=manifest,
+            authoritative_session_dates=dates,
             signal_start=dates[130],
             signal_end=dates[130],
         )
@@ -184,6 +194,7 @@ def test_repo_definition_and_canonical_panel_digests_reject_drift() -> None:
         evaluate_index_vol_overlays(
             omitted,
             manifest=manifest,
+            authoritative_session_dates=dates,
             signal_start=dates[130],
             signal_end=dates[130],
         )
@@ -209,6 +220,21 @@ def test_calendar_hash_and_strict_dplus1_availability_wall_are_verified() -> Non
         evaluate_index_vol_overlays(
             changed_calendar,
             manifest=calendar_manifest,
+            authoritative_session_dates=[row.date for row in changed_calendar],
+            signal_start=dates[130],
+            signal_end=dates[130],
+        )
+
+    deleted = rows[:75] + rows[76:]
+    deletion_manifest = replace(
+        manifest,
+        prepared_panel_digest=canonical_prepared_panel_digest(deleted),
+    )
+    with pytest.raises(ValueError, match="exactly match authoritative"):
+        evaluate_index_vol_overlays(
+            deleted,
+            manifest=deletion_manifest,
+            authoritative_session_dates=dates,
             signal_start=dates[130],
             signal_end=dates[130],
         )
@@ -222,6 +248,7 @@ def test_calendar_hash_and_strict_dplus1_availability_wall_are_verified() -> Non
         evaluate_index_vol_overlays(
             late,
             manifest=manifest,
+            authoritative_session_dates=dates,
             signal_start=dates[130],
             signal_end=dates[130],
         )
@@ -232,6 +259,7 @@ def test_calendar_hash_and_strict_dplus1_availability_wall_are_verified() -> Non
         evaluate_index_vol_overlays(
             unavailable,
             manifest=manifest,
+            authoritative_session_dates=dates,
             signal_start=dates[130],
             signal_end=dates[130],
         )

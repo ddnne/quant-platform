@@ -133,15 +133,35 @@ def canonical_prepared_panel_digest(
     )
 
 
-def canonical_trading_calendar_digest(
-    observations: Sequence[IndexVolOverlayObservation],
-) -> str:
-    """Hash the complete ordered session-date vector independently."""
+def _canonical_authoritative_session_dates(
+    session_dates: Sequence[str],
+) -> tuple[str, ...]:
+    if isinstance(session_dates, (str, bytes)) or len(session_dates) < 3:
+        raise ValueError("authoritative session dates must contain at least three rows")
+    canonical: list[str] = []
+    for raw in session_dates:
+        try:
+            parsed = date.fromisoformat(raw).isoformat()
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "authoritative session dates must be canonical ISO"
+            ) from exc
+        if parsed != raw:
+            raise ValueError("authoritative session dates must be canonical ISO")
+        if canonical and raw <= canonical[-1]:
+            raise ValueError("authoritative session dates must be strictly increasing")
+        canonical.append(raw)
+    return tuple(canonical)
 
+
+def canonical_trading_calendar_digest(session_dates: Sequence[str]) -> str:
+    """Hash only the independently supplied authoritative session vector."""
+
+    canonical = _canonical_authoritative_session_dates(session_dates)
     return _canonical_digest(
         {
             "schema_version": TRADING_CALENDAR_DIGEST_SCHEMA,
-            "ordered_session_dates": [row.date for row in observations],
+            "ordered_session_dates": list(canonical),
         }
     )
 
@@ -361,14 +381,23 @@ def _validate_observations(
 def _validate_manifest(
     manifest: PreparedIndexVolOverlayPanelManifest,
     observations: Sequence[IndexVolOverlayObservation],
+    authoritative_session_dates: Sequence[str],
 ) -> None:
     if not isinstance(manifest, PreparedIndexVolOverlayPanelManifest):
         raise TypeError("manifest must be PreparedIndexVolOverlayPanelManifest")
-    if manifest.session_count != len(observations):
+    authoritative = _canonical_authoritative_session_dates(
+        authoritative_session_dates
+    )
+    observed_dates = tuple(row.date for row in observations)
+    if observed_dates != authoritative:
+        raise ValueError(
+            "observation dates must exactly match authoritative session dates"
+        )
+    if manifest.session_count != len(authoritative):
         raise ValueError("prepared panel manifest session_count mismatch")
-    if manifest.session_date_start != observations[0].date:
+    if manifest.session_date_start != authoritative[0]:
         raise ValueError("prepared panel manifest session_date_start mismatch")
-    if manifest.session_date_end != observations[-1].date:
+    if manifest.session_date_end != authoritative[-1]:
         raise ValueError("prepared panel manifest session_date_end mismatch")
     try:
         observed_panel_digest = canonical_prepared_panel_digest(observations)
@@ -376,7 +405,7 @@ def _validate_manifest(
         raise ValueError("prepared panel rows are not canonically hashable") from exc
     if manifest.prepared_panel_digest != observed_panel_digest:
         raise ValueError("prepared_panel_digest does not match observation rows")
-    observed_calendar_digest = canonical_trading_calendar_digest(observations)
+    observed_calendar_digest = canonical_trading_calendar_digest(authoritative)
     if manifest.trading_calendar_digest != observed_calendar_digest:
         raise ValueError("trading_calendar_digest does not match ordered session dates")
 
@@ -384,22 +413,30 @@ def _validate_manifest(
 def build_prepared_panel_manifest(
     observations: Sequence[IndexVolOverlayObservation],
     *,
+    authoritative_session_dates: Sequence[str],
     snapshot_digest: str,
     base_report_digest: str,
 ) -> PreparedIndexVolOverlayPanelManifest:
     """Build the ergonomic manifest while deriving every repo/local digest."""
 
     _validate_observations(observations)
+    authoritative = _canonical_authoritative_session_dates(
+        authoritative_session_dates
+    )
+    if tuple(row.date for row in observations) != authoritative:
+        raise ValueError(
+            "observation dates must exactly match authoritative session dates"
+        )
     return PreparedIndexVolOverlayPanelManifest(
         strategy_spec_digest=EXPECTED_BASE_STRATEGY_SPEC_DIGEST,
         cohort_digest=EXPECTED_BASE_COHORT_DIGEST,
         snapshot_digest=snapshot_digest,
         base_report_digest=base_report_digest,
-        trading_calendar_digest=canonical_trading_calendar_digest(observations),
+        trading_calendar_digest=canonical_trading_calendar_digest(authoritative),
         prepared_panel_digest=canonical_prepared_panel_digest(observations),
-        session_date_start=observations[0].date,
-        session_date_end=observations[-1].date,
-        session_count=len(observations),
+        session_date_start=authoritative[0],
+        session_date_end=authoritative[-1],
+        session_count=len(authoritative),
     )
 
 
@@ -868,6 +905,7 @@ def evaluate_index_vol_overlays(
     observations: Sequence[IndexVolOverlayObservation],
     *,
     manifest: PreparedIndexVolOverlayPanelManifest,
+    authoritative_session_dates: Sequence[str],
     signal_start: str,
     signal_end: str | None = None,
     starting_capital: float = 1_000_000.0,
@@ -875,7 +913,7 @@ def evaluate_index_vol_overlays(
     """Evaluate exactly four predeclared overlays without selecting a winner."""
 
     _validate_observations(observations)
-    _validate_manifest(manifest, observations)
+    _validate_manifest(manifest, observations, authoritative_session_dates)
     try:
         start = date.fromisoformat(signal_start).isoformat()
         end = (
@@ -956,6 +994,7 @@ def evaluate_index_vol_overlays(
             "rebalance": "D_PLUS_1_CLOSE",
             "first_pnl": "D_PLUS_1_CLOSE_TO_D_PLUS_2_CLOSE",
             "terminal_close": True,
+            "authoritative_calendar_alignment": "EXACT_ORDERED_DATE_MATCH",
             "prepared_row_availability": (
                 "STRICTLY_BEFORE_D_PLUS_1_CONSERVATIVE_15_00_JST_CUTOFF"
             ),
