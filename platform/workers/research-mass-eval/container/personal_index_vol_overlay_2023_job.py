@@ -30,7 +30,10 @@ from research.options_225_smile_transport import (
     build_daily_svi_smile_transport_features,
 )
 from research.options_225_vol_series import DATASET_ID, build_daily_basevol_series
-from research.personal_base_sleeve import validate_personal_base_sleeve_artifact
+from research.personal_base_sleeve import (
+    validate_personal_base_sleeve_am_pm_artifact,
+    validate_personal_base_sleeve_artifact,
+)
 from research.personal_index_vol_overlay import (
     AM_PM_BASE_COHORT_ID,
     AM_PM_BASE_SLEEVE_ID,
@@ -43,6 +46,7 @@ from research.personal_index_vol_overlay import (
     IndexVolOverlayAmPmObservation,
     IndexVolOverlayObservation,
     am_pm_base_producer_unavailable_reason,
+    verified_am_pm_base_digests,
     OVERLAY_AM_PM_CANDIDATE_IDS,
     SMILE_TRANSPORT_AM_PM_CANDIDATE_IDS,
     SMILE_TRANSPORT_CANDIDATE_IDS,
@@ -507,6 +511,10 @@ def _reject_legacy_am_pm_input(parsed: Mapping[str, Any]) -> None:
         schema = base.get("artifact_schema_version") or base.get("schema_version")
         if cohort == BASE_COHORT_ID or execution == "next_close":
             raise RuntimeError("old next-close base sleeve is invalid for AM/PM overlay")
+        if execution == "am_pm":
+            raise RuntimeError("am_pm is not an execution mode")
+        if execution is not None and execution != AM_PM_EXECUTION_MODE:
+            raise RuntimeError("AM/PM overlay requires am_signal_pm_close")
         if schema == "personal-base-sleeve-source/v1":
             raise RuntimeError("old next-close base sleeve is invalid for AM/PM overlay")
 
@@ -613,45 +621,29 @@ def load_base_sleeve_from_archive(
 
 
 def validate_am_pm_base_sleeve_artifact(document: Any) -> None:
-    """Reject the next-close overlay sleeve on the AM/PM family."""
+    """Reject legacy, fixture, or non-comparable sleeves on the AM overlay path."""
 
+    try:
+        validate_personal_base_sleeve_am_pm_artifact(document)
+    except (TypeError, ValueError) as error:
+        raise RuntimeError(str(error)) from error
     if not isinstance(document, Mapping):
-        raise TypeError("AM/PM base sleeve artifact must be an object")
-    if document.get("schema_version") in {
-        "personal-base-sleeve-source/v1",
-        "personal-base-sleeve-reference/v1",
-    }:
-        raise RuntimeError("old next-close base sleeve is invalid for AM/PM overlay")
-    if document.get("schema_version") != AM_PM_BASE_SLEEVE_SCHEMA:
-        raise RuntimeError("AM/PM base sleeve artifact schema mismatch")
-    cohort = document.get("cohort")
+        raise RuntimeError("AM/PM base sleeve artifact must be an object")
+    quality = document.get("data_quality")
+    if not isinstance(quality, Mapping) or quality.get("comparable") is not True:
+        raise RuntimeError("AM/PM overlay requires a comparable base sleeve")
+    expected_spec, expected_cohort = verified_am_pm_base_digests()
     strategy = document.get("strategy")
+    cohort = document.get("cohort")
     source = document.get("source_run")
-    if not all(isinstance(value, Mapping) for value in (cohort, strategy, source)):
+    if not all(isinstance(value, Mapping) for value in (strategy, cohort, source)):
         raise RuntimeError("AM/PM base sleeve provenance is incomplete")
-    assert isinstance(cohort, Mapping)
-    assert isinstance(strategy, Mapping)
-    assert isinstance(source, Mapping)
-    if cohort.get("cohort_id") != AM_PM_BASE_COHORT_ID:
-        raise RuntimeError("AM/PM overlay requires sector-relative-ls-am-pm-v1")
-    if cohort.get("cohort_id") == BASE_COHORT_ID:
-        raise RuntimeError("old next-close base sleeve is invalid for AM/PM overlay")
-    if strategy.get("strategy_id") != AM_PM_BASE_SLEEVE_ID:
-        raise RuntimeError("AM/PM overlay requires the AM/PM frozen base strategy")
-    if source.get("execution_mode") == "next_close":
-        raise RuntimeError("old next-close base sleeve is invalid for AM/PM overlay")
-    if source.get("execution_mode") != AM_PM_EXECUTION_MODE:
-        raise RuntimeError("AM/PM base sleeve must use am_pm execution")
-    daily_path = document.get("daily_path")
-    if not isinstance(daily_path, list) or not daily_path:
-        raise RuntimeError("AM/PM base sleeve daily path is invalid")
-    for row in daily_path:
-        if not isinstance(row, Mapping):
-            raise RuntimeError("AM/PM base sleeve daily path is invalid")
-        if "equity" in row and "am_nav" not in row:
-            raise RuntimeError("old next-close base sleeve is invalid for AM/PM overlay")
-        if _number(row.get("am_nav"), positive=True) is None:
-            raise RuntimeError("AM/PM base sleeve missing exact morning NAV")
+    if (
+        strategy.get("strategy_spec_digest") != expected_spec
+        or cohort.get("cohort_digest") != expected_cohort
+        or source.get("execution_mode") != AM_PM_EXECUTION_MODE
+    ):
+        raise RuntimeError("AM/PM base sleeve does not match the repository producer")
 
 
 def load_am_pm_base_sleeve_from_archive(
@@ -1122,14 +1114,15 @@ def remap_smile_transport_features_for_am_pm(
 
 
 def _am_pm_base_digests(base_artifact: Mapping[str, Any]) -> tuple[str, str]:
+    expected_spec, expected_cohort = verified_am_pm_base_digests()
     strategy = base_artifact.get("strategy")
     cohort = base_artifact.get("cohort")
     if not isinstance(strategy, Mapping) or not isinstance(cohort, Mapping):
         raise RuntimeError("AM/PM base sleeve provenance is incomplete")
     spec_digest = str(strategy.get("strategy_spec_digest") or "")
     cohort_digest = str(cohort.get("cohort_digest") or "")
-    if _DIGEST_RE.fullmatch(spec_digest) is None or _DIGEST_RE.fullmatch(cohort_digest) is None:
-        raise RuntimeError("AM/PM base sleeve digests are invalid")
+    if spec_digest != expected_spec or cohort_digest != expected_cohort:
+        raise RuntimeError("AM/PM base sleeve digests do not match the repository producer")
     return spec_digest, cohort_digest
 
 
@@ -1757,7 +1750,7 @@ def _open_am_pm_sources(
         raise RuntimeError("overlay base references are invalid")
     if (
         base.get("cohort_id") == BASE_COHORT_ID
-        or base.get("execution_mode") == "next_close"
+        or base.get("execution_mode") in {"next_close", "am_pm"}
         or str(base.get("artifact_schema_version") or "")
         == "personal-base-sleeve-source/v1"
     ):

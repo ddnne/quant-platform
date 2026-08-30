@@ -61,6 +61,12 @@ COHORT_DIGEST = (
 LONG_SHORT_COHORT_DIGEST = (
     "sha256:584bbf0052ad1eee6ec31cacdf1298c13c8a59b9eb6928267935fc17e34289be"
 )
+AM_LONG_SHORT_COHORT_DIGEST = (
+    "sha256:e12e65393985ab8b7cc2b0b922a362a055404777a49fda7250f735d47f0b073b"
+)
+AM_EXECUTION_CONTRACT_DIGEST = (
+    "sha256:5fc214947a8fdde7005561820a9bf4b3c301154535b4dc37cff09e9d801bddac"
+)
 
 
 def _job(
@@ -688,6 +694,8 @@ def test_job_spec_rejects_long_short_on_a_compact_universe() -> None:
 
 
 def test_python_container_defaults_to_am_diverse_and_allows_am_ids() -> None:
+    from research.factor_cohorts import get_research_cohort
+
     assert service.DEFAULT_PERSONAL_COHORT_ID == "diverse-core-am-pm-v1"
     for cohort_id in (
         "price-relative-am-pm-v1",
@@ -700,14 +708,23 @@ def test_python_container_defaults_to_am_diverse_and_allows_am_ids() -> None:
         "compact-market-diverse-v1",
     ):
         assert cohort_id in service.PERSONAL_EXECUTABLE_COHORT_IDS
+    am_digest = str(get_research_cohort("diverse-core-am-pm-v1").to_dict()["cohort_digest"])
+    compact_digest = str(
+        get_research_cohort("compact-market-diverse-am-pm-v1").to_dict()["cohort_digest"]
+    )
     am = _redigest(
-        replace(_job("a" * 64), cohort_id="diverse-core-am-pm-v1")
+        replace(
+            _job("a" * 64),
+            cohort_id="diverse-core-am-pm-v1",
+            cohort_digest=am_digest,
+        )
     )
     am.validate()
     compact = _redigest(
         replace(
             _job("a" * 64),
             cohort_id="compact-market-diverse-am-pm-v1",
+            cohort_digest=compact_digest,
             universe_id="topix_core30",
         )
     )
@@ -938,6 +955,109 @@ def test_long_short_archive_validates_and_preserves_non_candidate_base_source(
     )
     assert "path" not in runner_summary["base_sleeve_artifact"]
     assert not tuple(work.iterdir())
+
+
+def test_child_rejects_tampered_am_cohort_digest() -> None:
+    sha = "a" * 64
+    body = {
+        "cohort_digest": "sha256:" + "f" * 64,
+        "cohort_id": "sector-relative-ls-am-pm-v1",
+        "job_id": "am-tamper",
+        "period_end": "2026-08-27",
+        "period_start": "2022-04-19",
+        "runner_version": service.RUNNER_VERSION,
+        "snapshot_key": f"research/personal/snapshots/sha256={sha}.sqlite",
+        "snapshot_sha256": sha,
+        "universe_id": "topix_all",
+        "universe_rule_digest": (
+            "sha256:7b88c89520a7cf751e7b63f160c16130183dba3c7c7e9c3a56660f3149c2c048"
+        ),
+    }
+    request_digest = "sha256:" + hashlib.sha256(
+        json.dumps(
+            body,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    with pytest.raises(service.JobInputError, match="repository definition"):
+        service.JobSpec.from_document(
+            {
+                **body,
+                "request_digest": request_digest,
+                "result_key": "research/personal/jobs/job=am-tamper/result.tar.gz",
+                "manifest_key": "research/personal/jobs/job=am-tamper/manifest.json",
+            }
+        )
+
+
+def test_am_job_binds_repo_mode_and_rejects_legacy_sleeve_reference(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "fixture.sqlite"
+    sha = _sqlite(source)
+    spec = _redigest(
+        replace(
+            _job(sha, job_id="am-base-sleeve"),
+            cohort_id="sector-relative-ls-am-pm-v1",
+            cohort_digest=AM_LONG_SHORT_COHORT_DIGEST,
+        )
+    )
+    identity = service._personal_cohort_identity(spec.cohort_id)
+    assert identity["execution_mode"] == "am_signal_pm_close"
+    assert identity["execution_contract_digest"] == AM_EXECUTION_CONTRACT_DIGEST
+    assert identity["session_view_digest"].startswith("sha256:")
+    output = tmp_path / "output"
+    summary = _write_base_sleeve_output(output, spec)
+    with pytest.raises(RuntimeError, match="base sleeve reference is invalid"):
+        service._validated_base_sleeve_reference(
+            summary,
+            spec=spec,
+            output_root=output,
+        )
+
+
+def test_am_execute_job_rejects_tampered_child_execution_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "fixture.sqlite"
+    sha = _sqlite(source)
+    spec = _redigest(
+        replace(
+            _job(sha, job_id="am-mode-tamper"),
+            cohort_id="sector-relative-ls-am-pm-v1",
+            cohort_digest=AM_LONG_SHORT_COHORT_DIGEST,
+        )
+    )
+
+    def completed_source_run(args, **kwargs):
+        output = Path(args[args.index("--output") + 1])
+        summary = _write_base_sleeve_output(output, spec)
+        summary["execution_mode"] = "next_close"
+        summary["execution_contract_digest"] = "sha256:" + "c" * 64
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(summary, sort_keys=True) + "\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(service, "_run_research_process", completed_source_run)
+    work = tmp_path / "work"
+    work.mkdir()
+
+    def copy_snapshot(_spec, destination):
+        destination.write_bytes(source.read_bytes())
+
+    manifest = service.execute_job(
+        spec,
+        work_root=work,
+        command=(sys.executable, "unused.py"),
+        downloader=copy_snapshot,
+        uploader=_uploader([]),
+    )
+    assert manifest["status"] == "FAILED"
+    assert "execution_mode" in manifest["error"]
 
 
 def test_exit_two_with_no_evaluated_candidates_archives_completed_result(

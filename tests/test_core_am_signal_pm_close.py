@@ -263,7 +263,10 @@ def test_held_book_decision_equity_uses_d_morning_price(tmp_path):
     assert day1.prices[CODE] == 120.0
     assert day1.equity == pytest.approx(1_200_000.0)
     day1_curve = next(row for row in res.equity_curve if row["date"] == D1)
+    assert day1_curve["signal_equity"] == pytest.approx(1_200_000.0)
     assert day1_curve["equity"] == pytest.approx(1_800_000.0)
+    d0_curve = next(row for row in res.equity_curve if row["date"] == D0)
+    assert d0_curve["signal_equity"] == pytest.approx(1_000_000.0)
 
 
 def test_new_position_has_no_pre_fill_am_to_pm_return(tmp_path):
@@ -332,6 +335,9 @@ def test_held_missing_madjc_skips_on_bar_and_rebalance(tmp_path):
     assert D1 in res.metrics["skipped_decision_dates"]
     assert res.metrics["comparable"] is False
     assert any(row["date"] == D1 for row in res.equity_curve)
+    day1 = next(row for row in res.equity_curve if row["date"] == D1)
+    assert day1["signal_equity"] is None
+    assert all(row["equity"] != 999.0 * 10_000 for row in res.equity_curve)
 
 
 def test_held_missing_aadjc_is_incomplete_non_comparable_valuation(tmp_path):
@@ -348,6 +354,7 @@ def test_held_missing_aadjc_is_incomplete_non_comparable_valuation(tmp_path):
     assert any(row["date"] == D1 for row in res.equity_curve)
     day1 = next(row for row in res.equity_curve if row["date"] == D1)
     assert CODE in day1["stale_mark_codes"]
+    assert day1["signal_equity"] == pytest.approx(1_000_000.0)
     assert res.metrics["comparable"] is False
     assert res.metrics["selection_eligible"] is False
     assert res.metrics["comparison_eligible"] is False

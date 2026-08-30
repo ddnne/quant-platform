@@ -202,7 +202,7 @@ async function amPmSources() {
   const document = JSON.parse(new TextDecoder().decode(await stored.arrayBuffer())) as Record<string, unknown>;
   document.cohort_id = "sector-relative-ls-am-pm-v1";
   document.cohort_digest = `sha256:${"a".repeat(64)}`;
-  document.execution_mode = "am_pm";
+  document.execution_mode = "am_signal_pm_close";
   const sleeve = isObject(document.base_sleeve_artifact)
     ? { ...document.base_sleeve_artifact, artifact_schema_version: "personal-base-sleeve-source-am-pm/v1", cohort_id: "sector-relative-ls-am-pm-v1" }
     : document.base_sleeve_artifact;

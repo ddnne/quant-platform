@@ -79,15 +79,17 @@ from research.paper_candidate_specs import (
     build_multi_day_hold_strategy_spec,
 )
 from research.personal_base_sleeve import (
+    AM_PM_BASE_COHORT_ID as INDEX_VOL_AM_PM_BASE_COHORT_ID,
+    AM_PM_BASE_SLEEVE_ID as INDEX_VOL_AM_PM_BASE_SLEEVE_ID,
     BASE_COHORT_ID as INDEX_VOL_BASE_COHORT_ID,
     BASE_SLEEVE_ID as INDEX_VOL_BASE_SLEEVE_ID,
     BASE_UNIVERSE_ID as INDEX_VOL_BASE_UNIVERSE_ID,
-    PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA,
     PERSONAL_BASE_SLEEVE_COST_BPS,
     PERSONAL_BASE_SLEEVE_RANKING_ROLE,
     PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA,
     PERSONAL_BASE_SLEEVE_ROLE,
     PERSONAL_BASE_SLEEVE_SHORT_FINANCING_RATE,
+    build_personal_base_sleeve_am_pm_artifact,
     build_personal_base_sleeve_artifact,
 )
 from research.stats_metrics import sharpe_ratio
@@ -203,6 +205,7 @@ class PersonalResearchRun:
     base_sleeve_artifact_path: Path | None = None
     base_sleeve_artifact_digest: str | None = None
     base_sleeve_archive_member: str | None = None
+    base_sleeve_artifact: dict[str, Any] | None = None
     non_candidate_source_backtest_count: int = 0
 
     @property
@@ -451,8 +454,9 @@ def _requires_index_vol_base_sleeve(
 
     return bool(
         cohort is not None
-        and cohort.cohort_id == INDEX_VOL_BASE_COHORT_ID
         and universe_id == INDEX_VOL_BASE_UNIVERSE_ID
+        and cohort.cohort_id
+        in {INDEX_VOL_BASE_COHORT_ID, INDEX_VOL_AM_PM_BASE_COHORT_ID}
     )
 
 
@@ -1573,9 +1577,15 @@ def _write_continuous_base_sleeve_artifact(
     source_period: tuple[str, str],
     output_root: Path,
     cohort_digest: str,
+    execution_mode: str = LEGACY_NEXT_CLOSE_EXECUTION_MODE,
+    execution_contract: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], Path, str]:
     """Execute one full-period base sleeve outside candidate selection."""
 
+    am_sleeve = (
+        execution_mode == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
+        or spec.strategy_id == INDEX_VOL_AM_PM_BASE_SLEEVE_ID
+    )
     evidence, _returns, _dates, paper_result = _run_one(
         executor,
         spec,
@@ -1590,13 +1600,24 @@ def _write_continuous_base_sleeve_artifact(
         short_financing_annual_rate=(
             PERSONAL_BASE_SLEEVE_SHORT_FINANCING_RATE
         ),
+        execution_mode=(
+            AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
+            if am_sleeve
+            else LEGACY_NEXT_CLOSE_EXECUTION_MODE
+        ),
+        execution_contract=execution_contract,
     )
     paper_membership_digest = paper_result.reproducibility.get(
         "resolved_universe_digest"
     )
     if not isinstance(paper_membership_digest, str):
         raise RuntimeError("base sleeve paper membership digest is absent")
-    document = build_personal_base_sleeve_artifact(
+    builder = (
+        build_personal_base_sleeve_am_pm_artifact
+        if am_sleeve
+        else build_personal_base_sleeve_artifact
+    )
+    document = builder(
         result=paper_result,
         evidence=evidence,
         spec=spec,
@@ -1624,12 +1645,12 @@ def _write_continuous_base_sleeve_artifact(
     artifact_digest = "sha256:" + artifact_path.stem
     reference = {
         "schema_version": PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA,
-        "artifact_schema_version": PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA,
+        "artifact_schema_version": document["schema_version"],
         "archive_member": archive_member,
         "sha256": artifact_digest,
-        "strategy_id": INDEX_VOL_BASE_SLEEVE_ID,
-        "cohort_id": INDEX_VOL_BASE_COHORT_ID,
-        "universe_id": INDEX_VOL_BASE_UNIVERSE_ID,
+        "strategy_id": document["strategy"]["strategy_id"],
+        "cohort_id": document["cohort"]["cohort_id"],
+        "universe_id": document["universe"]["universe_id"],
         "role": PERSONAL_BASE_SLEEVE_ROLE,
         "ranking_role": PERSONAL_BASE_SLEEVE_RANKING_ROLE,
         "candidate_count_contribution": 0,
@@ -2990,7 +3011,8 @@ class PersonalResearchService:
                     matching = [
                         (spec, closure)
                         for spec, closure in zip(specs, closures, strict=True)
-                        if spec.strategy_id == INDEX_VOL_BASE_SLEEVE_ID
+                        if spec.strategy_id
+                        in {INDEX_VOL_BASE_SLEEVE_ID, INDEX_VOL_AM_PM_BASE_SLEEVE_ID}
                     ]
                     if len(matching) != 1:
                         raise RuntimeError(
@@ -3010,6 +3032,8 @@ class PersonalResearchService:
                         source_period=(fold_periods[0][0], holdout_period[1]),
                         output_root=output_root,
                         cohort_digest=cohort_ref["cohort_digest"],
+                        execution_mode=execution_mode,
+                        execution_contract=execution_contract,
                     )
             worker_count = min(len(specs), self.policy.max_parallel)
             if worker_count > 1:
@@ -3207,6 +3231,7 @@ class PersonalResearchService:
                 if base_sleeve_reference is None
                 else str(base_sleeve_reference["archive_member"])
             ),
+            base_sleeve_artifact=base_sleeve_reference,
             non_candidate_source_backtest_count=int(
                 base_sleeve_reference is not None
             ),

@@ -70,6 +70,7 @@ from research.personal_service import (
     pool_or_rank_personal_comparison,
 )
 from research.personal_base_sleeve import (
+    AM_PM_BASE_SLEEVE_ID,
     BASE_SLEEVE_ID,
     PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA,
     validate_personal_base_sleeve_artifact,
@@ -1447,6 +1448,25 @@ def test_continuous_base_sleeve_is_content_addressed_and_not_a_candidate(
     truncated["daily_path"].pop(len(truncated["daily_path"]) // 2)
     with pytest.raises(ValueError, match="source session count"):
         validate_personal_base_sleeve_artifact(truncated)
+
+
+def test_am_and_legacy_sleeve_dispatch_is_cohort_specific() -> None:
+    from research.personal_service import _requires_index_vol_base_sleeve
+
+    am = get_research_cohort("sector-relative-ls-am-pm-v1")
+    legacy = get_research_cohort("sector-relative-ls-v1")
+    default_am = get_research_cohort("diverse-core-am-pm-v1")
+    assert _requires_index_vol_base_sleeve(am, universe_id="topix_all")
+    assert _requires_index_vol_base_sleeve(legacy, universe_id="topix_all")
+    assert not _requires_index_vol_base_sleeve(default_am, universe_id="topix_all")
+    assert not _requires_index_vol_base_sleeve(am, universe_id="topix500")
+    assert AM_PM_BASE_SLEEVE_ID != BASE_SLEEVE_ID
+    assert any(
+        spec.strategy_id == AM_PM_BASE_SLEEVE_ID for spec in am.strategy_specs
+    )
+    assert all(
+        spec.strategy_id != AM_PM_BASE_SLEEVE_ID for spec in legacy.strategy_specs
+    )
 
 
 def test_exact_four_backtest_budget_adds_only_one_base_source_run(

@@ -23,7 +23,10 @@ from pathlib import Path
 from statistics import mean, median
 from typing import Any, Final, Mapping, Sequence
 
-from research.factor_cohorts import get_research_cohort
+from research.factor_cohorts import (
+    AM_SIGNAL_PM_CLOSE_EXECUTION_MODE,
+    get_research_cohort,
+)
 from research.options_225_smile_features import OPTIONS_225_SMILE_SURFACE_SCOPE
 from research import options_225_smile_transport as _smile_transport_core
 from research.options_225_smile_transport import (
@@ -1984,7 +1987,7 @@ AM_PM_TEMPORAL_CONTRACT_DIGEST_SCHEMA: Final = (
 AM_PM_BASE_COHORT_ID: Final = "sector-relative-ls-am-pm-v1"
 AM_PM_BASE_SLEEVE_ID: Final = "personal_sector_balanced_four_factor_v1_ls_am_pm"
 AM_PM_BASE_SLEEVE_SCHEMA: Final = "personal-base-sleeve-source-am-pm/v1"
-AM_PM_EXECUTION_MODE: Final = "am_pm"
+AM_PM_EXECUTION_MODE: Final = AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
 AM_PM_NON_PRICE_CUTOFF_JST: Final = "11:30:00+09:00"
 AM_PM_EQUITY_USABLE_BY_JST: Final = "12:30:00+09:00"
 AM_PM_FILL_CUTOFF_JST: Final = "15:00:00+09:00"
@@ -2465,7 +2468,9 @@ class PreparedIndexVolOverlayAmPmPanelManifest:
         if self.base_universe_id != BASE_UNIVERSE_ID:
             raise ValueError("prepared panel must bind the exact topix_all universe")
         if self.execution_mode != AM_PM_EXECUTION_MODE:
-            raise ValueError("AM/PM prepared panel must use am_pm execution")
+            raise ValueError(
+                "AM/PM prepared panel must use am_signal_pm_close execution"
+            )
         if self.return_semantics != BASE_RETURN_SEMANTICS:
             raise ValueError(
                 "base sleeve returns must be net of stock costs and financing"

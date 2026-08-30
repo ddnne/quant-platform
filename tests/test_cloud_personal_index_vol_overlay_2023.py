@@ -20,6 +20,9 @@ from test_cloud_personal_research_container import (
     _job,
     service,
 )
+from test_personal_base_sleeve_am_pm import DATES as AM_DATES
+from test_personal_base_sleeve_am_pm import _build as _build_am_sleeve
+from test_personal_base_sleeve_am_pm import _quality as _am_quality
 
 import personal_index_vol_overlay_2023_job as overlay
 
@@ -450,12 +453,10 @@ def test_am_pm_job_spec_uses_distinct_prefix_and_rejects_legacy_identity() -> No
 
 def test_am_pm_base_sleeve_rejects_next_close_artifact() -> None:
     next_close = _base_sleeve_document(_job("a" * 64))
-    with pytest.raises(RuntimeError, match="old next-close base sleeve"):
+    with pytest.raises(RuntimeError, match="old next-close"):
         overlay.validate_am_pm_base_sleeve_artifact(next_close)
-    am_pm = {
-        "schema_version": overlay.AM_PM_BASE_SLEEVE_SCHEMA
-        if hasattr(overlay, "AM_PM_BASE_SLEEVE_SCHEMA")
-        else "personal-base-sleeve-source-am-pm/v1",
+    fixture = {
+        "schema_version": "personal-base-sleeve-source-am-pm/v1",
         "strategy": {
             "strategy_id": "personal_sector_balanced_four_factor_v1_ls_am_pm",
             "strategy_spec_digest": "sha256:" + "c" * 64,
@@ -470,31 +471,17 @@ def test_am_pm_base_sleeve_rejects_next_close_artifact() -> None:
             {"date": "2023-01-05", "am_nav": 101.0, "pm_nav": 101.2},
         ],
     }
-    overlay.validate_am_pm_base_sleeve_artifact(am_pm)
+    with pytest.raises(RuntimeError):
+        overlay.validate_am_pm_base_sleeve_artifact(fixture)
+    document = _build_am_sleeve()
+    overlay.validate_am_pm_base_sleeve_artifact(document)
     with pytest.raises(RuntimeError, match="old next-close"):
-        overlay.validate_am_pm_base_sleeve_artifact(
-            {**am_pm, "source_run": {"execution_mode": "next_close"}}
-        )
+        overlay.validate_am_pm_base_sleeve_artifact(next_close)
 
 
 def test_am_pm_observations_keep_native_option_dates_and_etf_ma() -> None:
-    dates = _dates(5)
-    base = {
-        "schema_version": "personal-base-sleeve-source-am-pm/v1",
-        "strategy": {
-            "strategy_id": "personal_sector_balanced_four_factor_v1_ls_am_pm",
-            "strategy_spec_digest": "sha256:" + "c" * 64,
-        },
-        "cohort": {
-            "cohort_id": "sector-relative-ls-am-pm-v1",
-            "cohort_digest": "sha256:" + "d" * 64,
-        },
-        "source_run": {"execution_mode": "am_pm"},
-        "daily_path": [
-            {"date": day, "am_nav": 100.0 + index, "pm_nav": 100.5 + index}
-            for index, day in enumerate(dates)
-        ],
-    }
+    dates = list(AM_DATES)
+    base = _build_am_sleeve()
     etf = {day: (1000.0 + index, 1001.0 + index) for index, day in enumerate(dates)}
     closes = {day: 2000.0 + index for index, day in enumerate(dates)}
     features = {day: {"date": day, **_feature()} for day in dates}
@@ -523,6 +510,8 @@ def test_am_pm_observations_keep_native_option_dates_and_etf_ma() -> None:
     assert rows[2].signal.topix_etf_13060_madjc == pytest.approx(1002.0)
     assert rows[2].signal.signal_available_at == f"{dates[2]}T12:30:00+09:00"
     assert rows[2].fill_outcome.fill_available_at == f"{dates[2]}T15:00:00+09:00"
+    assert rows[2].signal.base_sleeve_am_nav == pytest.approx(1_012_000.0)
+    assert rows[2].fill_outcome.base_sleeve_pm_nav == pytest.approx(1_020_000.0)
     missing_a = dict(etf)
     missing_a[dates[2]] = (1002.0, None)
     optional_a = overlay.build_am_pm_observations(
@@ -551,38 +540,31 @@ def test_am_pm_observations_keep_native_option_dates_and_etf_ma() -> None:
     )
 
 
-def test_am_pm_execute_fails_closed_before_panel_when_producer_missing() -> None:
-    job_id = "overlay-am-pm-producer"
-    prefix = f"research/personal/index-vol-overlay-2023-am-pm/job={job_id}"
-    body = {
-        "base_job_id": "base-am-pm",
-        "cohort_id": overlay.AM_PM_COHORT_ID,
-        "input_manifest_digest": "sha256:" + "b" * 64,
-        "input_manifest_key": f"{prefix}/input-manifest.json",
-        "job_id": job_id,
-        "manifest_key": f"{prefix}/manifest.json",
-        "request_digest": "sha256:" + "0" * 64,
-        "runner_version": overlay.AM_PM_RUNNER_VERSION,
-        "svi_job_id": "svi-am-pm",
+def test_am_pm_consumer_rejects_non_comparable_and_fixture_artifacts() -> None:
+    document = _build_am_sleeve()
+    overlay.validate_am_pm_base_sleeve_artifact(document)
+    non_comparable = _build_am_sleeve(
+        [
+            {"date": AM_DATES[0], "equity": 1_000_000.0, "signal_equity": 1_000_000.0},
+            {"date": AM_DATES[1], "equity": 1_050_000.0, "signal_equity": None},
+            {"date": AM_DATES[2], "equity": 1_080_000.0, "signal_equity": 1_060_000.0},
+        ],
+        quality=_am_quality(skipped=(AM_DATES[1],)),
+    )
+    with pytest.raises(RuntimeError, match="comparable"):
+        overlay.validate_am_pm_base_sleeve_artifact(non_comparable)
+    fixture = {
+        "schema_version": "personal-base-sleeve-source-am-pm/v1",
+        "strategy": {
+            "strategy_id": "personal_sector_balanced_four_factor_v1_ls_am_pm",
+            "strategy_spec_digest": "sha256:" + "c" * 64,
+        },
+        "cohort": {
+            "cohort_id": "sector-relative-ls-am-pm-v1",
+            "cohort_digest": "sha256:" + "d" * 64,
+        },
+        "source_run": {"execution_mode": "am_signal_pm_close"},
+        "daily_path": [{"date": AM_DATES[0], "am_nav": 100.0, "pm_nav": 100.1}],
     }
-    body["request_digest"] = overlay.PersonalIndexVolOverlay2023JobSpec(
-        **body
-    ).derived_request_digest()
-    spec = overlay.PersonalIndexVolOverlay2023JobSpec.from_document(body)
-    uploaded: list[tuple[str, bytes]] = []
-
-    def uploader(_spec, key, payload):
-        uploaded.append((key, payload))
-        return overlay._sha256(payload)
-
-    terminal = overlay.execute_am_pm_overlay_job(
-        spec,
-        overlay_opener=lambda *_args, **_kwargs: None,
-        uploader=uploader,
-    )
-    assert terminal["status"] == "FAILED"
-    assert terminal["error"] == "am_pm_base_producer_unavailable"
-    assert terminal["producer_dependency"]["required_cohort_id"] == (
-        "sector-relative-ls-am-pm-v1"
-    )
-    assert uploaded[0][0] == spec.manifest_key
+    with pytest.raises(RuntimeError):
+        overlay.validate_am_pm_base_sleeve_artifact(fixture)

@@ -12,15 +12,7 @@ from typing import Sequence
 from execution.personal_paper_service import PersonalPaperExecutionRejected
 from paper_runtime.personal_snapshot import PersonalSnapshotError
 from research.dependency_closure import PlanDependencyClosureError
-from research.personal_base_sleeve import (
-    BASE_COHORT_ID,
-    BASE_SLEEVE_ID,
-    BASE_UNIVERSE_ID,
-    PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA,
-    PERSONAL_BASE_SLEEVE_RANKING_ROLE,
-    PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA,
-    PERSONAL_BASE_SLEEVE_ROLE,
-)
+from research.personal_base_sleeve import PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA
 from research.factor_cohorts import DEFAULT_FACTOR_COHORT_ID
 from research.personal_service import (
     DEFAULT_PERSONAL_UNIVERSE_ID,
@@ -136,27 +128,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     base_sleeve_path = getattr(result, "base_sleeve_artifact_path", None)
-    base_sleeve_digest = getattr(result, "base_sleeve_artifact_digest", None)
-    base_sleeve_archive_member = getattr(
-        result, "base_sleeve_archive_member", None
-    )
-    base_sleeve_artifact = (
-        None
-        if base_sleeve_path is None
-        else {
-            "schema_version": PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA,
-            "artifact_schema_version": PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA,
-            "path": str(base_sleeve_path),
-            "archive_member": base_sleeve_archive_member,
-            "sha256": base_sleeve_digest,
-            "strategy_id": BASE_SLEEVE_ID,
-            "cohort_id": BASE_COHORT_ID,
-            "universe_id": BASE_UNIVERSE_ID,
-            "role": PERSONAL_BASE_SLEEVE_ROLE,
-            "ranking_role": PERSONAL_BASE_SLEEVE_RANKING_ROLE,
-            "candidate_count_contribution": 0,
-        }
-    )
+    returned_reference = getattr(result, "base_sleeve_artifact", None)
+    if isinstance(returned_reference, dict):
+        base_sleeve_artifact = dict(returned_reference)
+        if base_sleeve_path is not None:
+            base_sleeve_artifact["path"] = str(base_sleeve_path)
+        if base_sleeve_artifact.get("schema_version") != PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA:
+            raise PersonalResearchInputError(
+                "base sleeve reference schema mismatch"
+            )
+    elif base_sleeve_path is not None:
+        raise PersonalResearchInputError(
+            "base sleeve artifact path was emitted without its reference"
+        )
+    else:
+        base_sleeve_artifact = None
     print(
         json.dumps(
             {

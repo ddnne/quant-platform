@@ -184,9 +184,9 @@ async function baseInputs(
     family === "am-pm" &&
     manifest.cohort_id === PERSONAL_INDEX_AM_PM_BASE_COHORT_ID &&
     DIGEST_RE.test(String(manifest.cohort_digest ?? "")) &&
-    (manifest.execution_mode === "am_pm" ||
-      (isObject(sleeve) &&
-        sleeve.artifact_schema_version === "personal-base-sleeve-source-am-pm/v1"));
+    manifest.execution_mode === "am_signal_pm_close" &&
+    isObject(sleeve) &&
+    sleeve.artifact_schema_version === "personal-base-sleeve-source-am-pm/v1";
   const legacyEligible =
     family === "legacy" &&
     manifest.cohort_id === BASE_COHORT_ID &&

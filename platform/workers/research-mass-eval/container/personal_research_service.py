@@ -55,14 +55,26 @@ from ingestion.personal_history import (
     build_personal_history_plan,
 )
 from storage.sqlite_store import SqliteStore
+from pit.personal_retrospective_session import am_session_view_digest
+from research.factor_cohorts import (
+    AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT,
+    AM_SIGNAL_PM_CLOSE_EXECUTION_MODE,
+    LEGACY_NEXT_CLOSE_EXECUTION_MODE,
+    get_research_cohort,
+    is_am_pm_factor_cohort,
+)
 from research.personal_base_sleeve import (
+    AM_PM_BASE_COHORT_ID,
+    AM_PM_BASE_SLEEVE_ID,
     BASE_COHORT_ID,
     BASE_SLEEVE_ID,
     BASE_UNIVERSE_ID,
+    PERSONAL_BASE_SLEEVE_AM_PM_ARTIFACT_SCHEMA,
     PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA,
     PERSONAL_BASE_SLEEVE_RANKING_ROLE,
     PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA,
     PERSONAL_BASE_SLEEVE_ROLE,
+    validate_personal_base_sleeve_am_pm_artifact,
     validate_personal_base_sleeve_artifact,
 )
 
@@ -145,6 +157,47 @@ class JobBusyError(RuntimeError):
 
 def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _personal_cohort_identity(cohort_id: str) -> dict[str, Any]:
+    cohort = get_research_cohort(cohort_id)
+    am_pm = is_am_pm_factor_cohort(cohort_id)
+    return {
+        "cohort_id": cohort_id,
+        "cohort_digest": str(cohort.to_dict()["cohort_digest"]),
+        "am_pm": am_pm,
+        "execution_mode": (
+            AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
+            if am_pm
+            else LEGACY_NEXT_CLOSE_EXECUTION_MODE
+        ),
+        "execution_contract_digest": (
+            str(AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT["contract_digest"])
+            if am_pm
+            else None
+        ),
+        "session_view_digest": (
+            am_session_view_digest(include_morning_turnover_history=True)
+            if am_pm
+            else None
+        ),
+        "base_sleeve": cohort_id
+        in {BASE_COHORT_ID, AM_PM_BASE_COHORT_ID},
+        "base_sleeve_schema": (
+            PERSONAL_BASE_SLEEVE_AM_PM_ARTIFACT_SCHEMA
+            if cohort_id == AM_PM_BASE_COHORT_ID
+            else (
+                PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA
+                if cohort_id == BASE_COHORT_ID
+                else None
+            )
+        ),
+        "base_sleeve_strategy_id": (
+            AM_PM_BASE_SLEEVE_ID
+            if cohort_id == AM_PM_BASE_COHORT_ID
+            else (BASE_SLEEVE_ID if cohort_id == BASE_COHORT_ID else None)
+        ),
+    }
 
 
 def _canonical_bytes(value: Mapping[str, Any]) -> bytes:
@@ -261,6 +314,9 @@ class JobSpec:
             raise JobInputError("request_digest is invalid")
         if self.request_digest != self.derived_request_digest():
             raise JobInputError("request_digest mismatch")
+        identity = _personal_cohort_identity(self.cohort_id)
+        if self.cohort_digest != identity["cohort_digest"]:
+            raise JobInputError("cohort_digest does not match repository definition")
 
     def derived_request_digest(self) -> str:
         body = {
@@ -570,9 +626,9 @@ def _validated_base_sleeve_reference(
 ) -> dict[str, Any] | None:
     reference = summary.get("base_sleeve_artifact")
     source_count = summary.get("non_candidate_source_backtest_count")
+    identity = _personal_cohort_identity(spec.cohort_id)
     expected_profile = (
-        spec.cohort_id == BASE_COHORT_ID
-        and spec.universe_id == BASE_UNIVERSE_ID
+        identity["base_sleeve"] and spec.universe_id == BASE_UNIVERSE_ID
     )
     if type(source_count) is not int or source_count not in {0, 1}:
         raise RuntimeError("qp-research base sleeve source count is invalid")
@@ -601,12 +657,13 @@ def _validated_base_sleeve_reference(
     }
     if not isinstance(reference, dict) or set(reference) != expected_fields:
         raise RuntimeError("qp-research base sleeve reference is invalid")
+    expected_schema = identity["base_sleeve_schema"]
+    expected_strategy = identity["base_sleeve_strategy_id"]
     if (
         reference.get("schema_version") != PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA
-        or reference.get("artifact_schema_version")
-        != PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA
-        or reference.get("strategy_id") != BASE_SLEEVE_ID
-        or reference.get("cohort_id") != BASE_COHORT_ID
+        or reference.get("artifact_schema_version") != expected_schema
+        or reference.get("strategy_id") != expected_strategy
+        or reference.get("cohort_id") != spec.cohort_id
         or reference.get("universe_id") != BASE_UNIVERSE_ID
         or reference.get("role") != PERSONAL_BASE_SLEEVE_ROLE
         or reference.get("ranking_role") != PERSONAL_BASE_SLEEVE_RANKING_ROLE
@@ -629,7 +686,10 @@ def _validated_base_sleeve_reference(
         raise RuntimeError("qp-research base sleeve artifact digest is invalid")
     try:
         document = json.loads(artifact.read_bytes())
-        validate_personal_base_sleeve_artifact(document)
+        if identity["am_pm"]:
+            validate_personal_base_sleeve_am_pm_artifact(document)
+        else:
+            validate_personal_base_sleeve_artifact(document)
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as error:
         raise RuntimeError("qp-research base sleeve artifact is invalid") from error
     if (
@@ -643,6 +703,13 @@ def _validated_base_sleeve_reference(
         raise RuntimeError("qp-research base sleeve provenance is invalid")
     source_run = document.get("source_run")
     assert isinstance(source_run, dict)
+    if identity["am_pm"] and (
+        source_run.get("execution_mode") != identity["execution_mode"]
+        or source_run.get("execution_contract_digest")
+        != identity["execution_contract_digest"]
+        or source_run.get("session_view_digest") != identity["session_view_digest"]
+    ):
+        raise RuntimeError("qp-research AM base sleeve identities drifted")
     for field in ("paper_artifact", "risk_artifact"):
         _require_output_artifact(
             {field: str(output_root / str(source_run[field]))},
@@ -1062,6 +1129,16 @@ def execute_job(
                 or summary.get("automatic_promotion") is not False
             ):
                 raise RuntimeError("qp-research violated the fixed personal policy")
+            identity = _personal_cohort_identity(spec.cohort_id)
+            observed_mode = summary.get("execution_mode", LEGACY_NEXT_CLOSE_EXECUTION_MODE)
+            if observed_mode != identity["execution_mode"]:
+                raise RuntimeError("qp-research execution_mode does not match repository contract")
+            if identity["am_pm"] and summary.get("execution_contract_digest") != (
+                identity["execution_contract_digest"]
+            ):
+                raise RuntimeError(
+                    "qp-research execution_contract_digest does not match repository contract"
+                )
             expected_exit_code = 0 if evaluated_count == 4 else 2
             if process.returncode != expected_exit_code:
                 raise RuntimeError(
@@ -1101,6 +1178,12 @@ def execute_job(
             stable_summary["non_candidate_source_backtest_count"] = int(
                 base_sleeve_reference is not None
             )
+            if identity["am_pm"]:
+                stable_summary["execution_mode"] = identity["execution_mode"]
+                stable_summary["execution_contract_digest"] = identity[
+                    "execution_contract_digest"
+                ]
+                stable_summary["session_view_digest"] = identity["session_view_digest"]
             (output / "runner-summary.json").write_bytes(
                 _canonical_bytes(stable_summary)
             )
@@ -1133,6 +1216,12 @@ def execute_job(
                     base_sleeve_reference is not None
                 ),
             }
+            if identity["am_pm"]:
+                manifest["execution_mode"] = identity["execution_mode"]
+                manifest["execution_contract_digest"] = identity[
+                    "execution_contract_digest"
+                ]
+                manifest["session_view_digest"] = identity["session_view_digest"]
         except Exception as error:
             manifest = {
                 **_manifest_base(spec, started_at=started_at, finished_at=_now()),

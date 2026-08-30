@@ -12,7 +12,7 @@ import hashlib
 import json
 import math
 from datetime import datetime, timedelta
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import features
 import pit
@@ -608,6 +608,28 @@ def _mark_equity(
     return cash + positions_value
 
 
+def _causal_morning_equity(
+    shares: dict[str, float],
+    morning_prices: dict[str, float],
+    cash: float,
+    *,
+    missing_held: Sequence[str],
+) -> float | None:
+    """Value the book from D MAdjC only. Prior PM/full AdjC is never a fallback."""
+
+    if missing_held:
+        return None
+    equity = float(cash)
+    for code, qty in shares.items():
+        if not qty:
+            continue
+        price = morning_prices.get(code)
+        if price is None:
+            return None
+        equity += qty * float(price)
+    return equity
+
+
 def _update_marks(
     marks: dict[str, tuple[float, str]],
     session_prices: dict[str, float],
@@ -973,6 +995,7 @@ def run_backtest(
 
         daily_bars_capability = None
         skip_am_decision = False
+        signal_equity: float | None = None
         if am_pm_mode:
             snap_dec = _load_am_signal_snapshot(
                 decision_as_of,
@@ -1007,9 +1030,15 @@ def run_backtest(
                         "codes": held_missing_m,
                     }
                 )
-            decision_marks = dict(marks)
-            _update_marks(decision_marks, morning_prices, d)
-            decision_equity = _mark_equity(shares, decision_marks, cash)
+            signal_equity = _causal_morning_equity(
+                shares,
+                morning_prices,
+                cash,
+                missing_held=held_missing_m,
+            )
+            decision_equity = (
+                float(signal_equity) if signal_equity is not None else float(cash)
+            )
             daily_bars_capability = bind_personal_retrospective_am_session_daily_bars(
                 as_of=decision_as_of, db_path=resolved_db_path
             )
@@ -1194,11 +1223,12 @@ def run_backtest(
                             "codes": held_missing_a,
                         }
                     )
-            equity_curve.append(
-                _equity_point(
-                    date=d, shares=shares, marks=marks, cash=cash
-                )
+            point = _equity_point(
+                date=d, shares=shares, marks=marks, cash=cash
             )
+            if am_pm_mode:
+                point["signal_equity"] = signal_equity
+            equity_curve.append(point)
 
     metrics = compute_metrics(equity_curve=equity_curve, trades=trades)
     short_events = [
