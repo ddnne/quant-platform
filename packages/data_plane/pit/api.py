@@ -525,6 +525,7 @@ def get_equity_bars_daily(
             if latest_n is not None
             else "event_time, natural_key"
         ),
+        limit=latest_n,
     )
     rows = _latest_rows(
         [*rows, *_catalog_daily_bars(catalog)],

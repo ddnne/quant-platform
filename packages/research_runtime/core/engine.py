@@ -949,6 +949,7 @@ def run_backtest(
     )
     am_skipped_decisions: list[dict[str, Any]] = []
     am_incomplete_valuations: list[dict[str, Any]] = []
+    am_unfilled_orders: list[dict[str, Any]] = []
 
     for d in days:
         decision_as_of = mode.decision_as_of(d)
@@ -1130,7 +1131,7 @@ def run_backtest(
             if targets:
                 pending = {"targets": targets, "decision_date": d}
         else:
-            shares, cash, _ = _apply_fills(
+            shares, cash, leftover = _apply_fills(
                 targets,
                 decision_date=d,
                 fill_date=d,
@@ -1155,6 +1156,30 @@ def run_backtest(
             n_short_financing_gaps += s_gap
             n_leverage_financing_gaps += l_gap
             if am_pm_mode:
+                if leftover:
+                    held_now = {
+                        code for code, qty in shares.items() if qty
+                    }
+                    am_unfilled_orders.append(
+                        {
+                            "date": d,
+                            "decision_date": d,
+                            "fill_date": d,
+                            "reason": "missing_afternoon_adjustment_close",
+                            "codes": sorted(leftover),
+                            "unfilled_target_shares": {
+                                code: leftover[code] for code in sorted(leftover)
+                            },
+                            "new_target_codes": sorted(
+                                code for code in leftover if code not in held_now
+                            ),
+                            "held_codes": sorted(
+                                code for code in leftover if code in held_now
+                            ),
+                            "fallback": False,
+                            "fill_substituted": False,
+                        }
+                    )
                 held_after = sorted(
                     code for code, qty in shares.items() if qty
                 )
@@ -1312,15 +1337,30 @@ def run_backtest(
         session_digest = am_session_view_digest(
             include_morning_turnover_history=True
         )
-        comparable = not am_skipped_decisions and not am_incomplete_valuations
+        comparable = (
+            not am_skipped_decisions
+            and not am_incomplete_valuations
+            and not am_unfilled_orders
+        )
         skipped_dates = [event["date"] for event in am_skipped_decisions]
         incomplete_dates = [event["date"] for event in am_incomplete_valuations]
+        missing_fill_dates = [event["date"] for event in am_unfilled_orders]
         incomplete_codes = sorted(
             {
                 code
                 for event in am_incomplete_valuations
                 for code in event.get("codes") or ()
             }
+        )
+        missing_fill_codes = sorted(
+            {
+                code
+                for event in am_unfilled_orders
+                for code in event.get("codes") or ()
+            }
+        )
+        non_comparable_session_dates = sorted(
+            set(skipped_dates) | set(incomplete_dates) | set(missing_fill_dates)
         )
         data_quality = {
             "comparable": comparable,
@@ -1329,11 +1369,16 @@ def run_backtest(
             "incomplete_valuation": bool(am_incomplete_valuations),
             "skipped_decision_count": len(am_skipped_decisions),
             "incomplete_valuation_count": len(am_incomplete_valuations),
+            "unfilled_order_count": len(am_unfilled_orders),
             "skipped_decision_dates": skipped_dates,
             "incomplete_valuation_dates": incomplete_dates,
             "incomplete_valuation_codes": incomplete_codes,
+            "missing_fill_dates": missing_fill_dates,
+            "missing_fill_codes": missing_fill_codes,
+            "non_comparable_session_dates": non_comparable_session_dates,
             "held_missing_morning_adjustment_close": am_skipped_decisions,
             "held_missing_afternoon_adjustment_close": am_incomplete_valuations,
+            "missing_afternoon_adjustment_close_unfilled": am_unfilled_orders,
         }
         metadata["information_cutoff"] = INFORMATION_CUTOFF
         metadata["operational_usable_by"] = OPERATIONAL_USABLE_BY
@@ -1347,9 +1392,13 @@ def run_backtest(
         metrics["incomplete_valuation"] = bool(am_incomplete_valuations)
         metrics["skipped_decision_count"] = len(am_skipped_decisions)
         metrics["incomplete_valuation_count"] = len(am_incomplete_valuations)
+        metrics["unfilled_order_count"] = len(am_unfilled_orders)
         metrics["skipped_decision_dates"] = skipped_dates
         metrics["incomplete_valuation_dates"] = incomplete_dates
         metrics["incomplete_valuation_codes"] = incomplete_codes
+        metrics["missing_fill_dates"] = missing_fill_dates
+        metrics["missing_fill_codes"] = missing_fill_codes
+        metrics["non_comparable_session_dates"] = non_comparable_session_dates
         if not comparable:
             metrics["data_quality_gate"] = "hard_fail_not_selection_eligible"
 

@@ -243,6 +243,10 @@ def test_missing_aadjc_blocks_fill_without_adjc_fallback(tmp_path):
     assert all(trade["fill_date"] != D0 for trade in res.trades)
     assert res.trades[0]["fill_date"] == D1
     assert res.trades[0]["price"] == 110.0
+    assert res.metrics["comparable"] is False
+    assert res.metrics["selection_eligible"] is False
+    assert D0 in res.metrics["missing_fill_dates"]
+    assert D0 in res.metrics["non_comparable_session_dates"]
 
 
 def test_held_book_decision_equity_uses_d_morning_price(tmp_path):
@@ -364,6 +368,82 @@ def test_complete_am_run_is_comparable(tmp_path):
     assert res.metadata["information_cutoff"] == "11:30:00+09:00"
     assert res.metadata["operational_usable_by"] == "12:30:00+09:00"
     assert res.metadata["session_view_digest"].startswith("sha256:")
+
+
+def test_new_target_missing_aadjc_is_explicit_non_comparable_unfilled_order(tmp_path):
+    db = _seed(
+        tmp_path,
+        madjc=100.0,
+        aadjc_by_day={D1: 110.0, D2: 110.0, D3: 110.0},
+        adjc=999.0,
+    )
+    rec = AlwaysLong()
+    res = _run(db, rec)
+    assert rec.ctxs[0].date == D0
+    assert rec.ctxs[0].prices[CODE] == 100.0
+    assert all(trade["fill_date"] != D0 for trade in res.trades)
+    assert all(trade["price"] != 999.0 for trade in res.trades)
+    d0_curve = next(row for row in res.equity_curve if row["date"] == D0)
+    assert d0_curve["positions_value"] == pytest.approx(0.0)
+    assert d0_curve["cash"] == pytest.approx(1_000_000.0)
+    quality = res.metadata["data_quality"]
+    unfilled = quality["missing_afternoon_adjustment_close_unfilled"]
+    assert unfilled
+    assert unfilled[0]["date"] == D0
+    assert unfilled[0]["reason"] == "missing_afternoon_adjustment_close"
+    assert unfilled[0]["codes"] == [CODE]
+    assert unfilled[0]["new_target_codes"] == [CODE]
+    assert unfilled[0]["held_codes"] == []
+    assert unfilled[0]["fallback"] is False
+    assert unfilled[0]["fill_substituted"] is False
+    assert CODE in unfilled[0]["unfilled_target_shares"]
+    assert quality["comparable"] is False
+    assert quality["selection_eligible"] is False
+    assert D0 in quality["missing_fill_dates"]
+    assert D0 in quality["non_comparable_session_dates"]
+    assert res.metrics["comparable"] is False
+    assert res.metrics["selection_eligible"] is False
+    assert D0 in res.metrics["non_comparable_session_dates"]
+
+
+def test_held_target_missing_same_day_aadjc_keeps_prior_units_and_is_non_comparable(
+    tmp_path,
+):
+    db = _seed(
+        tmp_path,
+        madjc=100.0,
+        aadjc_by_day={D0: 100.0, D2: 110.0, D3: 110.0},
+        adjc=999.0,
+    )
+    rec = AlwaysLong()
+    res = _run(db, rec)
+    d0_trades = [trade for trade in res.trades if trade["fill_date"] == D0]
+    assert len(d0_trades) == 1
+    assert d0_trades[0]["price"] == 100.0
+    assert all(trade["fill_date"] != D1 for trade in res.trades)
+    assert all(trade["price"] != 999.0 for trade in res.trades)
+    day1 = next(row for row in res.equity_curve if row["date"] == D1)
+    assert CODE in day1["stale_mark_codes"]
+    assert day1["positions_value"] == pytest.approx(1_000_000.0)
+    quality = res.metadata["data_quality"]
+    unfilled = [
+        event
+        for event in quality["missing_afternoon_adjustment_close_unfilled"]
+        if event["date"] == D1
+    ]
+    assert unfilled
+    assert unfilled[0]["reason"] == "missing_afternoon_adjustment_close"
+    assert unfilled[0]["codes"] == [CODE]
+    assert unfilled[0]["held_codes"] == [CODE]
+    assert unfilled[0]["new_target_codes"] == []
+    assert unfilled[0]["fallback"] is False
+    assert D1 in quality["incomplete_valuation_dates"]
+    assert D1 in quality["missing_fill_dates"]
+    assert D1 in quality["non_comparable_session_dates"]
+    assert quality["comparable"] is False
+    assert quality["selection_eligible"] is False
+    assert res.metrics["comparable"] is False
+    assert res.metrics["selection_eligible"] is False
 
 
 def test_unheld_missing_m_and_a_stay_no_fill_without_adjc(tmp_path):

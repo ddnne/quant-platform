@@ -330,3 +330,67 @@ def test_am_latest_n_bounds_the_prior_query(tmp_path, monkeypatch):
     assert all(call.get("latest_n") is None for call in d_calls)
     assert all(call.get("from_event") == D3 for call in d_calls)
     assert all(call.get("to_event") == D3 for call in d_calls)
+
+
+def test_am_adapter_catalog_prior_read_is_physically_limited(tmp_path, monkeypatch):
+    from ingestion.jquants.normalize import normalize_generic
+    import pit.api as api_module
+
+    days = [f"2025-03-{day:02d}" for day in range(1, 21)] + list(TRADING_DAYS)
+    db = tmp_path / "catalog-am.sqlite"
+    store = SqliteStore(db)
+    store.upsert(
+        "jquants_records",
+        [
+            normalize_generic(
+                [{"Code": CODE, "Date": day, "Close": 10.0, "AdjC": 100.0}],
+                dataset="equities_bars_daily",
+                ingested_at=f"{day}T15:30:00+09:00",
+                available_at=f"{day}T15:30:00+09:00",
+            )[0]
+            for day in days
+        ],
+    )
+    store.close()
+
+    catalog_calls: list[dict] = []
+    decoded_lengths: list[int] = []
+    real_catalog = api_module._catalog_partition_rows
+    real_decode = api_module._catalog_daily_bars
+
+    def spy_catalog(*args, **kwargs):
+        catalog_calls.append(dict(kwargs))
+        return real_catalog(*args, **kwargs)
+
+    def spy_decode(rows):
+        decoded_lengths.append(len(rows))
+        return real_decode(rows)
+
+    monkeypatch.setattr(api_module, "_catalog_partition_rows", spy_catalog)
+    monkeypatch.setattr(api_module, "_catalog_daily_bars", spy_decode)
+
+    result = pit.get_personal_retrospective_am_signal_equity_bars_daily(
+        as_of=morning_close_as_of(D3),
+        code=CODE,
+        latest_n=2,
+        db_path=db,
+    )
+    bounded_decode_lengths = list(decoded_lengths)
+    prior_limits = [
+        call.get("limit")
+        for call in catalog_calls
+        if call.get("limit") is not None
+    ]
+    assert prior_limits
+    assert all(limit == 2 for limit in prior_limits)
+    assert bounded_decode_lengths
+    assert all(length <= 2 for length in bounded_decode_lengths)
+    assert [row["date"] for row in result.rows] == [D2, D3]
+    unbounded = pit.get_personal_retrospective_am_signal_equity_bars_daily(
+        as_of=morning_close_as_of(D3),
+        code=CODE,
+        db_path=db,
+    )
+    assert [row["date"] for row in result.rows] == [
+        row["date"] for row in unbounded.rows[-2:]
+    ]
