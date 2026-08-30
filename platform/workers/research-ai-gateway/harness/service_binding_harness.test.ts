@@ -13,6 +13,15 @@ beforeAll(async () => {
     workers: [
       { configPath: "./wrangler.test.toml" },
       { configPath: "../research-mass-eval/wrangler.test.toml" },
+      {
+        config: {
+          name: "quant-platform-ingestion-secrets-governed-page-test",
+          main: "harness/governed_page_target.ts",
+          compatibility_date: "2026-08-01",
+          workers_dev: false,
+          preview_urls: false,
+        },
+      },
     ],
   });
   await server.listen();

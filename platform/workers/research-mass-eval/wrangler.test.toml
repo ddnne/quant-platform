@@ -15,7 +15,7 @@ entrypoint = "GatewayService"
 
 [[services]]
 binding = "JQUANTS_ACQUISITION"
-service = "quant-platform-ingestion-secrets-test"
+service = "quant-platform-ingestion-secrets-governed-page-test"
 entrypoint = "IngestionSecretsService"
 
 [vars]

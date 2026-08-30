@@ -60,7 +60,7 @@
     ],
     "unclassified": "REJECT"
   },
-  "manifest_digest": "sha256:5394a19421cd339f283fa812b1cb3e00af3b16ad35a1845a6f7fc5bcb37b7ac7",
+  "manifest_digest": "sha256:c3647b1ee0e4e1e2be2b9bfc77ae240fbe49c414186b4c64a87656b73fbefd4a",
   "schema_version": "cloudflare-active-worker-bindings/v9",
   "test_harness_surfaces": {
     "ingestion-jsda": {
@@ -723,7 +723,7 @@
         {
           "binding": "JQUANTS_ACQUISITION",
           "entrypoint": "IngestionSecretsService",
-          "service": "quant-platform-ingestion-secrets-test"
+          "service": "quant-platform-ingestion-secrets-governed-page-test"
         }
       ],
       "tail_consumers": [],
