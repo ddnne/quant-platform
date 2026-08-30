@@ -1830,8 +1830,8 @@ def _candidate_evaluation(
 @dataclass(frozen=True, slots=True)
 class _CandidateProcessTask:
     ordinal: int
-    spec: StrategySpec
-    closure: PlanDependencyClosure
+    strategy_spec_document: bytes
+    dependency_closure_document: bytes
     snapshot: PersonalSnapshot
     universe: PersonalResolvedUniverseMembership
     fold_periods: tuple[tuple[str, str], ...]
@@ -1841,9 +1841,80 @@ class _CandidateProcessTask:
     short_financing_required: bool
 
 
+def _process_contract_dependency(
+    document: Any,
+    *,
+    expected_kind: str,
+) -> ContractDependency:
+    if not isinstance(document, Mapping):
+        raise RuntimeError("candidate process contract document is invalid")
+    try:
+        dependency = ContractDependency(
+            kind=document["kind"],
+            dependency_id=document["id"],
+            version=document["version"],
+            dataset_dependencies=tuple(document["dataset_dependencies"]),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise RuntimeError(
+            "candidate process contract document cannot be reconstructed"
+        ) from error
+    if dependency.kind != expected_kind or dependency.to_dict() != dict(document):
+        raise RuntimeError("candidate process contract identity mismatch")
+    return dependency
+
+
+def _candidate_process_domain(
+    task: _CandidateProcessTask,
+) -> tuple[StrategySpec, PlanDependencyClosure]:
+    """Rebuild immutable domain values from canonical, pickle-safe bytes."""
+
+    try:
+        spec_document = json.loads(task.strategy_spec_document)
+        closure_document = json.loads(task.dependency_closure_document)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise RuntimeError("candidate process document is invalid") from error
+    if not isinstance(spec_document, dict) or not isinstance(closure_document, dict):
+        raise RuntimeError("candidate process document must be an object")
+    spec = StrategySpec.from_dict(spec_document)
+    if spec.to_dict() != spec_document:
+        raise RuntimeError("candidate process strategy identity mismatch")
+    universe_documents = closure_document.get("universe_dependencies")
+    if not isinstance(universe_documents, list):
+        raise RuntimeError("candidate process universe dependencies are invalid")
+    closure = build_strategy_dependency_closure(
+        plan_id=closure_document["plan_id"],
+        plan_digest=closure_document["plan_digest"],
+        spec=spec,
+        universe_dependencies=tuple(
+            _process_contract_dependency(document, expected_kind="universe")
+            for document in universe_documents
+        ),
+        evaluation_dependency=_process_contract_dependency(
+            closure_document.get("evaluation_dependency"),
+            expected_kind="evaluation",
+        ),
+        risk_dependency=_process_contract_dependency(
+            closure_document.get("risk_dependency"),
+            expected_kind="risk",
+        ),
+        cost_dependency=_process_contract_dependency(
+            closure_document.get("cost_dependency"),
+            expected_kind="cost",
+        ),
+        research_data_profile_id=closure_document["research_data_profile_id"],
+        period_start=closure_document["period_start"],
+        period_end=closure_document["period_end"],
+    )
+    if closure.to_dict() != closure_document:
+        raise RuntimeError("candidate process dependency closure identity mismatch")
+    return spec, closure
+
+
 def _candidate_process(task: _CandidateProcessTask) -> tuple[int, dict[str, Any]]:
     """Evaluate one candidate in an isolated process-local prepared frame."""
 
+    spec, closure = _candidate_process_domain(task)
     executor = PersonalPaperExecutionService()
     with _personal_prepared_frame_scope(
         db_path=task.snapshot.db_path,
@@ -1851,8 +1922,8 @@ def _candidate_process(task: _CandidateProcessTask) -> tuple[int, dict[str, Any]
     ):
         candidate = _candidate_evaluation(
             executor,
-            task.spec,
-            task.closure,
+            spec,
+            closure,
             snapshot=task.snapshot,
             universe=task.universe,
             fold_periods=task.fold_periods,
@@ -1925,9 +1996,10 @@ def _evaluate_candidates_concurrently(
                     raise RuntimeError("candidate process result identity mismatch")
             except Exception as error:
                 unexpected_errors += 1
+                spec, closure = _candidate_process_domain(task)
                 ordered[task.ordinal] = _unexpected_candidate(
-                    task.spec,
-                    task.closure,
+                    spec,
+                    closure,
                     error,
                 )
             else:
@@ -2435,8 +2507,10 @@ class PersonalResearchService:
                 tasks = tuple(
                     _CandidateProcessTask(
                         ordinal=ordinal,
-                        spec=spec,
-                        closure=closure,
+                        strategy_spec_document=_canonical_bytes(spec.to_dict()),
+                        dependency_closure_document=_canonical_bytes(
+                            closure.to_dict()
+                        ),
                         snapshot=snapshot,
                         universe=universe,
                         fold_periods=fold_periods,

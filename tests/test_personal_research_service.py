@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import multiprocessing
 import sqlite3
-from concurrent.futures import Future
+from concurrent.futures import Future, ProcessPoolExecutor
 from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +21,7 @@ from core.engine import _make_feature_accessor
 from data_contracts.identity import natural_key
 from execution.personal_paper_service import PersonalPaperExecutionService
 from paper_runtime.snapshot_identity import data_snapshot_id
+from paper_runtime.personal_snapshot import PersonalSnapshot
 from paper_runtime.personal_prepared_frame import (
     _feature_cache_key_document,
     _personal_prepared_frame_scope,
@@ -41,6 +43,8 @@ from research.personal_service import (
     PersonalResearchRequest,
     PersonalResearchService,
     _CandidateProcessTask,
+    _candidate_process_domain,
+    _canonical_bytes,
     _calendar_lookback_days,
     _closures,
     _evaluate_candidates_concurrently,
@@ -70,7 +74,20 @@ from strategies.spec import (
     FeatureRef,
     interpret_strategy_spec,
     iter_feature_refs,
+    strategy_spec_digest,
 )
+
+
+def _spawn_candidate_identity(
+    task: _CandidateProcessTask,
+) -> tuple[int, str, str, str]:
+    spec, closure = _candidate_process_domain(task)
+    return (
+        task.ordinal,
+        spec.strategy_id,
+        strategy_spec_digest(spec),
+        closure.closure_digest,
+    )
 
 
 def _dates(start: date, end: date) -> list[str]:
@@ -1419,8 +1436,8 @@ def test_candidate_process_fanout_uses_four_workers_restores_order_and_bounds_fa
     tasks = tuple(
         _CandidateProcessTask(
             ordinal=ordinal,
-            spec=spec,
-            closure=closure,
+            strategy_spec_document=_canonical_bytes(spec.to_dict()),
+            dependency_closure_document=_canonical_bytes(closure.to_dict()),
             snapshot=SimpleNamespace(),
             universe=SimpleNamespace(),
             fold_periods=(("2022-01-01", "2022-12-31"),),
@@ -1448,6 +1465,7 @@ def test_candidate_process_fanout_uses_four_workers_restores_order_and_bounds_fa
 
         def submit(self, _worker, task):
             submitted.append(task.ordinal)
+            spec, _closure = _candidate_process_domain(task)
             future = GuardedFuture()
             if task.ordinal == 2:
                 future.set_exception(RuntimeError("bounded child failure"))
@@ -1456,7 +1474,7 @@ def test_candidate_process_fanout_uses_four_workers_restores_order_and_bounds_fa
                     (
                         task.ordinal,
                         {
-                            "strategy_id": task.spec.strategy_id,
+                            "strategy_id": spec.strategy_id,
                             "decision": "REJECT",
                         },
                     )
@@ -1483,6 +1501,81 @@ def test_candidate_process_fanout_uses_four_workers_restores_order_and_bounds_fa
         "type": "RuntimeError",
         "detail": "bounded child failure",
     }
+
+
+def test_diverse_core_candidate_documents_cross_a_real_spawn_boundary(
+    tmp_path: Path,
+) -> None:
+    policy = _policy(max_parallel=4)
+    selector = personal_universe_selector("topix_all")
+    specs = personal_specs_for_cohort("diverse-core-v1")
+    closures = _closures(
+        specs,
+        start="2022-01-01",
+        end="2026-01-01",
+        policy=policy,
+        universe_selector=selector,
+    )
+    closure_digests = tuple(sorted(closure.closure_digest for closure in closures))
+    snapshot = PersonalSnapshot(
+        snapshot_id="sha256:" + "1" * 64,
+        db_path=tmp_path / "snapshot.sqlite",
+        manifest_path=tmp_path / "snapshot.json",
+        database_sha256="sha256:" + "2" * 64,
+        logical_data_snapshot_id="sha256:" + "3" * 64,
+        required_datasets=tuple(
+            sorted(
+                {
+                    dataset
+                    for closure in closures
+                    for dataset in closure.required_datasets
+                }
+            )
+        ),
+        period_start="2022-01-01",
+        period_end="2026-01-01",
+        closure_digests=closure_digests,
+    )
+    universe = PersonalResolvedUniverseMembership(
+        period_start="2022-01-01",
+        period_end="2026-01-01",
+        decision_memberships=(("2022-01-03", ("1301",)),),
+        rule_id=selector.rule_id,
+        rule_version=selector.rule_version,
+        rule_digest=selector.rule_digest,
+    )
+    tasks = tuple(
+        _CandidateProcessTask(
+            ordinal=ordinal,
+            strategy_spec_document=_canonical_bytes(spec.to_dict()),
+            dependency_closure_document=_canonical_bytes(closure.to_dict()),
+            snapshot=snapshot,
+            universe=universe,
+            fold_periods=(("2022-01-01", "2022-12-31"),),
+            holdout_period=("2025-01-01", "2026-01-01"),
+            output_root=tmp_path,
+            policy=policy,
+            short_financing_required=False,
+        )
+        for ordinal, (spec, closure) in enumerate(zip(specs, closures, strict=True))
+    )
+
+    with ProcessPoolExecutor(
+        max_workers=4,
+        mp_context=multiprocessing.get_context("spawn"),
+    ) as pool:
+        futures = [pool.submit(_spawn_candidate_identity, task) for task in tasks]
+        identities = [future.result(timeout=20) for future in futures]
+
+    assert identities == [
+        (
+            ordinal,
+            spec.strategy_id,
+            strategy_spec_digest(spec),
+            closure.closure_digest,
+        )
+        for ordinal, (spec, closure) in enumerate(zip(specs, closures, strict=True))
+    ]
 
 
 @pytest.mark.parametrize("max_parallel", (0, 5))
