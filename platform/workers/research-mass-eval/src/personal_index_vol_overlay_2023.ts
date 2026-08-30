@@ -757,6 +757,7 @@ export async function submitPersonalIndexVolOverlay2023(
       requestDigest,
       kind: "overlay",
       deploymentId: env.CF_VERSION_METADATA?.id ?? "unknown",
+      runnerVersion: personalIndexOverlayFamilyRunnerVersion(request.cohort_id),
     }),
   );
   if (conflict) return conflict;

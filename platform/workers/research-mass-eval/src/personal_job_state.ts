@@ -107,6 +107,7 @@ export function submittedStateDocument(input: {
   kind: PersonalJobKind;
   now?: Date;
   deploymentId: string;
+  runnerVersion?: string;
 }): PersonalJobState {
   const now = input.now ?? new Date();
   return {
@@ -116,7 +117,7 @@ export function submittedStateDocument(input: {
     status: "SUBMITTED",
     submitted_at: now.toISOString(),
     expires_at: new Date(now.getTime() + PERSONAL_JOB_TTL_MS).toISOString(),
-    runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
+    runner_version: input.runnerVersion ?? PERSONAL_RESEARCH_RUNNER_VERSION,
     deployment_id: input.deploymentId,
   };
 }

@@ -1288,7 +1288,11 @@ def test_manager_allows_only_one_active_job_and_same_job_is_idempotent() -> None
             "go": False,
         }
 
-    manager = service.JobManager(runner, on_terminal=terminal.set)
+    manager = service.JobManager(
+        runner,
+        on_terminal=terminal.set,
+        terminal_uploader=lambda *args, **kwargs: None,
+    )
     first = _job("a" * 64, "job-one")
     second = _job("b" * 64, "job-two")
     manager.submit(first)
@@ -1412,6 +1416,7 @@ def test_timeout_create_only_does_not_overwrite_completed_terminal() -> None:
             "go": False,
         },
         terminal_uploader=uploader,
+        terminal_reader=lambda item: stored.get(item.manifest_key),
         max_job_seconds=30,
     )
     manager._jobs[spec.job_id] = {
@@ -1426,6 +1431,130 @@ def test_timeout_create_only_does_not_overwrite_completed_terminal() -> None:
     manager._expire(spec.job_id)
     assert stored[spec.manifest_key]["status"] == "COMPLETED"
     assert manager.status(spec.job_id)["status"] == "FAILED"
+
+
+def test_terminal_upload_retries_then_shuts_down() -> None:
+    attempts = {"n": 0}
+    terminal = threading.Event()
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del key, data, spec, content_digest, extra_headers
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise RuntimeError("R2 upload returned 503")
+
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        terminal_uploader=uploader,
+        retry_schedule=(0.01, 0.01),
+        max_job_seconds=30,
+    )
+    manager.submit(_job("a" * 64, "retry-terminal"))
+    assert terminal.wait(1)
+    assert attempts["n"] >= 2
+
+
+def test_unavailable_terminal_upload_does_not_shutdown() -> None:
+    terminal = threading.Event()
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del key, data, spec, content_digest, extra_headers
+        raise RuntimeError("R2 upload returned 503")
+
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        terminal_uploader=uploader,
+        retry_schedule=(0.05, 0.05),
+        max_job_seconds=30,
+    )
+    manager.submit(_job("a" * 64, "no-shutdown"))
+    assert not terminal.wait(0.2)
+    assert manager.status("no-shutdown")["status"] == "FAILED"
+    with pytest.raises(service.JobBusyError):
+        manager.submit(_job("b" * 64, "other"))
+
+
+def test_matching_existing_terminal_is_accepted() -> None:
+    stored: dict[str, dict] = {}
+    terminal = threading.Event()
+    spec = _job("a" * 64, "existing-ok")
+    stored[spec.manifest_key] = {
+        "job_id": spec.job_id,
+        "request_digest": spec.request_digest,
+        "status": "FAILED",
+    }
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del data, spec, content_digest, extra_headers
+        raise RuntimeError("R2 upload returned 409")
+
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        terminal_uploader=uploader,
+        terminal_reader=lambda item: stored.get(item.manifest_key),
+        max_job_seconds=30,
+    )
+    manager.submit(spec)
+    assert terminal.wait(1)
+
+
+def test_conflicting_terminal_does_not_shutdown() -> None:
+    stored: dict[str, dict] = {}
+    terminal = threading.Event()
+    spec = _job("a" * 64, "conflict-term")
+    stored[spec.manifest_key] = {
+        "job_id": spec.job_id,
+        "request_digest": "sha256:" + "c" * 64,
+        "status": "FAILED",
+    }
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del data, spec, content_digest, extra_headers
+        raise RuntimeError("R2 upload returned 409")
+
+    manager = service.JobManager(
+        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        on_terminal=terminal.set,
+        terminal_uploader=uploader,
+        terminal_reader=lambda item: stored.get(item.manifest_key),
+        retry_schedule=(0.05,),
+        max_job_seconds=30,
+    )
+    manager.submit(spec)
+    assert not terminal.wait(0.2)
+
+
+def test_watchdog_and_normal_race_keeps_one_terminal() -> None:
+    stored: dict[str, dict] = {}
+    terminal = threading.Event()
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del spec, content_digest, extra_headers
+        body = json.loads(data)
+        if key in stored:
+            raise RuntimeError("R2 upload returned 409")
+        stored[key] = body
+
+    spec = _job("a" * 64, "one-terminal")
+    manager = service.JobManager(
+        lambda item: {
+            "job_id": item.job_id,
+            "request_digest": item.request_digest,
+            "status": "COMPLETED",
+            "go": False,
+        },
+        on_terminal=terminal.set,
+        terminal_uploader=uploader,
+        terminal_reader=lambda item: stored.get(item.manifest_key),
+        max_job_seconds=0.05,
+    )
+    manager.submit(spec)
+    assert terminal.wait(1)
+    assert stored[spec.manifest_key]["status"] in {"COMPLETED", "FAILED"}
+    assert list(stored) == [spec.manifest_key]
 
 
 def test_absolute_watchdog_is_not_renewed_by_status_polling() -> None:
@@ -1443,10 +1572,17 @@ def test_absolute_watchdog_is_not_renewed_by_status_polling() -> None:
             "go": False,
         }
 
+    uploads: list[str] = []
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del data, spec, content_digest, extra_headers
+        uploads.append(key)
+
     manager = service.JobManager(
         runner,
         on_terminal=terminal.set,
         max_job_seconds=0.05,
+        terminal_uploader=uploader,
     )
     spec = _job("a" * 64, "watchdog-job")
     manager.submit(spec)

@@ -356,6 +356,7 @@ export async function submitPersonalSvi2023(
       requestDigest,
       kind: "svi",
       deploymentId: env.CF_VERSION_METADATA?.id ?? "unknown",
+      runnerVersion: PERSONAL_SVI_2023_RUNNER_VERSION,
     }),
   );
   if (conflict) return conflict;

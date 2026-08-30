@@ -339,6 +339,8 @@ def _selection_fields(selection: Any) -> Mapping[str, Any]:
         "selected_row_count": getattr(selection, "selected_row_count", None),
         "selected_digest": getattr(selection, "selected_digest", None),
         "source_row_count": getattr(selection, "source_row_count", None),
+        "scanned_page_digests": getattr(selection, "scanned_page_digests", ()),
+        "completion_digest": getattr(selection, "completion_digest", None),
         "contributing_page_digests": getattr(selection, "contributing_page_digests", ()),
     }
 
@@ -351,12 +353,22 @@ def _validated_selection(
     query = selection.get("query")
     if not isinstance(query, Mapping):
         raise PersonalHistoryError("selection query is missing")
+    source_digests = tuple(str(page["sha256"]) for page in source_pages)
+    source_digest_set = set(source_digests)
+    scanned_raw = selection.get("scanned_page_digests")
+    if scanned_raw is None:
+        scanned = source_digests
+    else:
+        scanned = tuple(_page_digest_hex(item) for item in scanned_raw)
+        if scanned != source_digests:
+            raise PersonalHistoryError(
+                "selection scanned pages do not match fetched source pages"
+            )
     contributing = tuple(
         _page_digest_hex(item)
         for item in (selection.get("contributing_page_digests") or ())
     )
-    source_digests = {str(page["sha256"]) for page in source_pages}
-    if any(digest not in source_digests for digest in contributing):
+    if any(digest not in source_digest_set for digest in contributing):
         raise PersonalHistoryError("selection cites a page that was not fetched")
     selected_digest = _canonical_digest(list(selected_rows))
     declared_digest = str(selection.get("selected_digest") or "")
@@ -373,11 +385,16 @@ def _validated_selection(
     declared_source = _count_field(selection.get("source_row_count"))
     if declared_source != source_row_count:
         raise PersonalHistoryError("selection source row count does not match pages")
+    completion = str(selection.get("completion_digest") or "")
+    if completion and not completion.startswith("sha256:"):
+        raise PersonalHistoryError("selection completion digest is missing")
     return {
         "query": dict(query),
         "selected_row_count": selected_count,
         "selected_digest": selected_digest,
         "source_row_count": source_row_count,
+        "scanned_page_digests": list(scanned),
+        "completion_digest": completion or None,
         "contributing_page_digests": list(contributing),
     }
 
@@ -389,29 +406,6 @@ def _page_evidence(
     selected_rows = tuple(dict(row) for row in getattr(fetch_result, "rows", ()) or ())
     selection = getattr(fetch_result, "selection", None)
     if not pages:
-        fields = None
-        try:
-            fields = _selection_fields(selection) if selection is not None else None
-        except PersonalHistoryError:
-            fields = None
-        if (
-            fields is not None
-            and _count_field(fields.get("selected_row_count")) == 0
-            and len(selected_rows) == 0
-        ):
-            empty_digest = _canonical_digest([])
-            query = fields.get("query") or {}
-            return (
-                [],
-                empty_digest,
-                {
-                    "query": dict(query) if isinstance(query, Mapping) else {},
-                    "selected_row_count": 0,
-                    "selected_digest": _canonical_digest([]),
-                    "source_row_count": 0,
-                    "contributing_page_digests": [],
-                },
-            )
         raise PersonalHistoryError("J-Quants response has no page evidence")
     evidence = [
         _source_page_descriptor(ordinal, page)

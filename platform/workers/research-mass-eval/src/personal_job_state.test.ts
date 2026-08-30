@@ -7,6 +7,9 @@ import {
   submittedStateDocument,
   writeSubmittedState,
 } from "./personal_job_state";
+import { PERSONAL_RESEARCH_RUNNER_VERSION } from "./personal_research_contract";
+import { PERSONAL_SVI_2023_RUNNER_VERSION } from "./personal_svi_2023_contract";
+import { PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION } from "./personal_index_vol_overlay_2023_contract";
 import type { Env } from "./types";
 
 const DIGEST_A = `sha256:${"a".repeat(64)}`;
@@ -106,6 +109,35 @@ describe("durable personal job state", () => {
       job: { job_id: "job-pending", status: "PENDING", request_digest: DIGEST_A },
     });
     expect(getByName).not.toHaveBeenCalled();
+  });
+
+  it("stamps the job-family runner identity on SUBMITTED state", () => {
+    expect(
+      submittedStateDocument({
+        jobId: "svi-one",
+        requestDigest: DIGEST_A,
+        kind: "svi",
+        deploymentId: "deploy-1",
+        runnerVersion: PERSONAL_SVI_2023_RUNNER_VERSION,
+      }).runner_version,
+    ).toBe(PERSONAL_SVI_2023_RUNNER_VERSION);
+    expect(
+      submittedStateDocument({
+        jobId: "overlay-one",
+        requestDigest: DIGEST_A,
+        kind: "overlay",
+        deploymentId: "deploy-1",
+        runnerVersion: PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION,
+      }).runner_version,
+    ).toBe(PERSONAL_INDEX_VOL_OVERLAY_2023_RUNNER_VERSION);
+    expect(
+      submittedStateDocument({
+        jobId: "research-one",
+        requestDigest: DIGEST_A,
+        kind: "research",
+        deploymentId: "deploy-1",
+      }).runner_version,
+    ).toBe(PERSONAL_RESEARCH_RUNNER_VERSION);
   });
 
   it("conflicts when the same job id carries a different request digest", async () => {

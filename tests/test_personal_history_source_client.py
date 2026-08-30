@@ -194,8 +194,12 @@ def test_missing_day_does_not_invent_an_http_page(tmp_path: Path) -> None:
         spool_path=tmp_path / "spool.sqlite",
         opener=Opener(),
     )
-    with pytest.raises(PersonalHistoryError, match="no governed source page"):
-        client.fetch_dataset_evidenced("equities_bars_daily", date="2024-03-15")
+    fetched = client.fetch_dataset_evidenced("equities_bars_daily", date="2024-03-15")
+    assert fetched.rows == ()
+    assert fetched.pages[0].slice_date == "2024-03-01"
+    assert fetched.selection is not None
+    assert fetched.selection.selected_row_count == 0
+    assert fetched.selection.scanned_page_digests == (fetched.pages[0].body_digest,)
     with pytest.raises(PersonalHistoryError, match="not a personal history dataset"):
         client.fetch_dataset_evidenced("fins_details", date="2024-03-01")
     client.close()
@@ -331,5 +335,238 @@ def test_hydrator_records_source_and_selection_evidence(tmp_path: Path) -> None:
     assert pages[0]["request_params"]["from"].endswith("-01")
     assert pages[0]["evidence_state"] == "RAW_PAGE"
     assert "HolidayDivision" not in json.dumps(pages)
+    assert selection["scanned_page_digests"] == [page["sha256"] for page in pages]
     store.close()
+    client.close()
+
+
+def _page_headers(state: str, continuation: str, slice_date: str) -> dict[str, str]:
+    return {
+        "x-quant-acquisition-evidence-state": "RAW_PAGE",
+        "x-quant-acquisition-pagination-state": state,
+        "x-quant-acquisition-continuation": continuation,
+        "x-quant-acquisition-slice-date": slice_date,
+    }
+
+
+def test_partial_paginated_month_is_cleared_and_refetched(tmp_path: Path) -> None:
+    calls: list[str | None] = []
+
+    class FailSecond:
+        def urlopen(self, request, timeout=120):
+            token = json.loads(request.data.decode()).get("continuation_token")
+            calls.append(token)
+            if token is None:
+                raw = json.dumps(
+                    {"data": [{"Code": "1001", "Date": "2024-03-01"}]},
+                    separators=(",", ":"),
+                ).encode()
+                return _Response(raw, _page_headers("CONTINUATION", "cursor-2", "2024-03-01"))
+            raise RuntimeError("page-2 failed")
+
+    class Complete:
+        def urlopen(self, request, timeout=120):
+            token = json.loads(request.data.decode()).get("continuation_token")
+            calls.append(token)
+            if token is None:
+                raw = json.dumps(
+                    {"data": [{"Code": "1001", "Date": "2024-03-01"}]},
+                    separators=(",", ":"),
+                ).encode()
+                return _Response(raw, _page_headers("CONTINUATION", "cursor-2", "2024-03-01"))
+            raw = json.dumps(
+                {"data": [{"Code": "1002", "Date": "2024-03-02"}]},
+                separators=(",", ":"),
+            ).encode()
+            return _Response(raw, _page_headers("EXHAUSTED", "NONE", "2024-03-02"))
+
+    spool = tmp_path / "spool.sqlite"
+    first = client_mod.PersonalHistorySourceClient(
+        environment="production",
+        period_end="2024-03-31",
+        spool_path=spool,
+        opener=FailSecond(),
+    )
+    with pytest.raises(RuntimeError, match="page-2 failed"):
+        first.fetch_dataset_evidenced("equities_bars_daily", date="2024-03-01")
+    assert first.spool.has_month("equities_bars_daily", "2024-03") is False
+    first.close()
+    failed_calls = list(calls)
+    second = client_mod.PersonalHistorySourceClient(
+        environment="production",
+        period_end="2024-03-31",
+        spool_path=spool,
+        opener=Complete(),
+    )
+    fetched = second.fetch_dataset_evidenced("equities_bars_daily", date="2024-03-01")
+    assert second.fetch_calls == 2
+    assert calls[len(failed_calls) :] == [None, "cursor-2"]
+    assert [row["Code"] for row in fetched.rows] == ["1001"]
+    assert len(fetched.pages) == 2
+    assert fetched.selection is not None
+    assert fetched.selection.source_row_count == 2
+    assert len(fetched.selection.scanned_page_digests) == 2
+    assert fetched.selection.selected_row_count == 1
+    second.close()
+
+
+def test_crash_after_exhausted_before_complete_refetches(tmp_path: Path) -> None:
+    class Opener:
+        def urlopen(self, request, timeout=120):
+            raw = json.dumps(
+                {"data": [{"Code": "1001", "Date": "2024-03-01"}]},
+                separators=(",", ":"),
+            ).encode()
+            return _Response(raw, _page_headers("EXHAUSTED", "NONE", "2024-03-01"))
+
+    spool = tmp_path / "spool.sqlite"
+    first = client_mod.PersonalHistorySourceClient(
+        environment="production",
+        period_end="2024-03-31",
+        spool_path=spool,
+        opener=Opener(),
+    )
+    first._finish_month = lambda *args, **kwargs: (_ for _ in ()).throw(
+        RuntimeError("crash before COMPLETE")
+    )
+    with pytest.raises(RuntimeError, match="crash before COMPLETE"):
+        first.fetch_dataset_evidenced("equities_bars_daily", date="2024-03-01")
+    assert first.spool.has_month("equities_bars_daily", "2024-03") is False
+    first.close()
+    second = client_mod.PersonalHistorySourceClient(
+        environment="production",
+        period_end="2024-03-31",
+        spool_path=spool,
+        opener=Opener(),
+    )
+    fetched = second.fetch_dataset_evidenced("equities_bars_daily", date="2024-03-01")
+    assert second.fetch_calls == 1
+    assert [row["Code"] for row in fetched.rows] == ["1001"]
+    assert second.spool.has_month("equities_bars_daily", "2024-03") is True
+    second.close()
+
+
+def test_zero_match_fins_binds_all_scanned_pages(tmp_path: Path) -> None:
+    class Opener:
+        def urlopen(self, request, timeout=120):
+            month = json.loads(request.data.decode())["segment_id"]
+            raw = json.dumps(
+                {"data": _fins_month(month)}, separators=(",", ":")
+            ).encode()
+            return _Response(raw, _page_headers("EXHAUSTED", "NONE", "NONE"))
+
+    client = client_mod.PersonalHistorySourceClient(
+        environment="production",
+        period_end="2024-03-31",
+        spool_path=tmp_path / "spool.sqlite",
+        opener=Opener(),
+    )
+    fetched = client.fetch_dataset_evidenced("fins_summary", code="9999")
+    assert fetched.rows == ()
+    assert len(fetched.pages) == client.fetch_calls
+    assert fetched.selection is not None
+    assert fetched.selection.selected_row_count == 0
+    assert fetched.selection.source_row_count == sum(page.row_count for page in fetched.pages)
+    assert fetched.selection.source_row_count > 0
+    assert fetched.selection.scanned_page_digests == tuple(
+        page.body_digest for page in fetched.pages
+    )
+    assert fetched.selection.contributing_page_digests == ()
+    evidence, _, selection = _page_evidence(fetched)
+    assert len(evidence) == len(fetched.pages)
+    assert selection["selected_row_count"] == 0
+    client.close()
+
+
+def test_match_on_first_page_still_scans_later_pages(tmp_path: Path) -> None:
+    class Opener:
+        def urlopen(self, request, timeout=120):
+            token = json.loads(request.data.decode()).get("continuation_token")
+            if token is None:
+                raw = json.dumps(
+                    {"data": [{"Code": "1001", "Date": "2024-03-01"}]},
+                    separators=(",", ":"),
+                ).encode()
+                return _Response(raw, _page_headers("CONTINUATION", "cursor-2", "2024-03-01"))
+            raw = json.dumps(
+                {"data": [{"Code": "1002", "Date": "2024-03-02"}]},
+                separators=(",", ":"),
+            ).encode()
+            return _Response(raw, _page_headers("EXHAUSTED", "NONE", "2024-03-02"))
+
+    client = client_mod.PersonalHistorySourceClient(
+        environment="production",
+        period_end="2024-03-31",
+        spool_path=tmp_path / "spool.sqlite",
+        opener=Opener(),
+    )
+    fetched = client.fetch_dataset_evidenced("equities_bars_daily", date="2024-03-01")
+    assert [row["Code"] for row in fetched.rows] == ["1001"]
+    assert len(fetched.pages) == 2
+    assert fetched.selection is not None
+    assert fetched.selection.source_row_count == 2
+    assert fetched.selection.selected_row_count == 1
+    assert len(fetched.selection.contributing_page_digests) == 1
+    assert len(fetched.selection.scanned_page_digests) == 2
+    client.close()
+
+
+def test_omitted_scanned_page_digest_is_rejected() -> None:
+    page = client_mod.SourcePage(
+        request_path="/v2/fins/summary",
+        request_params={"from": "2024-03-01", "to": "2024-03-31"},
+        response_status=200,
+        body_digest="sha256:" + "a" * 64,
+        row_count=2,
+    )
+    later = client_mod.SourcePage(
+        request_path="/v2/fins/summary",
+        request_params={"from": "2024-04-01", "to": "2024-04-30"},
+        response_status=200,
+        body_digest="sha256:" + "b" * 64,
+        row_count=2,
+    )
+    fetch = client_mod._Fetch(
+        rows=(),
+        pages=(page, later),
+        selection=client_mod.SelectionEvidence(
+            query={"code": "9999"},
+            selected_row_count=0,
+            selected_digest="sha256:" + hashlib.sha256(b"[]").hexdigest(),
+            source_row_count=4,
+            scanned_page_digests=(page.body_digest,),
+            completion_digest="sha256:" + "c" * 64,
+            contributing_page_digests=(),
+        ),
+    )
+    with pytest.raises(PersonalHistoryError, match="scanned pages"):
+        _page_evidence(fetch)
+
+
+def test_spool_page_bound_fails_with_exact_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(client_mod, "MAX_SPOOL_PAGES", 1)
+
+    class Opener:
+        def urlopen(self, request, timeout=120):
+            month = json.loads(request.data.decode())["segment_id"]
+            raw = json.dumps(
+                {"data": _calendar_month(month)}, separators=(",", ":")
+            ).encode()
+            return _Response(raw, _page_headers("EXHAUSTED", "NONE", "NONE"))
+
+    client = client_mod.PersonalHistorySourceClient(
+        environment="production",
+        period_end="2024-04-30",
+        spool_path=tmp_path / "spool.sqlite",
+        opener=Opener(),
+    )
+    client.fetch_dataset_evidenced(
+        "markets_calendar", **{"from": "2024-03-01", "to": "2024-03-02"}
+    )
+    with pytest.raises(PersonalHistoryError, match="page bound exceeded"):
+        client.fetch_dataset_evidenced(
+            "markets_calendar", **{"from": "2024-03-01", "to": "2024-04-02"}
+        )
     client.close()

@@ -16,6 +16,7 @@ import sys
 import tarfile
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.request
 import zlib
@@ -695,6 +696,20 @@ def _put(
             payload.close()
 
 
+def _get_json(key: str) -> dict[str, Any] | None:
+    request = urllib.request.Request(f"{R2_ORIGIN}/{key}", method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            if response.status != HTTPStatus.OK:
+                return None
+            parsed = json.loads(response.read().decode("utf-8"))
+    except (OSError, urllib.error.URLError, json.JSONDecodeError, TimeoutError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return parsed
+
+
 def _safe_detail(error: BaseException) -> str:
     return " ".join(f"{type(error).__name__}: {error}".split())[:500]
 
@@ -1259,6 +1274,8 @@ TerminalCallback = Callable[[], None]
 
 
 class JobManager:
+    _RETRY_SCHEDULE = (0.05, 0.2, 0.5, 1.0, 2.0, 5.0)
+
     def __init__(
         self,
         runner: Runner,
@@ -1266,6 +1283,8 @@ class JobManager:
         on_terminal: TerminalCallback | None = None,
         max_job_seconds: float = MAX_JOB_LIFETIME_SECONDS,
         terminal_uploader: Callable[..., None] | None = None,
+        terminal_reader: Callable[[JobSpecLike], dict[str, Any] | None] | None = None,
+        retry_schedule: Sequence[float] | None = None,
     ) -> None:
         if max_job_seconds <= 0:
             raise ValueError("max_job_seconds must be positive")
@@ -1273,12 +1292,18 @@ class JobManager:
         self._on_terminal = on_terminal
         self._max_job_seconds = max_job_seconds
         self._terminal_uploader = terminal_uploader or _put
+        self._terminal_reader = terminal_reader
+        self._retry_schedule = tuple(retry_schedule or self._RETRY_SCHEDULE)
         self._lock = threading.Lock()
         self._jobs: dict[str, dict[str, Any]] = {}
         self._specs: dict[str, JobSpecLike] = {}
         self._active_job_id: str | None = None
         self._accepting = True
         self._watchdog: threading.Timer | None = None
+        self._retry_timer: threading.Timer | None = None
+        self._pending_terminal: tuple[JobSpecLike, dict[str, Any]] | None = None
+        self._retry_index = 0
+        self._shutdown_notified = False
 
     def submit(self, spec: JobSpecLike) -> dict[str, Any]:
         with self._lock:
@@ -1395,16 +1420,111 @@ class JobManager:
             "error": error,
         }
 
-    def _write_timeout_terminal(self, spec: JobSpecLike) -> None:
-        manifest = self._timeout_terminal(spec)
+    def _failure_terminal(self, spec: JobSpecLike, error: str) -> dict[str, Any]:
+        failed = self._timeout_terminal(spec)
+        failed["error"] = error
+        return failed
+
+    def _read_terminal(self, spec: JobSpecLike) -> dict[str, Any] | None:
+        reader = self._terminal_reader
+        if reader is not None:
+            try:
+                return reader(spec)
+            except Exception:
+                return None
+        return _get_json(spec.manifest_key)
+
+    def _matching_terminal(self, spec: JobSpecLike, existing: Any) -> bool:
+        return (
+            isinstance(existing, dict)
+            and existing.get("job_id") == spec.job_id
+            and existing.get("request_digest") == spec.request_digest
+            and existing.get("status") in {"COMPLETED", "FAILED"}
+        )
+
+    def _conflicting_terminal(self, spec: JobSpecLike, existing: Any) -> bool:
+        return (
+            isinstance(existing, dict)
+            and (
+                existing.get("job_id") != spec.job_id
+                or existing.get("request_digest") != spec.request_digest
+            )
+        )
+
+    def _publish_verified_terminal(
+        self, spec: JobSpecLike, manifest: Mapping[str, Any]
+    ) -> str:
         body = _canonical_bytes(manifest)
         digest = "sha256:" + hashlib.sha256(body).hexdigest()
-        self._terminal_uploader(
-            spec.manifest_key,
-            body,
-            spec=spec,
-            content_digest=digest,
-        )
+        try:
+            self._terminal_uploader(
+                spec.manifest_key,
+                body,
+                spec=spec,
+                content_digest=digest,
+            )
+            return "ok"
+        except Exception as error:
+            existing = self._read_terminal(spec)
+            if self._matching_terminal(spec, existing):
+                return "ok"
+            if self._conflicting_terminal(spec, existing):
+                return "conflict"
+            raise RuntimeError(_safe_detail(error)) from error
+
+    def _notify_shutdown(self) -> None:
+        with self._lock:
+            if self._shutdown_notified:
+                return
+            self._shutdown_notified = True
+            pending_retry = self._retry_timer
+            self._retry_timer = None
+            self._pending_terminal = None
+        if pending_retry is not None:
+            pending_retry.cancel()
+        if self._on_terminal is not None:
+            self._on_terminal()
+
+    def _begin_terminal_publication(
+        self, spec: JobSpecLike, manifest: dict[str, Any]
+    ) -> None:
+        with self._lock:
+            self._accepting = False
+            self._pending_terminal = (spec, manifest)
+            self._retry_index = 0
+        self._attempt_terminal_publication()
+
+    def _attempt_terminal_publication(self) -> None:
+        with self._lock:
+            if self._shutdown_notified:
+                return
+            pending = self._pending_terminal
+        if pending is None:
+            return
+        spec, manifest = pending
+        try:
+            outcome = self._publish_verified_terminal(spec, manifest)
+        except Exception:
+            self._schedule_terminal_retry()
+            return
+        if outcome == "ok":
+            self._notify_shutdown()
+
+    def _schedule_terminal_retry(self) -> None:
+        with self._lock:
+            if self._shutdown_notified:
+                return
+            delay = self._retry_schedule[
+                min(self._retry_index, len(self._retry_schedule) - 1)
+            ]
+            self._retry_index += 1
+            timer = threading.Timer(delay, self._attempt_terminal_publication)
+            timer.daemon = True
+            self._retry_timer = timer
+            timer.start()
+
+    def _write_timeout_terminal(self, spec: JobSpecLike) -> None:
+        self._begin_terminal_publication(spec, self._timeout_terminal(spec))
 
     def _expire(self, job_id: str) -> None:
         spec: JobSpecLike | None = None
@@ -1425,12 +1545,7 @@ class JobManager:
             }
             self._accepting = False
         if spec is not None:
-            try:
-                self._write_timeout_terminal(spec)
-            except Exception:
-                pass
-        if self._on_terminal is not None:
-            self._on_terminal()
+            self._write_timeout_terminal(spec)
 
     def _execute(self, spec: JobSpecLike) -> None:
         with self._lock:
@@ -1441,20 +1556,19 @@ class JobManager:
         try:
             result = self._runner(spec)
         except Exception as error:  # upload or service failure after job execution
-            result = {
-                "job_id": spec.job_id,
-                "request_digest": spec.request_digest,
-                "status": "FAILED",
-                "error": _safe_detail(error),
-                "go": False,
-            }
-            if isinstance(spec, SnapshotJobSpec):
-                result["job_kind"] = "snapshot-build"
-            else:
-                result["cohort_id"] = spec.cohort_id
-                result["cohort_digest"] = spec.cohort_digest
-            if isinstance(spec, JobSpec):
-                result["universe_id"] = spec.universe_id
+            result = self._failure_terminal(spec, _safe_detail(error))
+            with self._lock:
+                if not self._accepting:
+                    return
+                self._jobs[spec.job_id] = dict(result)
+                self._active_job_id = None
+                self._accepting = False
+                watchdog = self._watchdog
+                self._watchdog = None
+                if watchdog is not None:
+                    watchdog.cancel()
+            self._begin_terminal_publication(spec, result)
+            return
         with self._lock:
             notify = self._accepting
             if notify:
@@ -1465,8 +1579,8 @@ class JobManager:
             self._watchdog = None
             if watchdog is not None:
                 watchdog.cancel()
-        if notify and self._on_terminal is not None:
-            self._on_terminal()
+        if notify:
+            self._begin_terminal_publication(spec, result)
 
     def status(self, job_id: str) -> dict[str, Any] | None:
         with self._lock:

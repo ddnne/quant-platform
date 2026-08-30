@@ -275,7 +275,8 @@ def test_container_job_spec_is_closed_and_uses_existing_job_manager() -> None:
             "request_digest": accepted.request_digest,
             "status": "COMPLETED",
             "go": False,
-        }
+        },
+        terminal_uploader=lambda *args, **kwargs: None,
     )
     assert manager.submit(spec)["status"] == "QUEUED"
 

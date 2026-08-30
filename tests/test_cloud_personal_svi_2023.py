@@ -74,7 +74,10 @@ def test_svi_job_manager_accepts_the_separate_spec_and_reaches_completed() -> No
             "go": False,
         }
 
-    manager = service.JobManager(runner)
+    manager = service.JobManager(
+        runner,
+        terminal_uploader=lambda *args, **kwargs: None,
+    )
     submitted = manager.submit(spec)
     assert submitted["cohort_id"] == "personal-svi-term-2023-v1"
     assert submitted["cohort_digest"].startswith("sha256:")
