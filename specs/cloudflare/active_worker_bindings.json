@@ -60,7 +60,7 @@
     ],
     "unclassified": "REJECT"
   },
-  "manifest_digest": "sha256:c3647b1ee0e4e1e2be2b9bfc77ae240fbe49c414186b4c64a87656b73fbefd4a",
+  "manifest_digest": "sha256:fdf2671ad2d5f0a8597e8d9e4c488bb7b8f333c7d9db5398189cebdf10b5bb89",
   "schema_version": "cloudflare-active-worker-bindings/v9",
   "test_harness_surfaces": {
     "ingestion-jsda": {
@@ -3135,7 +3135,9 @@
         "ratelimits": [],
         "route": null,
         "routes": [],
-        "secret_names": [],
+        "secret_names": [
+          "MASS_EVAL_TOKEN"
+        ],
         "services": [
           {
             "binding": "AI_GATEWAY",
@@ -3171,7 +3173,7 @@
           "binding": "CF_VERSION_METADATA"
         },
         "worker_entrypoints": [],
-        "workers_dev": false
+        "workers_dev": true
       }
     }
   }

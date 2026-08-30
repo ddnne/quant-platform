@@ -279,6 +279,7 @@ STAGING_SECRET_NAMES: dict[str, tuple[str, ...]] = {
         "JQUANTS_RPC_CURSOR_HMAC_KEY",
     ),
     "receipt-evidence-authority": ("RECEIPT_KEY_WRAP_KEY",),
+    "research-mass-eval": ("MASS_EVAL_TOKEN",),
 }
 
 
@@ -1274,13 +1275,15 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             raise ValueError(
                 f"research-mass-eval/{environment}: personal Container migration drift"
             )
-    for environment in ("base", "production"):
+    for environment in ("base", "production", "staging"):
         if workers["research-mass-eval"][environment]["workers_dev"] is not True:
             raise ValueError(
                 f"research-mass-eval/{environment}: token-gated personal route missing"
             )
-    if workers["research-mass-eval"]["staging"]["workers_dev"] is not False:
-        raise ValueError("research-mass-eval/staging: workers_dev must remain false")
+        if workers["research-mass-eval"][environment]["preview_urls"] is not False:
+            raise ValueError(
+                f"research-mass-eval/{environment}: preview_urls must remain false"
+            )
     mass_test = manifest["test_harness_surfaces"].get("research-mass-eval")
     if not isinstance(mass_test, dict) or any(
         mass_test[field] != [] for field in ("containers", "durable_objects")

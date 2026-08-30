@@ -1,11 +1,20 @@
-# Staging uses a distinct R2 resource and the private staging gateway.
+# Staging uses a distinct R2 resource and the staging AI gateway Service Binding.
+# Public surface: token-gated workers.dev hostname only. No custom domain.
+# Existing HTTP authorization remains fail-closed (header token; no query token).
+# preview_urls=false: version preview URLs are not a research API.
 # Freeze vars stay NO-GO / OFF / false.
+#
+# Secrets (required for eval/propose; unbound token fail-closes authorized()):
+#   npx wrangler secret put MASS_EVAL_TOKEN -c platform/workers/research-mass-eval/wrangler.staging.toml
 
 name = "quant-platform-research-mass-eval-staging"
 main = "src/index.ts"
 compatibility_date = "2026-08-01"
-workers_dev = false
+workers_dev = true
 preview_urls = false
+
+[secrets]
+required = ["MASS_EVAL_TOKEN"]
 
 [[containers]]
 class_name = "PersonalResearchContainer"
