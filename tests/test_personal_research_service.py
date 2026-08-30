@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import multiprocessing
 import sqlite3
+from concurrent.futures import Future, ProcessPoolExecutor
 from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +21,7 @@ from core.engine import _make_feature_accessor
 from data_contracts.identity import natural_key
 from execution.personal_paper_service import PersonalPaperExecutionService
 from paper_runtime.snapshot_identity import data_snapshot_id
+from paper_runtime.personal_snapshot import PersonalSnapshot
 from paper_runtime.personal_prepared_frame import (
     _feature_cache_key_document,
     _personal_prepared_frame_scope,
@@ -39,8 +42,12 @@ from research.personal_service import (
     PersonalResearchPolicy,
     PersonalResearchRequest,
     PersonalResearchService,
+    _CandidateProcessTask,
+    _candidate_process_domain,
+    _canonical_bytes,
     _calendar_lookback_days,
     _closures,
+    _evaluate_candidates_concurrently,
     _fixed_position_short_financing_evidence,
     _md_short_financing,
     _periods,
@@ -67,7 +74,20 @@ from strategies.spec import (
     FeatureRef,
     interpret_strategy_spec,
     iter_feature_refs,
+    strategy_spec_digest,
 )
+
+
+def _spawn_candidate_identity(
+    task: _CandidateProcessTask,
+) -> tuple[int, str, str, str]:
+    spec, closure = _candidate_process_domain(task)
+    return (
+        task.ordinal,
+        spec.strategy_id,
+        strategy_spec_digest(spec),
+        closure.closure_digest,
+    )
 
 
 def _dates(start: date, end: date) -> list[str]:
@@ -982,6 +1002,13 @@ def test_personal_research_runs_real_paper_and_is_idempotent(
     report = json.loads(first.report_json_path.read_text(encoding="utf-8"))
     assert report["version"] == PERSONAL_RESEARCH_REPORT_VERSION
     assert report["decision_policy"] == PERSONAL_DECISION_POLICY
+    assert report["candidate_execution"] == {
+        "model": "serial",
+        "worker_processes": 1,
+        "max_parallel": 1,
+        "shared_snapshot_and_quality_preparation": True,
+        "base_sleeve_before_fanout": False,
+    }
     assert report["summary"] == {
         "analysis_status": "COMPLETED",
         "candidate_count": 1,
@@ -1379,6 +1406,7 @@ def test_exact_four_backtest_budget_adds_only_one_base_source_run(
 ) -> None:
     source, start, end = personal_db
     assert PersonalResearchPolicy().validation_folds == 4
+    assert PersonalResearchPolicy().max_parallel == 4
     assert 4 * (PersonalResearchPolicy().validation_folds + 2) == 24
     assert PERSONAL_EXACT_FOUR_MAX_BACKTESTS == 25
     request = PersonalResearchRequest(
@@ -1391,6 +1419,169 @@ def test_exact_four_backtest_budget_adds_only_one_base_source_run(
 
     with pytest.raises(PersonalResearchInputError, match="25-backtest budget"):
         PersonalResearchService(policy=_policy(validation_folds=5)).run(request)
+
+
+def test_candidate_process_fanout_uses_four_workers_restores_order_and_bounds_failure(
+    tmp_path: Path,
+) -> None:
+    policy = _policy(max_parallel=4)
+    specs = personal_specs_for_cohort("diverse-core-v1")
+    closures = _closures(
+        specs,
+        start="2022-01-01",
+        end="2026-01-01",
+        policy=policy,
+        universe_selector=personal_universe_selector("topix_all"),
+    )
+    tasks = tuple(
+        _CandidateProcessTask(
+            ordinal=ordinal,
+            strategy_spec_document=_canonical_bytes(spec.to_dict()),
+            dependency_closure_document=_canonical_bytes(closure.to_dict()),
+            snapshot=SimpleNamespace(),
+            universe=SimpleNamespace(),
+            fold_periods=(("2022-01-01", "2022-12-31"),),
+            holdout_period=("2025-01-01", "2026-01-01"),
+            output_root=tmp_path,
+            policy=policy,
+            short_financing_required=False,
+        )
+        for ordinal, (spec, closure) in enumerate(zip(specs, closures, strict=True))
+    )
+    submitted: list[int] = []
+    selected_workers: list[int] = []
+
+    class GuardedFuture(Future):
+        def result(self, timeout=None):
+            assert submitted == [0, 1, 2, 3]
+            return super().result(timeout)
+
+    class FakePool:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def submit(self, _worker, task):
+            submitted.append(task.ordinal)
+            spec, _closure = _candidate_process_domain(task)
+            future = GuardedFuture()
+            if task.ordinal == 2:
+                future.set_exception(RuntimeError("bounded child failure"))
+            else:
+                future.set_result(
+                    (
+                        task.ordinal,
+                        {
+                            "strategy_id": spec.strategy_id,
+                            "decision": "REJECT",
+                        },
+                    )
+                )
+            return future
+
+    def factory(max_workers: int):
+        selected_workers.append(max_workers)
+        return FakePool()
+
+    candidates, unexpected_errors = _evaluate_candidates_concurrently(
+        tasks,
+        max_workers=4,
+        pool_factory=factory,
+    )
+
+    assert selected_workers == [4]
+    assert submitted == [0, 1, 2, 3]
+    assert [candidate["strategy_id"] for candidate in candidates] == [
+        spec.strategy_id for spec in specs
+    ]
+    assert unexpected_errors == 1
+    assert candidates[2]["error"] == {
+        "type": "RuntimeError",
+        "detail": "bounded child failure",
+    }
+
+
+def test_diverse_core_candidate_documents_cross_a_real_spawn_boundary(
+    tmp_path: Path,
+) -> None:
+    policy = _policy(max_parallel=4)
+    selector = personal_universe_selector("topix_all")
+    specs = personal_specs_for_cohort("diverse-core-v1")
+    closures = _closures(
+        specs,
+        start="2022-01-01",
+        end="2026-01-01",
+        policy=policy,
+        universe_selector=selector,
+    )
+    closure_digests = tuple(sorted(closure.closure_digest for closure in closures))
+    snapshot = PersonalSnapshot(
+        snapshot_id="sha256:" + "1" * 64,
+        db_path=tmp_path / "snapshot.sqlite",
+        manifest_path=tmp_path / "snapshot.json",
+        database_sha256="sha256:" + "2" * 64,
+        logical_data_snapshot_id="sha256:" + "3" * 64,
+        required_datasets=tuple(
+            sorted(
+                {
+                    dataset
+                    for closure in closures
+                    for dataset in closure.required_datasets
+                }
+            )
+        ),
+        period_start="2022-01-01",
+        period_end="2026-01-01",
+        closure_digests=closure_digests,
+    )
+    universe = PersonalResolvedUniverseMembership(
+        period_start="2022-01-01",
+        period_end="2026-01-01",
+        decision_memberships=(("2022-01-03", ("1301",)),),
+        rule_id=selector.rule_id,
+        rule_version=selector.rule_version,
+        rule_digest=selector.rule_digest,
+    )
+    tasks = tuple(
+        _CandidateProcessTask(
+            ordinal=ordinal,
+            strategy_spec_document=_canonical_bytes(spec.to_dict()),
+            dependency_closure_document=_canonical_bytes(closure.to_dict()),
+            snapshot=snapshot,
+            universe=universe,
+            fold_periods=(("2022-01-01", "2022-12-31"),),
+            holdout_period=("2025-01-01", "2026-01-01"),
+            output_root=tmp_path,
+            policy=policy,
+            short_financing_required=False,
+        )
+        for ordinal, (spec, closure) in enumerate(zip(specs, closures, strict=True))
+    )
+
+    with ProcessPoolExecutor(
+        max_workers=4,
+        mp_context=multiprocessing.get_context("spawn"),
+    ) as pool:
+        futures = [pool.submit(_spawn_candidate_identity, task) for task in tasks]
+        identities = [future.result(timeout=20) for future in futures]
+
+    assert identities == [
+        (
+            ordinal,
+            spec.strategy_id,
+            strategy_spec_digest(spec),
+            closure.closure_digest,
+        )
+        for ordinal, (spec, closure) in enumerate(zip(specs, closures, strict=True))
+    ]
+
+
+@pytest.mark.parametrize("max_parallel", (0, 5))
+def test_personal_research_parallelism_is_capped_at_four(max_parallel: int) -> None:
+    with pytest.raises(ValueError, match="parallelism"):
+        PersonalResearchPolicy(max_parallel=max_parallel)
 
 
 def test_short_financing_markdown_exposes_monotonicity_failure() -> None:

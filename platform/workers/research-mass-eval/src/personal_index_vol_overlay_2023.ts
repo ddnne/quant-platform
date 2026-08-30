@@ -16,7 +16,6 @@ import {
 } from "./personal_index_vol_overlay_2023_contract";
 import {
   PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES,
-  PERSONAL_RESEARCH_RUNNER_VERSION,
   isPersonalResearchSnapshotKey,
   personalResearchCohortDigest,
   personalResearchManifestKey,
@@ -42,6 +41,10 @@ const BASE_RESULT_MAX_BYTES = 512 * 1024 * 1024;
 const SVI_FEATURE_MAX_BYTES = 8 * 1024 * 1024;
 const SOURCE_MANIFEST_MAX_BYTES = 512 * 1024;
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
+const OVERLAY_COMPATIBLE_BASE_RUNNER_VERSIONS: ReadonlySet<string> = new Set([
+  "personal-cloud-runner/v9",
+  "personal-cloud-runner/v10",
+]);
 
 type JsonObject = Record<string, unknown>;
 
@@ -145,7 +148,7 @@ async function baseInputs(
   const snapshot = manifest.snapshot;
   if (
     manifest.status !== "COMPLETED" ||
-    manifest.version !== PERSONAL_RESEARCH_RUNNER_VERSION ||
+    !OVERLAY_COMPATIBLE_BASE_RUNNER_VERSIONS.has(String(manifest.version ?? "")) ||
     manifest.job_id !== baseJobId ||
     manifest.cohort_id !== BASE_COHORT_ID ||
     manifest.cohort_digest !== personalResearchCohortDigest(BASE_COHORT_ID) ||

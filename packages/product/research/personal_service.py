@@ -14,8 +14,10 @@ import hashlib
 import itertools
 import json
 import math
+import multiprocessing
 import os
 import sqlite3
+from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -83,7 +85,7 @@ from research.personal_base_sleeve import (
 )
 from research.stats_metrics import sharpe_ratio
 
-PERSONAL_RESEARCH_REPORT_VERSION = "personal-research-report/v9"
+PERSONAL_RESEARCH_REPORT_VERSION = "personal-research-report/v10"
 PERSONAL_DECISION_POLICY = "personal_drawdown_cost_stress/v3"
 PERSONAL_DATA_PROFILE = "personal-japan-equities-paper/v3"
 PERSONAL_BAR_COVERAGE_EVIDENCE = "observed-pit-market-breadth/v1"
@@ -115,7 +117,7 @@ class PersonalResearchPolicy:
     max_drawdown: float = 0.25
     min_fills: int = 100
     max_candidates: int = 12
-    max_parallel: int = 1
+    max_parallel: int = 4
     min_observed_bar_coverage: float = 0.995
     min_universe_fins_breadth: float = 0.95
 
@@ -132,8 +134,8 @@ class PersonalResearchPolicy:
             raise ValueError("max_drawdown must be in (0, 1]")
         if self.min_fills < 0 or self.max_candidates < 1:
             raise ValueError("fill and candidate limits cannot be negative")
-        if self.max_parallel != 1:
-            raise ValueError("personal research is intentionally serial")
+        if not 1 <= self.max_parallel <= 4:
+            raise ValueError("personal research parallelism must be in [1, 4]")
         if not 0.0 < self.min_observed_bar_coverage <= 1.0:
             raise ValueError("min_observed_bar_coverage must be in (0, 1]")
         if not 0.0 < self.min_universe_fins_breadth <= 1.0:
@@ -1825,6 +1827,188 @@ def _candidate_evaluation(
     return candidate
 
 
+@dataclass(frozen=True, slots=True)
+class _CandidateProcessTask:
+    ordinal: int
+    strategy_spec_document: bytes
+    dependency_closure_document: bytes
+    snapshot: PersonalSnapshot
+    universe: PersonalResolvedUniverseMembership
+    fold_periods: tuple[tuple[str, str], ...]
+    holdout_period: tuple[str, str]
+    output_root: Path
+    policy: PersonalResearchPolicy
+    short_financing_required: bool
+
+
+def _process_contract_dependency(
+    document: Any,
+    *,
+    expected_kind: str,
+) -> ContractDependency:
+    if not isinstance(document, Mapping):
+        raise RuntimeError("candidate process contract document is invalid")
+    try:
+        dependency = ContractDependency(
+            kind=document["kind"],
+            dependency_id=document["id"],
+            version=document["version"],
+            dataset_dependencies=tuple(document["dataset_dependencies"]),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise RuntimeError(
+            "candidate process contract document cannot be reconstructed"
+        ) from error
+    if dependency.kind != expected_kind or dependency.to_dict() != dict(document):
+        raise RuntimeError("candidate process contract identity mismatch")
+    return dependency
+
+
+def _candidate_process_domain(
+    task: _CandidateProcessTask,
+) -> tuple[StrategySpec, PlanDependencyClosure]:
+    """Rebuild immutable domain values from canonical, pickle-safe bytes."""
+
+    try:
+        spec_document = json.loads(task.strategy_spec_document)
+        closure_document = json.loads(task.dependency_closure_document)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise RuntimeError("candidate process document is invalid") from error
+    if not isinstance(spec_document, dict) or not isinstance(closure_document, dict):
+        raise RuntimeError("candidate process document must be an object")
+    spec = StrategySpec.from_dict(spec_document)
+    if spec.to_dict() != spec_document:
+        raise RuntimeError("candidate process strategy identity mismatch")
+    universe_documents = closure_document.get("universe_dependencies")
+    if not isinstance(universe_documents, list):
+        raise RuntimeError("candidate process universe dependencies are invalid")
+    closure = build_strategy_dependency_closure(
+        plan_id=closure_document["plan_id"],
+        plan_digest=closure_document["plan_digest"],
+        spec=spec,
+        universe_dependencies=tuple(
+            _process_contract_dependency(document, expected_kind="universe")
+            for document in universe_documents
+        ),
+        evaluation_dependency=_process_contract_dependency(
+            closure_document.get("evaluation_dependency"),
+            expected_kind="evaluation",
+        ),
+        risk_dependency=_process_contract_dependency(
+            closure_document.get("risk_dependency"),
+            expected_kind="risk",
+        ),
+        cost_dependency=_process_contract_dependency(
+            closure_document.get("cost_dependency"),
+            expected_kind="cost",
+        ),
+        research_data_profile_id=closure_document["research_data_profile_id"],
+        period_start=closure_document["period_start"],
+        period_end=closure_document["period_end"],
+    )
+    if closure.to_dict() != closure_document:
+        raise RuntimeError("candidate process dependency closure identity mismatch")
+    return spec, closure
+
+
+def _candidate_process(task: _CandidateProcessTask) -> tuple[int, dict[str, Any]]:
+    """Evaluate one candidate in an isolated process-local prepared frame."""
+
+    spec, closure = _candidate_process_domain(task)
+    executor = PersonalPaperExecutionService()
+    with _personal_prepared_frame_scope(
+        db_path=task.snapshot.db_path,
+        snapshot_id=task.snapshot.logical_data_snapshot_id,
+    ):
+        candidate = _candidate_evaluation(
+            executor,
+            spec,
+            closure,
+            snapshot=task.snapshot,
+            universe=task.universe,
+            fold_periods=task.fold_periods,
+            holdout_period=task.holdout_period,
+            output_root=task.output_root,
+            policy=task.policy,
+            short_financing_required=task.short_financing_required,
+        )
+    return task.ordinal, candidate
+
+
+def _unexpected_candidate(
+    spec: StrategySpec,
+    closure: PlanDependencyClosure,
+    error: BaseException,
+) -> dict[str, Any]:
+    detail = " ".join(str(error).split())[:400]
+    return {
+        "strategy_id": spec.strategy_id,
+        "strategy_spec_version": spec.version,
+        "strategy_spec_digest": strategy_spec_digest(spec),
+        "dependency_closure_digest": closure.closure_digest,
+        "strategy": _strategy_context(spec),
+        "decision": "SKIPPED",
+        "reasons": [f"unexpected:{type(error).__name__}"],
+        "validation": None,
+        "stress": None,
+        "holdout": None,
+        "decision_basis": "validation_and_cost_stress",
+        "performance_comparison": {
+            "stress_vs_validation": None,
+            "holdout_vs_validation": None,
+        },
+        "error": {
+            "type": type(error).__name__,
+            "detail": detail or "no detail",
+        },
+    }
+
+
+def _candidate_process_pool(max_workers: int) -> ProcessPoolExecutor:
+    return ProcessPoolExecutor(
+        max_workers=max_workers,
+        mp_context=multiprocessing.get_context("spawn"),
+    )
+
+
+def _evaluate_candidates_concurrently(
+    tasks: Sequence[_CandidateProcessTask],
+    *,
+    max_workers: int,
+    pool_factory: Any | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """Run bounded child processes and restore the governed candidate order."""
+
+    if not tasks or not 1 <= max_workers <= 4 or max_workers > len(tasks):
+        raise ValueError("candidate process fan-out is outside its closed bound")
+    factory = _candidate_process_pool if pool_factory is None else pool_factory
+    ordered: list[dict[str, Any] | None] = [None] * len(tasks)
+    unexpected_errors = 0
+    with factory(max_workers) as pool:
+        futures: dict[Future[tuple[int, dict[str, Any]]], _CandidateProcessTask] = {
+            pool.submit(_candidate_process, task): task for task in tasks
+        }
+        for future in as_completed(futures):
+            task = futures[future]
+            try:
+                ordinal, candidate = future.result()
+                if ordinal != task.ordinal or not isinstance(candidate, dict):
+                    raise RuntimeError("candidate process result identity mismatch")
+            except Exception as error:
+                unexpected_errors += 1
+                spec, closure = _candidate_process_domain(task)
+                ordered[task.ordinal] = _unexpected_candidate(
+                    spec,
+                    closure,
+                    error,
+                )
+            else:
+                ordered[ordinal] = candidate
+    if any(candidate is None for candidate in ordered):
+        raise RuntimeError("candidate process fan-in was incomplete")
+    return [candidate for candidate in ordered if candidate is not None], unexpected_errors
+
+
 def _comparison_document(candidates: Sequence[dict[str, Any]]) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     for candidate in candidates:
@@ -2075,7 +2259,7 @@ def _markdown(report: dict[str, Any]) -> str:
 
 
 class PersonalResearchService:
-    """Serial local research service; no network, model, or promotion surface."""
+    """Bounded DRAFT service; shared preparation and at most four candidates."""
 
     def __init__(self, *, policy: PersonalResearchPolicy | None = None) -> None:
         self.policy = policy or PersonalResearchPolicy()
@@ -2234,6 +2418,13 @@ class PersonalResearchService:
         base_sleeve_reference: dict[str, Any] | None = None
         base_sleeve_artifact_path: Path | None = None
         base_sleeve_artifact_digest: str | None = None
+        candidate_execution = {
+            "model": "not_started",
+            "worker_processes": 0,
+            "max_parallel": self.policy.max_parallel,
+            "shared_snapshot_and_quality_preparation": True,
+            "base_sleeve_before_fanout": base_sleeve_required,
+        }
         if (
             bar_coverage["status"] != "PASS"
             or source_sync["status"] != "PASS"
@@ -2280,11 +2471,11 @@ class PersonalResearchService:
         else:
             fold_periods, holdout_period = periods
             executor = PersonalPaperExecutionService()
-            with _personal_prepared_frame_scope(
-                db_path=snapshot.db_path,
-                snapshot_id=snapshot.logical_data_snapshot_id,
-            ):
-                if base_sleeve_required:
+            if base_sleeve_required:
+                with _personal_prepared_frame_scope(
+                    db_path=snapshot.db_path,
+                    snapshot_id=snapshot.logical_data_snapshot_id,
+                ):
                     if cohort_ref is None:
                         raise RuntimeError("base sleeve cohort provenance is absent")
                     matching = [
@@ -2311,48 +2502,67 @@ class PersonalResearchService:
                         output_root=output_root,
                         cohort_digest=cohort_ref["cohort_digest"],
                     )
-                for spec, closure in zip(specs, closures, strict=True):
-                    try:
-                        candidates.append(
-                            _candidate_evaluation(
-                                executor,
-                                spec,
-                                closure,
-                                snapshot=snapshot,
-                                universe=universe,
-                                fold_periods=fold_periods,
-                                holdout_period=holdout_period,
-                                output_root=output_root,
-                                policy=self.policy,
-                                short_financing_required=short_financing_required,
+            worker_count = min(len(specs), self.policy.max_parallel)
+            if worker_count > 1:
+                tasks = tuple(
+                    _CandidateProcessTask(
+                        ordinal=ordinal,
+                        strategy_spec_document=_canonical_bytes(spec.to_dict()),
+                        dependency_closure_document=_canonical_bytes(
+                            closure.to_dict()
+                        ),
+                        snapshot=snapshot,
+                        universe=universe,
+                        fold_periods=fold_periods,
+                        holdout_period=holdout_period,
+                        output_root=output_root,
+                        policy=self.policy,
+                        short_financing_required=short_financing_required,
+                    )
+                    for ordinal, (spec, closure) in enumerate(
+                        zip(specs, closures, strict=True)
+                    )
+                )
+                candidates, unexpected_errors = _evaluate_candidates_concurrently(
+                    tasks,
+                    max_workers=worker_count,
+                )
+                candidate_execution = {
+                    **candidate_execution,
+                    "model": "process_pool",
+                    "worker_processes": worker_count,
+                }
+            else:
+                candidate_execution = {
+                    **candidate_execution,
+                    "model": "serial",
+                    "worker_processes": 1,
+                }
+                with _personal_prepared_frame_scope(
+                    db_path=snapshot.db_path,
+                    snapshot_id=snapshot.logical_data_snapshot_id,
+                ):
+                    for spec, closure in zip(specs, closures, strict=True):
+                        try:
+                            candidates.append(
+                                _candidate_evaluation(
+                                    executor,
+                                    spec,
+                                    closure,
+                                    snapshot=snapshot,
+                                    universe=universe,
+                                    fold_periods=fold_periods,
+                                    holdout_period=holdout_period,
+                                    output_root=output_root,
+                                    policy=self.policy,
+                                    short_financing_required=short_financing_required,
+                                )
                             )
-                        )
-                    except Exception as exc:  # preserve report; CLI still exits 1
-                        unexpected_errors += 1
-                        detail = " ".join(str(exc).split())[:400]
-                        candidates.append(
-                            {
-                                "strategy_id": spec.strategy_id,
-                                "strategy_spec_version": spec.version,
-                                "strategy_spec_digest": strategy_spec_digest(spec),
-                                "dependency_closure_digest": closure.closure_digest,
-                                "strategy": _strategy_context(spec),
-                                "decision": "SKIPPED",
-                                "reasons": [f"unexpected:{type(exc).__name__}"],
-                                "validation": None,
-                                "stress": None,
-                                "holdout": None,
-                                "decision_basis": "validation_and_cost_stress",
-                                "performance_comparison": {
-                                    "stress_vs_validation": None,
-                                    "holdout_vs_validation": None,
-                                },
-                                "error": {
-                                    "type": type(exc).__name__,
-                                    "detail": detail or "no detail",
-                                },
-                            }
-                        )
+                        except Exception as error:  # report; CLI still exits 1
+                            unexpected_errors += 1
+                            candidates.append(
+                                _unexpected_candidate(spec, closure, error)
+                            )
         verify_personal_snapshot(snapshot)
         evaluated_count = sum(
             candidate["decision"] in {"HOLD", "REJECT"}
@@ -2376,6 +2586,7 @@ class PersonalResearchService:
                 "warmup_sessions": warmup_sessions,
             },
             "policy": self.policy.to_dict(),
+            "candidate_execution": candidate_execution,
             "universe": {
                 **universe_selector.to_dict(),
                 "resolved_membership_digest": (

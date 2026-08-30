@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -50,7 +51,7 @@ from research.personal_base_sleeve import (
     validate_personal_base_sleeve_artifact,
 )
 
-RUNNER_VERSION = "personal-cloud-runner/v9"
+RUNNER_VERSION = "personal-cloud-runner/v10"
 R2_ORIGIN = "http://research.r2"
 DEFAULT_TIMEOUT_SECONDS = 165 * 60
 MAX_JOB_LIFETIME_SECONDS = 180 * 60
@@ -59,6 +60,12 @@ MAX_REQUEST_BYTES = 16 * 1024
 MAX_RESULT_BYTES = 512 * 1024 * 1024
 MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024 * 1024
 MAX_BASE_SLEEVE_ARTIFACT_BYTES = 16 * 1024 * 1024
+_SINGLE_THREAD_NUMERIC_ENV = {
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "NUMEXPR_NUM_THREADS": "1",
+}
 
 _JOB_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _SHA_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -588,6 +595,46 @@ def _manifest_base(spec: JobSpec, *, started_at: str, finished_at: str) -> dict[
     }
 
 
+def _run_research_process(
+    args: Sequence[str],
+    *,
+    cwd: str,
+    env: Mapping[str, str],
+    timeout: float,
+) -> subprocess.CompletedProcess[str]:
+    """Run qp-research in a killable process group, including its four children."""
+
+    process = subprocess.Popen(
+        args,
+        cwd=cwd,
+        env=dict(env),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        stdout, stderr = process.communicate()
+        raise subprocess.TimeoutExpired(
+            cmd=error.cmd,
+            timeout=error.timeout,
+            output=stdout,
+            stderr=stderr,
+        ) from error
+    return subprocess.CompletedProcess(
+        args=args,
+        returncode=int(process.returncode or 0),
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+
 def execute_job(
     spec: JobSpec,
     *,
@@ -623,16 +670,17 @@ def execute_job(
                 "--universe",
                 spec.universe_id,
             ]
+            process_env = {
+                **os.environ,
+                "PYTHONUNBUFFERED": "1",
+                **_SINGLE_THREAD_NUMERIC_ENV,
+            }
             try:
-                process = subprocess.run(
+                process = _run_research_process(
                     args,
                     cwd=os.environ.get("QP_REPO_ROOT", "/app"),
-                    env={**os.environ, "PYTHONUNBUFFERED": "1"},
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    env=process_env,
                     timeout=timeout_seconds,
-                    check=False,
                 )
             except subprocess.TimeoutExpired as exc:
                 if timeout_seconds % 60 == 0:

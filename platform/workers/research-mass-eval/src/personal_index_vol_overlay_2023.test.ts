@@ -214,8 +214,27 @@ describe("fixed personal index-vol overlay admission", () => {
   });
 
   it.each([
+    ["legacy v9", "personal-cloud-runner/v9"],
+    ["current v10", "personal-cloud-runner/v10"],
+  ])("accepts the explicitly compatible %s base runner manifest", async (_label, baseVersion) => {
+    const fixed = await sources(baseVersion);
+    await expect(
+      buildPersonalIndexVolOverlay2023InputManifest(
+        fixed.mem.asBucket(),
+        {
+          job_id: `overlay-base-version-${baseVersion.slice(-2)}`,
+          cohort_id: PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID,
+          base_job_id: fixed.baseJobId,
+          svi_job_id: fixed.sviJobId,
+        },
+      ),
+    ).resolves.toMatchObject({ base: { job_id: fixed.baseJobId } });
+  });
+
+  it.each([
     ["missing", null],
     ["stale v8", "personal-cloud-runner/v8"],
+    ["unknown future v11", "personal-cloud-runner/v11"],
   ])("rejects a %s base runner manifest", async (_label, baseVersion) => {
     const fixed = await sources(baseVersion);
     await expect(

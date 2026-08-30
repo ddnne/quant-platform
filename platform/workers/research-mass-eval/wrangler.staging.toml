@@ -12,7 +12,7 @@ class_name = "PersonalResearchContainer"
 image = "./Dockerfile"
 image_build_context = "../../.."
 max_instances = 2
-instance_type = "standard-2"
+instance_type = "standard-4"
 rollout_active_grace_period = 11400
 
 [[durable_objects.bindings]]
@@ -24,7 +24,7 @@ tag = "personal-research-container-v1"
 new_sqlite_classes = ["PersonalResearchContainer"]
 
 [vars]
-MASS_EVAL_VERSION = "research-mass-eval/v144.4-container-rollover"
+MASS_EVAL_VERSION = "research-mass-eval/v145-strategy-parallel"
 MASS_EVAL_WAVE = "research-mass-eval"
 MASS_RESEARCH = "NO-GO"
 PHASE7 = "OFF"

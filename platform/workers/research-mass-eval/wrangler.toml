@@ -38,7 +38,7 @@ class_name = "PersonalResearchContainer"
 image = "./Dockerfile"
 image_build_context = "../../.."
 max_instances = 2
-instance_type = "standard-2"
+instance_type = "standard-4"
 rollout_active_grace_period = 11400
 
 [[durable_objects.bindings]]
@@ -64,7 +64,7 @@ service = "quant-platform-research-ai-gateway"
 entrypoint = "GatewayService"
 
 [vars]
-MASS_EVAL_VERSION = "research-mass-eval/v144.4-container-rollover"
+MASS_EVAL_VERSION = "research-mass-eval/v145-strategy-parallel"
 MASS_EVAL_WAVE = "research-mass-eval"
 # Freezes — do not flip operational gates from this worker.
 MASS_RESEARCH = "NO-GO"
@@ -92,7 +92,7 @@ class_name = "PersonalResearchContainer"
 image = "./Dockerfile"
 image_build_context = "../../.."
 max_instances = 2
-instance_type = "standard-2"
+instance_type = "standard-4"
 rollout_active_grace_period = 11400
 
 [[env.production.durable_objects.bindings]]
@@ -112,7 +112,7 @@ service = "quant-platform-research-ai-gateway"
 entrypoint = "GatewayService"
 
 [env.production.vars]
-MASS_EVAL_VERSION = "research-mass-eval/v144.4-container-rollover"
+MASS_EVAL_VERSION = "research-mass-eval/v145-strategy-parallel"
 MASS_EVAL_WAVE = "research-mass-eval"
 MASS_RESEARCH = "NO-GO"
 PHASE7 = "OFF"

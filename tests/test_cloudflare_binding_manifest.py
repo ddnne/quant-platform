@@ -34,6 +34,7 @@ def test_personal_research_runner_rollover_has_a_two_instance_ceiling() -> None:
         ]
         assert len(containers) == 1
         assert containers[0]["class_name"] == "PersonalResearchContainer"
+        assert containers[0]["instance_type"] == "standard-4"
         assert containers[0]["max_instances"] == 2
 
     drifted = copy.deepcopy(manifest)
