@@ -43,7 +43,7 @@ PERSONAL_HISTORY_DATASETS: tuple[str, ...] = (
     "fins_summary",
     "equities_bars_daily",
 )
-PERSONAL_HISTORY_FORMAT = "personal-draft-history/v3"
+PERSONAL_HISTORY_FORMAT = "personal-draft-history/v4"
 PERSONAL_RESEARCH_STATE = "PERSONAL_DRAFT"
 PERSONAL_COMPLETENESS_CLAIM = "NONE"
 PERSONAL_CONTROLLED_ELIGIBILITY = "FORBIDDEN"
@@ -485,6 +485,12 @@ _BAR_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("TurnoverValue", ("TurnoverValue", "Va")),
     ("MarketCapitalization", ("MarketCapitalization", "MarketCap", "MktCap")),
     ("AdjustmentFactor", ("AdjustmentFactor", "AdjFactor", "AdjF")),
+    ("MorningAdjustmentClose", ("MorningAdjustmentClose", "MAdjC")),
+    ("AfternoonAdjustmentClose", ("AfternoonAdjustmentClose", "AAdjC")),
+    ("MorningTurnoverValue", ("MorningTurnoverValue", "MVa")),
+    ("AfternoonTurnoverValue", ("AfternoonTurnoverValue", "AVa")),
+    ("MorningAdjustmentVolume", ("MorningAdjustmentVolume", "MAdjVo")),
+    ("AfternoonAdjustmentVolume", ("AfternoonAdjustmentVolume", "AAdjVo")),
 )
 
 
@@ -715,7 +721,7 @@ class PersonalHistoryHydrator:
                 raise PersonalHistoryError(
                     "personal history database uses an older compact format; "
                     "build a new dedicated SQLite file so PIT classifications "
-                    "and market cap are fetched again"
+                    "and market cap and AM/PM session fields are fetched again"
                 )
             if str(existing["plan_digest"]) != plan_digest:
                 raise PersonalHistoryError(
@@ -1335,7 +1341,11 @@ class PersonalHistoryHydrator:
                     source,code,date,event_time,available_at,ingested_at,
                     open,high,low,close,volume,turnover_value,
                     adjustment_open,adjustment_high,adjustment_low,
-                    adjustment_close,adjustment_volume,raw_payload,market_cap
+                    adjustment_close,adjustment_volume,
+                    morning_adjustment_close,morning_turnover_value,
+                    morning_adjustment_volume,afternoon_adjustment_close,
+                    afternoon_turnover_value,afternoon_adjustment_volume,
+                    raw_payload,market_cap
                 )
                 SELECT
                     source,
@@ -1349,6 +1359,12 @@ class PersonalHistoryHydrator:
                     NULL,NULL,NULL,
                     CAST(json_extract(payload,'$.AdjustmentClose') AS REAL),
                     CAST(json_extract(payload,'$.AdjustmentVolume') AS REAL),
+                    CAST(json_extract(payload,'$.MorningAdjustmentClose') AS REAL),
+                    CAST(json_extract(payload,'$.MorningTurnoverValue') AS REAL),
+                    CAST(json_extract(payload,'$.MorningAdjustmentVolume') AS REAL),
+                    CAST(json_extract(payload,'$.AfternoonAdjustmentClose') AS REAL),
+                    CAST(json_extract(payload,'$.AfternoonTurnoverValue') AS REAL),
+                    CAST(json_extract(payload,'$.AfternoonAdjustmentVolume') AS REAL),
                     NULL,
                     CAST(json_extract(payload,'$.MarketCapitalization') AS REAL)
                 FROM jquants_records
@@ -1368,6 +1384,12 @@ class PersonalHistoryHydrator:
                     adjustment_low=excluded.adjustment_low,
                     adjustment_close=excluded.adjustment_close,
                     adjustment_volume=excluded.adjustment_volume,
+                    morning_adjustment_close=excluded.morning_adjustment_close,
+                    morning_turnover_value=excluded.morning_turnover_value,
+                    morning_adjustment_volume=excluded.morning_adjustment_volume,
+                    afternoon_adjustment_close=excluded.afternoon_adjustment_close,
+                    afternoon_turnover_value=excluded.afternoon_turnover_value,
+                    afternoon_adjustment_volume=excluded.afternoon_adjustment_volume,
                     raw_payload=NULL,
                     market_cap=excluded.market_cap
                 """
@@ -1413,6 +1435,36 @@ class PersonalHistoryHydrator:
                           AND bars.adjustment_volume IS CAST(
                               json_extract(
                                   records.payload,'$.AdjustmentVolume'
+                              ) AS REAL
+                          )
+                          AND bars.morning_adjustment_close IS CAST(
+                              json_extract(
+                                  records.payload,'$.MorningAdjustmentClose'
+                              ) AS REAL
+                          )
+                          AND bars.morning_turnover_value IS CAST(
+                              json_extract(
+                                  records.payload,'$.MorningTurnoverValue'
+                              ) AS REAL
+                          )
+                          AND bars.morning_adjustment_volume IS CAST(
+                              json_extract(
+                                  records.payload,'$.MorningAdjustmentVolume'
+                              ) AS REAL
+                          )
+                          AND bars.afternoon_adjustment_close IS CAST(
+                              json_extract(
+                                  records.payload,'$.AfternoonAdjustmentClose'
+                              ) AS REAL
+                          )
+                          AND bars.afternoon_turnover_value IS CAST(
+                              json_extract(
+                                  records.payload,'$.AfternoonTurnoverValue'
+                              ) AS REAL
+                          )
+                          AND bars.afternoon_adjustment_volume IS CAST(
+                              json_extract(
+                                  records.payload,'$.AfternoonAdjustmentVolume'
                               ) AS REAL
                           )
                           AND bars.raw_payload IS NULL
