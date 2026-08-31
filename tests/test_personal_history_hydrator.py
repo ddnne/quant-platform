@@ -1591,6 +1591,122 @@ def test_leading_empty_fins_membership_is_skipped_then_fail_closed(tmp_path):
     store.close()
 
 
+class _RedundantLaterFinsClient(_HistoryClient):
+    @staticmethod
+    def _fins(code: str) -> list[dict]:
+        rows = _HistoryClient._fins(code)
+        if not rows:
+            return rows
+        extra = []
+        for ordinal, source in enumerate(rows, start=2):
+            extra.append(
+                {
+                    **source,
+                    "DiscDate": "2025-01-08",
+                    "DiscTime": "16:00:00",
+                    "DiscNo": f"{source['DiscNo']}-later-{ordinal}",
+                }
+            )
+        return rows + extra
+
+
+class _StableMasterClient(_HistoryClient):
+    @staticmethod
+    def _master(day: str) -> list[dict]:
+        rows = _HistoryClient._master("2025-01-02")
+        return [{**row, "Date": day} for row in rows]
+
+
+def test_later_fins_rows_do_not_change_first_visible_bar_universe(tmp_path):
+    baseline_store = SqliteStore(tmp_path / "baseline-universe.sqlite")
+    redundant_store = SqliteStore(tmp_path / "redundant-fins.sqlite")
+    PersonalHistoryHydrator(
+        client=_HistoryClient(), store=baseline_store, plan=_plan()
+    ).hydrate()
+    PersonalHistoryHydrator(
+        client=_RedundantLaterFinsClient(), store=redundant_store, plan=_plan()
+    ).hydrate()
+
+    def _bar_membership(store: SqliteStore) -> list[tuple[str, str, int]]:
+        return [
+            (str(row["query_start"]), str(row["membership_digest"]), int(row["expected_rows"]))
+            for row in store._conn.execute(
+                "SELECT query_start,membership_digest,expected_rows "
+                "FROM personal_history_segments "
+                "WHERE dataset='equities_bars_daily' "
+                "AND state IN ('OBSERVED','OBSERVED_EMPTY') "
+                "ORDER BY query_start"
+            )
+        ]
+
+    baseline = _bar_membership(baseline_store)
+    redundant = _bar_membership(redundant_store)
+    assert baseline
+    assert redundant == baseline
+    hydrator = PersonalHistoryHydrator(
+        client=_RedundantLaterFinsClient(),
+        store=redundant_store,
+        plan=_plan(),
+    )
+    first = hydrator._first_visible_fins_by_code()
+    assert first["1001"] == "2024-12-02T09:00:00+09:00"
+    assert first["1002"] == "2025-01-04T00:00:00+09:00"
+    assert first["1003"] == "2025-01-07T09:00:00+09:00"
+    baseline_store.close()
+    redundant_store.close()
+
+
+def test_unchanged_pit_universe_reuses_membership_digest(tmp_path):
+    store = SqliteStore(tmp_path / "stable-master.sqlite")
+    PersonalHistoryHydrator(
+        client=_StableMasterClient(), store=store, plan=_plan()
+    ).hydrate()
+    rows = list(
+        store._conn.execute(
+            "SELECT query_start,membership_digest,expected_rows "
+            "FROM personal_history_segments "
+            "WHERE dataset='equities_bars_daily' "
+            "AND state IN ('OBSERVED','OBSERVED_EMPTY') "
+            "AND query_start IN ('2025-01-06','2025-01-07','2025-01-08') "
+            "ORDER BY query_start"
+        )
+    )
+    assert [str(row["query_start"]) for row in rows] == [
+        "2025-01-06",
+        "2025-01-07",
+        "2025-01-08",
+    ]
+    digests = {str(row["membership_digest"]) for row in rows}
+    assert len(digests) == 1
+    assert next(iter(digests)).startswith("sha256:")
+    assert {int(row["expected_rows"]) for row in rows} == {2}
+    codes = {
+        str(row["code"])
+        for row in store._conn.execute(
+            "SELECT DISTINCT code FROM personal_history_compact_bars "
+            "WHERE date='2025-01-06'"
+        )
+    }
+    assert codes == {"1001", "1002"}
+    store.close()
+
+
+def test_first_visible_fins_fail_closed_on_invalid_payload(tmp_path):
+    store = SqliteStore(tmp_path / "invalid-fins.sqlite")
+    hydrator = PersonalHistoryHydrator(
+        client=_HistoryClient(), store=store, plan=_plan()
+    )
+    hydrator.hydrate()
+    store._conn.execute(
+        "UPDATE jquants_records SET payload='not-json' "
+        "WHERE source='jquants' AND dataset='fins_summary'"
+    )
+    store._conn.commit()
+    with pytest.raises(PersonalHistoryError, match="payload is invalid"):
+        hydrator._first_visible_fins_by_code()
+    store.close()
+
+
 def test_saved_proxy_rate_is_clamped_but_direct_rate_is_not() -> None:
     assert DEFAULT_RPM == 30.0
     help_text = " ".join(_parser().format_help().split())
