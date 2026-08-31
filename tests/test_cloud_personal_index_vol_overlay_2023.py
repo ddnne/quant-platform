@@ -31,6 +31,11 @@ from test_personal_base_sleeve_am_pm import _quality as _am_quality
 import personal_index_vol_overlay_2023_job as overlay
 
 
+def test_snapshot_transport_and_expanded_database_caps_are_split() -> None:
+    assert overlay.MAX_SNAPSHOT_BYTES == 4 * 1024 * 1024 * 1024
+    assert overlay.SNAPSHOT_MAX_DATABASE_BYTES == 5 * 1024 * 1024 * 1024
+
+
 def _dates(count: int) -> list[str]:
     start = date(2023, 1, 4)
     return [(start + timedelta(days=index)).isoformat() for index in range(count)]

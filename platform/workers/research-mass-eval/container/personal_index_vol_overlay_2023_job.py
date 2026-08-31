@@ -190,7 +190,10 @@ BASE_COHORT_ID = "sector-relative-ls-v1"
 BASE_UNIVERSE_ID = "topix_all"
 MAX_INPUT_BYTES = 1024 * 1024
 MAX_RESULT_BYTES = 512 * 1024 * 1024
+# Compressed R2/HTTP transport (gzip or legacy raw sqlite).
 MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024 * 1024
+# Expanded sqlite after gunzip.
+SNAPSHOT_MAX_DATABASE_BYTES = 5 * 1024 * 1024 * 1024
 MAX_BASE_ARTIFACT_BYTES = 16 * 1024 * 1024
 MAX_FEATURE_BYTES = 8 * 1024 * 1024
 TRADING_DAY_FLAG = "1"
@@ -564,7 +567,7 @@ def _expand_snapshot(transport: Path, destination: Path, raw_digest: str) -> Non
             if not chunk:
                 break
             expanded += len(chunk)
-            if expanded > MAX_SNAPSHOT_BYTES:
+            if expanded > SNAPSHOT_MAX_DATABASE_BYTES:
                 raise RuntimeError("expanded overlay snapshot exceeded size bound")
             digest.update(chunk)
             output.write(chunk)

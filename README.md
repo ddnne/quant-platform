@@ -5,31 +5,43 @@
 
 ## 個人利用の推奨入口
 
-通常の戦略検証には、署名付きREADYやMass Researchを待たず、ローカルの同期済み
-SQLiteからDRAFT Paperを作る次の入口を使います。
+通常の戦略検証には、署名付きREADYやMass Researchを待たず、Cloudflare の
+`POST /v1/personal-snapshot-build`（および status）と
+`POST /v1/personal-research-batch` を使います。R2 が正本、D1 は小さなジョブ状態、
+Container 上の SQLite はジョブ寿命の ephemeral コピーです。永続ローカルの市場・価格・
+財務履歴は通常経路ではなく、開発者／復旧用の正確な opt-in だけです。ローカル SQLite を
+gzip して手で upload する手順は使いません。curl 例は
+[platform/workers/research-mass-eval/README.md](platform/workers/research-mass-eval/README.md)
+を正とします。
 
-```bash
-uv sync --frozen --extra dev
-uv run qp-research \
-  --db data/structured/ingestion.sqlite \
-  --end 2026-08-27
-```
+個人研究は Prime に限定されません。既定ユニバースは PIT `topix_all` で、
+`topix_core30` / `topix_large70` / `topix_mid400` / `topix_small1` /
+`topix_small2` / `topix_small` / `topix100` / `topix500` も執行判定カットオフで
+PIT 解決し、財務と交差します。既定 AM cohort は 11:30 の情報と当日 PM close を使います。
 
-このv1コマンドはリポジトリcheckout内（またはその`.venv`）で実行します。既定では4つの
-小さなclosed `StrategySpec`を直列実行し、4期間のvalidationと取引費用stressだけで
+スナップショットは compact v7、1 つの連続オブジェクト、最大 7,000 inclusive calendar days です。
+圧縮 R2/HTTP は 4GiB 以下、展開 SQLite / builder は 5GiB 以下です。1 つの `standard-4`
+Container は snapshot/quality 準備を 1 回共有し、最大 4 つの strategy 子プロセスを走らせます。
+batch は最大 8 つの cohort/universe ジョブです。1 Container = 1 strategy ではありません。
+
+既定では4つの小さなclosed `StrategySpec`を評価し、4期間のvalidationと取引費用stressだけで
 `HOLD`候補を決めます。最後の12か月は再利用可能な参考値で、選択条件には使いません。
-入力DBはSQLite Backup APIで不変コピーされ、結果はcontent-addressed JSON/Markdownへ
-保存されます。
+結果はcontent-addressed JSON/Markdownへ保存されます。
 
-分析前には、管理対象DBなら最新validation/watermark、日次ユニバースの価格行99.5%以上、
-Prime銘柄と財務データの交差95%以上、RAW価格の分割・併合らしい不連続を確認します。
-不連続候補をvalidationまたはcost stressで実際に売買した戦略だけを`REJECT`し、Prime全体に
+分析前には、管理対象スナップショットなら最新validation/watermark、日次ユニバースの価格行99.5%以上、
+選択ユニバースと財務データの交差95%以上、RAW価格の分割・併合らしい不連続を確認します。
+不連続候補をvalidationまたはcost stressで実際に売買した戦略だけを`REJECT`し、ユニバース全体に
 通常の分割が1件あるだけでは全分析を停止しません（未売買銘柄による順位への小さな影響は
 除去せず、レポートへ明示します）。
-これらはローカルDBの`OBSERVED`な健全性確認であり、上流データの完全性を署名証明するもの
+これらは観測スナップショットの`OBSERVED`な健全性確認であり、上流データの完全性を署名証明するもの
 ではありません。分析不能時は全候補を`SKIPPED`にしてexit 2、予期しない候補エラーはexit 1、
 正常に評価できた場合（全件`REJECT`を含む）はexit 0です。自動昇格・発注・broker接続・
 LLM呼び出しは行いません。
+
+`qp-research` は開発者／復旧用の互換入口だけです。永続ローカル市場データは既定で無効で、
+環境変数 `QP_ALLOW_LOCAL_MARKET_DATA` が正確に `1` のときだけローカル SQLite を開きます。
+実データ `data/structured/ingestion.sqlite` を開くローカル実行例は載せません。オフライン確認は
+リポジトリの合成／fixture テストだけです。
 
 これは個人用Paper経路です。下記のControlled Pilot / Mass / Live authority群とは分離され、
 それらをGOにするものではありません。

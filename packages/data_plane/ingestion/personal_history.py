@@ -17,6 +17,7 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
 import hashlib
 import json
+import math
 from pathlib import Path
 import shutil
 import sqlite3
@@ -24,7 +25,12 @@ from types import SimpleNamespace
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import quote
 
-from data_contracts.identity import canonical_json
+from data_contracts.identity import canonical_json, session_close_jst
+from data_contracts.personal_history_compact import (
+    PERSONAL_HISTORY_COMPACT_CREATE_SQL,
+    PERSONAL_HISTORY_COMPACT_FORMAT,
+    PERSONAL_HISTORY_COMPACT_TABLES,
+)
 from data_contracts.personal_universe import (
     PERSONAL_HISTORY_SCOPE_DIGEST,
     PERSONAL_HISTORY_SCOPE_ID,
@@ -33,7 +39,7 @@ from data_contracts.personal_universe import (
 )
 from data_contracts.source_capability import source_capability_contract_for
 
-from .common.timeutil import JST, now_iso
+from .common.timeutil import JST, now_iso, parse_dt, to_iso
 from .jquants import normalize as JN
 from .pipeline import _assert_personal_draft_store_is_unmanaged
 
@@ -44,7 +50,23 @@ PERSONAL_HISTORY_DATASETS: tuple[str, ...] = (
     "fins_summary",
     "equities_bars_daily",
 )
-PERSONAL_HISTORY_FORMAT = "personal-draft-history/v6"
+
+
+def _official_availability(dataset: str) -> str:
+    return source_capability_contract_for(dataset).earliest_official_availability
+
+
+def personal_snapshot_data_floor() -> str:
+    """Earliest day a personal snapshot can hydrate bars.
+
+    The floor is the latest ``earliest_official_availability`` among the
+    compact-v7 source contracts. It is not a hardcoded calendar date.
+    """
+
+    return max(_official_availability(dataset) for dataset in PERSONAL_HISTORY_DATASETS)
+
+
+PERSONAL_HISTORY_FORMAT = PERSONAL_HISTORY_COMPACT_FORMAT
 PERSONAL_RESEARCH_STATE = "PERSONAL_DRAFT"
 PERSONAL_COMPLETENESS_CLAIM = "NONE"
 PERSONAL_CONTROLLED_ELIGIBILITY = "FORBIDDEN"
@@ -61,8 +83,52 @@ DEFAULT_MIN_OBSERVED_BAR_RATIO = 0.995
 DEFAULT_MAX_DATABASE_BYTES = 5 * 1024**3
 DEFAULT_MINIMUM_FREE_BYTES = 8 * 1024**3
 DEFAULT_WAL_CHECKPOINT_SEGMENTS = 25
+# Compact WITHOUT ROWID rows plus SQLite page/index/snapshot headroom.
+DEFAULT_COMPACT_STORAGE_BYTES_PER_ROW = 256
+# Calendar and fins stay generic JSON; this is a conservative page/index bound.
+DEFAULT_GENERIC_JSON_STORAGE_BYTES_PER_ROW = 1024
 _TERMINAL_STATES = frozenset({"OBSERVED", "OBSERVED_EMPTY"})
 _RETRYABLE_STATES = frozenset({"RUNNING", "FAILED"})
+_TYPED_JQUANTS_TABLES: tuple[str, ...] = (
+    "jquants_listed_info",
+    "jquants_daily_bars",
+    "jquants_market_calendar",
+)
+
+
+def _compact_table_builder_shape(
+    connection: sqlite3.Connection, table: str
+) -> tuple[Any, ...] | None:
+    """Capture the compact-table contract CREATE TABLE IF NOT EXISTS can miss.
+
+    Ordered columns, declared types, NOT NULL, composite PK ordinals, hidden
+    or generated columns, and WITHOUT ROWID are compared exactly.  The helper
+    is private to the trusted builder and is not a reader-side schema API.
+    """
+
+    if table not in PERSONAL_HISTORY_COMPACT_TABLES:
+        raise PersonalHistoryError(
+            f"personal history compact table {table} does not match builder DDL"
+        )
+    listing = connection.execute(
+        "SELECT type, ncol, wr FROM pragma_table_list "
+        "WHERE schema='main' AND name=?",
+        (table,),
+    ).fetchone()
+    if listing is None:
+        return None
+    columns = tuple(
+        (
+            int(row[0]),
+            str(row[1]),
+            str(row[2]),
+            int(row[3]),
+            int(row[5]),
+            int(row[6]),
+        )
+        for row in connection.execute(f"PRAGMA table_xinfo({table})")
+    )
+    return (str(listing[0]), int(listing[1]), int(listing[2]), columns)
 
 
 class PersonalHistoryError(RuntimeError):
@@ -104,6 +170,8 @@ class PersonalHistorySummary:
     written_rows: int
     skipped_segments: int
     database_bytes: int
+    actual_lookback_sessions: int
+    lookback_truncated: bool
     research_state: str = PERSONAL_RESEARCH_STATE
     completeness_claim: str = PERSONAL_COMPLETENESS_CLAIM
     controlled_live_eligibility: str = PERSONAL_CONTROLLED_ELIGIBILITY
@@ -153,6 +221,20 @@ def _iter_days(start: date, end: date) -> Iterable[date]:
         current += timedelta(days=1)
 
 
+def _membership_change_planning_allowance(estimated_sessions: int) -> int:
+    """Snapshot-day allowance for compact master planning.
+
+    ``ceil((estimated_sessions + 1) / 2)``, floored at 24, then capped to
+    ``estimated_sessions + 1``. Labelled a planning allowance; physical
+    guards remain authoritative.
+    """
+
+    return min(
+        estimated_sessions + 1,
+        max(24, math.ceil((estimated_sessions + 1) / 2)),
+    )
+
+
 def _iter_windows(start: date, end: date, days: int) -> Iterable[tuple[date, date]]:
     current = start
     step = timedelta(days=days)
@@ -189,26 +271,36 @@ def build_personal_history_plan(
 
     lookback = int(lookback_sessions)
     window_days = int(calendar_window_days)
-    official_floor = date.fromisoformat(
-        source_capability_contract_for(
-            "markets_calendar"
-        ).earliest_official_availability
-    )
-    if end < official_floor:
+    calendar_floor = date.fromisoformat(_official_availability("markets_calendar"))
+    profile_floor = date.fromisoformat(personal_snapshot_data_floor())
+    if end < profile_floor:
         raise PersonalHistoryError(
-            "period_end is before markets_calendar official availability; "
-            "calendar_start cannot exceed period_end"
+            "period_end is before the personal snapshot data floor"
         )
     # Same conservative conversion used by PersonalResearchService, plus two
     # weeks so the first requested master snapshot has an observed predecessor.
+    # Calendar may start before the profile floor so a master seed on/after
+    # the master contract floor remains observable.
     calendar_buffer = max(30, lookback * 2 + 30) + 14
     calendar_start = max(
         start - timedelta(days=calendar_buffer),
-        official_floor,
+        calendar_floor,
     )
-    all_days = (end - start).days + 1
-    estimated_sessions = sum(1 for day in _iter_days(start, end) if day.weekday() < 5)
-    estimated_sessions += lookback
+    effective_start = max(start, profile_floor)
+    if start <= profile_floor:
+        available_lookback = 0
+    else:
+        available_lookback = sum(
+            1
+            for day in _iter_days(profile_floor, start - timedelta(days=1))
+            if day.weekday() < 5
+        )
+    planned_lookback = min(lookback, available_lookback)
+    all_days = (end - effective_start).days + 1
+    estimated_sessions = sum(
+        1 for day in _iter_days(effective_start, end) if day.weekday() < 5
+    )
+    estimated_sessions += planned_lookback
     calendar_segments = sum(
         1 for _ in _iter_windows(calendar_start, end, window_days)
     )
@@ -216,13 +308,25 @@ def build_personal_history_plan(
     # intentionally not guessed, so this is labelled a lower bound.
     requests = calendar_segments + estimated_sessions * 2 + all_days
     bar_rows = estimated_sessions * DEFAULT_TOPIX_CODE_ESTIMATE
-    # Compressed master snapshots and fins are small relative to bars.  420
-    # bytes/row includes SQLite indexes and is intentionally conservative.
-    estimated_rows = bar_rows + DEFAULT_TOPIX_CODE_ESTIMATE * 24 + all_days * 100
-    # Compact JSON still pays for two indexes, SQLite pages, revisions headroom,
-    # and a later immutable research snapshot.  1.6 KiB/row deliberately puts
-    # a five-year TOPIX window in a deliberately conservative planning range.
-    estimated_bytes = estimated_rows * 1_600
+    # Period-dependent membership-change planning allowance for compact
+    # master snapshots: half of estimated trading sessions, rounded up,
+    # at least 24 days, and never more than sessions+1. This is a planning
+    # allowance, not an exact or conservative proof of membership churn.
+    # Physical max_page_count and file-size guards stay authoritative.
+    # Calendar and fins remain generic JSON payloads rather than WITHOUT
+    # ROWID facts.
+    master_rows = DEFAULT_TOPIX_CODE_ESTIMATE * _membership_change_planning_allowance(
+        estimated_sessions
+    )
+    generic_json_rows = all_days * 100
+    estimated_rows = bar_rows + master_rows + generic_json_rows
+    # Compact WITHOUT ROWID bar/master rows are planned at 256 bytes/row.
+    # Calendar/fins generic JSON uses a separate 1024 byte/row estimate.
+    # The physical max_page_count guard still enforces DEFAULT_MAX_DATABASE_BYTES.
+    estimated_bytes = (
+        (bar_rows + master_rows) * DEFAULT_COMPACT_STORAGE_BYTES_PER_ROW
+        + generic_json_rows * DEFAULT_GENERIC_JSON_STORAGE_BYTES_PER_ROW
+    )
     return PersonalHistoryPlan(
         period_start=start.isoformat(),
         period_end=end.isoformat(),
@@ -609,6 +713,38 @@ def _master_availability(day: str) -> str:
     return f"{day}T08:00:00+09:00"
 
 
+def _canonical_jst(value: Any, label: str) -> datetime:
+    text = str(value or "")
+    try:
+        parsed = parse_dt(text)
+    except (TypeError, ValueError) as exc:
+        raise PersonalHistoryError(
+            f"{label} is not a canonical JST timestamp"
+        ) from exc
+    if to_iso(parsed) != text:
+        raise PersonalHistoryError(f"{label} is not a canonical JST timestamp")
+    return parsed
+
+
+def _require_ingested_not_before(
+    ingested_at: Any, available_at: Any, label: str
+) -> None:
+    ingested = _canonical_jst(ingested_at, f"{label} ingested_at")
+    available = _canonical_jst(available_at, f"{label} available_at")
+    if ingested < available:
+        raise PersonalHistoryError(
+            f"{label} ingested_at is earlier than available_at"
+        )
+
+
+def _session_close(day: str, label: str) -> str:
+    _parse_day(day, label)
+    try:
+        return session_close_jst(day)
+    except ValueError as exc:
+        raise PersonalHistoryError(f"{label} must be an ISO date") from exc
+
+
 def _compact_master(
     rows: Sequence[Mapping[str, Any]], *, snapshot_day: str, ingested_at: str
 ) -> tuple[list[dict], str]:
@@ -667,14 +803,27 @@ def _compact_master(
             for row in compact
         ]
     )
+    expected_available = _master_availability(snapshot_day)
     normalized = JN.normalize_generic(
         compact,
         dataset="equities_master",
         ingested_at=ingested_at,
-        available_at=_master_availability(snapshot_day),
+        available_at=expected_available,
     )
     for row in normalized:
         row["raw_payload"] = None
+        event = _canonical_jst(row["event_time"], "equities_master event_time")
+        if event.date().isoformat() != snapshot_day:
+            raise PersonalHistoryError(
+                "equities_master event_time date does not equal snapshot_date"
+            )
+        if str(row["available_at"]) != expected_available:
+            raise PersonalHistoryError(
+                "equities_master available_at must be snapshot_date 08:00 JST"
+            )
+        _require_ingested_not_before(
+            row["ingested_at"], row["available_at"], "equities_master"
+        )
     return normalized, digest
 
 
@@ -803,6 +952,81 @@ _BAR_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("MorningAdjustmentVolume", ("MorningAdjustmentVolume", "MAdjVo")),
     ("AfternoonAdjustmentVolume", ("AfternoonAdjustmentVolume", "AAdjVo")),
 )
+_BAR_STRICTLY_POSITIVE_FIELDS = frozenset(
+    {
+        "Close",
+        "AdjustmentClose",
+        "MorningAdjustmentClose",
+        "AfternoonAdjustmentClose",
+        "AdjustmentFactor",
+    }
+)
+_BAR_NONNEGATIVE_FIELDS = frozenset(
+    {
+        "Volume",
+        "AdjustmentVolume",
+        "MorningAdjustmentVolume",
+        "AfternoonAdjustmentVolume",
+        "TurnoverValue",
+        "MorningTurnoverValue",
+        "AfternoonTurnoverValue",
+        "MarketCapitalization",
+    }
+)
+
+
+def _validated_bar_number(value: Any, field: str) -> int | float:
+    """Reject non-finite garbage while preserving original numeric values."""
+
+    if isinstance(value, bool) or value is None:
+        raise PersonalHistoryError(
+            f"equities_bars_daily {field} is not a finite numeric value"
+        )
+    if isinstance(value, int):
+        number: int | float = value
+        original: int | float | None = value
+    elif isinstance(value, float):
+        number = value
+        original = value
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text:
+            raise PersonalHistoryError(
+                f"equities_bars_daily {field} is not a finite numeric value"
+            )
+        try:
+            number = int(text)
+        except ValueError:
+            try:
+                number = float(text)
+            except ValueError as exc:
+                raise PersonalHistoryError(
+                    f"equities_bars_daily {field} is not a finite numeric value"
+                ) from exc
+        original = None
+    else:
+        raise PersonalHistoryError(
+            f"equities_bars_daily {field} is not a finite numeric value"
+        )
+    try:
+        as_float = float(number)
+    except OverflowError as exc:
+        raise PersonalHistoryError(
+            f"equities_bars_daily {field} is not a finite numeric value"
+        ) from exc
+    if not math.isfinite(as_float):
+        raise PersonalHistoryError(
+            f"equities_bars_daily {field} is not a finite numeric value"
+        )
+    if field in _BAR_STRICTLY_POSITIVE_FIELDS and not as_float > 0.0:
+        raise PersonalHistoryError(
+            f"equities_bars_daily {field} must be finite and strictly positive"
+        )
+    if field in _BAR_NONNEGATIVE_FIELDS and as_float < 0.0:
+        raise PersonalHistoryError(
+            f"equities_bars_daily {field} must be finite and non-negative"
+        )
+    return number if original is None else original
 
 
 def _compact_bars(
@@ -834,7 +1058,7 @@ def _compact_bars(
         for canonical, aliases in _BAR_FIELDS:
             value = _pick(source, *aliases)
             if value is not None:
-                item[canonical] = value
+                item[canonical] = _validated_bar_number(value, canonical)
         # Suspended/no-trade issues can be present with a null close.  Exclude
         # them from research facts and let the observed-breadth ratio decide
         # whether the day remains usable; one null must not abort a broad day.
@@ -851,13 +1075,25 @@ def _compact_bars(
             f"equities_bars_daily {trading_day} observed ratio {ratio:.6f} "
             f"is below {minimum_ratio:.6f} ({len(compact)}/{len(scope_union)})"
         )
+    session_close = _session_close(trading_day, "equities_bars_daily.Date")
     normalized = JN.normalize_generic(
         compact,
         dataset="equities_bars_daily",
         ingested_at=ingested_at,
+        available_at=session_close,
     )
     for row in normalized:
         row["raw_payload"] = None
+        if (
+            str(row["event_time"]) != session_close
+            or str(row["available_at"]) != session_close
+        ):
+            raise PersonalHistoryError(
+                "equities_bars_daily timestamps must be the official session close"
+            )
+        _require_ingested_not_before(
+            row["ingested_at"], row["available_at"], "equities_bars_daily"
+        )
     return normalized
 
 
@@ -890,6 +1126,7 @@ class PersonalHistoryHydrator:
         _assert_personal_draft_store_is_unmanaged(store)
         self._connection: sqlite3.Connection = store._conn
         self._ensure_checkpoint_schema()
+        self._assert_compact_tables_match_builder_ddl()
         self._apply_max_page_count()
         self._initialize_manifest()
         self._outcomes: list[_SegmentOutcome] = []
@@ -1033,6 +1270,8 @@ class PersonalHistoryHydrator:
             )
             """
         )
+        for _table, create_sql in PERSONAL_HISTORY_COMPACT_CREATE_SQL:
+            self._connection.execute(create_sql)
         self._connection.commit()
         columns = {
             str(row[1])
@@ -1047,6 +1286,24 @@ class PersonalHistoryHydrator:
             )
             self._connection.commit()
 
+    def _assert_compact_tables_match_builder_ddl(self) -> None:
+        """Reject lookalike compact tables that IF NOT EXISTS would otherwise keep."""
+
+        probe = sqlite3.connect(":memory:")
+        try:
+            for _table, create_sql in PERSONAL_HISTORY_COMPACT_CREATE_SQL:
+                probe.execute(create_sql)
+            for table in PERSONAL_HISTORY_COMPACT_TABLES:
+                if _compact_table_builder_shape(
+                    self._connection, table
+                ) != _compact_table_builder_shape(probe, table):
+                    raise PersonalHistoryError(
+                        f"personal history compact table {table} does not "
+                        "match builder DDL"
+                    )
+        finally:
+            probe.close()
+
     def _initialize_manifest(self) -> None:
         plan_json = canonical_json(self.plan.to_dict())
         plan_digest = "sha256:" + hashlib.sha256(
@@ -1060,10 +1317,11 @@ class PersonalHistoryHydrator:
             if str(existing["format"]) != PERSONAL_HISTORY_FORMAT:
                 raise PersonalHistoryError(
                     "personal history database uses an older compact format; "
-                    "build a new dedicated SQLite file so PIT classifications, "
-                    "market cap, AM/PM session fields, the compact "
-                    "personal-fins projection, and shared fins scan evidence "
-                    "are fetched again"
+                    "build a new dedicated SQLite file so compact master and "
+                    "bar WITHOUT ROWID tables, PIT classifications, market "
+                    "cap, AM/PM session fields, the compact personal-fins "
+                    "projection, and shared fins scan evidence are fetched "
+                    "again"
                 )
             if str(existing["plan_digest"]) != plan_digest:
                 raise PersonalHistoryError(
@@ -1246,7 +1504,12 @@ class PersonalHistoryHydrator:
                     key=lambda row: str(row["natural_key"]),
                 )
             )
-            estimated_write_bytes = _estimated_fact_write_bytes(rows)
+            if dataset in ("equities_master", "equities_bars_daily"):
+                estimated_write_bytes = (
+                    len(rows) * DEFAULT_COMPACT_STORAGE_BYTES_PER_ROW
+                )
+            else:
+                estimated_write_bytes = _estimated_fact_write_bytes(rows)
             page_evidence_json: str | None
             selection_evidence_json: str | None
             stored_page_count = len(page_evidence)
@@ -1292,7 +1555,10 @@ class PersonalHistoryHydrator:
             self._connection.execute("BEGIN IMMEDIATE")
             if scan is not None:
                 self._upsert_shared_fins_scan(scan)
-            written = self.store.upsert("jquants_records", rows, commit=False)
+            if dataset in ("equities_master", "equities_bars_daily"):
+                written = self._insert_compact_facts(dataset, rows)
+            else:
+                written = self.store.upsert("jquants_records", rows, commit=False)
             self._connection.execute(
                 """
                 UPDATE personal_history_segments SET
@@ -1403,40 +1669,54 @@ class PersonalHistoryHydrator:
         return trading
 
     def _bar_and_master_days(self, trading: Sequence[str]) -> tuple[str, list[str]]:
-        prior = [day for day in trading if day < self.plan.period_start]
-        if len(prior) < self.plan.lookback_sessions + 1:
+        profile_floor = personal_snapshot_data_floor()
+        master_floor = _official_availability("equities_master")
+        usable = [
+            day
+            for day in trading
+            if profile_floor <= day <= self.plan.period_end
+        ]
+        if not usable:
             raise PersonalHistoryError(
-                "observed calendar does not contain the requested lookback and seed"
+                "research window has no observed trading days on or after "
+                "the personal snapshot data floor"
             )
-        if self.plan.lookback_sessions:
-            bar_start = prior[-self.plan.lookback_sessions]
+        prior = [day for day in usable if day < self.plan.period_start]
+        actual_lookback = min(self.plan.lookback_sessions, len(prior))
+        if actual_lookback:
+            bar_start = prior[-actual_lookback]
         else:
-            bar_start = self.plan.period_start
+            window_start = max(self.plan.period_start, profile_floor)
+            on_or_after = [day for day in usable if day >= window_start]
+            if not on_or_after:
+                raise PersonalHistoryError(
+                    "research window has no observed trading days on or after "
+                    "the personal snapshot data floor"
+                )
+            bar_start = on_or_after[0]
         bar_days = [
             day for day in trading if bar_start <= day <= self.plan.period_end
         ]
         if not bar_days:
             raise PersonalHistoryError("research window has no observed trading days")
-        seed = max(day for day in trading if day < bar_days[0])
-        return bar_start, [seed, *bar_days]
+        seed_days = [
+            day for day in trading if master_floor <= day < bar_days[0]
+        ]
+        if not seed_days:
+            raise PersonalHistoryError(
+                "observed calendar does not contain a master seed on or after "
+                "official master availability"
+            )
+        return bar_start, [seed_days[-1], *bar_days]
 
     def _hydrate_master(self, master_days: Sequence[str]) -> None:
         previous_digest: str | None = None
+        master_floor = _official_availability("equities_master")
         for day in master_days:
-            checkpoint = self._checkpoint("equities_master", f"master:{day}")
-            if checkpoint is not None and checkpoint["state"] in _TERMINAL_STATES:
-                previous_digest = str(checkpoint["membership_digest"] or "") or None
-                outcome = _SegmentOutcome(
-                    dataset="equities_master",
-                    segment_id=f"master:{day}",
-                    fetched=0,
-                    written=0,
-                    skipped=True,
-                    state=str(checkpoint["state"]),
-                    membership_digest=previous_digest,
+            if day < master_floor:
+                raise PersonalHistoryError(
+                    "equities_master query is before official availability"
                 )
-                self._outcomes.append(outcome)
-                continue
 
             def transform(rows: Sequence[Mapping[str, Any]], stamp: str):
                 normalized, digest = _compact_master(
@@ -1456,24 +1736,17 @@ class PersonalHistoryHydrator:
             previous_digest = outcome.membership_digest
 
     def _topix_union(self) -> frozenset[str]:
-        rows = self._connection.execute(
-            "SELECT payload FROM jquants_records WHERE source='jquants' "
-            "AND dataset='equities_master'"
-        ).fetchall()
-        codes: set[str] = set()
-        for row in rows:
-            try:
-                payload = json.loads(row["payload"])
-            except (TypeError, json.JSONDecodeError) as exc:
-                raise PersonalHistoryError(
-                    "stored equities_master payload is invalid"
-                ) from exc
-            code = str(_pick(payload, "Code") or "").strip()
-            category = canonical_topix_scale_category(
-                _pick(payload, "ScaleCategory", "ScaleCat")
+        codes = {
+            str(row["code"]).strip()
+            for row in self._connection.execute(
+                "SELECT DISTINCT code,scale_category "
+                "FROM personal_history_compact_master "
+                "WHERE trim(code) <> '' AND scale_category IS NOT NULL "
+                "AND trim(scale_category) <> ''"
             )
-            if code and category is not None:
-                codes.add(code)
+            if str(row["code"] or "").strip()
+            and canonical_topix_scale_category(row["scale_category"]) is not None
+        }
         if not codes:
             raise PersonalHistoryError("compressed master has no TOPIX code union")
         return frozenset(codes)
@@ -1498,24 +1771,16 @@ class PersonalHistoryHydrator:
 
     def _master_memberships(self) -> list[tuple[str, frozenset[str]]]:
         rows = self._connection.execute(
-            "SELECT event_time,payload FROM jquants_records "
-            "WHERE source='jquants' AND dataset='equities_master' "
-            "ORDER BY event_time,natural_key"
+            "SELECT snapshot_date,code,scale_category "
+            "FROM personal_history_compact_master "
+            "ORDER BY snapshot_date,code"
         ).fetchall()
         by_day: dict[str, set[str]] = {}
         for row in rows:
-            try:
-                payload = json.loads(row["payload"])
-            except (TypeError, json.JSONDecodeError) as exc:
-                raise PersonalHistoryError(
-                    "stored equities_master payload is invalid"
-                ) from exc
-            day = str(row["event_time"])[:10]
-            code = str(_pick(payload, "Code") or "").strip()
-            category = canonical_topix_scale_category(
-                _pick(payload, "ScaleCategory", "ScaleCat")
-            )
-            if code and category is not None:
+            day = str(row["snapshot_date"] or "")[:10]
+            code = str(row["code"] or "").strip()
+            category = canonical_topix_scale_category(row["scale_category"])
+            if day and code and category is not None:
                 by_day.setdefault(day, set()).add(code)
         if not by_day:
             raise PersonalHistoryError("compressed master membership is empty")
@@ -1566,21 +1831,26 @@ class PersonalHistoryHydrator:
     ) -> None:
         snapshots = self._master_memberships()
         first_fins = self._first_visible_fins_by_code()
+        profile_floor = personal_snapshot_data_floor()
+        started = False
         for day in trading:
             if day < bar_start or day > self.plan.period_end:
                 continue
+            if day < profile_floor:
+                raise PersonalHistoryError(
+                    "equities_bars_daily query is before the personal "
+                    "snapshot data floor"
+                )
             topix = self._membership_for_day(snapshots, day)
-            close = (
-                f"{day}T15:00:00+09:00"
-                if day < "2024-11-05"
-                else f"{day}T15:30:00+09:00"
-            )
+            close = _session_close(day, "equities_bars_daily.Date")
             expected = frozenset(
                 code
                 for code in topix
                 if first_fins.get(code, "9999") <= close
             )
             if not expected:
+                if not started:
+                    continue
                 raise PersonalHistoryError(
                     f"TOPIX intersect PIT-visible fins is empty for {day}"
                 )
@@ -1600,290 +1870,99 @@ class PersonalHistoryHydrator:
                 membership_digest=_canonical_digest(sorted(expected)),
                 expected_rows=len(expected),
             )
-
-    def _materialize_typed_bars(self) -> int:
-        """Move completed compact bars to the indexed typed PIT table.
-
-        Segment writes stay in ``jquants_records`` so a failed/resumed fetch
-        keeps the existing atomic fact+checkpoint contract.  Once every bar
-        segment is terminal, this single transaction makes the query-optimized
-        representation authoritative and removes the JSON rows that would
-        otherwise be decoded on every research read.
-        """
-        expected_count = int(
-            self._connection.execute(
-                "SELECT COALESCE(SUM(rows_written),0) "
-                "FROM personal_history_segments "
-                "WHERE dataset='equities_bars_daily' "
-                "AND state IN ('OBSERVED','OBSERVED_EMPTY')"
-            ).fetchone()[0]
-        )
-        revisions = int(
-            self._connection.execute(
-                "SELECT COUNT(*) FROM jquants_records_revisions "
-                "WHERE source='jquants' AND dataset='equities_bars_daily'"
-            ).fetchone()[0]
-        )
-        if revisions:
+            started = True
+        if not started:
             raise PersonalHistoryError(
-                "personal history cannot materialize revised generic bars"
+                "TOPIX intersect PIT-visible fins is empty for the research window"
             )
-        typed_revisions = int(
-            self._connection.execute(
-                "SELECT COUNT(*) FROM jquants_daily_bars_revisions "
-                "WHERE source='jquants'"
-            ).fetchone()[0]
-        )
-        if typed_revisions:
-            raise PersonalHistoryError(
-                "personal history cannot use revised typed bars"
-            )
-        generic_count = int(
-            self._connection.execute(
-                "SELECT COUNT(*) FROM jquants_records "
-                "WHERE source='jquants' AND dataset='equities_bars_daily'"
-            ).fetchone()[0]
-        )
-        typed_count = int(
-            self._connection.execute(
-                "SELECT COUNT(*) FROM jquants_daily_bars "
-                "WHERE source='jquants'"
-            ).fetchone()[0]
-        )
-        if generic_count == 0:
-            if expected_count < 1 or typed_count != expected_count:
-                raise PersonalHistoryError(
-                    "typed bar count does not match completed bar checkpoints"
-                )
+
+    def _insert_compact_facts(
+        self, dataset: str, rows: Sequence[Mapping[str, Any]]
+    ) -> int:
+        """Insert already-normalized master/bar rows into compact WITHOUT ROWID tables."""
+
+        if not rows:
             return 0
-        if expected_count < 1:
-            raise PersonalHistoryError(
-                "generic bars have no completed checkpoint evidence"
-            )
-        if generic_count != expected_count:
-            raise PersonalHistoryError(
-                "generic bar count does not match completed checkpoints"
-            )
-        if typed_count:
-            raise PersonalHistoryError(
-                "generic and typed bars cannot coexist before materialization"
-            )
 
-        malformed = int(
-            self._connection.execute(
-                """
-                SELECT COUNT(*) FROM jquants_records
-                WHERE source='jquants' AND dataset='equities_bars_daily'
-                  AND CASE
-                    WHEN payload IS NULL OR json_valid(payload)=0 THEN 1
-                    WHEN json_type(payload) <> 'object' THEN 1
-                    WHEN trim(CAST(json_extract(payload,'$.Code') AS TEXT)) = ''
-                         OR json_extract(payload,'$.Code') IS NULL THEN 1
-                    WHEN length(CAST(json_extract(payload,'$.Date') AS TEXT)) < 10
-                         OR json_extract(payload,'$.Date') IS NULL THEN 1
-                    WHEN json_extract(payload,'$.Close') IS NULL THEN 1
-                    ELSE 0
-                  END = 1
-                """
-            ).fetchone()[0]
-        )
-        if malformed:
-            raise PersonalHistoryError(
-                f"personal history has {malformed} malformed generic bar row(s)"
-            )
-        duplicate = self._connection.execute(
-            """
-            SELECT 1 FROM jquants_records
-            WHERE source='jquants' AND dataset='equities_bars_daily'
-            GROUP BY CAST(json_extract(payload,'$.Code') AS TEXT),
-                     substr(CAST(json_extract(payload,'$.Date') AS TEXT),1,10)
-            HAVING COUNT(*) > 1 LIMIT 1
-            """
-        ).fetchone()
-        if duplicate is not None:
-            raise PersonalHistoryError(
-                "personal history generic bars contain duplicate typed keys"
-            )
+        def payload_of(row: Mapping[str, Any]) -> Mapping[str, Any]:
+            raw = row.get("payload")
+            if isinstance(raw, Mapping):
+                return raw
+            try:
+                parsed = json.loads(raw)
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise PersonalHistoryError("compact fact payload is invalid") from exc
+            if not isinstance(parsed, dict):
+                raise PersonalHistoryError("compact fact payload is invalid")
+            return parsed
 
-        self._guard_capacity(
-            phase="before typed bar materialization",
-            additional_bytes=generic_count * 256,
-        )
-        try:
-            self._connection.execute("BEGIN IMMEDIATE")
-            self._connection.execute(
+        values: list[tuple[Any, ...]]
+        if dataset == "equities_master":
+            sql = """
+                INSERT INTO personal_history_compact_master (
+                    snapshot_date,code,event_time,available_at,ingested_at,
+                    market_code,sector_17_code,sector_33_code,
+                    scale_category,source_scale_category
+                ) VALUES (?,?,?,?,?,?,?,?,?,?)
                 """
-                INSERT INTO jquants_daily_bars (
-                    source,code,date,event_time,available_at,ingested_at,
-                    open,high,low,close,volume,turnover_value,
-                    adjustment_open,adjustment_high,adjustment_low,
-                    adjustment_close,adjustment_volume,
-                    morning_adjustment_close,morning_turnover_value,
-                    morning_adjustment_volume,afternoon_adjustment_close,
-                    afternoon_turnover_value,afternoon_adjustment_volume,
-                    raw_payload,market_cap
+            values = []
+            for row in rows:
+                payload = payload_of(row)
+                values.append(
+                    (
+                        str(payload.get("Date") or "")[:10],
+                        str(payload.get("Code") or ""),
+                        row["event_time"],
+                        row["available_at"],
+                        row["ingested_at"],
+                        payload.get("MarketCode"),
+                        payload.get("Sector17Code"),
+                        payload.get("Sector33Code"),
+                        payload.get("ScaleCategory"),
+                        payload.get("SourceScaleCategory"),
+                    )
                 )
-                SELECT
-                    source,
-                    CAST(json_extract(payload,'$.Code') AS TEXT),
-                    substr(CAST(json_extract(payload,'$.Date') AS TEXT),1,10),
-                    event_time,available_at,ingested_at,
-                    NULL,NULL,NULL,
-                    CAST(json_extract(payload,'$.Close') AS REAL),
-                    CAST(json_extract(payload,'$.Volume') AS REAL),
-                    CAST(json_extract(payload,'$.TurnoverValue') AS REAL),
-                    NULL,NULL,NULL,
-                    CAST(json_extract(payload,'$.AdjustmentClose') AS REAL),
-                    CAST(json_extract(payload,'$.AdjustmentVolume') AS REAL),
-                    CAST(json_extract(payload,'$.MorningAdjustmentClose') AS REAL),
-                    CAST(json_extract(payload,'$.MorningTurnoverValue') AS REAL),
-                    CAST(json_extract(payload,'$.MorningAdjustmentVolume') AS REAL),
-                    CAST(json_extract(payload,'$.AfternoonAdjustmentClose') AS REAL),
-                    CAST(json_extract(payload,'$.AfternoonTurnoverValue') AS REAL),
-                    CAST(json_extract(payload,'$.AfternoonAdjustmentVolume') AS REAL),
-                    NULL,
-                    CAST(json_extract(payload,'$.MarketCapitalization') AS REAL)
-                FROM jquants_records
-                WHERE source='jquants' AND dataset='equities_bars_daily'
-                ON CONFLICT(source,code,date) DO UPDATE SET
-                    event_time=excluded.event_time,
-                    available_at=excluded.available_at,
-                    ingested_at=excluded.ingested_at,
-                    open=excluded.open,
-                    high=excluded.high,
-                    low=excluded.low,
-                    close=excluded.close,
-                    volume=excluded.volume,
-                    turnover_value=excluded.turnover_value,
-                    adjustment_open=excluded.adjustment_open,
-                    adjustment_high=excluded.adjustment_high,
-                    adjustment_low=excluded.adjustment_low,
-                    adjustment_close=excluded.adjustment_close,
-                    adjustment_volume=excluded.adjustment_volume,
-                    morning_adjustment_close=excluded.morning_adjustment_close,
-                    morning_turnover_value=excluded.morning_turnover_value,
-                    morning_adjustment_volume=excluded.morning_adjustment_volume,
-                    afternoon_adjustment_close=excluded.afternoon_adjustment_close,
-                    afternoon_turnover_value=excluded.afternoon_turnover_value,
-                    afternoon_adjustment_volume=excluded.afternoon_adjustment_volume,
-                    raw_payload=NULL,
-                    market_cap=excluded.market_cap
+        elif dataset == "equities_bars_daily":
+            sql = """
+                INSERT INTO personal_history_compact_bars (
+                    code,date,event_time,available_at,ingested_at,
+                    close,volume,turnover_value,adjustment_close,adjustment_volume,
+                    morning_adjustment_close,afternoon_adjustment_close,
+                    morning_turnover_value,afternoon_turnover_value,
+                    morning_adjustment_volume,afternoon_adjustment_volume,
+                    market_cap
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """
-            )
-            mismatched = int(
-                self._connection.execute(
-                    """
-                    SELECT COUNT(*) FROM jquants_records AS records
-                    JOIN jquants_daily_bars AS bars
-                      ON bars.source=records.source
-                     AND bars.code=CAST(json_extract(records.payload,'$.Code') AS TEXT)
-                     AND bars.date=substr(
-                         CAST(json_extract(records.payload,'$.Date') AS TEXT),1,10
-                     )
-                    WHERE records.source='jquants'
-                      AND records.dataset='equities_bars_daily'
-                      AND NOT (
-                          bars.event_time IS records.event_time
-                          AND bars.available_at IS records.available_at
-                          AND bars.ingested_at IS records.ingested_at
-                          AND bars.open IS NULL
-                          AND bars.high IS NULL
-                          AND bars.low IS NULL
-                          AND bars.close IS CAST(
-                              json_extract(records.payload,'$.Close') AS REAL
-                          )
-                          AND bars.volume IS CAST(
-                              json_extract(records.payload,'$.Volume') AS REAL
-                          )
-                          AND bars.turnover_value IS CAST(
-                              json_extract(
-                                  records.payload,'$.TurnoverValue'
-                              ) AS REAL
-                          )
-                          AND bars.adjustment_open IS NULL
-                          AND bars.adjustment_high IS NULL
-                          AND bars.adjustment_low IS NULL
-                          AND bars.adjustment_close IS CAST(
-                              json_extract(
-                                  records.payload,'$.AdjustmentClose'
-                              ) AS REAL
-                          )
-                          AND bars.adjustment_volume IS CAST(
-                              json_extract(
-                                  records.payload,'$.AdjustmentVolume'
-                              ) AS REAL
-                          )
-                          AND bars.morning_adjustment_close IS CAST(
-                              json_extract(
-                                  records.payload,'$.MorningAdjustmentClose'
-                              ) AS REAL
-                          )
-                          AND bars.morning_turnover_value IS CAST(
-                              json_extract(
-                                  records.payload,'$.MorningTurnoverValue'
-                              ) AS REAL
-                          )
-                          AND bars.morning_adjustment_volume IS CAST(
-                              json_extract(
-                                  records.payload,'$.MorningAdjustmentVolume'
-                              ) AS REAL
-                          )
-                          AND bars.afternoon_adjustment_close IS CAST(
-                              json_extract(
-                                  records.payload,'$.AfternoonAdjustmentClose'
-                              ) AS REAL
-                          )
-                          AND bars.afternoon_turnover_value IS CAST(
-                              json_extract(
-                                  records.payload,'$.AfternoonTurnoverValue'
-                              ) AS REAL
-                          )
-                          AND bars.afternoon_adjustment_volume IS CAST(
-                              json_extract(
-                                  records.payload,'$.AfternoonAdjustmentVolume'
-                              ) AS REAL
-                          )
-                          AND bars.raw_payload IS NULL
-                          AND bars.market_cap IS CAST(
-                              json_extract(
-                                  records.payload,'$.MarketCapitalization'
-                              ) AS REAL
-                          )
-                      )
-                    """
-                ).fetchone()[0]
-            )
-            if mismatched:
-                raise PersonalHistoryError(
-                    "typed bar materialization content does not reconcile"
+            values = []
+            for row in rows:
+                payload = payload_of(row)
+                values.append(
+                    (
+                        str(payload.get("Code") or ""),
+                        str(payload.get("Date") or "")[:10],
+                        row["event_time"],
+                        row["available_at"],
+                        row["ingested_at"],
+                        payload.get("Close"),
+                        payload.get("Volume"),
+                        payload.get("TurnoverValue"),
+                        payload.get("AdjustmentClose"),
+                        payload.get("AdjustmentVolume"),
+                        payload.get("MorningAdjustmentClose"),
+                        payload.get("AfternoonAdjustmentClose"),
+                        payload.get("MorningTurnoverValue"),
+                        payload.get("AfternoonTurnoverValue"),
+                        payload.get("MorningAdjustmentVolume"),
+                        payload.get("AfternoonAdjustmentVolume"),
+                        payload.get("MarketCapitalization"),
+                    )
                 )
-            materialized_count = int(
-                self._connection.execute(
-                    "SELECT COUNT(*) FROM jquants_daily_bars "
-                    "WHERE source='jquants'"
-                ).fetchone()[0]
-            )
-            if materialized_count != expected_count:
-                raise PersonalHistoryError(
-                    "typed bar materialization count does not match checkpoints"
-                )
-            deleted = self._connection.execute(
-                "DELETE FROM jquants_records WHERE source='jquants' "
-                "AND dataset='equities_bars_daily'"
-            ).rowcount
-            if int(deleted) != generic_count:
-                raise PersonalHistoryError(
-                    "typed bar materialization did not remove every generic row"
-                )
-            self._connection.commit()
-        except Exception as exc:
-            self._connection.rollback()
-            if isinstance(exc, PersonalHistoryError):
-                raise
+        else:
             raise PersonalHistoryError(
-                f"typed bar materialization failed: {exc}"
-            ) from exc
-        return generic_count
+                f"personal history cannot write {dataset} as compact facts"
+            )
+        self._connection.executemany(sql, values)
+        return len(values)
 
     def _upsert_shared_fins_scan(self, scan: Mapping[str, Any]) -> None:
         scan_digest = str(scan["scan_digest"])
@@ -2078,25 +2157,37 @@ class PersonalHistoryHydrator:
             raise PersonalHistoryError(
                 "personal history rows contain forbidden raw_payload copies"
             )
-        generic_bars = int(
+        generic_compacted = int(
             self._connection.execute(
                 "SELECT "
                 "(SELECT COUNT(*) FROM jquants_records WHERE source='jquants' "
-                " AND dataset='equities_bars_daily') + "
+                " AND dataset IN ('equities_master','equities_bars_daily')) + "
                 "(SELECT COUNT(*) FROM jquants_records_revisions "
-                " WHERE source='jquants' AND dataset='equities_bars_daily')"
+                " WHERE source='jquants' "
+                " AND dataset IN ('equities_master','equities_bars_daily'))"
             ).fetchone()[0]
         )
-        if generic_bars:
+        if generic_compacted:
             raise PersonalHistoryError(
-                "personal history generic bars remain after typed materialization"
+                "personal history generic master or bars remain"
             )
-        typed_bars = int(
+        expected_master = int(
             self._connection.execute(
-                "SELECT COUNT(*) FROM jquants_daily_bars "
-                "WHERE source='jquants'"
+                "SELECT COALESCE(SUM(rows_written),0) "
+                "FROM personal_history_segments "
+                "WHERE dataset='equities_master' "
+                "AND state IN ('OBSERVED','OBSERVED_EMPTY')"
             ).fetchone()[0]
         )
+        compact_master = int(
+            self._connection.execute(
+                "SELECT COUNT(*) FROM personal_history_compact_master"
+            ).fetchone()[0]
+        )
+        if expected_master < 1 or compact_master != expected_master:
+            raise PersonalHistoryError(
+                "personal history compact master does not match completed checkpoints"
+            )
         expected_bars = int(
             self._connection.execute(
                 "SELECT COALESCE(SUM(rows_written),0) "
@@ -2105,26 +2196,40 @@ class PersonalHistoryHydrator:
                 "AND state IN ('OBSERVED','OBSERVED_EMPTY')"
             ).fetchone()[0]
         )
-        if expected_bars < 1 or typed_bars != expected_bars:
-            raise PersonalHistoryError(
-                "personal history typed bars do not match completed checkpoints"
-            )
-        typed_revisions = int(
+        compact_bars = int(
             self._connection.execute(
-                "SELECT COUNT(*) FROM jquants_daily_bars_revisions "
-                "WHERE source='jquants'"
+                "SELECT COUNT(*) FROM personal_history_compact_bars"
             ).fetchone()[0]
         )
-        if typed_revisions:
+        if expected_bars < 1 or compact_bars != expected_bars:
             raise PersonalHistoryError(
-                "personal history typed bar revisions are forbidden"
+                "personal history compact bars do not match completed checkpoints"
+            )
+        master_mismatch = self._connection.execute(
+            """
+            SELECT 1 FROM personal_history_segments AS segments
+            LEFT JOIN (
+                SELECT snapshot_date,COUNT(*) AS row_count
+                FROM personal_history_compact_master
+                GROUP BY snapshot_date
+            ) AS compact ON compact.snapshot_date=segments.query_start
+            WHERE segments.dataset='equities_master'
+              AND segments.state IN ('OBSERVED','OBSERVED_EMPTY')
+              AND COALESCE(compact.row_count,0) <> segments.rows_written
+            LIMIT 1
+            """
+        ).fetchone()
+        if master_mismatch is not None:
+            raise PersonalHistoryError(
+                "personal history compact master snapshot counts do not match "
+                "checkpoints"
             )
         day_mismatch = self._connection.execute(
             """
             SELECT 1 FROM personal_history_segments AS segments
             LEFT JOIN (
                 SELECT date,COUNT(*) AS row_count
-                FROM jquants_daily_bars WHERE source='jquants'
+                FROM personal_history_compact_bars
                 GROUP BY date
             ) AS bars ON bars.date=segments.query_start
             WHERE segments.dataset='equities_bars_daily'
@@ -2135,20 +2240,42 @@ class PersonalHistoryHydrator:
         ).fetchone()
         if day_mismatch is not None:
             raise PersonalHistoryError(
-                "personal history typed bar day counts do not match checkpoints"
+                "personal history compact bar day counts do not match checkpoints"
             )
-        typed_raw = int(
+        compact_raw = int(
             self._connection.execute(
-                "SELECT COUNT(*) FROM jquants_daily_bars "
-                "WHERE source='jquants' AND ("
-                "raw_payload IS NOT NULL OR trim(code)='' OR close IS NULL "
-                "OR date <> substr(event_time,1,10))"
+                """
+                SELECT
+                (SELECT COUNT(*) FROM personal_history_compact_master
+                 WHERE trim(code)='' OR snapshot_date <> substr(event_time,1,10)
+                   OR scale_category IS NULL OR trim(scale_category)='')
+                +
+                (SELECT COUNT(*) FROM personal_history_compact_bars
+                 WHERE trim(code)='' OR close IS NULL
+                   OR date <> substr(event_time,1,10))
+                """
             ).fetchone()[0]
         )
-        if typed_raw:
+        if compact_raw:
             raise PersonalHistoryError(
-                "personal history typed bars violate compact PIT invariants"
+                "personal history compact rows violate compact PIT invariants"
             )
+        self._assert_compact_v7_timestamps()
+        for table in _TYPED_JQUANTS_TABLES:
+            remaining = int(
+                self._connection.execute(
+                    f"SELECT COUNT(*) FROM {table}"
+                ).fetchone()[0]
+            )
+            remaining += int(
+                self._connection.execute(
+                    f"SELECT COUNT(*) FROM {table}_revisions"
+                ).fetchone()[0]
+            )
+            if remaining:
+                raise PersonalHistoryError(
+                    "personal history standard typed jquants tables must stay empty"
+                )
         policies = {
             str(row[0])
             for row in self._connection.execute(
@@ -2166,6 +2293,88 @@ class PersonalHistoryHydrator:
                 f"personal history PIT policies are incomplete: {sorted(policies)}"
             )
         self._validate_shared_fins_scan_evidence()
+
+    def _assert_compact_v7_timestamps(self) -> None:
+        canonical_ingested = (
+            "ingested_at IS NULL "
+            "OR length(ingested_at) <> 25 "
+            "OR ingested_at NOT GLOB '????-??-??T??:??:??+09:00'"
+        )
+        if self._connection.execute(
+            """
+            SELECT 1 FROM personal_history_compact_master
+            WHERE available_at IS NOT snapshot_date || 'T08:00:00+09:00'
+            LIMIT 1
+            """
+        ).fetchone() is not None:
+            raise PersonalHistoryError(
+                "personal history compact master available_at is not "
+                "snapshot_date 08:00 JST"
+            )
+        if self._connection.execute(
+            """
+            SELECT 1 FROM personal_history_compact_master
+            WHERE substr(event_time,1,10) IS NOT snapshot_date
+            LIMIT 1
+            """
+        ).fetchone() is not None:
+            raise PersonalHistoryError(
+                "personal history compact master event_time date does not "
+                "equal snapshot_date"
+            )
+        if self._connection.execute(
+            f"""
+            SELECT 1 FROM personal_history_compact_master
+            WHERE {canonical_ingested}
+               OR ingested_at < available_at
+            LIMIT 1
+            """
+        ).fetchone() is not None:
+            raise PersonalHistoryError(
+                "personal history compact master ingested_at is not "
+                "canonical or precedes available_at"
+            )
+        if self._connection.execute(
+            """
+            SELECT 1 FROM personal_history_compact_bars
+            WHERE event_time IS NOT date || CASE
+                    WHEN date < '2024-11-05' THEN 'T15:00:00+09:00'
+                    ELSE 'T15:30:00+09:00'
+                  END
+               OR available_at IS NOT date || CASE
+                    WHEN date < '2024-11-05' THEN 'T15:00:00+09:00'
+                    ELSE 'T15:30:00+09:00'
+                  END
+            LIMIT 1
+            """
+        ).fetchone() is not None:
+            raise PersonalHistoryError(
+                "personal history compact bar timestamps are not the "
+                "official session close"
+            )
+        if self._connection.execute(
+            """
+            SELECT 1 FROM personal_history_compact_bars
+            WHERE substr(event_time,1,10) IS NOT date
+               OR substr(available_at,1,10) IS NOT date
+            LIMIT 1
+            """
+        ).fetchone() is not None:
+            raise PersonalHistoryError(
+                "personal history compact bar date does not match timestamps"
+            )
+        if self._connection.execute(
+            f"""
+            SELECT 1 FROM personal_history_compact_bars
+            WHERE {canonical_ingested}
+               OR ingested_at < available_at
+            LIMIT 1
+            """
+        ).fetchone() is not None:
+            raise PersonalHistoryError(
+                "personal history compact bars ingested_at is not "
+                "canonical or precedes available_at"
+            )
 
     def hydrate(self) -> PersonalHistorySummary:
         self._outcomes = []
@@ -2187,9 +2396,24 @@ class PersonalHistoryHydrator:
             self._hydrate_bars(bar_start=bar_start, trading=trading)
             self._checkpoint_wal()
             self._guard_capacity(phase="after bars stage")
-            self._materialize_typed_bars()
             self._manifest_status("VALIDATING")
             self._validate_draft_boundary()
+            hydrated_days = [
+                str(row[0])
+                for row in self._connection.execute(
+                    "SELECT DISTINCT date FROM personal_history_compact_bars "
+                    "ORDER BY date"
+                )
+            ]
+            if not hydrated_days:
+                raise PersonalHistoryError(
+                    "personal history hydrated no bar sessions"
+                )
+            data_start = hydrated_days[0]
+            requested_lookback = self.plan.lookback_sessions
+            actual_lookback = sum(
+                1 for day in hydrated_days if day < self.plan.period_start
+            )
             self._manifest_status("COMPLETE_DRAFT")
             self._checkpoint_wal()
         except Exception as exc:
@@ -2203,12 +2427,14 @@ class PersonalHistoryHydrator:
         return PersonalHistorySummary(
             period_start=self.plan.period_start,
             period_end=self.plan.period_end,
-            bar_start=bar_start,
+            bar_start=data_start,
             segment_counts=counts,
             fetched_rows=sum(outcome.fetched for outcome in self._outcomes),
             written_rows=sum(outcome.written for outcome in self._outcomes),
             skipped_segments=sum(outcome.skipped for outcome in self._outcomes),
             database_bytes=self._database_footprint(),
+            actual_lookback_sessions=actual_lookback,
+            lookback_truncated=actual_lookback < requested_lookback,
         )
 
 
@@ -2216,7 +2442,10 @@ __all__ = [
     "BARS_AVAILABILITY_POLICY",
     "CALENDAR_AVAILABILITY_POLICY",
     "DEFAULT_CALENDAR_WINDOW_DAYS",
+    "DEFAULT_COMPACT_STORAGE_BYTES_PER_ROW",
+    "DEFAULT_GENERIC_JSON_STORAGE_BYTES_PER_ROW",
     "DEFAULT_LOOKBACK_SESSIONS",
+    "DEFAULT_MAX_DATABASE_BYTES",
     "FINS_AVAILABILITY_POLICY",
     "MASTER_AVAILABILITY_POLICY",
     "PERSONAL_COMPLETENESS_CLAIM",
@@ -2232,4 +2461,5 @@ __all__ = [
     "PersonalHistorySummary",
     "assert_personal_history_database",
     "build_personal_history_plan",
+    "personal_snapshot_data_floor",
 ]

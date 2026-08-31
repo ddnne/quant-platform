@@ -1,4 +1,4 @@
-"""Governed N225 vol-ratio AM/PM panel writer on the v14 runner."""
+"""Governed N225 vol-ratio AM/PM panel writer on the v15 runner."""
 
 from __future__ import annotations
 
@@ -13,6 +13,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO, Callable, Mapping, Sequence
 
+from data_contracts.personal_history_compact import (
+    PERSONAL_HISTORY_COMPACT_BARS_TABLE,
+    compact_history_state,
+)
 from ingestion.personal_history import PERSONAL_HISTORY_FORMAT
 from research.eval_universe import (
     EVAL_UNIVERSE_POOL,
@@ -26,11 +30,12 @@ from research.fins_summary_keys import FINS_SUMMARY_EQAR_KEY, FINS_SUMMARY_TA_KE
 R2_ORIGIN = "http://research.r2"
 PRODUCER_ID = "personal-vol-ratio-am-pm-panel-writer/v1"
 COHORT_ID = "personal-vol-ratio-am-pm-v1"
-RUNNER_VERSION = "personal-cloud-runner/v14"
+RUNNER_VERSION = "personal-cloud-runner/v15"
 SNAPSHOT_SOURCE_RUNNER_VERSIONS = frozenset(
     {
         "personal-cloud-runner/v13",
         "personal-cloud-runner/v14",
+        "personal-cloud-runner/v15",
     }
 )
 INPUT_SCHEMA = "personal-vol-ratio-am-pm-panel-writer-input/v1"
@@ -105,7 +110,10 @@ TEMPORAL_CONTRACT = {
     "no_signal_date_option_values": True,
 }
 MAX_INPUT_BYTES = 512 * 1024
+# Compressed R2/HTTP transport (gzip or legacy raw sqlite).
 MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024 * 1024
+# Expanded sqlite after gunzip.
+SNAPSHOT_MAX_DATABASE_BYTES = 5 * 1024 * 1024 * 1024
 MAX_LEGACY_PANEL_BYTES = 64 * 1024 * 1024
 # Fixed <=100-code membership, three fixed evaluation windows, and index-level
 # option maps: 100 codes * ~320 sessions * compact AM/PM bars stay well under
@@ -348,7 +356,7 @@ def _expand_gzip(transport: Path, destination: Path, raw_digest: str) -> None:
             if not chunk:
                 break
             expanded += len(chunk)
-            if expanded > MAX_SNAPSHOT_BYTES:
+            if expanded > SNAPSHOT_MAX_DATABASE_BYTES:
                 raise RuntimeError("expanded snapshot exceeded size bound")
             digest.update(chunk)
             output.write(chunk)
@@ -378,15 +386,21 @@ def _require_snapshot_format(connection: sqlite3.Connection) -> None:
         raise RuntimeError(f"snapshot is not {PERSONAL_HISTORY_FORMAT}")
 
 
+def _compact_v7_equity_bars_table(connection: sqlite3.Connection) -> str:
+    state = compact_history_state(connection)
+    if state == "compact":
+        return PERSONAL_HISTORY_COMPACT_BARS_TABLE
+    if state == "mixed":
+        raise RuntimeError(
+            "snapshot cannot mix compact with typed or generic bars"
+        )
+    raise RuntimeError("snapshot compact v7 marker or schema is invalid")
+
+
 def _calendar_from_snapshot(
     connection: sqlite3.Connection,
 ) -> tuple[list[str], dict[str, Any]]:
-    columns = {
-        str(row[1])
-        for row in connection.execute("PRAGMA table_info(jquants_daily_bars)")
-    }
-    if "morning_adjustment_close" not in columns or "afternoon_adjustment_close" not in columns:
-        raise RuntimeError("typed M/A columns are missing from jquants_daily_bars")
+    _compact_v7_equity_bars_table(connection)
     try:
         checkpoints = [
             dict(row)
@@ -471,13 +485,14 @@ def _positive(value: Any) -> float | None:
 
 def _select_2019_membership(connection: sqlite3.Connection) -> list[str]:
     pool = list(EVAL_UNIVERSE_POOL)
+    compact_bars = _compact_v7_equity_bars_table(connection)
     scored: list[dict[str, Any]] = []
     for code in pool:
         bars = connection.execute(
-            """
+            f"""
             SELECT date, close, volume, turnover_value
-            FROM jquants_daily_bars
-            WHERE source='jquants' AND code=? AND date BETWEEN ? AND ?
+            FROM {compact_bars}
+            WHERE code=? AND date BETWEEN ? AND ?
             ORDER BY date
             """,
             (code, SELECTION_START, SELECTION_END),
@@ -543,12 +558,13 @@ def _bars_for_codes(
 ) -> dict[str, list[dict[str, Any]]]:
     wanted = set(dates)
     out: dict[str, list[dict[str, Any]]] = {code: [] for code in codes}
+    compact_bars = _compact_v7_equity_bars_table(connection)
     placeholders = ",".join("?" for _ in codes)
     rows = connection.execute(
         f"""
         SELECT code, date, morning_adjustment_close, afternoon_adjustment_close
-        FROM jquants_daily_bars
-        WHERE source='jquants' AND code IN ({placeholders})
+        FROM {compact_bars}
+        WHERE code IN ({placeholders})
         ORDER BY code, date
         """,
         tuple(codes),

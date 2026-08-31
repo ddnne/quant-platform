@@ -56,6 +56,10 @@ from personal_option_sidecar_job import (
     PersonalOptionSidecarJobSpec,
     execute_option_sidecar_job,
 )
+from data_contracts.personal_history_compact import (
+    PERSONAL_HISTORY_COMPACT_BARS_TABLE,
+    compact_history_state,
+)
 from ingestion.personal_history import (
     PERSONAL_COMPLETENESS_CLAIM,
     PERSONAL_CONTROLLED_ELIGIBILITY,
@@ -77,6 +81,10 @@ from research.factor_cohorts import (
     get_research_cohort,
     is_am_pm_factor_cohort,
 )
+from research.personal_universe import (
+    PersonalUniverseError,
+    personal_research_universe_rule_digest,
+)
 from research.personal_base_sleeve import (
     AM_PM_BASE_COHORT_ID,
     AM_PM_BASE_SLEEVE_ID,
@@ -92,15 +100,17 @@ from research.personal_base_sleeve import (
     validate_personal_base_sleeve_artifact,
 )
 
-RUNNER_VERSION = "personal-cloud-runner/v14"
-SNAPSHOT_MAX_DATABASE_BYTES = 3_758_096_384
+RUNNER_VERSION = "personal-cloud-runner/v15"
+# Expanded sqlite / snapshot-builder physical cap.
+SNAPSHOT_MAX_DATABASE_BYTES = 5 * 1024 * 1024 * 1024
 SNAPSHOT_MINIMUM_FREE_BYTES = 256 * 1024 * 1024
 R2_ORIGIN = "http://research.r2"
 DEFAULT_TIMEOUT_SECONDS = 165 * 60
 MAX_JOB_LIFETIME_SECONDS = 180 * 60
-MAX_PERIOD_DAYS = 2200
+MAX_PERIOD_DAYS = 7000
 MAX_REQUEST_BYTES = 16 * 1024
 MAX_RESULT_BYTES = 512 * 1024 * 1024
+# Compressed R2/HTTP transport (gzip or legacy raw sqlite).
 MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024 * 1024
 MAX_BASE_SLEEVE_ARTIFACT_BYTES = 16 * 1024 * 1024
 _SINGLE_THREAD_NUMERIC_ENV = {
@@ -331,6 +341,19 @@ class JobSpec:
         identity = _personal_cohort_identity(self.cohort_id)
         if self.cohort_digest != identity["cohort_digest"]:
             raise JobInputError("cohort_digest does not match repository definition")
+        try:
+            expected_universe_digest = personal_research_universe_rule_digest(
+                self.universe_id,
+                am_pm=bool(identity["am_pm"]),
+            )
+        except PersonalUniverseError as exc:
+            raise JobInputError(
+                "universe_id is not executable by personal research"
+            ) from exc
+        if self.universe_rule_digest != expected_universe_digest:
+            raise JobInputError(
+                "universe_rule_digest does not match cohort and universe"
+            )
 
     def derived_request_digest(self) -> str:
         body = {
@@ -509,7 +532,7 @@ def _expand_gzip_snapshot(
                         if not chunk:
                             break
                         expanded += len(chunk)
-                        if expanded > MAX_SNAPSHOT_BYTES:
+                        if expanded > SNAPSHOT_MAX_DATABASE_BYTES:
                             raise RuntimeError(
                                 "expanded snapshot exceeds the fixed size bound"
                             )
@@ -1134,6 +1157,8 @@ def execute_job(
                 **os.environ,
                 "PYTHONUNBUFFERED": "1",
                 **_SINGLE_THREAD_NUMERIC_ENV,
+                # Child opens the R2 snapshot copied into this job temp dir.
+                "QP_ALLOW_LOCAL_MARKET_DATA": "1",
             }
             try:
                 process = _run_research_process(
@@ -1315,9 +1340,12 @@ def execute_job(
         shutil.rmtree(job_root, ignore_errors=True)
 
 
-def _session_coverage(connection: sqlite3.Connection) -> dict[str, Any]:
+def _bar_session_coverage(
+    connection: sqlite3.Connection, table: str, *, source_filter: bool
+) -> dict[str, Any]:
+    where = " WHERE source='jquants'" if source_filter else ""
     row = connection.execute(
-        """
+        f"""
         SELECT
             COUNT(*) AS bar_rows,
             SUM(morning_adjustment_close IS NOT NULL) AS am_close,
@@ -1326,13 +1354,11 @@ def _session_coverage(connection: sqlite3.Connection) -> dict[str, Any]:
             SUM(afternoon_adjustment_close IS NOT NULL) AS pm_close,
             SUM(afternoon_turnover_value IS NOT NULL) AS pm_turnover,
             SUM(afternoon_adjustment_volume IS NOT NULL) AS pm_volume
-        FROM jquants_daily_bars
-        WHERE source='jquants'
+        FROM {table}{where}
         """
     ).fetchone()
-    total = int(row["bar_rows"] or 0)
     return {
-        "bar_rows": total,
+        "bar_rows": int(row["bar_rows"] or 0),
         "am": {
             "morning_adjustment_close_non_null": int(row["am_close"] or 0),
             "morning_turnover_value_non_null": int(row["am_turnover"] or 0),
@@ -1344,6 +1370,23 @@ def _session_coverage(connection: sqlite3.Connection) -> dict[str, Any]:
             "afternoon_adjustment_volume_non_null": int(row["pm_volume"] or 0),
         },
     }
+
+
+def _session_coverage(connection: sqlite3.Connection) -> dict[str, Any]:
+    state = compact_history_state(connection)
+    if state == "invalid":
+        raise RuntimeError("snapshot compact v7 marker or schema is invalid")
+    if state == "mixed":
+        raise RuntimeError(
+            "snapshot cannot mix compact with typed or generic bars"
+        )
+    if state == "compact":
+        return _bar_session_coverage(
+            connection, PERSONAL_HISTORY_COMPACT_BARS_TABLE, source_filter=False
+        )
+    return _bar_session_coverage(
+        connection, "jquants_daily_bars", source_filter=True
+    )
 
 
 def _gzip_file(source: Path, destination: Path) -> None:
@@ -1427,11 +1470,11 @@ def execute_snapshot_job(
                 period_end=spec.period_end,
                 lookback_sessions=spec.lookback_sessions,
             )
-            # Conservative planning admission budget, not an exact SQLite-size proof.
+            # Period-dependent planning allowance, not a conservative proof.
             # The physical file-size guard after hydrate remains the measured cap.
             if plan.estimated_bytes > spec.max_database_bytes:
                 raise RuntimeError(
-                    "snapshot conservative planning estimate exceeds builder cap: "
+                    "snapshot planning allowance exceeds builder cap: "
                     f"estimated={plan.estimated_bytes} "
                     f"limit={spec.max_database_bytes}"
                 )
@@ -1457,11 +1500,15 @@ def execute_snapshot_job(
             verify_sqlite(database)
             raw_bytes = database.stat().st_size
             if raw_bytes > spec.max_database_bytes:
-                raise RuntimeError("snapshot sqlite exceeds the 3.5 GiB builder cap")
+                raise RuntimeError("snapshot sqlite exceeds the 5 GiB builder cap")
             raw_digest = "sha256:" + _sha256_file(database)
             gzip_path = job_root / "personal-history.sqlite.gz"
             _gzip_file(database, gzip_path)
             gzip_bytes = gzip_path.stat().st_size
+            if gzip_bytes > MAX_SNAPSHOT_BYTES:
+                raise RuntimeError(
+                    "compressed snapshot exceeds 4 GiB transport cap"
+                )
             gzip_digest = "sha256:" + _sha256_file(gzip_path)
             gzip_key = (
                 "research/personal/snapshots/sha256="
@@ -1482,6 +1529,8 @@ def execute_snapshot_job(
                 "data_start": summary.bar_start,
                 "calendar_start": plan.calendar_start,
                 "calendar_end": spec.period_end,
+                "actual_lookback_sessions": summary.actual_lookback_sessions,
+                "lookback_truncated": bool(summary.lookback_truncated),
                 "dataset_segment_counts": dict(summary.segment_counts),
                 "fetched_rows": summary.fetched_rows,
                 "written_rows": summary.written_rows,

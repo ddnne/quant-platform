@@ -60,7 +60,7 @@
     ],
     "unclassified": "REJECT"
   },
-  "manifest_digest": "sha256:d4c65d0199dd4e9821ec0c663147cfb62652fe3a0bcd9e283531e5d1efccb84d",
+  "manifest_digest": "sha256:9674f9d6a362d116cf8c9b545cbf2a5e9d0a2ad5e496cc820b6ca07aef3ef1c3",
   "schema_version": "cloudflare-active-worker-bindings/v9",
   "test_harness_surfaces": {
     "ingestion-jsda": {
@@ -2949,7 +2949,7 @@
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
           "ENVIRONMENT": "production",
-          "MASS_EVAL_VERSION": "research-mass-eval/v153-snapshot-capacity-preflight",
+          "MASS_EVAL_VERSION": "research-mass-eval/v154-compact-v7-cloud-history",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -3055,7 +3055,7 @@
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
           "ENVIRONMENT": "production",
-          "MASS_EVAL_VERSION": "research-mass-eval/v153-snapshot-capacity-preflight",
+          "MASS_EVAL_VERSION": "research-mass-eval/v154-compact-v7-cloud-history",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -3161,7 +3161,7 @@
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
           "ENVIRONMENT": "staging",
-          "MASS_EVAL_VERSION": "research-mass-eval/v153-snapshot-capacity-preflight",
+          "MASS_EVAL_VERSION": "research-mass-eval/v154-compact-v7-cloud-history",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",

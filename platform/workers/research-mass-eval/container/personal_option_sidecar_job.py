@@ -1,4 +1,4 @@
-"""Cloud-only N225 option sidecar producer on the v14 runner."""
+"""Cloud-only N225 option sidecar producer on the v15 runner."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ from research.freezes import MASS_RESEARCH, OPERATIONAL_GO, PHASE7, READY_DECLAR
 R2_ORIGIN = "http://research.r2"
 PRODUCER_ID = "personal-n225-option-sidecar-producer/v1"
 COHORT_ID = "personal-n225-option-sidecar/v1"
-RUNNER_VERSION = "personal-cloud-runner/v14"
+RUNNER_VERSION = "personal-cloud-runner/v15"
 INPUT_SCHEMA = "personal-n225-option-sidecar-input/v1"
 MANIFEST_SCHEMA = "personal-n225-option-sidecar-manifest/v1"
 OBJECT_SCHEMA = "personal-n225-option-sidecar/v1"

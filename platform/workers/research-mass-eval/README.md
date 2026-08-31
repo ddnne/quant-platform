@@ -29,11 +29,20 @@ research/mass_eval/job={id}/panels_meta.json
 research/mass_eval/job={id}/logic={logic_id}/result.json   # when n_logics ≤ 50
 ```
 
-The separate personal route runs the repository's existing deterministic
-`qp-research` engine inside one Cloudflare Container. It does not change or
-arm the Mass capability.
+The separate personal route is the normal operator path for DRAFT exact-four
+research. R2 is authoritative. D1 is small job state. The Container expands
+one immutable snapshot onto ephemeral disk, runs the repository `qp-research`
+engine, then discards the SQLite copy. Persistent local market/price/fundamental
+history is not a normal path. It does not change or arm the Mass capability.
+Do not start from a local SQLite file and gzip/upload it. `qp-research` on a
+laptop is developer/recovery compatibility only (`QP_ALLOW_LOCAL_MARKET_DATA=1`).
 
 ## Personal cloud exact-four
+
+The normal operator path is `POST /v1/personal-snapshot-build` (then GET
+status) followed by `POST /v1/personal-research-batch`. R2 is the snapshot
+authority; D1 is small job state; Container SQLite is ephemeral job disk. Do
+not gzip a local SQLite and upload it.
 
 `POST /v1/personal-research` accepts one immutable SQLite snapshot already in
 R2 and executes one closed four-candidate DRAFT cohort. The allowed cohort ids
@@ -52,11 +61,13 @@ evidence. The current engine treats each post-fill end-of-session short book as
 one close-to-next-session accrual and includes a terminal period-end accrual
 even when the report has no next valued session. That terminal convention is a
 disclosed DRAFT residual risk, not hidden borrow evidence.
-The default research universe is PIT `topix_all`; the same request can select
-`topix_core30`, `topix_large70`, `topix_mid400`, `topix_small1`,
-`topix_small2`, `topix_small`, `topix100`, or `topix500`. Every selector is
-intersected with financials visible at that decision time. This personal
-surface is separate from the controlled Prime contract.
+Personal research is not Prime-limited. The default research universe is PIT
+`topix_all`; the same request can select `topix_core30`, `topix_large70`,
+`topix_mid400`, `topix_small1`, `topix_small2`, `topix_small`, `topix100`, or
+`topix500`. Every selector is PIT-resolved and intersected with financials at
+the execution decision cutoff. Default AM cohorts use 11:30 information and
+same-day PM close. This personal surface is separate from the controlled Prime
+contract.
 The input is closed:
 
 ```json
@@ -64,23 +75,24 @@ The input is closed:
   "cohort_id": "diverse-core-v1",
   "universe_id": "topix_all",
   "job_id": "exact-four-20260829",
-  "snapshot_key": "research/personal/snapshots/sha256=<64-lowercase-hex>.sqlite",
+  "snapshot_key": "research/personal/snapshots/sha256=<64-lowercase-hex>.sqlite.gz",
   "snapshot_sha256": "<64-lowercase-hex>",
   "period_start": "2022-04-19",
   "period_end": "2026-08-27"
 }
 ```
 
-`POST /v1/personal-snapshot-build` builds one bounded v4 personal-history SQLite
-on the Container's ephemeral disk, gzips it, and stores it immutably in R2 at
-`research/personal/snapshots/sha256=<raw-64-hex>.sqlite.gz`. The request is
+`POST /v1/personal-snapshot-build` builds one bounded `personal-draft-history/v7`
+SQLite on the Container's ephemeral disk, gzips it, and stores it immutably in
+R2 at `research/personal/snapshots/sha256=<raw-64-hex>.sqlite.gz`. The request is
 closed: `job_id`, `period_start`, `period_end`, and optional `lookback_sessions`
 (0-252). End dates must not be in the future and must fall inside a closed
 J-Quants calendar month (the governed acquisition RPC cannot serve the current
-month). Maximum span is 2,200 calendar days; do not ask for 2008-2026 in one
-object. Warmup `data_start` stays distinct from the evaluation period in the
-terminal manifest. `POST /v1/personal-research-batch` accepts 1..8 unique
-closed personal-research jobs and dispatches them concurrently.
+month). Snapshot build is compact v7, one continuous object, with a maximum
+span of 7,000 inclusive calendar days. Warmup `data_start` stays distinct from
+the evaluation period in the terminal manifest.
+`POST /v1/personal-research-batch` accepts 1..8 unique closed personal-research
+jobs and dispatches them concurrently.
 
 The Container independently downloads and hashes the snapshot, runs SQLite
 `quick_check`, then calls `scripts/qp-research`. Results are immutable:
@@ -104,15 +116,14 @@ dispatch on the batch route. Snapshot builds use one singleton Container
 because J-Quants acquisition is globally rate-limited. Every Container exits
 after terminal evidence. The base sleeve, when required, is
 computed before candidate fan-out. Candidate results are restored to registry
-order before the exact-four aggregate is written. The route retains its 4 GiB
-snapshot ceiling, 165-minute process-group timeout and 180-minute outer
+order before the exact-four aggregate is written. Compressed R2/HTTP snapshots
+are capped at 4 GiB; expanded SQLite/builder size is capped at 5 GiB. The
+route retains its 165-minute process-group timeout and 180-minute outer
 Container activity window. Exact-four is also capped at 24
 actual backtests (four validation folds, one stress, and one holdout per
 candidate); financing sensitivity does not multiply that execution count. A
-single request is limited to
-2,200 calendar days. The cohort registry records the 2008/2016 data floors,
-but a full-history study must use a future segmented or precomputed panel path;
-this route does not claim to execute 18 years in one Container run. The
+single request is limited to 7,000 inclusive calendar days as one continuous
+compact v7 object. The cohort registry records the 2008/2016 data floors. The
 subprocess limit
 leaves fifteen minutes for verified R2 input/output and the durable terminal
 manifest. The process exits immediately
@@ -250,39 +261,51 @@ curl -sS -X POST \
     ]
   }" | jq '{ok, job_id, n_logics, n_survivors, r2_keys, ranking}'
 
-# personal exact-four snapshot upload. The key digest is always calculated from
-# the expanded raw SQLite file; gzip is only the bounded R2 transport.
-SNAPSHOT_RAW="/absolute/path/to/personal-snapshot.sqlite"
-SNAPSHOT_GZIP="${SNAPSHOT_RAW}.gz"
-SNAPSHOT_SHA256="$(shasum -a 256 "${SNAPSHOT_RAW}" | awk '{print $1}')"
-gzip -n -6 -c "${SNAPSHOT_RAW}" > "${SNAPSHOT_GZIP}"
-
-cd platform/workers/research-mass-eval
-npx wrangler r2 object put \
-  "quant-structured/research/personal/snapshots/sha256=${SNAPSHOT_SHA256}.sqlite.gz" \
-  --remote \
-  --file="${SNAPSHOT_GZIP}" \
-  --content-type application/gzip
-# Deliberately do not set --content-encoding: the Container must receive the
-# compressed bytes and performs the bounded, digest-verified expansion itself.
-
-PERSONAL_JOB_ID="exact-four-$(date -u +%Y%m%dT%H%M%SZ)"
+# personal exact-four: build an R2 snapshot, then batch research jobs.
+# R2 is authoritative; Container SQLite is ephemeral. Do not gzip a local
+# SQLite and wrangler-put it.
+WORKER="https://quant-platform-research-mass-eval.<subdomain>.workers.dev"
+SNAPSHOT_JOB_ID="snap-$(date -u +%Y%m%dT%H%M%SZ)"
 curl -sS -X POST \
-  "https://quant-platform-research-mass-eval.<subdomain>.workers.dev/v1/personal-research" \
+  "${WORKER}/v1/personal-snapshot-build" \
   -H 'content-type: application/json' \
   -H "X-Mass-Eval-Token: ${MASS_EVAL_TOKEN:?required}" \
   -d "{
-    \"cohort_id\": \"diverse-core-v1\",
-    \"universe_id\": \"topix_all\",
-    \"job_id\": \"${PERSONAL_JOB_ID}\",
-    \"snapshot_key\": \"research/personal/snapshots/sha256=${SNAPSHOT_SHA256}.sqlite.gz\",
-    \"snapshot_sha256\": \"${SNAPSHOT_SHA256}\",
+    \"job_id\": \"${SNAPSHOT_JOB_ID}\",
     \"period_start\": \"2022-04-19\",
     \"period_end\": \"2026-08-27\"
   }" | jq .
 
+SNAPSHOT_STATUS=$(curl -sS \
+  "${WORKER}/v1/personal-snapshot-build/${SNAPSHOT_JOB_ID}" \
+  -H "X-Mass-Eval-Token: ${MASS_EVAL_TOKEN:?required}")
+echo "$SNAPSHOT_STATUS" | jq .
+# Status shape is {job:{...}}. Use job.snapshot_key as-is. Strip the sha256:
+# prefix from job.raw_sha256 before posting snapshot_sha256 (64-hex only).
+SNAPSHOT_KEY=$(echo "$SNAPSHOT_STATUS" | jq -r '.job.snapshot_key')
+SNAPSHOT_SHA256=$(echo "$SNAPSHOT_STATUS" | jq -r '.job.raw_sha256 | ltrimstr("sha256:")')
+
+PERSONAL_JOB_ID="exact-four-$(date -u +%Y%m%dT%H%M%SZ)"
+curl -sS -X POST \
+  "${WORKER}/v1/personal-research-batch" \
+  -H 'content-type: application/json' \
+  -H "X-Mass-Eval-Token: ${MASS_EVAL_TOKEN:?required}" \
+  -d "{
+    \"jobs\": [
+      {
+        \"cohort_id\": \"diverse-core-v1\",
+        \"universe_id\": \"topix_all\",
+        \"job_id\": \"${PERSONAL_JOB_ID}\",
+        \"snapshot_key\": \"${SNAPSHOT_KEY}\",
+        \"snapshot_sha256\": \"${SNAPSHOT_SHA256}\",
+        \"period_start\": \"2022-04-19\",
+        \"period_end\": \"2026-08-27\"
+      }
+    ]
+  }" | jq .
+
 curl -sS \
-  "https://quant-platform-research-mass-eval.<subdomain>.workers.dev/v1/personal-research/jobs/${PERSONAL_JOB_ID}" \
+  "${WORKER}/v1/personal-research-batch?job_id=${PERSONAL_JOB_ID}" \
   -H "X-Mass-Eval-Token: ${MASS_EVAL_TOKEN:?required}" | jq .
 ```
 

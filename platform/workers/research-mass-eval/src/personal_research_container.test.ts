@@ -217,7 +217,7 @@ describe("personal research Container admission", () => {
     });
   });
 
-  it("forwards an AM request with exact schema, mode digest, and v14 runner", async () => {
+  it("forwards an AM request with exact schema, mode digest, and v15 runner", async () => {
     const request: PersonalResearchRequest = {
       ...REQUEST,
       cohort_id: "diverse-core-am-pm-v1",
@@ -234,6 +234,8 @@ describe("personal research Container admission", () => {
       cohort_id: "diverse-core-am-pm-v1",
       runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
       universe_id: "topix500",
+      universe_rule_digest:
+        "sha256:8ca72cf8c134ad082605fd948cf005b73124643b106a68521174b009442046fb",
     });
   });
 

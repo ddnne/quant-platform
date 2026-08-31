@@ -1,9 +1,16 @@
-"""Command-line entry point for bounded personal DRAFT research."""
+"""Command-line entry point for bounded personal DRAFT research.
+
+Persistent local market/history SQLite is disabled by default. The normal
+operator path is Cloudflare ``POST /v1/personal-snapshot-build``, status, and
+``POST /v1/personal-research-batch``. R2 is authoritative; Container SQLite is
+ephemeral. ``qp-research`` remains developer/recovery compatibility only.
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -25,13 +32,37 @@ from research.personal_service import (
 from selection.budget_ledger import MassResearchDisabledError
 from strategies.spec import StrategySpec, StrategySpecError
 
+LOCAL_MARKET_DATA_ENV = "QP_ALLOW_LOCAL_MARKET_DATA"
+LOCAL_MARKET_DATA_DISABLED = (
+    "local market data is disabled; persistent local SQLite is not the operator "
+    "path. Use Cloudflare POST /v1/personal-snapshot-build, GET "
+    "/v1/personal-snapshot-build/<job_id>, and POST /v1/personal-research-batch "
+    "(R2 is authoritative; Container SQLite is ephemeral). Set "
+    f"{LOCAL_MARKET_DATA_ENV}=1 only for developer/recovery compatibility."
+)
+
+
+def local_market_data_allowed() -> bool:
+    """True only when ``QP_ALLOW_LOCAL_MARKET_DATA=1`` (exact).
+
+    Any other value, including unset, denies opening or copying a market
+    SQLite. Cloudflare Container ``execute_job`` sets this on the child
+    ``qp-research`` process because that database is ephemeral under the job
+    temp dir and sourced from R2; it is not set globally.
+    """
+    return os.environ.get(LOCAL_MARKET_DATA_ENV) == "1"
+
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="qp-research",
         description=(
-            "Run deterministic DRAFT-only research against an immutable copy "
-            "of one SQLite snapshot. Default factor selection is "
+            "Developer/recovery compatibility for deterministic DRAFT-only "
+            "research against an immutable copy of one SQLite snapshot. "
+            "Persistent local market data is disabled unless "
+            f"{LOCAL_MARKET_DATA_ENV}=1. The normal operator path is "
+            "Cloudflare personal-snapshot-build/status and "
+            "personal-research-batch. Default factor selection is "
             f"{DEFAULT_FACTOR_COHORT_ID} (AM-signal same-day PM-close). "
             "Explicit legacy *-v1 cohorts remain next-close replay."
         ),
@@ -94,6 +125,8 @@ def _load_specs(paths: Sequence[Path]) -> tuple[StrategySpec, ...] | None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if not local_market_data_allowed():
+            raise PersonalResearchInputError(LOCAL_MARKET_DATA_DISABLED)
         specs = _load_specs(args.spec)
         cohort_id = args.cohort
         if specs is None and cohort_id is None:
@@ -187,4 +220,9 @@ if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
 
 
-__all__ = ["main"]
+__all__ = [
+    "LOCAL_MARKET_DATA_DISABLED",
+    "LOCAL_MARKET_DATA_ENV",
+    "local_market_data_allowed",
+    "main",
+]

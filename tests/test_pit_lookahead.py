@@ -9,9 +9,16 @@ boundary on the canonical table and across the parsing offset round-trip.
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
-from pit import get_equity_bars_daily, get_jquants_records
+from personal_history_compact_support import (
+    insert_compact_bar,
+    insert_compact_master,
+    install_compact_schema,
+)
+from pit import get_equity_bars_daily, get_equity_master, get_jquants_records
 from storage.sqlite_store import SqliteStore
 
 
@@ -136,6 +143,67 @@ def test_lookahead_boundary_matrix(tmp_path, as_of, expected):
     path = _seed_bars(tmp_path, BARS)
     res = get_equity_bars_daily(as_of=as_of, code="8697", db_path=path)
     assert {r["date"] for r in res} == expected
+
+
+def test_compact_v7_available_at_time_wall(tmp_path):
+    """Compact v7 rows use the same available_at IS NOT NULL / <= as_of gate."""
+    path = tmp_path / "compact-wall.sqlite"
+    SqliteStore(path).close()
+    with sqlite3.connect(path) as conn:
+        install_compact_schema(conn)
+        for day, avail, close in (
+            ("2025-03-30", "2025-03-31T17:00:00+09:00", 100.0),
+            ("2025-03-31", "2025-04-01T17:00:00+09:00", 110.0),
+            ("2025-04-01", "2025-04-02T17:00:00+09:00", 120.0),
+        ):
+            insert_compact_bar(
+                conn,
+                code="8697",
+                day=day,
+                available_at=avail,
+                ingested_at=avail if avail is not None else "2025-04-01T17:00:00+09:00",
+                close=close,
+                volume=1.0,
+                turnover_value=1.0,
+                adjustment_volume=1.0,
+                morning_turnover_value=1.0,
+                afternoon_turnover_value=1.0,
+                morning_adjustment_volume=1.0,
+                afternoon_adjustment_volume=1.0,
+                market_cap=1.0,
+            )
+        insert_compact_master(
+            conn,
+            snapshot_date="2025-04-01",
+            code="8697",
+            event_time="2025-04-01T00:00:00+09:00",
+            available_at="2025-04-01T08:00:00+09:00",
+            ingested_at="2025-04-01T08:00:00+09:00",
+            market_code="1",
+        )
+        conn.commit()
+
+    equal = get_equity_bars_daily(
+        as_of="2025-04-01T17:00:00+09:00", code="8697", db_path=path
+    )
+    before = get_equity_bars_daily(
+        as_of="2025-04-01T16:59:59+09:00", code="8697", db_path=path
+    )
+    utc_equal = get_equity_bars_daily(
+        as_of="2025-04-01T08:00:00+00:00", code="8697", db_path=path
+    )
+    master_before = get_equity_master(
+        as_of="2025-04-01T07:59:59+09:00", db_path=path
+    )
+    master_equal = get_equity_master(
+        as_of="2025-04-01T08:00:00+09:00", db_path=path
+    )
+
+    assert {row["date"] for row in equal} == {"2025-03-30", "2025-03-31"}
+    assert {row["date"] for row in before} == {"2025-03-30"}
+    assert {row["date"] for row in utc_equal} == {"2025-03-30", "2025-03-31"}
+    assert master_before.rows == []
+    assert [row["snapshot_date"] for row in master_equal.rows] == ["2025-04-01"]
 
 
 if __name__ == "__main__":

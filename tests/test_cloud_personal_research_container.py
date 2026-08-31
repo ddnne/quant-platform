@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import sqlite3
 import sys
 import tarfile
@@ -18,9 +19,21 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from personal_history_compact_support import (
+    insert_compact_bar,
+    insert_compact_master,
+    install_compact_schema,
+    stamp_compact_manifest,
+)
+from research.factor_cohorts import get_research_cohort, is_am_pm_factor_cohort
 from research.personal_base_sleeve import (
     EXPECTED_BASE_COHORT_DIGEST,
     EXPECTED_BASE_STRATEGY_SPEC_DIGEST,
+)
+from research.personal_universe import (
+    personal_research_universe_decision_cutoff,
+    personal_research_universe_rule_digest,
+    personal_universe_selector,
 )
 from research.personal_index_vol_overlay import canonical_trading_calendar_digest
 
@@ -74,10 +87,15 @@ def _job(
     job_id: str = "exact-four-test",
     *,
     compressed: bool = False,
+    cohort_id: str = "diverse-core-v1",
+    universe_id: str = "topix_all",
+    cohort_digest: str | None = None,
+    universe_rule_digest: str | None = None,
 ):
     body = {
-        "cohort_digest": COHORT_DIGEST,
-        "cohort_id": "diverse-core-v1",
+        "cohort_digest": cohort_digest
+        or str(get_research_cohort(cohort_id).to_dict()["cohort_digest"]),
+        "cohort_id": cohort_id,
         "job_id": job_id,
         "period_end": "2026-08-27",
         "period_start": "2022-04-19",
@@ -87,9 +105,10 @@ def _job(
             + (".gz" if compressed else "")
         ),
         "snapshot_sha256": sha,
-        "universe_id": "topix_all",
-        "universe_rule_digest": (
-            "sha256:7b88c89520a7cf751e7b63f160c16130183dba3c7c7e9c3a56660f3149c2c048"
+        "universe_id": universe_id,
+        "universe_rule_digest": universe_rule_digest
+        or personal_research_universe_rule_digest(
+            universe_id, am_pm=is_am_pm_factor_cohort(cohort_id)
         ),
     }
     request_digest = "sha256:" + hashlib.sha256(
@@ -335,6 +354,11 @@ def test_snapshot_digest_mismatch_is_a_durable_failure(tmp_path: Path) -> None:
     assert not tuple(work.iterdir())
 
 
+def test_snapshot_capacity_splits_transport_from_expanded_database() -> None:
+    assert service.MAX_SNAPSHOT_BYTES == 4 * 1024 * 1024 * 1024
+    assert service.SNAPSHOT_MAX_DATABASE_BYTES == 5 * 1024 * 1024 * 1024
+
+
 def test_snapshot_download_rejects_an_oversized_content_length(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -489,7 +513,7 @@ def test_gzip_snapshot_download_enforces_exact_raw_bound(
     raw = b"z" * expanded_size
     packed = gzip.compress(raw, mtime=0)
     spec = _job(hashlib.sha256(raw).hexdigest(), compressed=True)
-    monkeypatch.setattr(service, "MAX_SNAPSHOT_BYTES", 1024)
+    monkeypatch.setattr(service, "SNAPSHOT_MAX_DATABASE_BYTES", 1024)
     monkeypatch.setattr(
         service.urllib.request,
         "urlopen",
@@ -642,6 +666,42 @@ def test_research_process_timeout_kills_the_entire_new_process_group(
     assert raised.value.stderr == "bounded stderr"
 
 
+def test_execute_job_passes_local_market_data_opt_in_to_child_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "fixture.sqlite"
+    sha = _sqlite(source)
+    spec = _job(sha)
+    seen_env: list[dict[str, str]] = []
+
+    def capture_env(args, **kwargs):
+        del args
+        seen_env.append(kwargs["env"])
+        raise RuntimeError("stop after capturing child env")
+
+    monkeypatch.delenv("QP_ALLOW_LOCAL_MARKET_DATA", raising=False)
+    monkeypatch.setattr(service, "_run_research_process", capture_env)
+    work = tmp_path / "work"
+    work.mkdir()
+    uploads: list[tuple[str, bytes, str]] = []
+
+    def copy_snapshot(_spec, destination):
+        destination.write_bytes(source.read_bytes())
+
+    manifest = service.execute_job(
+        spec,
+        work_root=work,
+        command=(sys.executable, "unused.py"),
+        downloader=copy_snapshot,
+        uploader=_uploader(uploads),
+    )
+
+    assert seen_env
+    assert seen_env[0]["QP_ALLOW_LOCAL_MARKET_DATA"] == "1"
+    assert os.environ.get("QP_ALLOW_LOCAL_MARKET_DATA") is None
+    assert manifest["status"] == "FAILED"
+
+
 def _redigest(spec):
     return replace(spec, request_digest=spec.derived_request_digest())
 
@@ -694,8 +754,6 @@ def test_job_spec_rejects_long_short_on_a_compact_universe() -> None:
 
 
 def test_python_container_defaults_to_am_diverse_and_allows_am_ids() -> None:
-    from research.factor_cohorts import get_research_cohort
-
     assert service.DEFAULT_PERSONAL_COHORT_ID == "diverse-core-am-pm-v1"
     for cohort_id in (
         "price-relative-am-pm-v1",
@@ -708,36 +766,20 @@ def test_python_container_defaults_to_am_diverse_and_allows_am_ids() -> None:
         "compact-market-diverse-v1",
     ):
         assert cohort_id in service.PERSONAL_EXECUTABLE_COHORT_IDS
-    am_digest = str(get_research_cohort("diverse-core-am-pm-v1").to_dict()["cohort_digest"])
-    compact_digest = str(
-        get_research_cohort("compact-market-diverse-am-pm-v1").to_dict()["cohort_digest"]
-    )
-    am = _redigest(
-        replace(
-            _job("a" * 64),
-            cohort_id="diverse-core-am-pm-v1",
-            cohort_digest=am_digest,
-        )
-    )
+    am = _job("a" * 64, cohort_id="diverse-core-am-pm-v1")
     am.validate()
-    compact = _redigest(
-        replace(
-            _job("a" * 64),
-            cohort_id="compact-market-diverse-am-pm-v1",
-            cohort_digest=compact_digest,
-            universe_id="topix_core30",
-        )
+    compact = _job(
+        "a" * 64,
+        cohort_id="compact-market-diverse-am-pm-v1",
+        universe_id="topix_core30",
     )
     compact.validate()
     with pytest.raises(service.JobInputError, match="profile mismatch"):
         replace(_job("a" * 64), universe_id="topix_core30").validate()
     with pytest.raises(service.JobInputError, match="profile mismatch"):
-        _redigest(
-            replace(
-                _job("a" * 64),
-                cohort_id="sector-relative-ls-am-pm-v1",
-                universe_id="topix_core30",
-            )
+        replace(
+            _job("a" * 64, cohort_id="sector-relative-ls-am-pm-v1"),
+            universe_id="topix_core30",
         ).validate()
 
 
@@ -969,8 +1011,8 @@ def test_child_rejects_tampered_am_cohort_digest() -> None:
         "snapshot_key": f"research/personal/snapshots/sha256={sha}.sqlite",
         "snapshot_sha256": sha,
         "universe_id": "topix_all",
-        "universe_rule_digest": (
-            "sha256:7b88c89520a7cf751e7b63f160c16130183dba3c7c7e9c3a56660f3149c2c048"
+        "universe_rule_digest": personal_research_universe_rule_digest(
+            "topix_all", am_pm=True
         ),
     }
     request_digest = "sha256:" + hashlib.sha256(
@@ -997,12 +1039,10 @@ def test_am_job_binds_repo_mode_and_rejects_legacy_sleeve_reference(
 ) -> None:
     source = tmp_path / "fixture.sqlite"
     sha = _sqlite(source)
-    spec = _redigest(
-        replace(
-            _job(sha, job_id="am-base-sleeve"),
-            cohort_id="sector-relative-ls-am-pm-v1",
-            cohort_digest=AM_LONG_SHORT_COHORT_DIGEST,
-        )
+    spec = _job(
+        sha,
+        job_id="am-base-sleeve",
+        cohort_id="sector-relative-ls-am-pm-v1",
     )
     identity = service._personal_cohort_identity(spec.cohort_id)
     assert identity["execution_mode"] == "am_signal_pm_close"
@@ -1023,12 +1063,10 @@ def test_am_execute_job_rejects_tampered_child_execution_mode(
 ) -> None:
     source = tmp_path / "fixture.sqlite"
     sha = _sqlite(source)
-    spec = _redigest(
-        replace(
-            _job(sha, job_id="am-mode-tamper"),
-            cohort_id="sector-relative-ls-am-pm-v1",
-            cohort_digest=AM_LONG_SHORT_COHORT_DIGEST,
-        )
+    spec = _job(
+        sha,
+        job_id="am-mode-tamper",
+        cohort_id="sector-relative-ls-am-pm-v1",
     )
 
     def completed_source_run(args, **kwargs):
@@ -1058,6 +1096,178 @@ def test_am_execute_job_rejects_tampered_child_execution_mode(
     )
     assert manifest["status"] == "FAILED"
     assert "execution_mode" in manifest["error"]
+
+
+def _am_cli_summary(spec, output: Path, *, universe_rule_digest: str) -> dict[str, object]:
+    (output / "reports").mkdir(parents=True, exist_ok=True)
+    report_json = output / "reports" / "report.json"
+    report_md = output / "reports" / "report.md"
+    report_json.write_text('{"ok":true}', encoding="utf-8")
+    report_md.write_text("# report", encoding="utf-8")
+    summary = _runner_summary(spec)
+    summary["universe_rule_digest"] = universe_rule_digest
+    summary["report_json"] = str(report_json)
+    summary["report_markdown"] = str(report_md)
+    summary["execution_mode"] = "am_signal_pm_close"
+    summary["execution_contract_digest"] = AM_EXECUTION_CONTRACT_DIGEST
+    return summary
+
+
+def test_am_topix_all_cli_report_digest_uses_morning_cutoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    from research import personal_cli
+
+    morning = personal_research_universe_rule_digest("topix_all", am_pm=True)
+    session = personal_research_universe_rule_digest("topix_all", am_pm=False)
+    assert morning != session
+    assert personal_research_universe_decision_cutoff(am_pm=True) == "morning_close"
+    assert personal_research_universe_decision_cutoff(am_pm=False) == "session_close"
+    assert personal_universe_selector(
+        "topix_all", decision_cutoff="morning_close"
+    ).rule_digest == morning
+
+    database = tmp_path / "input.sqlite"
+    database.touch()
+    report_json = tmp_path / "cli-report.json"
+    report_md = tmp_path / "cli-report.md"
+    report_json.write_text("{}", encoding="utf-8")
+    report_md.write_text("# report", encoding="utf-8")
+
+    class FakeService:
+        def run(self, request):
+            cutoff = personal_research_universe_decision_cutoff(
+                am_pm=is_am_pm_factor_cohort(request.cohort_id)
+            )
+            selector = personal_universe_selector(
+                request.universe_id, decision_cutoff=cutoff
+            )
+            return SimpleNamespace(
+                report_id="sha256:" + "1" * 64,
+                report_json_path=report_json,
+                report_markdown_path=report_md,
+                snapshot=SimpleNamespace(
+                    snapshot_id="sha256:" + "2" * 64,
+                    logical_data_snapshot_id="sha256:" + "3" * 64,
+                ),
+                candidate_count=4,
+                evaluated_count=4,
+                hold_count=0,
+                unexpected_errors=0,
+                cohort_id=request.cohort_id,
+                cohort_digest=str(
+                    get_research_cohort(request.cohort_id).to_dict()["cohort_digest"]
+                ),
+                universe_id=selector.selector_id,
+                universe_rule_digest=selector.rule_digest,
+                execution_mode="am_signal_pm_close",
+                execution_contract_digest=AM_EXECUTION_CONTRACT_DIGEST,
+                base_sleeve_artifact_path=None,
+                base_sleeve_artifact_digest=None,
+                base_sleeve_archive_member=None,
+                base_sleeve_artifact=None,
+                non_candidate_source_backtest_count=0,
+                exit_code=0,
+            )
+
+    monkeypatch.setattr(personal_cli, "PersonalResearchService", FakeService)
+    monkeypatch.setenv(personal_cli.LOCAL_MARKET_DATA_ENV, "1")
+    code = personal_cli.main(
+        [
+            "--db",
+            str(database),
+            "--start",
+            "2022-04-19",
+            "--end",
+            "2026-08-27",
+            "--output",
+            str(tmp_path),
+            "--cohort",
+            "diverse-core-am-pm-v1",
+            "--universe",
+            "topix_all",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert payload["universe_rule_digest"] == morning
+    assert payload["universe_id"] == "topix_all"
+
+    spec = _job(
+        "a" * 64,
+        job_id="am-topix-all-morning",
+        cohort_id="diverse-core-am-pm-v1",
+    )
+    assert spec.universe_rule_digest == morning
+    with pytest.raises(
+        service.JobInputError, match="universe_rule_digest does not match"
+    ):
+        _job(
+            "a" * 64,
+            job_id="am-topix-all-session",
+            cohort_id="diverse-core-am-pm-v1",
+            universe_rule_digest=session,
+        )
+
+    source = tmp_path / "fixture.sqlite"
+    sha = _sqlite(source)
+    spec = _job(
+        sha,
+        job_id="am-topix-all-run",
+        cohort_id="diverse-core-am-pm-v1",
+    )
+
+    def copy_snapshot(_spec, destination):
+        destination.write_bytes(source.read_bytes())
+
+    def run_matching(args, **kwargs):
+        del kwargs
+        output = Path(args[args.index("--output") + 1])
+        summary = _am_cli_summary(spec, output, universe_rule_digest=morning)
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(summary, sort_keys=True) + "\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(service, "_run_research_process", run_matching)
+    work = tmp_path / "work-ok"
+    work.mkdir()
+    completed = service.execute_job(
+        spec,
+        work_root=work,
+        command=(sys.executable, "unused.py"),
+        downloader=copy_snapshot,
+        uploader=_uploader([]),
+    )
+    assert completed["status"] == "COMPLETED"
+    assert completed["universe_rule_digest"] == morning
+
+    def run_mismatch(args, **kwargs):
+        del kwargs
+        output = Path(args[args.index("--output") + 1])
+        summary = _am_cli_summary(spec, output, universe_rule_digest=session)
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(summary, sort_keys=True) + "\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(service, "_run_research_process", run_mismatch)
+    work_bad = tmp_path / "work-mismatch"
+    work_bad.mkdir()
+    failed = service.execute_job(
+        spec,
+        work_root=work_bad,
+        command=(sys.executable, "unused.py"),
+        downloader=copy_snapshot,
+        uploader=_uploader([]),
+    )
+    assert failed["status"] == "FAILED"
+    assert "qp-research violated the fixed personal policy" in failed["error"]
+
+    legacy = _job("a" * 64, job_id="legacy-session", cohort_id="diverse-core-v1")
+    assert legacy.universe_rule_digest == session
 
 
 def test_exit_two_with_no_evaluated_candidates_archives_completed_result(
@@ -1435,11 +1645,11 @@ def test_manager_allows_only_one_active_job_and_same_job_is_idempotent() -> None
 
 
 def _research_period_document(period_start: str, period_end: str) -> dict:
-    template = _job("a" * 64, "bound-2200")
+    template = _job("a" * 64, "bound-7000")
     identity = {
         "cohort_digest": template.cohort_digest,
         "cohort_id": template.cohort_id,
-        "job_id": "bound-2200",
+        "job_id": "bound-7000",
         "period_end": period_end,
         "period_start": period_start,
         "runner_version": service.RUNNER_VERSION,
@@ -1450,8 +1660,8 @@ def _research_period_document(period_start: str, period_end: str) -> dict:
     }
     return {
         **identity,
-        "manifest_key": "research/personal/jobs/job=bound-2200/manifest.json",
-        "result_key": "research/personal/jobs/job=bound-2200/result.tar.gz",
+        "manifest_key": "research/personal/jobs/job=bound-7000/manifest.json",
+        "result_key": "research/personal/jobs/job=bound-7000/result.tar.gz",
         "request_digest": "sha256:" + hashlib.sha256(
             json.dumps(
                 identity,
@@ -1463,13 +1673,13 @@ def _research_period_document(period_start: str, period_end: str) -> dict:
     }
 
 
-def test_inclusive_research_period_cap_is_2200_calendar_dates() -> None:
+def test_inclusive_research_period_cap_is_7000_calendar_dates() -> None:
     service.JobSpec.from_document(
-        _research_period_document("2020-01-01", "2026-01-08")
+        _research_period_document("2007-01-01", "2026-03-01")
     )
     with pytest.raises(service.JobInputError, match="inclusive calendar dates"):
         service.JobSpec.from_document(
-            _research_period_document("2020-01-01", "2026-01-09")
+            _research_period_document("2007-01-01", "2026-03-02")
         )
 
 
@@ -2195,3 +2405,298 @@ def test_overlay_terminal_put_uses_family_identity_headers(monkeypatch) -> None:
     assert seen["x-overlay-input-manifest-digest"] == spec.input_manifest_digest
     assert seen["x-personal-job-id"] == spec.job_id
     assert seen["x-personal-request-digest"] == spec.request_digest
+
+
+def _coverage_connection() -> sqlite3.Connection:
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def _insert_compact_master(
+    connection: sqlite3.Connection, *, snapshot_date: str = "2024-01-04"
+) -> None:
+    insert_compact_master(connection, snapshot_date=snapshot_date)
+
+
+def _insert_compact_bar(
+    connection: sqlite3.Connection,
+    *,
+    day: str,
+    code: str = "1301",
+    morning_close: float | None = 100.0,
+    afternoon_close: float | None = 100.0,
+    morning_turnover: float | None = 5000.0,
+    afternoon_turnover: float | None = 5000.0,
+    morning_volume: float | None = 500.0,
+    afternoon_volume: float | None = 500.0,
+) -> None:
+    insert_compact_bar(
+        connection,
+        day=day,
+        code=code,
+        available_at=f"{day}T15:30:00+09:00",
+        ingested_at=f"{day}T16:00:00+09:00",
+        morning_adjustment_close=morning_close,
+        afternoon_adjustment_close=afternoon_close,
+        morning_turnover_value=morning_turnover,
+        afternoon_turnover_value=afternoon_turnover,
+        morning_adjustment_volume=morning_volume,
+        afternoon_adjustment_volume=afternoon_volume,
+    )
+
+
+def _install_exact_compact_v7(connection: sqlite3.Connection) -> None:
+    install_compact_schema(connection)
+
+
+def _install_typed_bars(
+    connection: sqlite3.Connection,
+    *,
+    morning_close: float | None = 100.0,
+    afternoon_close: float | None = 101.0,
+) -> None:
+    connection.execute(
+        """
+        CREATE TABLE jquants_daily_bars (
+            source TEXT,
+            code TEXT,
+            date TEXT,
+            event_time TEXT,
+            available_at TEXT,
+            ingested_at TEXT,
+            close REAL,
+            morning_adjustment_close REAL,
+            morning_turnover_value REAL,
+            morning_adjustment_volume REAL,
+            afternoon_adjustment_close REAL,
+            afternoon_turnover_value REAL,
+            afternoon_adjustment_volume REAL
+        )
+        """
+    )
+    connection.execute(
+        "INSERT INTO jquants_daily_bars("
+        "source,code,date,event_time,available_at,ingested_at,close,"
+        "morning_adjustment_close,morning_turnover_value,"
+        "morning_adjustment_volume,afternoon_adjustment_close,"
+        "afternoon_turnover_value,afternoon_adjustment_volume"
+        ") VALUES ('jquants','1001','2024-01-04',"
+        "'2024-01-04T15:00:00+09:00','2024-01-04T15:00:00+09:00',"
+        "'2024-01-04T16:00:00+09:00',100,?,?,?,?,?,?)",
+        (
+            morning_close,
+            10.0 if morning_close is not None else None,
+            1.0 if morning_close is not None else None,
+            afternoon_close,
+            20.0 if afternoon_close is not None else None,
+            2.0 if afternoon_close is not None else None,
+        ),
+    )
+
+
+def test_session_coverage_reads_compact_v7_am_pm_counts() -> None:
+    connection = _coverage_connection()
+    try:
+        _install_exact_compact_v7(connection)
+        _insert_compact_master(connection)
+        _insert_compact_bar(connection, day="2024-01-04")
+        _insert_compact_bar(
+            connection,
+            day="2024-01-05",
+            afternoon_close=None,
+            afternoon_turnover=None,
+            afternoon_volume=None,
+        )
+        _insert_compact_bar(
+            connection,
+            day="2024-01-06",
+            morning_close=None,
+            morning_turnover=None,
+            morning_volume=None,
+            afternoon_close=None,
+            afternoon_turnover=None,
+            afternoon_volume=None,
+        )
+        coverage = service._session_coverage(connection)
+    finally:
+        connection.close()
+
+    assert coverage["bar_rows"] == 3
+    assert coverage["am"] == {
+        "morning_adjustment_close_non_null": 2,
+        "morning_turnover_value_non_null": 2,
+        "morning_adjustment_volume_non_null": 2,
+    }
+    assert coverage["pm"] == {
+        "afternoon_adjustment_close_non_null": 1,
+        "afternoon_turnover_value_non_null": 1,
+        "afternoon_adjustment_volume_non_null": 1,
+    }
+
+
+def test_session_coverage_fail_closed_state_mapping() -> None:
+    invalid = _coverage_connection()
+    try:
+        stamp_compact_manifest(invalid)
+        _install_typed_bars(invalid)
+        with pytest.raises(RuntimeError, match="compact v7 marker or schema"):
+            service._session_coverage(invalid)
+    finally:
+        invalid.close()
+
+    mixed = _coverage_connection()
+    try:
+        _install_exact_compact_v7(mixed)
+        _insert_compact_master(mixed)
+        _insert_compact_bar(mixed, day="2024-01-04")
+        _install_typed_bars(mixed)
+        with pytest.raises(RuntimeError, match="mix compact"):
+            service._session_coverage(mixed)
+    finally:
+        mixed.close()
+
+
+def test_session_coverage_keeps_typed_bars_for_v6_manifest_without_compact() -> None:
+    connection = _coverage_connection()
+    try:
+        stamp_compact_manifest(connection, "personal-draft-history/v6")
+        _install_typed_bars(
+            connection, morning_close=100.0, afternoon_close=None
+        )
+        coverage = service._session_coverage(connection)
+    finally:
+        connection.close()
+
+    assert coverage["bar_rows"] == 1
+    assert coverage["am"]["morning_adjustment_close_non_null"] == 1
+    assert coverage["pm"]["afternoon_adjustment_close_non_null"] == 0
+
+
+def _snapshot_request_digest(request: dict) -> str:
+    body = {
+        "format": service.PERSONAL_HISTORY_FORMAT,
+        "job_id": request["job_id"],
+        "lookback_sessions": request["lookback_sessions"],
+        "period_end": request["period_end"],
+        "period_start": request["period_start"],
+        "runner_version": service.RUNNER_VERSION,
+    }
+    return "sha256:" + hashlib.sha256(
+        json.dumps(body, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _snapshot_spec(job_id: str) -> service.SnapshotJobSpec:
+    request = {
+        "job_id": job_id,
+        "lookback_sessions": 10,
+        "period_end": "2024-12-31",
+        "period_start": "2024-01-01",
+        "runner_version": service.RUNNER_VERSION,
+        "format": service.PERSONAL_HISTORY_FORMAT,
+    }
+    return service.SnapshotJobSpec.from_document(
+        {
+            **request,
+            "deployment_id": "test-deploy",
+            "environment": "production",
+            "manifest_key": f"research/personal/snapshot-builds/job={job_id}/manifest.json",
+            "max_database_bytes": service.SNAPSHOT_MAX_DATABASE_BYTES,
+            "request_digest": _snapshot_request_digest(request),
+        }
+    )
+
+
+class _CompactCoverageHydrator:
+    def __init__(self, **kwargs):
+        self.store = kwargs["store"]
+        self.plan = kwargs["plan"]
+
+    def hydrate(self):
+        connection = self.store._conn
+        _install_exact_compact_v7(connection)
+        _insert_compact_master(connection)
+        _insert_compact_bar(connection, day="2024-01-04")
+        _insert_compact_bar(
+            connection,
+            day="2024-01-05",
+            afternoon_close=None,
+            afternoon_turnover=None,
+            afternoon_volume=None,
+        )
+        connection.commit()
+        lookback = int(self.plan.lookback_sessions)
+        return SimpleNamespace(
+            bar_start="2024-01-04",
+            segment_counts={"markets_calendar": 1, "equities_master": 1},
+            fetched_rows=2,
+            written_rows=2,
+            actual_lookback_sessions=lookback,
+            lookback_truncated=False,
+        )
+
+
+class _InvalidCompactHydrator(_CompactCoverageHydrator):
+    def hydrate(self):
+        connection = self.store._conn
+        stamp_compact_manifest(connection)
+        connection.commit()
+        return SimpleNamespace(
+            bar_start="2024-01-04",
+            segment_counts={"markets_calendar": 1, "equities_master": 1},
+            fetched_rows=1,
+            written_rows=1,
+        )
+
+
+def test_snapshot_build_records_compact_v7_session_coverage(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(service, "PersonalHistoryHydrator", _CompactCoverageHydrator)
+    spec = _snapshot_spec("snap-compact-coverage")
+    uploads: list[str] = []
+
+    def upload(key, data, *, spec, content_digest, extra_headers=None):
+        del spec, content_digest, extra_headers, data
+        uploads.append(key)
+
+    manifest = service.execute_snapshot_job(
+        spec, work_root=tmp_path, uploader=upload, client_factory=lambda _spec: object()
+    )
+    assert manifest["status"] == "COMPLETED"
+    assert manifest["bar_rows"] == 2
+    assert manifest["am_field_non_null_coverage"] == {
+        "morning_adjustment_close_non_null": 2,
+        "morning_turnover_value_non_null": 2,
+        "morning_adjustment_volume_non_null": 2,
+    }
+    assert manifest["pm_field_non_null_coverage"] == {
+        "afternoon_adjustment_close_non_null": 1,
+        "afternoon_turnover_value_non_null": 1,
+        "afternoon_adjustment_volume_non_null": 1,
+    }
+    assert uploads == [manifest["snapshot_key"], spec.manifest_key]
+
+
+def test_snapshot_build_fails_closed_on_invalid_compact_marker(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(service, "PersonalHistoryHydrator", _InvalidCompactHydrator)
+    spec = _snapshot_spec("snap-compact-invalid")
+    uploads: list[tuple[str, dict]] = []
+
+    def upload(key, data, *, spec, content_digest, extra_headers=None):
+        del spec, content_digest, extra_headers
+        body = data.read_bytes() if isinstance(data, Path) else bytes(data)
+        uploads.append(
+            (key, json.loads(body) if key.endswith("manifest.json") else {})
+        )
+
+    manifest = service.execute_snapshot_job(
+        spec, work_root=tmp_path, uploader=upload, client_factory=lambda _spec: object()
+    )
+    assert manifest["status"] == "FAILED"
+    assert "compact v7 marker or schema" in manifest["error"]
+    assert manifest.get("snapshot_key") is None
+    assert [key for key, _ in uploads] == [spec.manifest_key]

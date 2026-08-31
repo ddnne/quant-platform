@@ -19,6 +19,7 @@ import {
 } from "./personal_vol_am_pm_panel_writer_contract";
 import { PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION } from "./personal_vol_am_pm_panel";
 import {
+  PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES,
   isPersonalResearchJobId,
   isPersonalResearchSnapshotKey,
 } from "./personal_research_contract";
@@ -171,7 +172,7 @@ async function getInput(
   const reference = listedRef(loaded.manifest, key);
   if (!reference) return json({ error: "vol panel input key not listed" }, 403);
   const maximum = isPersonalResearchSnapshotKey(key)
-    ? 4 * 1024 * 1024 * 1024
+    ? PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES
     : PERSONAL_VOL_AM_PM_PANEL_BUILD_MAX_LEGACY_PANEL_BYTES;
   const object =
     request.method === "HEAD"

@@ -82,26 +82,29 @@ class _FakeHydrator:
             "'2024-01-04T15:00:00+09:00','2024-01-04T16:00:00+09:00',100)"
         )
         self.store._conn.commit()
+        lookback = int(self.plan.lookback_sessions)
         return SimpleNamespace(
             bar_start="2024-01-04",
             segment_counts={"markets_calendar": 1, "equities_master": 1},
             fetched_rows=2,
             written_rows=2,
+            actual_lookback_sessions=lookback,
+            lookback_truncated=False,
         )
 
 
-def test_inclusive_snapshot_period_cap_is_2200_calendar_dates() -> None:
-    accepted = _spec("bound-2200")
+def test_inclusive_snapshot_period_cap_is_7000_calendar_dates() -> None:
+    accepted = _spec("bound-7000")
     document = {
         "deployment_id": accepted.deployment_id,
         "environment": accepted.environment,
         "format": accepted.format,
-        "job_id": "bound-2200",
+        "job_id": "bound-7000",
         "lookback_sessions": accepted.lookback_sessions,
-        "manifest_key": "research/personal/snapshot-builds/job=bound-2200/manifest.json",
+        "manifest_key": "research/personal/snapshot-builds/job=bound-7000/manifest.json",
         "max_database_bytes": accepted.max_database_bytes,
-        "period_end": "2026-01-08",
-        "period_start": "2020-01-01",
+        "period_end": "2026-03-01",
+        "period_start": "2007-01-01",
         "runner_version": accepted.runner_version,
     }
     document["request_digest"] = _digest(
@@ -114,7 +117,7 @@ def test_inclusive_snapshot_period_cap_is_2200_calendar_dates() -> None:
     )
     service.SnapshotJobSpec.from_document(document)
     over = dict(document)
-    over["period_end"] = "2026-01-09"
+    over["period_end"] = "2026-03-02"
     over["request_digest"] = _digest(
         {
             "job_id": over["job_id"],
@@ -152,6 +155,37 @@ def test_snapshot_gzip_and_manifest_last_order(tmp_path: Path, monkeypatch) -> N
     assert manifest["raw_sha256"] != manifest["gzip_sha256"]
     assert manifest["data_start"] == "2024-01-04"
     assert manifest["period_start"] == "2024-01-01"
+    assert manifest["lookback_sessions"] == spec.lookback_sessions
+    assert "requested_lookback_sessions" not in manifest
+    assert manifest["actual_lookback_sessions"] == spec.lookback_sessions
+    assert manifest["lookback_truncated"] is False
+
+
+class _TruncatedHydrator(_FakeHydrator):
+    def hydrate(self):
+        result = super().hydrate()
+        result.actual_lookback_sessions = 0
+        result.lookback_truncated = True
+        return result
+
+
+def test_snapshot_manifest_records_truncated_lookback(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(service, "PersonalHistoryHydrator", _TruncatedHydrator)
+    spec = _spec("snap-lookback-trunc")
+    manifest = service.execute_snapshot_job(
+        spec,
+        work_root=tmp_path,
+        uploader=lambda *args, **kwargs: None,
+        client_factory=lambda _spec: object(),
+    )
+    assert manifest["status"] == "COMPLETED"
+    assert manifest["period_start"] == spec.period_start
+    assert manifest["lookback_sessions"] == spec.lookback_sessions
+    assert "requested_lookback_sessions" not in manifest
+    assert manifest["actual_lookback_sessions"] == 0
+    assert manifest["lookback_truncated"] is True
     assert manifest["research_state"] == "PERSONAL_DRAFT"
     assert manifest["completeness_claim"] == "NONE"
     assert manifest["controlled_live_eligibility"] == "FORBIDDEN"
@@ -230,19 +264,27 @@ def test_snapshot_manifest_includes_cache_metrics_on_failure(
     assert "api_key" not in json.dumps(manifest).lower()
 
 
-def test_planner_admission_budget_splits_operational_six_year_window() -> None:
-    rejected = service.build_personal_history_plan(
+def test_planner_admission_budget_fits_operational_windows_under_five_gib() -> None:
+    assert service.MAX_SNAPSHOT_BYTES == 4 * 1024 * 1024 * 1024
+    assert service.SNAPSHOT_MAX_DATABASE_BYTES == 5 * 1024 * 1024 * 1024
+    six_year = service.build_personal_history_plan(
         period_start="2008-07-07",
         period_end="2014-07-15",
         lookback_sessions=0,
     )
-    accepted = service.build_personal_history_plan(
+    two_year = service.build_personal_history_plan(
         period_start="2008-07-07",
         period_end="2010-06-30",
         lookback_sessions=252,
     )
-    assert rejected.estimated_bytes > service.SNAPSHOT_MAX_DATABASE_BYTES
-    assert accepted.estimated_bytes < service.SNAPSHOT_MAX_DATABASE_BYTES
+    full_compact = service.build_personal_history_plan(
+        period_start="2008-01-01",
+        period_end="2026-08-31",
+        lookback_sessions=252,
+    )
+    assert six_year.estimated_bytes < service.SNAPSHOT_MAX_DATABASE_BYTES
+    assert two_year.estimated_bytes < service.SNAPSHOT_MAX_DATABASE_BYTES
+    assert full_compact.estimated_bytes < service.SNAPSHOT_MAX_DATABASE_BYTES
 
 
 def test_oversized_plan_fails_before_acquisition_without_snapshot_upload(
@@ -293,6 +335,8 @@ def test_oversized_plan_fails_before_acquisition_without_snapshot_upload(
     assert hydrator_calls == []
     assert [key for key, _ in uploads] == [spec.manifest_key]
     assert manifest.get("snapshot_key") is None
+    assert "snapshot planning allowance exceeds builder cap" in manifest["error"]
+    assert "conservative" not in manifest["error"]
     assert f"estimated={spec.max_database_bytes + 1}" in manifest["error"]
     assert f"limit={spec.max_database_bytes}" in manifest["error"]
     assert "api_key" not in json.dumps(manifest).lower()
@@ -321,6 +365,50 @@ def test_safe_sized_plan_still_reaches_snapshot_execution(
     assert factory_calls == [spec]
     assert manifest["status"] == "COMPLETED"
     assert uploads == [manifest["snapshot_key"], spec.manifest_key]
+
+
+def test_oversized_gzip_fails_locally_before_hash_and_upload(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(service, "PersonalHistoryHydrator", _FakeHydrator)
+    spec = _spec("snap-gzip-oversize")
+    uploads: list[str] = []
+    hashed: list[str] = []
+
+    def fake_gzip(source: Path, destination: Path) -> None:
+        del source
+        destination.write_bytes(b"tiny")
+
+    original_stat = Path.stat
+
+    def huge_gzip_stat(self, *args, **kwargs):
+        if self.name == "personal-history.sqlite.gz":
+            return SimpleNamespace(st_size=service.MAX_SNAPSHOT_BYTES + 1)
+        return original_stat(self, *args, **kwargs)
+
+    real_sha256 = service._sha256_file
+
+    def tracking_sha256(path: Path) -> str:
+        hashed.append(Path(path).name)
+        return real_sha256(path)
+
+    def upload(key, data, *, spec, content_digest, extra_headers=None):
+        del spec, content_digest, extra_headers, data
+        uploads.append(key)
+        if str(key).endswith(".sqlite.gz"):
+            raise AssertionError("gzip snapshot uploader must not be called")
+
+    monkeypatch.setattr(service, "_gzip_file", fake_gzip)
+    monkeypatch.setattr(Path, "stat", huge_gzip_stat)
+    monkeypatch.setattr(service, "_sha256_file", tracking_sha256)
+    manifest = service.execute_snapshot_job(
+        spec, work_root=tmp_path, uploader=upload, client_factory=lambda _spec: object()
+    )
+    assert manifest["status"] == "FAILED"
+    assert "compressed snapshot exceeds 4 GiB transport cap" in manifest["error"]
+    assert [key for key in uploads] == [spec.manifest_key]
+    assert manifest.get("snapshot_key") is None
+    assert "personal-history.sqlite.gz" not in hashed
 
 
 def test_size_failure_does_not_publish_snapshot(tmp_path: Path, monkeypatch) -> None:
