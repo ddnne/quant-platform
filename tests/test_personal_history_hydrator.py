@@ -458,6 +458,7 @@ def test_older_compact_format_cannot_resume_without_refetch(tmp_path) -> None:
         "personal-draft-history/v1",
         "personal-draft-history/v3",
         "personal-draft-history/v4",
+        "personal-draft-history/v5",
     ):
         store._conn.execute(
             "UPDATE personal_history_manifest SET format=? WHERE singleton=1",

@@ -43,7 +43,7 @@ PERSONAL_HISTORY_DATASETS: tuple[str, ...] = (
     "fins_summary",
     "equities_bars_daily",
 )
-PERSONAL_HISTORY_FORMAT = "personal-draft-history/v5"
+PERSONAL_HISTORY_FORMAT = "personal-draft-history/v6"
 PERSONAL_RESEARCH_STATE = "PERSONAL_DRAFT"
 PERSONAL_COMPLETENESS_CLAIM = "NONE"
 PERSONAL_CONTROLLED_ELIGIBILITY = "FORBIDDEN"
@@ -419,6 +419,107 @@ def _validated_selection(
         "completion_digest": expected_completion,
         "contributing_page_digests": list(contributing),
     }
+
+
+_FINS_COMPACT_SELECTION_KEYS = frozenset(
+    {
+        "query",
+        "selected_row_count",
+        "selected_digest",
+        "contributing_page_digests",
+        "shared_scan_digest",
+        "integrity_digest",
+    }
+)
+
+
+def _shared_scan_fields(
+    page_evidence: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Independently derive the canonical fins source-scan record from pages."""
+
+    pages = [dict(page) for page in page_evidence]
+    if not pages:
+        raise PersonalHistoryError("shared fins scan has no page evidence")
+    scanned = [str(page["sha256"]) for page in pages]
+    for digest in scanned:
+        _page_digest_hex(digest)
+    source_row_count = 0
+    for page in pages:
+        count = int(page["row_count"])
+        if count < 0:
+            raise PersonalHistoryError("shared fins scan page row count is invalid")
+        source_row_count += count
+    completion = _canonical_digest(
+        {
+            "scanned_page_digests": [f"sha256:{digest}" for digest in scanned],
+            "source_row_count": source_row_count,
+            "page_count": len(scanned),
+            "status": "COMPLETE",
+        }
+    )
+    return {
+        "scan_digest": _canonical_digest(pages),
+        "page_count": len(pages),
+        "source_row_count": source_row_count,
+        "completion_digest": completion,
+        "scanned_page_digests": scanned,
+        "page_evidence": pages,
+    }
+
+
+def _compact_fins_selection(
+    selection: Mapping[str, Any], *, scan_digest: str
+) -> dict[str, Any]:
+    compact = {
+        "query": dict(selection["query"]),
+        "selected_row_count": int(selection["selected_row_count"]),
+        "selected_digest": str(selection["selected_digest"]),
+        "contributing_page_digests": list(selection["contributing_page_digests"]),
+        "shared_scan_digest": scan_digest,
+    }
+    compact["integrity_digest"] = _canonical_digest(compact)
+    return compact
+
+
+def _validated_compact_fins_selection(selection: Any) -> dict[str, Any]:
+    if not isinstance(selection, Mapping):
+        raise PersonalHistoryError("fins_summary selection evidence is invalid")
+    if set(selection) != _FINS_COMPACT_SELECTION_KEYS:
+        raise PersonalHistoryError("fins_summary selection evidence fields are closed")
+    query = selection.get("query")
+    if not isinstance(query, Mapping):
+        raise PersonalHistoryError("selection query is missing")
+    contributing_raw = selection.get("contributing_page_digests")
+    if not isinstance(contributing_raw, list):
+        raise PersonalHistoryError("selection contributing pages are invalid")
+    contributing = [_page_digest_hex(item) for item in contributing_raw]
+    selected_count = _count_field(selection.get("selected_row_count"))
+    if selected_count < 0:
+        raise PersonalHistoryError("selection row count does not match selected rows")
+    selected_digest = str(selection.get("selected_digest") or "")
+    _page_digest_hex(selected_digest)
+    scan_digest = str(selection.get("shared_scan_digest") or "")
+    _page_digest_hex(scan_digest)
+    body = {
+        "query": dict(query),
+        "selected_row_count": selected_count,
+        "selected_digest": selected_digest
+        if selected_digest.startswith("sha256:")
+        else "sha256:" + selected_digest,
+        "contributing_page_digests": contributing,
+        "shared_scan_digest": scan_digest
+        if scan_digest.startswith("sha256:")
+        else "sha256:" + scan_digest,
+    }
+    expected_integrity = _canonical_digest(body)
+    declared_integrity = str(selection.get("integrity_digest") or "")
+    if not declared_integrity or _page_digest_hex(
+        declared_integrity
+    ) != _page_digest_hex(expected_integrity):
+        raise PersonalHistoryError("selection digest does not match selected rows")
+    body["integrity_digest"] = expected_integrity
+    return body
 
 
 def _page_evidence(
@@ -867,6 +968,22 @@ class PersonalHistoryHydrator:
         )
         self._connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS personal_history_shared_scans (
+                scan_digest TEXT PRIMARY KEY,
+                dataset TEXT NOT NULL,
+                page_count INTEGER NOT NULL,
+                source_row_count INTEGER NOT NULL,
+                completion_digest TEXT NOT NULL,
+                scanned_page_digests_json TEXT NOT NULL,
+                page_evidence_json TEXT NOT NULL,
+                CHECK (dataset = 'fins_summary'),
+                CHECK (page_count >= 1),
+                CHECK (source_row_count >= 0)
+            )
+            """
+        )
+        self._connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS personal_history_segments (
                 dataset TEXT NOT NULL,
                 segment_id TEXT NOT NULL,
@@ -930,8 +1047,9 @@ class PersonalHistoryHydrator:
                 raise PersonalHistoryError(
                     "personal history database uses an older compact format; "
                     "build a new dedicated SQLite file so PIT classifications, "
-                    "market cap, AM/PM session fields, and the compact "
-                    "personal-fins projection are fetched again"
+                    "market cap, AM/PM session fields, the compact "
+                    "personal-fins projection, and shared fins scan evidence "
+                    "are fetched again"
                 )
             if str(existing["plan_digest"]) != plan_digest:
                 raise PersonalHistoryError(
@@ -1115,11 +1233,51 @@ class PersonalHistoryHydrator:
                 )
             )
             estimated_write_bytes = _estimated_fact_write_bytes(rows)
+            page_evidence_json: str | None
+            selection_evidence_json: str | None
+            stored_page_count = len(page_evidence)
+            scan: Mapping[str, Any] | None = None
+            if dataset == "fins_summary" and selection is not None:
+                scan = _shared_scan_fields(page_evidence)
+                if (
+                    selection["scanned_page_digests"] != scan["scanned_page_digests"]
+                    or selection["source_row_count"] != scan["source_row_count"]
+                    or _page_digest_hex(selection["completion_digest"])
+                    != _page_digest_hex(scan["completion_digest"])
+                    or response_digest != scan["scan_digest"]
+                ):
+                    raise PersonalHistoryError(
+                        "fins_summary selection does not match independently "
+                        "derived shared scan"
+                    )
+                compact = _compact_fins_selection(
+                    selection, scan_digest=scan["scan_digest"]
+                )
+                page_evidence_json = None
+                selection_evidence_json = canonical_json(compact)
+                response_digest = scan["scan_digest"]
+                stored_page_count = scan["page_count"]
+                estimated_write_bytes += len(selection_evidence_json.encode("utf-8")) * 3
+                known_scan = self._connection.execute(
+                    "SELECT 1 FROM personal_history_shared_scans WHERE scan_digest=?",
+                    (scan["scan_digest"],),
+                ).fetchone()
+                if known_scan is None:
+                    estimated_write_bytes += (
+                        len(canonical_json(scan["page_evidence"]).encode("utf-8")) * 3
+                    )
+            else:
+                page_evidence_json = canonical_json(page_evidence)
+                selection_evidence_json = (
+                    None if selection is None else canonical_json(selection)
+                )
             self._guard_capacity(
                 phase=f"before commit {segment_id}",
                 additional_bytes=estimated_write_bytes,
             )
             self._connection.execute("BEGIN IMMEDIATE")
+            if scan is not None:
+                self._upsert_shared_fins_scan(scan)
             written = self.store.upsert("jquants_records", rows, commit=False)
             self._connection.execute(
                 """
@@ -1135,9 +1293,9 @@ class PersonalHistoryHydrator:
                     state,
                     len(source_rows),
                     written,
-                    len(page_evidence),
-                    canonical_json(page_evidence),
-                    None if selection is None else canonical_json(selection),
+                    stored_page_count,
+                    page_evidence_json,
+                    selection_evidence_json,
                     response_digest,
                     facts_digest,
                     membership_digest,
@@ -1713,6 +1871,180 @@ class PersonalHistoryHydrator:
             ) from exc
         return generic_count
 
+    def _upsert_shared_fins_scan(self, scan: Mapping[str, Any]) -> None:
+        scan_digest = str(scan["scan_digest"])
+        existing_digests = {
+            str(row[0])
+            for row in self._connection.execute(
+                "SELECT scan_digest FROM personal_history_shared_scans "
+                "WHERE dataset='fins_summary'"
+            )
+        }
+        if existing_digests - {scan_digest}:
+            raise PersonalHistoryError("fins_summary shared scan evidence diverged")
+        existing = self._connection.execute(
+            "SELECT scan_digest,page_count,source_row_count,completion_digest "
+            "FROM personal_history_shared_scans WHERE scan_digest=?",
+            (scan_digest,),
+        ).fetchone()
+        if existing is None:
+            self._connection.execute(
+                """
+                INSERT INTO personal_history_shared_scans (
+                    scan_digest,dataset,page_count,source_row_count,
+                    completion_digest,scanned_page_digests_json,page_evidence_json
+                ) VALUES (?,?,?,?,?,?,?)
+                """,
+                (
+                    scan_digest,
+                    "fins_summary",
+                    int(scan["page_count"]),
+                    int(scan["source_row_count"]),
+                    str(scan["completion_digest"]),
+                    canonical_json(scan["scanned_page_digests"]),
+                    canonical_json(scan["page_evidence"]),
+                ),
+            )
+            inserted = self._connection.execute(
+                "SELECT * FROM personal_history_shared_scans WHERE scan_digest=?",
+                (scan_digest,),
+            ).fetchone()
+            if inserted is None:
+                raise PersonalHistoryError(
+                    "fins_summary shared scan reference is missing"
+                )
+            self._verified_shared_scan_metadata(inserted)
+            return
+        if (
+            int(existing["page_count"]) != int(scan["page_count"])
+            or int(existing["source_row_count"]) != int(scan["source_row_count"])
+            or _page_digest_hex(existing["completion_digest"])
+            != _page_digest_hex(scan["completion_digest"])
+        ):
+            raise PersonalHistoryError(
+                "fins_summary selection does not match independently "
+                "derived shared scan"
+            )
+
+    def _verified_shared_scan_metadata(self, row: sqlite3.Row) -> dict[str, Any]:
+        try:
+            pages = json.loads(row["page_evidence_json"])
+            scanned_stored = json.loads(row["scanned_page_digests_json"])
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise PersonalHistoryError(
+                "shared fins scan evidence is invalid"
+            ) from exc
+        if not isinstance(pages, list) or not isinstance(scanned_stored, list):
+            raise PersonalHistoryError("shared fins scan evidence is invalid")
+        derived = _shared_scan_fields(pages)
+        if derived["scan_digest"] != str(row["scan_digest"]):
+            raise PersonalHistoryError(
+                "shared scan digest does not match page evidence"
+            )
+        if derived["page_count"] != int(row["page_count"]):
+            raise PersonalHistoryError(
+                "shared scan page count does not match page evidence"
+            )
+        if derived["source_row_count"] != int(row["source_row_count"]):
+            raise PersonalHistoryError(
+                "selection source row count does not match pages"
+            )
+        if _page_digest_hex(derived["completion_digest"]) != _page_digest_hex(
+            row["completion_digest"]
+        ):
+            raise PersonalHistoryError(
+                "selection completion digest does not match pages"
+            )
+        if derived["scanned_page_digests"] != [
+            _page_digest_hex(item) for item in scanned_stored
+        ]:
+            raise PersonalHistoryError(
+                "selection scanned pages do not match fetched source pages"
+            )
+        if str(row["dataset"]) != "fins_summary":
+            raise PersonalHistoryError("shared scan dataset is invalid")
+        return {
+            "scan_digest": derived["scan_digest"],
+            "page_count": derived["page_count"],
+            "source_row_count": derived["source_row_count"],
+            "completion_digest": derived["completion_digest"],
+            "scanned_set": set(derived["scanned_page_digests"]),
+        }
+
+    def _validate_shared_fins_scan_evidence(self) -> None:
+        verified: dict[str, dict[str, Any]] = {}
+        for row in self._connection.execute(
+            "SELECT * FROM personal_history_shared_scans"
+        ):
+            metadata = self._verified_shared_scan_metadata(row)
+            verified[metadata["scan_digest"]] = metadata
+        referenced: set[str] = set()
+        saw_shared = False
+        saw_local = False
+        for segment in self._connection.execute(
+            "SELECT segment_id,state,rows_fetched,page_count,page_evidence_json,"
+            "selection_evidence_json,response_digest "
+            "FROM personal_history_segments WHERE dataset='fins_summary'"
+        ):
+            selection_raw = segment["selection_evidence_json"]
+            page_raw = segment["page_evidence_json"]
+            if selection_raw is None:
+                if not page_raw:
+                    raise PersonalHistoryError(
+                        "fins_summary segment is missing page evidence"
+                    )
+                saw_local = True
+                continue
+            saw_shared = True
+            if page_raw is not None:
+                raise PersonalHistoryError(
+                    "fins_summary page evidence must live in the shared scan record"
+                )
+            try:
+                selection = json.loads(selection_raw)
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise PersonalHistoryError(
+                    "fins_summary selection evidence is invalid"
+                ) from exc
+            compact = _validated_compact_fins_selection(selection)
+            scan_digest = compact["shared_scan_digest"]
+            scan = verified.get(scan_digest)
+            if scan is None:
+                raise PersonalHistoryError(
+                    "fins_summary shared scan reference is missing"
+                )
+            referenced.add(scan_digest)
+            expected_code = str(segment["segment_id"]).split(":", 1)[-1]
+            if str(compact["query"].get("code") or "") != expected_code:
+                raise PersonalHistoryError(
+                    "fins_summary selection query does not match the segment"
+                )
+            if str(segment["response_digest"]) != scan_digest:
+                raise PersonalHistoryError(
+                    "fins_summary response digest does not match shared scan"
+                )
+            if int(segment["page_count"]) != int(scan["page_count"]):
+                raise PersonalHistoryError(
+                    "shared scan page count does not match page evidence"
+                )
+            if int(segment["rows_fetched"]) != int(compact["selected_row_count"]):
+                raise PersonalHistoryError(
+                    "selection row count does not match selected rows"
+                )
+            contributing = compact["contributing_page_digests"]
+            if any(digest not in scan["scanned_set"] for digest in contributing):
+                raise PersonalHistoryError("selection cites a page that was not fetched")
+            if int(compact["selected_row_count"]) > 0 and not contributing:
+                raise PersonalHistoryError(
+                    "selection digest does not match selected rows"
+                )
+        if saw_shared and saw_local:
+            raise PersonalHistoryError(
+                "fins_summary cannot mix shared and local page evidence"
+            )
+        if saw_shared and set(verified) != referenced:
+            raise PersonalHistoryError("fins_summary shared scan reference is missing")
+
     def _validate_draft_boundary(self) -> None:
         _assert_personal_draft_store_is_unmanaged(self.store)
         active = self._connection.execute(
@@ -1819,6 +2151,7 @@ class PersonalHistoryHydrator:
             raise PersonalHistoryError(
                 f"personal history PIT policies are incomplete: {sorted(policies)}"
             )
+        self._validate_shared_fins_scan_evidence()
 
     def hydrate(self) -> PersonalHistorySummary:
         self._outcomes = []
