@@ -80,10 +80,10 @@ class _HistoryClient:
         self,
         *,
         fail_once: tuple[str, str] | None = None,
-        omit_bar: tuple[str, str] | None = None,
+        omit_bars: frozenset[tuple[str, str]] = frozenset(),
     ) -> None:
         self.fail_once = fail_once
-        self.omit_bar = omit_bar
+        self.omit_bars = omit_bars
         self.failed = False
         self.calls: Counter[tuple[str, str]] = Counter()
 
@@ -144,7 +144,7 @@ class _HistoryClient:
     def _bars(self, day: str) -> list[dict]:
         rows = []
         for ordinal, code in enumerate(("1001", "1002", "1003", "9001"), start=1):
-            if self.omit_bar == (day, code):
+            if (day, code) in self.omit_bars:
                 continue
             rows.append(
                 {
@@ -898,12 +898,18 @@ def test_plan_admits_2008_2026_under_five_gib() -> None:
 
 def test_bar_breadth_failure_is_checkpointed_without_complete_claim(tmp_path):
     store = SqliteStore(tmp_path / "thin.sqlite")
-    client = _HistoryClient(omit_bar=("2025-01-06", "1002"))
+    # 2025-01-07 has three expected TOPIX codes; two missing exceeds the
+    # small-universe absolute tolerance of one.
+    client = _HistoryClient(
+        omit_bars=frozenset(
+            {("2025-01-07", "1001"), ("2025-01-07", "1002")}
+        )
+    )
     with pytest.raises(PersonalHistoryError, match="observed ratio"):
         PersonalHistoryHydrator(client=client, store=store, plan=_plan()).hydrate()
     checkpoint = store._conn.execute(
         "SELECT state,completeness_claim FROM personal_history_segments "
-        "WHERE segment_id='bars:2025-01-06'"
+        "WHERE segment_id='bars:2025-01-07'"
     ).fetchone()
     assert tuple(checkpoint) == ("FAILED", "NONE")
     manifest = store._conn.execute(
@@ -912,6 +918,7 @@ def test_bar_breadth_failure_is_checkpointed_without_complete_claim(tmp_path):
     assert manifest["status"] == "BUILDING"
     assert manifest["completeness_claim"] == "NONE"
     assert "observed ratio" in manifest["last_error"]
+    assert "allowed-missing" in manifest["last_error"]
     store.close()
 
 
@@ -933,6 +940,83 @@ def test_null_close_is_dropped_and_breadth_guard_decides() -> None:
     )
     assert len(normalized) == 199
     assert all(json.loads(row["payload"])["Code"] != "0000" for row in normalized)
+
+
+def test_compact_bars_tolerate_one_missing_code_without_imputing() -> None:
+    trading_day = "2025-01-06"
+    observed = ("1001", "1002", "1003", "1004", "1005")
+    omitted = "1006"
+    rows = _compact_bars(
+        [
+            {"Code": code, "Date": trading_day, "Close": 100 + index}
+            for index, code in enumerate(observed, start=1)
+        ],
+        trading_day=trading_day,
+        scope_union=frozenset({*observed, omitted}),
+        ingested_at="2025-01-06T16:00:00+09:00",
+    )
+    payloads = [json.loads(row["payload"]) for row in rows]
+    assert [item["Code"] for item in payloads] == list(observed)
+    assert [item["Close"] for item in payloads] == [101, 102, 103, 104, 105]
+    assert all(item["Code"] != omitted for item in payloads)
+    assert len(payloads) == 5
+
+
+def test_compact_bars_reject_two_missing_codes_in_small_universe() -> None:
+    trading_day = "2025-01-06"
+    observed = ("1001", "1002", "1003", "1004")
+    scope = frozenset({*observed, "1005", "1006"})
+    with pytest.raises(
+        PersonalHistoryError,
+        match=r"observed ratio 4/6 is below 0\.995000 \(missing 2, allowed-missing 1\)",
+    ):
+        _compact_bars(
+            [
+                {"Code": code, "Date": trading_day, "Close": 100}
+                for code in observed
+            ],
+            trading_day=trading_day,
+            scope_union=scope,
+            ingested_at="2025-01-06T16:00:00+09:00",
+        )
+
+
+def test_compact_bars_reject_broad_universe_beyond_proportional_tolerance() -> None:
+    trading_day = "2025-01-06"
+    codes = [f"{ordinal:04d}" for ordinal in range(400)]
+    with pytest.raises(
+        PersonalHistoryError,
+        match=r"observed ratio 397/400 is below 0\.995000 \(missing 3, allowed-missing 2\)",
+    ):
+        _compact_bars(
+            [
+                {"Code": code, "Date": trading_day, "Close": 100}
+                for code in codes[3:]
+            ],
+            trading_day=trading_day,
+            scope_union=frozenset(codes),
+            ingested_at="2025-01-06T16:00:00+09:00",
+        )
+
+
+def test_compact_bars_minimum_ratio_one_is_strict() -> None:
+    trading_day = "2025-01-06"
+    with pytest.raises(
+        PersonalHistoryError,
+        match=r"observed ratio 5/6 is below 1\.000000 \(missing 1, allowed-missing 0\)",
+    ):
+        _compact_bars(
+            [
+                {"Code": code, "Date": trading_day, "Close": 100}
+                for code in ("1001", "1002", "1003", "1004", "1005")
+            ],
+            trading_day=trading_day,
+            scope_union=frozenset(
+                {"1001", "1002", "1003", "1004", "1005", "1006"}
+            ),
+            ingested_at="2025-01-06T16:00:00+09:00",
+            minimum_ratio=1.0,
+        )
 
 
 def _one_bar(**overrides: object) -> dict:
