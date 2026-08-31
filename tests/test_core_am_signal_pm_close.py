@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+import pit
 from core import (
     PERSONAL_RETROSPECTIVE_ADJUSTED,
     PIT_ADJUSTED,
@@ -15,6 +16,12 @@ from core import (
 from core.execution import morning_close_as_of
 from core.strategy_protocol import BarContext, OrderIntent
 from core.universe import membership_at
+from strategies.spec import (
+    FeatureRef,
+    StrategySpec,
+    StrategySpecStrategy,
+    ThresholdRule,
+)
 
 from _coreseed import TRADING_DAYS, seed_db
 
@@ -468,3 +475,162 @@ def test_unheld_missing_m_and_a_stay_no_fill_without_adjc(tmp_path):
     assert all(trade["price"] != 999.0 for trade in res.trades)
     assert res.trades[0]["fill_date"] == D1
     assert res.trades[0]["price"] == 110.0
+
+
+LOOKBACK_DAYS = 30
+
+
+def _momentum_spec() -> StrategySpec:
+    return StrategySpec(
+        strategy_id="am_spec_threshold",
+        version="strategy-spec/v2",
+        rule=ThresholdRule(
+            FeatureRef(
+                id="retrospective_split_adjusted_momentum_n",
+                version="1.0.0",
+                params={"n": 1},
+            ),
+            -1.0,
+        ),
+    )
+
+
+class RecordingSpecStrategy(StrategySpecStrategy):
+    def __init__(self, spec: StrategySpec) -> None:
+        super().__init__(spec)
+        self.ctxs: list[BarContext] = []
+
+    def on_bar(self, ctx: BarContext) -> list[OrderIntent]:
+        self.ctxs.append(ctx)
+        return super().on_bar(ctx)
+
+
+class LegacyRollingSpecStrategy(RecordingSpecStrategy):
+    consumes_rolling_bars = True
+
+
+class AlwaysLongSpecStrategy(RecordingSpecStrategy):
+    def __init__(self) -> None:
+        super().__init__(_momentum_spec())
+
+    def on_bar(self, ctx: BarContext) -> list[OrderIntent]:
+        self.ctxs.append(ctx)
+        return [OrderIntent(code=CODE, target_weight=1.0)]
+
+
+class LegacyAlwaysLongSpecStrategy(AlwaysLongSpecStrategy):
+    consumes_rolling_bars = True
+
+
+def _spy_am_snapshot_windows(monkeypatch) -> list[tuple[str, str, str]]:
+    real = pit.get_personal_retrospective_am_signal_equity_bars_daily
+    seen: list[tuple[str, str, str]] = []
+
+    def wrapped(as_of=None, code=None, from_event=None, to_event=None, **kwargs):
+        seen.append((str(from_event), str(to_event), str(as_of)[:10]))
+        return real(
+            as_of=as_of,
+            code=code,
+            from_event=from_event,
+            to_event=to_event,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(
+        pit,
+        "get_personal_retrospective_am_signal_equity_bars_daily",
+        wrapped,
+    )
+    return seen
+
+
+def _trading_payload(result):
+    return {
+        "trades": result.trades,
+        "equity_curve": result.equity_curve,
+        "metrics": result.metrics,
+    }
+
+
+def _run_lookback(db, strategy):
+    return _run(db, strategy, lookback_days=LOOKBACK_DAYS)
+
+
+def _assert_windows(windows, *, compact: bool) -> None:
+    assert windows
+    for from_event, to_event, session in windows:
+        assert to_event == session
+        if compact:
+            assert from_event == to_event == session
+        else:
+            assert from_event != to_event
+
+
+def _run_pair(db, compact, windows, legacy):
+    compact_res = _run_lookback(db, compact)
+    compact_windows = list(windows)
+    windows.clear()
+    return compact_res, compact_windows, _run_lookback(db, legacy)
+
+
+def test_strategy_spec_am_path_queries_current_session_only_and_matches_legacy(
+    tmp_path, monkeypatch
+):
+    db = _seed(tmp_path, madjc=100.0, aadjc=110.0, adjc=999.0)
+    windows = _spy_am_snapshot_windows(monkeypatch)
+    compact = RecordingSpecStrategy(_momentum_spec())
+    legacy = LegacyRollingSpecStrategy(_momentum_spec())
+    compact_res, compact_windows, legacy_res = _run_pair(
+        db, compact, windows, legacy
+    )
+
+    assert compact.consumes_rolling_bars is False
+    _assert_windows(compact_windows, compact=True)
+    for ctx in compact.ctxs:
+        assert {bar.date for bar in ctx.bars[CODE]} == {ctx.date}
+        assert ctx.prices[CODE] == 100.0
+    assert compact_res.metadata["context_bar_lookback_days"] == 0
+    _assert_windows(windows, compact=False)
+    assert legacy_res.metadata["context_bar_lookback_days"] == LOOKBACK_DAYS
+    assert _trading_payload(compact_res) == _trading_payload(legacy_res)
+    assert compact_res.trades
+    assert len(legacy.ctxs[-1].bars[CODE]) == len(TRADING_DAYS)
+
+
+def test_custom_am_strategy_still_receives_full_lookback_bars(
+    tmp_path, monkeypatch
+):
+    db = _seed(tmp_path, madjc=100.0, aadjc=110.0, adjc=999.0)
+    windows = _spy_am_snapshot_windows(monkeypatch)
+    rec = Recorder()
+    res = _run_lookback(db, rec)
+
+    assert getattr(rec, "consumes_rolling_bars", True) is True
+    last = rec.ctxs[-1]
+    assert last.date == D3
+    assert [bar.date for bar in last.bars[CODE]] == TRADING_DAYS
+    _assert_windows(windows, compact=False)
+    assert res.metadata["context_bar_lookback_days"] == LOOKBACK_DAYS
+
+
+def test_strategy_spec_am_missing_morning_prices_match_legacy_fail_closed(
+    tmp_path,
+):
+    db = _seed(
+        tmp_path,
+        madjc_by_day={D0: 100.0, D2: 120.0, D3: 120.0},
+        aadjc_by_day={D0: 100.0, D1: 110.0, D2: 120.0, D3: 120.0},
+        adjc=999.0,
+    )
+    compact = AlwaysLongSpecStrategy()
+    compact_res = _run_lookback(db, compact)
+    legacy = LegacyAlwaysLongSpecStrategy()
+    legacy_res = _run_lookback(db, legacy)
+
+    assert [ctx.date for ctx in compact.ctxs] == [D0, D2, D3]
+    assert [ctx.date for ctx in legacy.ctxs] == [D0, D2, D3]
+    assert _trading_payload(compact_res) == _trading_payload(legacy_res)
+    assert compact_res.metadata["data_quality"] == legacy_res.metadata["data_quality"]
+    assert D1 in compact_res.metrics["skipped_decision_dates"]
+    assert compact_res.metrics["comparable"] is False
+    assert compact_res.metadata["context_bar_lookback_days"] == 0
