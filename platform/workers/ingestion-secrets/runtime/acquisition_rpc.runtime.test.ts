@@ -650,28 +650,34 @@ describe("governed J-Quants WorkerEntrypoint RPC", () => {
     const fetchMock = installFetch(async () => upstream('{"data":[]}'));
     const valid = await requestFor("indices_bars_daily_topix");
     const fakeDigest = `sha256:${"0".repeat(64)}`;
-    const invalid: unknown[] = [
-      { ...valid, url: "https://evil.example/" },
-      { ...valid, query: { code: "86970" } },
-      { ...valid, headers: { "x-api-key": "caller" } },
-      { ...valid, token: "shared-token" },
-      { ...valid, method: "POST" },
-      { ...valid, environment: "staging" },
-      { ...valid, dataset_id: "equities_master" },
-      { ...valid, source_capability_digest: fakeDigest },
-      { ...valid, coverage_policy_digest: fakeDigest },
-      { ...valid, query_contract_digest: fakeDigest },
-      { ...valid, target_registry_digest: fakeDigest },
-      { ...valid, segment_end: "2024-02-28" },
-      { ...valid, segment_id: "2026-08", segment_start: "2026-08-01", segment_end: "2026-08-31" },
-      { ...valid, acquisition_nonce: "predictable" },
-      { ...valid, continuation_token: "jqa2.invalid.invalid" },
+    const currentJstMonth = new Date(Date.now() + 9 * 60 * 60 * 1000)
+      .toISOString()
+      .slice(0, 7);
+    const invalid: { name: string; request: unknown }[] = [
+      { name: "caller url", request: { ...valid, url: "https://evil.example/" } },
+      { name: "caller query", request: { ...valid, query: { code: "86970" } } },
+      { name: "caller headers", request: { ...valid, headers: { "x-api-key": "caller" } } },
+      { name: "caller token", request: { ...valid, token: "shared-token" } },
+      { name: "caller method", request: { ...valid, method: "POST" } },
+      { name: "environment mismatch", request: { ...valid, environment: "staging" } },
+      { name: "dataset_id mismatch", request: { ...valid, dataset_id: "equities_master" } },
+      { name: "source_capability_digest", request: { ...valid, source_capability_digest: fakeDigest } },
+      { name: "coverage_policy_digest", request: { ...valid, coverage_policy_digest: fakeDigest } },
+      { name: "query_contract_digest", request: { ...valid, query_contract_digest: fakeDigest } },
+      { name: "target_registry_digest", request: { ...valid, target_registry_digest: fakeDigest } },
+      { name: "segment_end mismatch", request: { ...valid, segment_end: "2024-02-28" } },
+      {
+        name: "unclosed current segment",
+        request: await requestFor("indices_bars_daily_topix", currentJstMonth),
+      },
+      { name: "predictable nonce", request: { ...valid, acquisition_nonce: "predictable" } },
+      { name: "invalid continuation token", request: { ...valid, continuation_token: "jqa2.invalid.invalid" } },
     ];
     const untyped = rpc as unknown as { fetch_governed_page(request: unknown): Promise<Response> };
-    for (const request of invalid) {
-      const response = await untyped.fetch_governed_page(request);
-      expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({ error: "request_rejected" });
+    for (const item of invalid) {
+      const response = await untyped.fetch_governed_page(item.request);
+      expect(response.status, item.name).toBe(400);
+      expect(await response.json(), item.name).toEqual({ error: "request_rejected" });
     }
     expect(fetchMock).not.toHaveBeenCalled();
   });
