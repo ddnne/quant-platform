@@ -1029,6 +1029,21 @@ def _validated_bar_number(value: Any, field: str) -> int | float:
     return number if original is None else original
 
 
+def _allowed_missing_observed_bars(expected: int, minimum_ratio: float) -> int:
+    """Missing expected codes tolerated by one compact daily-bar session.
+
+    Uses integer ``floor(expected * (1 - minimum_ratio))`` so float rounding
+    cannot change the budget.  Ratios below 1.0 also allow one missing code
+    (a 5/6 2008-style session).  ``minimum_ratio >= 1.0`` stays strict.
+    """
+
+    if expected <= 0 or minimum_ratio >= 1.0:
+        return 0
+    numerator, denominator = minimum_ratio.as_integer_ratio()
+    proportional = expected * (denominator - numerator) // denominator
+    return max(1, proportional)
+
+
 def _compact_bars(
     rows: Sequence[Mapping[str, Any]],
     *,
@@ -1060,8 +1075,9 @@ def _compact_bars(
             if value is not None:
                 item[canonical] = _validated_bar_number(value, canonical)
         # Suspended/no-trade issues can be present with a null close.  Exclude
-        # them from research facts and let the observed-breadth ratio decide
-        # whether the day remains usable; one null must not abort a broad day.
+        # them from research facts; they stay absent and untradable that day.
+        # Do not impute a price row.  The observed-breadth gate decides whether
+        # the day remains usable.
         if "Close" not in item:
             continue
         compact.append(item)
@@ -1069,11 +1085,15 @@ def _compact_bars(
         raise PersonalHistoryError(
             f"equities_bars_daily {trading_day} has no rows in observed TOPIX union"
         )
-    ratio = len(compact) / len(scope_union)
-    if ratio < minimum_ratio:
+    observed = len(compact)
+    expected = len(scope_union)
+    missing = expected - observed
+    allowed_missing = _allowed_missing_observed_bars(expected, minimum_ratio)
+    if missing > allowed_missing:
         raise PersonalHistoryError(
-            f"equities_bars_daily {trading_day} observed ratio {ratio:.6f} "
-            f"is below {minimum_ratio:.6f} ({len(compact)}/{len(scope_union)})"
+            f"equities_bars_daily {trading_day} observed ratio "
+            f"{observed}/{expected} is below {minimum_ratio:.6f} "
+            f"(missing {missing}, allowed-missing {allowed_missing})"
         )
     session_close = _session_close(trading_day, "equities_bars_daily.Date")
     normalized = JN.normalize_generic(
