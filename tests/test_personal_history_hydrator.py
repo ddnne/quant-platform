@@ -37,6 +37,7 @@ from ingestion.personal_history import (
     PERSONAL_HISTORY_SCOPE_VERSION,
     PersonalHistoryError,
     PersonalHistoryHydrator,
+    personal_snapshot_data_floor,
     _PERSONAL_FINS_FEATURE_ALIASES,
     _compact_bars,
     _compact_calendar,
@@ -314,6 +315,10 @@ def test_hydrator_pit_timing_compression_compaction_and_draft_boundary(tmp_path)
 
     assert summary.completeness_claim == "NONE"
     assert summary.controlled_live_eligibility == "FORBIDDEN"
+    assert summary.actual_lookback_sessions == 1
+    assert summary.lookback_truncated is False
+    assert summary.bar_start == "2025-01-03"
+    assert summary.period_start == "2025-01-06"
     manifest = store._conn.execute(
         "SELECT * FROM personal_history_manifest"
     ).fetchone()
@@ -820,12 +825,12 @@ def _membership_change_planning_allowance(estimated_sessions: int) -> int:
 def _expected_plan_bytes(plan) -> int:
     sessions = plan.estimated_trading_sessions
     change_days = _membership_change_planning_allowance(sessions)
+    effective_start = max(
+        date.fromisoformat(plan.period_start),
+        date.fromisoformat(personal_snapshot_data_floor()),
+    )
     generic_json_rows = (
-        (
-            date.fromisoformat(plan.period_end)
-            - date.fromisoformat(plan.period_start)
-        ).days
-        + 1
+        (date.fromisoformat(plan.period_end) - effective_start).days + 1
     ) * 100
     bar_rows = sessions * DEFAULT_TOPIX_CODE_ESTIMATE
     master_rows = DEFAULT_TOPIX_CODE_ESTIMATE * change_days
@@ -849,6 +854,8 @@ def test_plan_membership_change_allowance_is_period_dependent() -> None:
         lookback_sessions=252,
         today=date(2026, 8, 31),
     )
+    assert short.period_start == "2025-01-06"
+    assert short.period_start > personal_snapshot_data_floor()
     assert short.estimated_trading_sessions == 5
     assert _membership_change_planning_allowance(5) == 6
     assert short.estimated_bytes == _expected_plan_bytes(short)
@@ -869,8 +876,12 @@ def test_plan_admits_2008_2026_under_five_gib() -> None:
         lookback_sessions=252,
         today=date(2026, 8, 31),
     )
+    effective_start = max(
+        date.fromisoformat(plan.period_start),
+        date.fromisoformat(personal_snapshot_data_floor()),
+    )
     generic_json_rows = (
-        date.fromisoformat(plan.period_end) - date.fromisoformat(plan.period_start)
+        date.fromisoformat(plan.period_end) - effective_start
     ).days + 1
     generic_json_rows *= 100
     compact_rows = plan.estimated_structured_rows - generic_json_rows
@@ -878,6 +889,7 @@ def test_plan_admits_2008_2026_under_five_gib() -> None:
         compact_rows * DEFAULT_COMPACT_STORAGE_BYTES_PER_ROW
         + generic_json_rows * DEFAULT_GENERIC_JSON_STORAGE_BYTES_PER_ROW
     )
+    assert plan.estimated_trading_sessions == 4736
     assert plan.estimated_bytes == _expected_plan_bytes(plan)
     assert plan.estimated_bytes < DEFAULT_MAX_DATABASE_BYTES
     assert DEFAULT_COMPACT_STORAGE_BYTES_PER_ROW == 256
@@ -1248,15 +1260,251 @@ def test_plan_does_not_clamp_later_calendar_start() -> None:
     assert plan.calendar_start > _markets_calendar_official_floor()
 
 
-def test_plan_rejects_period_end_before_markets_calendar_official_floor() -> None:
-    floor = date.fromisoformat(_markets_calendar_official_floor())
-    with pytest.raises(PersonalHistoryError, match="official availability"):
+def test_plan_rejects_period_end_before_profile_floor() -> None:
+    floor = date.fromisoformat(personal_snapshot_data_floor())
+    calendar_floor = date.fromisoformat(_markets_calendar_official_floor())
+    assert floor > calendar_floor
+    with pytest.raises(PersonalHistoryError, match="personal snapshot data floor"):
         build_personal_history_plan(
             period_start=(floor - timedelta(days=30)).isoformat(),
             period_end=(floor - timedelta(days=1)).isoformat(),
             lookback_sessions=0,
             today=floor,
         )
+
+
+class _FloorHistoryClient:
+    """Synthetic 2008 client. Weekday calendar; no real market data."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, str]]] = []
+        self.master_floor = source_capability_contract_for(
+            "equities_master"
+        ).earliest_official_availability
+        self.profile_floor = personal_snapshot_data_floor()
+        self.calendar_floor = source_capability_contract_for(
+            "markets_calendar"
+        ).earliest_official_availability
+
+    def fetch_dataset_evidenced(self, dataset: str, **params):
+        recorded = {key: str(value) for key, value in params.items()}
+        self.calls.append((dataset, recorded))
+        if dataset == "markets_calendar":
+            start = str(params["from"])
+            end = str(params["to"])
+            assert start >= self.calendar_floor
+            rows = _HistoryClient._calendar(start, end)
+        elif dataset == "equities_master":
+            day = str(params["date"])
+            if day < self.master_floor:
+                raise AssertionError(f"master queried before floor: {day}")
+            rows = [
+                {
+                    "Code": "1001",
+                    "Date": day,
+                    "Mkt": "0111",
+                    "S17": "1",
+                    "S33": "0050",
+                    "ScaleCat": "TOPIX Core30",
+                },
+                {
+                    "Code": "1002",
+                    "Date": day,
+                    "Mkt": "0112",
+                    "S17": "1",
+                    "S33": "0050",
+                    "ScaleCat": "TOPIX Small 1",
+                },
+            ]
+        elif dataset == "fins_summary":
+            code = str(params["code"])
+            rows = [
+                {
+                    "Code": code,
+                    "DiscDate": self.profile_floor,
+                    "DiscTime": "09:00:00",
+                    "DiscNo": f"disc-{code}",
+                    "EarningsPerShare": 1.25,
+                }
+            ]
+        elif dataset == "equities_bars_daily":
+            day = str(params["date"])
+            if day < self.profile_floor:
+                raise AssertionError(f"bars queried before profile floor: {day}")
+            rows = [
+                {
+                    "Code": code,
+                    "Date": day,
+                    "Close": 100 + ordinal,
+                    "AdjustmentClose": 100 + ordinal,
+                    "Volume": 1_000 * ordinal,
+                    "AdjustmentVolume": 1_000 * ordinal,
+                    "TurnoverValue": 1_000_000 * ordinal,
+                    "MktCap": 10_000_000 * ordinal,
+                    "MAdjC": 10 + ordinal,
+                    "AAdjC": 20 + ordinal,
+                    "MVa": 100 * ordinal,
+                    "AVa": 200 * ordinal,
+                    "MAdjVo": 10 * ordinal,
+                    "AAdjVo": 20 * ordinal,
+                }
+                for ordinal, code in enumerate(("1001", "1002"), start=1)
+            ]
+        else:  # pragma: no cover
+            raise AssertionError(dataset)
+        body = json.dumps({"data": rows}, separators=(",", ":")).encode()
+        page = _Page(
+            request_path=f"/v2/{dataset}",
+            request_params=MappingProxyType(dict(params)),
+            response_status=200,
+            response_body=body,
+        )
+        return _Fetch(tuple(rows), (page,))
+
+
+def test_2008_jan1_request_truncates_lookback_to_profile_floor(tmp_path):
+    profile_floor = personal_snapshot_data_floor()
+    master_floor = source_capability_contract_for(
+        "equities_master"
+    ).earliest_official_availability
+    fins_floor = source_capability_contract_for(
+        "fins_summary"
+    ).earliest_official_availability
+    assert profile_floor == fins_floor
+    assert master_floor < profile_floor
+    plan = build_personal_history_plan(
+        period_start="2008-01-01",
+        period_end="2008-07-08",
+        lookback_sessions=252,
+        calendar_window_days=366,
+        today=date(2008, 8, 1),
+    )
+    assert plan.period_start == "2008-01-01"
+    assert plan.period_end == "2008-07-08"
+    assert plan.lookback_sessions == 252
+    assert plan.calendar_start == _markets_calendar_official_floor()
+    assert plan.estimated_trading_sessions == 2
+    assert plan.estimated_bytes == _expected_plan_bytes(plan)
+    store = SqliteStore(tmp_path / "floor-2008.sqlite")
+    client = _FloorHistoryClient()
+    hydrator = PersonalHistoryHydrator(
+        client=client, store=store, plan=plan
+    )
+    summary = hydrator.hydrate()
+    manifest = store._conn.execute(
+        "SELECT status,plan_json FROM personal_history_manifest"
+    ).fetchone()
+    assert manifest["status"] == "COMPLETE_DRAFT"
+    stored_plan = json.loads(manifest["plan_json"])
+    assert stored_plan["period_start"] == "2008-01-01"
+    assert stored_plan["lookback_sessions"] == 252
+    assert summary.status == "COMPLETE_DRAFT"
+    assert summary.period_start == "2008-01-01"
+    assert summary.actual_lookback_sessions == 0
+    assert summary.lookback_truncated is True
+    assert summary.bar_start == "2008-07-07"
+    master_days = [
+        params["date"]
+        for dataset, params in client.calls
+        if dataset == "equities_master"
+    ]
+    bar_days = [
+        params["date"]
+        for dataset, params in client.calls
+        if dataset == "equities_bars_daily"
+    ]
+    assert master_days
+    assert min(master_days) >= master_floor
+    assert min(master_days) == "2008-07-04"
+    assert bar_days == ["2008-07-07", "2008-07-08"]
+    assert min(bar_days) >= profile_floor
+    compact_days = {row["date"] for row in _compact_bar_rows(store)}
+    assert compact_days == {"2008-07-07", "2008-07-08"}
+    calls_after = list(client.calls)
+    resumed = hydrator.hydrate()
+    assert resumed.bar_start == summary.bar_start
+    assert resumed.actual_lookback_sessions == summary.actual_lookback_sessions
+    assert resumed.lookback_truncated is True
+    assert client.calls == calls_after
+    store.close()
+
+
+def test_later_lookback_zero_starts_at_requested_period(tmp_path):
+    plan = build_personal_history_plan(
+        period_start="2025-01-06",
+        period_end="2025-01-08",
+        lookback_sessions=0,
+        calendar_window_days=366,
+        today=date(2025, 2, 1),
+    )
+    assert plan.period_start == "2025-01-06"
+    assert plan.estimated_trading_sessions == 3
+    store = SqliteStore(tmp_path / "lookback-zero.sqlite")
+    client = _HistoryClient()
+    summary = PersonalHistoryHydrator(
+        client=client, store=store, plan=plan
+    ).hydrate()
+    bar_days = sorted(
+        identity
+        for dataset, identity in client.calls
+        if dataset == "equities_bars_daily"
+    )
+    assert bar_days[0] == "2025-01-06"
+    assert summary.bar_start == "2025-01-06"
+    assert summary.actual_lookback_sessions == 0
+    assert summary.lookback_truncated is False
+    store.close()
+
+
+class _SkipThenFailClosedClient(_HistoryClient):
+    @staticmethod
+    def _master(day: str) -> list[dict]:
+        if day >= "2025-01-08":
+            return [
+                {
+                    "Code": "1004",
+                    "Date": day,
+                    "Mkt": "0111",
+                    "S17": "1",
+                    "S33": "0050",
+                    "ScaleCat": "TOPIX Core30",
+                }
+            ]
+        return _HistoryClient._master(day)
+
+    @staticmethod
+    def _fins(code: str) -> list[dict]:
+        if code not in {"1001", "1002", "1003"}:
+            return []
+        return [
+            {
+                "Code": code,
+                "DiscDate": "2025-01-06",
+                "DiscNo": f"disc-{code}",
+                "EarningsPerShare": 123.4,
+            }
+        ]
+
+
+def test_leading_empty_fins_membership_is_skipped_then_fail_closed(tmp_path):
+    store = SqliteStore(tmp_path / "skip-then-fail.sqlite")
+    client = _SkipThenFailClosedClient()
+    with pytest.raises(
+        PersonalHistoryError, match="PIT-visible fins is empty for 2025-01-08"
+    ):
+        PersonalHistoryHydrator(client=client, store=store, plan=_plan()).hydrate()
+    bar_days = sorted(
+        identity
+        for dataset, identity in client.calls
+        if dataset == "equities_bars_daily"
+    )
+    assert "2025-01-03" not in bar_days
+    assert "2025-01-06" not in bar_days
+    assert "2025-01-07" in bar_days
+    assert store._conn.execute(
+        "SELECT status FROM personal_history_manifest"
+    ).fetchone()[0] == "BUILDING"
+    store.close()
 
 
 def test_saved_proxy_rate_is_clamped_but_direct_rate_is_not() -> None:

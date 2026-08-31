@@ -1529,6 +1529,8 @@ def execute_snapshot_job(
                 "data_start": summary.bar_start,
                 "calendar_start": plan.calendar_start,
                 "calendar_end": spec.period_end,
+                "actual_lookback_sessions": summary.actual_lookback_sessions,
+                "lookback_truncated": bool(summary.lookback_truncated),
                 "dataset_segment_counts": dict(summary.segment_counts),
                 "fetched_rows": summary.fetched_rows,
                 "written_rows": summary.written_rows,

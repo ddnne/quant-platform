@@ -50,6 +50,22 @@ PERSONAL_HISTORY_DATASETS: tuple[str, ...] = (
     "fins_summary",
     "equities_bars_daily",
 )
+
+
+def _official_availability(dataset: str) -> str:
+    return source_capability_contract_for(dataset).earliest_official_availability
+
+
+def personal_snapshot_data_floor() -> str:
+    """Earliest day a personal snapshot can hydrate bars.
+
+    The floor is the latest ``earliest_official_availability`` among the
+    compact-v7 source contracts. It is not a hardcoded calendar date.
+    """
+
+    return max(_official_availability(dataset) for dataset in PERSONAL_HISTORY_DATASETS)
+
+
 PERSONAL_HISTORY_FORMAT = PERSONAL_HISTORY_COMPACT_FORMAT
 PERSONAL_RESEARCH_STATE = "PERSONAL_DRAFT"
 PERSONAL_COMPLETENESS_CLAIM = "NONE"
@@ -154,6 +170,8 @@ class PersonalHistorySummary:
     written_rows: int
     skipped_segments: int
     database_bytes: int
+    actual_lookback_sessions: int
+    lookback_truncated: bool
     research_state: str = PERSONAL_RESEARCH_STATE
     completeness_claim: str = PERSONAL_COMPLETENESS_CLAIM
     controlled_live_eligibility: str = PERSONAL_CONTROLLED_ELIGIBILITY
@@ -253,26 +271,36 @@ def build_personal_history_plan(
 
     lookback = int(lookback_sessions)
     window_days = int(calendar_window_days)
-    official_floor = date.fromisoformat(
-        source_capability_contract_for(
-            "markets_calendar"
-        ).earliest_official_availability
-    )
-    if end < official_floor:
+    calendar_floor = date.fromisoformat(_official_availability("markets_calendar"))
+    profile_floor = date.fromisoformat(personal_snapshot_data_floor())
+    if end < profile_floor:
         raise PersonalHistoryError(
-            "period_end is before markets_calendar official availability; "
-            "calendar_start cannot exceed period_end"
+            "period_end is before the personal snapshot data floor"
         )
     # Same conservative conversion used by PersonalResearchService, plus two
     # weeks so the first requested master snapshot has an observed predecessor.
+    # Calendar may start before the profile floor so a master seed on/after
+    # the master contract floor remains observable.
     calendar_buffer = max(30, lookback * 2 + 30) + 14
     calendar_start = max(
         start - timedelta(days=calendar_buffer),
-        official_floor,
+        calendar_floor,
     )
-    all_days = (end - start).days + 1
-    estimated_sessions = sum(1 for day in _iter_days(start, end) if day.weekday() < 5)
-    estimated_sessions += lookback
+    effective_start = max(start, profile_floor)
+    if start <= profile_floor:
+        available_lookback = 0
+    else:
+        available_lookback = sum(
+            1
+            for day in _iter_days(profile_floor, start - timedelta(days=1))
+            if day.weekday() < 5
+        )
+    planned_lookback = min(lookback, available_lookback)
+    all_days = (end - effective_start).days + 1
+    estimated_sessions = sum(
+        1 for day in _iter_days(effective_start, end) if day.weekday() < 5
+    )
+    estimated_sessions += planned_lookback
     calendar_segments = sum(
         1 for _ in _iter_windows(calendar_start, end, window_days)
     )
@@ -1641,26 +1669,55 @@ class PersonalHistoryHydrator:
         return trading
 
     def _bar_and_master_days(self, trading: Sequence[str]) -> tuple[str, list[str]]:
-        prior = [day for day in trading if day < self.plan.period_start]
-        if len(prior) < self.plan.lookback_sessions + 1:
+        profile_floor = personal_snapshot_data_floor()
+        master_floor = _official_availability("equities_master")
+        usable = [
+            day
+            for day in trading
+            if profile_floor <= day <= self.plan.period_end
+        ]
+        if not usable:
             raise PersonalHistoryError(
-                "observed calendar does not contain the requested lookback and seed"
+                "research window has no observed trading days on or after "
+                "the personal snapshot data floor"
             )
-        if self.plan.lookback_sessions:
-            bar_start = prior[-self.plan.lookback_sessions]
+        prior = [day for day in usable if day < self.plan.period_start]
+        actual_lookback = min(self.plan.lookback_sessions, len(prior))
+        if actual_lookback:
+            bar_start = prior[-actual_lookback]
         else:
-            bar_start = self.plan.period_start
+            window_start = max(self.plan.period_start, profile_floor)
+            on_or_after = [day for day in usable if day >= window_start]
+            if not on_or_after:
+                raise PersonalHistoryError(
+                    "research window has no observed trading days on or after "
+                    "the personal snapshot data floor"
+                )
+            bar_start = on_or_after[0]
         bar_days = [
             day for day in trading if bar_start <= day <= self.plan.period_end
         ]
         if not bar_days:
             raise PersonalHistoryError("research window has no observed trading days")
-        seed = max(day for day in trading if day < bar_days[0])
-        return bar_start, [seed, *bar_days]
+        seed_days = [
+            day for day in trading if master_floor <= day < bar_days[0]
+        ]
+        if not seed_days:
+            raise PersonalHistoryError(
+                "observed calendar does not contain a master seed on or after "
+                "official master availability"
+            )
+        return bar_start, [seed_days[-1], *bar_days]
 
     def _hydrate_master(self, master_days: Sequence[str]) -> None:
         previous_digest: str | None = None
+        master_floor = _official_availability("equities_master")
         for day in master_days:
+            if day < master_floor:
+                raise PersonalHistoryError(
+                    "equities_master query is before official availability"
+                )
+
             def transform(rows: Sequence[Mapping[str, Any]], stamp: str):
                 normalized, digest = _compact_master(
                     rows, snapshot_day=day, ingested_at=stamp
@@ -1774,9 +1831,16 @@ class PersonalHistoryHydrator:
     ) -> None:
         snapshots = self._master_memberships()
         first_fins = self._first_visible_fins_by_code()
+        profile_floor = personal_snapshot_data_floor()
+        started = False
         for day in trading:
             if day < bar_start or day > self.plan.period_end:
                 continue
+            if day < profile_floor:
+                raise PersonalHistoryError(
+                    "equities_bars_daily query is before the personal "
+                    "snapshot data floor"
+                )
             topix = self._membership_for_day(snapshots, day)
             close = _session_close(day, "equities_bars_daily.Date")
             expected = frozenset(
@@ -1785,6 +1849,8 @@ class PersonalHistoryHydrator:
                 if first_fins.get(code, "9999") <= close
             )
             if not expected:
+                if not started:
+                    continue
                 raise PersonalHistoryError(
                     f"TOPIX intersect PIT-visible fins is empty for {day}"
                 )
@@ -1803,6 +1869,11 @@ class PersonalHistoryHydrator:
                 ),
                 membership_digest=_canonical_digest(sorted(expected)),
                 expected_rows=len(expected),
+            )
+            started = True
+        if not started:
+            raise PersonalHistoryError(
+                "TOPIX intersect PIT-visible fins is empty for the research window"
             )
 
     def _insert_compact_facts(
@@ -2327,6 +2398,22 @@ class PersonalHistoryHydrator:
             self._guard_capacity(phase="after bars stage")
             self._manifest_status("VALIDATING")
             self._validate_draft_boundary()
+            hydrated_days = [
+                str(row[0])
+                for row in self._connection.execute(
+                    "SELECT DISTINCT date FROM personal_history_compact_bars "
+                    "ORDER BY date"
+                )
+            ]
+            if not hydrated_days:
+                raise PersonalHistoryError(
+                    "personal history hydrated no bar sessions"
+                )
+            data_start = hydrated_days[0]
+            requested_lookback = self.plan.lookback_sessions
+            actual_lookback = sum(
+                1 for day in hydrated_days if day < self.plan.period_start
+            )
             self._manifest_status("COMPLETE_DRAFT")
             self._checkpoint_wal()
         except Exception as exc:
@@ -2340,12 +2427,14 @@ class PersonalHistoryHydrator:
         return PersonalHistorySummary(
             period_start=self.plan.period_start,
             period_end=self.plan.period_end,
-            bar_start=bar_start,
+            bar_start=data_start,
             segment_counts=counts,
             fetched_rows=sum(outcome.fetched for outcome in self._outcomes),
             written_rows=sum(outcome.written for outcome in self._outcomes),
             skipped_segments=sum(outcome.skipped for outcome in self._outcomes),
             database_bytes=self._database_footprint(),
+            actual_lookback_sessions=actual_lookback,
+            lookback_truncated=actual_lookback < requested_lookback,
         )
 
 
@@ -2372,4 +2461,5 @@ __all__ = [
     "PersonalHistorySummary",
     "assert_personal_history_database",
     "build_personal_history_plan",
+    "personal_snapshot_data_floor",
 ]

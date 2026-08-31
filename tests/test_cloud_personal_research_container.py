@@ -2611,6 +2611,7 @@ def _snapshot_spec(job_id: str) -> service.SnapshotJobSpec:
 class _CompactCoverageHydrator:
     def __init__(self, **kwargs):
         self.store = kwargs["store"]
+        self.plan = kwargs["plan"]
 
     def hydrate(self):
         connection = self.store._conn
@@ -2625,11 +2626,14 @@ class _CompactCoverageHydrator:
             afternoon_volume=None,
         )
         connection.commit()
+        lookback = int(self.plan.lookback_sessions)
         return SimpleNamespace(
             bar_start="2024-01-04",
             segment_counts={"markets_calendar": 1, "equities_master": 1},
             fetched_rows=2,
             written_rows=2,
+            actual_lookback_sessions=lookback,
+            lookback_truncated=False,
         )
 
 

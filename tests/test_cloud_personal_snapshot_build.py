@@ -82,11 +82,14 @@ class _FakeHydrator:
             "'2024-01-04T15:00:00+09:00','2024-01-04T16:00:00+09:00',100)"
         )
         self.store._conn.commit()
+        lookback = int(self.plan.lookback_sessions)
         return SimpleNamespace(
             bar_start="2024-01-04",
             segment_counts={"markets_calendar": 1, "equities_master": 1},
             fetched_rows=2,
             written_rows=2,
+            actual_lookback_sessions=lookback,
+            lookback_truncated=False,
         )
 
 
@@ -152,6 +155,37 @@ def test_snapshot_gzip_and_manifest_last_order(tmp_path: Path, monkeypatch) -> N
     assert manifest["raw_sha256"] != manifest["gzip_sha256"]
     assert manifest["data_start"] == "2024-01-04"
     assert manifest["period_start"] == "2024-01-01"
+    assert manifest["lookback_sessions"] == spec.lookback_sessions
+    assert "requested_lookback_sessions" not in manifest
+    assert manifest["actual_lookback_sessions"] == spec.lookback_sessions
+    assert manifest["lookback_truncated"] is False
+
+
+class _TruncatedHydrator(_FakeHydrator):
+    def hydrate(self):
+        result = super().hydrate()
+        result.actual_lookback_sessions = 0
+        result.lookback_truncated = True
+        return result
+
+
+def test_snapshot_manifest_records_truncated_lookback(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(service, "PersonalHistoryHydrator", _TruncatedHydrator)
+    spec = _spec("snap-lookback-trunc")
+    manifest = service.execute_snapshot_job(
+        spec,
+        work_root=tmp_path,
+        uploader=lambda *args, **kwargs: None,
+        client_factory=lambda _spec: object(),
+    )
+    assert manifest["status"] == "COMPLETED"
+    assert manifest["period_start"] == spec.period_start
+    assert manifest["lookback_sessions"] == spec.lookback_sessions
+    assert "requested_lookback_sessions" not in manifest
+    assert manifest["actual_lookback_sessions"] == 0
+    assert manifest["lookback_truncated"] is True
     assert manifest["research_state"] == "PERSONAL_DRAFT"
     assert manifest["completeness_claim"] == "NONE"
     assert manifest["controlled_live_eligibility"] == "FORBIDDEN"
