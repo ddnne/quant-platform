@@ -426,10 +426,12 @@ class StrategySpecStrategy:
     positions (no daily churn).
     """
 
-    # The closed interpreter reads market facts only through ``ctx.feature``
-    # and ``ctx.master``; it never inspects the rolling ``ctx.bars`` payload.
-    # Only active personal next-close jobs may use the compact price path.
+    # The closed interpreter reads market facts only through ``ctx.feature``,
+    # ``ctx.master``, prices, and positions; it never inspects rolling
+    # ``ctx.bars``. AM-signal snapshots may therefore query the current
+    # session only. Do not reuse ``personal_prepared_frame_eligible`` for that.
     personal_prepared_frame_eligible = True
+    consumes_rolling_bars = False
 
     def __init__(self, spec: StrategySpec) -> None:
         definitions = resolve_strategy_features(spec)

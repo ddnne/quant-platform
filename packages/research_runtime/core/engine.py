@@ -320,8 +320,9 @@ def _load_am_signal_snapshot(
     """AM signal snapshot: D decision prices are exact-session MAdjC only.
 
     A missing D morning row or non-positive MAdjC leaves that code unpriced.
-    Prior lookback bars stay available for history, but must not become
-    ``prices_d`` and must not abort a multi-name run.
+    ``lookback_days`` bounds historical bars placed on ``ctx.bars``. Zero
+    queries the current session only. Prior bars, when requested, must not
+    become ``prices_d`` and must not abort a multi-name run.
     """
     snapshot: dict[str, dict[str, Any]] = {
         code: {"close": None, "bars": []} for code in codes
@@ -969,6 +970,14 @@ def run_backtest(
         and _active_personal_prepared_frame(resolved_db_path) is not None
         and getattr(strategy, "personal_prepared_frame_eligible", False) is True
     )
+    # AM ctx.bars window only. Features still use their own declared history.
+    # Explicit False opts out; missing/True keeps the requested lookback.
+    context_bar_lookback_days = lookback_days
+    if (
+        am_pm_mode
+        and getattr(strategy, "consumes_rolling_bars", True) is False
+    ):
+        context_bar_lookback_days = 0
     am_skipped_decisions: list[dict[str, Any]] = []
     am_incomplete_valuations: list[dict[str, Any]] = []
     am_unfilled_orders: list[dict[str, Any]] = []
@@ -1001,7 +1010,7 @@ def run_backtest(
                 decision_as_of,
                 held,
                 d,
-                lookback_days,
+                context_bar_lookback_days,
                 db_path=resolved_db_path,
                 price_basis=resolved_price_basis,
             )
@@ -1339,6 +1348,7 @@ def run_backtest(
         "trading_days": len(days),
     }
     if am_pm_mode:
+        metadata["context_bar_lookback_days"] = context_bar_lookback_days
         metadata["valuation_mark_policy"] = (
             "decision_marks_d_morning_adjustment_close;"
             "pm_valuation_afternoon_adjustment_close_only"
