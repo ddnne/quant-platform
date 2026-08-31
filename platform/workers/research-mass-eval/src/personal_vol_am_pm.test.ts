@@ -795,6 +795,166 @@ describe("AM/PM causal contract", () => {
   });
 });
 
+function stickyFixedHorizonForParity(
+  entries: Array<number | null>,
+  hold: number,
+): Array<number | null> {
+  const out: Array<number | null> = new Array(entries.length).fill(null);
+  let held: number | null = null;
+  let since = 0;
+  for (let index = 0; index < entries.length; index += 1) {
+    const raw = entries[index];
+    const entry = raw === null || !Number.isFinite(raw) ? null : Math.sign(raw);
+    if (index === 0 || since >= hold) {
+      if (entry !== null && entry !== 0) held = entry;
+      else if (entry === 0) held = 0;
+      since = 1;
+    } else {
+      since += 1;
+    }
+    out[index] = held;
+  }
+  return out;
+}
+
+function naiveHeldBookFromExportedEntrySigns(
+  panel: PersonalVolAmPmPanel,
+  strategyId: (typeof PERSONAL_VOL_STRATEGIES)[number]["strategy_id"] | "control",
+): Record<string, Record<string, number>> {
+  const dates = panel.session_calendar.dates;
+  const codes = equityCodes(panel);
+  const held: Record<string, Record<string, number>> = {};
+  for (const code of codes) held[code] = {};
+  if (!dates.length) return held;
+  const entriesByCode: Record<string, number[]> = {};
+  for (const code of codes) entriesByCode[code] = [];
+  for (const date of dates) {
+    const signs = personalVolAmPmEntrySigns(panel, strategyId, date);
+    for (const code of codes) {
+      entriesByCode[code].push(signs[code] ?? 0);
+    }
+  }
+  for (const code of codes) {
+    const sticky = stickyFixedHorizonForParity(
+      entriesByCode[code],
+      PERSONAL_VOL_HOLD_SESSIONS,
+    );
+    for (let index = 0; index < dates.length; index += 1) {
+      const position = sticky[index];
+      if (position !== null && position !== 0) {
+        held[code][dates[index]] = position;
+      }
+    }
+  }
+  return held;
+}
+
+describe("AM/PM held-book precompute parity", () => {
+  it("matches exported entrySigns plus sticky hold for every candidate and the control", async () => {
+    const panel = await amPmPanel();
+    const strategies = [
+      ...PERSONAL_VOL_STRATEGIES.map((row) => row.strategy_id),
+      "control" as const,
+    ];
+    for (const strategyId of strategies) {
+      expect(personalVolAmPmHeldBook(panel, strategyId)).toEqual(
+        naiveHeldBookFromExportedEntrySigns(panel, strategyId),
+      );
+    }
+  });
+
+  it("keeps D morning signs from D-1 vol, D AAdjC fill, and first PnL on next PM", async () => {
+    const panel = await amPmPanel();
+    const dates = panel.session_calendar.dates;
+    const signalDate = dates[8];
+    const predecessor = dates[7];
+    const pnlDate = dates[9];
+    const signs = personalVolAmPmEntrySigns(
+      panel,
+      "basevol_short_long_ratio",
+      signalDate,
+    );
+    expect(signs.A).toBe(-1);
+    expect(signs.B).toBe(1);
+
+    const dVolMutated = clone(panel);
+    dVolMutated.opt225_regime!.basevol!.rv_short_by_date![signalDate] = 0.1;
+    expect(
+      personalVolAmPmEntrySigns(dVolMutated, "basevol_short_long_ratio", signalDate),
+    ).toEqual(signs);
+
+    const predVolMutated = clone(panel);
+    predVolMutated.opt225_regime!.basevol!.rv_short_by_date![predecessor] = 0.5;
+    expect(
+      personalVolAmPmEntrySigns(
+        predVolMutated,
+        "basevol_short_long_ratio",
+        signalDate,
+      ),
+    ).not.toEqual(signs);
+
+    const window = await evaluatePersonalVolAmPmWindow(
+      PERSONAL_VOL_STRATEGIES[0],
+      panel,
+    );
+    expect(window).toMatchObject({
+      execution_timing: "signal_d_morning_d_minus_1_vol_fill_d_aadjc",
+      fill: "D_AAdjC",
+      first_pnl: "D_AAdjC_to_next_AAdjC",
+      option_signal_lag_sessions: 1,
+      fill_lag_sessions: 0,
+      first_pnl_lag_sessions: 1,
+    });
+    const held = personalVolAmPmHeldBook(panel, "basevol_short_long_ratio");
+    const path = personalVolAmPmDailyPath(held, panel);
+    expect(path.points.find((point) => point.date === pnlDate)).toBeDefined();
+  });
+
+  it("fails closed on unknown dates, missing predecessor, missing D-1 vol, and empty universe", async () => {
+    const panel = await amPmPanel();
+    const dates = panel.session_calendar.dates;
+    const zeros = { A: 0, B: 0 };
+
+    expect(
+      personalVolAmPmEntrySigns(panel, "basevol_short_long_ratio", "1999-01-01"),
+    ).toEqual(zeros);
+    expect(
+      personalVolAmPmEntrySigns(panel, "basevol_short_long_ratio", dates[0]),
+    ).toEqual(zeros);
+
+    const firstMask = personalVolAmPmCommonValidMask(panel)[0];
+    expect(firstMask?.predecessor).toBeNull();
+    expect(firstMask?.predecessor_available).toBe(false);
+    expect(firstMask?.reasons).toContain("predecessor_session_missing");
+    expect(firstMask?.common_valid).toBe(false);
+
+    const missingVol = clone(panel);
+    delete missingVol.opt225_regime!.basevol!.rv_short_by_date![dates[7]];
+    expect(
+      personalVolAmPmEntrySigns(
+        missingVol,
+        "basevol_short_long_ratio",
+        dates[8],
+      ),
+    ).toEqual(zeros);
+    expect(
+      personalVolAmPmHeldBook(missingVol, "basevol_short_long_ratio").A[dates[8]],
+    ).toBeUndefined();
+
+    const emptyUniverse = clone(panel);
+    emptyUniverse.codes = [];
+    emptyUniverse.bars = {};
+    expect(
+      personalVolAmPmEntrySigns(emptyUniverse, "control", dates[8]),
+    ).toEqual({});
+    expect(personalVolAmPmHeldBook(emptyUniverse, "control")).toEqual({});
+    expect(
+      personalVolAmPmCommonValidity(emptyUniverse).find((row) => row.date === dates[8])
+        ?.morning_reasons,
+    ).toContain("equity_universe_empty");
+  });
+});
+
 const noopMass = async () => {
   throw new Error("mass evaluator must not run");
 };

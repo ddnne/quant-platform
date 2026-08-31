@@ -185,10 +185,30 @@ function finiteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
-function predecessorOf(dates: string[], date: string): string | null {
-  const index = dates.indexOf(date);
-  if (index <= 0) return null;
-  return dates[index - 1];
+// One panel index per held-book evaluation: dates, codes, bars, and predecessor
+// lookups are O(T+C), not rebuilt per session (the previous O(T^2*C) path).
+type PersonalVolAmPmPanelIndex = {
+  dates: string[];
+  codes: string[];
+  morning: Record<string, Record<string, number>>;
+  afternoon: Record<string, Record<string, number>>;
+  indexByDate: Record<string, number>;
+  predecessor: Array<string | null>;
+};
+
+function personalVolAmPmPanelIndex(
+  panel: PersonalVolAmPmPanel,
+): PersonalVolAmPmPanelIndex {
+  const dates = panel.session_calendar.dates;
+  const codes = equityCodes(panel);
+  const { morning, afternoon } = barMaps(panel);
+  const indexByDate: Record<string, number> = {};
+  const predecessor: Array<string | null> = new Array(dates.length);
+  for (let index = 0; index < dates.length; index += 1) {
+    indexByDate[dates[index]] = index;
+    predecessor[index] = index > 0 ? dates[index - 1] : null;
+  }
+  return { dates, codes, morning, afternoon, indexByDate, predecessor };
 }
 
 function lookupSeries(
@@ -274,17 +294,16 @@ function afternoonEquityReasons(
   return reasons;
 }
 
-export function personalVolAmPmCommonValidity(
+function personalVolAmPmCommonValidityFromIndex(
   panel: PersonalVolAmPmPanel,
+  indexed: PersonalVolAmPmPanelIndex,
 ): PersonalVolAmPmValidityRow[] {
-  const dates = panel.session_calendar.dates;
-  const codes = equityCodes(panel);
-  const { morning, afternoon } = barMaps(panel);
-  return dates.map((date) => {
-    const predecessor = predecessorOf(dates, date);
+  const { dates, codes, morning, afternoon, predecessor } = indexed;
+  return dates.map((date, index) => {
+    const pred = predecessor[index];
     const morningReasons: string[] = [];
-    if (!predecessor) morningReasons.push("predecessor_session_missing");
-    else morningReasons.push(...fourSignalReasons(panel.opt225_regime, predecessor));
+    if (!pred) morningReasons.push("predecessor_session_missing");
+    else morningReasons.push(...fourSignalReasons(panel.opt225_regime, pred));
     if (!codes.length) morningReasons.push("equity_universe_empty");
     morningReasons.push(...morningEquityReasons(morning, codes, date));
     const executionReasons = afternoonEquityReasons(afternoon, codes, date);
@@ -292,13 +311,22 @@ export function personalVolAmPmCommonValidity(
     const executionUnique = uniqueReasons(executionReasons);
     return {
       date,
-      predecessor,
+      predecessor: pred,
       morning_signal_valid: morningUnique.length === 0,
       morning_reasons: morningUnique,
       execution_valid: executionUnique.length === 0,
       execution_reasons: executionUnique,
     };
   });
+}
+
+export function personalVolAmPmCommonValidity(
+  panel: PersonalVolAmPmPanel,
+): PersonalVolAmPmValidityRow[] {
+  return personalVolAmPmCommonValidityFromIndex(
+    panel,
+    personalVolAmPmPanelIndex(panel),
+  );
 }
 
 const BOUNDED_REASON_ORDER: PersonalVolAmPmCommonValidReasonCode[] = [
@@ -317,17 +345,16 @@ const BOUNDED_REASON_ORDER: PersonalVolAmPmCommonValidReasonCode[] = [
 export function personalVolAmPmCommonValidMask(
   panel: PersonalVolAmPmPanel,
 ): PersonalVolAmPmCommonValidRow[] {
-  const dates = panel.session_calendar.dates;
-  const codes = equityCodes(panel);
-  const { morning, afternoon } = barMaps(panel);
+  const { dates, codes, morning, afternoon, predecessor } =
+    personalVolAmPmPanelIndex(panel);
   return dates.map((date, index) => {
-    const predecessor = predecessorOf(dates, date);
+    const pred = predecessor[index];
     const next = index + 1 < dates.length ? dates[index + 1] : null;
     const reasons: PersonalVolAmPmCommonValidReasonCode[] = [];
-    const predecessorAvailable = predecessor !== null;
+    const predecessorAvailable = pred !== null;
     if (!predecessorAvailable) reasons.push("predecessor_session_missing");
-    const volReasons = predecessor
-      ? fourSignalReasons(panel.opt225_regime, predecessor)
+    const volReasons = pred
+      ? fourSignalReasons(panel.opt225_regime, pred)
       : [];
     const basevol = predecessorAvailable && !volReasons.includes("d_minus_1_basevol_missing");
     const atm = predecessorAvailable && !volReasons.includes("d_minus_1_atm_iv_missing");
@@ -366,7 +393,7 @@ export function personalVolAmPmCommonValidMask(
       d_minus_1_skew: skew,
       date,
       next_a_valuation_valid: nextA,
-      predecessor,
+      predecessor: pred,
       predecessor_available: predecessorAvailable,
       reasons: unique,
     };
@@ -621,23 +648,27 @@ function regimeAt(
   return "flat";
 }
 
-export function personalVolAmPmEntrySigns(
+function emptyEntrySigns(codes: string[]): Record<string, number> {
+  const empty: Record<string, number> = {};
+  for (const code of codes) empty[code] = 0;
+  return empty;
+}
+
+function personalVolAmPmEntrySignsFromIndex(
   panel: PersonalVolAmPmPanel,
   strategyId: PersonalVolStrategyId | "control",
   signalDate: string,
+  indexed: PersonalVolAmPmPanelIndex,
+  validity: PersonalVolAmPmValidityRow[],
 ): Record<string, number> {
-  const dates = panel.session_calendar.dates;
-  const index = dates.indexOf(signalDate);
-  const empty: Record<string, number> = {};
-  for (const code of equityCodes(panel)) empty[code] = 0;
-  if (index < 0) return empty;
-  const validity = personalVolAmPmCommonValidity(panel);
+  const empty = emptyEntrySigns(indexed.codes);
+  const index = indexed.indexByDate[signalDate];
+  if (index === undefined) return empty;
   const row = validity[index];
   if (!row?.morning_signal_valid) return empty;
-  const { morning } = barMaps(panel);
   const scores: Record<string, number | null> = {};
-  for (const code of equityCodes(panel)) {
-    scores[code] = momentumAt(dates, morning[code] || {}, index);
+  for (const code of indexed.codes) {
+    scores[code] = momentumAt(indexed.dates, indexed.morning[code] || {}, index);
   }
   const ranks = rankSigns(scores);
   const regime = regimeAt(
@@ -646,7 +677,7 @@ export function personalVolAmPmEntrySigns(
     row.predecessor || "",
   );
   const out: Record<string, number> = {};
-  for (const code of equityCodes(panel)) {
+  for (const code of indexed.codes) {
     const rank = ranks[code] ?? 0;
     if (!rank || regime === null || regime === "flat") out[code] = 0;
     else if (regime === "reverse") out[code] = -rank;
@@ -655,19 +686,41 @@ export function personalVolAmPmEntrySigns(
   return out;
 }
 
-export function personalVolAmPmHeldBook(
+export function personalVolAmPmEntrySigns(
   panel: PersonalVolAmPmPanel,
   strategyId: PersonalVolStrategyId | "control",
+  signalDate: string,
+): Record<string, number> {
+  const indexed = personalVolAmPmPanelIndex(panel);
+  return personalVolAmPmEntrySignsFromIndex(
+    panel,
+    strategyId,
+    signalDate,
+    indexed,
+    personalVolAmPmCommonValidityFromIndex(panel, indexed),
+  );
+}
+
+function personalVolAmPmHeldBookFromIndex(
+  panel: PersonalVolAmPmPanel,
+  strategyId: PersonalVolStrategyId | "control",
+  indexed: PersonalVolAmPmPanelIndex,
+  validity: PersonalVolAmPmValidityRow[],
 ): HeldBook {
-  const dates = panel.session_calendar.dates;
-  const codes = equityCodes(panel);
+  const { dates, codes } = indexed;
   const held: HeldBook = {};
   for (const code of codes) held[code] = {};
   if (!dates.length) return held;
   const entriesByCode: Record<string, number[]> = {};
   for (const code of codes) entriesByCode[code] = [];
   for (const date of dates) {
-    const signs = personalVolAmPmEntrySigns(panel, strategyId, date);
+    const signs = personalVolAmPmEntrySignsFromIndex(
+      panel,
+      strategyId,
+      date,
+      indexed,
+      validity,
+    );
     for (const code of codes) {
       entriesByCode[code].push(signs[code] ?? 0);
     }
@@ -687,10 +740,20 @@ export function personalVolAmPmHeldBook(
   return held;
 }
 
-export function personalVolAmPmDailyPath(
-  held: HeldBook,
+export function personalVolAmPmHeldBook(
   panel: PersonalVolAmPmPanel,
-): {
+  strategyId: PersonalVolStrategyId | "control",
+): HeldBook {
+  const indexed = personalVolAmPmPanelIndex(panel);
+  return personalVolAmPmHeldBookFromIndex(
+    panel,
+    strategyId,
+    indexed,
+    personalVolAmPmCommonValidityFromIndex(panel, indexed),
+  );
+}
+
+type PersonalVolAmPmDailyPathResult = {
   points: PersonalVolDailyPoint[];
   active_sessions: number;
   short_sessions: number;
@@ -706,10 +769,14 @@ export function personalVolAmPmDailyPath(
     missing_leg_count: number;
   }>;
   incomplete_interval_samples_omitted: number;
-} {
-  const dates = panel.session_calendar.dates;
-  const { afternoon } = barMaps(panel);
-  const codes = equityCodes(panel);
+};
+
+function personalVolAmPmDailyPathFromIndex(
+  held: HeldBook,
+  panel: PersonalVolAmPmPanel,
+  indexed: PersonalVolAmPmPanelIndex,
+): PersonalVolAmPmDailyPathResult {
+  const { dates, codes, afternoon } = indexed;
   const points: PersonalVolDailyPoint[] = [];
   let equity = 1;
   let activeSessions = 0;
@@ -818,6 +885,17 @@ export function personalVolAmPmDailyPath(
   };
 }
 
+export function personalVolAmPmDailyPath(
+  held: HeldBook,
+  panel: PersonalVolAmPmPanel,
+): PersonalVolAmPmDailyPathResult {
+  return personalVolAmPmDailyPathFromIndex(
+    held,
+    panel,
+    personalVolAmPmPanelIndex(panel),
+  );
+}
+
 function unavailableWindow(
   panel: PersonalVolAmPmPanel,
   reason: string,
@@ -880,12 +958,18 @@ export async function evaluatePersonalVolAmPmWindow(
   }
   const strategyId =
     "strategy_id" in definition ? definition.strategy_id : "control";
-  const validity = personalVolAmPmCommonValidity(panel);
+  const indexed = personalVolAmPmPanelIndex(panel);
+  const validity = personalVolAmPmCommonValidityFromIndex(panel, indexed);
   const requiredDates = validity.filter(
     (row) => row.date >= panel.period_start && row.date <= panel.period_end,
   );
-  const held = personalVolAmPmHeldBook(panel, strategyId);
-  const path = personalVolAmPmDailyPath(held, panel);
+  const held = personalVolAmPmHeldBookFromIndex(
+    panel,
+    strategyId,
+    indexed,
+    validity,
+  );
+  const path = personalVolAmPmDailyPathFromIndex(held, panel, indexed);
   const status =
     path.incomplete_intervals > 0
       ? "incomplete"

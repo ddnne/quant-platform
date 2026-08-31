@@ -31,6 +31,7 @@ from data_contracts.personal_universe import (
     PERSONAL_HISTORY_SCOPE_VERSION,
     canonical_topix_scale_category,
 )
+from data_contracts.source_capability import source_capability_contract_for
 
 from .common.timeutil import JST, now_iso
 from .jquants import normalize as JN
@@ -188,10 +189,23 @@ def build_personal_history_plan(
 
     lookback = int(lookback_sessions)
     window_days = int(calendar_window_days)
+    official_floor = date.fromisoformat(
+        source_capability_contract_for(
+            "markets_calendar"
+        ).earliest_official_availability
+    )
+    if end < official_floor:
+        raise PersonalHistoryError(
+            "period_end is before markets_calendar official availability; "
+            "calendar_start cannot exceed period_end"
+        )
     # Same conservative conversion used by PersonalResearchService, plus two
     # weeks so the first requested master snapshot has an observed predecessor.
     calendar_buffer = max(30, lookback * 2 + 30) + 14
-    calendar_start = start - timedelta(days=calendar_buffer)
+    calendar_start = max(
+        start - timedelta(days=calendar_buffer),
+        official_floor,
+    )
     all_days = (end - start).days + 1
     estimated_sessions = sum(1 for day in _iter_days(start, end) if day.weekday() < 5)
     estimated_sessions += lookback

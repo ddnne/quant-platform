@@ -15,6 +15,7 @@ from typing import Mapping, Sequence
 import pytest
 
 from data_contracts.identity import canonical_json
+from data_contracts.source_capability import source_capability_contract_for
 from features import FUNDAMENTAL_RATIO_MODES, PitFundamentalRatio
 from features.ratio_features import _FINS_ALIASES
 from ingestion.jquants.normalize import normalize_generic
@@ -794,6 +795,44 @@ def test_plan_rejects_future_reversed_and_excessive_lookback() -> None:
             period_end="2025-01-31",
             lookback_sessions=253,
             today=date(2025, 2, 1),
+        )
+
+
+def _markets_calendar_official_floor() -> str:
+    return source_capability_contract_for(
+        "markets_calendar"
+    ).earliest_official_availability
+
+
+def test_plan_clamps_old_s1_calendar_start_to_canonical_contract_floor() -> None:
+    plan = build_personal_history_plan(
+        period_start="2009-06-01",
+        period_end="2014-07-15",
+        lookback_sessions=252,
+        today=date(2014, 7, 15),
+    )
+    assert plan.calendar_start == _markets_calendar_official_floor()
+    assert plan.calendar_start <= plan.period_end
+
+
+def test_plan_does_not_clamp_later_calendar_start() -> None:
+    plan = build_personal_history_plan(
+        period_start="2025-01-06",
+        period_end="2025-01-08",
+        lookback_sessions=1,
+        today=date(2025, 2, 1),
+    )
+    assert plan.calendar_start > _markets_calendar_official_floor()
+
+
+def test_plan_rejects_period_end_before_markets_calendar_official_floor() -> None:
+    floor = date.fromisoformat(_markets_calendar_official_floor())
+    with pytest.raises(PersonalHistoryError, match="official availability"):
+        build_personal_history_plan(
+            period_start=(floor - timedelta(days=30)).isoformat(),
+            period_end=(floor - timedelta(days=1)).isoformat(),
+            lookback_sessions=0,
+            today=floor,
         )
 
 
