@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import hashlib
 import importlib.util
 import json
@@ -227,6 +228,99 @@ def test_snapshot_manifest_includes_cache_metrics_on_failure(
     assert uploads[-1][0] == spec.manifest_key
     assert uploads[-1][1]["cache_misses"] == 1
     assert "api_key" not in json.dumps(manifest).lower()
+
+
+def test_planner_admission_budget_splits_operational_six_year_window() -> None:
+    rejected = service.build_personal_history_plan(
+        period_start="2008-07-07",
+        period_end="2014-07-15",
+        lookback_sessions=0,
+    )
+    accepted = service.build_personal_history_plan(
+        period_start="2008-07-07",
+        period_end="2010-06-30",
+        lookback_sessions=252,
+    )
+    assert rejected.estimated_bytes > service.SNAPSHOT_MAX_DATABASE_BYTES
+    assert accepted.estimated_bytes < service.SNAPSHOT_MAX_DATABASE_BYTES
+
+
+def test_oversized_plan_fails_before_acquisition_without_snapshot_upload(
+    tmp_path: Path, monkeypatch
+) -> None:
+    real_plan = service.build_personal_history_plan
+    spec = _spec("snap-plan-oversize")
+    store_calls: list[object] = []
+    factory_calls: list[object] = []
+    hydrator_calls: list[object] = []
+    uploads: list[tuple[str, dict]] = []
+
+    def oversized_plan(**kwargs):
+        return replace(
+            real_plan(**kwargs),
+            estimated_bytes=spec.max_database_bytes + 1,
+        )
+
+    def tracking_store(*args, **kwargs):
+        store_calls.append((args, kwargs))
+        raise AssertionError("SqliteStore must not be created")
+
+    class TrackingHydrator(_FakeHydrator):
+        def __init__(self, **kwargs):
+            hydrator_calls.append(kwargs)
+            super().__init__(**kwargs)
+
+    def factory(_spec):
+        factory_calls.append(_spec)
+        raise AssertionError("client_factory must not be invoked")
+
+    def upload(key, data, *, spec, content_digest, extra_headers=None):
+        del spec, content_digest, extra_headers
+        body = data.read_bytes() if isinstance(data, Path) else bytes(data)
+        uploads.append(
+            (key, json.loads(body) if key.endswith("manifest.json") else {"bytes": len(body)})
+        )
+
+    monkeypatch.setattr(service, "build_personal_history_plan", oversized_plan)
+    monkeypatch.setattr(service, "SqliteStore", tracking_store)
+    monkeypatch.setattr(service, "PersonalHistoryHydrator", TrackingHydrator)
+    manifest = service.execute_snapshot_job(
+        spec, work_root=tmp_path, uploader=upload, client_factory=factory
+    )
+    assert manifest["status"] == "FAILED"
+    assert store_calls == []
+    assert factory_calls == []
+    assert hydrator_calls == []
+    assert [key for key, _ in uploads] == [spec.manifest_key]
+    assert manifest.get("snapshot_key") is None
+    assert f"estimated={spec.max_database_bytes + 1}" in manifest["error"]
+    assert f"limit={spec.max_database_bytes}" in manifest["error"]
+    assert "api_key" not in json.dumps(manifest).lower()
+    assert "secret" not in json.dumps(manifest).lower()
+
+
+def test_safe_sized_plan_still_reaches_snapshot_execution(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(service, "PersonalHistoryHydrator", _FakeHydrator)
+    spec = _spec("snap-plan-safe")
+    factory_calls: list[object] = []
+    uploads: list[str] = []
+
+    def factory(_spec):
+        factory_calls.append(_spec)
+        return object()
+
+    def upload(key, data, *, spec, content_digest, extra_headers=None):
+        del spec, content_digest, extra_headers, data
+        uploads.append(key)
+
+    manifest = service.execute_snapshot_job(
+        spec, work_root=tmp_path, uploader=upload, client_factory=factory
+    )
+    assert factory_calls == [spec]
+    assert manifest["status"] == "COMPLETED"
+    assert uploads == [manifest["snapshot_key"], spec.manifest_key]
 
 
 def test_size_failure_does_not_publish_snapshot(tmp_path: Path, monkeypatch) -> None:
