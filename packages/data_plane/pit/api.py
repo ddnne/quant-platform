@@ -29,9 +29,16 @@ import base64
 import hashlib
 import json
 import math
+import sqlite3
 from datetime import date, timedelta
 from typing import Any, Mapping
 
+from data_contracts.personal_history_compact import (
+    PERSONAL_HISTORY_COMPACT_BARS_TABLE,
+    PERSONAL_HISTORY_COMPACT_FORMAT,
+    PERSONAL_HISTORY_COMPACT_MASTER_TABLE,
+    compact_history_state,
+)
 from data_contracts.source_capability import (
     apply_official_query_clamp,
     source_capability_contract_for,
@@ -44,11 +51,13 @@ from ingestion.jquants.normalize import (
 )
 from storage.schema import CATALOG_CODE_SQL
 
-from .errors import InvalidDataset
+from .errors import InvalidDataset, PitError
 from .models import PIT_API_VERSION, PitResult
 from .query import (
     _NOT_GIVEN,
     _probe_standalone_typed_adjustment_candidates,
+    _scoped_read_connection,
+    connect_readonly,
     normalize_as_of,
     run_query,
 )
@@ -73,6 +82,10 @@ _CATALOG_CODE_SQL = CATALOG_CODE_SQL
 _PAGE_CURSOR_VERSION = 1
 _MAX_PAGE_SIZE = 1_000
 _JQUANTS_PAGE_ORDER = ("event_time", "natural_key", "source")
+
+# Compact v7 classification is owned by data_contracts.personal_history_compact.
+# Genuine legacy keeps typed/catalog equity reads. Invalid marker/schema and
+# mixed equity facts fail closed instead of falling back.
 
 
 def _result(
@@ -279,18 +292,150 @@ def _catalog_market_calendar(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
     return out
 
 
+def _compact_v7_or_legacy(db_path: Any) -> bool:
+    """Return True for exclusive valid compact v7; False for genuine legacy.
+
+    Invalid marker/schema and mixed typed/generic equity rows raise rather
+    than silently falling back to typed/catalog reads.
+    """
+    conn = _scoped_read_connection(db_path)
+    close_connection = conn is None
+    if conn is None:
+        conn = connect_readonly(db_path)
+    try:
+        state = compact_history_state(conn)
+        if state == "invalid":
+            raise PitError("compact v7 marker or schema is invalid")
+        if state == "mixed":
+            raise PitError(
+                "cannot mix compact with typed or generic equity master or bars"
+            )
+        return state == "compact"
+    except sqlite3.Error as exc:
+        raise PitError("compact v7 marker or schema is invalid") from exc
+    finally:
+        if close_connection:
+            conn.close()
+
+
+def _compact_v7_metadata(enabled: bool) -> dict[str, Any] | None:
+    if not enabled:
+        return None
+    return {"personal_history_format": PERSONAL_HISTORY_COMPACT_FORMAT}
+
+
+def _canonical_compact_master_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Map a compact master row onto the curated ``jquants_listed_info`` shape."""
+    return {
+        "source": "jquants",
+        "code": row.get("code"),
+        "snapshot_date": row.get("snapshot_date"),
+        "event_time": row.get("event_time"),
+        "available_at": row.get("available_at"),
+        "ingested_at": row.get("ingested_at"),
+        "company_name": None,
+        "company_name_en": None,
+        "sector_17_code": row.get("sector_17_code"),
+        "sector_17_name": None,
+        "sector_33_code": row.get("sector_33_code"),
+        "sector_33_name": None,
+        "scale_category": row.get("scale_category"),
+        "market_code": row.get("market_code"),
+        "market_name": None,
+        "listing_date": None,
+        "raw_payload": None,
+    }
+
+
+def _canonical_compact_bar_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Map a compact bar row onto the curated ``jquants_daily_bars`` shape."""
+    return {
+        "source": "jquants",
+        "code": row.get("code"),
+        "date": row.get("date"),
+        "event_time": row.get("event_time"),
+        "available_at": row.get("available_at"),
+        "ingested_at": row.get("ingested_at"),
+        "open": None,
+        "high": None,
+        "low": None,
+        "close": row.get("close"),
+        "volume": row.get("volume"),
+        "turnover_value": row.get("turnover_value"),
+        "market_cap": row.get("market_cap"),
+        "adjustment_open": None,
+        "adjustment_high": None,
+        "adjustment_low": None,
+        "adjustment_close": row.get("adjustment_close"),
+        "adjustment_volume": row.get("adjustment_volume"),
+        "morning_adjustment_close": row.get("morning_adjustment_close"),
+        "morning_turnover_value": row.get("morning_turnover_value"),
+        "morning_adjustment_volume": row.get("morning_adjustment_volume"),
+        "afternoon_adjustment_close": row.get("afternoon_adjustment_close"),
+        "afternoon_turnover_value": row.get("afternoon_turnover_value"),
+        "afternoon_adjustment_volume": row.get("afternoon_adjustment_volume"),
+        "raw_payload": None,
+    }
+
+
+def _compact_v7_rows(
+    db_path: Any,
+    *,
+    as_of: str,
+    table: str,
+    extra_where: str | None = None,
+    params: list[Any] | None = None,
+    order_by: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """PIT-gated compact read of the two v7 tables only.
+
+    Callers must already have enabled compact v7.  The available_at wall is
+    still applied by :func:`run_query`.
+    """
+    if table not in {
+        PERSONAL_HISTORY_COMPACT_MASTER_TABLE,
+        PERSONAL_HISTORY_COMPACT_BARS_TABLE,
+    }:
+        return []
+    return run_query(
+        db_path,
+        as_of=as_of,
+        table=table,
+        extra_where=extra_where,
+        params=params,
+        order_by=order_by,
+        limit=limit,
+    )
+
+
 def _latest_master_snapshot_date(
     db_path: Any,
     *,
     as_of: str,
     official_start: str,
+    compact_enabled: bool = False,
 ) -> str | None:
-    """Newest globally visible master snapshot across typed and catalog stores.
+    """Newest globally visible master snapshot.
 
-    The marker lookup deliberately runs before an optional code filter.  A
-    code absent from the newest full snapshot is absent from the universe; an
-    older per-code row must not resurrect it after delisting.
+    Valid compact v7 resolves this marker from compact master only.  Legacy
+    DBs still merge typed and catalog.  The lookup runs before an optional
+    code filter so a delisted code cannot resurrect from an older snapshot.
     """
+    if compact_enabled:
+        compact_marker = _compact_v7_rows(
+            db_path,
+            as_of=as_of,
+            table=PERSONAL_HISTORY_COMPACT_MASTER_TABLE,
+            extra_where="snapshot_date >= ?",
+            params=[official_start],
+            order_by="snapshot_date DESC, code DESC",
+            limit=1,
+        )
+        candidates = [
+            str(row.get("snapshot_date") or "")[:10] for row in compact_marker
+        ]
+        return max((day for day in candidates if day), default=None)
     typed_marker = run_query(
         db_path,
         as_of=as_of,
@@ -352,62 +497,80 @@ def get_equity_master(
         min(as_of_iso[:10], contract.earliest_official_availability),
         contract,
     )
+    compact_enabled = _compact_v7_or_legacy(db_path)
     selected_snapshot = None
     if latest_snapshot:
         selected_snapshot = _latest_master_snapshot_date(
             db_path,
             as_of=as_of_iso,
             official_start=official_start,
+            compact_enabled=compact_enabled,
         )
         if selected_snapshot is None:
+            extra = {
+                "latest_snapshot": True,
+                "snapshot_date": None,
+            }
+            extra.update(_compact_v7_metadata(compact_enabled) or {})
             return _result(
                 [],
                 as_of=as_of_iso,
                 table="jquants_listed_info",
                 source="jquants",
-                extra_metadata={
-                    "latest_snapshot": True,
-                    "snapshot_date": None,
-                },
+                extra_metadata=extra,
             )
 
     extra_where = "snapshot_date >= ?"
     params: list[Any] = [official_start]
-    catalog_clauses: list[str] = ["event_time >= ?"]
-    catalog_params: list[Any] = [_day_start(official_start)]
     if selected_snapshot is not None:
         extra_where = "snapshot_date = ?"
         params = [selected_snapshot]
-        catalog_clauses = ["event_time >= ?", "event_time < ?"]
-        catalog_params = [
-            _day_start(selected_snapshot),
-            _next_day_start(selected_snapshot),
-        ]
     if code is not None:
         extra_where += " AND code = ?"
         params.append(code)
-    rows = run_query(
-        db_path,
-        as_of=as_of_iso,
-        table="jquants_listed_info",
-        extra_where=extra_where,
-        params=params,
-        order_by="code, snapshot_date",
-    )
-    if code is not None:
-        catalog_clauses.append(f"{_CATALOG_CODE_SQL} = ?")
-        catalog_params.append(code)
-    catalog = _catalog_partition_rows(
-        db_path,
-        as_of=as_of_iso,
-        dataset="equities_master",
-        clauses=catalog_clauses,
-        params=catalog_params,
-    )
-    rows = _latest_rows(
-        [*rows, *_catalog_equity_master(catalog)],
-        key_fields=("source", "code", "snapshot_date"),
-    )
+    if compact_enabled:
+        rows = [
+            _canonical_compact_master_row(row)
+            for row in _compact_v7_rows(
+                db_path,
+                as_of=as_of_iso,
+                table=PERSONAL_HISTORY_COMPACT_MASTER_TABLE,
+                extra_where=extra_where,
+                params=list(params),
+                order_by="code, snapshot_date",
+            )
+        ]
+    else:
+        catalog_clauses: list[str] = ["event_time >= ?"]
+        catalog_params: list[Any] = [_day_start(official_start)]
+        if selected_snapshot is not None:
+            catalog_clauses = ["event_time >= ?", "event_time < ?"]
+            catalog_params = [
+                _day_start(selected_snapshot),
+                _next_day_start(selected_snapshot),
+            ]
+        rows = run_query(
+            db_path,
+            as_of=as_of_iso,
+            table="jquants_listed_info",
+            extra_where=extra_where,
+            params=params,
+            order_by="code, snapshot_date",
+        )
+        if code is not None:
+            catalog_clauses.append(f"{_CATALOG_CODE_SQL} = ?")
+            catalog_params.append(code)
+        catalog = _catalog_partition_rows(
+            db_path,
+            as_of=as_of_iso,
+            dataset="equities_master",
+            clauses=catalog_clauses,
+            params=catalog_params,
+        )
+        rows = _latest_rows(
+            [*rows, *_catalog_equity_master(catalog)],
+            key_fields=("source", "code", "snapshot_date"),
+        )
     rows = [
         row
         for row in rows
@@ -420,19 +583,17 @@ def get_equity_master(
     rows.sort(
         key=lambda row: (row.get("code") or "", row.get("snapshot_date") or "")
     )
+    extra: dict[str, Any] = {}
+    if latest_snapshot:
+        extra["latest_snapshot"] = True
+        extra["snapshot_date"] = selected_snapshot
+    extra.update(_compact_v7_metadata(compact_enabled) or {})
     return _result(
         rows,
         as_of=as_of_iso,
         table="jquants_listed_info",
         source="jquants",
-        extra_metadata=(
-            {
-                "latest_snapshot": True,
-                "snapshot_date": selected_snapshot,
-            }
-            if latest_snapshot
-            else None
-        ),
+        extra_metadata=extra or None,
     )
 
 
@@ -487,61 +648,83 @@ def get_equity_bars_daily(
     if to_event is not None:
         clauses.append("date <= ?")
         params.append(_date_bound(to_event))
-    rows = run_query(
-        db_path,
-        as_of=as_of_iso,
-        table="jquants_daily_bars",
-        extra_where=" AND ".join(clauses) if clauses else None,
-        params=params,
-        order_by=(
+    bar_where = " AND ".join(clauses) if clauses else None
+    compact_enabled = _compact_v7_or_legacy(db_path)
+    if compact_enabled:
+        compact_order = (
+            "date DESC, code DESC" if latest_n is not None else "code, date"
+        )
+        rows = [
+            _canonical_compact_bar_row(row)
+            for row in _compact_v7_rows(
+                db_path,
+                as_of=as_of_iso,
+                table=PERSONAL_HISTORY_COMPACT_BARS_TABLE,
+                extra_where=bar_where,
+                params=list(params),
+                order_by=compact_order,
+                limit=latest_n,
+            )
+        ]
+    else:
+        bar_order = (
             "date DESC, code DESC, source DESC" if latest_n is not None
             else "code, date"
-        ),
-        limit=latest_n,
-    )
-    catalog_clauses: list[str] = []
-    catalog_params: list[Any] = []
-    if requested_codes is not None:
-        if requested_codes:
-            placeholders = ",".join("?" for _ in requested_codes)
-            catalog_clauses.append(f"{_CATALOG_CODE_SQL} IN ({placeholders})")
-            catalog_params.extend(requested_codes)
-        else:
-            catalog_clauses.append("0")
-    if from_event is not None:
-        catalog_clauses.append("substr(event_time, 1, 10) >= ?")
-        catalog_params.append(_date_bound(from_event))
-    if to_event is not None:
-        catalog_clauses.append("substr(event_time, 1, 10) <= ?")
-        catalog_params.append(_date_bound(to_event))
-    catalog = _catalog_partition_rows(
-        db_path,
-        as_of=as_of_iso,
-        dataset="equities_bars_daily",
-        clauses=catalog_clauses,
-        params=catalog_params,
-        order_by=(
-            "event_time DESC, natural_key DESC, source DESC"
-            if latest_n is not None
-            else "event_time, natural_key"
-        ),
-        limit=latest_n,
-    )
-    rows = _latest_rows(
-        [*rows, *_catalog_daily_bars(catalog)],
-        key_fields=("source", "code", "date"),
-    )
+        )
+        rows = run_query(
+            db_path,
+            as_of=as_of_iso,
+            table="jquants_daily_bars",
+            extra_where=bar_where,
+            params=params,
+            order_by=bar_order,
+            limit=latest_n,
+        )
+        catalog_clauses: list[str] = []
+        catalog_params: list[Any] = []
+        if requested_codes is not None:
+            if requested_codes:
+                placeholders = ",".join("?" for _ in requested_codes)
+                catalog_clauses.append(f"{_CATALOG_CODE_SQL} IN ({placeholders})")
+                catalog_params.extend(requested_codes)
+            else:
+                catalog_clauses.append("0")
+        if from_event is not None:
+            catalog_clauses.append("substr(event_time, 1, 10) >= ?")
+            catalog_params.append(_date_bound(from_event))
+        if to_event is not None:
+            catalog_clauses.append("substr(event_time, 1, 10) <= ?")
+            catalog_params.append(_date_bound(to_event))
+        catalog = _catalog_partition_rows(
+            db_path,
+            as_of=as_of_iso,
+            dataset="equities_bars_daily",
+            clauses=catalog_clauses,
+            params=catalog_params,
+            order_by=(
+                "event_time DESC, natural_key DESC, source DESC"
+                if latest_n is not None
+                else "event_time, natural_key"
+            ),
+            limit=latest_n,
+        )
+        rows = _latest_rows(
+            [*rows, *_catalog_daily_bars(catalog)],
+            key_fields=("source", "code", "date"),
+        )
     rows.sort(key=lambda row: (row.get("code") or "", row.get("date") or ""))
     if latest_n is not None:
         rows = rows[-latest_n:]
+    extra: dict[str, Any] = {}
+    if latest_n is not None:
+        extra["latest_n"] = latest_n
+    extra.update(_compact_v7_metadata(compact_enabled) or {})
     return _result(
         rows,
         as_of=as_of_iso,
         table="jquants_daily_bars",
         source="jquants",
-        extra_metadata=(
-            {"latest_n": latest_n} if latest_n is not None else None
-        ),
+        extra_metadata=extra or None,
     )
 
 
@@ -584,6 +767,34 @@ def first_invalid_adjusted_close(
     requested_codes = tuple(sorted({str(value) for value in codes}))
     from_date = _date_bound(from_event) if from_event is not None else None
     to_date = _date_bound(to_event) if to_event is not None else None
+
+    if _compact_v7_or_legacy(db_path):
+        clauses: list[str] = []
+        params: list[Any] = []
+        if requested_codes:
+            placeholders = ",".join("?" for _ in requested_codes)
+            clauses.append(f"code IN ({placeholders})")
+            params.extend(requested_codes)
+        else:
+            clauses.append("0")
+        if from_date is not None:
+            clauses.append("date >= ?")
+            params.append(from_date)
+        if to_date is not None:
+            clauses.append("date <= ?")
+            params.append(to_date)
+        for row in _compact_v7_rows(
+            db_path,
+            as_of=as_of_iso,
+            table=PERSONAL_HISTORY_COMPACT_BARS_TABLE,
+            extra_where=" AND ".join(clauses) if clauses else None,
+            params=params,
+            order_by="code, date",
+        ):
+            mapped = _canonical_compact_bar_row(row)
+            if not _valid_adjusted_close(mapped.get("adjustment_close")):
+                return mapped
+        return None
 
     exact, candidates = _probe_standalone_typed_adjustment_candidates(
         db_path,

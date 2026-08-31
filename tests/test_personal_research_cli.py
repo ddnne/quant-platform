@@ -9,7 +9,49 @@ from types import SimpleNamespace
 from research import personal_cli
 
 
-def test_cli_returns_two_for_missing_database(tmp_path: Path, capsys) -> None:
+def _allow_local_market_data(monkeypatch) -> None:
+    monkeypatch.setenv(personal_cli.LOCAL_MARKET_DATA_ENV, "1")
+
+
+def test_local_market_data_allowed_requires_exact_one(monkeypatch) -> None:
+    monkeypatch.delenv(personal_cli.LOCAL_MARKET_DATA_ENV, raising=False)
+    assert personal_cli.local_market_data_allowed() is False
+    monkeypatch.setenv(personal_cli.LOCAL_MARKET_DATA_ENV, "true")
+    assert personal_cli.local_market_data_allowed() is False
+    monkeypatch.setenv(personal_cli.LOCAL_MARKET_DATA_ENV, "1")
+    assert personal_cli.local_market_data_allowed() is True
+
+
+class _MustNotOpenDatabase:
+    def __init__(self, *args, **kwargs) -> None:
+        raise AssertionError("must not open or copy a local database")
+
+    def run(self, request):  # pragma: no cover - constructor already fails
+        raise AssertionError("must not open or copy a local database")
+
+
+def test_cli_rejects_local_market_data_by_default(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    monkeypatch.delenv(personal_cli.LOCAL_MARKET_DATA_ENV, raising=False)
+    database = tmp_path / "input.sqlite"
+    database.touch()
+    monkeypatch.setattr(personal_cli, "PersonalResearchService", _MustNotOpenDatabase)
+    code = personal_cli.main(
+        ["--db", str(database), "--end", "2026-08-27"]
+    )
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "local market data is disabled" in err
+    assert "/v1/personal-snapshot-build" in err
+    assert "/v1/personal-research-batch" in err
+    assert personal_cli.LOCAL_MARKET_DATA_ENV in err
+
+
+def test_cli_returns_two_for_missing_database(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    _allow_local_market_data(monkeypatch)
     code = personal_cli.main(
         ["--db", str(tmp_path / "missing.sqlite"), "--end", "2026-08-27"]
     )
@@ -68,6 +110,7 @@ def test_cli_prints_machine_readable_artifact_summary(
             )
 
     monkeypatch.setattr(personal_cli, "PersonalResearchService", FakeService)
+    _allow_local_market_data(monkeypatch)
     code = personal_cli.main(
         [
             "--db",
@@ -157,6 +200,7 @@ def test_cli_emits_returned_am_base_sleeve_reference(
             )
 
     monkeypatch.setattr(personal_cli, "PersonalResearchService", FakeService)
+    _allow_local_market_data(monkeypatch)
     code = personal_cli.main(
         [
             "--db",
@@ -217,6 +261,7 @@ def test_cli_defaults_to_am_diverse_and_keeps_explicit_legacy(
             )
 
     monkeypatch.setattr(personal_cli, "PersonalResearchService", FakeService)
+    _allow_local_market_data(monkeypatch)
     default_code = personal_cli.main(
         ["--db", str(database), "--end", "2026-08-27", "--output", str(tmp_path)]
     )

@@ -1,9 +1,13 @@
 """Closed, PIT-resolved TOPIX universes for personal DRAFT research.
 
 This module is intentionally separate from ``research.universe_contract``.
-The latter is the immutable controlled exact-four Prime authority; these
-selectors are unsigned personal exploration inputs and can never mint READY,
-Pilot, Mass, promotion, or trading authority.
+The latter is the immutable controlled exact-four Prime authority. Personal
+research is not Prime-limited: default ``topix_all`` and the listed
+Core30/Large70/Mid400/Small/TOPIX100/500 selectors are PIT-resolved and
+intersected with financials at the execution decision cutoff. Default AM
+cohorts use 11:30 information and same-day PM close. These selectors are
+unsigned personal exploration inputs and can never mint READY, Pilot, Mass,
+promotion, or trading authority.
 """
 
 from __future__ import annotations
@@ -12,15 +16,16 @@ import hashlib
 import heapq
 import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Mapping, Sequence
+from typing import Any, Literal, Mapping, Sequence
 from urllib.parse import quote
 
-from core.execution import close_as_of
-from data_contracts.identity import natural_key as contract_natural_key
+from core.execution import close_as_of, morning_close_as_of
+from data_contracts.identity import canonical_json, natural_key as contract_natural_key
+from data_contracts.personal_history_compact import compact_history_state
 from data_contracts.personal_universe import (
     TOPIX_CORE30,
     TOPIX_LARGE70,
@@ -35,7 +40,52 @@ from data_contracts.personal_universe import (
 PERSONAL_UNIVERSE_RULE_VERSION = "personal-topix-scale-with-fins/v1"
 PERSONAL_UNIVERSE_BREADTH_FORMAT = "personal-topix-with-fins-breadth/v1"
 DEFAULT_PERSONAL_UNIVERSE_ID = "topix_all"
+PersonalUniverseDecisionCutoff = Literal["session_close", "morning_close"]
+PERSONAL_UNIVERSE_DECISION_CUTOFFS: tuple[str, ...] = (
+    "session_close",
+    "morning_close",
+)
+DEFAULT_PERSONAL_UNIVERSE_DECISION_CUTOFF: PersonalUniverseDecisionCutoff = (
+    "session_close"
+)
+_DECISION_CUTOFF_AS_OF = {
+    "session_close": close_as_of,
+    "morning_close": morning_close_as_of,
+}
+_DECISION_CUTOFF_CLOCK_IDS = {
+    "session_close": "tse_session_close_jst",
+    "morning_close": "tse_morning_close_jst",
+}
 _VersionIdentity = tuple[str, str, str]
+
+
+def _require_decision_cutoff(value: str) -> PersonalUniverseDecisionCutoff:
+    cutoff = str(value)
+    if cutoff not in _DECISION_CUTOFF_AS_OF:
+        raise PersonalUniverseError(
+            "personal universe decision_cutoff must be one of "
+            f"{list(PERSONAL_UNIVERSE_DECISION_CUTOFFS)}"
+        )
+    return cutoff  # type: ignore[return-value]
+
+
+def personal_research_universe_decision_cutoff(
+    *, am_pm: bool
+) -> PersonalUniverseDecisionCutoff:
+    """AM-signal/PM-close cohorts resolve membership at morning close."""
+
+    return "morning_close" if am_pm else "session_close"
+
+
+def personal_research_universe_rule_digest(
+    universe_id: str, *, am_pm: bool
+) -> str:
+    """Rule digest for one closed universe at the cohort execution cutoff."""
+
+    return personal_universe_selector(
+        universe_id,
+        decision_cutoff=personal_research_universe_decision_cutoff(am_pm=am_pm),
+    ).rule_digest
 
 
 class PersonalUniverseError(ValueError):
@@ -57,6 +107,7 @@ def _canonical_digest(value: Any) -> str:
 class PersonalUniverseSelector:
     selector_id: str
     scale_categories: tuple[str, ...]
+    decision_cutoff: str = DEFAULT_PERSONAL_UNIVERSE_DECISION_CUTOFF
 
     def __post_init__(self) -> None:
         categories = tuple(dict.fromkeys(self.scale_categories))
@@ -67,6 +118,9 @@ class PersonalUniverseSelector:
         ):
             raise PersonalUniverseError("personal universe selector is invalid")
         object.__setattr__(self, "scale_categories", categories)
+        object.__setattr__(
+            self, "decision_cutoff", _require_decision_cutoff(self.decision_cutoff)
+        )
 
     @property
     def rule_id(self) -> str:
@@ -76,11 +130,17 @@ class PersonalUniverseSelector:
     def rule_version(self) -> str:
         return PERSONAL_UNIVERSE_RULE_VERSION
 
+    def with_decision_cutoff(self, decision_cutoff: str) -> PersonalUniverseSelector:
+        cutoff = _require_decision_cutoff(decision_cutoff)
+        if cutoff == self.decision_cutoff:
+            return self
+        return replace(self, decision_cutoff=cutoff)
+
     def to_canonical_dict(self) -> dict[str, Any]:
         return {
             "rule_id": self.rule_id,
             "rule_version": self.rule_version,
-            "decision_clock": "tse_session_close_jst",
+            "decision_clock": _DECISION_CUTOFF_CLOCK_IDS[self.decision_cutoff],
             "master_rule": {
                 "dataset": "equities_master",
                 "latest_snapshot_visible_at_decision": True,
@@ -137,13 +197,18 @@ _SELECTORS: Mapping[str, PersonalUniverseSelector] = MappingProxyType(
 PERSONAL_UNIVERSE_IDS: tuple[str, ...] = tuple(_SELECTORS)
 
 
-def personal_universe_selector(selector_id: str) -> PersonalUniverseSelector:
+def personal_universe_selector(
+    selector_id: str,
+    *,
+    decision_cutoff: str = DEFAULT_PERSONAL_UNIVERSE_DECISION_CUTOFF,
+) -> PersonalUniverseSelector:
     try:
-        return _SELECTORS[str(selector_id)]
+        selector = _SELECTORS[str(selector_id)]
     except KeyError as exc:
         raise PersonalUniverseError(
             f"universe_id must be one of {list(PERSONAL_UNIVERSE_IDS)}"
         ) from exc
+    return selector.with_decision_cutoff(decision_cutoff)
 
 
 @dataclass(frozen=True, slots=True)
@@ -297,6 +362,41 @@ def _calendar_dates(start: str, end: str) -> tuple[str, ...]:
     return tuple(values)
 
 
+def _synthesize_compact_master_row(raw: Mapping[str, Any]) -> dict[str, Any]:
+    def field(*names: str) -> str:
+        for name in names:
+            value = raw.get(name)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+        return ""
+
+    scale = field("scale_category")
+    source_scale = field("source_scale_category")
+    canonical = canonical_topix_scale_category(scale)
+    if canonical is None:
+        canonical = canonical_topix_scale_category(source_scale)
+    payload = {
+        "Code": field("code"),
+        "Date": field("snapshot_date"),
+        "MarketCode": field("market_code"),
+        "Sector17Code": field("sector_17_code"),
+        "Sector33Code": field("sector_33_code"),
+        "ScaleCategory": scale,
+        "CanonicalScaleCategory": canonical or "",
+        "SourceScaleCategory": source_scale,
+    }
+    return {
+        "source": "jquants",
+        "dataset": "equities_master",
+        "natural_key": contract_natural_key(payload, "equities_master"),
+        "event_time": raw.get("event_time"),
+        "available_at": raw.get("available_at"),
+        "ingested_at": raw.get("ingested_at"),
+        "payload": canonical_json(payload),
+        "raw_payload": None,
+    }
+
+
 def _load_rows(
     db_path: str | Path, dataset_ids: Sequence[str]
 ) -> dict[str, tuple[dict[str, Any], ...]]:
@@ -318,30 +418,64 @@ def _load_rows(
             "payload",
             "raw_payload",
         }
-        placeholders = ",".join("?" for _ in dataset_ids)
-        rows: list[sqlite3.Row] = []
-        for table in ("jquants_records", "jquants_records_revisions"):
-            columns = {
-                str(row[1])
-                for row in connection.execute(f"PRAGMA table_info({table})")
-            }
-            if not columns:
-                if table == "jquants_records":
-                    raise PersonalUniverseError(
-                        "personal universe requires canonical jquants_records"
-                    )
-                continue
-            if not required <= columns:
+        load_compact_master = False
+        generic_ids = tuple(dataset_ids)
+        if "equities_master" in dataset_ids:
+            compact_state = compact_history_state(connection)
+            if compact_state == "invalid":
                 raise PersonalUniverseError(
-                    f"personal universe requires canonical {table} schema"
+                    "personal universe compact v7 marker or schema is invalid"
                 )
+            if compact_state == "mixed":
+                raise PersonalUniverseError(
+                    "personal universe cannot mix compact master with "
+                    "generic or revision equities_master"
+                )
+            if compact_state == "compact":
+                load_compact_master = True
+                generic_ids = tuple(
+                    dataset_id
+                    for dataset_id in dataset_ids
+                    if dataset_id != "equities_master"
+                )
+        rows: list[dict[str, Any]] = []
+        if generic_ids:
+            placeholders = ",".join("?" for _ in generic_ids)
+            for table in ("jquants_records", "jquants_records_revisions"):
+                columns = {
+                    str(row[1])
+                    for row in connection.execute(f"PRAGMA table_info({table})")
+                }
+                if not columns:
+                    if table == "jquants_records":
+                        raise PersonalUniverseError(
+                            "personal universe requires canonical jquants_records"
+                        )
+                    continue
+                if not required <= columns:
+                    raise PersonalUniverseError(
+                        f"personal universe requires canonical {table} schema"
+                    )
+                rows.extend(
+                    dict(raw)
+                    for raw in connection.execute(
+                        "SELECT source,dataset,natural_key,event_time,available_at,"
+                        f"ingested_at,payload,raw_payload FROM {table} "
+                        f"WHERE source='jquants' AND dataset IN ({placeholders}) "
+                        "ORDER BY dataset,event_time,natural_key,available_at,"
+                        "ingested_at",
+                        tuple(generic_ids),
+                    ).fetchall()
+                )
+        if load_compact_master:
             rows.extend(
-                connection.execute(
-                    "SELECT source,dataset,natural_key,event_time,available_at,"
-                    f"ingested_at,payload,raw_payload FROM {table} "
-                    f"WHERE source='jquants' AND dataset IN ({placeholders}) "
-                    "ORDER BY dataset,event_time,natural_key,available_at,ingested_at",
-                    tuple(dataset_ids),
+                _synthesize_compact_master_row(dict(raw))
+                for raw in connection.execute(
+                    "SELECT snapshot_date,code,event_time,available_at,"
+                    "ingested_at,market_code,sector_17_code,sector_33_code,"
+                    "scale_category,source_scale_category "
+                    "FROM personal_history_compact_master "
+                    "ORDER BY event_time,code,available_at,ingested_at"
                 ).fetchall()
             )
     except sqlite3.Error as exc:
@@ -352,8 +486,7 @@ def _load_rows(
     grouped: dict[str, list[dict[str, Any]]] = {
         str(dataset_id): [] for dataset_id in dataset_ids
     }
-    for raw in rows:
-        row = dict(raw)
+    for row in rows:
         dataset_id = str(row["dataset"])
         row["_payload"] = _decode_payload(row, dataset_id)
         row["_available"] = _parse_datetime(
@@ -375,10 +508,14 @@ def resolve_personal_universe_with_evidence(
     period_start: str,
     period_end: str,
     universe_id: str = DEFAULT_PERSONAL_UNIVERSE_ID,
+    decision_cutoff: str = DEFAULT_PERSONAL_UNIVERSE_DECISION_CUTOFF,
 ) -> tuple[PersonalResolvedUniverseMembership, dict[str, Any]]:
     """Resolve one closed selector from the latest PIT-visible dated master."""
 
-    selector = personal_universe_selector(universe_id)
+    selector = personal_universe_selector(
+        universe_id, decision_cutoff=decision_cutoff
+    )
+    decision_as_of = _DECISION_CUTOFF_AS_OF[selector.decision_cutoff]
     rows = _load_rows(
         db_path, ("markets_calendar", "equities_master", "fins_summary")
     )
@@ -486,7 +623,7 @@ def resolve_personal_universe_with_evidence(
     event_index = 0
     saw_trading_day = False
     for day in requested_days:
-        as_of = _parse_datetime(close_as_of(day), label="decision_as_of")
+        as_of = _parse_datetime(decision_as_of(day), label="decision_as_of")
         while (
             event_index < len(activation_events)
             and activation_events[event_index][0] <= as_of
@@ -594,6 +731,7 @@ def resolve_personal_universe_with_evidence(
         "format": PERSONAL_UNIVERSE_BREADTH_FORMAT,
         "evidence_kind": "OBSERVED",
         "selector": selector.to_dict(),
+        "decision_cutoff": selector.decision_cutoff,
         "period_start": period_start,
         "period_end": period_end,
         "daily_observations": daily_observations,
@@ -620,24 +758,30 @@ def resolve_personal_universe(
     period_start: str,
     period_end: str,
     universe_id: str = DEFAULT_PERSONAL_UNIVERSE_ID,
+    decision_cutoff: str = DEFAULT_PERSONAL_UNIVERSE_DECISION_CUTOFF,
 ) -> PersonalResolvedUniverseMembership:
     membership, _evidence = resolve_personal_universe_with_evidence(
         db_path,
         period_start=period_start,
         period_end=period_end,
         universe_id=universe_id,
+        decision_cutoff=decision_cutoff,
     )
     return membership
 
 
 __all__ = [
+    "DEFAULT_PERSONAL_UNIVERSE_DECISION_CUTOFF",
     "DEFAULT_PERSONAL_UNIVERSE_ID",
     "PERSONAL_UNIVERSE_BREADTH_FORMAT",
+    "PERSONAL_UNIVERSE_DECISION_CUTOFFS",
     "PERSONAL_UNIVERSE_IDS",
     "PERSONAL_UNIVERSE_RULE_VERSION",
     "PersonalResolvedUniverseMembership",
     "PersonalUniverseError",
     "PersonalUniverseSelector",
+    "personal_research_universe_decision_cutoff",
+    "personal_research_universe_rule_digest",
     "personal_universe_selector",
     "resolve_personal_universe",
     "resolve_personal_universe_with_evidence",

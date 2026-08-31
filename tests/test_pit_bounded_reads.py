@@ -14,7 +14,20 @@ from ingestion.jquants.normalize import (
     normalize_generic,
     normalize_listed_info,
 )
-from pit import get_equity_bars_daily, get_equity_master
+from pit import (
+    PitError,
+    first_invalid_adjusted_close,
+    get_equity_bars_daily,
+    get_equity_master,
+    get_jquants_records,
+    get_market_calendar,
+)
+from personal_history_compact_support import (
+    insert_compact_bar,
+    insert_compact_master,
+    install_compact_schema,
+    stamp_compact_manifest,
+)
 from storage.schema import CATALOG_CODE_SQL
 from storage.sqlite_store import SqliteStore
 
@@ -460,3 +473,200 @@ def test_schema_indexes_match_bounded_pit_query_shapes(tmp_path: Path) -> None:
     assert any(
         "ix_records_dataset_code_event_pit" in row[3] for row in catalog_plan
     )
+
+
+def _open_compact(path: Path) -> sqlite3.Connection:
+    SqliteStore(path).close()
+    conn = sqlite3.connect(path)
+    install_compact_schema(conn)
+    return conn
+
+
+def _seed_typed_equity(path: Path) -> None:
+    with SqliteStore(path) as store:
+        store.upsert(
+            "jquants_listed_info",
+            normalize_listed_info(
+                [{"Code": "1301", "CompanyName": "typed-fallback"}],
+                snapshot_date="2025-04-02",
+                ingested_at="2025-04-02T08:00:00+09:00",
+                available_at="2025-04-02T08:00:00+09:00",
+            ),
+        )
+        store.upsert("jquants_daily_bars", [_typed_bar("2025-04-02", 101.0)])
+
+
+def _assert_equity_reads_fail_closed(path: Path, *, match: str) -> None:
+    with pytest.raises(PitError, match=match):
+        get_equity_master(as_of=AS_OF, db_path=path)
+    with pytest.raises(PitError, match=match):
+        get_equity_bars_daily(as_of=AS_OF, code=CODE, db_path=path)
+    with pytest.raises(PitError, match=match):
+        first_invalid_adjusted_close(as_of=AS_OF, codes=(CODE,), db_path=path)
+
+
+def test_genuine_v6_legacy_keeps_typed_catalog_reads(tmp_path: Path) -> None:
+    path = tmp_path / "genuine-v6.sqlite"
+    _seed_typed_equity(path)
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "CREATE TABLE personal_history_manifest ("
+            "singleton INTEGER PRIMARY KEY, format TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO personal_history_manifest(singleton, format) "
+            "VALUES (1, 'personal-draft-history/v6')"
+        )
+        conn.commit()
+
+    master = get_equity_master(as_of=AS_OF, db_path=path)
+    bars = get_equity_bars_daily(as_of=AS_OF, code=CODE, db_path=path)
+    assert [(row["snapshot_date"], row["code"]) for row in master.rows] == [
+        ("2025-04-02", "1301")
+    ]
+    assert [(row["date"], row["close"]) for row in bars.rows] == [
+        ("2025-04-02", 101.0)
+    ]
+    assert "personal_history_format" not in master.metadata
+    assert "personal_history_format" not in bars.metadata
+
+
+def test_malformed_or_mixed_compact_v7_fail_closed(tmp_path: Path) -> None:
+    malformed = tmp_path / "malformed-typed-fallback.sqlite"
+    _seed_typed_equity(malformed)
+    with sqlite3.connect(malformed) as conn:
+        stamp_compact_manifest(conn)
+        conn.commit()
+    _assert_equity_reads_fail_closed(malformed, match="compact v7 marker or schema")
+
+    mixed = tmp_path / "mixed-typed.sqlite"
+    _seed_typed_equity(mixed)
+    with sqlite3.connect(mixed) as conn:
+        install_compact_schema(conn)
+        conn.commit()
+    _assert_equity_reads_fail_closed(mixed, match="cannot mix compact")
+
+
+def test_compact_v7_latest_master_snapshot_does_not_resurrect_delisted(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "compact-master.sqlite"
+    first = "2025-04-01"
+    second = "2025-04-02"
+    with _open_compact(path) as conn:
+        for code in ("1301", "1302"):
+            insert_compact_master(
+                conn,
+                snapshot_date=first,
+                code=code,
+                available_at=f"{first}T08:00:00+09:00",
+            )
+        insert_compact_master(
+            conn,
+            snapshot_date=second,
+            code="1301",
+            available_at=f"{second}T08:00:00+09:00",
+        )
+        insert_compact_master(
+            conn,
+            snapshot_date="2025-04-03",
+            code="1303",
+            available_at="2025-05-01T08:00:00+09:00",
+        )
+        conn.commit()
+
+    latest = get_equity_master(
+        as_of=AS_OF,
+        latest_snapshot=True,
+        db_path=path,
+    )
+    delisted = get_equity_master(
+        as_of=AS_OF,
+        code="1302",
+        latest_snapshot=True,
+        db_path=path,
+    )
+    historical = get_equity_master(
+        as_of=AS_OF,
+        code="1302",
+        db_path=path,
+    )
+    universe = load_master(AS_OF, db_path=path)
+
+    assert [(row["snapshot_date"], row["code"]) for row in latest.rows] == [
+        (second, "1301")
+    ]
+    assert latest.metadata["table"] == "jquants_listed_info"
+    assert latest.metadata["snapshot_date"] == second
+    assert latest.metadata["personal_history_format"] == "personal-draft-history/v7"
+    assert latest.rows[0]["source"] == "jquants"
+    assert latest.rows[0]["raw_payload"] is None
+    assert latest.rows[0]["company_name"] is None
+    assert latest.rows[0]["sector_17_name"] is None
+    assert "source_scale_category" not in latest.rows[0]
+    assert delisted.rows == []
+    assert [row["snapshot_date"] for row in historical.rows] == [first]
+    assert set(universe) == {"1301"}
+
+
+def test_compact_v7_bars_honor_codes_date_bounds_and_latest_n(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "compact-bars.sqlite"
+    with _open_compact(path) as conn:
+        for code, day, close in (
+            ("1332", "2025-04-01", 10.0),
+            ("1332", "2025-04-02", 11.0),
+            ("1332", "2025-04-03", 12.0),
+            ("7203", "2025-04-02", 20.0),
+            ("8697", "2025-04-01", 30.0),
+            ("8697", "2025-04-02", 31.0),
+            ("8697", "2025-04-03", 32.0),
+            ("8697", "2025-04-04", 33.0),
+        ):
+            insert_compact_bar(
+                conn,
+                code=code,
+                day=day,
+                available_at=f"{day}T15:30:00+09:00",
+                close=close,
+            )
+        conn.commit()
+
+    multi = get_equity_bars_daily(
+        as_of=AS_OF,
+        codes=("8697", "1332"),
+        from_event="2025-04-02",
+        to_event="2025-04-03",
+        db_path=path,
+    )
+    bounded = get_equity_bars_daily(
+        as_of=AS_OF,
+        code=CODE,
+        latest_n=2,
+        db_path=path,
+    )
+    unbounded = get_equity_bars_daily(as_of=AS_OF, code=CODE, db_path=path)
+
+    assert [(row["code"], row["date"], row["close"]) for row in multi.rows] == [
+        ("1332", "2025-04-02", 11.0),
+        ("1332", "2025-04-03", 12.0),
+        ("8697", "2025-04-02", 31.0),
+        ("8697", "2025-04-03", 32.0),
+    ]
+    assert [(row["date"], row["close"]) for row in bounded.rows] == [
+        ("2025-04-03", 32.0),
+        ("2025-04-04", 33.0),
+    ]
+    assert bounded.rows == unbounded.rows[-2:]
+    assert bounded.metadata["table"] == "jquants_daily_bars"
+    assert bounded.metadata["latest_n"] == 2
+    assert bounded.metadata["personal_history_format"] == "personal-draft-history/v7"
+    sample = multi.rows[0]
+    assert sample["source"] == "jquants"
+    assert sample["raw_payload"] is None
+    assert sample["open"] is None
+    assert sample["adjustment_open"] is None
+    assert first_invalid_adjusted_close(
+        as_of=AS_OF, codes=(CODE,), db_path=path
+    ) is None

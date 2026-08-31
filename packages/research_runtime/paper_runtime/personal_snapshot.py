@@ -21,6 +21,12 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 from urllib.parse import quote
 
+from data_contracts.personal_history_compact import (
+    PERSONAL_HISTORY_COMPACT_BARS_TABLE,
+    PERSONAL_HISTORY_COMPACT_MASTER_TABLE,
+    compact_history_state,
+)
+
 from .snapshot_identity import data_snapshot_id
 
 
@@ -29,6 +35,13 @@ PERSONAL_POLICY_FORMAT = "personal-draft-policy/v1"
 PERSONAL_PUBLICATION_STATE = "PERSONAL_DRAFT"
 _TARGET_LOCAL_PUBLICATION_STATE = "SYNCED"
 _PERSONAL_PROVENANCE_TABLE = "personal_snapshot_provenance"
+_TYPED_DAILY_BARS_COLUMNS = {
+    "source",
+    "code",
+    "date",
+    "event_time",
+    "available_at",
+}
 
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _UNSTABLE_PUBLICATION_STATES = frozenset({"BUILDING", "VALIDATING"})
@@ -139,6 +152,39 @@ def _table_columns(connection: sqlite3.Connection, table: str) -> set[str]:
     return {
         str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")
     }
+
+
+def _aggregate_observation(
+    connection: sqlite3.Connection,
+    *,
+    dataset_id: str,
+    table: str,
+    date_column: str,
+    where: str = "",
+) -> dict[str, Any] | None:
+    row = connection.execute(
+        f"SELECT '{dataset_id}' AS dataset,COUNT(*) AS row_count,"
+        f"MIN({date_column}) AS min_event_date,MAX({date_column}) AS max_event_date "
+        f"FROM {table}{where}"
+    ).fetchone()
+    if row is None or int(row["row_count"] or 0) < 1:
+        return None
+    return dict(row)
+
+
+def _typed_daily_bars_observation(
+    connection: sqlite3.Connection,
+) -> dict[str, Any] | None:
+    typed_columns = _table_columns(connection, "jquants_daily_bars")
+    if not _TYPED_DAILY_BARS_COLUMNS <= typed_columns:
+        return None
+    return _aggregate_observation(
+        connection,
+        dataset_id="equities_bars_daily",
+        table="jquants_daily_bars",
+        date_column="date",
+        where=" WHERE source='jquants'",
+    )
 
 
 def _source_policy_provenance(connection: sqlite3.Connection) -> dict[str, Any]:
@@ -408,32 +454,49 @@ def _observed_dataset_evidence(
             (str(row["dataset"]), dict(row)) for row in rows
         )
 
-    # The personal hydrator promotes its largest/query-hot partition into the
-    # existing indexed typed table at completion. Prefer that representation,
-    # while retaining generic observations for older fixtures and snapshots.
-    if "equities_bars_daily" in required_datasets:
-        typed_columns = _table_columns(connection, "jquants_daily_bars")
-        required_typed = {
-            "source",
-            "code",
-            "date",
-            "event_time",
-            "available_at",
-        }
-        if required_typed <= typed_columns:
-            typed = connection.execute(
-                "SELECT 'equities_bars_daily' AS dataset,"
-                "COUNT(*) AS row_count,MIN(date) AS min_event_date,"
-                "MAX(date) AS max_event_date FROM jquants_daily_bars "
-                "WHERE source='jquants'"
-            ).fetchone()
-            if typed is not None and int(typed["row_count"] or 0) > 0:
-                generic = by_dataset.get("equities_bars_daily")
-                if generic is not None and int(generic["row_count"] or 0) > 0:
-                    raise PersonalSnapshotError(
-                        "personal snapshot cannot mix generic and typed daily bars"
-                    )
-                by_dataset["equities_bars_daily"] = dict(typed)
+    compact_state = compact_history_state(connection)
+    if compact_state == "invalid":
+        raise PersonalSnapshotError(
+            "personal snapshot compact v7 marker or schema is invalid"
+        )
+    if compact_state == "mixed":
+        raise PersonalSnapshotError(
+            "personal snapshot cannot mix compact with typed or generic "
+            "equity master or bars"
+        )
+
+    if compact_state == "compact":
+        if "equities_master" in required_datasets:
+            compact_master = _aggregate_observation(
+                connection,
+                dataset_id="equities_master",
+                table=PERSONAL_HISTORY_COMPACT_MASTER_TABLE,
+                date_column="snapshot_date",
+            )
+            if compact_master is not None:
+                by_dataset["equities_master"] = compact_master
+        if "equities_bars_daily" in required_datasets:
+            compact_bars = _aggregate_observation(
+                connection,
+                dataset_id="equities_bars_daily",
+                table=PERSONAL_HISTORY_COMPACT_BARS_TABLE,
+                date_column="date",
+            )
+            if compact_bars is not None:
+                by_dataset["equities_bars_daily"] = compact_bars
+    elif "equities_bars_daily" in required_datasets:
+        typed_bars = _typed_daily_bars_observation(connection)
+        if typed_bars is not None:
+            # The personal hydrator promotes its largest/query-hot partition into
+            # the existing indexed typed table at completion. Prefer that
+            # representation, while retaining generic observations for older
+            # fixtures and snapshots.
+            generic_bars = by_dataset.get("equities_bars_daily")
+            if generic_bars is not None and int(generic_bars["row_count"] or 0) > 0:
+                raise PersonalSnapshotError(
+                    "personal snapshot cannot mix generic and typed daily bars"
+                )
+            by_dataset["equities_bars_daily"] = typed_bars
 
     evidence: list[dict[str, Any]] = []
     for dataset_id in required_datasets:

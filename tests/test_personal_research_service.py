@@ -22,6 +22,11 @@ from core.engine import _make_feature_accessor
 from data_contracts.identity import natural_key
 from execution.personal_paper_service import PersonalPaperExecutionService
 from paper_runtime.snapshot_identity import data_snapshot_id
+from personal_history_compact_support import (
+    insert_compact_bar,
+    install_compact_schema,
+    stamp_compact_manifest,
+)
 from paper_runtime.personal_snapshot import PersonalSnapshot
 from paper_runtime.personal_prepared_frame import (
     _feature_cache_key_document,
@@ -39,6 +44,7 @@ from research.factor_cohorts import (
     LEGACY_NEXT_CLOSE_LABEL,
 )
 from research.personal_service import (
+    PERSONAL_BAR_COVERAGE_EVIDENCE,
     PERSONAL_DECISION_POLICY,
     PERSONAL_EXACT_FOUR_MAX_BACKTESTS,
     PERSONAL_RESEARCH_REPORT_VERSION,
@@ -58,10 +64,12 @@ from research.personal_service import (
     _evaluate_candidates_concurrently,
     _fixed_position_short_financing_evidence,
     _md_short_financing,
+    _observed_market_bar_coverage,
     _periods,
     _resolved_execution_contract,
     _run_one,
     _short_financing_sensitivity_document,
+    _universe_corporate_action_check,
     _validated_specs,
     _write_continuous_base_sleeve_artifact,
     default_personal_specs,
@@ -77,6 +85,7 @@ from research.personal_base_sleeve import (
 )
 from research.personal_universe import (
     PersonalResolvedUniverseMembership,
+    personal_research_universe_rule_digest,
     personal_universe_selector,
 )
 from storage.sqlite_store import SqliteStore
@@ -1095,6 +1104,7 @@ def test_personal_research_runs_real_paper_and_is_idempotent(
     )
     assert first.universe_id == "topix_all"
     assert report["universe"]["rule_id"] == "topix_all_with_fins"
+    assert report["universe"]["decision_clock"] == "tse_session_close_jst"
     assert report["universe"]["controlled_live_eligibility"] == "FORBIDDEN"
     assert report["dependency_closures"][0]["universe_dependencies"][0][
         "id"
@@ -2427,12 +2437,16 @@ def test_default_specs_and_am_cohort_use_am_pm_legacy_stays_next_close() -> None
 
 def test_am_pm_closures_bind_contract_and_keep_full_daily_bars() -> None:
     specs = personal_specs_for_cohort("diverse-core-am-pm-v1")
+    am_selector = personal_universe_selector(
+        "topix_all", decision_cutoff="morning_close"
+    )
+    legacy_selector = personal_universe_selector("topix_all")
     am = _closures(
         specs,
         start="2022-01-01",
         end="2026-01-01",
         policy=_policy(),
-        universe_selector=personal_universe_selector("topix_all"),
+        universe_selector=am_selector,
         execution_contract=dict(AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT),
     )
     legacy = _closures(
@@ -2440,8 +2454,10 @@ def test_am_pm_closures_bind_contract_and_keep_full_daily_bars() -> None:
         start="2022-01-01",
         end="2026-01-01",
         policy=_policy(),
-        universe_selector=personal_universe_selector("topix_all"),
+        universe_selector=legacy_selector,
     )
+    assert am_selector.to_dict()["decision_clock"] == "tse_morning_close_jst"
+    assert legacy_selector.to_dict()["decision_clock"] == "tse_session_close_jst"
     assert am[0].plan_digest != legacy[0].plan_digest
     assert "equities_bars_daily" in am[0].required_datasets
     assert "equities_bars_daily_am" not in am[0].required_datasets
@@ -2541,6 +2557,20 @@ def test_am_pm_cohort_report_binds_execution_contract_without_core_mode(
     assert contract["label"] == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
     assert contract["execution_mode"] == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
     assert report["strategy_cohort"]["cohort_id"] == "diverse-core-am-pm-v1"
+    assert report["universe"]["decision_clock"] == "tse_morning_close_jst"
+    assert result.universe_rule_digest == personal_research_universe_rule_digest(
+        "topix_all", am_pm=True
+    )
+    assert result.universe_rule_digest != personal_research_universe_rule_digest(
+        "topix_all", am_pm=False
+    )
+    assert report["universe"]["rule_digest"] == result.universe_rule_digest
+    assert report["data_quality"]["universe_breadth"]["decision_cutoff"] == (
+        "morning_close"
+    )
+    assert report["data_quality"]["universe_breadth"]["selector"][
+        "decision_clock"
+    ] == "tse_morning_close_jst"
     assert report["comparison"]["execution_contract_column"] is True
     assert all(
         row["execution_contract_digest"] == contract["contract_digest"]
@@ -2555,6 +2585,290 @@ def test_am_pm_cohort_report_binds_execution_contract_without_core_mode(
         "equities_bars_daily" in closure["required_datasets"]
         for closure in report["dependency_closures"]
     )
+
+
+def _direct_universe(*days: str, codes: tuple[str, ...] = ("1301",)):
+    return PersonalResolvedUniverseMembership(
+        period_start=days[0],
+        period_end=days[-1],
+        decision_memberships=tuple((day, codes) for day in days),
+        rule_id="topix_all_with_fins",
+        rule_version="personal-topix-scale-with-fins/v1",
+        rule_digest=(
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        ),
+    )
+
+
+def _install_compact_v7_bars(
+    path: Path,
+    rows: tuple[dict[str, object], ...],
+) -> None:
+    connection = sqlite3.connect(path)
+    try:
+        install_compact_schema(connection)
+        for row in rows:
+            kwargs: dict[str, object] = {
+                "code": str(row["code"]),
+                "day": str(row["date"]),
+                "close": float(row.get("close", 100.0)),
+                "volume": float(row.get("volume", 1000.0)),
+            }
+            for key in (
+                "adjustment_close",
+                "adjustment_volume",
+                "event_time",
+                "available_at",
+                "ingested_at",
+            ):
+                if key in row and row[key] is not None:
+                    kwargs[key] = row[key]
+            insert_compact_bar(connection, **kwargs)  # type: ignore[arg-type]
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _compact_bar(
+    code: str,
+    day: str,
+    *,
+    close: float = 100.0,
+    adjustment_close: float | None = None,
+    volume: float = 1000.0,
+    adjustment_volume: float | None = None,
+    available_at: str | None = None,
+    event_time: str | None = None,
+) -> dict[str, object]:
+    stamp = f"{day}T15:00:00+09:00"
+    return {
+        "code": code,
+        "date": day,
+        "event_time": stamp if event_time is None else event_time,
+        "available_at": stamp if available_at is None else available_at,
+        "ingested_at": stamp if available_at is None else available_at,
+        "close": close,
+        "volume": volume,
+        "adjustment_close": close if adjustment_close is None else adjustment_close,
+        "adjustment_volume": (
+            volume if adjustment_volume is None else adjustment_volume
+        ),
+    }
+
+
+def test_compact_v7_observed_bar_breadth_counts_exact_schema_rows(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "compact-breadth.sqlite"
+    days = ("2024-01-04", "2024-01-05")
+    _install_compact_v7_bars(
+        path,
+        (
+            _compact_bar("1301", days[0]),
+            _compact_bar("1301", days[1]),
+            _compact_bar("1302", days[0]),
+            _compact_bar("1302", days[1]),
+        ),
+    )
+    universe = _direct_universe(*days, codes=("1301", "1302"))
+
+    coverage = _observed_market_bar_coverage(path, universe, minimum_ratio=1.0)
+
+    assert coverage["status"] == "PASS"
+    assert coverage["version"] == PERSONAL_BAR_COVERAGE_EVIDENCE
+    assert coverage["observed_rows"] == 4
+    assert coverage["missing_rows"] == 0
+
+
+def test_compact_v7_missing_bar_rows_fail_observed_breadth(tmp_path: Path) -> None:
+    path = tmp_path / "compact-missing.sqlite"
+    days = ("2024-01-04", "2024-01-05")
+    _install_compact_v7_bars(
+        path,
+        (_compact_bar("1301", days[0]), _compact_bar("1302", days[0])),
+    )
+    universe = _direct_universe(*days, codes=("1301", "1302"))
+
+    coverage = _observed_market_bar_coverage(path, universe, minimum_ratio=1.0)
+
+    assert coverage["status"] == "FAIL"
+    assert coverage["observed_rows"] == 2
+    assert coverage["missing_rows"] == 2
+    assert {"date": days[1], "code": "1301"} in coverage["missing_sample"]
+    assert {"date": days[1], "code": "1302"} in coverage["missing_sample"]
+
+
+def test_compact_v7_timestamp_wall_excludes_unobservable_rows(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "compact-wall.sqlite"
+    days = ("2024-01-04", "2024-01-05")
+    _install_compact_v7_bars(
+        path,
+        (
+            _compact_bar("1301", days[0]),
+            _compact_bar(
+                "1301",
+                days[1],
+                event_time="2024-01-05T15:00:00+09:00",
+                available_at="2024-01-05T16:00:00+09:00",
+            ),
+            _compact_bar(
+                "1301",
+                "2024-01-06",
+                close=50.0,
+                adjustment_close=50.0,
+                available_at="2024-01-06T16:00:00+09:00",
+            ),
+        ),
+    )
+    universe = _direct_universe(*days)
+
+    coverage = _observed_market_bar_coverage(path, universe, minimum_ratio=1.0)
+    corporate = _universe_corporate_action_check(
+        path, universe=universe, lookback_days=0
+    )
+
+    assert coverage["status"] == "FAIL"
+    assert coverage["observed_rows"] == 1
+    assert coverage["missing_sample"] == [{"date": days[1], "code": "1301"}]
+    assert corporate["status"] == "PASS"
+    assert corporate["affected_codes"] == []
+    assert corporate["supported_factor_events"] == []
+
+
+def test_compact_v7_corporate_action_uses_stored_split_fields(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "compact-split.sqlite"
+    days = ("2024-01-04", "2024-01-05")
+    _install_compact_v7_bars(
+        path,
+        (
+            _compact_bar(
+                "1301",
+                days[0],
+                close=100.0,
+                adjustment_close=100.0,
+                volume=1000.0,
+                adjustment_volume=1000.0,
+            ),
+            _compact_bar(
+                "1301",
+                days[1],
+                close=50.0,
+                adjustment_close=100.0,
+                volume=2000.0,
+                adjustment_volume=1000.0,
+            ),
+        ),
+    )
+    universe = _direct_universe(*days)
+
+    corporate = _universe_corporate_action_check(
+        path, universe=universe, lookback_days=0
+    )
+
+    assert corporate["status"] == "PASS"
+    assert corporate["affected_codes"] == ["1301"]
+    assert corporate["supported_factor_events"]
+    assert corporate["supported_factor_events"][0]["price_ratio_changed"] is True
+    assert corporate["supported_factor_events"][0]["volume_ratio_changed"] is True
+    assert corporate["reason"] == (
+        "supported_factor_events_handled_by_retrospective_basis"
+    )
+
+
+def test_compact_v7_fail_closed_state_mapping(tmp_path: Path) -> None:
+    days = ("2024-01-04",)
+    universe = _direct_universe(*days)
+
+    invalid = tmp_path / "compact-invalid.sqlite"
+    connection = sqlite3.connect(invalid)
+    try:
+        stamp_compact_manifest(connection)
+        connection.commit()
+    finally:
+        connection.close()
+    coverage = _observed_market_bar_coverage(invalid, universe, minimum_ratio=1.0)
+    corporate = _universe_corporate_action_check(
+        invalid, universe=universe, lookback_days=0
+    )
+    assert coverage["status"] == "FAIL"
+    assert coverage["reason"] == "compact_v7_marker_or_schema_invalid"
+    assert "observed_rows" not in coverage
+    assert corporate["status"] == "FAIL"
+    assert corporate["reason"] == "compact_v7_marker_or_schema_invalid"
+
+    mixed = tmp_path / "compact-mixed.sqlite"
+    _install_compact_v7_bars(mixed, (_compact_bar("1301", days[0]),))
+    connection = sqlite3.connect(mixed)
+    try:
+        stamp = f"{days[0]}T15:00:00+09:00"
+        connection.execute(
+            "CREATE TABLE jquants_daily_bars ("
+            "source TEXT, code TEXT, date TEXT, available_at TEXT, event_time TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO jquants_daily_bars("
+            "source,code,date,available_at,event_time"
+            ") VALUES ('jquants','1301',?,?,?)",
+            (days[0], stamp, stamp),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    coverage = _observed_market_bar_coverage(mixed, universe, minimum_ratio=1.0)
+    corporate = _universe_corporate_action_check(
+        mixed, universe=universe, lookback_days=0
+    )
+    assert coverage["status"] == "FAIL"
+    assert coverage["reason"] == "mixed_compact_and_typed_or_generic_bars"
+    assert corporate["status"] == "FAIL"
+    assert corporate["reason"] == "mixed_compact_and_typed_or_generic_bars"
+
+
+def test_v6_manifest_without_compact_bars_keeps_legacy_typed_bars(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "legacy-v6.sqlite"
+    days = ("2024-01-04", "2024-01-05")
+    connection = sqlite3.connect(path)
+    try:
+        stamp_compact_manifest(connection, "personal-draft-history/v6")
+        connection.execute(
+            "CREATE TABLE jquants_daily_bars ("
+            "source TEXT, code TEXT, date TEXT, event_time TEXT,"
+            "available_at TEXT, ingested_at TEXT, close REAL,"
+            "adjustment_close REAL, volume REAL, adjustment_volume REAL)"
+        )
+        for day, close, adjusted in (
+            (days[0], 100.0, 100.0),
+            (days[1], 50.0, 100.0),
+        ):
+            stamp = f"{day}T15:00:00+09:00"
+            connection.execute(
+                "INSERT INTO jquants_daily_bars("
+                "source,code,date,event_time,available_at,ingested_at,"
+                "close,adjustment_close,volume,adjustment_volume"
+                ") VALUES ('jquants','1301',?,?,?,?,?,?,?,?)",
+                (day, stamp, stamp, stamp, close, adjusted, 1000.0, 1000.0),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+    universe = _direct_universe(*days)
+
+    coverage = _observed_market_bar_coverage(path, universe, minimum_ratio=1.0)
+    corporate = _universe_corporate_action_check(
+        path, universe=universe, lookback_days=0
+    )
+
+    assert coverage["status"] == "PASS"
+    assert coverage["observed_rows"] == 2
+    assert corporate["status"] == "PASS"
+    assert corporate["affected_codes"] == ["1301"]
+    assert corporate["supported_factor_events"]
 
 
 def test_legacy_cohort_report_labels_next_close_without_am_timing_text(

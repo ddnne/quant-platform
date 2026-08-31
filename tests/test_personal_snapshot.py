@@ -13,6 +13,12 @@ import stat
 import pytest
 import pit
 
+from personal_history_compact_support import (
+    insert_compact_bar,
+    insert_compact_master,
+    install_compact_schema,
+    stamp_compact_manifest,
+)
 from paper_runtime.personal_snapshot import (
     PERSONAL_SNAPSHOT_FORMAT,
     PersonalSnapshotError,
@@ -487,3 +493,196 @@ def test_verify_detects_manifest_id_mismatch(tmp_path: Path) -> None:
     os.chmod(snapshot.manifest_path, 0o444)
     with pytest.raises(PersonalSnapshotError, match="filename/id mismatch"):
         verify_personal_snapshot(snapshot.manifest_path)
+
+
+def _install_compact_v7(
+    connection: sqlite3.Connection,
+    *,
+    master_days: tuple[str, ...] = ("2024-01-02", "2024-06-01"),
+    bar_days: tuple[str, ...] = ("2024-01-02", "2024-12-30"),
+    replace_generic_bars: bool = True,
+) -> None:
+    install_compact_schema(connection)
+    for day in master_days:
+        insert_compact_master(connection, snapshot_date=day)
+    for day in bar_days:
+        insert_compact_bar(
+            connection,
+            day=day,
+            available_at=f"{day}T15:30:00+09:00",
+            ingested_at=f"{day}T16:00:00+09:00",
+        )
+    if replace_generic_bars:
+        connection.execute(
+            "DELETE FROM jquants_records WHERE dataset='equities_bars_daily'"
+        )
+    connection.commit()
+
+
+def _observed(manifest: dict, dataset_id: str) -> dict:
+    return next(
+        item
+        for item in manifest["observed_datasets"]
+        if item["dataset_id"] == dataset_id
+    )
+
+
+def test_materialize_reports_compact_v7_master_and_bar_ranges(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "compact.sqlite"
+    writer = _open_wal_source(source)
+    try:
+        fins = json.dumps({"Code": "1301", "DiscDate": "2024-03-31"}, sort_keys=True)
+        writer.execute(
+            "INSERT INTO jquants_records VALUES ('jquants','fins_summary',"
+            "'fin-1301','2024-03-31T15:00:00+09:00',"
+            "'2024-03-31T15:00:00+09:00','2024-03-31T16:00:00+09:00',?,?)",
+            (fins, fins),
+        )
+        _install_compact_v7(writer)
+        snapshot = materialize_personal_snapshot(
+            source,
+            tmp_path / "snapshots",
+            required_datasets=(
+                "markets_calendar",
+                "equities_master",
+                "fins_summary",
+                "equities_bars_daily",
+            ),
+            period_start="2024-01-01",
+            period_end="2024-12-31",
+            closure_digests=(_CLOSURE_A,),
+        )
+    finally:
+        writer.close()
+
+    manifest = json.loads(snapshot.manifest_path.read_text(encoding="utf-8"))
+    assert _observed(manifest, "equities_master") == {
+        "dataset_id": "equities_master",
+        "evidence_status": "OBSERVED",
+        "row_count": 2,
+        "min_event_date": "2024-01-02",
+        "max_event_date": "2024-06-01",
+    }
+    assert _observed(manifest, "equities_bars_daily") == {
+        "dataset_id": "equities_bars_daily",
+        "evidence_status": "OBSERVED",
+        "row_count": 2,
+        "min_event_date": "2024-01-02",
+        "max_event_date": "2024-12-30",
+    }
+    assert _observed(manifest, "markets_calendar")["row_count"] == 4
+    assert _observed(manifest, "fins_summary") == {
+        "dataset_id": "fins_summary",
+        "evidence_status": "OBSERVED",
+        "row_count": 1,
+        "min_event_date": "2024-03-31",
+        "max_event_date": "2024-03-31",
+    }
+
+
+def test_materialize_fail_closed_state_mapping(tmp_path: Path) -> None:
+    invalid = tmp_path / "compact-invalid.sqlite"
+    writer = _open_wal_source(invalid)
+    try:
+        stamp_compact_manifest(writer)
+        writer.commit()
+        with pytest.raises(
+            PersonalSnapshotError, match="compact v7 marker or schema"
+        ):
+            _materialize(invalid, tmp_path / "snapshots-invalid")
+    finally:
+        writer.close()
+
+    mixed = tmp_path / "compact-mixed.sqlite"
+    writer = _open_wal_source(mixed)
+    try:
+        _install_compact_v7(writer, replace_generic_bars=False)
+        with pytest.raises(PersonalSnapshotError, match="cannot mix compact"):
+            materialize_personal_snapshot(
+                mixed,
+                tmp_path / "snapshots-mixed",
+                required_datasets=("markets_calendar", "equities_bars_daily"),
+                period_start="2024-01-01",
+                period_end="2024-12-31",
+                closure_digests=(_CLOSURE_A,),
+            )
+    finally:
+        writer.close()
+
+
+def test_materialize_keeps_legacy_evidence_for_non_v7_manifest_without_compact(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "legacy-manifest.sqlite"
+    writer = _open_wal_source(source)
+    try:
+        stamp_compact_manifest(writer, "personal-draft-history/v6")
+        writer.commit()
+        snapshot = _materialize(source, tmp_path / "snapshots")
+    finally:
+        writer.close()
+
+    manifest = json.loads(snapshot.manifest_path.read_text(encoding="utf-8"))
+    assert _observed(manifest, "equities_bars_daily")["row_count"] == 2
+    assert _observed(manifest, "markets_calendar")["row_count"] == 4
+
+
+def test_materialize_rejects_compact_bars_outside_calendar_trading_days(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "compact-short-bars.sqlite"
+    writer = _open_wal_source(source)
+    try:
+        _install_compact_v7(writer, bar_days=("2024-01-02",))
+        with pytest.raises(
+            PersonalSnapshotError,
+            match="equities_bars_daily observed range does not cover requested",
+        ):
+            _materialize(source, tmp_path / "snapshots")
+    finally:
+        writer.close()
+
+
+def test_compact_table_content_change_updates_logical_snapshot_id(
+    tmp_path: Path,
+) -> None:
+    first_source = tmp_path / "compact-a.sqlite"
+    second_source = tmp_path / "compact-b.sqlite"
+    first_writer = _open_wal_source(first_source)
+    second_writer = _open_wal_source(second_source)
+    try:
+        _install_compact_v7(first_writer, master_days=("2024-01-02",))
+        _install_compact_v7(
+            second_writer, master_days=("2024-01-02", "2024-06-01")
+        )
+        first = materialize_personal_snapshot(
+            first_source,
+            tmp_path / "snapshots-a",
+            required_datasets=("markets_calendar", "equities_master"),
+            period_start="2024-01-01",
+            period_end="2024-12-31",
+            closure_digests=(_CLOSURE_A,),
+        )
+        second = materialize_personal_snapshot(
+            second_source,
+            tmp_path / "snapshots-b",
+            required_datasets=("markets_calendar", "equities_master"),
+            period_start="2024-01-01",
+            period_end="2024-12-31",
+            closure_digests=(_CLOSURE_A,),
+        )
+    finally:
+        first_writer.close()
+        second_writer.close()
+
+    assert first.logical_data_snapshot_id != second.logical_data_snapshot_id
+    assert _observed(
+        json.loads(first.manifest_path.read_text(encoding="utf-8")),
+        "equities_master",
+    )["row_count"] == 1
+    assert _observed(
+        json.loads(second.manifest_path.read_text(encoding="utf-8")),
+        "equities_master",
+    )["row_count"] == 2

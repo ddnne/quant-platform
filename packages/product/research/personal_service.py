@@ -1,10 +1,25 @@
-"""Small, deterministic research loop for one person's local paper database.
+"""Bounded personal DRAFT research over a compact-v7 snapshot.
+
+The normal path is cloud: R2 is the snapshot authority, D1 is small job
+state, and Container SQLite is ephemeral. Persistent local market, price, or
+fundamental history is not a normal path; it remains exact opt-in
+developer/recovery only (``QP_ALLOW_LOCAL_MARKET_DATA=1``).
+
+This module is not Prime-limited. Default universe is PIT ``topix_all``;
+Core30, Large70, Mid400, Small, TOPIX100, and TOPIX500 selectors are
+PIT-resolved and intersected with financials at the execution decision cutoff.
+Default AM cohorts use 11:30 information and same-day PM close.
+
+Snapshot build is compact v7, one continuous object, at most 7000 inclusive
+calendar days. Compressed R2/HTTP is <= 4 GiB; expanded SQLite/builder is
+<= 5 GiB. One standard-4 Container shares one snapshot/quality prep and runs
+up to four strategy child processes; a batch runs up to eight cohort/universe
+jobs.
 
 This module intentionally does not participate in the controlled-pilot or
-mass-research authority chains.  It snapshots one local SQLite database,
-evaluates a bounded set of closed ``StrategySpec`` values, and emits DRAFT
-paper evidence for human review.  It cannot promote a strategy or place an
-order.
+mass-research authority chains. It evaluates a bounded set of closed
+``StrategySpec`` values and emits DRAFT paper evidence for human review. It
+cannot promote a strategy or place an order.
 """
 
 from __future__ import annotations
@@ -39,6 +54,11 @@ from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED
 from strategies.paper import Lifecycle, PaperRunConfig, PaperRunResult
 from strategies.spec import StrategySpec, iter_feature_refs, strategy_spec_digest
 
+from data_contracts.personal_history_compact import (
+    PERSONAL_HISTORY_COMPACT_BARS_TABLE,
+    compact_history_state,
+)
+
 from research.dependency_closure import (
     ContractDependency,
     PlanDependencyClosure,
@@ -70,6 +90,7 @@ from research.personal_universe import (
     PersonalResolvedUniverseMembership,
     PersonalUniverseError,
     PersonalUniverseSelector,
+    personal_research_universe_decision_cutoff,
     personal_universe_selector,
     resolve_personal_universe_with_evidence,
 )
@@ -107,6 +128,8 @@ PERSONAL_SHORT_FINANCING_SESSIONS_PER_YEAR = 245
 PERSONAL_EXACT_FOUR_MAX_BACKTESTS = 25
 _CANDIDATE_PROCESS_RESULT_SCHEMA = "personal-candidate-process-result/v1"
 _CANDIDATE_PROCESS_STOP_GRACE_SECONDS = 5.0
+_TYPED_BAR_TABLES = ("jquants_daily_bars", "jquants_daily_bars_revisions")
+_GENERIC_BAR_TABLES = ("jquants_records", "jquants_records_revisions")
 
 
 class PersonalResearchInputError(ValueError):
@@ -568,6 +591,19 @@ def _table_columns(connection: sqlite3.Connection, table: str) -> set[str]:
     return {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")}
 
 
+def _compact_v7_bar_read_state(
+    connection: sqlite3.Connection,
+) -> tuple[str, str | None]:
+    state = compact_history_state(connection)
+    if state == "invalid":
+        return "invalid", "compact_v7_marker_or_schema_invalid"
+    if state == "mixed":
+        return "mixed", "mixed_compact_and_typed_or_generic_bars"
+    if state == "compact":
+        return "compact", None
+    return "legacy", None
+
+
 def _observed_market_bar_coverage(
     db_path: Path,
     universe: PersonalResolvedUniverseMembership,
@@ -586,36 +622,56 @@ def _observed_market_bar_coverage(
     connection = sqlite3.connect(uri, uri=True)
     try:
         tables = _table_names(connection)
+        read_state, compact_reason = _compact_v7_bar_read_state(connection)
+        if read_state in {"invalid", "mixed"}:
+            return {
+                "version": PERSONAL_BAR_COVERAGE_EVIDENCE,
+                "evidence_kind": "OBSERVED",
+                "status": "FAIL",
+                "reason": compact_reason,
+                "minimum_ratio": minimum_ratio,
+                "source_complete_claim": False,
+            }
         selects: list[str] = []
-        for table in ("jquants_daily_bars", "jquants_daily_bars_revisions"):
-            if table in tables:
-                selects.append(
-                    "SELECT date AS day, code AS code "
-                    f"FROM {table} "
-                    "WHERE source='jquants' AND date BETWEEN ? AND ? "
-                    "AND available_at IS NOT NULL "
-                    "AND event_time IS NOT NULL "
-                    "AND available_at <= event_time"
-                )
-        code_sql = (
-            "COALESCE("
-            "CASE WHEN json_valid(payload) "
-            "THEN CAST(json_extract(payload, '$.Code') AS TEXT) END,"
-            "CASE WHEN json_valid(raw_payload) "
-            "THEN CAST(json_extract(raw_payload, '$.Code') AS TEXT) END)"
-        )
-        for table in ("jquants_records", "jquants_records_revisions"):
-            if table in tables:
-                selects.append(
-                    "SELECT substr(event_time, 1, 10) AS day, "
-                    f"{code_sql} AS code FROM {table} "
-                    "WHERE source='jquants' "
-                    "AND dataset = 'equities_bars_daily' "
-                    "AND substr(event_time, 1, 10) BETWEEN ? AND ? "
-                    "AND available_at IS NOT NULL "
-                    "AND event_time IS NOT NULL "
-                    "AND available_at <= event_time"
-                )
+        if read_state == "compact":
+            selects.append(
+                "SELECT date AS day, code AS code "
+                f"FROM {PERSONAL_HISTORY_COMPACT_BARS_TABLE} "
+                "WHERE date BETWEEN ? AND ? "
+                "AND available_at IS NOT NULL "
+                "AND event_time IS NOT NULL "
+                "AND available_at <= event_time"
+            )
+        else:
+            for table in _TYPED_BAR_TABLES:
+                if table in tables:
+                    selects.append(
+                        "SELECT date AS day, code AS code "
+                        f"FROM {table} "
+                        "WHERE source='jquants' AND date BETWEEN ? AND ? "
+                        "AND available_at IS NOT NULL "
+                        "AND event_time IS NOT NULL "
+                        "AND available_at <= event_time"
+                    )
+            code_sql = (
+                "COALESCE("
+                "CASE WHEN json_valid(payload) "
+                "THEN CAST(json_extract(payload, '$.Code') AS TEXT) END,"
+                "CASE WHEN json_valid(raw_payload) "
+                "THEN CAST(json_extract(raw_payload, '$.Code') AS TEXT) END)"
+            )
+            for table in _GENERIC_BAR_TABLES:
+                if table in tables:
+                    selects.append(
+                        "SELECT substr(event_time, 1, 10) AS day, "
+                        f"{code_sql} AS code FROM {table} "
+                        "WHERE source='jquants' "
+                        "AND dataset = 'equities_bars_daily' "
+                        "AND substr(event_time, 1, 10) BETWEEN ? AND ? "
+                        "AND available_at IS NOT NULL "
+                        "AND event_time IS NOT NULL "
+                        "AND available_at <= event_time"
+                    )
         expected_by_day = dict(universe.decision_memberships)
         expected_total = sum(len(codes) for codes in expected_by_day.values())
         if not selects or expected_total == 0:
@@ -1195,74 +1251,96 @@ def _universe_corporate_action_check(
     connection = sqlite3.connect(uri, uri=True)
     try:
         tables = _table_names(connection)
+        read_state, compact_reason = _compact_v7_bar_read_state(connection)
+        if read_state in {"invalid", "mixed"}:
+            return {
+                "status": "FAIL",
+                "price_basis": PERSONAL_RETROSPECTIVE_ADJUSTED,
+                "reason": compact_reason,
+                "checked_codes": 0,
+                "affected_codes": [],
+                "suspicious_jump_codes": [],
+                "supported_factor_events": [],
+                "extreme_price_move_events": [],
+            }
         selects: list[str] = []
-        for table in ("jquants_daily_bars", "jquants_daily_bars_revisions"):
-            if table in tables:
-                selects.append(
-                    "SELECT code,date AS day,close AS raw_close,"
-                    "adjustment_close AS adjusted_close,volume AS raw_volume,"
-                    "adjustment_volume AS adjusted_volume,available_at,ingested_at "
-                    f"FROM {table} "
-                    "WHERE source='jquants' AND date BETWEEN ? AND ? "
-                    "AND available_at <= ?"
-                )
-        code_sql = (
-            "COALESCE("
-            "CASE WHEN json_valid(payload) "
-            "THEN CAST(json_extract(payload, '$.Code') AS TEXT) END,"
-            "CASE WHEN json_valid(raw_payload) "
-            "THEN CAST(json_extract(raw_payload, '$.Code') AS TEXT) END)"
-        )
-        raw_close_sql = (
-            "COALESCE("
-            "CASE WHEN json_valid(payload) "
-            "THEN json_extract(payload, '$.Close') END,"
-            "CASE WHEN json_valid(raw_payload) "
-            "THEN json_extract(raw_payload, '$.Close') END)"
-        )
-        adjusted_close_sql = (
-            "COALESCE("
-            "CASE WHEN json_valid(payload) THEN COALESCE("
-            "json_extract(payload, '$.AdjustmentClose'),"
-            "json_extract(payload, '$.AdjClose'),"
-            "json_extract(payload, '$.AdjC')) END,"
-            "CASE WHEN json_valid(raw_payload) THEN COALESCE("
-            "json_extract(raw_payload, '$.AdjustmentClose'),"
-            "json_extract(raw_payload, '$.AdjClose'),"
-            "json_extract(raw_payload, '$.AdjC')) END)"
-        )
-        raw_volume_sql = (
-            "COALESCE("
-            "CASE WHEN json_valid(payload) "
-            "THEN json_extract(payload, '$.Volume') END,"
-            "CASE WHEN json_valid(raw_payload) "
-            "THEN json_extract(raw_payload, '$.Volume') END)"
-        )
-        adjusted_volume_sql = (
-            "COALESCE("
-            "CASE WHEN json_valid(payload) THEN COALESCE("
-            "json_extract(payload, '$.AdjustmentVolume'),"
-            "json_extract(payload, '$.AdjVolume'),"
-            "json_extract(payload, '$.AdjVo')) END,"
-            "CASE WHEN json_valid(raw_payload) THEN COALESCE("
-            "json_extract(raw_payload, '$.AdjustmentVolume'),"
-            "json_extract(raw_payload, '$.AdjVolume'),"
-            "json_extract(raw_payload, '$.AdjVo')) END)"
-        )
-        for table in ("jquants_records", "jquants_records_revisions"):
-            if table in tables:
-                selects.append(
-                    f"SELECT {code_sql} AS code,substr(event_time,1,10) AS day,"
-                    f"{raw_close_sql} AS raw_close,"
-                    f"{adjusted_close_sql} AS adjusted_close,"
-                    f"{raw_volume_sql} AS raw_volume,"
-                    f"{adjusted_volume_sql} AS adjusted_volume,"
-                    "available_at,ingested_at "
-                    f"FROM {table} "
-                    "WHERE source='jquants' AND dataset='equities_bars_daily' "
-                    "AND substr(event_time,1,10) BETWEEN ? AND ? "
-                    "AND available_at <= ?"
-                )
+        if read_state == "compact":
+            selects.append(
+                "SELECT code,date AS day,close AS raw_close,"
+                "adjustment_close AS adjusted_close,volume AS raw_volume,"
+                "adjustment_volume AS adjusted_volume,available_at,ingested_at "
+                f"FROM {PERSONAL_HISTORY_COMPACT_BARS_TABLE} "
+                "WHERE date BETWEEN ? AND ? "
+                "AND available_at <= ?"
+            )
+        else:
+            for table in _TYPED_BAR_TABLES:
+                if table in tables:
+                    selects.append(
+                        "SELECT code,date AS day,close AS raw_close,"
+                        "adjustment_close AS adjusted_close,volume AS raw_volume,"
+                        "adjustment_volume AS adjusted_volume,available_at,ingested_at "
+                        f"FROM {table} "
+                        "WHERE source='jquants' AND date BETWEEN ? AND ? "
+                        "AND available_at <= ?"
+                    )
+            code_sql = (
+                "COALESCE("
+                "CASE WHEN json_valid(payload) "
+                "THEN CAST(json_extract(payload, '$.Code') AS TEXT) END,"
+                "CASE WHEN json_valid(raw_payload) "
+                "THEN CAST(json_extract(raw_payload, '$.Code') AS TEXT) END)"
+            )
+            raw_close_sql = (
+                "COALESCE("
+                "CASE WHEN json_valid(payload) "
+                "THEN json_extract(payload, '$.Close') END,"
+                "CASE WHEN json_valid(raw_payload) "
+                "THEN json_extract(raw_payload, '$.Close') END)"
+            )
+            adjusted_close_sql = (
+                "COALESCE("
+                "CASE WHEN json_valid(payload) THEN COALESCE("
+                "json_extract(payload, '$.AdjustmentClose'),"
+                "json_extract(payload, '$.AdjClose'),"
+                "json_extract(payload, '$.AdjC')) END,"
+                "CASE WHEN json_valid(raw_payload) THEN COALESCE("
+                "json_extract(raw_payload, '$.AdjustmentClose'),"
+                "json_extract(raw_payload, '$.AdjClose'),"
+                "json_extract(raw_payload, '$.AdjC')) END)"
+            )
+            raw_volume_sql = (
+                "COALESCE("
+                "CASE WHEN json_valid(payload) "
+                "THEN json_extract(payload, '$.Volume') END,"
+                "CASE WHEN json_valid(raw_payload) "
+                "THEN json_extract(raw_payload, '$.Volume') END)"
+            )
+            adjusted_volume_sql = (
+                "COALESCE("
+                "CASE WHEN json_valid(payload) THEN COALESCE("
+                "json_extract(payload, '$.AdjustmentVolume'),"
+                "json_extract(payload, '$.AdjVolume'),"
+                "json_extract(payload, '$.AdjVo')) END,"
+                "CASE WHEN json_valid(raw_payload) THEN COALESCE("
+                "json_extract(raw_payload, '$.AdjustmentVolume'),"
+                "json_extract(raw_payload, '$.AdjVolume'),"
+                "json_extract(raw_payload, '$.AdjVo')) END)"
+            )
+            for table in _GENERIC_BAR_TABLES:
+                if table in tables:
+                    selects.append(
+                        f"SELECT {code_sql} AS code,substr(event_time,1,10) AS day,"
+                        f"{raw_close_sql} AS raw_close,"
+                        f"{adjusted_close_sql} AS adjusted_close,"
+                        f"{raw_volume_sql} AS raw_volume,"
+                        f"{adjusted_volume_sql} AS adjusted_volume,"
+                        "available_at,ingested_at "
+                        f"FROM {table} "
+                        "WHERE source='jquants' AND dataset='equities_bars_daily' "
+                        "AND substr(event_time,1,10) BETWEEN ? AND ? "
+                        "AND available_at <= ?"
+                    )
         if not selects:
             return {
                 "status": "UNKNOWN",
@@ -2813,6 +2891,14 @@ class PersonalResearchService:
             and request.cohort_id is None,
         )
         execution_mode = str(execution_contract["execution_mode"])
+        try:
+            universe_selector = universe_selector.with_decision_cutoff(
+                personal_research_universe_decision_cutoff(
+                    am_pm=execution_mode == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
+                )
+            )
+        except PersonalUniverseError as exc:
+            raise PersonalResearchInputError(str(exc)) from exc
         short_financing_required = bool(
             cohort is not None and cohort.short_financing_required
         )
@@ -2898,6 +2984,7 @@ class PersonalResearchService:
                 period_start=start_day.isoformat(),
                 period_end=end_day.isoformat(),
                 universe_id=universe_selector.selector_id,
+                decision_cutoff=universe_selector.decision_cutoff,
             )
         except PersonalUniverseError as exc:
             raise PersonalResearchInputError(str(exc)) from exc

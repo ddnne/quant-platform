@@ -30,23 +30,7 @@ def _isolated_python(program: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_personal_cli_import_and_input_rejection_do_not_load_authorities() -> None:
-    program = r'''
-import sys
-
-sys.path[:0] = sys.argv[1:]
-
-from research import personal_cli
-
-code = personal_cli.main([
-    "--db",
-    "/definitely/missing/personal-research.sqlite",
-    "--end",
-    "2026-08-27",
-])
-if code != 2:
-    raise AssertionError(f"unexpected missing-input exit code: {code}")
-
+_FORBIDDEN_AUTHORITY_MODULES = """
 forbidden = {
     "execution.controlled_artifacts",
     "execution.paper_service",
@@ -65,7 +49,73 @@ forbidden = {
 loaded = sorted(forbidden.intersection(sys.modules))
 if loaded:
     raise AssertionError(f"personal CLI loaded controlled modules: {loaded}")
-'''
+"""
+
+
+def test_personal_cli_import_and_input_rejection_do_not_load_authorities() -> None:
+    program = r'''
+import io
+import os
+import sys
+from contextlib import redirect_stderr
+
+sys.path[:0] = sys.argv[1:]
+os.environ.pop("QP_ALLOW_LOCAL_MARKET_DATA", None)
+os.environ.pop("QP_REPO_ROOT", None)
+os.environ.pop("QP_RESEARCH_COMMAND", None)
+
+from research import personal_cli
+
+buf = io.StringIO()
+with redirect_stderr(buf):
+    code = personal_cli.main([
+        "--db",
+        "/definitely/missing/personal-research.sqlite",
+        "--end",
+        "2026-08-27",
+    ])
+err = buf.getvalue()
+if code != 2:
+    raise AssertionError(f"unexpected default-reject exit code: {code}")
+if "local market data is disabled" not in err:
+    raise AssertionError(f"missing disabled diagnostic: {err}")
+if "/v1/personal-snapshot-build" not in err or "/v1/personal-research-batch" not in err:
+    raise AssertionError(f"missing Cloudflare operator path: {err}")
+if "database does not exist" in err:
+    raise AssertionError("default reject must not open or copy a database")
+''' + _FORBIDDEN_AUTHORITY_MODULES
+    completed = _isolated_python(program)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_personal_cli_opt_in_missing_database_still_avoids_authorities() -> None:
+    program = r'''
+import io
+import os
+import sys
+from contextlib import redirect_stderr
+
+sys.path[:0] = sys.argv[1:]
+os.environ["QP_ALLOW_LOCAL_MARKET_DATA"] = "1"
+os.environ.pop("QP_REPO_ROOT", None)
+os.environ.pop("QP_RESEARCH_COMMAND", None)
+
+from research import personal_cli
+
+buf = io.StringIO()
+with redirect_stderr(buf):
+    code = personal_cli.main([
+        "--db",
+        "/definitely/missing/personal-research.sqlite",
+        "--end",
+        "2026-08-27",
+    ])
+err = buf.getvalue()
+if code != 2:
+    raise AssertionError(f"unexpected missing-input exit code: {code}")
+if "database does not exist" not in err:
+    raise AssertionError(f"opt-in must still reject a missing database: {err}")
+''' + _FORBIDDEN_AUTHORITY_MODULES
     completed = _isolated_python(program)
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
