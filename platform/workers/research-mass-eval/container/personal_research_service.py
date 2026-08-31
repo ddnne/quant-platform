@@ -1427,6 +1427,14 @@ def execute_snapshot_job(
                 period_end=spec.period_end,
                 lookback_sessions=spec.lookback_sessions,
             )
+            # Conservative planning admission budget, not an exact SQLite-size proof.
+            # The physical file-size guard after hydrate remains the measured cap.
+            if plan.estimated_bytes > spec.max_database_bytes:
+                raise RuntimeError(
+                    "snapshot conservative planning estimate exceeds builder cap: "
+                    f"estimated={plan.estimated_bytes} "
+                    f"limit={spec.max_database_bytes}"
+                )
             store = SqliteStore(database)
             client = (client_factory or (
                 lambda job: PersonalHistorySourceClient(
