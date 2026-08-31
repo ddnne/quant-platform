@@ -339,7 +339,7 @@ describe("closed personal vol AM/PM panel-build request", () => {
       return originalGet(key);
     };
     const input = await buildPersonalVolAmPmPanelInputManifest(mem.asBucket(), REQUEST);
-    expect(input.runner_version).toBe("personal-cloud-runner/v14");
+    expect(input.runner_version).toBe(PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION);
     expect(input.selection.runner_version).toBe(PERSONAL_RESEARCH_RUNNER_VERSION);
     expect(input.required_lookback_sessions).toBe(61);
     expect(input.selection.snapshot.raw_sha256).toBe(digestDigit("1"));
@@ -427,7 +427,7 @@ describe("closed personal vol AM/PM panel-build request", () => {
 
   it.each([
     ["v12", "personal-cloud-runner/v12"],
-    ["unknown future", "personal-cloud-runner/v15"],
+    ["unknown future", "personal-cloud-runner/v16"],
     ["prefix", "personal-cloud-runner/v14-extra"],
     ["arbitrary string", "personal-cloud-runner"],
   ])("rejects a %s snapshot source runner", async (_label, runnerVersion) => {

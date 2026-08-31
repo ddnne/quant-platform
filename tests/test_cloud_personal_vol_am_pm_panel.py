@@ -12,7 +12,13 @@ from typing import Any
 
 import pytest
 
+from data_contracts.personal_history_compact import PERSONAL_HISTORY_COMPACT_BARS_TABLE
 from ingestion.personal_history import PERSONAL_HISTORY_FORMAT
+from personal_history_compact_support import (
+    create_compact_tables,
+    insert_compact_bar,
+    stamp_compact_manifest,
+)
 from test_cloud_personal_research_container import service
 import personal_vol_am_pm_panel_job as job
 
@@ -45,37 +51,28 @@ class _Response(io.BytesIO):
         return False
 
 
-def _sqlite_bytes(*, codes: list[str], dates: list[str], typed: bool = True) -> bytes:
-    handle = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
-    handle.close()
-    path = handle.name
+_EMPTY_TYPED_BARS_DDL = """
+CREATE TABLE jquants_daily_bars (
+    source TEXT, code TEXT, date TEXT, close REAL, volume REAL,
+    turnover_value REAL, morning_adjustment_close REAL,
+    afternoon_adjustment_close REAL, adjustment_close REAL
+)
+"""
+
+
+def _write_compact_v7_snapshot(
+    path: Path,
+    *,
+    codes: list[str],
+    dates: list[str],
+    format_name: str = PERSONAL_HISTORY_FORMAT,
+    include_compact: bool = True,
+    empty_typed_table: bool = True,
+    typed_bar_rows: bool = False,
+    generic_equity_bar_rows: bool = False,
+) -> None:
     connection = sqlite3.connect(path)
-    connection.execute(
-        "CREATE TABLE personal_history_manifest (singleton INTEGER PRIMARY KEY, format TEXT)"
-    )
-    connection.execute(
-        "INSERT INTO personal_history_manifest VALUES (1, ?)",
-        (PERSONAL_HISTORY_FORMAT,),
-    )
-    if typed:
-        connection.execute(
-            """
-            CREATE TABLE jquants_daily_bars (
-                source TEXT, code TEXT, date TEXT, close REAL, volume REAL,
-                turnover_value REAL, morning_adjustment_close REAL,
-                afternoon_adjustment_close REAL, adjustment_close REAL
-            )
-            """
-        )
-    else:
-        connection.execute(
-            """
-            CREATE TABLE jquants_daily_bars (
-                source TEXT, code TEXT, date TEXT, close REAL, volume REAL,
-                turnover_value REAL, adjustment_close REAL
-            )
-            """
-        )
+    stamp_compact_manifest(connection, format_name)
     connection.execute(
         """
         CREATE TABLE personal_history_segments (
@@ -93,6 +90,10 @@ def _sqlite_bytes(*, codes: list[str], dates: list[str], typed: bool = True) -> 
     connection.execute(
         "CREATE TABLE jquants_records (source TEXT, dataset TEXT, event_time TEXT, payload TEXT)"
     )
+    if empty_typed_table or typed_bar_rows:
+        connection.execute(_EMPTY_TYPED_BARS_DDL)
+    if include_compact:
+        create_compact_tables(connection)
     for index, day in enumerate(dates):
         connection.execute(
             """
@@ -106,7 +107,26 @@ def _sqlite_bytes(*, codes: list[str], dates: list[str], typed: bool = True) -> 
         for code in codes:
             morning = 100 + index
             afternoon = 200 + index
-            if typed:
+            if include_compact:
+                insert_compact_bar(
+                    connection,
+                    code=code,
+                    day=day,
+                    close=afternoon,
+                    available_at=f"{day}T15:30:00+09:00",
+                    ingested_at=f"{day}T16:00:00+09:00",
+                    volume=1000,
+                    turnover_value=1000 * afternoon,
+                    adjustment_close=afternoon,
+                    adjustment_volume=1000,
+                    morning_adjustment_close=morning,
+                    afternoon_adjustment_close=afternoon,
+                    morning_turnover_value=1000 * morning,
+                    afternoon_turnover_value=1000 * afternoon,
+                    morning_adjustment_volume=1000,
+                    afternoon_adjustment_volume=1000,
+                )
+            if typed_bar_rows:
                 connection.execute(
                     """
                     INSERT INTO jquants_daily_bars
@@ -114,13 +134,15 @@ def _sqlite_bytes(*, codes: list[str], dates: list[str], typed: bool = True) -> 
                     """,
                     (code, day, afternoon, 1000, 1000 * afternoon, morning, afternoon, afternoon),
                 )
-            else:
+            if generic_equity_bar_rows:
                 connection.execute(
                     """
-                    INSERT INTO jquants_daily_bars
-                    VALUES ('jquants',?,?,?,?,?,?)
+                    INSERT INTO jquants_records VALUES ('jquants','equities_bars_daily',?,?)
                     """,
-                    (code, day, afternoon, 1000, 1000 * afternoon, afternoon),
+                    (
+                        f"{day}T15:00:00+09:00",
+                        json.dumps({"Code": code, "Date": day, "Close": afternoon}),
+                    ),
                 )
             if day == dates[0]:
                 connection.execute(
@@ -141,9 +163,27 @@ def _sqlite_bytes(*, codes: list[str], dates: list[str], typed: bool = True) -> 
                 )
     connection.commit()
     connection.close()
-    raw = Path(path).read_bytes()
-    Path(path).unlink(missing_ok=True)
-    return raw
+
+
+def _sqlite_bytes(
+    *,
+    codes: list[str],
+    dates: list[str],
+    **kwargs: Any,
+) -> bytes:
+    handle = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+    handle.close()
+    path = Path(handle.name)
+    try:
+        _write_compact_v7_snapshot(path, codes=codes, dates=dates, **kwargs)
+        return path.read_bytes()
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_snapshot_transport_and_expanded_database_caps_are_split() -> None:
+    assert job.MAX_SNAPSHOT_BYTES == 4 * 1024 * 1024 * 1024
+    assert job.SNAPSHOT_MAX_DATABASE_BYTES == 5 * 1024 * 1024 * 1024
 
 
 def _gzip(raw: bytes) -> bytes:
@@ -308,6 +348,7 @@ def test_snapshot_source_runner_allowlist_is_closed() -> None:
         {
             "personal-cloud-runner/v13",
             "personal-cloud-runner/v14",
+            "personal-cloud-runner/v15",
         }
     )
 
@@ -320,8 +361,8 @@ def test_snapshot_source_runner_allowlist_is_closed() -> None:
 
     for denied in (
         "personal-cloud-runner/v12",
-        "personal-cloud-runner/v15",
-        "personal-cloud-runner/v14-extra",
+        "personal-cloud-runner/v16",
+        "personal-cloud-runner/v15-extra",
         "personal-cloud-runner",
     ):
         manifest["selection"]["runner_version"] = denied
@@ -340,6 +381,13 @@ def test_vol_panel_job_fields_are_closed() -> None:
                 "job_id": "x",
             }
         )
+
+
+def _open_snapshot(path: Path, **kwargs: Any) -> sqlite3.Connection:
+    _write_compact_v7_snapshot(path, **kwargs)
+    connection = sqlite3.connect(path)
+    connection.row_factory = sqlite3.Row
+    return connection
 
 
 def test_vol_panel_rejects_older_snapshot_format(tmp_path: Path) -> None:
@@ -467,7 +515,7 @@ def test_execute_writes_children_before_terminal_and_recomputes_common_mask(
 
     terminal = job.execute_vol_am_pm_panel_job(spec, opener=opener, uploader=uploader)
     assert terminal["status"] == "COMPLETED"
-    assert terminal["runner_version"] == "personal-cloud-runner/v14"
+    assert terminal["runner_version"] == "personal-cloud-runner/v15"
     assert puts[-1] == spec.manifest_key
     assert spec.manifest_key not in puts[:-1]
     period = job.EVALUATION_PERIODS[0]["period_id"]
@@ -493,25 +541,40 @@ def test_execute_writes_children_before_terminal_and_recomputes_common_mask(
     assert terminal["membership"]["codes"] == panel["codes"]
 
 
-def test_missing_typed_ma_columns_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(job, "EVAL_UNIVERSE_POOL", ("13010",))
+def _execute_panel(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    dates: list[str],
+    sqlite_kwargs: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, bytes], job.PersonalVolAmPmPanelJobSpec]:
+    monkeypatch.setattr(job, "EVAL_UNIVERSE_POOL", ("13010", "72030"))
     monkeypatch.setattr(job, "UNIVERSE_MIN_BAR_DAYS", 2)
-    dates = [f"2019-01-{index:02d}" for index in range(4, 16)]
-    raw = _sqlite_bytes(codes=["13010"], dates=dates, typed=False)
-    compressed = _gzip(raw)
     store: dict[str, bytes] = {}
     manifest = _input_manifest(store, dates)
-    for period in job.EVALUATION_PERIODS:
-        lock = _snapshot_lock(
-            f"snap-{period['period_id']}",
-            period["period_id"],
-            period["period_start"],
-            period["period_end"],
+    if sqlite_kwargs is not None:
+        raw = _sqlite_bytes(codes=["13010", "72030"], dates=dates, **sqlite_kwargs)
+        compressed = _gzip(raw)
+        selection = _snapshot_lock(
+            "snap-2019",
+            "y2019_selection",
+            "2019-01-01",
+            "2019-10-21",
             compressed,
             raw,
         )
-        manifest["periods"][period["period_id"]] = lock
-        store[lock["snapshot"]["key"]] = compressed
+        store[selection["snapshot"]["key"]] = compressed
+        manifest["selection"] = selection
+        for period in job.EVALUATION_PERIODS:
+            lock = _snapshot_lock(
+                f"snap-{period['period_id']}",
+                period["period_id"],
+                period["period_start"],
+                period["period_end"],
+                compressed,
+                raw,
+            )
+            manifest["periods"][period["period_id"]] = lock
+            store[lock["snapshot"]["key"]] = compressed
     input_bytes = _canonical(manifest)
     spec = _spec(manifest, _digest(input_bytes))
     store[spec.input_manifest_key] = input_bytes
@@ -524,8 +587,69 @@ def test_missing_typed_ma_columns_fail_closed(monkeypatch: pytest.MonkeyPatch) -
         return _digest(data)
 
     terminal = job.execute_vol_am_pm_panel_job(spec, opener=opener, uploader=uploader)
-    assert terminal["status"] == "FAILED"
-    assert "typed M/A" in terminal["error"]
+    return terminal, store, spec
+
+
+def test_compact_v7_fail_closed_state_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dates = [f"2019-01-{index:02d}" for index in range(4, 16)]
+    invalid, _store, _spec = _execute_panel(
+        monkeypatch,
+        dates=dates,
+        sqlite_kwargs={"include_compact": False},
+    )
+    assert invalid["status"] == "FAILED"
+    assert "compact v7 marker or schema" in invalid["error"]
+
+    mixed, _mixed_store, _mixed_spec = _execute_panel(
+        monkeypatch,
+        dates=dates,
+        sqlite_kwargs={"typed_bar_rows": True},
+    )
+    assert mixed["status"] == "FAILED"
+    assert "mix compact with typed or generic bars" in mixed["error"]
+
+
+def test_compact_v7_reads_compact_bars_without_source_predicate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(job, "EVAL_UNIVERSE_POOL", ("13010",))
+    monkeypatch.setattr(job, "UNIVERSE_MIN_BAR_DAYS", 2)
+    dates = [f"2019-01-{index:02d}" for index in range(4, 8)]
+    connection = _open_snapshot(
+        tmp_path / "compact.sqlite",
+        codes=["13010"],
+        dates=dates,
+    )
+    try:
+        assert job._compact_v7_equity_bars_table(connection) == PERSONAL_HISTORY_COMPACT_BARS_TABLE
+        trading, meta = job._calendar_from_snapshot(connection)
+        assert trading == dates
+        assert meta["checkpoints"]
+        selected = job._select_2019_membership(connection)
+        assert selected == ["13010"]
+        bars = job._bars_for_codes(connection, ["13010"], dates)
+        assert bars["13010"][0] == {
+            "date": dates[0],
+            "MAdjC": 100.0,
+            "AAdjC": 200.0,
+        }
+        assert connection.execute(
+            "SELECT COUNT(*) FROM jquants_daily_bars"
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM jquants_records WHERE dataset='equities_bars_daily'"
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM jquants_records WHERE dataset='markets_calendar'"
+        ).fetchone()[0] == len(dates)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM jquants_records WHERE dataset='fins_summary'"
+        ).fetchone()[0] == 1
+    finally:
+        connection.close()
 
 
 def test_job_manager_409_then_verified_get(monkeypatch: pytest.MonkeyPatch) -> None:

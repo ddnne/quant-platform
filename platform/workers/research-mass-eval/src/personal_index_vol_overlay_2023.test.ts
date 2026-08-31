@@ -313,7 +313,8 @@ describe("fixed personal index-vol overlay admission", () => {
     ["legacy v11", "personal-cloud-runner/v11"],
     ["legacy v12", "personal-cloud-runner/v12"],
     ["legacy v13", "personal-cloud-runner/v13"],
-    ["current v14", "personal-cloud-runner/v14"],
+    ["legacy v14", "personal-cloud-runner/v14"],
+    ["current v15", "personal-cloud-runner/v15"],
   ])("accepts the explicitly compatible %s base runner manifest", async (_label, baseVersion) => {
     const fixed = await sources(baseVersion);
     await expect(
@@ -329,11 +330,11 @@ describe("fixed personal index-vol overlay admission", () => {
     ).resolves.toMatchObject({ base: { job_id: fixed.baseJobId } });
   });
 
-  it("requires the current v14 runner and frozen AM digest for AM/PM bases", async () => {
+  it("requires the current v15 runner and frozen AM digest for AM/PM bases", async () => {
     const current = await amPmSources();
     await expect(
       buildPersonalIndexVolOverlay2023InputManifest(current.mem.asBucket(), {
-        job_id: "overlay-am-pm-v14",
+        job_id: "overlay-am-pm-v15",
         cohort_id: PERSONAL_INDEX_VOL_OVERLAY_2023_AM_PM_COHORT_ID,
         base_job_id: current.baseJobId,
         svi_job_id: current.sviJobId,
@@ -412,7 +413,8 @@ describe("fixed personal index-vol overlay admission", () => {
   it.each([
     ["missing", null],
     ["stale v8", "personal-cloud-runner/v8"],
-    ["unknown future v15", "personal-cloud-runner/v15"],
+    ["unknown future v16", "personal-cloud-runner/v16"],
+    ["prefix", "personal-cloud-runner/v15-extra"],
   ])("rejects a %s base runner manifest", async (_label, baseVersion) => {
     const fixed = await sources(baseVersion);
     await expect(

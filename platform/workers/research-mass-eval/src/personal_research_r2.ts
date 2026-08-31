@@ -1,4 +1,5 @@
 import {
+  PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES,
   PERSONAL_RESEARCH_RUNNER_VERSION,
   isPersonalResearchJobId,
   isPersonalResearchSnapshotKey,
@@ -59,7 +60,8 @@ import { sha256Hex } from "./sha256";
 
 const RESULT_MAX_BYTES = 512 * 1024 * 1024;
 const MANIFEST_MAX_BYTES = 64 * 1024;
-const SNAPSHOT_GZIP_MAX_BYTES = 3_758_096_384;
+// Gzip PUT is compressed transport, not expanded sqlite.
+const SNAPSHOT_GZIP_MAX_BYTES = PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES;
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
 const SHA_HEX_RE = /^[0-9a-f]{64}$/;
 
@@ -296,6 +298,9 @@ async function getSnapshot(
   if (request.method === "HEAD") {
     const object = await env.STRUCTURED_BUCKET.head(key);
     if (!object) return responseJson({ error: "snapshot not found" }, 404);
+    if (object.size < 1 || object.size > PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES) {
+      return responseJson({ error: "invalid snapshot length" }, 400);
+    }
     return new Response(null, {
       status: 200,
       headers: {
@@ -309,6 +314,9 @@ async function getSnapshot(
   }
   const object = await env.STRUCTURED_BUCKET.get(key);
   if (!object) return responseJson({ error: "snapshot not found" }, 404);
+  if (object.size < 1 || object.size > PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES) {
+    return responseJson({ error: "invalid snapshot length" }, 400);
+  }
   const headers = new Headers({
     "content-length": String(object.size),
     etag: object.httpEtag,

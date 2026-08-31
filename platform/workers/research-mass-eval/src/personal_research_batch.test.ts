@@ -173,7 +173,7 @@ describe("personal research bounded batch", () => {
       manifest_key: `research/personal/jobs/job=${request.job_id}/manifest.json`,
       runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
       universe_rule_digest:
-        "sha256:7b88c89520a7cf751e7b63f160c16130183dba3c7c7e9c3a56660f3149c2c048",
+        "sha256:ba0c9af6b51121e6c27d660ccd28ae3e1a7c8af1ae3ffcff4986bf3f31247fd9",
     });
   });
 });

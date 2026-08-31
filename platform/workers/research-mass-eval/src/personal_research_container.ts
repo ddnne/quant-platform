@@ -148,6 +148,7 @@ export async function submitPersonalResearch(
           runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
           universe_rule_digest: personalResearchUniverseRuleDigest(
             request.universe_id,
+            request.cohort_id,
           ),
         }),
       }),

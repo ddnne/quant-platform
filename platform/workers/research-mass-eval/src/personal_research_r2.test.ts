@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { PERSONAL_RESEARCH_RUNNER_VERSION } from "./personal_research_contract";
+import {
+  PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES,
+  PERSONAL_RESEARCH_RUNNER_VERSION,
+} from "./personal_research_contract";
 import { personalResearchR2Outbound } from "./personal_research_r2";
 import { PERSONAL_SNAPSHOT_FORMAT } from "./personal_snapshot_contract";
 
@@ -105,6 +108,55 @@ describe("personal Container R2 capability", () => {
     expect(denied.status).toBe(403);
     expect(bucket.get).toHaveBeenCalledTimes(1);
     expect(bucket.head).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects snapshot gzip PUT above the 4 GiB transport bound", async () => {
+    const raw = "d".repeat(64);
+    const key = `research/personal/snapshots/sha256=${raw}.sqlite.gz`;
+    const bucket = {
+      head: vi.fn(),
+      put: vi.fn(),
+    } as unknown as R2Bucket;
+    const response = await personalResearchR2Outbound(
+      new Request(`http://research.r2/${key}`, {
+        method: "PUT",
+        headers: {
+          "content-length": String(PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES + 1),
+          "x-personal-job-id": "snap-1",
+          "x-personal-request-digest": `sha256:${"b".repeat(64)}`,
+          "x-content-sha256": `sha256:${THREE_BYTE_SHA256}`,
+          "x-personal-raw-sha256": `sha256:${raw}`,
+        },
+        body: new Uint8Array([1, 2, 3]),
+      }),
+      { STRUCTURED_BUCKET: bucket },
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "invalid snapshot length" });
+    expect(bucket.put).not.toHaveBeenCalled();
+  });
+
+  it("rejects snapshot GET above the 4 GiB transport bound", async () => {
+    const sha = "a".repeat(64);
+    const key = `research/personal/snapshots/sha256=${sha}.sqlite.gz`;
+    const object = r2Object(key, new Uint8Array([1, 2, 3]));
+    object.size = PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES + 1;
+    const bucket = {
+      get: vi.fn(async () => object),
+      head: vi.fn(async () => object),
+      put: vi.fn(),
+    } as unknown as R2Bucket;
+    const get = await personalResearchR2Outbound(
+      new Request(`http://research.r2/${key}`),
+      { STRUCTURED_BUCKET: bucket },
+    );
+    const head = await personalResearchR2Outbound(
+      new Request(`http://research.r2/${key}`, { method: "HEAD" }),
+      { STRUCTURED_BUCKET: bucket },
+    );
+    expect(get.status).toBe(400);
+    expect(head.status).toBe(400);
+    expect(bucket.put).not.toHaveBeenCalled();
   });
 
   it("passes result bodies to R2 as streams and freezes the output key", async () => {

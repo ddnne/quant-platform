@@ -5,7 +5,7 @@ import {
 } from "./personal_research_contract";
 import { sha256Hex } from "./sha256";
 
-export const PERSONAL_SNAPSHOT_FORMAT = "personal-draft-history/v6";
+export const PERSONAL_SNAPSHOT_FORMAT = "personal-draft-history/v7";
 export const PERSONAL_SNAPSHOT_DEFAULT_LOOKBACK_SESSIONS = 10;
 export const PERSONAL_SNAPSHOT_MAX_LOOKBACK_SESSIONS = 252;
 export const PERSONAL_SNAPSHOT_MAX_REQUEST_BYTES = 8 * 1024;

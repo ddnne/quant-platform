@@ -170,7 +170,7 @@ describe("durable personal job state", () => {
         deploymentId: "deploy-1",
         runnerVersion: PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION,
       }).runner_version,
-    ).toBe("personal-cloud-runner/v14");
+    ).toBe(PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION);
     expect(
       submittedStateDocument({
         jobId: "sidecar-one",
@@ -179,7 +179,7 @@ describe("durable personal job state", () => {
         deploymentId: "deploy-1",
         runnerVersion: PERSONAL_OPTION_SIDECAR_RUNNER_VERSION,
       }).runner_version,
-    ).toBe("personal-cloud-runner/v14");
+    ).toBe(PERSONAL_OPTION_SIDECAR_RUNNER_VERSION);
   });
 
   it("conflicts when the same job id carries a different request digest", async () => {

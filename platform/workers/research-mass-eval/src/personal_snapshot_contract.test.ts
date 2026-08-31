@@ -38,7 +38,7 @@ describe("personal snapshot request contract", () => {
     ).toBe(false);
     expect(
       parsePersonalSnapshotBuildRequest(
-        { job_id: "x", period_start: "2018-01-01", period_end: "2024-12-31" },
+        { job_id: "x", period_start: "2000-01-01", period_end: "2024-12-31" },
         NOW,
       ).ok,
     ).toBe(false);
@@ -56,16 +56,16 @@ describe("personal snapshot request contract", () => {
     expect(lastClosedMonthEnd(NOW)).toBe("2026-07-31");
   });
 
-  it("interprets the 2200-day cap as inclusive calendar dates", () => {
+  it("interprets the 7000-day cap as inclusive calendar dates", () => {
     expect(
       parsePersonalSnapshotBuildRequest(
-        { job_id: "bound-2200", period_start: "2020-01-01", period_end: "2026-01-08" },
+        { job_id: "bound-7000", period_start: "2007-01-01", period_end: "2026-03-01" },
         NOW,
       ).ok,
     ).toBe(true);
     expect(
       parsePersonalSnapshotBuildRequest(
-        { job_id: "bound-2201", period_start: "2020-01-01", period_end: "2026-01-09" },
+        { job_id: "bound-7001", period_start: "2007-01-01", period_end: "2026-03-02" },
         NOW,
       ).ok,
     ).toBe(false);

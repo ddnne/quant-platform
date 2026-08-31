@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   PERSONAL_RESEARCH_AM_PM_COHORT_IDS,
   PERSONAL_RESEARCH_LEGACY_CONTAINER_NAME,
+  PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES,
   PERSONAL_RESEARCH_RUNNER_SLOT,
   PERSONAL_RESEARCH_RUNNER_VERSION,
   PERSONAL_SNAPSHOT_CONTAINER_NAME,
+  PERSONAL_SNAPSHOT_MAX_DATABASE_BYTES,
   PERSONAL_SNAPSHOT_SOURCE_RUNNER_VERSIONS,
   isPersonalSnapshotSourceRunnerVersion,
   parsePersonalResearchRequest,
@@ -13,6 +15,7 @@ import {
   personalResearchCohortDigest,
   personalResearchJobIdFromPath,
   personalResearchRequestDigest,
+  personalResearchUniverseDecisionCutoff,
   personalResearchUniverseRuleDigest,
   personalSnapshotContainerName,
 } from "./personal_research_contract";
@@ -33,17 +36,26 @@ const VALID_GZIP = {
 };
 
 describe("personal research request contract", () => {
+  it("separates 4 GiB compressed transport from 5 GiB expanded sqlite", () => {
+    expect(PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES).toBe(4 * 1024 * 1024 * 1024);
+    expect(PERSONAL_SNAPSHOT_MAX_DATABASE_BYTES).toBe(5 * 1024 * 1024 * 1024);
+  });
+
   it("pins the runner-bound Container identity", async () => {
-    expect(PERSONAL_RESEARCH_RUNNER_VERSION).toBe("personal-cloud-runner/v14");
-    expect(PERSONAL_RESEARCH_RUNNER_SLOT).toBe("v14");
-    expect(PERSONAL_SNAPSHOT_CONTAINER_NAME).toBe("personal-snapshot-v14");
-    expect(personalSnapshotContainerName()).toBe("personal-snapshot-v14");
+    expect(PERSONAL_RESEARCH_RUNNER_VERSION).toBe("personal-cloud-runner/v15");
+    expect(PERSONAL_RESEARCH_RUNNER_SLOT).toBe("v15");
+    expect(PERSONAL_SNAPSHOT_CONTAINER_NAME).toBe("personal-snapshot-v15");
+    expect(personalSnapshotContainerName()).toBe("personal-snapshot-v15");
     expect(PERSONAL_RESEARCH_LEGACY_CONTAINER_NAME).toBe("personal-research-v12");
     expect([...PERSONAL_SNAPSHOT_SOURCE_RUNNER_VERSIONS]).toEqual([
       "personal-cloud-runner/v13",
       "personal-cloud-runner/v14",
+      "personal-cloud-runner/v15",
     ]);
     expect(isPersonalSnapshotSourceRunnerVersion("personal-cloud-runner/v13")).toBe(
+      true,
+    );
+    expect(isPersonalSnapshotSourceRunnerVersion("personal-cloud-runner/v14")).toBe(
       true,
     );
     expect(isPersonalSnapshotSourceRunnerVersion(PERSONAL_RESEARCH_RUNNER_VERSION)).toBe(
@@ -52,29 +64,29 @@ describe("personal research request contract", () => {
     expect(isPersonalSnapshotSourceRunnerVersion("personal-cloud-runner/v12")).toBe(
       false,
     );
-    expect(isPersonalSnapshotSourceRunnerVersion("personal-cloud-runner/v15")).toBe(
+    expect(isPersonalSnapshotSourceRunnerVersion("personal-cloud-runner/v16")).toBe(
       false,
     );
     expect(
-      isPersonalSnapshotSourceRunnerVersion("personal-cloud-runner/v14-extra"),
+      isPersonalSnapshotSourceRunnerVersion("personal-cloud-runner/v15-extra"),
     ).toBe(false);
     expect(isPersonalSnapshotSourceRunnerVersion("personal-cloud-runner/")).toBe(
       false,
     );
     const first = await personalJobContainerName("research", VALID.job_id);
     const second = await personalJobContainerName("research", "other-job");
-    expect(first).toMatch(/^personal-v14-research-[0-9a-f]{24}$/);
+    expect(first).toMatch(/^personal-v15-research-[0-9a-f]{24}$/);
     expect(first).not.toBe(PERSONAL_RESEARCH_LEGACY_CONTAINER_NAME);
     expect(second).not.toBe(first);
     expect(await personalJobContainerName("svi", VALID.job_id)).not.toBe(first);
     expect(await personalJobContainerName("vol-panel", VALID.job_id)).toMatch(
-      /^personal-v14-vol-panel-[0-9a-f]{24}$/,
+      /^personal-v15-vol-panel-[0-9a-f]{24}$/,
     );
     expect(await personalJobContainerName("vol-panel", VALID.job_id)).not.toBe(
       await personalJobContainerName("svi", VALID.job_id),
     );
     expect(await personalJobContainerName("option-sidecar", VALID.job_id)).toMatch(
-      /^personal-v14-option-sidecar-[0-9a-f]{24}$/,
+      /^personal-v15-option-sidecar-[0-9a-f]{24}$/,
     );
     expect(await personalJobContainerName("option-sidecar", VALID.job_id)).not.toBe(
       await personalJobContainerName("vol-panel", VALID.job_id),
@@ -96,7 +108,10 @@ describe("personal research request contract", () => {
       snapshot_key: VALID.snapshot_key,
       snapshot_sha256: VALID.snapshot_sha256,
       universe_id: VALID.universe_id,
-      universe_rule_digest: personalResearchUniverseRuleDigest(VALID.universe_id),
+      universe_rule_digest: personalResearchUniverseRuleDigest(
+        VALID.universe_id,
+        VALID.cohort_id,
+      ),
     });
     const expected = await crypto.subtle.digest(
       "SHA-256",
@@ -131,7 +146,7 @@ describe("personal research request contract", () => {
     expect(
       parsePersonalResearchRequest({
         ...VALID,
-        period_start: "2010-01-01",
+        period_start: "2000-01-01",
       }).ok,
     ).toBe(false);
     expect(
@@ -145,19 +160,19 @@ describe("personal research request contract", () => {
     );
   });
 
-  it("interprets the 2200-day cap as inclusive calendar dates", () => {
+  it("interprets the 7000-day cap as inclusive calendar dates", () => {
     expect(
       parsePersonalResearchRequest({
         ...VALID,
-        period_start: "2020-01-01",
-        period_end: "2026-01-08",
+        period_start: "2007-01-01",
+        period_end: "2026-03-01",
       }).ok,
     ).toBe(true);
     expect(
       parsePersonalResearchRequest({
         ...VALID,
-        period_start: "2020-01-01",
-        period_end: "2026-01-09",
+        period_start: "2007-01-01",
+        period_end: "2026-03-02",
       }).ok,
     ).toBe(false);
     expect(
@@ -223,6 +238,62 @@ describe("personal research request contract", () => {
         cohort_id: "compact-market-diverse-am-pm-v1",
       }).ok,
     ).toBe(false);
+  });
+
+  it("selects morning_close universe rule digests for AM cohorts only", async () => {
+    expect(personalResearchUniverseDecisionCutoff("diverse-core-v1")).toBe(
+      "session_close",
+    );
+    expect(
+      personalResearchUniverseDecisionCutoff("diverse-core-am-pm-v1"),
+    ).toBe("morning_close");
+    expect(
+      personalResearchUniverseRuleDigest("topix_all", "diverse-core-v1"),
+    ).toBe(
+      "sha256:7b88c89520a7cf751e7b63f160c16130183dba3c7c7e9c3a56660f3149c2c048",
+    );
+    expect(
+      personalResearchUniverseRuleDigest(
+        "topix_all",
+        "diverse-core-am-pm-v1",
+      ),
+    ).toBe(
+      "sha256:ba0c9af6b51121e6c27d660ccd28ae3e1a7c8af1ae3ffcff4986bf3f31247fd9",
+    );
+    const am = parsePersonalResearchRequest({
+      ...VALID,
+      cohort_id: "diverse-core-am-pm-v1",
+    });
+    expect(am.ok).toBe(true);
+    if (!am.ok) throw new Error(am.error);
+    const digest = await personalResearchRequestDigest(am.value);
+    const canonical = JSON.stringify({
+      cohort_digest: personalResearchCohortDigest("diverse-core-am-pm-v1"),
+      cohort_id: "diverse-core-am-pm-v1",
+      job_id: VALID.job_id,
+      period_end: VALID.period_end,
+      period_start: VALID.period_start,
+      runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
+      snapshot_key: VALID.snapshot_key,
+      snapshot_sha256: VALID.snapshot_sha256,
+      universe_id: VALID.universe_id,
+      universe_rule_digest: personalResearchUniverseRuleDigest(
+        VALID.universe_id,
+        "diverse-core-am-pm-v1",
+      ),
+    });
+    const expected = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(canonical),
+    );
+    expect(digest).toBe(
+      `sha256:${Array.from(new Uint8Array(expected), (v) => v.toString(16).padStart(2, "0")).join("")}`,
+    );
+    expect(
+      personalResearchUniverseRuleDigest("topix_all", "diverse-core-am-pm-v1"),
+    ).not.toBe(
+      personalResearchUniverseRuleDigest("topix_all", "diverse-core-v1"),
+    );
   });
 
   it("admits the five frozen AM cohorts with exact repo digests", async () => {
