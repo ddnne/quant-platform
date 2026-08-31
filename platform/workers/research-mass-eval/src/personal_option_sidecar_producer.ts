@@ -34,11 +34,12 @@ import {
   PERSONAL_VOL_AM_PM_SESSION_CALENDAR_IDENTITY,
   calendarDatesDigest,
   calendarDayFromKey,
-  calendarRootPrefix,
+  calendarMonthPrefix,
   canonicalSha256,
   isoDaysInclusive,
   optionsDayFromKey,
   optionsDayPrefix,
+  personalOptionSidecarCalendarMonths,
   personalOptionSidecarInputKey,
   personalOptionSidecarRequestDigest,
   personalOptionSidecarTerminalKey,
@@ -213,25 +214,33 @@ function parseCalendarRow(
 
 async function scanOfficialCalendar(bucket: R2Bucket): Promise<ScannedCalendar> {
   const listed: R2Object[] = [];
-  let cursor: string | undefined;
   let scannedBytes = 0;
-  do {
-    const page = await bucket.list({
-      prefix: calendarRootPrefix(),
-      limit: 1000,
-      ...(cursor ? { cursor } : {}),
-      include: ["customMetadata"],
-    });
-    listed.push(...page.objects);
-    scannedBytes += page.objects.reduce((sum, object) => sum + object.size, 0);
-    if (
-      listed.length > PERSONAL_OPTION_SIDECAR_MAX_CALENDAR_SCAN_OBJECTS ||
-      scannedBytes > PERSONAL_OPTION_SIDECAR_MAX_CALENDAR_SCAN_BYTES
-    ) {
-      fail("option_sidecar_calendar_scan_bound_exceeded");
-    }
-    cursor = page.truncated ? page.cursor : undefined;
-  } while (cursor);
+  for (const month of personalOptionSidecarCalendarMonths()) {
+    let cursor: string | undefined;
+    do {
+      const page = await bucket.list({
+        prefix: calendarMonthPrefix(month),
+        limit: 1000,
+        ...(cursor ? { cursor } : {}),
+        include: ["customMetadata"],
+      });
+      for (const object of page.objects) {
+        const keyDate = calendarDayFromKey(object.key);
+        if (!keyDate || keyDate.slice(0, 7) !== month) {
+          fail("option_sidecar_source_key_denied");
+        }
+      }
+      listed.push(...page.objects);
+      scannedBytes += page.objects.reduce((sum, object) => sum + object.size, 0);
+      if (
+        listed.length > PERSONAL_OPTION_SIDECAR_MAX_CALENDAR_SCAN_OBJECTS ||
+        scannedBytes > PERSONAL_OPTION_SIDECAR_MAX_CALENDAR_SCAN_BYTES
+      ) {
+        fail("option_sidecar_calendar_scan_bound_exceeded");
+      }
+      cursor = page.truncated ? page.cursor : undefined;
+    } while (cursor);
+  }
   if (listed.length === 0) fail("option_sidecar_source_missing");
   const objects: StructuredObjectRef[] = [];
   const winnerByDate = new Map<string, CalendarWinner>();

@@ -256,6 +256,13 @@ export function calendarRootPrefix(): string {
   return `${PERSONAL_OPTION_SIDECAR_CALENDAR_ROOT}/`;
 }
 
+export function calendarMonthPrefix(month: string): string {
+  if (!/^\d{4}-\d{2}$/.test(month)) {
+    throw new Error("calendar month is invalid");
+  }
+  return `${PERSONAL_OPTION_SIDECAR_CALENDAR_ROOT}/dt=${month}`;
+}
+
 export function monthStartDay(day: string): string {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
     throw new Error("calendar day is invalid");
@@ -274,6 +281,16 @@ export function isoDaysInclusive(start: string, end: string): string[] {
   const out: string[] = [];
   for (let day = start; day <= end; day = addIsoDays(day, 1)) out.push(day);
   return out;
+}
+
+export function personalOptionSidecarCalendarMonths(): string[] {
+  const months = new Set<string>();
+  for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
+    for (const day of isoDaysInclusive(period.raw_start, period.period_end)) {
+      months.add(day.slice(0, 7));
+    }
+  }
+  return [...months].sort();
 }
 
 export function periodById(
