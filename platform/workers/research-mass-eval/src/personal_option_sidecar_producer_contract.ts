@@ -41,18 +41,20 @@ export const PERSONAL_OPTION_SIDECAR_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 export const PERSONAL_OPTION_SIDECAR_TERMINAL_MAX_BYTES = 64 * 1024;
 export const PERSONAL_OPTION_SIDECAR_TIMEOUT_GRACE_MS = 30 * 60 * 1000;
 
-// Live staging inventory for the exact three frozen periods (design-cap source).
-export const PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_OBJECTS = 651;
+// Live production inventory for the exact frozen 650 option dates.
+export const PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_OBJECTS = 813;
 export const PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_DATES = 650;
-export const PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_ROWS = 3_031_214;
-export const PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_BYTES = 3_419_223_324;
+export const PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_ROWS = 4_030_644;
+export const PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_BYTES = 4_546_724_564;
 export const PERSONAL_OPTION_SIDECAR_LIVE_CALENDAR_OBJECTS = 33;
 export const PERSONAL_OPTION_SIDECAR_LIVE_CALENDAR_ROWS = 960;
 export const PERSONAL_OPTION_SIDECAR_LIVE_CALENDAR_BYTES = 318_720;
 
-// 5 GiB / 4M rows sit above 3.419 GB / 3.031M live and below a 12 GB all-rows OOM.
+// Object (1024) and byte (5 GiB) caps stay. Only the row cap rises to 4.5M:
+// production measured 4,030,644 rows, and the Python container streams one
+// day at a time without retaining all source rows globally.
 export const PERSONAL_OPTION_SIDECAR_MAX_OPTIONS_OBJECTS = 1024;
-export const PERSONAL_OPTION_SIDECAR_MAX_OPTIONS_ROWS = 4_000_000;
+export const PERSONAL_OPTION_SIDECAR_MAX_OPTIONS_ROWS = 4_500_000;
 export const PERSONAL_OPTION_SIDECAR_MAX_OPTIONS_BYTES = 5 * 1024 * 1024 * 1024;
 export const PERSONAL_OPTION_SIDECAR_MAX_CALENDAR_SCAN_OBJECTS = 512;
 export const PERSONAL_OPTION_SIDECAR_MAX_CALENDAR_SCAN_BYTES = 4 * 1024 * 1024;

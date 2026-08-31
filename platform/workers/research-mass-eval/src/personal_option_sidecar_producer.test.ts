@@ -603,10 +603,10 @@ describe("option sidecar admission", () => {
     );
   });
 
-  it("admits the live staging inventory under the total caps", () => {
-    expect(PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_BYTES).toBe(3_419_223_324);
-    expect(PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_ROWS).toBe(3_031_214);
-    expect(PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_OBJECTS).toBe(651);
+  it("admits the live production inventory under the total caps", () => {
+    expect(PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_BYTES).toBe(4_546_724_564);
+    expect(PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_ROWS).toBe(4_030_644);
+    expect(PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_OBJECTS).toBe(813);
     expect(PERSONAL_OPTION_SIDECAR_LIVE_OPTIONS_DATES).toBe(650);
     expect(PERSONAL_OPTION_SIDECAR_LIVE_CALENDAR_OBJECTS).toBe(33);
     expect(PERSONAL_OPTION_SIDECAR_LIVE_CALENDAR_ROWS).toBe(960);
