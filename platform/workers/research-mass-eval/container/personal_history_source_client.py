@@ -306,6 +306,13 @@ class AcquisitionSpool:
         self._verified_pages.clear()
         self._conn.close()
 
+    def _checkpoint_committed_wal(self) -> None:
+        result = self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        if result is not None and int(result[0]) != 0:
+            raise PersonalHistoryError(
+                "acquisition spool WAL checkpoint could not acquire a safe lock"
+            )
+
     def usage(self) -> tuple[int, int]:
         pages = int(
             self._conn.execute("SELECT COUNT(*) FROM source_pages").fetchone()[0]
@@ -318,6 +325,8 @@ class AcquisitionSpool:
         return pages, size
 
     def guard_bounds(self, *, extra_pages: int = 0, extra_bytes: int = 0) -> None:
+        # Sole TRUNCATE site: pre-write extra_bytes and post-write physical size.
+        self._checkpoint_committed_wal()
         pages, size = self.usage()
         next_pages = pages + extra_pages
         next_bytes = size + extra_bytes
