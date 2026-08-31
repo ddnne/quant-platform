@@ -7,12 +7,14 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import sqlite3
 import sys
 import urllib.error
 import urllib.request
 
 import pytest
 
+from data_contracts.identity import canonical_json
 from ingestion.personal_history import (
     PERSONAL_HISTORY_DATASETS,
     PersonalHistoryError,
@@ -572,6 +574,178 @@ def test_spool_page_bound_fails_with_exact_counts(
             "markets_calendar", **{"from": "2024-03-01", "to": "2024-04-02"}
         )
     client.close()
+
+
+def _spool_sidecar_sizes(path: Path) -> tuple[int, int, int]:
+    wal = Path(str(path) + "-wal")
+    shm = Path(str(path) + "-shm")
+    return (
+        path.stat().st_size if path.exists() else 0,
+        wal.stat().st_size if wal.exists() else 0,
+        shm.stat().st_size if shm.exists() else 0,
+    )
+
+
+def _large_spool_rows(count: int = 800, payload_bytes: int = 2048) -> list[dict]:
+    blob = "x" * payload_bytes
+    return [
+        {
+            "Code": f"{index:04d}",
+            "Date": "2024-03-01",
+            "Payload": blob,
+        }
+        for index in range(count)
+    ]
+
+
+def _write_committed_spool_page(
+    spool: client_mod.AcquisitionSpool, rows: list[dict]
+) -> None:
+    spool.begin_month(
+        "equities_bars_daily",
+        "2024-03",
+        {"dataset_id": "equities_bars_daily", "segment_id": "2024-03"},
+    )
+    spool.record_page(
+        dataset="equities_bars_daily",
+        month="2024-03",
+        page_ordinal=0,
+        slice_date="2024-03-01",
+        body_digest="sha256:" + "a" * 64,
+        row_count=len(rows),
+        request_path="/v1/equities/bars/daily",
+        request_params={"date": "2024-03-01"},
+        response_status=200,
+        pagination_in=None,
+        pagination_out=None,
+        evidence_state="RAW_PAGE",
+        rows=rows,
+    )
+
+
+def _verified_fins_cache_month(rows: list[dict]):
+    cache_mod = sys.modules["personal_acquisition_cache"]
+    encoded = [canonical_json(dict(row)) for row in rows]
+    return cache_mod.VerifiedCacheMonth(
+        identity={"dataset_id": "fins_summary", "segment_id": "2024-03"},
+        identity_hex="ab" * 32,
+        environment="production",
+        dataset="fins_summary",
+        month="2024-03",
+        completion_digest="sha256:" + "b" * 64,
+        page_count=1,
+        pages=(
+            {
+                "dataset": "fins_summary",
+                "month": "2024-03",
+                "page_ordinal": 0,
+                "slice_date": None,
+                "body_digest": "sha256:" + "c" * 64,
+                "row_count": len(rows),
+                "request_path": "/v2/fins/summary",
+                "request_params_json": canonical_json(
+                    {"from": "2024-03-01", "to": "2024-03-31"}
+                ),
+                "response_status": 200,
+                "pagination_in": None,
+                "pagination_out": None,
+                "evidence_state": "RAW_PAGE",
+            },
+        ),
+        rows=tuple(
+            {
+                "dataset": "fins_summary",
+                "month": "2024-03",
+                "page_ordinal": 0,
+                "row_index": index,
+                "code": row["Code"],
+                "row_date": row["Date"],
+                "row_json": encoded[index],
+            }
+            for index, row in enumerate(rows)
+        ),
+    )
+
+
+def test_retained_checkpointed_wal_is_reclaimed_at_committed_capacity_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spool = client_mod.AcquisitionSpool(tmp_path / "spool.sqlite")
+    spool._conn.execute("PRAGMA wal_autocheckpoint=0")
+    spool._checkpoint_committed_wal = lambda: None
+    _write_committed_spool_page(spool, _large_spool_rows())
+    busy, _log, checkpointed = spool._conn.execute(
+        "PRAGMA wal_checkpoint(PASSIVE)"
+    ).fetchone()
+    assert busy == 0
+    assert checkpointed > 0
+    main, wal, shm = _spool_sidecar_sizes(spool.path)
+    pages, usage = spool.usage()
+    assert pages == 1
+    assert wal > 0
+    assert usage == main + wal + shm
+    retained_bound = main + shm + (wal // 2)
+    assert main + shm < retained_bound < usage
+    monkeypatch.setattr(client_mod, "MAX_SPOOL_BYTES", retained_bound)
+    with pytest.raises(PersonalHistoryError, match="byte bound exceeded"):
+        spool.guard_bounds()
+    spool._checkpoint_committed_wal = (
+        lambda: client_mod.AcquisitionSpool._checkpoint_committed_wal(spool)
+    )
+    spool.guard_bounds()
+    main_after, wal_after, shm_after = _spool_sidecar_sizes(spool.path)
+    _pages_after, usage_after = spool.usage()
+    assert wal_after == 0
+    assert usage_after == main_after + wal_after + shm_after
+    assert usage_after <= retained_bound
+    spool.close()
+
+
+def test_busy_reader_blocks_truncate_and_fails_closed(tmp_path: Path) -> None:
+    spool = client_mod.AcquisitionSpool(tmp_path / "spool.sqlite")
+    _write_committed_spool_page(spool, _large_spool_rows(count=8, payload_bytes=64))
+    spool._conn.execute("PRAGMA busy_timeout=0")
+    reader = sqlite3.connect(str(spool.path), timeout=0)
+    try:
+        reader.execute("BEGIN")
+        assert reader.execute("SELECT COUNT(*) FROM source_pages").fetchone()[0] == 1
+        spool.begin_month(
+            "equities_bars_daily",
+            "2024-04",
+            {"dataset_id": "equities_bars_daily", "segment_id": "2024-04"},
+        )
+        _main, wal, _shm = _spool_sidecar_sizes(spool.path)
+        assert wal > 0
+        with pytest.raises(
+            PersonalHistoryError, match="could not acquire a safe lock"
+        ):
+            spool.guard_bounds()
+    finally:
+        reader.close()
+    spool.guard_bounds()
+    _main_after, wal_after, _shm_after = _spool_sidecar_sizes(spool.path)
+    assert wal_after == 0
+    spool.close()
+
+
+def test_committed_cache_import_truncates_wal_and_keeps_true_byte_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cached = _verified_fins_cache_month(_large_spool_rows())
+    spool = client_mod.AcquisitionSpool(tmp_path / "spool.sqlite")
+    spool._conn.execute("PRAGMA wal_autocheckpoint=0")
+    spool.import_complete_month(cached)
+    main, wal, shm = _spool_sidecar_sizes(spool.path)
+    pages, usage = spool.usage()
+    assert pages == 1
+    assert wal == 0
+    assert usage == main + wal + shm
+    monkeypatch.setattr(client_mod, "MAX_SPOOL_BYTES", usage - 1)
+    with pytest.raises(PersonalHistoryError, match="byte bound exceeded"):
+        spool.guard_bounds()
+    monkeypatch.setattr(client_mod, "MAX_SPOOL_BYTES", usage)
+    spool.guard_bounds()
+    spool.close()
 
 
 def _two_page_opener():
