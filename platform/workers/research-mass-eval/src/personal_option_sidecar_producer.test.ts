@@ -33,9 +33,9 @@ import {
   PERSONAL_OPTION_SIDECAR_RECORDS_SCHEMA,
   PERSONAL_OPTION_SIDECAR_SOURCE_VERSION,
   addIsoDays,
+  calendarMonthPrefix,
   calendarRootPrefix,
   isoDaysInclusive,
-  monthStartDay,
   parsePersonalOptionSidecarProduceRequest,
   personalOptionSidecarInputKey,
   personalOptionSidecarObjectKey,
@@ -62,6 +62,11 @@ class MemoryR2 {
   readonly values = new Map<string, Stored>();
   readonly writes: string[] = [];
   readonly listed: string[] = [];
+  readonly listCalls: Array<{
+    prefix: string;
+    include?: string[];
+    cursor?: string;
+  }> = [];
 
   seed(
     key: string,
@@ -101,10 +106,29 @@ class MemoryR2 {
   async list(options?: R2ListOptions): Promise<R2Objects> {
     const prefix = options?.prefix ?? "";
     this.listed.push(prefix);
-    const objects = [...this.values.entries()]
+    this.listCalls.push({
+      prefix,
+      include: options?.include ? [...options.include] : undefined,
+      cursor: options?.cursor,
+    });
+    const matches = [...this.values.entries()]
       .filter(([key]) => key.startsWith(prefix))
-      .map(([key, stored]) => this.object(key, stored) as unknown as R2Object);
-    return { objects, delimitedPrefixes: [], truncated: false };
+      .sort(([left], [right]) => left.localeCompare(right));
+    const limit = options?.limit ?? matches.length;
+    const start = options?.cursor ? Number.parseInt(options.cursor, 10) : 0;
+    const slice = Number.isInteger(start)
+      ? matches.slice(start, start + limit)
+      : matches;
+    const next = start + slice.length;
+    const truncated = Number.isInteger(start) && next < matches.length;
+    return {
+      objects: slice.map(
+        ([key, stored]) => this.object(key, stored) as unknown as R2Object,
+      ),
+      delimitedPrefixes: [],
+      truncated,
+      ...(truncated ? { cursor: String(next) } : {}),
+    };
   }
 
   async put(
@@ -210,6 +234,7 @@ async function seedPeriod(
   period: (typeof PERSONAL_OPTION_SIDECAR_PERIODS)[number],
   options?: {
     omitOptionsDay?: string;
+    omitCalendarDay?: string;
     badShaDay?: string;
     extraOptionsDay?: string;
     calendarPayloadOverride?: { day: string; payload: unknown };
@@ -230,12 +255,14 @@ async function seedPeriod(
   expect(split.ok).toBe(true);
   const byMonth = new Map<string, string[]>();
   for (const day of isoDaysInclusive(period.raw_start, period.period_end)) {
-    const month = monthStartDay(day);
+    if (day === options?.omitCalendarDay) continue;
+    const month = day.slice(0, 7);
     const rows = byMonth.get(month) ?? [];
     rows.push(day);
     byMonth.set(month, rows);
   }
   for (const [month, days] of byMonth) {
+    const partitionDay = days[0]!;
     const records = days.map((day) =>
       structuredRecord({
         dataset: "markets_calendar",
@@ -247,9 +274,14 @@ async function seedPeriod(
             : JSON.stringify({ Date: day, HolDiv: trading.has(day) ? "1" : "0" }),
       }),
     );
-    const calendar = await jsonlObject("markets_calendar", month, records, `cal-${month}`);
+    const calendar = await jsonlObject(
+      "markets_calendar",
+      partitionDay,
+      records,
+      `cal-${month}`,
+    );
     mem.seed(
-      `${PERSONAL_OPTION_SIDECAR_CALENDAR_ROOT}/dt=${month}/${month}.jsonl`,
+      `${PERSONAL_OPTION_SIDECAR_CALENDAR_ROOT}/dt=${partitionDay}/${partitionDay}.jsonl`,
       calendar.bytes,
       `cal-${month}`,
       calendar.meta,
@@ -298,6 +330,28 @@ async function seedPeriod(
 }
 
 const REQUEST = { job_id: "sidecar-one" };
+
+function frozenCalendarMonths(): string[] {
+  return [
+    ...new Set(
+      PERSONAL_OPTION_SIDECAR_PERIODS.flatMap((period) =>
+        isoDaysInclusive(period.raw_start, period.period_end).map((day) =>
+          day.slice(0, 7),
+        ),
+      ),
+    ),
+  ].sort();
+}
+
+function calendarMonthListPrefixes(mem: MemoryR2): string[] {
+  return mem.listed.filter(
+    (prefix) =>
+      prefix.startsWith(`${PERSONAL_OPTION_SIDECAR_CALENDAR_ROOT}/dt=`) &&
+      /^\d{4}-\d{2}$/.test(
+        prefix.slice(`${PERSONAL_OPTION_SIDECAR_CALENDAR_ROOT}/dt=`.length),
+      ),
+  );
+}
 
 function validChild(
   period: (typeof PERSONAL_OPTION_SIDECAR_PERIODS)[number],
@@ -513,18 +567,16 @@ describe("option sidecar admission", () => {
       );
     }
     const input = await buildPersonalOptionSidecarInputManifest(mem.asBucket(), REQUEST);
-    expect(mem.listed.some((prefix) => prefix === calendarRootPrefix())).toBe(true);
-    expect(
-      mem.listed.some((prefix) =>
-        prefix.startsWith(`${PERSONAL_OPTION_SIDECAR_CALENDAR_ROOT}/dt=`),
-      ),
-    ).toBe(false);
+    expect(mem.listed).not.toContain(calendarRootPrefix());
+    expect([...new Set(calendarMonthListPrefixes(mem))].sort()).toEqual(
+      frozenCalendarMonths().map((month) => calendarMonthPrefix(month)),
+    );
     const first = input.periods.y2021_full;
     expect(first.calendar.length).toBeGreaterThan(1);
     expect(first.calendar.every((object) => object.schema === PERSONAL_OPTION_SIDECAR_RECORDS_SCHEMA)).toBe(
       true,
     );
-    const october = first.calendar.find((object) => object.date === "2020-10-01");
+    const october = first.calendar.find((object) => object.date === "2020-10-05");
     expect(october?.count).toBeGreaterThan(1);
     expect(first.options.every((day) => Array.isArray(day.objects))).toBe(true);
     expect("date" in (first.calendar[0] as StructuredObjectRef)).toBe(true);
@@ -578,6 +630,225 @@ describe("option sidecar admission", () => {
       isoDaysInclusive(period.raw_start, period.period_end),
     );
     expect(canonical).toHaveLength(PERSONAL_OPTION_SIDECAR_LIVE_CALENDAR_ROWS);
+  });
+
+  it("never lists unrelated calendar months, so they cannot trip the scan bound", async () => {
+    const mem = new MemoryR2();
+    for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
+      await seedPeriod(mem, period);
+    }
+    const required = new Set(frozenCalendarMonths());
+    const unrelatedSize = Math.ceil(
+      PERSONAL_OPTION_SIDECAR_MAX_CALENDAR_SCAN_BYTES / 80,
+    );
+    const unrelated = new Uint8Array(unrelatedSize);
+    let unrelatedMonths = 0;
+    for (let year = 1990; year <= 2026; year += 1) {
+      for (let month = 1; month <= 12; month += 1) {
+        const stamp = `${year}-${String(month).padStart(2, "0")}`;
+        if (required.has(stamp)) continue;
+        unrelatedMonths += 1;
+        const day = `${stamp}-01`;
+        mem.seed(
+          `${PERSONAL_OPTION_SIDECAR_CALENDAR_ROOT}/dt=${day}/unrelated.jsonl`,
+          unrelated,
+          `unrelated-${stamp}`,
+          {
+            sha256: "a".repeat(64),
+            count: "1",
+            bytes: String(unrelated.byteLength),
+            dataset: "markets_calendar",
+            run_id: `unrelated-${stamp}`,
+            date: day,
+            schema: PERSONAL_OPTION_SIDECAR_RECORDS_SCHEMA,
+          },
+        );
+      }
+    }
+    expect(unrelatedMonths).toBeGreaterThan(200);
+    expect(unrelatedMonths * unrelatedSize).toBeGreaterThan(
+      PERSONAL_OPTION_SIDECAR_MAX_CALENDAR_SCAN_BYTES,
+    );
+    const input = await buildPersonalOptionSidecarInputManifest(
+      mem.asBucket(),
+      REQUEST,
+    );
+    const monthPrefixes = [...new Set(calendarMonthListPrefixes(mem))].sort();
+    expect(monthPrefixes).toEqual(
+      frozenCalendarMonths().map((month) => calendarMonthPrefix(month)),
+    );
+    expect(mem.listed).not.toContain(calendarRootPrefix());
+    expect(
+      mem.listed.some((prefix) => prefix.includes("/dt=1990-") || prefix.includes("/dt=2024-")),
+    ).toBe(false);
+    for (const call of mem.listCalls.filter((row) =>
+      monthPrefixes.includes(row.prefix),
+    )) {
+      expect(call.include).toEqual(["customMetadata"]);
+    }
+    expect(input.periods.y2021_full.calendar.length).toBeGreaterThan(1);
+    expect(input.periods.y2023_full.calendar.length).toBeGreaterThan(1);
+    expect(input.periods.y2025_q4.calendar.length).toBeGreaterThan(1);
+  });
+
+  it("fails closed when relevant calendar objects exceed the scan byte bound", async () => {
+    const mem = new MemoryR2();
+    for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
+      await seedPeriod(mem, period);
+    }
+    const overflow = new Uint8Array(
+      PERSONAL_OPTION_SIDECAR_MAX_CALENDAR_SCAN_BYTES + 1,
+    );
+    mem.seed(
+      `${PERSONAL_OPTION_SIDECAR_CALENDAR_ROOT}/dt=2020-10-15/overflow.jsonl`,
+      overflow,
+      "overflow-2020-10",
+      {
+        sha256: "b".repeat(64),
+        count: "1",
+        bytes: String(overflow.byteLength),
+        dataset: "markets_calendar",
+        run_id: "overflow",
+        date: "2020-10-15",
+        schema: PERSONAL_OPTION_SIDECAR_RECORDS_SCHEMA,
+      },
+    );
+    await expect(
+      buildPersonalOptionSidecarInputManifest(mem.asBucket(), REQUEST),
+    ).rejects.toMatchObject({ code: "option_sidecar_calendar_scan_bound_exceeded" });
+  });
+
+  it("fails closed when a required calendar day is missing", async () => {
+    const mem = new MemoryR2();
+    const target = PERSONAL_OPTION_SIDECAR_PERIODS[0]!;
+    for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
+      await seedPeriod(
+        mem,
+        period,
+        period.period_id === target.period_id
+          ? { omitCalendarDay: target.raw_start }
+          : undefined,
+      );
+    }
+    await expect(
+      buildPersonalOptionSidecarInputManifest(mem.asBucket(), REQUEST),
+    ).rejects.toMatchObject({ code: "option_sidecar_calendar_day_missing" });
+  });
+
+  it("rejects a listed calendar key whose partition day is outside the requested YYYY-MM", async () => {
+    const mem = new MemoryR2();
+    for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
+      await seedPeriod(mem, period);
+    }
+    const innerList = mem.list.bind(mem);
+    mem.list = async (options?: R2ListOptions) => {
+      const page = await innerList(options);
+      if (options?.prefix !== calendarMonthPrefix("2020-10")) return page;
+      const strayKey = `${PERSONAL_OPTION_SIDECAR_CALENDAR_ROOT}/dt=2024-01-01/stray.jsonl`;
+      return {
+        ...page,
+        objects: [
+          ...page.objects,
+          {
+            key: strayKey,
+            size: 1,
+            etag: "stray",
+            customMetadata: {},
+          } as unknown as R2Object,
+        ],
+      };
+    };
+    await expect(
+      buildPersonalOptionSidecarInputManifest(mem.asBucket(), REQUEST),
+    ).rejects.toMatchObject({ code: "option_sidecar_source_key_denied" });
+  });
+
+  it("selects the lexicographic-max duplicate across relevant calendar objects only", async () => {
+    const mem = new MemoryR2();
+    for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
+      await seedPeriod(mem, period);
+    }
+    const target = PERSONAL_OPTION_SIDECAR_PERIODS[0]!;
+    const warmup = samplePinnedDates(
+      target.raw_start,
+      addIsoDays(target.period_start, -1),
+      target.warmup_sessions,
+    );
+    const evaluation = samplePinnedDates(
+      target.period_start,
+      target.period_end,
+      target.evaluation_sessions,
+    );
+    const trading = new Set([...warmup, ...evaluation]);
+    const octoberDays = isoDaysInclusive(target.raw_start, "2020-10-31");
+    const extraTradingDay = octoberDays.find((day) => !trading.has(day));
+    expect(extraTradingDay).toBeTruthy();
+    const recordsFor = (holDivForExtra: "0" | "1", ingestedAt: string) =>
+      octoberDays.map((day) =>
+        structuredRecord({
+          dataset: "markets_calendar",
+          date: day,
+          naturalKey: { Date: day },
+          ingestedAt,
+          payload: JSON.stringify({
+            Date: day,
+            HolDiv:
+              day === extraTradingDay ? holDivForExtra : trading.has(day) ? "1" : "0",
+          }),
+        }),
+      );
+    const loser = await jsonlObject(
+      "markets_calendar",
+      "2020-10-05",
+      recordsFor("1", "2020-10-05T12:00:00+09:00"),
+      "cal-2020-10-loser",
+    );
+    const winner = await jsonlObject(
+      "markets_calendar",
+      "2020-10-31",
+      recordsFor("0", "2020-10-05T18:00:00+09:00"),
+      "cal-2020-10-winner",
+    );
+    mem.values.delete(
+      `${PERSONAL_OPTION_SIDECAR_CALENDAR_ROOT}/dt=2020-10-05/2020-10-05.jsonl`,
+    );
+    mem.seed(
+      `${PERSONAL_OPTION_SIDECAR_CALENDAR_ROOT}/dt=2020-10-05/loser.jsonl`,
+      loser.bytes,
+      "cal-2020-10-loser",
+      loser.meta,
+    );
+    mem.seed(
+      `${PERSONAL_OPTION_SIDECAR_CALENDAR_ROOT}/dt=2020-10-31/winner.jsonl`,
+      winner.bytes,
+      "cal-2020-10-winner",
+      winner.meta,
+    );
+    const unrelatedWinner = await jsonlObject(
+      "markets_calendar",
+      "2024-01-01",
+      recordsFor("1", "2024-01-01T23:00:00+09:00"),
+      "cal-unrelated-winner",
+    );
+    mem.seed(
+      `${PERSONAL_OPTION_SIDECAR_CALENDAR_ROOT}/dt=2024-01-01/unrelated.jsonl`,
+      unrelatedWinner.bytes,
+      "cal-unrelated-winner",
+      unrelatedWinner.meta,
+    );
+    const input = await buildPersonalOptionSidecarInputManifest(
+      mem.asBucket(),
+      REQUEST,
+    );
+    const october = input.periods.y2021_full.calendar.filter((object) =>
+      object.date.startsWith("2020-10"),
+    );
+    expect(october.map((object) => object.key).sort()).toEqual([
+      `${PERSONAL_OPTION_SIDECAR_CALENDAR_ROOT}/dt=2020-10-05/loser.jsonl`,
+      `${PERSONAL_OPTION_SIDECAR_CALENDAR_ROOT}/dt=2020-10-31/winner.jsonl`,
+    ]);
+    expect(input.periods.y2021_full.warmup_dates).toEqual(warmup);
+    expect(input.periods.y2021_full.evaluation_dates).toEqual(evaluation);
   });
 
   it("fits a live-shaped compact input fixture in 2MiB with two objects on one day", () => {
