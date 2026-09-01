@@ -179,11 +179,13 @@ and [`docs/architecture/wave_assets_deprecated.md`](../docs/architecture/wave_as
 The exact-four runtime and replay-isolation tests enforce the operational
 boundary; filenames are not used as a security or release boundary.
 
-Official OTC archive recovery (not a COMPLETE issuer):
+Official OTC archive recovery (not a COMPLETE issuer). Host-local fetch and
+seal require `QP_ALLOW_LOCAL_MARKET_DATA=1`; the backfill planner launches the
+guarded fetch child and does not duplicate the opt-in.
 
 ```bash
-uv run python scripts/jsda_otc_official_backfill.py --year 2003 --n 100 --log-dir data/ops/otc_official_backfill --fetch
-uv run python scripts/jsda_otc_seal_official.py --log-dir data/ops/otc_official_backfill
+QP_ALLOW_LOCAL_MARKET_DATA=1 uv run python scripts/jsda_otc_official_backfill.py --year 2003 --n 100 --log-dir data/ops/otc_official_backfill --fetch
+QP_ALLOW_LOCAL_MARKET_DATA=1 uv run python scripts/jsda_otc_seal_official.py --log-dir data/ops/otc_official_backfill
 ```
 
 The second command records `FAILED/REPROOF_REQUIRED` plus
@@ -191,21 +193,26 @@ The second command records `FAILED/REPROOF_REQUIRED` plus
 trusted receipt, refresh COMPLETE, or publish an Ops projection. Reprocess the
 persisted raw through the governed acquisition/reconciliation service instead.
 
-## run_ingestion_once.py（Phase 1）
+## run_ingestion_once.py
 
-1 パスのデータ取得。local ランタイム主系。
+1 パスのデータ取得。既定ランタイムは `cloudflare`（ホストローカルへは取得しない）。
+通常経路は Cloudflare（R2 正本、D1 メタデータ、Container SQLite は ephemeral）。
+ホストローカル取得は復旧用で、実行ファイル起動時に `QP_ALLOW_LOCAL_MARKET_DATA=1`
+と `--runtime local` が必要。
 
 ```bash
-python scripts/run_ingestion_once.py --source {jquants|jsda|all} --runtime local
+python scripts/run_ingestion_once.py --source {jquants|jsda|all}
+QP_ALLOW_LOCAL_MARKET_DATA=1 python scripts/run_ingestion_once.py --source jsda --runtime local
 ```
 
 主なオプション:
 
 - `--source {jquants|jsda|all}` — 対象ソース（既定 `all`）。
+- `--runtime {cloudflare|local}` — 既定 `cloudflare`（環境変数 `INGESTION_RUNTIME`）。`local` は opt-in 復旧。
 - `--mode {incremental|backfill}` — J-Quants カタログ取得モード（既定 `incremental`。`incremental` は直近約5日、`backfill` は全範囲）。
 - `--dataset NAME` — J-Quants カタログのデータセット id（繰り返し可・カンマ区切り可。`fins_dividend` 等）。指定時は汎用テーブル `jquants_records` へ蓄積。未指定時は curate 済み3系列 + `fins/summary` raw の従来経路。
-- `--personal-draft` — 個人用DRAFT研究向けの明示的なlocal-onlyモード。`--source jquants --dataset ...` が必須。既定DBは専用の `data/structured/personal-ingestion.sqlite`。immutable raw manifest とPIT正規化行だけを保存し、署名receipt・Coverage COMPLETE・READY・完全性を発行/主張しない。`run_historical_backfill.py` からも同じflagを指定できる。
-- `hydrate_personal_history.py` — 4系列だけを専用SQLiteへ低速・逐次・再開可能に保存する個人DRAFT用hydrator。既定はdry-run・30 requests/minで、実行には`--execute`が必須。速度は`--requests-per-minute`で上書きでき、saved proxyは従来どおり最大60 requests/minに制限される。raw本文は保存せずpage SHA-256と件数だけをcheckpointし、masterの`Date 08:00 JST`は訂正publication時刻を復元しない近似である。receipt・Coverage・READY・controlled/live適格性・完全性は一切主張しない。
+- `--personal-draft` — 個人用DRAFT研究向けの明示的なlocal-onlyモード。`--source jquants --runtime local --dataset ...` が必須。既定DBは専用の `data/structured/personal-ingestion.sqlite`。immutable raw manifest とPIT正規化行だけを保存し、署名receipt・Coverage COMPLETE・READY・完全性を発行/主張しない。`run_historical_backfill.py` からも同じflagを指定できる（既定 runtime は `cf`；local 側は子の `run_ingestion_once.py` が opt-in を見る）。
+- `hydrate_personal_history.py` — 4系列だけを専用SQLiteへ低速・逐次・再開可能に保存する個人DRAFT用hydrator。既定はdry-run・30 requests/minで、dry-runは opt-in 不要。実行には`--execute`と `QP_ALLOW_LOCAL_MARKET_DATA=1` が必須。速度は`--requests-per-minute`で上書きでき、saved proxyは従来どおり最大60 requests/minに制限される。raw本文は保存せずpage SHA-256と件数だけをcheckpointし、masterの`Date 08:00 JST`は訂正publication時刻を復元しない近似である。receipt・Coverage・READY・controlled/live適格性・完全性は一切主張しない。
 - `--code/--from-date/--to-date` — J-Quants の銘柄・日付絞り込み。
 - `--workers N` — J-Quants 並列ワーカ数（データセット×日付ウィンドウのジョブ数。レート制限は共有で Premium 約500/min に抑える。既定8）。
 - `--chunk-days N` — `from/to` 長期間を N 日グリッドに分割して並列バックフィル（J-Quants、既定30）。
@@ -219,7 +226,7 @@ python scripts/run_ingestion_once.py --source {jquants|jsda|all} --runtime local
 
 J-Quants の鍵は **CF proxy が既定**（環境変数 `JQUANTS_PROXY_URL`/`JQUANTS_PROXY_TOKEN` または `~/.config/quant-platform/jquants_proxy_{url,token}`）。local `JQUANTS_API_KEY` は `UNSAFE_DEV_DIRECT_JQUANTS=1` を明示した開発時だけ利用する。JSDA は鍵不要。
 
-終了コード: `0`=取得/登録あり, `1`=予期せぬエラー, `2`=何も実行せず（CF ランタイム or 全ソース skip）。
+終了コード: `0`=取得/登録あり, `1`=予期せぬエラー, `2`=何も実行せず（opt-in 拒否、CF ランタイム、または全ソース skip）。
 詳細は [docs/data_sources.md](../docs/data_sources.md)。
 
 Full governed READY、D1 migration、Ops MCP projection/deploy の順序は

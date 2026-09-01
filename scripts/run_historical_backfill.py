@@ -168,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--runtime",
         choices=["local", "cf"],
-        default="local",
+        default="cf",
         help="local=run_ingestion_once; cf=premium /v1/run via range batch scheduler",
     )
     ap.add_argument(

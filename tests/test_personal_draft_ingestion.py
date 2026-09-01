@@ -114,7 +114,7 @@ def test_personal_draft_commits_exact_pit_rows_and_unsigned_raw_manifest(
             "requires --runtime local",
         ),
         (
-            ["--personal-draft", "--source", "jquants"],
+            ["--personal-draft", "--source", "jquants", "--runtime", "local"],
             "requires at least one --dataset",
         ),
         (
@@ -122,6 +122,8 @@ def test_personal_draft_commits_exact_pit_rows_and_unsigned_raw_manifest(
                 "--personal-draft",
                 "--source",
                 "jquants",
+                "--runtime",
+                "local",
                 "--dataset",
                 " , ",
             ],
@@ -132,6 +134,8 @@ def test_personal_draft_commits_exact_pit_rows_and_unsigned_raw_manifest(
                 "--personal-draft",
                 "--source",
                 "all",
+                "--runtime",
+                "local",
                 "--dataset",
                 "markets_calendar",
             ],
@@ -184,6 +188,8 @@ def test_personal_draft_cli_refuses_governed_default_database(
                 "--personal-draft",
                 "--source",
                 "jquants",
+                "--runtime",
+                "local",
                 "--dataset",
                 "markets_calendar",
                 "--data-dir",
@@ -250,6 +256,8 @@ def test_historical_wrapper_propagates_personal_mode_and_dedicated_db(
     code = historical.main(
         [
             "--personal-draft",
+            "--runtime",
+            "local",
             "--dataset",
             "markets_calendar",
             "--from-date",

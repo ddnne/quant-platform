@@ -583,4 +583,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    from _local_market_data_guard import require_local_market_data_opt_in
+
+    require_local_market_data_opt_in()
     raise SystemExit(main())

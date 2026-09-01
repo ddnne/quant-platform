@@ -1,20 +1,17 @@
-# data/ (local only)
+# data/
 
-This directory holds **local-only** ingestion artifacts and is **gitignored**
-(see `.gitignore`). Never commit raw dumps or the SQLite DB.
+Gitignored host-local recovery artifacts. Normal operation is Cloudflare:
+R2 is persistent authority, D1 holds metadata, and Container SQLite is
+ephemeral. Never commit raw dumps or SQLite files.
 
-Layout (created on demand by ingestion):
+This tree is created only by opt-in developer/recovery tools
+(`QP_ALLOW_LOCAL_MARKET_DATA=1`). It is not the operator store.
+
+Layout (recovery/compatibility):
 
 ```
 data/
-  raw/{source}/{yyyy}/{mm}/{dd}/<file>     # verbatim source bytes (Pattern B fetch side)
-  structured/ingestion.sqlite               # normalized rows with PIT columns
-  tmp/                                       # scratch
-```
-
-Future Cloudflare R2 layout (Phase 2+, documented only — not implemented):
-
-```
-raw/    -> quant-raw/{source}/{yyyy}/{mm}/{dd}/{file}
-structured/ -> quant-structured/{source}/{table}.parquet (or D1 rows)
+  raw/{source}/{yyyy}/{mm}/{dd}/<file>
+  structured/ingestion.sqlite
+  tmp/
 ```

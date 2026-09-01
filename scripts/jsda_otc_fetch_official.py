@@ -140,4 +140,12 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    import sys
+
+    _scripts = Path(__file__).resolve().parent
+    if str(_scripts) not in sys.path:
+        sys.path.insert(0, str(_scripts))
+    from _local_market_data_guard import require_local_market_data_opt_in
+
+    require_local_market_data_opt_in()
     raise SystemExit(main())
