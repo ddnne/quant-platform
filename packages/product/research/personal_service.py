@@ -1525,6 +1525,61 @@ def _universe_corporate_action_check(
     }
 
 
+_DATA_QUALITY_FLAG_NAMES = (
+    "comparable",
+    "selection_eligible",
+    "comparison_eligible",
+)
+_DATA_QUALITY_DETAIL_KEYS = (
+    "incomplete_valuation",
+    "skipped_decision_count",
+    "incomplete_valuation_count",
+    "unfilled_order_count",
+    "skipped_decision_dates",
+    "incomplete_valuation_dates",
+    "incomplete_valuation_codes",
+    "missing_fill_dates",
+    "missing_fill_codes",
+    "non_comparable_session_dates",
+    "held_missing_morning_adjustment_close",
+    "held_missing_afternoon_adjustment_close",
+    "missing_afternoon_adjustment_close_unfilled",
+    "data_quality_gate",
+)
+
+
+def _explicit_quality_flag(source: Mapping[str, Any], name: str) -> bool:
+    if name not in source:
+        return True
+    return source[name] is not False
+
+
+def _paper_run_data_quality(metrics: Mapping[str, Any]) -> dict[str, Any]:
+    """Always emit AM/PM eligibility flags; absent metrics stay eligible."""
+
+    quality = {
+        name: _explicit_quality_flag(metrics, name)
+        for name in _DATA_QUALITY_FLAG_NAMES
+    }
+    for key in _DATA_QUALITY_DETAIL_KEYS:
+        if key in metrics:
+            quality[key] = metrics[key]
+    return quality
+
+
+def _run_is_selection_eligible(run: Mapping[str, Any]) -> bool:
+    """True unless a run explicitly marks itself selection-ineligible."""
+
+    if not isinstance(run, Mapping):
+        return True
+    if "selection_eligible" in run:
+        return run["selection_eligible"] is not False
+    quality = run.get("data_quality")
+    if isinstance(quality, Mapping) and "selection_eligible" in quality:
+        return quality["selection_eligible"] is not False
+    return True
+
+
 def _paper_evidence(
     result: PaperRunResult,
     *,
@@ -1554,6 +1609,7 @@ def _paper_evidence(
         trades=result.trades,
         starting_capital=config.starting_capital,
     )
+    data_quality = _paper_run_data_quality(metrics)
     return (
         {
             "run_id": result.run_id,
@@ -1564,6 +1620,10 @@ def _paper_evidence(
             "execution_contract": (
                 None if execution_contract is None else dict(execution_contract)
             ),
+            "comparable": data_quality["comparable"],
+            "selection_eligible": data_quality["selection_eligible"],
+            "comparison_eligible": data_quality["comparison_eligible"],
+            "data_quality": data_quality,
             "total_return_post_cost": float(
                 metrics.get("total_return_post_cost", 0.0)
             ),
@@ -1919,6 +1979,9 @@ def _candidate_evaluation(
         ),
         "fills": fills >= policy.min_fills,
         "risk_agent": all(run["risk_status"] == "pass" for run in validation_runs),
+        "data_quality_selection": all(
+            _run_is_selection_eligible(run) for run in validation_runs
+        ),
     }
     if short_financing_sensitivity is not None:
         validation_checks["short_financing_rate_monotonicity"] = bool(
@@ -1994,6 +2057,7 @@ def _candidate_evaluation(
         and stress["annualized_sharpe"] >= 0.0,
         "drawdown": stress["max_drawdown"] <= policy.max_drawdown,
         "risk_agent": stress["risk_status"] == "pass",
+        "data_quality_selection": _run_is_selection_eligible(stress),
     }
     candidate["stress"] = {**stress, "checks": stress_checks}
     candidate["performance_comparison"]["stress_vs_validation"] = performance_delta(
