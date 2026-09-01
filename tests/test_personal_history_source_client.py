@@ -1334,6 +1334,23 @@ def test_source_client_preserves_metrics_across_spool_reset(tmp_path: Path) -> N
     client.close()
 
 
+def test_guard_bounds_admits_measured_full_fins_and_rejects_over_nine_gib(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert client_mod.MAX_SPOOL_BYTES == 9 * 1024 ** 3
+    spool = client_mod.AcquisitionSpool(tmp_path / "spool.sqlite")
+    monkeypatch.setattr(spool, "_checkpoint_committed_wal", lambda: None)
+    measured_full_fins = 8_596_356_272
+    monkeypatch.setattr(spool, "usage", lambda: (1, measured_full_fins))
+    spool.guard_bounds()
+    monkeypatch.setattr(
+        spool, "usage", lambda: (1, client_mod.MAX_SPOOL_BYTES + 1)
+    )
+    with pytest.raises(PersonalHistoryError, match="byte bound exceeded"):
+        spool.guard_bounds()
+    spool.close()
+
+
 def _synthetic_master_day(day: str) -> list[dict]:
     topix = ["1001", "1002"] if day < "2025-01-07" else ["1001", "1002", "1003"]
     return [

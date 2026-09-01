@@ -78,10 +78,13 @@ _TRANSIENT_RETRY_DELAYS_S = (1, 2, 4)
 _RETRY_AFTER_MIN_S = 1
 _RETRY_AFTER_MAX_S = 120
 _RETRY_AFTER_SECONDS_RE = __import__("re").compile(r"^[0-9]+$")
-# 20 GiB Container disk: 3.5 GiB sqlite + ~3.5 GiB gzip + 256 MiB reserve.
-# Keep the ephemeral spool under 8 GiB so a full snapshot still fits.
+# 9 GiB is only enough for the measured full official-earliest fins phase.
+# Calendar/master/fins are physically reset at phase commit; bars reset at
+# month boundaries. The 20 GB Container disk plus the existing snapshot and
+# free-space guards remain authoritative. This is not permission for
+# cumulative bars storage.
 MAX_SPOOL_PAGES = 32_768
-MAX_SPOOL_BYTES = 8 * 1024 ** 3
+MAX_SPOOL_BYTES = 9 * 1024 ** 3
 _DATE_RE = __import__("re").compile(r"^\d{4}-\d{2}-\d{2}$")
 _SPOOL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS source_pages (
