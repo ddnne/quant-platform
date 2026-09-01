@@ -17,6 +17,8 @@ import pytest
 
 from data_contracts.identity import canonical_json, session_close_jst
 from data_contracts.personal_history_compact import (
+    DEFAULT_DAILY_MIN_OBSERVED_BAR_RATIO,
+    DEFAULT_TINY_MISSING_OBSERVED_BARS,
     PERSONAL_HISTORY_COMPACT_BARS_COLUMNS,
     PERSONAL_HISTORY_COMPACT_CREATE_SQL,
     PERSONAL_HISTORY_COMPACT_MASTER_COLUMNS,
@@ -30,8 +32,6 @@ from ingestion.personal_history import (
     DEFAULT_GENERIC_JSON_STORAGE_BYTES_PER_ROW,
     DEFAULT_MAX_DATABASE_BYTES,
     DEFAULT_MIN_OBSERVED_BAR_RATIO,
-    DEFAULT_TINY_MISSING_BAR_RATIO,
-    DEFAULT_TINY_MISSING_OBSERVED_BARS,
     DEFAULT_TOPIX_CODE_ESTIMATE,
     MASTER_AVAILABILITY_POLICY,
     PERSONAL_HISTORY_FORMAT,
@@ -985,17 +985,17 @@ def test_compact_bars_reject_two_missing_codes_in_small_universe() -> None:
         )
 
 
-def test_compact_bars_reject_broad_universe_beyond_proportional_tolerance() -> None:
+def test_compact_bars_reject_broad_universe_below_daily_floor() -> None:
     trading_day = "2025-01-06"
     codes = [f"{ordinal:04d}" for ordinal in range(400)]
     with pytest.raises(
         PersonalHistoryError,
-        match=r"observed ratio 397/400 is below 0\.995000 \(missing 3, allowed-missing 2\)",
+        match=r"observed ratio 395/400 is below 0\.995000 \(missing 5, allowed-missing 4\)",
     ):
         _compact_bars(
             [
                 {"Code": code, "Date": trading_day, "Close": 100}
-                for code in codes[3:]
+                for code in codes[5:]
             ],
             trading_day=trading_day,
             scope_union=frozenset(codes),
@@ -1023,27 +1023,30 @@ def test_compact_bars_minimum_ratio_one_is_strict() -> None:
         )
 
 
-def test_allowed_missing_bars_tiny_absolute_requires_ratio_floor() -> None:
-    assert DEFAULT_TINY_MISSING_OBSERVED_BARS == 2
-    assert DEFAULT_TINY_MISSING_BAR_RATIO == 0.99
+def test_allowed_missing_bars_uses_daily_floor_not_absolute_two() -> None:
+    assert DEFAULT_TINY_MISSING_OBSERVED_BARS == 1
+    assert DEFAULT_DAILY_MIN_OBSERVED_BAR_RATIO == 0.99
     assert DEFAULT_MIN_OBSERVED_BAR_RATIO == 0.995
     ratio = DEFAULT_MIN_OBSERVED_BAR_RATIO
-    # 355/357 is the production early-TOPIX boundary: two absences, ratio
-    # just under 0.995, still above the tiny-path 0.99 floor.
-    assert _allowed_missing_observed_bars(357, ratio) == 2
+    assert _allowed_missing_observed_bars(357, ratio) == 3
     assert _allowed_missing_observed_bars(6, ratio) == 1
     assert _allowed_missing_observed_bars(199, ratio) == 1
     assert _allowed_missing_observed_bars(200, ratio) == 2
-    assert _allowed_missing_observed_bars(400, ratio) == 2
-    assert _allowed_missing_observed_bars(600, ratio) == 3
+    assert _allowed_missing_observed_bars(400, ratio) == 4
+    assert _allowed_missing_observed_bars(600, ratio) == 6
+    assert _allowed_missing_observed_bars(1113, ratio) == 11
     assert _allowed_missing_observed_bars(357, 1.0) == 0
+    assert _allowed_missing_observed_bars(1113, 1.0) == 0
 
 
-def test_compact_bars_tolerate_two_missing_codes_at_355_of_357() -> None:
-    trading_day = "2008-07-30"
-    codes = [f"{ordinal:04d}" for ordinal in range(357)]
-    omitted = frozenset(codes[:2])
-    observed = codes[2:]
+def _compact_observed_subset(
+    *,
+    expected: int,
+    omit: int,
+    trading_day: str = "2008-07-30",
+) -> tuple[list[str], list[dict]]:
+    codes = [f"{ordinal:04d}" for ordinal in range(expected)]
+    observed = codes[omit:]
     rows = _compact_bars(
         [
             {"Code": code, "Date": trading_day, "Close": 100}
@@ -1051,30 +1054,44 @@ def test_compact_bars_tolerate_two_missing_codes_at_355_of_357() -> None:
         ],
         trading_day=trading_day,
         scope_union=frozenset(codes),
-        ingested_at="2008-07-30T16:00:00+09:00",
+        ingested_at=f"{trading_day}T16:00:00+09:00",
     )
+    return observed, rows
+
+
+def test_compact_bars_tolerate_two_missing_codes_at_355_of_357() -> None:
+    observed, rows = _compact_observed_subset(expected=357, omit=2)
     payloads = [json.loads(row["payload"]) for row in rows]
+    omitted = {f"{ordinal:04d}" for ordinal in range(2)}
     assert [item["Code"] for item in payloads] == observed
     assert all(item["Code"] not in omitted for item in payloads)
     assert len(payloads) == 355
 
 
-def test_compact_bars_reject_three_missing_codes_at_354_of_357() -> None:
-    trading_day = "2008-07-30"
-    codes = [f"{ordinal:04d}" for ordinal in range(357)]
+def test_compact_bars_tolerate_three_missing_codes_at_354_of_357() -> None:
+    observed, rows = _compact_observed_subset(expected=357, omit=3)
+    payloads = [json.loads(row["payload"]) for row in rows]
+    assert [item["Code"] for item in payloads] == observed
+    assert len(payloads) == 354
+
+
+def test_compact_bars_reject_four_missing_codes_at_353_of_357() -> None:
     with pytest.raises(
         PersonalHistoryError,
-        match=r"observed ratio 354/357 is below 0\.995000 \(missing 3, allowed-missing 2\)",
+        match=r"observed ratio 353/357 is below 0\.995000 \(missing 4, allowed-missing 3\)",
     ):
-        _compact_bars(
-            [
-                {"Code": code, "Date": trading_day, "Close": 100}
-                for code in codes[3:]
-            ],
-            trading_day=trading_day,
-            scope_union=frozenset(codes),
-            ingested_at="2008-07-30T16:00:00+09:00",
-        )
+        _compact_observed_subset(expected=357, omit=4)
+
+
+def test_compact_bars_tolerate_1105_of_1113_without_imputing() -> None:
+    observed, rows = _compact_observed_subset(
+        expected=1113, omit=8, trading_day="2008-08-08"
+    )
+    payloads = [json.loads(row["payload"]) for row in rows]
+    omitted = {f"{ordinal:04d}" for ordinal in range(8)}
+    assert [item["Code"] for item in payloads] == observed
+    assert all(item["Code"] not in omitted for item in payloads)
+    assert len(payloads) == 1105
 
 
 def _one_bar(**overrides: object) -> dict:

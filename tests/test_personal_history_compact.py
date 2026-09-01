@@ -6,8 +6,8 @@ import sqlite3
 
 from data_contracts.identity import session_close_jst
 from data_contracts.personal_history_compact import (
+    DEFAULT_DAILY_MIN_OBSERVED_BAR_RATIO,
     DEFAULT_MIN_OBSERVED_BAR_RATIO,
-    DEFAULT_TINY_MISSING_BAR_RATIO,
     DEFAULT_TINY_MISSING_OBSERVED_BARS,
     PERSONAL_HISTORY_COMPACT_BARS_CREATE_SQL,
     PERSONAL_HISTORY_COMPACT_BARS_TABLE,
@@ -321,14 +321,19 @@ def test_insert_compact_bar_defaults_to_official_session_close() -> None:
     ]
 
 
-def test_allowed_missing_observed_bars_is_shared_tiny_absolute_plus_ratio() -> None:
-    assert DEFAULT_TINY_MISSING_OBSERVED_BARS == 2
-    assert DEFAULT_TINY_MISSING_BAR_RATIO == 0.99
+def test_allowed_missing_observed_bars_is_shared_daily_floor() -> None:
+    assert DEFAULT_TINY_MISSING_OBSERVED_BARS == 1
+    assert DEFAULT_DAILY_MIN_OBSERVED_BAR_RATIO == 0.99
+    assert DEFAULT_MIN_OBSERVED_BAR_RATIO == 0.995
     ratio = DEFAULT_MIN_OBSERVED_BAR_RATIO
-    assert allowed_missing_observed_bars(357, ratio) == 2
+    assert allowed_missing_observed_bars(357, ratio) == 3
     assert allowed_missing_observed_bars(6, ratio) == 1
+    assert allowed_missing_observed_bars(99, ratio) == 1
+    assert allowed_missing_observed_bars(100, ratio) == 1
     assert allowed_missing_observed_bars(199, ratio) == 1
     assert allowed_missing_observed_bars(200, ratio) == 2
-    assert allowed_missing_observed_bars(400, ratio) == 2
-    assert allowed_missing_observed_bars(600, ratio) == 3
+    assert allowed_missing_observed_bars(400, ratio) == 4
+    assert allowed_missing_observed_bars(600, ratio) == 6
+    assert allowed_missing_observed_bars(1113, ratio) == 11
     assert allowed_missing_observed_bars(357, 1.0) == 0
+    assert allowed_missing_observed_bars(1113, 1.0) == 0
