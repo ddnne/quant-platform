@@ -5,6 +5,9 @@ Readers classify a connection as ``legacy``, ``compact``, ``invalid``, or
 must still match production-declared type, NOT NULL, and PK ordinal by
 name, and both compact objects must be real WITHOUT ROWID tables.  The
 trusted builder still stamps v7 only after its DDL shape matches exactly.
+
+Daily bar-breadth tolerance lives here so ingestion compacting and
+research coverage share one pure missing-code budget.
 """
 
 from __future__ import annotations
@@ -122,6 +125,41 @@ _GENERIC_EQUITY_DATASETS: tuple[str, ...] = (
     "equities_master",
     "equities_bars_daily",
 )
+
+DEFAULT_MIN_OBSERVED_BAR_RATIO = 0.995
+# At most two expected codes may be absent on one session (suspension /
+# no-trade).  Combined with DEFAULT_TINY_MISSING_BAR_RATIO so a 6-name
+# fixture cannot hide behind the same absolute budget.
+DEFAULT_TINY_MISSING_OBSERVED_BARS = 2
+DEFAULT_TINY_MISSING_BAR_RATIO = 0.99
+
+
+def allowed_missing_observed_bars(expected: int, minimum_ratio: float) -> int:
+    """Missing expected codes tolerated by one daily-bar session.
+
+    Uses integer ``floor(expected * (1 - minimum_ratio))`` so float rounding
+    cannot change the large-universe budget.  A tiny absolute allowance
+    (default 2) covers legitimate daily non-observation such as a 355/357
+    early-TOPIX session, but only when those absences still meet
+    ``DEFAULT_TINY_MISSING_BAR_RATIO``.  One missing code remains allowed
+    for small 2008-style sessions.  ``minimum_ratio >= 1.0`` stays strict.
+    """
+
+    if expected <= 0 or minimum_ratio >= 1.0:
+        return 0
+    numerator, denominator = minimum_ratio.as_integer_ratio()
+    proportional = expected * (denominator - numerator) // denominator
+    tiny_limit = DEFAULT_TINY_MISSING_OBSERVED_BARS
+    tiny_numerator, tiny_denominator = (
+        DEFAULT_TINY_MISSING_BAR_RATIO.as_integer_ratio()
+    )
+    tiny_still_meets_floor = (
+        expected >= tiny_limit
+        and (expected - tiny_limit) * tiny_denominator
+        >= expected * tiny_numerator
+    )
+    absolute = tiny_limit if tiny_still_meets_floor else 1
+    return max(absolute, proportional)
 
 
 def compact_history_state(connection: sqlite3.Connection) -> CompactHistoryState:

@@ -55,7 +55,9 @@ from strategies.paper import Lifecycle, PaperRunConfig, PaperRunResult
 from strategies.spec import StrategySpec, iter_feature_refs, strategy_spec_digest
 
 from data_contracts.personal_history_compact import (
+    DEFAULT_MIN_OBSERVED_BAR_RATIO,
     PERSONAL_HISTORY_COMPACT_BARS_TABLE,
+    allowed_missing_observed_bars,
     compact_history_state,
 )
 
@@ -152,7 +154,7 @@ class PersonalResearchPolicy:
     min_fills: int = 100
     max_candidates: int = 12
     max_parallel: int = 4
-    min_observed_bar_coverage: float = 0.995
+    min_observed_bar_coverage: float = DEFAULT_MIN_OBSERVED_BAR_RATIO
     min_universe_fins_breadth: float = 0.95
 
     def __post_init__(self) -> None:
@@ -604,6 +606,30 @@ def _compact_v7_bar_read_state(
     return "legacy", None
 
 
+def _observed_bar_day_evidence(
+    day: str,
+    *,
+    expected: int,
+    observed: int,
+    minimum_ratio: float,
+) -> dict[str, Any]:
+    """Record one session's observed breadth without rounding it up to the floor."""
+
+    missing = expected - observed
+    allowed_missing = allowed_missing_observed_bars(expected, minimum_ratio)
+    ratio = (observed / expected) if expected else 0.0
+    return {
+        "date": day,
+        "expected": expected,
+        "observed": observed,
+        "missing": missing,
+        "allowed_missing": allowed_missing,
+        "ratio": ratio,
+        "within_allowed_missing": missing <= allowed_missing,
+        "meets_minimum_ratio": ratio >= minimum_ratio,
+    }
+
+
 def _observed_market_bar_coverage(
     db_path: Path,
     universe: PersonalResolvedUniverseMembership,
@@ -709,12 +735,12 @@ def _observed_market_bar_coverage(
             expected = len(expected_codes)
             observed_total += observed
             daily.append(
-                {
-                    "date": day,
-                    "expected": expected,
-                    "observed": observed,
-                    "ratio": observed / expected,
-                }
+                _observed_bar_day_evidence(
+                    day,
+                    expected=expected,
+                    observed=observed,
+                    minimum_ratio=minimum_ratio,
+                )
             )
             if len(missing_sample) < 20:
                 missing_sample.extend(
@@ -727,7 +753,12 @@ def _observed_market_bar_coverage(
             if day in seen_days:
                 continue
             daily.append(
-                {"date": day, "expected": len(codes), "observed": 0, "ratio": 0.0}
+                _observed_bar_day_evidence(
+                    day,
+                    expected=len(codes),
+                    observed=0,
+                    minimum_ratio=minimum_ratio,
+                )
             )
             if len(missing_sample) < 20:
                 missing_sample.extend(
@@ -736,17 +767,16 @@ def _observed_market_bar_coverage(
                 )
         overall_ratio = observed_total / expected_total
         minimum_daily_ratio = min(float(row["ratio"]) for row in daily)
-        passed = (
-            overall_ratio >= minimum_ratio
-            and minimum_daily_ratio >= minimum_ratio
-        )
-        return {
+        daily_missing_ok = all(bool(row["within_allowed_missing"]) for row in daily)
+        passed = overall_ratio >= minimum_ratio and daily_missing_ok
+        evidence: dict[str, Any] = {
             "version": PERSONAL_BAR_COVERAGE_EVIDENCE,
             "evidence_kind": "OBSERVED",
             "status": "PASS" if passed else "FAIL",
             "minimum_ratio": minimum_ratio,
             "overall_ratio": overall_ratio,
             "minimum_daily_ratio": minimum_daily_ratio,
+            "daily_missing_ok": daily_missing_ok,
             "expected_rows": expected_total,
             "observed_rows": observed_total,
             "missing_rows": expected_total - observed_total,
@@ -756,6 +786,13 @@ def _observed_market_bar_coverage(
             "missing_sample": missing_sample,
             "source_complete_claim": False,
         }
+        if not passed:
+            evidence["reason"] = (
+                "daily_missing_above_allowance"
+                if not daily_missing_ok
+                else "overall_ratio_below_minimum"
+            )
+        return evidence
     finally:
         connection.close()
 

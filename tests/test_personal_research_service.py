@@ -20,6 +20,10 @@ import pytest
 from core import run_backtest
 from core.engine import _make_feature_accessor
 from data_contracts.identity import natural_key
+from data_contracts.personal_history_compact import (
+    DEFAULT_MIN_OBSERVED_BAR_RATIO,
+    allowed_missing_observed_bars,
+)
 from execution.personal_paper_service import PersonalPaperExecutionService
 from paper_runtime.snapshot_identity import data_snapshot_id
 from personal_history_compact_support import (
@@ -2132,14 +2136,18 @@ def test_incomplete_observed_bar_breadth_is_no_analysis(
     source, start, end = personal_db
     connection = sqlite3.connect(source)
     try:
-        connection.execute(
-            "DELETE FROM jquants_daily_bars WHERE code='1304' AND date=?", (start,)
-        )
-        connection.execute(
-            "DELETE FROM jquants_records WHERE dataset='equities_bars_daily' "
-            "AND substr(event_time,1,10)=? AND json_extract(payload,'$.Code')='1304'",
-            (start,),
-        )
+        # Two missing names in a 4-name session exceeds the shared
+        # small-universe allowance of one.
+        for code in ("1303", "1304"):
+            connection.execute(
+                "DELETE FROM jquants_daily_bars WHERE code=? AND date=?",
+                (code, start),
+            )
+            connection.execute(
+                "DELETE FROM jquants_records WHERE dataset='equities_bars_daily' "
+                "AND substr(event_time,1,10)=? AND json_extract(payload,'$.Code')=?",
+                (start, code),
+            )
         connection.commit()
     finally:
         connection.close()
@@ -2680,6 +2688,23 @@ def test_compact_v7_observed_bar_breadth_counts_exact_schema_rows(
     assert coverage["missing_rows"] == 0
 
 
+def _thin_topix_coverage_fixture(
+    tmp_path: Path,
+    *,
+    omit: int,
+    suffix: str,
+) -> tuple[Path, object]:
+    thin_day = "2008-07-30"
+    full_day = "2008-07-31"
+    codes = tuple(f"{ordinal:04d}" for ordinal in range(357))
+    path = tmp_path / f"compact-thin-{suffix}.sqlite"
+    rows = tuple(
+        _compact_bar(code, thin_day) for code in codes[omit:]
+    ) + tuple(_compact_bar(code, full_day) for code in codes)
+    _install_compact_v7_bars(path, rows)
+    return path, _direct_universe(thin_day, full_day, codes=codes)
+
+
 def test_compact_v7_missing_bar_rows_fail_observed_breadth(tmp_path: Path) -> None:
     path = tmp_path / "compact-missing.sqlite"
     days = ("2024-01-04", "2024-01-05")
@@ -2694,8 +2719,69 @@ def test_compact_v7_missing_bar_rows_fail_observed_breadth(tmp_path: Path) -> No
     assert coverage["status"] == "FAIL"
     assert coverage["observed_rows"] == 2
     assert coverage["missing_rows"] == 2
+    assert coverage["daily_missing_ok"] is False
+    assert coverage["reason"] == "daily_missing_above_allowance"
     assert {"date": days[1], "code": "1301"} in coverage["missing_sample"]
     assert {"date": days[1], "code": "1302"} in coverage["missing_sample"]
+
+
+def test_observed_bar_coverage_allows_355_of_357_without_claiming_ratio(
+    tmp_path: Path,
+) -> None:
+    path, universe = _thin_topix_coverage_fixture(tmp_path, omit=2, suffix="355")
+    coverage = _observed_market_bar_coverage(
+        path, universe, minimum_ratio=DEFAULT_MIN_OBSERVED_BAR_RATIO
+    )
+    thin = next(row for row in coverage["worst_days"] if row["date"] == "2008-07-30")
+
+    assert coverage["status"] == "PASS"
+    assert coverage["daily_missing_ok"] is True
+    assert coverage["overall_ratio"] >= DEFAULT_MIN_OBSERVED_BAR_RATIO
+    assert coverage["minimum_daily_ratio"] == pytest.approx(355 / 357)
+    assert coverage["minimum_daily_ratio"] < DEFAULT_MIN_OBSERVED_BAR_RATIO
+    assert "reason" not in coverage
+    assert thin["observed"] == 355
+    assert thin["expected"] == 357
+    assert thin["missing"] == 2
+    assert thin["allowed_missing"] == 2
+    assert thin["within_allowed_missing"] is True
+    assert thin["meets_minimum_ratio"] is False
+    assert thin["ratio"] == pytest.approx(355 / 357)
+
+
+def test_observed_bar_coverage_rejects_354_of_357(tmp_path: Path) -> None:
+    path, universe = _thin_topix_coverage_fixture(tmp_path, omit=3, suffix="354")
+    coverage = _observed_market_bar_coverage(
+        path, universe, minimum_ratio=DEFAULT_MIN_OBSERVED_BAR_RATIO
+    )
+    thin = next(row for row in coverage["worst_days"] if row["date"] == "2008-07-30")
+
+    assert coverage["status"] == "FAIL"
+    assert coverage["daily_missing_ok"] is False
+    assert coverage["overall_ratio"] >= DEFAULT_MIN_OBSERVED_BAR_RATIO
+    assert coverage["reason"] == "daily_missing_above_allowance"
+    assert thin["observed"] == 354
+    assert thin["expected"] == 357
+    assert thin["missing"] == 3
+    assert thin["allowed_missing"] == 2
+    assert thin["within_allowed_missing"] is False
+    assert thin["meets_minimum_ratio"] is False
+
+
+def test_observed_bar_coverage_minimum_ratio_one_rejects_355_of_357(
+    tmp_path: Path,
+) -> None:
+    path, universe = _thin_topix_coverage_fixture(tmp_path, omit=2, suffix="strict")
+    coverage = _observed_market_bar_coverage(path, universe, minimum_ratio=1.0)
+    thin = next(row for row in coverage["worst_days"] if row["date"] == "2008-07-30")
+
+    assert allowed_missing_observed_bars(357, 1.0) == 0
+    assert coverage["status"] == "FAIL"
+    assert coverage["daily_missing_ok"] is False
+    assert thin["allowed_missing"] == 0
+    assert thin["missing"] == 2
+    assert thin["within_allowed_missing"] is False
+    assert thin["meets_minimum_ratio"] is False
 
 
 def test_compact_v7_timestamp_wall_excludes_unobservable_rows(
