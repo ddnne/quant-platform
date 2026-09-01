@@ -3,8 +3,7 @@ import { sha256Hex } from "./sha256";
 export const PERSONAL_RESEARCH_RUNNER_VERSION = "personal-cloud-runner/v15";
 export const PERSONAL_RESEARCH_RUNNER_SLOT = "v15";
 export const PERSONAL_RESEARCH_LEGACY_CONTAINER_NAME = "personal-research-v12";
-export const PERSONAL_SNAPSHOT_CONTAINER_NAME =
-  `personal-snapshot-${PERSONAL_RESEARCH_RUNNER_SLOT}`;
+export const PERSONAL_SNAPSHOT_CONTAINER_NAME = "personal-snapshot-v16";
 export const PERSONAL_SNAPSHOT_SOURCE_RUNNER_VERSIONS = [
   "personal-cloud-runner/v13",
   "personal-cloud-runner/v14",
