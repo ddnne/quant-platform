@@ -1289,3 +1289,286 @@ def test_429_retry_does_not_change_fetch_call_evidence(tmp_path: Path) -> None:
         "2024-03-12",
     ]
     client.close()
+
+
+def test_spool_reset_recreates_empty_schema_and_rejects_fetching(
+    tmp_path: Path,
+) -> None:
+    spool = client_mod.AcquisitionSpool(tmp_path / "spool.sqlite")
+    _write_committed_spool_page(spool, _large_spool_rows())
+    with pytest.raises(PersonalHistoryError, match="is FETCHING"):
+        spool.reset()
+    assert (
+        spool._conn.execute("SELECT status FROM month_state").fetchone()[0]
+        == "FETCHING"
+    )
+    pages_before, size_before = spool.usage()
+    assert pages_before == 1
+    spool.complete_month(
+        "equities_bars_daily",
+        "2024-03",
+        page_count=1,
+        completion_digest="sha256:" + "a" * 64,
+    )
+    spool.reset()
+    pages, size = spool.usage()
+    assert pages == 0
+    assert spool._conn.execute("SELECT COUNT(*) FROM source_rows").fetchone()[0] == 0
+    assert spool._conn.execute("SELECT COUNT(*) FROM source_pages").fetchone()[0] == 0
+    assert spool._conn.execute("SELECT COUNT(*) FROM month_state").fetchone()[0] == 0
+    assert spool.path.exists()
+    assert size < size_before
+    spool.close()
+
+
+def test_source_client_preserves_metrics_across_spool_reset(tmp_path: Path) -> None:
+    client = _two_page_client(tmp_path)
+    metrics = client.cache_metrics()
+    assert client.fetch_calls == 2
+    assert client.spool.usage()[0] == 2
+    client.release_acquired_raw()
+    assert client.cache_metrics() == metrics
+    assert client.fetch_calls == 2
+    assert client.spool.usage()[0] == 0
+    assert client.spool.has_month("equities_bars_daily", "2024-03") is False
+    client.close()
+
+
+def _synthetic_master_day(day: str) -> list[dict]:
+    topix = ["1001", "1002"] if day < "2025-01-07" else ["1001", "1002", "1003"]
+    return [
+        {
+            "Code": code,
+            "Date": day,
+            "Mkt": {"1001": "0111", "1002": "0112", "1003": "0113"}[code],
+            "S17": "1",
+            "S33": "0050" if code != "1003" else "1050",
+            "ScaleCat": "TOPIX Core30" if code == "1001" else "TOPIX Small 1",
+        }
+        for code in topix
+    ] + [{"Code": "9001", "Date": day, "Mkt": "0112", "ScaleCat": "-"}]
+
+
+def _synthetic_bars_day(day: str) -> list[dict]:
+    rows = []
+    for ordinal, code in enumerate(("1001", "1002", "1003", "9001"), start=1):
+        rows.append(
+            {
+                "Code": code,
+                "Date": day,
+                "Close": 100 + ordinal,
+                "AdjustmentClose": 100 + ordinal,
+                "Volume": 1_000 * ordinal,
+                "AdjustmentVolume": 1_000 * ordinal,
+                "TurnoverValue": 1_000_000 * ordinal,
+                "MktCap": 10_000_000 * ordinal,
+                "MAdjC": 10 + ordinal,
+                "AAdjC": 20 + ordinal,
+                "MVa": 100 * ordinal,
+                "AVa": 200 * ordinal,
+                "MAdjVo": 10 * ordinal,
+                "AAdjVo": 20 * ordinal,
+                "Open": 90,
+                "CompanyName": "must-not-be-kept",
+            }
+        )
+    return rows
+
+
+_FINS_DISCLOSURES = {
+    "1001": ("2024-12-02", "09:00:00"),
+    "1002": ("2025-01-03", None),
+    "1003": ("2025-01-07", "09:00:00"),
+}
+
+
+def _synthetic_history_opener():
+    class Opener:
+        def urlopen(self, request, timeout=120):
+            payload = json.loads(request.data.decode())
+            dataset = payload["dataset_id"]
+            month = payload["segment_id"]
+            if dataset == "markets_calendar":
+                rows = _calendar_month(month)
+                slice_date = "NONE"
+            elif dataset == "equities_master":
+                rows = []
+                current = date.fromisoformat(f"{month}-01")
+                while current.isoformat()[:7] == month:
+                    if current.weekday() < 5:
+                        rows.extend(_synthetic_master_day(current.isoformat()))
+                    current += timedelta(days=1)
+                slice_date = f"{month}-01"
+            elif dataset == "equities_bars_daily":
+                rows = []
+                current = date.fromisoformat(f"{month}-01")
+                while current.isoformat()[:7] == month:
+                    if current.weekday() < 5:
+                        rows.extend(_synthetic_bars_day(current.isoformat()))
+                    current += timedelta(days=1)
+                slice_date = f"{month}-01"
+            elif dataset == "fins_summary":
+                rows = []
+                for code, (disc, clock) in _FINS_DISCLOSURES.items():
+                    if disc[:7] != month:
+                        continue
+                    row = {
+                        "Code": code,
+                        "DiscDate": disc,
+                        "DiscNo": f"disc-{code}",
+                        "EarningsPerShare": 123.4,
+                        "Narrative": "must-not-be-kept",
+                    }
+                    if clock:
+                        row["DiscTime"] = clock
+                    rows.append(row)
+                slice_date = "NONE"
+            else:
+                raise AssertionError(dataset)
+            raw = json.dumps({"data": rows}, separators=(",", ":")).encode()
+            return _Response(
+                raw,
+                {
+                    "x-quant-acquisition-evidence-state": "RAW_PAGE",
+                    "x-quant-acquisition-pagination-state": "EXHAUSTED",
+                    "x-quant-acquisition-continuation": "NONE",
+                    "x-quant-acquisition-slice-date": slice_date,
+                },
+            )
+
+    return Opener()
+
+
+def _committed_history(store: SqliteStore) -> dict:
+    def rows(sql: str) -> list[dict]:
+        return [dict(row) for row in store._conn.execute(sql)]
+
+    return {
+        "segments": rows(
+            "SELECT dataset, segment_id, state, rows_fetched, rows_written, "
+            "page_count, page_evidence_json, selection_evidence_json, "
+            "response_digest, facts_digest, membership_digest, expected_rows, "
+            "observed_ratio, pit_policy FROM personal_history_segments "
+            "ORDER BY dataset, segment_id"
+        ),
+        "scans": rows(
+            "SELECT scan_digest, dataset, page_count, source_row_count, "
+            "completion_digest, scanned_page_digests_json, page_evidence_json "
+            "FROM personal_history_shared_scans ORDER BY scan_digest"
+        ),
+        "master": [
+            {key: value for key, value in row.items() if key != "ingested_at"}
+            for row in rows(
+                "SELECT * FROM personal_history_compact_master "
+                "ORDER BY snapshot_date, code"
+            )
+        ],
+        "bars": [
+            {key: value for key, value in row.items() if key != "ingested_at"}
+            for row in rows(
+                "SELECT * FROM personal_history_compact_bars ORDER BY date, code"
+            )
+        ],
+        "records": [
+            {key: value for key, value in row.items() if key != "ingested_at"}
+            for row in rows(
+                "SELECT dataset, natural_key, event_time, available_at, payload "
+                "FROM jquants_records ORDER BY dataset, natural_key"
+            )
+        ],
+    }
+
+
+def _hydrate_source_client(
+    tmp_path: Path,
+    *,
+    plan,
+    release: bool = True,
+    on_release=None,
+):
+    client = client_mod.PersonalHistorySourceClient(
+        environment="production",
+        period_end=plan.period_end,
+        spool_path=tmp_path / "spool.sqlite",
+        opener=_synthetic_history_opener(),
+    )
+    original = client.release_acquired_raw
+    if on_release is not None:
+        def wrapped() -> None:
+            on_release(client)
+            original()
+
+        client.release_acquired_raw = wrapped  # type: ignore[method-assign]
+    elif not release:
+        client.release_acquired_raw = lambda: None  # type: ignore[method-assign]
+    store = SqliteStore(tmp_path / "history.sqlite")
+    summary = PersonalHistoryHydrator(client=client, store=store, plan=plan).hydrate()
+    return client, store, summary
+
+
+def test_full_hydrate_evidence_remains_equivalent_after_spool_reset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "ingestion.personal_history.now_iso",
+        lambda: "2025-03-01T16:00:00+09:00",
+    )
+    plan = build_personal_history_plan(
+        period_start="2025-01-06",
+        period_end="2025-01-08",
+        lookback_sessions=1,
+        calendar_window_days=366,
+        today=date(2025, 2, 1),
+    )
+    kept = tmp_path / "kept"
+    reclaimed = tmp_path / "reclaimed"
+    kept.mkdir()
+    reclaimed.mkdir()
+    kept_client, kept_store, _kept_summary = _hydrate_source_client(
+        kept, plan=plan, release=False
+    )
+    reclaimed_client, reclaimed_store, _reclaimed_summary = _hydrate_source_client(
+        reclaimed, plan=plan, release=True
+    )
+    assert _committed_history(kept_store) == _committed_history(reclaimed_store)
+    assert reclaimed_client.spool.usage()[0] == 0
+    assert kept_client.spool.usage()[0] > 0
+    kept_store.close()
+    reclaimed_store.close()
+    kept_client.close()
+    reclaimed_client.close()
+
+
+def test_bar_months_are_released_so_physical_usage_is_not_cumulative(
+    tmp_path: Path,
+) -> None:
+    plan = build_personal_history_plan(
+        period_start="2025-02-03",
+        period_end="2025-02-05",
+        lookback_sessions=5,
+        calendar_window_days=366,
+        today=date(2025, 3, 1),
+    )
+    peaks: list[tuple[frozenset[str], int, int]] = []
+
+    def on_release(client) -> None:
+        datasets = frozenset(
+            str(row[0])
+            for row in client.spool._conn.execute(
+                "SELECT DISTINCT dataset FROM month_state"
+            )
+        )
+        pages, size = client.spool.usage()
+        peaks.append((datasets, pages, size))
+
+    client, store, _summary = _hydrate_source_client(
+        tmp_path, plan=plan, on_release=on_release
+    )
+    bar_peaks = [
+        item for item in peaks if item[0] == frozenset({"equities_bars_daily"})
+    ]
+    assert len(bar_peaks) == 2
+    assert [pages for _datasets, pages, _size in bar_peaks] == [1, 1]
+    assert client.spool.usage()[0] == 0
+    store.close()
+    client.close()

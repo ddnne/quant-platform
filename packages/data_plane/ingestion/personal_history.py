@@ -1151,6 +1151,15 @@ class PersonalHistoryHydrator:
         self._initialize_manifest()
         self._outcomes: list[_SegmentOutcome] = []
 
+    def _release_acquired_raw(self) -> None:
+        release = getattr(self.client, "release_acquired_raw", None)
+        if callable(release):
+            release()
+
+    def _release_acquired_raw_if_committed(self, *, before_segments: int) -> None:
+        if self._new_segments > before_segments:
+            self._release_acquired_raw()
+
     def _database_footprint(self) -> int:
         path = Path(self.store.path)
         return sum(
@@ -1869,6 +1878,8 @@ class PersonalHistoryHydrator:
         current_expected: frozenset[str] | None = None
         current_digest: str | None = None
         visible: set[str] = set()
+        current_month: str | None = None
+        month_committed = False
         fins_events = tuple(
             sorted((when, code) for code, when in first_fins.items())
         )
@@ -1920,7 +1931,13 @@ class PersonalHistoryHydrator:
                 raise PersonalHistoryError(
                     f"TOPIX intersect PIT-visible fins is empty for {day}"
                 )
-            self._run_segment(
+            month = day[:7]
+            if current_month is not None and month != current_month:
+                if month_committed:
+                    self._release_acquired_raw()
+                month_committed = False
+            current_month = month
+            outcome = self._run_segment(
                 dataset="equities_bars_daily",
                 segment_id=f"bars:{day}",
                 query_start=day,
@@ -1937,10 +1954,14 @@ class PersonalHistoryHydrator:
                 expected_rows=len(expected),
             )
             started = True
+            if not outcome.skipped:
+                month_committed = True
         if not started:
             raise PersonalHistoryError(
                 "TOPIX intersect PIT-visible fins is empty for the research window"
             )
+        if month_committed:
+            self._release_acquired_raw()
 
     def _insert_compact_facts(
         self, dataset: str, rows: Sequence[Mapping[str, Any]]
@@ -2447,18 +2468,24 @@ class PersonalHistoryHydrator:
         self._new_segments = 0
         self._manifest_status("BUILDING")
         try:
+            before = self._new_segments
             self._hydrate_calendar()
             self._checkpoint_wal()
             self._guard_capacity(phase="after calendar stage")
+            self._release_acquired_raw_if_committed(before_segments=before)
             trading = self._trading_days()
             bar_start, master_days = self._bar_and_master_days(trading)
+            before = self._new_segments
             self._hydrate_master(master_days)
             self._checkpoint_wal()
             self._guard_capacity(phase="after master stage")
+            self._release_acquired_raw_if_committed(before_segments=before)
             scope_union = self._topix_union()
+            before = self._new_segments
             self._hydrate_fins(scope_union)
             self._checkpoint_wal()
             self._guard_capacity(phase="after fins stage")
+            self._release_acquired_raw_if_committed(before_segments=before)
             self._hydrate_bars(bar_start=bar_start, trading=trading)
             self._checkpoint_wal()
             self._guard_capacity(phase="after bars stage")
