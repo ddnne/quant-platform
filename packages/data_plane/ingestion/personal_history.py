@@ -28,8 +28,6 @@ from urllib.parse import quote
 from data_contracts.identity import canonical_json, session_close_jst
 from data_contracts.personal_history_compact import (
     DEFAULT_MIN_OBSERVED_BAR_RATIO,
-    DEFAULT_TINY_MISSING_BAR_RATIO,
-    DEFAULT_TINY_MISSING_OBSERVED_BARS,
     PERSONAL_HISTORY_COMPACT_CREATE_SQL,
     PERSONAL_HISTORY_COMPACT_FORMAT,
     PERSONAL_HISTORY_COMPACT_TABLES,

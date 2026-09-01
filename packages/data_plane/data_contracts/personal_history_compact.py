@@ -7,7 +7,9 @@ name, and both compact objects must be real WITHOUT ROWID tables.  The
 trusted builder still stamps v7 only after its DDL shape matches exactly.
 
 Daily bar-breadth tolerance lives here so ingestion compacting and
-research coverage share one pure missing-code budget.
+research coverage share one missing-code budget: each session may fall
+to a 0.99 observed floor, while the overall research window still uses
+0.995.  Missing rows stay absent and are never imputed.
 """
 
 from __future__ import annotations
@@ -127,39 +129,38 @@ _GENERIC_EQUITY_DATASETS: tuple[str, ...] = (
 )
 
 DEFAULT_MIN_OBSERVED_BAR_RATIO = 0.995
-# At most two expected codes may be absent on one session (suspension /
-# no-trade).  Combined with DEFAULT_TINY_MISSING_BAR_RATIO so a 6-name
-# fixture cannot hide behind the same absolute budget.
-DEFAULT_TINY_MISSING_OBSERVED_BARS = 2
-DEFAULT_TINY_MISSING_BAR_RATIO = 0.99
+# Per-session observed floor for this single-user DRAFT path.  Exact 99/100
+# is used in the missing budget so float(0.99) cannot drift the boundary.
+DEFAULT_DAILY_MIN_OBSERVED_BAR_RATIO = 0.99
+_DAILY_MIN_OBSERVED_BAR_RATIO_NUMERATOR = 99
+_DAILY_MIN_OBSERVED_BAR_RATIO_DENOMINATOR = 100
+# Tiny non-strict synthetic fixtures (expected < 100) would otherwise get
+# a zero daily budget from floor(expected / 100).
+DEFAULT_TINY_MISSING_OBSERVED_BARS = 1
 
 
 def allowed_missing_observed_bars(expected: int, minimum_ratio: float) -> int:
     """Missing expected codes tolerated by one daily-bar session.
 
-    Uses integer ``floor(expected * (1 - minimum_ratio))`` so float rounding
-    cannot change the large-universe budget.  A tiny absolute allowance
-    (default 2) covers legitimate daily non-observation such as a 355/357
-    early-TOPIX session, but only when those absences still meet
-    ``DEFAULT_TINY_MISSING_BAR_RATIO``.  One missing code remains allowed
-    for small 2008-style sessions.  ``minimum_ratio >= 1.0`` stays strict.
+    Daily coverage may fall to ``DEFAULT_DAILY_MIN_OBSERVED_BAR_RATIO``
+    even when the overall research window still requires
+    ``DEFAULT_MIN_OBSERVED_BAR_RATIO``.  The budget is
+    ``floor(expected * (1 - 99/100))`` via integer arithmetic.  Tiny
+    non-strict fixtures still allow one missing code.
+    ``minimum_ratio >= 1.0`` stays strict (zero missing).
     """
 
     if expected <= 0 or minimum_ratio >= 1.0:
         return 0
-    numerator, denominator = minimum_ratio.as_integer_ratio()
-    proportional = expected * (denominator - numerator) // denominator
-    tiny_limit = DEFAULT_TINY_MISSING_OBSERVED_BARS
-    tiny_numerator, tiny_denominator = (
-        DEFAULT_TINY_MISSING_BAR_RATIO.as_integer_ratio()
+    proportional = (
+        expected
+        * (
+            _DAILY_MIN_OBSERVED_BAR_RATIO_DENOMINATOR
+            - _DAILY_MIN_OBSERVED_BAR_RATIO_NUMERATOR
+        )
+        // _DAILY_MIN_OBSERVED_BAR_RATIO_DENOMINATOR
     )
-    tiny_still_meets_floor = (
-        expected >= tiny_limit
-        and (expected - tiny_limit) * tiny_denominator
-        >= expected * tiny_numerator
-    )
-    absolute = tiny_limit if tiny_still_meets_floor else 1
-    return max(absolute, proportional)
+    return max(DEFAULT_TINY_MISSING_OBSERVED_BARS, proportional)
 
 
 def compact_history_state(connection: sqlite3.Connection) -> CompactHistoryState:
