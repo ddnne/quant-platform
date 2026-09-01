@@ -1810,41 +1810,52 @@ class PersonalHistoryHydrator:
         ]
 
     def _first_visible_fins_by_code(self) -> dict[str, str]:
-        rows = self._connection.execute(
-            "SELECT available_at,payload FROM jquants_records "
-            "WHERE source='jquants' AND dataset='fins_summary' "
-            "ORDER BY available_at"
-        ).fetchall()
-        first: dict[str, str] = {}
-        for row in rows:
-            try:
-                payload = json.loads(row["payload"])
-            except (TypeError, json.JSONDecodeError) as exc:
-                raise PersonalHistoryError(
-                    "stored fins_summary payload is invalid"
-                ) from exc
-            code = str(_pick(payload, "Code") or "").strip()
-            availability = str(row["available_at"] or "")
-            if code and availability:
-                previous = first.get(code)
-                if previous is None or availability < previous:
-                    first[code] = availability
-        return first
-
-    @staticmethod
-    def _membership_for_day(
-        snapshots: Sequence[tuple[str, frozenset[str]]], day: str
-    ) -> frozenset[str]:
-        membership: frozenset[str] | None = None
-        for snapshot_day, codes in snapshots:
-            if snapshot_day > day:
-                break
-            membership = codes
-        if membership is None:
+        # Bar membership needs first available_at per Code, not full payloads.
+        try:
+            invalid = self._connection.execute(
+                """
+                SELECT 1 FROM jquants_records
+                WHERE source='jquants' AND dataset='fins_summary'
+                  AND (
+                    payload IS NULL
+                    OR json_valid(payload)=0
+                    OR json_type(payload, '$') IS NOT 'object'
+                  )
+                LIMIT 1
+                """
+            ).fetchone()
+        except sqlite3.Error as exc:
             raise PersonalHistoryError(
-                f"no compressed TOPIX master snapshot is visible for {day}"
+                "stored fins_summary payload is invalid"
+            ) from exc
+        if invalid is not None:
+            raise PersonalHistoryError("stored fins_summary payload is invalid")
+        first: dict[str, str] = {}
+        try:
+            rows = self._connection.execute(
+                """
+                SELECT TRIM(CAST(json_extract(payload, '$.Code') AS TEXT)) AS code,
+                       MIN(available_at) AS first_available
+                FROM jquants_records
+                WHERE source='jquants'
+                  AND dataset='fins_summary'
+                  AND available_at IS NOT NULL
+                  AND TRIM(available_at) <> ''
+                  AND json_extract(payload, '$.Code') IS NOT NULL
+                  AND TRIM(CAST(json_extract(payload, '$.Code') AS TEXT)) <> ''
+                GROUP BY TRIM(CAST(json_extract(payload, '$.Code') AS TEXT))
+                """
             )
-        return membership
+        except sqlite3.Error as exc:
+            raise PersonalHistoryError(
+                "stored fins_summary payload is invalid"
+            ) from exc
+        for row in rows:
+            code = str(row["code"] or "").strip()
+            availability = str(row["first_available"] or "")
+            if code and availability:
+                first[code] = availability
+        return first
 
     def _hydrate_bars(
         self, *, bar_start: str, trading: Sequence[str]
@@ -1853,6 +1864,15 @@ class PersonalHistoryHydrator:
         first_fins = self._first_visible_fins_by_code()
         profile_floor = personal_snapshot_data_floor()
         started = False
+        snapshot_index = -1
+        current_topix: frozenset[str] | None = None
+        current_expected: frozenset[str] | None = None
+        current_digest: str | None = None
+        visible: set[str] = set()
+        fins_events = tuple(
+            sorted((when, code) for code, when in first_fins.items())
+        )
+        fins_index = 0
         for day in trading:
             if day < bar_start or day > self.plan.period_end:
                 continue
@@ -1861,13 +1881,39 @@ class PersonalHistoryHydrator:
                     "equities_bars_daily query is before the personal "
                     "snapshot data floor"
                 )
-            topix = self._membership_for_day(snapshots, day)
+            while (
+                snapshot_index + 1 < len(snapshots)
+                and snapshots[snapshot_index + 1][0] <= day
+            ):
+                snapshot_index += 1
+                current_topix = None
+            if snapshot_index < 0:
+                raise PersonalHistoryError(
+                    f"no compressed TOPIX master snapshot is visible for {day}"
+                )
+            topix = snapshots[snapshot_index][1]
             close = _session_close(day, "equities_bars_daily.Date")
-            expected = frozenset(
-                code
-                for code in topix
-                if first_fins.get(code, "9999") <= close
-            )
+            rebuilt = current_topix is not topix
+            while (
+                fins_index < len(fins_events)
+                and fins_events[fins_index][0] <= close
+            ):
+                code = fins_events[fins_index][1]
+                visible.add(code)
+                if code in topix:
+                    rebuilt = True
+                fins_index += 1
+            if rebuilt or current_expected is None:
+                current_topix = topix
+                current_expected = frozenset(
+                    code for code in topix if code in visible
+                )
+                current_digest = (
+                    _canonical_digest(sorted(current_expected))
+                    if current_expected
+                    else ""
+                )
+            expected = current_expected
             if not expected:
                 if not started:
                     continue
@@ -1887,7 +1933,7 @@ class PersonalHistoryHydrator:
                     scope_union=expected,
                     ingested_at=stamp,
                 ),
-                membership_digest=_canonical_digest(sorted(expected)),
+                membership_digest=current_digest,
                 expected_rows=len(expected),
             )
             started = True
