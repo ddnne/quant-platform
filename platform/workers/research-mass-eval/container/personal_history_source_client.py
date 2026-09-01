@@ -78,11 +78,58 @@ _TRANSIENT_RETRY_DELAYS_S = (1, 2, 4)
 _RETRY_AFTER_MIN_S = 1
 _RETRY_AFTER_MAX_S = 120
 _RETRY_AFTER_SECONDS_RE = __import__("re").compile(r"^[0-9]+$")
-# 20 GiB Container disk: 3.5 GiB sqlite + ~3.5 GiB gzip + 256 MiB reserve.
-# Keep the ephemeral spool under 8 GiB so a full snapshot still fits.
+# 9 GiB is only enough for the measured full official-earliest fins phase.
+# Calendar/master/fins are physically reset at phase commit; bars reset at
+# month boundaries. The 20 GB Container disk plus the existing snapshot and
+# free-space guards remain authoritative. This is not permission for
+# cumulative bars storage.
 MAX_SPOOL_PAGES = 32_768
-MAX_SPOOL_BYTES = 8 * 1024 ** 3
+MAX_SPOOL_BYTES = 9 * 1024 ** 3
 _DATE_RE = __import__("re").compile(r"^\d{4}-\d{2}-\d{2}$")
+_SPOOL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS source_pages (
+    dataset TEXT NOT NULL,
+    month TEXT NOT NULL,
+    page_ordinal INTEGER NOT NULL,
+    slice_date TEXT,
+    body_digest TEXT NOT NULL,
+    row_count INTEGER NOT NULL,
+    request_path TEXT NOT NULL,
+    request_params_json TEXT NOT NULL,
+    response_status INTEGER NOT NULL,
+    pagination_in TEXT,
+    pagination_out TEXT,
+    evidence_state TEXT NOT NULL,
+    PRIMARY KEY (dataset, month, page_ordinal)
+);
+CREATE TABLE IF NOT EXISTS source_rows (
+    dataset TEXT NOT NULL,
+    month TEXT NOT NULL,
+    page_ordinal INTEGER NOT NULL,
+    row_index INTEGER NOT NULL,
+    code TEXT,
+    row_date TEXT,
+    row_json TEXT NOT NULL,
+    PRIMARY KEY (dataset, month, page_ordinal, row_index)
+);
+CREATE INDEX IF NOT EXISTS source_rows_dataset_date
+    ON source_rows(dataset, row_date);
+CREATE INDEX IF NOT EXISTS source_rows_dataset_code
+    ON source_rows(dataset, code);
+CREATE TABLE IF NOT EXISTS month_state (
+    dataset TEXT NOT NULL,
+    month TEXT NOT NULL,
+    status TEXT NOT NULL,
+    page_count INTEGER NOT NULL DEFAULT 0,
+    next_cursor TEXT,
+    identity_json TEXT,
+    completion_digest TEXT,
+    started_at TEXT,
+    finished_at TEXT,
+    PRIMARY KEY (dataset, month),
+    CHECK (status IN ('FETCHING','COMPLETE'))
+);
+"""
 
 
 def _month_end(month: str) -> str:
@@ -247,56 +294,14 @@ class AcquisitionSpool:
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
+        self._open()
+
+    def _open(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self.path))
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS source_pages (
-                dataset TEXT NOT NULL,
-                month TEXT NOT NULL,
-                page_ordinal INTEGER NOT NULL,
-                slice_date TEXT,
-                body_digest TEXT NOT NULL,
-                row_count INTEGER NOT NULL,
-                request_path TEXT NOT NULL,
-                request_params_json TEXT NOT NULL,
-                response_status INTEGER NOT NULL,
-                pagination_in TEXT,
-                pagination_out TEXT,
-                evidence_state TEXT NOT NULL,
-                PRIMARY KEY (dataset, month, page_ordinal)
-            );
-            CREATE TABLE IF NOT EXISTS source_rows (
-                dataset TEXT NOT NULL,
-                month TEXT NOT NULL,
-                page_ordinal INTEGER NOT NULL,
-                row_index INTEGER NOT NULL,
-                code TEXT,
-                row_date TEXT,
-                row_json TEXT NOT NULL,
-                PRIMARY KEY (dataset, month, page_ordinal, row_index)
-            );
-            CREATE INDEX IF NOT EXISTS source_rows_dataset_date
-                ON source_rows(dataset, row_date);
-            CREATE INDEX IF NOT EXISTS source_rows_dataset_code
-                ON source_rows(dataset, code);
-            CREATE TABLE IF NOT EXISTS month_state (
-                dataset TEXT NOT NULL,
-                month TEXT NOT NULL,
-                status TEXT NOT NULL,
-                page_count INTEGER NOT NULL DEFAULT 0,
-                next_cursor TEXT,
-                identity_json TEXT,
-                completion_digest TEXT,
-                started_at TEXT,
-                finished_at TEXT,
-                PRIMARY KEY (dataset, month),
-                CHECK (status IN ('FETCHING','COMPLETE'))
-            );
-            """
-        )
+        self._conn.executescript(_SPOOL_SCHEMA)
         self._conn.commit()
         # Instance-local reuse of already-verified COMPLETE months. Not durable
         # and not shared with another spool/client/job.
@@ -305,6 +310,26 @@ class AcquisitionSpool:
     def close(self) -> None:
         self._verified_pages.clear()
         self._conn.close()
+
+    def reset(self) -> None:
+        incomplete = self._conn.execute(
+            """
+            SELECT dataset, month, status FROM month_state
+            WHERE status <> 'COMPLETE'
+            LIMIT 1
+            """
+        ).fetchone()
+        if incomplete is not None:
+            raise PersonalHistoryError(
+                "acquisition spool reset rejected: "
+                f"{incomplete['dataset']} {incomplete['month']} "
+                f"is {incomplete['status']}"
+            )
+        path = self.path
+        self.close()
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            Path(str(path) + suffix).unlink(missing_ok=True)
+        self._open()
 
     def _checkpoint_committed_wal(self) -> None:
         result = self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
@@ -863,6 +888,10 @@ class PersonalHistorySourceClient:
             "cache_unavailable": self.cache_unavailable,
             "live_fetch_calls": self.fetch_calls,
         }
+
+    def release_acquired_raw(self) -> None:
+        self.spool.reset()
+        self._refresh_progress()
 
     def close(self) -> None:
         self.spool.close()
