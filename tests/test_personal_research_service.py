@@ -23,6 +23,7 @@ from data_contracts.identity import natural_key
 from data_contracts.personal_history_compact import (
     DEFAULT_DAILY_MIN_OBSERVED_BAR_RATIO,
     DEFAULT_MIN_OBSERVED_BAR_RATIO,
+    PERSONAL_HISTORY_COMPACT_BARS_TABLE,
     allowed_missing_observed_bars,
 )
 from execution.personal_paper_service import PersonalPaperExecutionService
@@ -2702,18 +2703,59 @@ def _thin_topix_coverage_fixture(
     path = tmp_path / f"compact-thin-{suffix}.sqlite"
     cursor = date(2008, 7, 30)
     days: list[str] = []
-    rows: list[dict[str, object]] = []
+    rows: list[tuple[object, ...]] = []
+
+    def _append_day(day: str, members: tuple[str, ...]) -> None:
+        stamp = f"{day}T15:00:00+09:00"
+        rows.extend(
+            (
+                code,
+                day,
+                stamp,
+                stamp,
+                stamp,
+                100.0,
+                1000.0,
+                10000.0,
+                100.0,
+                1000.0,
+                100.0,
+                100.0,
+                5000.0,
+                5000.0,
+                500.0,
+                500.0,
+                1.0,
+            )
+            for code in members
+        )
+
     for _ in range(thin_days):
         day = cursor.isoformat()
         days.append(day)
-        rows.extend(_compact_bar(code, day) for code in codes[omit:])
+        _append_day(day, codes[omit:])
         cursor += timedelta(days=1)
     for _ in range(full_days):
         day = cursor.isoformat()
         days.append(day)
-        rows.extend(_compact_bar(code, day) for code in codes)
+        _append_day(day, codes)
         cursor += timedelta(days=1)
-    _install_compact_v7_bars(path, tuple(rows))
+    connection = sqlite3.connect(path)
+    try:
+        install_compact_schema(connection)
+        connection.executemany(
+            f"INSERT INTO {PERSONAL_HISTORY_COMPACT_BARS_TABLE} ("
+            "code, date, event_time, available_at, ingested_at, "
+            "close, volume, turnover_value, adjustment_close, adjustment_volume, "
+            "morning_adjustment_close, afternoon_adjustment_close, "
+            "morning_turnover_value, afternoon_turnover_value, "
+            "morning_adjustment_volume, afternoon_adjustment_volume, market_cap"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            rows,
+        )
+        connection.commit()
+    finally:
+        connection.close()
     return path, _direct_universe(*days, codes=codes)
 
 
@@ -2756,7 +2798,7 @@ def test_observed_bar_coverage_allows_355_of_357_without_claiming_ratio(
     assert thin["observed"] == 355
     assert thin["expected"] == 357
     assert thin["missing"] == 2
-    assert thin["allowed_missing"] == 3
+    assert thin["allowed_missing"] == 17
     assert thin["within_allowed_missing"] is True
     assert thin["meets_minimum_ratio"] is False
     assert thin["ratio"] == pytest.approx(355 / 357)
@@ -2781,17 +2823,44 @@ def test_observed_bar_coverage_allows_354_of_357_without_claiming_ratio(
     assert thin["observed"] == 354
     assert thin["expected"] == 357
     assert thin["missing"] == 3
-    assert thin["allowed_missing"] == 3
+    assert thin["allowed_missing"] == 17
     assert thin["within_allowed_missing"] is True
     assert thin["meets_minimum_ratio"] is False
     assert thin["ratio"] == pytest.approx(354 / 357)
 
 
-def test_observed_bar_coverage_rejects_353_of_357_even_when_overall_holds(
+def test_observed_bar_coverage_allows_1495_of_1520_without_claiming_ratio(
     tmp_path: Path,
 ) -> None:
     path, universe = _thin_topix_coverage_fixture(
-        tmp_path, omit=4, suffix="353", full_days=2
+        tmp_path, omit=25, suffix="1495", universe_size=1520, full_days=3
+    )
+    coverage = _observed_market_bar_coverage(
+        path, universe, minimum_ratio=DEFAULT_MIN_OBSERVED_BAR_RATIO
+    )
+    thin = next(row for row in coverage["worst_days"] if row["date"] == "2008-07-30")
+
+    assert coverage["status"] == "PASS"
+    assert coverage["daily_missing_ok"] is True
+    assert coverage["overall_ratio"] >= DEFAULT_MIN_OBSERVED_BAR_RATIO
+    assert coverage["minimum_daily_ratio"] == pytest.approx(1495 / 1520)
+    assert coverage["minimum_daily_ratio"] < DEFAULT_MIN_OBSERVED_BAR_RATIO
+    assert coverage["minimum_daily_ratio"] > DEFAULT_DAILY_MIN_OBSERVED_BAR_RATIO
+    assert "reason" not in coverage
+    assert thin["observed"] == 1495
+    assert thin["expected"] == 1520
+    assert thin["missing"] == 25
+    assert thin["allowed_missing"] == 76
+    assert thin["within_allowed_missing"] is True
+    assert thin["meets_minimum_ratio"] is False
+    assert thin["ratio"] == pytest.approx(1495 / 1520)
+
+
+def test_observed_bar_coverage_rejects_1443_of_1520_even_when_overall_holds(
+    tmp_path: Path,
+) -> None:
+    path, universe = _thin_topix_coverage_fixture(
+        tmp_path, omit=77, suffix="1443", universe_size=1520, full_days=10
     )
     coverage = _observed_market_bar_coverage(
         path, universe, minimum_ratio=DEFAULT_MIN_OBSERVED_BAR_RATIO
@@ -2801,13 +2870,13 @@ def test_observed_bar_coverage_rejects_353_of_357_even_when_overall_holds(
     assert coverage["status"] == "FAIL"
     assert coverage["daily_missing_ok"] is False
     assert coverage["overall_ratio"] >= DEFAULT_MIN_OBSERVED_BAR_RATIO
-    assert coverage["minimum_daily_ratio"] == pytest.approx(353 / 357)
+    assert coverage["minimum_daily_ratio"] == pytest.approx(1443 / 1520)
     assert coverage["minimum_daily_ratio"] < DEFAULT_DAILY_MIN_OBSERVED_BAR_RATIO
     assert coverage["reason"] == "daily_missing_above_allowance"
-    assert thin["observed"] == 353
-    assert thin["expected"] == 357
-    assert thin["missing"] == 4
-    assert thin["allowed_missing"] == 3
+    assert thin["observed"] == 1443
+    assert thin["expected"] == 1520
+    assert thin["missing"] == 77
+    assert thin["allowed_missing"] == 76
     assert thin["within_allowed_missing"] is False
     assert thin["meets_minimum_ratio"] is False
 
@@ -2833,7 +2902,7 @@ def test_observed_bar_coverage_allows_1105_of_1113_without_claiming_ratio(
     assert thin["observed"] == 1105
     assert thin["expected"] == 1113
     assert thin["missing"] == 8
-    assert thin["allowed_missing"] == 11
+    assert thin["allowed_missing"] == 55
     assert thin["within_allowed_missing"] is True
     assert thin["meets_minimum_ratio"] is False
     assert thin["ratio"] == pytest.approx(1105 / 1113)
