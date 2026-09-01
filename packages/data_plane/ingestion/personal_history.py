@@ -27,6 +27,7 @@ from urllib.parse import quote
 
 from data_contracts.identity import canonical_json, session_close_jst
 from data_contracts.personal_history_compact import (
+    DEFAULT_DAILY_MIN_OBSERVED_BAR_RATIO,
     DEFAULT_MIN_OBSERVED_BAR_RATIO,
     PERSONAL_HISTORY_COMPACT_CREATE_SQL,
     PERSONAL_HISTORY_COMPACT_FORMAT,
@@ -1076,9 +1077,15 @@ def _compact_bars(
     missing = expected - observed
     allowed_missing = _allowed_missing_observed_bars(expected, minimum_ratio)
     if missing > allowed_missing:
+        daily_floor = (
+            float(minimum_ratio)
+            if minimum_ratio >= 1.0
+            else DEFAULT_DAILY_MIN_OBSERVED_BAR_RATIO
+        )
         raise PersonalHistoryError(
-            f"equities_bars_daily {trading_day} observed ratio "
-            f"{observed}/{expected} is below {minimum_ratio:.6f} "
+            f"equities_bars_daily {trading_day} daily missing allowance "
+            f"exceeded: observed ratio {observed}/{expected} is below "
+            f"daily floor {daily_floor:.6f} "
             f"(missing {missing}, allowed-missing {allowed_missing})"
         )
     session_close = _session_close(trading_day, "equities_bars_daily.Date")

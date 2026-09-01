@@ -8,7 +8,7 @@ trusted builder still stamps v7 only after its DDL shape matches exactly.
 
 Daily bar-breadth tolerance lives here so ingestion compacting and
 research coverage share one missing-code budget: each session may fall
-to a 0.99 observed floor, while the overall research window still uses
+to a 0.95 observed floor, while the overall research window still uses
 0.995.  Missing rows stay absent and are never imputed.
 """
 
@@ -129,13 +129,13 @@ _GENERIC_EQUITY_DATASETS: tuple[str, ...] = (
 )
 
 DEFAULT_MIN_OBSERVED_BAR_RATIO = 0.995
-# Per-session observed floor for this single-user DRAFT path.  Exact 99/100
-# is used in the missing budget so float(0.99) cannot drift the boundary.
-DEFAULT_DAILY_MIN_OBSERVED_BAR_RATIO = 0.99
-_DAILY_MIN_OBSERVED_BAR_RATIO_NUMERATOR = 99
+# Per-session observed floor for this single-user DRAFT path.  Exact 95/100
+# is used in the missing budget so float(0.95) cannot drift the boundary.
+DEFAULT_DAILY_MIN_OBSERVED_BAR_RATIO = 0.95
+_DAILY_MIN_OBSERVED_BAR_RATIO_NUMERATOR = 95
 _DAILY_MIN_OBSERVED_BAR_RATIO_DENOMINATOR = 100
-# Tiny non-strict synthetic fixtures (expected < 100) would otherwise get
-# a zero daily budget from floor(expected / 100).
+# Tiny non-strict synthetic fixtures (expected < 20) would otherwise get
+# a zero daily budget from floor(expected * 5 / 100).
 DEFAULT_TINY_MISSING_OBSERVED_BARS = 1
 
 
@@ -145,7 +145,7 @@ def allowed_missing_observed_bars(expected: int, minimum_ratio: float) -> int:
     Daily coverage may fall to ``DEFAULT_DAILY_MIN_OBSERVED_BAR_RATIO``
     even when the overall research window still requires
     ``DEFAULT_MIN_OBSERVED_BAR_RATIO``.  The budget is
-    ``floor(expected * (1 - 99/100))`` via integer arithmetic.  Tiny
+    ``floor(expected * (1 - 95/100))`` via integer arithmetic.  Tiny
     non-strict fixtures still allow one missing code.
     ``minimum_ratio >= 1.0`` stays strict (zero missing).
     """

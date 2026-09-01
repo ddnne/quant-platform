@@ -972,7 +972,7 @@ def test_compact_bars_reject_two_missing_codes_in_small_universe() -> None:
     scope = frozenset({*observed, "1005", "1006"})
     with pytest.raises(
         PersonalHistoryError,
-        match=r"observed ratio 4/6 is below 0\.995000 \(missing 2, allowed-missing 1\)",
+        match=r"daily missing allowance exceeded: observed ratio 4/6 is below daily floor 0\.950000 \(missing 2, allowed-missing 1\)",
     ):
         _compact_bars(
             [
@@ -990,12 +990,12 @@ def test_compact_bars_reject_broad_universe_below_daily_floor() -> None:
     codes = [f"{ordinal:04d}" for ordinal in range(400)]
     with pytest.raises(
         PersonalHistoryError,
-        match=r"observed ratio 395/400 is below 0\.995000 \(missing 5, allowed-missing 4\)",
+        match=r"daily missing allowance exceeded: observed ratio 379/400 is below daily floor 0\.950000 \(missing 21, allowed-missing 20\)",
     ):
         _compact_bars(
             [
                 {"Code": code, "Date": trading_day, "Close": 100}
-                for code in codes[5:]
+                for code in codes[21:]
             ],
             trading_day=trading_day,
             scope_union=frozenset(codes),
@@ -1007,7 +1007,7 @@ def test_compact_bars_minimum_ratio_one_is_strict() -> None:
     trading_day = "2025-01-06"
     with pytest.raises(
         PersonalHistoryError,
-        match=r"observed ratio 5/6 is below 1\.000000 \(missing 1, allowed-missing 0\)",
+        match=r"daily missing allowance exceeded: observed ratio 5/6 is below daily floor 1\.000000 \(missing 1, allowed-missing 0\)",
     ):
         _compact_bars(
             [
@@ -1025,18 +1025,22 @@ def test_compact_bars_minimum_ratio_one_is_strict() -> None:
 
 def test_allowed_missing_bars_uses_daily_floor_not_absolute_two() -> None:
     assert DEFAULT_TINY_MISSING_OBSERVED_BARS == 1
-    assert DEFAULT_DAILY_MIN_OBSERVED_BAR_RATIO == 0.99
+    assert DEFAULT_DAILY_MIN_OBSERVED_BAR_RATIO == 0.95
     assert DEFAULT_MIN_OBSERVED_BAR_RATIO == 0.995
     ratio = DEFAULT_MIN_OBSERVED_BAR_RATIO
-    assert _allowed_missing_observed_bars(357, ratio) == 3
+    assert _allowed_missing_observed_bars(357, ratio) == 17
     assert _allowed_missing_observed_bars(6, ratio) == 1
-    assert _allowed_missing_observed_bars(199, ratio) == 1
-    assert _allowed_missing_observed_bars(200, ratio) == 2
-    assert _allowed_missing_observed_bars(400, ratio) == 4
-    assert _allowed_missing_observed_bars(600, ratio) == 6
-    assert _allowed_missing_observed_bars(1113, ratio) == 11
+    assert _allowed_missing_observed_bars(19, ratio) == 1
+    assert _allowed_missing_observed_bars(20, ratio) == 1
+    assert _allowed_missing_observed_bars(199, ratio) == 9
+    assert _allowed_missing_observed_bars(200, ratio) == 10
+    assert _allowed_missing_observed_bars(400, ratio) == 20
+    assert _allowed_missing_observed_bars(600, ratio) == 30
+    assert _allowed_missing_observed_bars(1113, ratio) == 55
+    assert _allowed_missing_observed_bars(1520, ratio) == 76
     assert _allowed_missing_observed_bars(357, 1.0) == 0
     assert _allowed_missing_observed_bars(1113, 1.0) == 0
+    assert _allowed_missing_observed_bars(1520, 1.0) == 0
 
 
 def _compact_observed_subset(
@@ -1075,12 +1079,33 @@ def test_compact_bars_tolerate_three_missing_codes_at_354_of_357() -> None:
     assert len(payloads) == 354
 
 
-def test_compact_bars_reject_four_missing_codes_at_353_of_357() -> None:
+def test_compact_bars_reject_eighteen_missing_codes_at_339_of_357() -> None:
     with pytest.raises(
         PersonalHistoryError,
-        match=r"observed ratio 353/357 is below 0\.995000 \(missing 4, allowed-missing 3\)",
+        match=r"daily missing allowance exceeded: observed ratio 339/357 is below daily floor 0\.950000 \(missing 18, allowed-missing 17\)",
     ):
-        _compact_observed_subset(expected=357, omit=4)
+        _compact_observed_subset(expected=357, omit=18)
+
+
+def test_compact_bars_tolerate_1495_of_1520_without_imputing() -> None:
+    observed, rows = _compact_observed_subset(
+        expected=1520, omit=25, trading_day="2008-12-25"
+    )
+    payloads = [json.loads(row["payload"]) for row in rows]
+    omitted = {f"{ordinal:04d}" for ordinal in range(25)}
+    assert [item["Code"] for item in payloads] == observed
+    assert all(item["Code"] not in omitted for item in payloads)
+    assert len(payloads) == 1495
+
+
+def test_compact_bars_reject_1443_of_1520_below_daily_floor() -> None:
+    with pytest.raises(
+        PersonalHistoryError,
+        match=r"daily missing allowance exceeded: observed ratio 1443/1520 is below daily floor 0\.950000 \(missing 77, allowed-missing 76\)",
+    ):
+        _compact_observed_subset(
+            expected=1520, omit=77, trading_day="2008-12-25"
+        )
 
 
 def test_compact_bars_tolerate_1105_of_1113_without_imputing() -> None:
