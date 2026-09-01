@@ -1,31 +1,36 @@
 #!/usr/bin/env python3
-"""Run one ingestion pass. Phase 1: local runtime is primary.
+"""Run one ingestion pass.
+
+Normal operation is Cloudflare (R2 authority, D1 metadata). Host-local
+fetch is developer/recovery only and requires
+``QP_ALLOW_LOCAL_MARKET_DATA=1`` at the executable CLI.
 
 Examples
 --------
-  # Everything, local (J-Quants needs a key — CF proxy by default if a proxy
-  # config exists, else JQUANTS_API_KEY in env; JSDA needs no key):
-  python3 scripts/run_ingestion_once.py --source all --runtime local
+  # Default runtime is cloudflare: no host-local fetch.
+  python3 scripts/run_ingestion_once.py --source all
 
-  # Just JSDA (no key required):
-  python3 scripts/run_ingestion_once.py --source jsda --runtime local
+  # Host-local recovery (JSDA needs no key):
+  QP_ALLOW_LOCAL_MARKET_DATA=1 python3 scripts/run_ingestion_once.py \\
+      --source jsda --runtime local
 
   # J-Quants daily bars for one code, a small date window:
-  python3 scripts/run_ingestion_once.py --source jquants --code 8697 \\
+  QP_ALLOW_LOCAL_MARKET_DATA=1 python3 scripts/run_ingestion_once.py \\
+      --source jquants --runtime local --code 8697 \\
       --from-date 2025-04-01 --to-date 2025-04-05
 
 Runtime
 -------
-``--runtime local`` (default; env ``INGESTION_RUNTIME``) fetches for real.
-``--runtime cloudflare`` does NOT fetch in Phase 1 — Pattern B keeps fetch on
-local and Cloudflare reads storage only. Passing it exits cleanly (code 2).
+``--runtime cloudflare`` (default; env ``INGESTION_RUNTIME``) does not fetch
+into host-local storage. Operator ingestion is Cloudflare-side.
+``--runtime local`` fetches for real and is recovery-only.
 
 Exit codes
 ----------
   0  run completed (at least one source fetched/registered)
   1  at least one source errored (fetch/parse/register failure)
-  2  nothing executed (cloudflare runtime, or every source cleanly skipped,
-     e.g. all API keys absent)
+  2  nothing executed (denied host-local opt-in, cloudflare runtime, or every
+     source cleanly skipped, e.g. all API keys absent)
 
 Secrets are resolved via :mod:`ingestion.common.secrets` (the Cloudflare
 proxy when configured — key held on the Worker — or the ``JQUANTS_API_KEY``
@@ -64,14 +69,16 @@ from storage.sqlite_store import SqliteStore  # noqa: E402
 _UA = "quant-platform-ingest/0.1 (+personal-research; JST)"
 
 def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Phase 1 ingestion (one shot)")
+    p = argparse.ArgumentParser(
+        description="One-shot ingestion (Cloudflare default; host-local is opt-in)"
+    )
     p.add_argument(
         "--source", choices=["jquants", "jsda", "all"], default="all"
     )
     p.add_argument(
         "--runtime",
         choices=["local", "cloudflare"],
-        default=os.environ.get("INGESTION_RUNTIME", "local"),
+        default=os.environ.get("INGESTION_RUNTIME", "cloudflare"),
     )
     p.add_argument("--data-dir", default="data")
     p.add_argument(
@@ -223,8 +230,10 @@ def main(argv=None) -> int:
 
     if runtime == "cloudflare":
         print(
-            "[cloudflare] Fetch is not supported in Phase 1 "
-            "(Pattern B: fetch on local, CF reads storage only)."
+            "[cloudflare] This CLI does not fetch into host-local storage. "
+            "Use Cloudflare ingestion (R2 persistent authority, D1 metadata; "
+            "Container SQLite is ephemeral). Host-local fetch requires "
+            "QP_ALLOW_LOCAL_MARKET_DATA=1 and --runtime local."
         )
         return 2
 
@@ -361,5 +370,33 @@ def main(argv=None) -> int:
     print(f"[done] db={db_path}")
     return decide_exit(all_reports)
 
+
+def _runtime_resolves_to_local(argv: list[str] | None = None) -> bool:
+    """True when executable argv/env resolve to ``--runtime local``.
+
+    Matches argparse: last ``--runtime`` / ``--runtime=`` wins; otherwise
+    ``INGESTION_RUNTIME``; otherwise the cloudflare default.
+    """
+    args = sys.argv[1:] if argv is None else argv
+    selected: str | None = None
+    i = 0
+    while i < len(args):
+        token = args[i]
+        if token == "--runtime" and i + 1 < len(args):
+            selected = args[i + 1]
+            i += 2
+            continue
+        if token.startswith("--runtime="):
+            selected = token.split("=", 1)[1]
+        i += 1
+    if selected is None:
+        selected = os.environ.get("INGESTION_RUNTIME", "cloudflare")
+    return selected == "local"
+
+
 if __name__ == "__main__":
+    from _local_market_data_guard import require_local_market_data_opt_in
+
+    if _runtime_resolves_to_local():
+        require_local_market_data_opt_in()
     sys.exit(main())

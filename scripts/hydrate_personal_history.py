@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Hydrate compact local J-Quants history for personal DRAFT research.
 
-Dry-run is the default.  Pass ``--execute`` to make network requests and write
-the dedicated SQLite file.  This command cannot issue receipts, Coverage,
-READY, controlled-pilot evidence, or trading authorization.
+Dry-run is the default and does not require opt-in.  Pass ``--execute`` to
+make network requests and write the dedicated SQLite file; that executable
+path requires ``QP_ALLOW_LOCAL_MARKET_DATA=1``.  This command cannot issue
+receipts, Coverage, READY, controlled-pilot evidence, or trading authorization.
 """
 
 from __future__ import annotations
@@ -258,4 +259,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    from _local_market_data_guard import require_local_market_data_opt_in
+
+    _argv = sys.argv[1:]
+    if "--execute" in _argv and "--dry-run" not in _argv:
+        require_local_market_data_opt_in()
     raise SystemExit(main())
