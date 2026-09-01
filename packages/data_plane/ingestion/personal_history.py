@@ -27,9 +27,13 @@ from urllib.parse import quote
 
 from data_contracts.identity import canonical_json, session_close_jst
 from data_contracts.personal_history_compact import (
+    DEFAULT_MIN_OBSERVED_BAR_RATIO,
+    DEFAULT_TINY_MISSING_BAR_RATIO,
+    DEFAULT_TINY_MISSING_OBSERVED_BARS,
     PERSONAL_HISTORY_COMPACT_CREATE_SQL,
     PERSONAL_HISTORY_COMPACT_FORMAT,
     PERSONAL_HISTORY_COMPACT_TABLES,
+    allowed_missing_observed_bars as _allowed_missing_observed_bars,
 )
 from data_contracts.personal_universe import (
     PERSONAL_HISTORY_SCOPE_DIGEST,
@@ -79,7 +83,6 @@ BARS_AVAILABILITY_POLICY = "canonical_session_close/v1"
 DEFAULT_LOOKBACK_SESSIONS = 10
 DEFAULT_CALENDAR_WINDOW_DAYS = 180
 DEFAULT_TOPIX_CODE_ESTIMATE = 2_200
-DEFAULT_MIN_OBSERVED_BAR_RATIO = 0.995
 DEFAULT_MAX_DATABASE_BYTES = 5 * 1024**3
 DEFAULT_MINIMUM_FREE_BYTES = 8 * 1024**3
 DEFAULT_WAL_CHECKPOINT_SEGMENTS = 25
@@ -1027,21 +1030,6 @@ def _validated_bar_number(value: Any, field: str) -> int | float:
             f"equities_bars_daily {field} must be finite and non-negative"
         )
     return number if original is None else original
-
-
-def _allowed_missing_observed_bars(expected: int, minimum_ratio: float) -> int:
-    """Missing expected codes tolerated by one compact daily-bar session.
-
-    Uses integer ``floor(expected * (1 - minimum_ratio))`` so float rounding
-    cannot change the budget.  Ratios below 1.0 also allow one missing code
-    (a 5/6 2008-style session).  ``minimum_ratio >= 1.0`` stays strict.
-    """
-
-    if expected <= 0 or minimum_ratio >= 1.0:
-        return 0
-    numerator, denominator = minimum_ratio.as_integer_ratio()
-    proportional = expected * (denominator - numerator) // denominator
-    return max(1, proportional)
 
 
 def _compact_bars(
