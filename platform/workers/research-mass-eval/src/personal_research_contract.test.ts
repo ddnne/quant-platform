@@ -44,8 +44,8 @@ describe("personal research request contract", () => {
   it("pins the runner-bound Container identity", async () => {
     expect(PERSONAL_RESEARCH_RUNNER_VERSION).toBe("personal-cloud-runner/v15");
     expect(PERSONAL_RESEARCH_RUNNER_SLOT).toBe("v15");
-    expect(PERSONAL_SNAPSHOT_CONTAINER_NAME).toBe("personal-snapshot-v15");
-    expect(personalSnapshotContainerName()).toBe("personal-snapshot-v15");
+    expect(PERSONAL_SNAPSHOT_CONTAINER_NAME).toBe("personal-snapshot-v16");
+    expect(personalSnapshotContainerName()).toBe("personal-snapshot-v16");
     expect(PERSONAL_RESEARCH_LEGACY_CONTAINER_NAME).toBe("personal-research-v12");
     expect([...PERSONAL_SNAPSHOT_SOURCE_RUNNER_VERSIONS]).toEqual([
       "personal-cloud-runner/v13",
