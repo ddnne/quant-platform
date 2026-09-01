@@ -1691,15 +1691,23 @@ def test_unchanged_pit_universe_reuses_membership_digest(tmp_path):
     store.close()
 
 
-def test_first_visible_fins_fail_closed_on_invalid_payload(tmp_path):
+@pytest.mark.parametrize(
+    "payload",
+    (
+        "not-json",
+        '[{"Code":"1001"}]',
+    ),
+)
+def test_first_visible_fins_fail_closed_on_invalid_payload(tmp_path, payload):
     store = SqliteStore(tmp_path / "invalid-fins.sqlite")
     hydrator = PersonalHistoryHydrator(
         client=_HistoryClient(), store=store, plan=_plan()
     )
     hydrator.hydrate()
     store._conn.execute(
-        "UPDATE jquants_records SET payload='not-json' "
-        "WHERE source='jquants' AND dataset='fins_summary'"
+        "UPDATE jquants_records SET payload=? "
+        "WHERE source='jquants' AND dataset='fins_summary'",
+        (payload,),
     )
     store._conn.commit()
     with pytest.raises(PersonalHistoryError, match="payload is invalid"):

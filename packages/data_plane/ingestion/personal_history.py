@@ -1816,7 +1816,11 @@ class PersonalHistoryHydrator:
                 """
                 SELECT 1 FROM jquants_records
                 WHERE source='jquants' AND dataset='fins_summary'
-                  AND (payload IS NULL OR json_valid(payload)=0)
+                  AND (
+                    payload IS NULL
+                    OR json_valid(payload)=0
+                    OR json_type(payload, '$') IS NOT 'object'
+                  )
                 LIMIT 1
                 """
             ).fetchone()
