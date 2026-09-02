@@ -111,7 +111,14 @@ def test_all_named_entrypoints_and_governed_dos_have_exact_rpc_inventories() -> 
             "name": "GatewayService",
             "handlers": ["class"],
             "fetch_reserved_special": False,
-            "rpc_methods": ["complete"],
+            "rpc_methods": [
+                "cancelControlledPaper",
+                "complete",
+                "finalizeControlledPaper",
+                "heartbeatControlledPaper",
+                "queryControlledPaper",
+                "reserveControlledPaper",
+            ],
         }],
     }
     for environment in ("base", "production", "staging"):
@@ -150,8 +157,10 @@ def test_all_named_entrypoints_and_governed_dos_have_exact_rpc_inventories() -> 
         "rpc_methods": [
             "cancelPreProvider",
             "finalizeExact",
+            "finalizeOwnedPaper",
             "heartbeat",
             "markProviderStarted",
+            "queryOwned",
             "release",
             "reserve",
             "reserveOwned",

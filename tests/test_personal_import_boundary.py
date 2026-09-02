@@ -179,6 +179,7 @@ expected = {
         "SnapshotRejected",
         "begin_snapshot_sync",
         "data_snapshot_id",
+        "immutable_data_snapshot_id",
         "describe_snapshot",
         "fail_snapshot_sync",
         "latest_ready_snapshot",

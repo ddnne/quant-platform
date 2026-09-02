@@ -200,6 +200,30 @@ def _manifest() -> tuple[
     return readiness, trader, execution, manifest
 
 
+def test_result_manifest_rejects_omitted_or_mutated_identity() -> None:
+    _readiness, _trader, execution, manifest = _manifest()
+    document = manifest.to_dict()
+    assert document["identity"] == "controlled_pilot_v1"
+    omitted = dict(document)
+    omitted.pop("identity")
+    with pytest.raises(ExactFourAuthorityContractError):
+        parse_and_validate_exact_four_pilot_result_manifest_v2(
+            json.dumps(omitted).encode("utf-8"),
+            readiness=_readiness,
+            trader=_trader,
+            execution=execution,
+        )
+    mutated = dict(document)
+    mutated["identity"] = "draft_factor_cohort_v1"
+    with pytest.raises(ExactFourAuthorityContractError):
+        parse_and_validate_exact_four_pilot_result_manifest_v2(
+            json.dumps(mutated).encode("utf-8"),
+            readiness=_readiness,
+            trader=_trader,
+            execution=execution,
+        )
+
+
 def test_result_manifest_binds_exact_four_authority_and_artifact_chain() -> None:
     readiness, trader, execution, manifest = _manifest()
 

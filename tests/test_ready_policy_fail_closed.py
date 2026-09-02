@@ -994,6 +994,7 @@ def test_signed_projection_cursor_must_equal_local_snapshot_generation() -> None
 
 _SCOPE_DATASETS = (
     "equities_bars_daily",
+    "equities_bars_daily_am",
     "equities_master",
     "fins_summary",
     "indices_bars_daily_topix",
@@ -1072,6 +1073,16 @@ def _seed_exact_pit_scope(
             }
             for day in calendar_dates
         ],
+        "equities_bars_daily_am": [
+            {
+                "Code": "1332",
+                "Date": day,
+                "MAdjC": 100.0,
+                "trusted_receipt_digest": "sha256:" + ("ab" * 32),
+                "product_snapshot_id": "sha256:" + ("cd" * 32),
+            }
+            for day in calendar_dates
+        ],
         "indices_bars_daily_topix": [
             {
                 "Date": day,
@@ -1088,11 +1099,19 @@ def _seed_exact_pit_scope(
         "equities_master": "2023-01-02T08:00:00+09:00",
         "fins_summary": "2023-01-03T08:00:00+09:00",
         "equities_bars_daily": "2023-01-06T16:00:00+09:00",
+        "equities_bars_daily_am": "2023-01-06T11:30:00+09:00",
         "indices_bars_daily_topix": "2023-01-06T16:00:00+09:00",
     }
     with SqliteStore(db_path) as store:
         store._conn.execute(  # noqa: SLF001
             "ALTER TABLE ingestion_run_log ADD COLUMN authority_operation_id TEXT"
+        )
+        store._conn.execute(  # noqa: SLF001
+            "CREATE TABLE IF NOT EXISTS snapshot_observation_clock "
+            "(observed_through TEXT NOT NULL)"
+        )
+        store._conn.execute(  # noqa: SLF001
+            "INSERT INTO snapshot_observation_clock VALUES ('2023-01-06T11:30:00+09:00')"
         )
         store._conn.executescript(  # noqa: SLF001
             """
@@ -1466,6 +1485,16 @@ def test_signed_product_digest_survives_sync_projection_and_ready(
                     "{}",
                 )
             )
+        mirror._conn.execute(  # noqa: SLF001
+            "CREATE TABLE IF NOT EXISTS snapshot_observation_clock "
+            "(observed_through TEXT NOT NULL)"
+        )
+        mirror._conn.execute(  # noqa: SLF001
+            "DELETE FROM snapshot_observation_clock"
+        )
+        mirror._conn.execute(  # noqa: SLF001
+            "INSERT INTO snapshot_observation_clock VALUES ('2023-01-06T11:30:00+09:00')"
+        )
         mirror._conn.executemany(  # noqa: SLF001
             "INSERT INTO dataset_coverage "
             "(dataset,status,policy_version,collection_scope,"

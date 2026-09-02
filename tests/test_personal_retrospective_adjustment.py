@@ -105,13 +105,14 @@ def test_adjusted_close_missing_fails_without_raw_fallback(tmp_path) -> None:
         )
 
 
-def test_retrospective_basis_is_draft_only_and_pit_adjusted_stays_closed() -> None:
-    with pytest.raises(ValueError, match="restricted to local DRAFT"):
+def test_retrospective_basis_allows_controlled_paper_and_pit_adjusted_stays_closed() -> None:
+    with pytest.raises(ValueError, match="DRAFT"):
         PaperRunConfig(
             start="2025-01-01",
             end="2025-01-02",
             lifecycle=Lifecycle.PAPER,
             price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+            execution_mode="am_signal_pm_close",
         )
     with pytest.raises(ValueError, match="not enabled"):
         PaperRunConfig(

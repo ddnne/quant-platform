@@ -8,9 +8,15 @@ them back exclusively through ``pit``.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Iterable
 
+from data_contracts.identity import natural_key
+from ops.receipt_product import (
+    canonical_product_artifact_bytes,
+    product_artifact_digest,
+)
 from storage.sqlite_store import SqliteStore
 
 # Four consecutive weekdays in April 2025 (post 2024-11-05 close-time change).
@@ -21,6 +27,10 @@ CODES = ["8697", "1332"]
 def close_iso(date: str) -> str:
     """Engine's session-close ``as_of`` for ``date`` (2025 -> 15:30 JST)."""
     return f"{date}T15:30:00+09:00"
+
+
+def morning_iso(date: str) -> str:
+    return f"{date}T11:30:00+09:00"
 
 
 def open_iso(date: str) -> str:
@@ -148,6 +158,24 @@ def rising_prices(codes: list[str], days: list[str], start: float = 100.0) -> di
     return prices
 
 
+
+def write_snapshot_observation_clock(store: SqliteStore, observed_through: str) -> None:
+    from pit.query import normalize_as_of
+
+    canonical = normalize_as_of(observed_through)
+    store._conn.execute("DROP TABLE IF EXISTS snapshot_observation_clock")
+    store._conn.execute(
+        "CREATE TABLE snapshot_observation_clock ("
+        "singleton INTEGER NOT NULL PRIMARY KEY CHECK (singleton = 1), "
+        "observed_through TEXT NOT NULL CHECK (length(observed_through) >= 25))"
+    )
+    store._conn.execute(
+        "INSERT INTO snapshot_observation_clock(singleton, observed_through) "
+        "VALUES (1, ?)",
+        (canonical,),
+    )
+    store._conn.commit()
+
 def seed_db(
     tmp_path: Path,
     *,
@@ -188,5 +216,185 @@ def seed_db(
             market_caps=market_caps,
         ),
     )
+    last = (days or TRADING_DAYS)[-1]
+    write_snapshot_observation_clock(store, close_iso(last))
+    store.close()
+    return path
+
+
+def seed_governed_am_pm_session_db(
+    tmp_path: Path,
+    *,
+    codes: list[str] | None = None,
+    days: list[str] | None = None,
+    morning_prices: dict | None = None,
+    afternoon_prices: dict | None = None,
+) -> Path:
+    """Positive Controlled fixture: AM row at 11:30, PM revision at close."""
+
+    codes = codes or CODES
+    days = days or TRADING_DAYS
+    morning_prices = morning_prices or rising_prices(codes, days, start=100.0)
+    afternoon_prices = afternoon_prices or rising_prices(codes, days, start=100.0)
+    path = tmp_path / "ing.sqlite"
+    store = SqliteStore(path)
+    store.upsert("jquants_market_calendar", _calendar_rows(days))
+    store.upsert("jquants_listed_info", _master_rows(codes))
+    am_rows: list[dict] = []
+    pm_rows: list[dict] = []
+    for code in codes:
+        for day in days:
+            morning = float(morning_prices[code][day])
+            afternoon = float(afternoon_prices[code][day])
+            am_rows.append(
+                {
+                    "source": "jquants",
+                    "code": code,
+                    "date": day,
+                    "event_time": morning_iso(day),
+                    "available_at": morning_iso(day),
+                    "ingested_at": morning_iso(day),
+                    "open": morning,
+                    "high": morning,
+                    "low": morning,
+                    "close": morning,
+                    "volume": 1000.0,
+                    "morning_adjustment_close": morning,
+                    "morning_adjustment_volume": 500.0,
+                    "afternoon_adjustment_close": None,
+                }
+            )
+            pm_rows.append(
+                {
+                    "source": "jquants",
+                    "code": code,
+                    "date": day,
+                    "event_time": close_iso(day),
+                    "available_at": close_iso(day),
+                    "ingested_at": close_iso(day),
+                    "open": morning,
+                    "high": afternoon,
+                    "low": morning,
+                    "close": afternoon,
+                    "volume": 1000.0,
+                    "morning_adjustment_close": morning,
+                    "morning_adjustment_volume": 500.0,
+                    "afternoon_adjustment_close": afternoon,
+                    "afternoon_adjustment_volume": 1000.0,
+                }
+            )
+    store.upsert("jquants_daily_bars", am_rows)
+    store.upsert("jquants_daily_bars", pm_rows)
+    am_catalog: list[dict] = []
+    for code in codes:
+        for day in days:
+            morning = float(morning_prices[code][day])
+            event = morning_iso(day)
+            payload = {
+                "Code": code,
+                "Date": day,
+                "MAdjC": morning,
+            }
+            payload_text = json.dumps(
+                payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+            )
+            am_catalog.append(
+                {
+                    "source": "jquants",
+                    "dataset": "equities_bars_daily_am",
+                    "natural_key": natural_key(payload, "equities_bars_daily_am"),
+                    "event_time": event,
+                    "available_at": event,
+                    "ingested_at": event,
+                    "payload": payload_text,
+                    "raw_payload": "",
+                }
+            )
+    store.upsert("jquants_records", am_catalog)
+    daily_catalog: list[dict] = []
+    for code in codes:
+        for day in days:
+            payload = {
+                "Code": code,
+                "Date": day,
+                "MAdjC": float(morning_prices[code][day]),
+                "AAdjC": float(afternoon_prices[code][day]),
+            }
+            event = close_iso(day)
+            daily_catalog.append(
+                {
+                    "source": "jquants",
+                    "dataset": "equities_bars_daily",
+                    "natural_key": natural_key(payload, "equities_bars_daily"),
+                    "event_time": event,
+                    "available_at": event,
+                    "ingested_at": event,
+                    "payload": json.dumps(
+                        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+                    ),
+                    "raw_payload": "",
+                }
+            )
+    store.upsert("jquants_records", daily_catalog)
+    for run_id, dataset_id, suffix in (
+        (1, "equities_bars_daily", "daily"),
+        (2, "equities_bars_daily_am", "am"),
+    ):
+        stored = store._conn.execute(
+            "SELECT source, dataset, natural_key, event_time, available_at, "
+            "ingested_at, payload, COALESCE(raw_payload, '') AS raw_payload "
+            "FROM jquants_records WHERE dataset=? ORDER BY natural_key",
+            (dataset_id,),
+        ).fetchall()
+        product_rows: list[dict[str, str]] = []
+        for row in stored:
+            payload_raw = row["payload"]
+            payload_obj = json.loads(payload_raw) if isinstance(payload_raw, str) else {}
+            product_rows.append(
+                {
+                    "source": str(row["source"]),
+                    "dataset": str(row["dataset"]),
+                    "natural_key": str(row["natural_key"]),
+                    "event_time": str(row["event_time"]),
+                    "available_at": str(row["available_at"]),
+                    "ingested_at": str(row["ingested_at"]),
+                    "payload": json.dumps(
+                        payload_obj,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        ensure_ascii=False,
+                    ),
+                    "raw_payload": str(row["raw_payload"] or ""),
+                }
+            )
+        artifact_body = canonical_product_artifact_bytes(product_rows).decode("utf-8")
+        artifact_digest = product_artifact_digest(product_rows)
+        # Offline fixture seal only. This is not a READY/promotable snapshot.
+        store._conn.execute(
+            "INSERT INTO receipt_product_materializations ("
+            "operation_id, run_id, source, dataset, segment_id, artifact_key, "
+            "artifact_digest, artifact_body, row_count, byte_count, manifest_key, "
+            "manifest_digest, raw_manifest_key, raw_manifest_digest, raw_page_count, "
+            "raw_row_count, raw_bytes, committed_at"
+            ") VALUES (?, ?, 'jquants', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, ?)",
+            (
+                f"offline-fixture-{suffix}-product",
+                run_id,
+                dataset_id,
+                f"offline-fixture-{suffix}",
+                f"offline-fixture-{suffix}-artifact",
+                artifact_digest,
+                artifact_body,
+                len(product_rows),
+                len(artifact_body.encode("utf-8")),
+                f"offline-fixture-{suffix}-manifest",
+                artifact_digest,
+                f"offline-fixture-{suffix}-raw-manifest",
+                artifact_digest,
+                close_iso((days or TRADING_DAYS)[-1]),
+            ),
+        )
+    last = (days or TRADING_DAYS)[-1]
+    write_snapshot_observation_clock(store, close_iso(last))
     store.close()
     return path

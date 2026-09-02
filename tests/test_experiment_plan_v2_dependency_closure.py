@@ -94,7 +94,7 @@ def test_closure_is_deterministic_transitive_and_profile_bound() -> None:
         assert tuple(sorted(closure.required_datasets)) == closure.required_datasets
         assert "equities_master" in closure.required_datasets
         assert "markets_calendar" in closure.required_datasets
-        assert "equities_bars_daily_am" not in closure.required_datasets
+        assert "equities_bars_daily_am" in closure.required_datasets
         assert "equities_earnings_calendar" not in closure.required_datasets
         derived = {
             dataset

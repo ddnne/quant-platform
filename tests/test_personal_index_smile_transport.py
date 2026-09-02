@@ -199,7 +199,7 @@ def _month_days(dates: Sequence[str], month: str, count: int) -> list[str]:
     return chosen[:count]
 
 
-def test_exact_four_identity_keeps_sticky_models_as_separate_candidates() -> None:
+def test_draft_smile_cohort_keeps_sticky_models_as_separate_candidates() -> None:
     assert SMILE_TRANSPORT_CANDIDATE_IDS == (
         "n225_sticky_strike_downside_smile_term_surprise_v1",
         "n225_sticky_moneyness_downside_smile_term_surprise_v1",

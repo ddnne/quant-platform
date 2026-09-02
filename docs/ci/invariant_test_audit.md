@@ -21,7 +21,9 @@ not release authorities.
 | Strict Gateway rejection | Closed request/output schemas are validated before an artifact is returned | `tests/test_gateway_fail_closed.py` and Gateway runtime tests |
 | Budget concurrency and settlement | BudgetLedger Durable Object serializes reservations and settles only through the Gateway coordinator bound to exact lease, digest, provider-start, and a retry-safe one-shot settlement capability | `platform/workers/research-ai-gateway/src/budget_runtime.test.ts` and `index_complete_budget.test.ts` |
 | OAuth boundary | The Ops MCP Worker requires OAuth while public metadata remains available | `platform/workers/quant-ops-mcp/runtime/ops_runtime.test.js` and `harness/oauth_harness.test.ts` |
-| Exact-four only | ExperimentPlan compilation resolves exactly four immutable strategy/feature/dataset closures; Mass accepts a distinct readiness type and remains disabled | `tests/test_experiment_plan_v2_dependency_closure.py` and `tests/test_phase7_pilot_construct.py` |
+| Controlled Pilot identity | Runtime discriminant is exactly `controlled_pilot_v1`; Draft/Personal purpose IDs cannot substitute | `tests/test_controlled_pilot_identity.py` |
+| generated `controlled_pilot_v1` contract | Python exact-four compiler emits the Worker/Container binding; CI drift check is `scripts/verify_controlled_pilot_v1_drift.py` | `tests/test_controlled_pilot_p0.py` and `platform/workers/research-mass-eval/src/controlled_pilot.test.ts` |
+| Exact-four only | ExperimentPlan compilation resolves the `controlled_pilot_v1` four-plan closures; Mass accepts a distinct readiness type and remains disabled | `tests/test_experiment_plan_v2_dependency_closure.py` and `tests/test_phase7_pilot_construct.py` |
 
 ## Consolidation decisions
 

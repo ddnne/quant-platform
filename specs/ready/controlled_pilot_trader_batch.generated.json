@@ -1,0 +1,64 @@
+{
+  "algorithm": "Ed25519",
+  "authority_instance_id": "trader-authority/staging/v1",
+  "budget_scope_digest": "sha256:89d5f31cd611c4bcf10cef0ba12081df2417a4a77468266185595f97f5d8bea5",
+  "dependency_closure_digest": "sha256:dbda1ed2c7c0bf942817f19b3668163710afceedf265f436114e50b80a7e8cb0",
+  "environment": "staging",
+  "exact_four_binding_digest": "sha256:68725a83bf2f7ab8cc36b394be513c4d42406022f3d19b5590c74b4e550f5640",
+  "execution_limit_set_digest": "sha256:2c5e0a2e138b52986c43d1f5757e3579a0e395d4cab174597b9ab827b085a815",
+  "expires_at": "2026-09-02T13:00:00+00:00",
+  "fill_contract_digest": "sha256:678985a0f7b142eeecd693ebe28bff822916bc815889f0b39e2841830377377d",
+  "format": "controlled-pilot-trader-authorization-batch/v2",
+  "idempotency_key": "controlled-job-1",
+  "identity": "controlled_pilot_v1",
+  "immutable_db_digest": "sha256:1d673408ef5efa994659ecfe0082056807538233971523e120a01c5f79c57b5b",
+  "issued_at": "2026-09-02T12:00:00+00:00",
+  "issuer": "ControlledTraderAuthorizationService/v1",
+  "key_id": "controlled-pilot-fixture-v1",
+  "policy_digest": "sha256:60fc8438f7dd4914c9fec99ae53476b9a514a80d0411b7ab07dc7e9963d5f319",
+  "profile_digest": "sha256:ccad8a7ab0cf9af80cabc68a0b8a5111c064b578d211495423dae56333b8bf63",
+  "purpose": "controlled_trader_authorization_verification",
+  "ready_attestation_id": "ready-44adc3f6d5ae7366d411a9ef8765c449ffdd540844f653a3fb1f948dba3e677a",
+  "ready_manifest_digest": "sha256:b1173c3bbfc9adbe2e7b99d11e7616b368299372602cf687eb1fe17d214742df",
+  "request_digest": "sha256:6dbaa9f6fbc782d710f9efdfde3d49e49e38eb13d7c033bd5fbcf4e0b59b7c50",
+  "resolved_universe_digest": "sha256:1a695e645a6d24355be1b2bf39fdc3513bce7d6512752dfbce423ff8b9ac6700",
+  "rows": [
+    {
+      "ordinal": 1,
+      "plan_binding_digest": "sha256:1a0831c8ad7d90d7c433ba9080e7bbd0764f274b31c6541453b493c9f0351383",
+      "plan_id": "exp-mdh-hold10-momentum",
+      "strategy_spec_hash": "sha256:298dca13e0caa1dae7cd9b196ea9c298f3b3507e84a7463bfeecc538ccf7fe8f",
+      "strategy_spec_id": "paper_mdh_hold10_momentum_topk",
+      "strategy_spec_version": "strategy-spec/v3"
+    },
+    {
+      "ordinal": 2,
+      "plan_binding_digest": "sha256:c9d8685fc12f4be477a4f1d662f4896660f1aeef9d690c03f8c74b274fac59a9",
+      "plan_id": "exp-xs-hold10-mom5",
+      "strategy_spec_hash": "sha256:8ee8a821f3311ed8d82dc3e83130063cdb78229c177c221a5c0a92fe3abae30c",
+      "strategy_spec_id": "cross_section_hold_10",
+      "strategy_spec_version": "strategy-spec/v3"
+    },
+    {
+      "ordinal": 3,
+      "plan_binding_digest": "sha256:e36f333e6ec9906d8d90db8cbcdef1ee93ef4022ef82e0ec4402bc5add042f1c",
+      "plan_id": "exp-event-post-hold5",
+      "strategy_spec_hash": "sha256:4fb9953081e1016dece08e09eab7ae11ad2f59c1ea7fdf59438c85739080cc2b",
+      "strategy_spec_id": "paper_event_post_hold5_disclosure_proxy",
+      "strategy_spec_version": "strategy-spec/v3"
+    },
+    {
+      "ordinal": 4,
+      "plan_binding_digest": "sha256:df389155b45d522d4666568973c39e22df7bede55dcf8abc2a576aa99014e5f8",
+      "plan_id": "exp-fund-hold10-value-mom",
+      "strategy_spec_hash": "sha256:59c0128401097901c029340f49e92acfef3abcb4d9eb6a3bbd01f6930fbb7d3b",
+      "strategy_spec_id": "fundamentals_hold_10",
+      "strategy_spec_version": "strategy-spec/v3"
+    }
+  ],
+  "schema_version": 2,
+  "signature": "ed25519:CuRLQdKg2SDZG9wCPrCSAVDlsRZxh9/pXSoKk/93FLAQbf6W/i9YIcthmHd7zurTwPfLcAQ8m0cqf+dEdPLCAg==",
+  "snapshot_id": "sha256:29058b15274a0bdf21e1946a7f363843b40b7a3ed338c8548ff1c8a97ab01d1b",
+  "snapshot_key": "research/controlled_pilot/v1/snapshots/sha256=1d673408ef5efa994659ecfe0082056807538233971523e120a01c5f79c57b5b.sqlite",
+  "snapshot_size": 32
+}

@@ -3,7 +3,7 @@
   "$id": "specs/experiment_plans/schema.json",
   "title": "ExperimentPlan",
   "description": "Closed ExperimentPlan v2. Exact strategy id/version/hash, governed FeatureRefs, strict enums, and execution disabled.",
-  "$comment": "Exactly four typed plans live beside this schema. v1 is audit-only and is never execution eligible.",
+  "$comment": "Exactly four typed plans live beside this schema. v1 is audit-only and is never execution eligible. fill_contract consts are locked to controlled_pilot_v1.generated.json.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -23,7 +23,9 @@
     "evaluation_protocol",
     "risk_policy",
     "budget_allocation",
-    "execution_enabled"
+    "execution_enabled",
+    "identity",
+    "fill_contract"
   ],
   "properties": {
     "version": {"type": "string", "const": "experiment-plan/v2"},
@@ -96,6 +98,61 @@
         "estimated_cost_micros": {"type": "integer", "minimum": 1}
       }
     },
-    "execution_enabled": {"type": "boolean", "const": false}
+    "execution_enabled": {"type": "boolean", "const": false},
+    "identity": {"type": "string", "const": "controlled_pilot_v1"},
+    "fill_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "id",
+        "version",
+        "identity",
+        "execution_mode",
+        "signal_session",
+        "signal_price_field",
+        "signal_price_dataset",
+        "fill_session",
+        "fill_valuation_field",
+        "fill_valuation_session",
+        "information_cutoff",
+        "lifecycle",
+        "retrospective_only",
+        "draft",
+        "live_trading_evidence",
+        "ready_snapshot_declared",
+        "go",
+        "automatic_promotion",
+        "fallback",
+        "forward_fill",
+        "contract_digest"
+      ],
+      "properties": {
+        "format": {"const": "controlled-pilot-fill-contract/v1"},
+        "id": {"const": "controlled-pilot-am-signal-pm-close"},
+        "version": {"const": "1.0.0"},
+        "identity": {"const": "controlled_pilot_v1"},
+        "execution_mode": {"const": "am_signal_pm_close"},
+        "signal_session": {"const": "morning_close"},
+        "signal_price_field": {"const": "MAdjC"},
+        "signal_price_dataset": {"const": "equities_bars_daily_am"},
+        "fill_session": {"const": "afternoon_close"},
+        "fill_valuation_field": {"const": "AAdjC"},
+        "fill_valuation_session": {"const": "same_trading_date"},
+        "information_cutoff": {"const": "11:30:00+09:00"},
+        "lifecycle": {"const": "Paper"},
+        "retrospective_only": {"const": false},
+        "draft": {"const": false},
+        "live_trading_evidence": {"const": false},
+        "ready_snapshot_declared": {"const": true},
+        "go": {"const": false},
+        "automatic_promotion": {"const": false},
+        "fallback": {"const": false},
+        "forward_fill": {"const": false},
+        "contract_digest": {
+          "const": "sha256:678985a0f7b142eeecd693ebe28bff822916bc815889f0b39e2841830377377d"
+        }
+      }
+    }
   }
 }

@@ -1,0 +1,47 @@
+{
+  "completed": {
+    "ok": true,
+    "identity": "controlled_pilot_v1",
+    "status": "COMPLETED",
+    "job_id": "controlled-job-1",
+    "request_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "execution_id": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    "runner_version": "controlled-pilot-container/v1",
+    "automatic_promotion": false,
+    "live_orders_enabled": false,
+    "ephemeral_cleaned": true,
+    "papers": [
+      { "ordinal": 1 },
+      { "ordinal": 2 },
+      { "ordinal": 3 },
+      { "ordinal": 4 }
+    ],
+    "risks": [
+      { "ordinal": 1 },
+      { "ordinal": 2 },
+      { "ordinal": 3 },
+      { "ordinal": 4 }
+    ],
+    "selection": { "decision": "HOLD" },
+    "knowledge": { "kind": "knowledge" },
+    "generation": 1,
+    "max_parallel": 2,
+    "owner_nonce": "owner-nonce-1",
+    "fencing_token": 1
+  },
+  "failed": {
+    "ok": false,
+    "identity": "controlled_pilot_v1",
+    "status": "FAILED",
+    "job_id": "controlled-job-1",
+    "request_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "execution_id": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    "runner_version": "controlled-pilot-container/v1",
+    "error": "controlled_execution_failed",
+    "go": false,
+    "automatic_promotion": false,
+    "live_orders_enabled": false,
+    "owner_nonce": "owner-nonce-1",
+    "fencing_token": 1
+  }
+}

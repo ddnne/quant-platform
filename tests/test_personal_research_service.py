@@ -52,7 +52,7 @@ from pit.personal_research_view import OfflineFixture, OfflineFixtureDataView, S
 from research.personal_service import (
     PERSONAL_BAR_COVERAGE_EVIDENCE,
     PERSONAL_DECISION_POLICY,
-    PERSONAL_EXACT_FOUR_MAX_BACKTESTS,
+    PERSONAL_DRAFT_COHORT_MAX_BACKTESTS,
     PERSONAL_RESEARCH_REPORT_VERSION,
     PERSONAL_SHORT_FINANCING_ANNUAL_RATES,
     PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE,
@@ -1470,14 +1470,14 @@ def test_am_and_legacy_sleeve_dispatch_is_cohort_specific() -> None:
     )
 
 
-def test_exact_four_backtest_budget_adds_only_one_base_source_run(
+def test_draft_factor_cohort_backtest_budget_adds_only_one_base_source_run(
     personal_db: tuple[Path, str, str], tmp_path: Path
 ) -> None:
     source, start, end = personal_db
     assert PersonalResearchPolicy().validation_folds == 4
     assert PersonalResearchPolicy().max_parallel == 1
     assert 4 * (PersonalResearchPolicy().validation_folds + 2) == 24
-    assert PERSONAL_EXACT_FOUR_MAX_BACKTESTS == 25
+    assert PERSONAL_DRAFT_COHORT_MAX_BACKTESTS == 25
     request = PersonalResearchRequest(
         data_view=OfflineFixture(artifact_root=tmp_path / "out").bind(source, decision_cutoff="session_close"),
         period_start=start,

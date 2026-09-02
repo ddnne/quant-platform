@@ -156,6 +156,7 @@ def mint_pilot_readiness(
         ),
         "signed_projection_document_digest": projection_digest,
         "readiness_scope": VerifiedPilotReadiness.EXPECTED_SCOPE,
+        "identity": "controlled_pilot_v1",
         "snapshot_id": manifest.snapshot_id,
         "profile_id": manifest.profile_id,
         "profile_version": manifest.profile_version,
@@ -186,6 +187,7 @@ def mint_pilot_readiness(
         "evidence_digest": canonical_digest(evidence),
         "key_id": signer.key_id,
         "issuer": "ReadyPublicationService/v3",
+        "fill_contract_digest": manifest.fill_contract_digest,
     }
     signature = signer.sign(
         {"format": VerifiedPilotReadiness.FORMAT, **body}

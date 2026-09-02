@@ -140,6 +140,7 @@
         "period_start",
         "period_end",
         "cost_scenario",
+        "fill_contract_digest",
         "binding_digest"
       ],
       "properties": {
@@ -171,6 +172,9 @@
         "period_start": { "type": "string", "format": "date" },
         "period_end": { "type": "string", "format": "date" },
         "cost_scenario": { "$ref": "#/$defs/nonEmpty" },
+        "fill_contract_digest": {
+          "const": "sha256:678985a0f7b142eeecd693ebe28bff822916bc815889f0b39e2841830377377d"
+        },
         "binding_digest": { "$ref": "#/$defs/digest" }
       }
     },
@@ -223,6 +227,7 @@
       "additionalProperties": false,
       "required": [
         "format",
+        "identity",
         "execution_mode",
         "policy",
         "artifact_cardinality",
@@ -242,10 +247,12 @@
         "automatic_promotion",
         "mass_research_enabled",
         "live_trading_enabled",
+        "fill_contract_digest",
         "binding_digest"
       ],
       "properties": {
         "format": { "const": "exact-four-execution-binding/v1" },
+        "identity": { "const": "controlled_pilot_v1" },
         "execution_mode": { "const": "paper" },
         "policy": { "$ref": "#/$defs/policy" },
         "artifact_cardinality": { "$ref": "#/$defs/artifactCardinality" },
@@ -268,11 +275,11 @@
         "profile_set_digest": { "$ref": "#/$defs/digest" },
         "required_dataset_membership_digest": { "$ref": "#/$defs/digest" },
         "universe_rule_digest": {
-          "const": "sha256:2d8b9b49ff0b99e9da1f206f839aeb5b1f88e264be4796cd17954ea181a7e860"
+          "const": "sha256:710bd711b107dfebec64da6376a13933a8233d3c55e97562432f27f38c34d351"
         },
         "coverage_policy_version": { "const": "collection-coverage/v3" },
         "coverage_policy_digest": {
-          "const": "sha256:f98d44ec18da2e892fa8c138fa1785e969cc80fa08bf9d519c942ce026ab19d7"
+          "const": "sha256:9e5d8d7c5d668c2b6eb5bf10650f869d876c7d37f8ddf3c08fa3381595df09aa"
         },
         "budget_scope_digest": { "$ref": "#/$defs/digest" },
         "execution_limit_set_digest": { "$ref": "#/$defs/digest" },
@@ -280,6 +287,9 @@
         "automatic_promotion": { "const": false },
         "mass_research_enabled": { "const": false },
         "live_trading_enabled": { "const": false },
+        "fill_contract_digest": {
+          "const": "sha256:678985a0f7b142eeecd693ebe28bff822916bc815889f0b39e2841830377377d"
+        },
         "binding_digest": { "$ref": "#/$defs/digest" }
       }
     },
@@ -364,6 +374,7 @@
       "additionalProperties": false,
       "required": [
         "format",
+        "identity",
         "issuer",
         "authority_scope",
         "pilot_run_id",
@@ -378,6 +389,7 @@
       ],
       "properties": {
         "format": { "const": "pilot-readiness-attestation-claims/v2" },
+        "identity": { "const": "controlled_pilot_v1" },
         "issuer": { "const": "PilotReadyPublicationService/v2" },
         "authority_scope": { "const": "VERIFIED_PILOT_READINESS" },
         "pilot_run_id": { "$ref": "#/$defs/nonEmpty" },
@@ -445,6 +457,7 @@
       "additionalProperties": false,
       "required": [
         "format",
+        "identity",
         "authority_scope",
         "execution_mode",
         "pilot_run_id",
@@ -468,6 +481,7 @@
       ],
       "properties": {
         "format": { "const": "exact-four-execution-request-claims/v2" },
+        "identity": { "const": "controlled_pilot_v1" },
         "authority_scope": { "const": "EXACT_FOUR_CONTROLLED_PAPER_EXECUTION" },
         "execution_mode": { "const": "paper" },
         "pilot_run_id": { "$ref": "#/$defs/nonEmpty" },

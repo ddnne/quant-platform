@@ -214,7 +214,7 @@ def test_am_builder_binds_repo_identities_and_d_m_versus_d_a_nav() -> None:
         "sha256:54a59cb980f38c37ac5879f979bd26a635bf23a95974413f2f24358ef936be4d"
     )
     assert cohort_digest == (
-        "sha256:e12e65393985ab8b7cc2b0b922a362a055404777a49fda7250f735d47f0b073b"
+        "sha256:9d4135b9b78ad16d071f8a0b26a88b29d315c4d53eace3cb7600aaccf450b73c"
     )
     assert AM_PM_EXECUTION_MODE == "am_signal_pm_close"
     first, second, third = document["daily_path"]

@@ -104,16 +104,9 @@ def _readiness(
     return pending
 
 
-def _budget(
-    tmp_path: Path,
-    *,
-    limits: OfflineExperimentBudget | None = None,
-) -> ResearchBudgetCapability:
-    return ResearchBudgetCapability(
-        "pilot-b",
-        tmp_path / "pilot-b.sqlite",
-        limits or OfflineExperimentBudget(),
-    )
+def _budget(tmp_path: Path) -> None:
+    del tmp_path
+    return None
 
 
 def _plan() -> ExperimentPlan:
@@ -136,10 +129,8 @@ def _construct(
     publisher = publisher or _publisher()
     kwargs: dict[str, object] = {
         "readiness": _readiness(publisher),
-        "budget": _budget(tmp_path),
         "plan": _plan(),
         "authorized_evaluation_service": _eval_service(),
-        "immutable_artifact_store": _store(tmp_path),
     }
     kwargs.update(overrides)
     return controlled_pilot_scheduler(
@@ -243,49 +234,32 @@ def test_construct_fails_without_readiness(tmp_path: Path) -> None:
         _construct(tmp_path, readiness={"snapshot_id": "snap-1"})
 
 
-def test_construct_fails_without_budget(tmp_path: Path) -> None:
-    with pytest.raises(MassResearchDisabledError, match="ResearchBudgetCapability"):
-        _construct(tmp_path, budget=None)
+def test_construct_rejects_local_budget(tmp_path: Path) -> None:
+    with pytest.raises(MassResearchDisabledError, match="no local budget"):
+        _construct(tmp_path, budget=object())
 
 
 def test_controlled_scheduler_rejects_offline_caller_budget_overrides(
     tmp_path: Path,
 ) -> None:
-    assert ExperimentBudget is OfflineExperimentBudget
-    overridden = _budget(
-        tmp_path,
-        limits=OfflineExperimentBudget(max_model_calls=15),
+    local = ResearchBudgetCapability(
+        "pilot-b",
+        tmp_path / "pilot-b.sqlite",
+        OfflineExperimentBudget(max_model_calls=15),
     )
-    with pytest.raises(
-        MassResearchDisabledError,
-        match="rejects caller budget overrides",
-    ):
-        _construct(tmp_path, budget=overridden)
+    with pytest.raises(MassResearchDisabledError, match="no local budget"):
+        _construct(tmp_path, budget=local)
 
 
-def test_controlled_scheduler_rejects_budget_subclass_and_clones_exact_input(
+def test_controlled_scheduler_has_no_local_ledger_or_artifact_store(
     tmp_path: Path,
 ) -> None:
-    class OverridingBudgetCapability(ResearchBudgetCapability):
-        def consume(self, **amounts: int) -> None:
-            del amounts
-
-    subclassed = OverridingBudgetCapability(
-        "subclassed-budget",
-        tmp_path / "subclassed.sqlite",
-        OfflineExperimentBudget(),
-    )
-    with pytest.raises(MassResearchDisabledError, match="ResearchBudgetCapability"):
-        _construct(tmp_path, budget=subclassed)
-
-    caller_budget = _budget(tmp_path)
-    scheduler = _construct(tmp_path, budget=caller_budget)
-    original_ledger_path = scheduler._budget_ledger.ledger_path
-    object.__setattr__(caller_budget, "ledger_path", tmp_path / "caller-mutated.sqlite")
-    assert scheduler._budget_ledger is not caller_budget
-    assert scheduler._budget_ledger.ledger_path == original_ledger_path
-    assert scheduler._budget_ledger.ledger_path != caller_budget.ledger_path
-    assert type(scheduler._budget_ledger) is ResearchBudgetCapability
+    scheduler = _construct(tmp_path)
+    assert not hasattr(scheduler, "_budget_ledger")
+    assert not hasattr(scheduler, "_budget_reservation")
+    assert not hasattr(scheduler, "_artifact_store")
+    with pytest.raises(MassResearchDisabledError, match="no local artifact store"):
+        _construct(tmp_path, immutable_artifact_store=_store(tmp_path))
 
 
 def test_construct_fails_without_plan(tmp_path: Path) -> None:
@@ -315,18 +289,12 @@ def test_construct_fails_without_bound_evaluation_service(tmp_path: Path) -> Non
         _construct(tmp_path, authorized_evaluation_service=AuthorizedEvaluationService())
 
 
-def test_construct_fails_without_artifact_store_create_if_absent(
+def test_construct_rejects_local_artifact_store(
     tmp_path: Path,
 ) -> None:
-    with pytest.raises(MassResearchDisabledError, match="immutable_artifact_store"):
-        _construct(tmp_path, immutable_artifact_store=None)
-    with pytest.raises(MassResearchDisabledError, match="create_if_absent"):
+    assert isinstance(_construct(tmp_path, immutable_artifact_store=None), ControlledPilotScheduler)
+    with pytest.raises(MassResearchDisabledError, match="no local artifact store"):
         _construct(tmp_path, immutable_artifact_store=SimpleNamespace())
-    with pytest.raises(MassResearchDisabledError, match="create_if_absent"):
-        _construct(
-            tmp_path,
-            immutable_artifact_store=SimpleNamespace(create_if_absent=lambda *_a, **_k: None),
-        )
 
 
 def test_construct_rejects_operator_override(tmp_path: Path) -> None:
@@ -408,6 +376,8 @@ def test_mass_scheduler_and_start_are_hard_disabled_even_for_mass_nominal_type(
                 if field.name == "readiness_scope"
                 else "mass/governed-v1"
                 if field.name == "profile_id"
+                else "mass_research_disabled"
+                if field.name == "identity"
                 else object.__getattribute__(pilot, field.name)
             )
             for field in fields(VerifiedPilotReadiness)

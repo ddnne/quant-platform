@@ -42,6 +42,7 @@ from research.personal_universe import (
     personal_universe_selector,
 )
 from research.personal_index_vol_overlay import canonical_trading_calendar_digest
+from research.universe_contract import EXACT_FOUR_UNIVERSE_RULE_DIGEST
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = (
@@ -75,13 +76,13 @@ def _sqlite(path: Path) -> str:
 
 
 COHORT_DIGEST = (
-    "sha256:ea37baf3423e5d84e61d4c80c59bdfe8184342dd3dee28646bd339cd45085a84"
+    "sha256:d78fb2c6adb3a21acd6b90d37c197c1bd7710e986ea882bbbec28f4d21c53397"
 )
 LONG_SHORT_COHORT_DIGEST = (
-    "sha256:584bbf0052ad1eee6ec31cacdf1298c13c8a59b9eb6928267935fc17e34289be"
+    "sha256:6e4de725046c0b0e55416891d83580b9acb753c00a2beecfd3a26ee0c87a74f9"
 )
 AM_LONG_SHORT_COHORT_DIGEST = (
-    "sha256:e12e65393985ab8b7cc2b0b922a362a055404777a49fda7250f735d47f0b073b"
+    "sha256:9d4135b9b78ad16d071f8a0b26a88b29d315c4d53eace3cb7600aaccf450b73c"
 )
 AM_EXECUTION_CONTRACT_DIGEST = (
     "sha256:5fc214947a8fdde7005561820a9bf4b3c301154535b4dc37cff09e9d801bddac"
@@ -2739,3 +2740,940 @@ def test_snapshot_build_fails_closed_on_invalid_compact_marker(
     assert "rebuild as personal-draft-history/v8" in manifest["error"]
     assert manifest.get("snapshot_key") is None
     assert [key for key, _ in uploads] == [spec.manifest_key]
+
+
+def _controlled_job_spec(**overrides: object) -> dict[str, object]:
+    ready_fixture = json.loads(
+        Path(service._CONTRACT_PATH)
+        .with_name("controlled_pilot_ready.generated.json")
+        .read_text(encoding="utf-8")
+    )
+    physical = "sha256:" + ("cd" * 32)
+    hex_digest = physical[len("sha256:") :]
+    universe = "sha256:" + ("ab" * 32)
+    spec: dict[str, object] = {
+        "identity": "controlled_pilot_v1",
+        "format": "controlled-pilot-job-spec/v1",
+        "runner_version": service._CONTROLLED_CONTRACT["runner_version"],
+        "job_id": "controlled-job-1",
+        "idempotency_key": "controlled-job-1",
+        "ready_attestation_id": ready_fixture["attestation"]["attestation_id"],
+        "ready_manifest_digest": ready_fixture["ready_manifest"]["manifest_digest"],
+        "signed_projection_document_digest": ready_fixture["attestation"][
+            "signed_projection_document_digest"
+        ],
+        "session_scope": ready_fixture["controlled_session_scope"],
+        "snapshot_id": "sha256:" + ("ab" * 32),
+        "immutable_db_digest": physical,
+        "snapshot_key": f"research/controlled_pilot/v1/snapshots/sha256={hex_digest}.sqlite",
+        "snapshot_size": 16,
+        "fill_contract_digest": service.CONTROLLED_FILL_CONTRACT_DIGEST,
+        "authorization_digest": "sha256:" + ("11" * 32),
+        "request_digest": "sha256:" + ("22" * 32),
+        "resolved_universe_digest": universe,
+        "universe_rule_digest": EXACT_FOUR_UNIVERSE_RULE_DIGEST,
+        "max_gross_weight_ppm": 500_000,
+        "manifest_key": "research/controlled_pilot/v1/jobs/controlled-job-1/container-terminal.json",
+        "execution_id": "sha256:" + ("33" * 32),
+        "profile_digest": service.CONTROLLED_PROFILE_DIGEST,
+        "plan_set_digest": service.CONTROLLED_PLAN_SET_DIGEST,
+        "dependency_closure_digest": service.CONTROLLED_CLOSURE_DIGEST,
+        "exact_four_binding_digest": service.CONTROLLED_BINDING_DIGEST,
+    }
+    spec.update(overrides)
+    return spec
+
+
+def test_controlled_container_rejects_caller_paths_and_bytes() -> None:
+    with pytest.raises(service.JobInputError, match="closed"):
+        service.execute_controlled_pilot_container(
+            {**_controlled_job_spec(), "db_path": "/tmp/attacker.sqlite"}
+        )
+
+
+def test_controlled_container_deletes_ephemeral_snapshot_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kept: list[Path] = []
+
+    def fail_download(key: str, dest: Path, *, expected_hex: str, expected_size: int) -> str:
+        del key, expected_hex, expected_size
+        dest.write_bytes(b"sqlite")
+        kept.append(dest)
+        raise RuntimeError("download failed")
+
+    monkeypatch.setattr(service, "_download_controlled_snapshot", fail_download)
+    with pytest.raises(RuntimeError, match="download failed"):
+        service.execute_controlled_pilot_container(_controlled_job_spec())
+    assert kept
+    assert not kept[0].exists()
+    assert not kept[0].parent.exists()
+
+
+def test_controlled_container_runs_canonical_four_with_independent_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.result import BacktestResult
+    from strategies.paper import Lifecycle, PaperRunResult
+
+    snapshot = tmp_path / "controlled.sqlite"
+    sha = _sqlite(snapshot)
+    physical_id = f"sha256:{sha}"
+    snapshot_id = "sha256:" + ("ab" * 32)
+    calls: list[tuple[str, str]] = []
+
+    def fake_download(key: str, dest: Path, *, expected_hex: str, expected_size: int) -> str:
+        del key, expected_size
+        dest.write_bytes(snapshot.read_bytes())
+        return expected_hex
+
+    def fake_run(strategy: object, config: object) -> PaperRunResult:
+        calls.append((type(strategy).__name__, getattr(config, "lifecycle").value))
+        experiment_id = "e" * 64
+        return PaperRunResult(
+            experiment_id=experiment_id,
+            run_id=experiment_id,
+            lifecycle=Lifecycle.PAPER,
+            backtest=BacktestResult(
+                equity_curve=[{"date": "2023-01-04", "equity": 1.0}],
+                trades=[{"code": "7203"}],
+                metrics={
+                    "total_return_post_cost": 0.01,
+                    "max_drawdown": 0.01,
+                    "num_trades": 1,
+                },
+                metadata={
+                    "max_gross_weight_limit": 0.5,
+                    "requested_gross_weight": 0.5,
+                    "realized_gross_weight": 0.5,
+                    "authentic_am_session_evidence": True,
+                },
+            ),
+            reproducibility={
+                "data_snapshot_id": snapshot_id,
+                "feature_versions": {"momentum_n": "1.0.0"},
+                "feature_definition_hashes": {},
+                "strategy_definition_hash": "sha256:" + ("cd" * 32),
+            },
+        )
+
+    class _Universe:
+        rule_digest = EXACT_FOUR_UNIVERSE_RULE_DIGEST
+        resolved_membership_digest = "sha256:" + ("ab" * 32)
+        membership_by_date = {"2023-01-04": ("7203",)}
+        membership_proof = "controlled-resolved-universe:" + ("sha256:" + ("ab" * 32))
+
+    handle_events: list[str] = []
+
+    class _Handle:
+        def _begin_controlled_batch_reads(self) -> None:
+            handle_events.append("begin")
+
+        def logical_snapshot_id(self) -> str:
+            return snapshot_id
+
+        def resolve_controlled_universe(self, **_kwargs: object) -> _Universe:
+            return _Universe()
+
+        def _end_controlled_batch_reads(self) -> None:
+            handle_events.append("end")
+
+        def close(self) -> None:
+            handle_events.append("close")
+
+    monkeypatch.setattr(service, "_download_controlled_snapshot", fake_download)
+    monkeypatch.setattr(service, "_run_controlled_paper", fake_run)
+    monkeypatch.setattr(service, "_mint_controlled_am_view", lambda *_args: _Handle())
+    result = service.execute_controlled_pilot_container(
+        _controlled_job_spec(
+            snapshot_id=snapshot_id,
+            immutable_db_digest=physical_id,
+            snapshot_key=(
+                "research/controlled_pilot/v1/snapshots/sha256="
+                + physical_id[len("sha256:") :]
+                + ".sqlite"
+            ),
+            snapshot_size=snapshot.stat().st_size,
+        )
+    )
+    assert result["ok"] is True
+    assert result["ephemeral_cleaned"] is True
+    assert result["automatic_promotion"] is False
+    assert result["live_orders_enabled"] is False
+    papers = result["papers"]
+    assert len(papers) == 4
+    assert {row["lifecycle"] for row in papers} == {"Paper"}
+    assert len({row["strategy_spec_hash"] for row in papers}) == 4
+    assert len(result["risks"]) == 4
+    assert all("audit_id" in row for row in result["risks"])
+    assert result["selection"]["decision"] == "HOLD"
+    assert result["selection"]["automatic_promotion"] is False
+    assert "PROMOTE" not in {
+        row["decision"] for row in result["selection"]["decisions"]
+    }
+    assert result["knowledge"]["digest"].startswith("sha256:")
+    assert len(calls) == 4
+    assert handle_events == ["begin", "end", "close"]
+    assert {lifecycle for _, lifecycle in calls} == {"Paper"}
+    assert "Threshold" not in " ".join(name for name, _ in calls)
+    assert papers[0]["ordinal"] == 1
+    assert papers[0]["plan_id"] == "exp-mdh-hold10-momentum"
+    assert "paper_digest" in papers[0]
+    assert result["knowledge"]["child_digest_set"] == result["selection"]["child_digest_set"]
+    assert result["knowledge"]["selection_digest"] != result["selection"]["result_digest"]
+    assert result["knowledge"]["selection_digest"].startswith("sha256:")
+    assert result["knowledge"]["selection_digest"] != result["selection"]["result_digest"]
+    assert result["knowledge"]["selection_digest"].startswith("sha256:")
+
+
+def _controlled_completed_result(item) -> dict:
+    return {
+        "ok": True,
+        "identity": service.CONTROLLED_PILOT_IDENTITY,
+        "status": "COMPLETED",
+        "job_id": item.job_id,
+        "request_digest": item.request_digest,
+        "execution_id": item.execution_id,
+        "runner_version": item.runner_version,
+        "automatic_promotion": False,
+        "live_orders_enabled": False,
+        "ephemeral_cleaned": True,
+        "papers": [{"ordinal": index} for index in range(1, 5)],
+        "risks": [{"ordinal": index} for index in range(1, 5)],
+        "selection": {"decision": "HOLD"},
+        "knowledge": {"kind": "knowledge"},
+        "generation": int(service._CONTROLLED_CONTRACT["generation"]),
+        "max_parallel": int(service._CONTROLLED_CONTRACT["max_parallel"]),
+    }
+
+
+def test_controlled_job_manager_restart_executes_once() -> None:
+    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
+    store: dict[str, bytes] = {}
+    executions = {"n": 0}
+    done = threading.Event()
+
+    def upload(key, data, *, spec, content_digest, extra_headers=None):
+        del spec, content_digest, extra_headers
+        body = data if isinstance(data, bytes) else bytes(data)
+        if key in store:
+            raise service.TerminalReadDenied("create-only")
+        store[key] = body
+
+    def reader(item):
+        raw = store.get(item.manifest_key)
+        if raw is None:
+            return None
+        return json.loads(raw.decode("utf-8"))
+
+    def runner(item):
+        executions["n"] += 1
+        return _controlled_completed_result(item)
+
+    first = service.JobManager(
+        runner,
+        terminal_uploader=upload,
+        terminal_reader=reader,
+        on_terminal=done.set,
+        max_job_seconds=5,
+        retry_schedule=(0.01,),
+    )
+    first.submit(spec)
+    assert done.wait(2.0)
+    second_done = threading.Event()
+    second = service.JobManager(
+        runner,
+        terminal_uploader=upload,
+        terminal_reader=reader,
+        on_terminal=second_done.set,
+        max_job_seconds=5,
+        retry_schedule=(0.01,),
+    )
+    recovered = second.submit(spec)
+    assert executions["n"] == 1
+    assert recovered["status"] == "COMPLETED"
+    assert recovered["execution_id"] == spec.execution_id
+    assert second_done.is_set() is False
+
+
+
+def test_controlled_missing_runner_version_is_rejected() -> None:
+    document = _controlled_job_spec()
+    document["runner_version"] = ""
+    with pytest.raises(service.JobInputError, match="runner_version"):
+        service.ControlledPilotJobSpec.from_document(document)
+    missing = _controlled_job_spec()
+    missing.pop("runner_version")
+    with pytest.raises(service.JobInputError, match="closed"):
+        service.ControlledPilotJobSpec.from_document(missing)
+    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
+    headers = service._terminal_get_headers(spec)
+    assert headers["x-personal-runner-version"] == spec.runner_version
+    assert spec.runner_version == service._CONTROLLED_CONTRACT["runner_version"]
+
+
+def test_python_controlled_terminals_match_the_worker_closed_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
+    monkeypatch.setattr(
+        service,
+        "execute_controlled_pilot_container",
+        lambda _document: {
+            key: value
+            for key, value in _controlled_completed_result(spec).items()
+            if key
+            not in {
+                "status",
+                "job_id",
+                "request_digest",
+                "execution_id",
+                "runner_version",
+            }
+        },
+    )
+    completed = service.default_runner(spec)
+    assert completed["runner_version"] == spec.runner_version
+    closed_completed = {
+        **completed,
+        "owner_nonce": "owner-nonce-1",
+        "fencing_token": 1,
+    }
+    cross_runtime = json.loads(
+        (
+            ROOT
+            / "tests"
+            / "fixtures"
+            / "controlled_pilot_python_terminals.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert closed_completed == cross_runtime["completed"]
+    assert service._controlled_terminal_matches_spec(spec, closed_completed)
+
+    manager = service.JobManager(lambda _spec: {}, max_job_seconds=5)
+    timeout = {
+        **manager._timeout_terminal(spec),
+        "owner_nonce": "owner-nonce-1",
+        "fencing_token": 1,
+    }
+    failure = {
+        **manager._failure_terminal(spec, "controlled_execution_failed"),
+        "owner_nonce": "owner-nonce-1",
+        "fencing_token": 1,
+    }
+    assert timeout["runner_version"] == spec.runner_version
+    assert failure["runner_version"] == spec.runner_version
+    assert failure == cross_runtime["failed"]
+    assert service._controlled_terminal_matches_spec(spec, timeout)
+    assert service._controlled_terminal_matches_spec(spec, failure)
+    for malformed in (
+        {key: value for key, value in closed_completed.items() if key != "runner_version"},
+        {**closed_completed, "runner_version": "evil-runner"},
+        {**closed_completed, "fencing_token": "1"},
+        {**closed_completed, "extra": True},
+    ):
+        assert not service._controlled_terminal_matches_spec(spec, malformed)
+
+
+class _ControlledCasStore:
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.objects: dict[str, tuple[bytes, str]] = {}
+        self.seq = 0
+
+    def upload(self, key, data, *, spec, content_digest, extra_headers=None):
+        del spec, content_digest
+        body = data if isinstance(data, bytes) else bytes(data)
+        headers = {str(k).lower(): str(v) for k, v in dict(extra_headers or {}).items()}
+        with self.lock:
+            existing = self.objects.get(key)
+            if key.endswith("/container-lease.json"):
+                if headers.get("if-none-match") == "*":
+                    if existing is not None:
+                        raise service.ControlledLeaseConflict("lease exists")
+                elif headers.get("if-match"):
+                    if existing is None or existing[1] != headers["if-match"]:
+                        raise service.ControlledLeaseConflict("lease cas")
+                elif existing is not None:
+                    raise service.ControlledLeaseConflict("lease precondition")
+            elif existing is not None:
+                if existing[0] == body:
+                    return
+                raise service.JobConflictError("digest conflict")
+            self.seq += 1
+            self.objects[key] = (body, f"etag-{self.seq}")
+
+    def reader(self, item):
+        raw = self.objects.get(item.manifest_key)
+        if raw is None:
+            return None
+        return json.loads(raw[0].decode("utf-8"))
+
+    def object_reader(self, spec, key):
+        del spec
+        raw = self.objects.get(key)
+        if raw is None:
+            return None, ""
+        return json.loads(raw[0].decode("utf-8")), raw[1]
+
+
+def _controlled_runner(executions, started=None, release=None):
+    def runner(item):
+        executions["n"] += 1
+        if started is not None:
+            started.set()
+        if release is not None:
+            release.wait(2.0)
+        return _controlled_completed_result(item)
+
+    return runner
+
+
+def test_controlled_crash_before_terminal_takeover_after_lease_expiry() -> None:
+    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
+    store = _ControlledCasStore()
+    stage = {
+        "identity": service.CONTROLLED_PILOT_IDENTITY,
+        "job_id": spec.job_id,
+        "request_digest": spec.request_digest,
+        "execution_id": spec.execution_id,
+        "runner_version": spec.runner_version,
+        "status": "QUEUED",
+        "stage": "QUEUED",
+    }
+    lease = {
+        "identity": service.CONTROLLED_PILOT_IDENTITY,
+        "job_id": spec.job_id,
+        "request_digest": spec.request_digest,
+        "execution_id": spec.execution_id,
+        "runner_version": spec.runner_version,
+        "kind": "controlled-pilot",
+        "owner_nonce": "deadownerdeadowner",
+        "fencing_token": 1,
+        "expires_at": 1.0,
+        "heartbeat_at": 0.0,
+        "status": "CLAIMED",
+    }
+    store.objects[spec.stage_key] = (
+        service._canonical_bytes(stage),
+        "etag-stage",
+    )
+    store.objects[spec.lease_key] = (
+        service._canonical_bytes(lease),
+        "etag-dead",
+    )
+    executions = {"n": 0}
+    done = threading.Event()
+    manager = service.JobManager(
+        _controlled_runner(executions),
+        terminal_uploader=store.upload,
+        terminal_reader=store.reader,
+        object_reader=store.object_reader,
+        on_terminal=done.set,
+        max_job_seconds=5,
+        retry_schedule=(0.01,),
+    )
+    accepted = manager.submit(spec)
+    assert accepted["status"] in {"QUEUED", "RUNNING", "COMPLETED"}
+    assert done.wait(2.0)
+    assert executions["n"] == 1
+    claimed, _etag = store.object_reader(spec, spec.lease_key)
+    assert claimed["owner_nonce"] != "deadownerdeadowner"
+    assert float(claimed["expires_at"]) > 1.0
+
+
+def test_controlled_two_managers_race_has_at_most_one_executor() -> None:
+    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
+    store = _ControlledCasStore()
+    executions = {"n": 0}
+    started = threading.Event()
+    release = threading.Event()
+    first_done = threading.Event()
+    second_done = threading.Event()
+    first = service.JobManager(
+        _controlled_runner(executions, started, release),
+        terminal_uploader=store.upload,
+        terminal_reader=store.reader,
+        object_reader=store.object_reader,
+        on_terminal=first_done.set,
+        max_job_seconds=5,
+        retry_schedule=(0.01,),
+    )
+    second = service.JobManager(
+        _controlled_runner(executions, started, release),
+        terminal_uploader=store.upload,
+        terminal_reader=store.reader,
+        object_reader=store.object_reader,
+        on_terminal=second_done.set,
+        max_job_seconds=5,
+        retry_schedule=(0.01,),
+    )
+    results: list[dict] = []
+    errors: list[BaseException] = []
+    ready = threading.Barrier(3)
+
+    def run(manager):
+        try:
+            ready.wait(2.0)
+            results.append(manager.submit(spec))
+        except BaseException as exc:
+            errors.append(exc)
+            raise
+
+    threads = [threading.Thread(target=run, args=(first,)), threading.Thread(target=run, args=(second,))]
+    for thread in threads:
+        thread.start()
+    ready.wait(2.0)
+    for thread in threads:
+        thread.join(2.0)
+        assert not thread.is_alive()
+    assert errors == []
+    assert started.wait(2.0)
+    assert executions["n"] == 1
+    release.set()
+    assert sum(1 for row in results if row.get("status") in {"QUEUED", "RUNNING", "COMPLETED"}) == 2
+    winner_done = first_done.wait(2.0)
+    if not winner_done:
+        winner_done = second_done.wait(2.0)
+    assert winner_done
+    assert executions["n"] == 1
+    terminals = [row for row in results if row.get("status") == "COMPLETED"]
+    lookups = [row for row in results if row.get("status") == "RUNNING" and row.get("job_id") == spec.job_id]
+    assert len(terminals) + len(lookups) >= 1
+
+
+def _closed_lease(spec, owner, expires_at, fencing_token=1):
+    return {
+        "identity": service.CONTROLLED_PILOT_IDENTITY,
+        "job_id": spec.job_id,
+        "request_digest": spec.request_digest,
+        "execution_id": spec.execution_id,
+        "runner_version": spec.runner_version,
+        "kind": "controlled-pilot",
+        "owner_nonce": owner,
+        "fencing_token": fencing_token,
+        "expires_at": expires_at,
+        "heartbeat_at": expires_at - 1,
+        "status": "CLAIMED",
+    }
+
+
+def test_fresh_manager_observes_active_lease_then_claims_after_expiry() -> None:
+    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
+    store = _ControlledCasStore()
+    now = __import__("time").time()
+    store.objects[spec.lease_key] = (
+        service._canonical_bytes(_closed_lease(spec, "oldowneroldowner", now + 0.25)),
+        "etag-old",
+    )
+    executions = {"n": 0}
+    done = threading.Event()
+    manager = service.JobManager(
+        _controlled_runner(executions),
+        terminal_uploader=store.upload,
+        terminal_reader=store.reader,
+        object_reader=store.object_reader,
+        on_terminal=done.set,
+        max_job_seconds=5,
+        retry_schedule=(0.01,),
+        lease_ttl_seconds=0.4,
+    )
+    first = manager.submit(spec)
+    assert first["status"] == "RUNNING"
+    assert executions["n"] == 0
+    assert manager.status(spec.job_id)["status"] == "RUNNING"
+    assert done.wait(3.0)
+    assert executions["n"] == 1
+    claimed, _ = store.object_reader(spec, spec.lease_key)
+    assert claimed["owner_nonce"] != "oldowneroldowner"
+    assert claimed["fencing_token"] == 2
+
+
+def test_crash_before_executor_fresh_manager_takeover() -> None:
+    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
+    store = _ControlledCasStore()
+    now = __import__("time").time()
+    store.objects[spec.lease_key] = (
+        service._canonical_bytes(_closed_lease(spec, "crashedcrashedcr", now + 0.2, 3)),
+        "etag-crash",
+    )
+    executions = {"n": 0}
+    done = threading.Event()
+    manager = service.JobManager(
+        _controlled_runner(executions),
+        terminal_uploader=store.upload,
+        terminal_reader=store.reader,
+        object_reader=store.object_reader,
+        on_terminal=done.set,
+        max_job_seconds=5,
+        retry_schedule=(0.01,),
+        lease_ttl_seconds=0.3,
+    )
+    observed = manager.submit(spec)
+    assert observed["status"] == "RUNNING"
+    assert executions["n"] == 0
+    later = manager.submit(spec)
+    assert later["status"] in {"RUNNING", "QUEUED", "COMPLETED"}
+    assert done.wait(3.0)
+    assert executions["n"] == 1
+
+
+def test_heartbeat_cas_loss_fences_old_executor_zero_late_success() -> None:
+    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
+    store = _ControlledCasStore()
+    executions = {"n": 0}
+    authorized = {"n": 0}
+    started = threading.Event()
+    release = threading.Event()
+
+    def old_runner(item):
+        executions["n"] += 1
+        started.set()
+        deadline = __import__("time").time() + 2.0
+        while __import__("time").time() < deadline:
+            if old.lease_lost():
+                return {
+                    "ok": False,
+                    "identity": service.CONTROLLED_PILOT_IDENTITY,
+                    "status": "FAILED",
+                    "job_id": item.job_id,
+                    "request_digest": item.request_digest,
+                    "execution_id": item.execution_id,
+                    "runner_version": item.runner_version,
+                    "error": "controlled lease lost",
+                    "go": False,
+                    "automatic_promotion": False,
+                    "live_orders_enabled": False,
+                }
+            if release.is_set():
+                break
+            __import__("time").sleep(0.02)
+        authorized["n"] += 1
+        return _controlled_runner(executions)(item)
+
+    old_done = threading.Event()
+    new_done = threading.Event()
+    old = service.JobManager(
+        old_runner,
+        terminal_uploader=store.upload,
+        terminal_reader=store.reader,
+        object_reader=store.object_reader,
+        on_terminal=old_done.set,
+        max_job_seconds=5,
+        retry_schedule=(0.01,),
+        lease_ttl_seconds=0.3,
+    )
+    new = service.JobManager(
+        _controlled_runner(executions),
+        terminal_uploader=store.upload,
+        terminal_reader=store.reader,
+        object_reader=store.object_reader,
+        on_terminal=new_done.set,
+        max_job_seconds=5,
+        retry_schedule=(0.01,),
+        lease_ttl_seconds=0.3,
+    )
+    old.submit(spec)
+    assert started.wait(2.0)
+    lease, etag = store.object_reader(spec, spec.lease_key)
+    stolen = dict(lease)
+    stolen["owner_nonce"] = "newownernewowner"
+    stolen["fencing_token"] = int(lease["fencing_token"]) + 1
+    stolen["expires_at"] = 1.0
+    store.upload(
+        spec.lease_key,
+        service._canonical_bytes(stolen),
+        spec=spec,
+        content_digest="sha256:" + __import__("hashlib").sha256(service._canonical_bytes(stolen)).hexdigest(),
+        extra_headers={"if-match": etag},
+    )
+    try:
+        old._heartbeat_controlled_lease(spec)
+    except Exception:
+        pass
+    assert old.lease_lost()
+    takeover = new.submit(spec)
+    assert takeover["status"] in {"QUEUED", "RUNNING", "COMPLETED"}
+    release.set()
+    assert new_done.wait(3.0)
+    terminals = [json.loads(raw[0]) for key, raw in store.objects.items() if key.endswith("container-terminal.json")]
+    successes = [row for row in terminals if row.get("status") == "COMPLETED" and row.get("ok") is True]
+    assert len(successes) == 1
+    assert successes[0]["owner_nonce"] != lease["owner_nonce"]
+    assert authorized["n"] == 0
+
+
+
+def test_delayed_heartbeat_expired_does_not_upload() -> None:
+    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
+    store = _ControlledCasStore()
+    now = time.time()
+    expired = _closed_lease(spec, "ownerxxxowner", now - 5.0, fencing_token=7)
+    store.objects[spec.lease_key] = (service._canonical_bytes(expired), "etag-7")
+    puts: list[str] = []
+    original_upload = store.upload
+
+    def recording_upload(key, data, *, spec, content_digest, extra_headers=None):
+        puts.append(key)
+        return original_upload(
+            key,
+            data,
+            spec=spec,
+            content_digest=content_digest,
+            extra_headers=extra_headers,
+        )
+
+    manager = service.JobManager(
+        _controlled_runner({"n": 0}),
+        terminal_uploader=recording_upload,
+        terminal_reader=store.reader,
+        object_reader=store.object_reader,
+        max_job_seconds=5,
+        retry_schedule=(0.01,),
+        lease_ttl_seconds=0.4,
+    )
+    manager._controlled_lease = dict(expired)
+    manager._lease_etag = "etag-7"
+    before = store.objects[spec.lease_key][0]
+    with pytest.raises(service.JobConflictError, match="expired"):
+        manager._heartbeat_controlled_lease(spec)
+    assert manager.lease_lost()
+    assert puts == []
+    claimed, etag = store.object_reader(spec, spec.lease_key)
+    assert etag == "etag-7"
+    assert claimed["fencing_token"] == 7
+    assert claimed["expires_at"] == expired["expires_at"]
+    assert store.objects[spec.lease_key][0] == before
+
+
+
+
+class _RecordingBytesResponse:
+    def __init__(self, body: bytes, status: int = 200, headers: dict | None = None) -> None:
+        self._buf = io.BytesIO(body)
+        self.status = status
+        self.headers = headers or {"etag": "etag-1", "content-type": "application/json; charset=utf-8"}
+        self.read_sizes: list[int] = []
+
+    def read(self, n: int = -1) -> bytes:
+        self.read_sizes.append(n)
+        return self._buf.read(n)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+
+def _logical_terminal(spec, *, pad: int = 0) -> dict:
+    body = {
+        **_controlled_completed_result(spec),
+        "owner_nonce": "owner-nonce-1",
+        "fencing_token": 1,
+    }
+    if pad:
+        body["papers"][0]["pad"] = "x" * pad
+    return body
+
+
+def _embedded_terminal_lease(spec, payload: bytes, owner: str = "owner-nonce-1") -> dict:
+    digest = "sha256:" + hashlib.sha256(payload).hexdigest()
+    return {
+        "identity": service.CONTROLLED_PILOT_IDENTITY,
+        "job_id": spec.job_id,
+        "request_digest": spec.request_digest,
+        "execution_id": spec.execution_id,
+        "runner_version": spec.runner_version,
+        "kind": "controlled-pilot",
+        "owner_nonce": owner,
+        "fencing_token": 1,
+        "expires_at": 10.0,
+        "heartbeat_at": 9.0,
+        "status": "TERMINAL",
+        "terminal_digest": digest,
+        "terminal_status": "COMPLETED",
+        "terminal_payload_b64": __import__("base64").b64encode(payload).decode("ascii"),
+    }
+
+
+def _near_max_stored_lease(spec) -> tuple[bytes, bytes]:
+    low = 0
+    high = service.CONTROLLED_TERMINAL_MAX_BYTES
+    best_payload = service._canonical_bytes(_logical_terminal(spec))
+    best_stored = service._canonical_bytes(_embedded_terminal_lease(spec, best_payload))
+    while low <= high:
+        mid = (low + high) // 2
+        payload = service._canonical_bytes(_logical_terminal(spec, pad=mid))
+        stored = service._canonical_bytes(_embedded_terminal_lease(spec, payload))
+        if (
+            len(payload) <= service.CONTROLLED_TERMINAL_MAX_BYTES
+            and len(stored) <= service.CONTROLLED_LEASE_STORED_MAX_BYTES
+        ):
+            best_payload, best_stored = payload, stored
+            low = mid + 1
+        else:
+            high = mid - 1
+    assert len(best_payload) > 8 * 1024
+    assert len(best_payload) <= service.CONTROLLED_TERMINAL_MAX_BYTES
+    assert len(best_stored) > service.CONTROLLED_LEASE_MAX_BYTES
+    assert len(best_stored) <= service.CONTROLLED_LEASE_STORED_MAX_BYTES
+    assert service.CONTROLLED_TERMINAL_MAX_BYTES - len(best_payload) < 64
+    return best_payload, best_stored
+
+
+def test_python_stored_lease_cap_matches_worker_formula() -> None:
+    expected = (
+        8 * 1024
+        + ((64 * 1024 + 2) // 3) * 4
+        + 2048
+    )
+    assert service.CONTROLLED_LEASE_MAX_BYTES == 8 * 1024
+    assert service.CONTROLLED_TERMINAL_MAX_BYTES == 64 * 1024
+    assert service.CONTROLLED_LEASE_STORED_MAX_BYTES == expected
+    assert expected == 97624
+
+
+def test_near_maximum_embedded_terminal_lease_recovery(monkeypatch) -> None:
+    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
+    payload, stored = _near_max_stored_lease(spec)
+    logical = json.loads(payload.decode("utf-8"))
+    responses: dict[str, _RecordingBytesResponse] = {}
+    puts: list[str] = []
+
+    def urlopen(request, timeout=None):
+        del timeout
+        key = urllib.parse.urlparse(request.full_url).path.lstrip("/")
+        method = request.get_method()
+        if method == "PUT":
+            puts.append(key)
+            raise AssertionError(f"unexpected PUT {key}")
+        if key == spec.lease_key:
+            response = _RecordingBytesResponse(stored, headers={"etag": "etag-terminal-lease"})
+        elif key == spec.manifest_key:
+            response = _RecordingBytesResponse(payload, headers={"etag": "etag-logical"})
+        else:
+            raise urllib.error.HTTPError(request.full_url, 404, "not found", Message(), io.BytesIO(b""))
+        responses[key] = response
+        return response
+
+    monkeypatch.setattr(service.urllib.request, "urlopen", urlopen)
+    parsed, etag = service._get_json_at(spec, spec.lease_key)
+    assert etag == "etag-terminal-lease"
+    assert parsed is not None
+    assert parsed["status"] == "TERMINAL"
+    assert parsed["terminal_digest"] == "sha256:" + hashlib.sha256(payload).hexdigest()
+    lease_reads = responses[spec.lease_key].read_sizes
+    assert lease_reads == [service.CONTROLLED_LEASE_STORED_MAX_BYTES + 1]
+
+    logical_got = service._get_json(spec)
+    assert logical_got == logical
+    assert responses[spec.manifest_key].read_sizes == [service.CONTROLLED_TERMINAL_MAX_BYTES + 1]
+
+    executions = {"n": 0}
+    done = threading.Event()
+    store = _ControlledCasStore()
+    store.objects[spec.lease_key] = (stored, "etag-terminal-lease")
+
+    def reader(item):
+        del item
+        return dict(logical)
+
+    manager = service.JobManager(
+        _controlled_runner(executions),
+        terminal_uploader=store.upload,
+        terminal_reader=reader,
+        object_reader=store.object_reader,
+        on_terminal=done.set,
+        max_job_seconds=5,
+        retry_schedule=(0.01,),
+    )
+    first = manager.submit(spec)
+    assert first["status"] == "COMPLETED"
+    assert first["execution_id"] == spec.execution_id
+    assert executions["n"] == 0
+    assert done.is_set() is False
+    replay = manager.submit(spec)
+    assert replay["status"] == "COMPLETED"
+    assert executions["n"] == 0
+    claimed, _ = store.object_reader(spec, spec.lease_key)
+    assert claimed["status"] == "TERMINAL"
+    assert claimed["owner_nonce"] == "owner-nonce-1"
+    assert puts == []
+
+    manager._controlled_lease = {
+        "owner_nonce": "owner-nonce-1",
+        "fencing_token": 1,
+    }
+    manager._lease_etag = "etag-terminal-lease"
+    before = store.objects[spec.lease_key][0]
+    try:
+        manager._heartbeat_controlled_lease(spec)
+        raise AssertionError("heartbeat after terminal must fail closed")
+    except service.JobConflictError:
+        pass
+    assert manager.lease_lost()
+    assert store.objects[spec.lease_key][0] == before
+
+
+def test_oversized_stored_lease_fails_closed(monkeypatch) -> None:
+    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
+    oversized = b"{" + b"x" * service.CONTROLLED_LEASE_STORED_MAX_BYTES
+    assert len(oversized) == service.CONTROLLED_LEASE_STORED_MAX_BYTES + 1
+    response = _RecordingBytesResponse(oversized, headers={"etag": "etag-over"})
+
+    def urlopen(request, timeout=None):
+        del timeout, request
+        return response
+
+    monkeypatch.setattr(service.urllib.request, "urlopen", urlopen)
+    with pytest.raises(service.TerminalReadDenied, match="exceeds bound"):
+        service._get_json_at(spec, spec.lease_key)
+    assert response.read_sizes == [service.CONTROLLED_LEASE_STORED_MAX_BYTES + 1]
+
+    huge_logical = b"{" + b"y" * service.CONTROLLED_TERMINAL_MAX_BYTES
+    logical_response = _RecordingBytesResponse(huge_logical)
+
+    def urlopen_logical(request, timeout=None):
+        del timeout, request
+        return logical_response
+
+    monkeypatch.setattr(service.urllib.request, "urlopen", urlopen_logical)
+    with pytest.raises(service.TerminalReadDenied, match="exceeds bound"):
+        service._get_json(spec)
+    assert logical_response.read_sizes == [service.CONTROLLED_TERMINAL_MAX_BYTES + 1]
+
+
+def test_terminal_lease_does_not_takeover_when_logical_terminal_missing() -> None:
+    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
+    payload, stored = _near_max_stored_lease(spec)
+    del payload
+    store = _ControlledCasStore()
+    store.objects[spec.lease_key] = (stored, "etag-terminal-lease")
+    executions = {"n": 0}
+    manager = service.JobManager(
+        _controlled_runner(executions),
+        terminal_uploader=store.upload,
+        terminal_reader=lambda item: None,
+        object_reader=store.object_reader,
+        max_job_seconds=5,
+        retry_schedule=(0.01,),
+    )
+    try:
+        observed = manager.submit(spec)
+        assert observed["status"] == "RUNNING"
+        assert observed.get("lease_observer") is True
+        assert executions["n"] == 0
+        claimed, _ = store.object_reader(spec, spec.lease_key)
+        assert claimed["status"] == "TERMINAL"
+        assert claimed["owner_nonce"] == "owner-nonce-1"
+    finally:
+        with manager._lock:
+            recovery = manager._lease_recovery
+            manager._lease_recovery = None
+            heartbeat = manager._lease_heartbeat
+            manager._lease_heartbeat = None
+        if recovery is not None:
+            recovery.cancel()
+        if heartbeat is not None:
+            heartbeat.cancel()

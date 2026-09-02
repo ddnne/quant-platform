@@ -1,0 +1,17 @@
+{
+  "algorithm": "Ed25519",
+  "issued_at": "2026-09-02T12:00:00+00:00",
+  "key_id": "controlled-pilot-fixture-v1",
+  "logical_snapshot_id": "sha256:29058b15274a0bdf21e1946a7f363843b40b7a3ed338c8548ff1c8a97ab01d1b",
+  "physical_snapshot_id": "sha256:1d673408ef5efa994659ecfe0082056807538233971523e120a01c5f79c57b5b",
+  "public_key_b64": "YRMjID9SanCZBg4UX63gBWiKR4zZTmAaRGXsO4goZy4=",
+  "request": {
+    "idempotency_key": "controlled-job-1",
+    "ready_attestation_id": "ready-44adc3f6d5ae7366d411a9ef8765c449ffdd540844f653a3fb1f948dba3e677a",
+    "snapshot_id": "sha256:29058b15274a0bdf21e1946a7f363843b40b7a3ed338c8548ff1c8a97ab01d1b"
+  },
+  "request_digest": "sha256:6dbaa9f6fbc782d710f9efdfde3d49e49e38eb13d7c033bd5fbcf4e0b59b7c50",
+  "resolved_universe_digest": "sha256:1a695e645a6d24355be1b2bf39fdc3513bce7d6512752dfbce423ff8b9ac6700",
+  "ttl_seconds": 3600,
+  "verifier_now": "2026-09-02T12:00:30+00:00"
+}

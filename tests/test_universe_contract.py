@@ -68,6 +68,12 @@ def _universe_db(path: Path, *, fins_codes: tuple[str, ...]) -> None:
             "raw_payload TEXT NOT NULL,"
             "PRIMARY KEY(source,dataset,natural_key))"
         )
+        connection.execute(
+            "CREATE TABLE snapshot_observation_clock (observed_through TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO snapshot_observation_clock VALUES ('2024-12-31T15:30:00+09:00')"
+        )
         _insert_record(
             connection,
             dataset="markets_calendar",
@@ -120,6 +126,8 @@ def _revisioned_universe_db(path: Path) -> None:
             );
             CREATE TABLE jquants_records_revisions AS
                 SELECT * FROM jquants_records WHERE 0;
+            CREATE TABLE snapshot_observation_clock (observed_through TEXT NOT NULL);
+            INSERT INTO snapshot_observation_clock VALUES ('2024-12-31T15:30:00+09:00');
             """
         )
         for day in ("2024-01-02", "2024-01-03"):
@@ -201,6 +209,12 @@ def _scale_universe_db(path: Path, *, day_count: int) -> tuple[str, str]:
             "ingested_at TEXT NOT NULL,payload TEXT NOT NULL,"
             "raw_payload TEXT NOT NULL,"
             "PRIMARY KEY(source,dataset,natural_key))"
+        )
+        connection.execute(
+            "CREATE TABLE snapshot_observation_clock (observed_through TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO snapshot_observation_clock VALUES ('2024-12-31T15:30:00+09:00')"
         )
         for offset in range(day_count):
             day = (start + timedelta(days=offset)).isoformat()
