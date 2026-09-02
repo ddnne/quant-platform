@@ -36,6 +36,7 @@ from .history_reads import (
     iter_unmanaged_draft_catalog_pages,
     iter_unmanaged_draft_revision_pages,
 )
+from .governed_am_view import am_product_row_matches_session
 from .read_clock import (
     DRAFT_OBSERVATION_LABEL,
     SNAPSHOT_OBSERVATION_LABEL,
@@ -762,6 +763,15 @@ class _SqliteDraftDataView(PersonalResearchDataView):
                             or (
                                 self._cutoff == DEFAULT_DECISION_CUTOFF
                                 and ingested > acquisition_cutoff
+                            )
+                        ):
+                            continue
+                        if dataset == _AM_BAR_DATASET and not (
+                            am_product_row_matches_session(
+                                event_time=event_time,
+                                available_at=available,
+                                ingested_at=ingested,
+                                session_date=event_time[:10],
                             )
                         ):
                             continue

@@ -1033,7 +1033,7 @@ def _seed_exact_pit_scope(
     tmp_path,
     receipt_ed25519_keys,
 ) -> tuple[object, object]:
-    """Five-day exact natural-key closure with governed v4 receipts."""
+    """Synthetic five-day exact natural-key closure with governed v4 receipts."""
     db_path = tmp_path / "pit-scope.sqlite"
     calendar_dates: list[str] = []
     cursor = date(2023, 1, 2)
@@ -1135,14 +1135,27 @@ def _seed_exact_pit_scope(
             """
         )
         for dataset_id in _SCOPE_DATASETS:
-            store.upsert(
-                "jquants_records",
-                normalize_generic(
-                    payloads[dataset_id],
-                    dataset=dataset_id,
-                    ingested_at=ingestion_clocks[dataset_id],
-                ),
-            )
+            rows = payloads[dataset_id]
+            if dataset_id == "equities_bars_daily_am":
+                for row in rows:
+                    day = str(row["Date"])
+                    store.upsert(
+                        "jquants_records",
+                        normalize_generic(
+                            [row],
+                            dataset=dataset_id,
+                            ingested_at=f"{day}T11:30:00+09:00",
+                        ),
+                    )
+            else:
+                store.upsert(
+                    "jquants_records",
+                    normalize_generic(
+                        rows,
+                        dataset=dataset_id,
+                        ingested_at=ingestion_clocks[dataset_id],
+                    ),
+                )
         authority = _TestSignedReceiptAuthority(
             signing_key=receipt_ed25519_keys.signing_key
         )
@@ -1636,6 +1649,7 @@ def test_signed_product_digest_survives_sync_projection_and_ready(
         ("equities_master", "2023-01-02"),
         ("fins_summary", "2023-01-03"),
         ("equities_bars_daily", "2023-01-05"),
+        ("equities_bars_daily_am", "2023-01-05"),
         ("indices_bars_daily_topix", "2023-01-05"),
     ),
 )
@@ -1657,6 +1671,26 @@ def test_exact_pit_dependency_scope_rejects_each_missing_or_late_dependency(
         (victim, event_date),
     )
     with pytest.raises(MassResearchDisabledError):
+        _verify_scope(db_path, binding, monkeypatch)
+
+
+def test_exact_pit_dependency_scope_rejects_am_captured_after_operational_deadline(
+    tmp_path,
+    receipt_ed25519_keys,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path, binding = _seed_exact_pit_scope(tmp_path, receipt_ed25519_keys)
+    _mutate_sqlite(
+        db_path,
+        "UPDATE jquants_records "
+        "SET ingested_at='2023-01-05T12:31:00+09:00' "
+        "WHERE dataset='equities_bars_daily_am' "
+        "AND substr(event_time,1,10)='2023-01-05'",
+    )
+    with pytest.raises(
+        MassResearchDisabledError,
+        match="equities_bars_daily_am same-day operational closure missing/late",
+    ):
         _verify_scope(db_path, binding, monkeypatch)
 
 

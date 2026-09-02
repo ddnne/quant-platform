@@ -166,6 +166,7 @@ def test_am_dual_clock_is_exact_and_dataset_scoped(tmp_path: Path) -> None:
     path = tmp_path / "am-dual-clock.sqlite"
     con = _catalog_db(path)
     for code, acquired in (
+        ("1300", "2024-01-05T11:29:59+09:00"),
         ("1301", "2024-01-05T12:15:00+09:00"),
         ("1302", "2024-01-05T12:30:00+09:00"),
         ("1303", "2024-01-05T12:30:01+09:00"),
@@ -250,7 +251,7 @@ def test_am_dual_clock_is_exact_and_dataset_scoped(tmp_path: Path) -> None:
         for page in view.iter_decision_pages(
             decision_date="2024-01-05",
             dataset="equities_bars_daily_am",
-            codes=("1301", "1302", "1303", "1304", "1305"),
+            codes=("1300", "1301", "1302", "1303", "1304", "1305"),
             start="2024-01-05",
             end="2024-01-05",
         )
@@ -296,6 +297,11 @@ def test_am_dual_clock_is_exact_and_dataset_scoped(tmp_path: Path) -> None:
     )
     assert late_coverage["status"] == "FAIL"
     assert late_coverage["observed_rows"] == 0
+    pre_window_coverage = view.observed_bar_coverage(
+        _universe("2024-01-05", codes=("1300",)), minimum_ratio=1.0
+    )
+    assert pre_window_coverage["status"] == "FAIL"
+    assert pre_window_coverage["observed_rows"] == 0
 
 
 def test_morning_corporate_action_requires_end_day_every_code(tmp_path: Path) -> None:

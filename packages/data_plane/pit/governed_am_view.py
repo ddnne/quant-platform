@@ -175,6 +175,25 @@ def am_product_row_is_admitted(
     )
 
 
+def am_product_row_matches_session(
+    *,
+    event_time: str,
+    available_at: str,
+    ingested_at: str,
+    session_date: str,
+) -> bool:
+    """Require the exact AM event clock and its same-day acquisition window."""
+
+    return (
+        event_time == am_information_cutoff(session_date)
+        and am_product_row_is_admitted(
+            available_at=available_at,
+            ingested_at=ingested_at,
+            session_date=session_date,
+        )
+    )
+
+
 def _physical_sqlite_digest(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -348,9 +367,8 @@ def _load_authorized_am_rows(
         if len(day) != 10:
             continue
         expected_event = am_information_cutoff(day)
-        if event_time != expected_event:
-            continue
-        if not am_product_row_is_admitted(
+        if not am_product_row_matches_session(
+            event_time=event_time,
             available_at=available_at,
             ingested_at=ingested_at,
             session_date=day,
@@ -813,7 +831,8 @@ class VerifiedControlledSnapshotHandle:
             day = str(row["date"])
             if day < from_date or day > to_date:
                 continue
-            if not am_product_row_is_admitted(
+            if not am_product_row_matches_session(
+                event_time=str(row["event_time"]),
                 available_at=str(row["available_at"]),
                 ingested_at=str(row["ingested_at"]),
                 session_date=day,

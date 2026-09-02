@@ -12,10 +12,15 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Iterator, Mapping, Sequence
 
-from core.execution import close_as_of
+from core.execution import (
+    close_as_of,
+    morning_close_as_of,
+    operational_usable_by_as_of,
+)
 from data_contracts import coverage_contract_for
 from data_contracts.identity import natural_key as contract_natural_key
 from pit import PitError
+from pit.governed_am_view import am_product_row_matches_session
 from pit.read_clock import (
     PitReadClock,
     SNAPSHOT_OBSERVATION_LABEL,
@@ -27,6 +32,7 @@ from research.universe_contract import (
     resolve_tse_prime_with_fins,
 )
 from selection.budget_ledger import MassResearchDisabledError
+from paper_runtime.readiness_attestation import EXACT_FOUR_DATASET_IDS
 from storage.receipt_crypto import (
     PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
     PRODUCTION_RECEIPT_ENVIRONMENT,
@@ -153,13 +159,7 @@ def _verify_publication_on_authenticated_mirror(
         for scope in profile.dataset_scopes
     )
     required_datasets = tuple(binding.required_datasets)
-    expected_exact = {
-        "equities_bars_daily",
-        "equities_master",
-        "fins_summary",
-        "indices_bars_daily_topix",
-        "markets_calendar",
-    }
+    expected_exact = frozenset(EXACT_FOUR_DATASET_IDS)
     if set(required_datasets) != expected_exact:
         raise MassResearchDisabledError(
             "exact-four PIT verifier dataset closure drifted"
@@ -462,7 +462,7 @@ def _verify_publication_on_authenticated_mirror(
                     yield tuple(page)
 
             as_of_for_day = {
-                day: close_as_of(day)
+                day: morning_close_as_of(day)
                 for day in _calendar_dates(period_start, period_end)
             }
             with install_read_clock(proof_clock):
@@ -567,7 +567,9 @@ def _verify_publication_on_authenticated_mirror(
                     )
                 calendar_by_date[day] = row
 
-            start_clock = _as_datetime(close_as_of(period_start), "period_start")
+            start_clock = _as_datetime(
+                morning_close_as_of(period_start), "period_start"
+            )
             prior_trading = sorted(
                 day
                 for day, row in calendar_by_date.items()
@@ -605,7 +607,9 @@ def _verify_publication_on_authenticated_mirror(
                     raise MassResearchDisabledError(
                         f"markets_calendar missing exact scope date {day}"
                     )
-                if row["available_at"] > _as_datetime(close_as_of(day), day):
+                if row["available_at"] > _as_datetime(
+                    morning_close_as_of(day), day
+                ):
                     raise MassResearchDisabledError(
                         f"markets_calendar {day} is late at decision time"
                     )
@@ -641,12 +645,21 @@ def _verify_publication_on_authenticated_mirror(
                 code = _row_code(row)
                 if code:
                     bars_by_day_code.setdefault((row["event_date"], code), []).append(row)
+            am_by_day_code: dict[tuple[str, str], list[dict[str, Any]]] = {}
+            for row in _iter_dataset_facts(
+                "equities_bars_daily_am", codes=member_codes
+            ):
+                code = _row_code(row)
+                if code:
+                    am_by_day_code.setdefault((row["event_date"], code), []).append(
+                        row
+                    )
             topix_by_day: dict[str, list[dict[str, Any]]] = {}
             for row in _iter_dataset_facts("indices_bars_daily_topix"):
                 topix_by_day.setdefault(row["event_date"], []).append(row)
 
             for day in in_period_trading:
-                decision_clock = _as_datetime(close_as_of(day), day)
+                decision_clock = _as_datetime(morning_close_as_of(day), day)
                 members = resolved_universe.codes_for(day)
                 visible_dates = [stamp for stamp in master_by_date if stamp <= day]
                 if not visible_dates:
@@ -695,6 +708,28 @@ def _verify_publication_on_authenticated_mirror(
                     selected_event_dates["fins_summary"][latest_fins["natural_key"]] = (
                         latest_fins["event_date"]
                     )
+                    am_matches = [
+                        row
+                        for row in am_by_day_code.get((day, code), ())
+                        if am_product_row_matches_session(
+                            event_time=row["event_at"].isoformat(),
+                            available_at=row["available_at"].isoformat(),
+                            ingested_at=row["ingested_at"],
+                            session_date=day,
+                        )
+                    ]
+                    if len(am_matches) != 1:
+                        raise MassResearchDisabledError(
+                            "equities_bars_daily_am same-day operational closure "
+                            f"missing/late for {code}/{day}: rows={len(am_matches)}; "
+                            f"usable_by={operational_usable_by_as_of(day)}"
+                        )
+                    selected_keys["equities_bars_daily_am"].add(
+                        am_matches[0]["natural_key"]
+                    )
+                    selected_event_dates["equities_bars_daily_am"][
+                        am_matches[0]["natural_key"]
+                    ] = am_matches[0]["event_date"]
 
             for day in trading_dates:
                 decision_clock = _as_datetime(close_as_of(day), day)

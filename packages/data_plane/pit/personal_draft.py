@@ -25,6 +25,7 @@ from .api import (
     get_equity_bars_daily,
 )
 from .errors import PitError
+from .governed_am_view import am_product_row_matches_session
 from .query import (
     _readonly_connection_scope,
     _scoped_read_connection,
@@ -253,6 +254,15 @@ def _iter_catalog_bar_presence(
                 not ingested
                 or str(ingested) > clock.observed_through
                 or str(ingested) > str(ingested_cutoff or clock.decision_at)
+            ):
+                continue
+            if dataset == "equities_bars_daily_am" and not (
+                am_product_row_matches_session(
+                    event_time=str(event_time),
+                    available_at=str(available),
+                    ingested_at=str(ingested),
+                    session_date=str(day)[:10],
+                )
             ):
                 continue
             yield str(code or ""), str(day)[:10], str(available or "")
