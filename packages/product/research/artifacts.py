@@ -293,7 +293,9 @@ class ExperimentPlan:
     execution_enabled: bool = False
     version: str = EXPERIMENT_PLAN_VERSION
     identity: str = CONTROLLED_PILOT_IDENTITY
-    fill_contract: Mapping[str, Any] = MappingProxyType(dict(CONTROLLED_FILL_CONTRACT))
+    fill_contract: Mapping[str, Any] = field(
+        default_factory=lambda: MappingProxyType(dict(CONTROLLED_FILL_CONTRACT))
+    )
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "ExperimentPlan":
