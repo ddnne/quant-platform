@@ -1693,6 +1693,193 @@ function manifestKey(jobId: string): string {
   return `${controlledJobPrefix(jobId)}/manifest.json`;
 }
 
+const SUBMITTED_STATE_FIELDS = new Set([
+  "identity", "status", "job_id", "request_digest", "submitted_at",
+  "spec", "ready", "request", "go", "automatic_promotion",
+  "live_orders_enabled", "mass",
+]);
+const VERIFIED_READY_STATE_FIELDS = new Set([
+  "attestation_id", "snapshot_id", "immutable_db_digest", "physical", "identity",
+  "profile_digest", "plan_set_digest", "dependency_closure_digest",
+  "ready_manifest_digest", "fill_contract_digest", "receipt_proof_digest",
+  "coverage_proof_digest", "b0_quality_proof_digest", "b4_quality_proof_digest",
+  "resolved_universe_digest", "environment", "signed_projection_document_digest",
+  "session_scope",
+]);
+
+type ControlledPilotSubmittedState = {
+  identity: typeof CONTROLLED_PILOT_IDENTITY;
+  status: "SUBMITTED";
+  job_id: string;
+  request_digest: string;
+  submitted_at: string;
+  spec: ControlledPilotJobSpec;
+  ready: VerifiedControlledReady;
+  request: ControlledPilotRequest;
+  go: false;
+  automatic_promotion: false;
+  live_orders_enabled: false;
+  mass: false;
+};
+
+async function parseStoredSessionScope(
+  value: unknown,
+  physicalDigest: string,
+): Promise<ControlledSessionScope | null> {
+  if (!isRecord(value) || !closedShape(value, new Set([
+    "format", "dependency_scope_proof_digest", "physical_db_digest", "observed_through", "entries",
+  ])) || value.format !== "controlled-session-scope/v1" ||
+      !isSha256(value.dependency_scope_proof_digest) ||
+      value.physical_db_digest !== physicalDigest ||
+      typeof value.observed_through !== "string" ||
+      !Number.isFinite(Date.parse(value.observed_through)) ||
+      !Array.isArray(value.entries) ||
+      value.entries.length !== EXACT_FOUR_DATASET_IDS.length) return null;
+  const entries: ControlledSessionScope["entries"] = [];
+  for (let index = 0; index < EXACT_FOUR_DATASET_IDS.length; index += 1) {
+    const raw = value.entries[index];
+    const datasetId = EXACT_FOUR_DATASET_IDS[index]!;
+    if (!isRecord(raw) || !closedShape(raw, CONTROLLED_SESSION_ENTRY_FIELDS) ||
+        raw.dataset_id !== datasetId ||
+        !Number.isSafeInteger(raw.natural_key_count) || Number(raw.natural_key_count) < 1 ||
+        !isSha256(raw.natural_key_digest) || !Array.isArray(raw.product_artifact_digests) ||
+        raw.product_artifact_digests.length < 1 ||
+        raw.product_artifact_digests.some((digest: unknown) => !isSha256(digest)) ||
+        new Set(raw.product_artifact_digests).size !== raw.product_artifact_digests.length ||
+        !isSha256(raw.product_artifact_set_digest) ||
+        raw.product_artifact_set_digest !==
+          await sha256Digest(canonicalJson(raw.product_artifact_digests))) return null;
+    entries.push({
+      dataset_id: datasetId,
+      natural_key_count: Number(raw.natural_key_count),
+      natural_key_digest: raw.natural_key_digest,
+      product_artifact_digests: [...raw.product_artifact_digests] as string[],
+      product_artifact_set_digest: raw.product_artifact_set_digest,
+    });
+  }
+  const parsed: ControlledSessionScope = {
+    format: "controlled-session-scope/v1",
+    dependency_scope_proof_digest: value.dependency_scope_proof_digest,
+    physical_db_digest: physicalDigest,
+    observed_through: value.observed_through,
+    entries,
+  };
+  return jsonEqual(value, parsed) ? parsed : null;
+}
+
+async function parseStoredVerifiedReady(
+  value: unknown,
+  request: ControlledPilotRequest,
+  environment: string,
+): Promise<VerifiedControlledReady | null> {
+  if (!isRecord(value) || !closedShape(value, VERIFIED_READY_STATE_FIELDS) ||
+      value.attestation_id !== request.ready_attestation_id ||
+      value.snapshot_id !== request.snapshot_id || !isSha256(value.snapshot_id) ||
+      !isSha256(value.immutable_db_digest) || !isRecord(value.physical) ||
+      !closedShape(value.physical, PHYSICAL_FIELDS) ||
+      value.physical.digest !== value.immutable_db_digest ||
+      value.physical.key !== controlledPhysicalSnapshotKey(value.immutable_db_digest) ||
+      !Number.isSafeInteger(value.physical.size) || Number(value.physical.size) < 1 ||
+      value.identity !== CONTROLLED_PILOT_IDENTITY ||
+      value.profile_digest !== EXACT_FOUR_PROFILE_DIGEST ||
+      value.plan_set_digest !== EXACT_FOUR_PLAN_SET_DIGEST ||
+      value.dependency_closure_digest !== EXACT_FOUR_CLOSURE_DIGEST ||
+      value.fill_contract_digest !== CONTROLLED_FILL_CONTRACT_DIGEST ||
+      value.environment !== environment ||
+      !isSha256(value.ready_manifest_digest) || !isSha256(value.receipt_proof_digest) ||
+      !isSha256(value.coverage_proof_digest) || !isSha256(value.b0_quality_proof_digest) ||
+      !isSha256(value.b4_quality_proof_digest) || !isSha256(value.resolved_universe_digest) ||
+      !isSha256(value.signed_projection_document_digest)) return null;
+  const sessionScope = await parseStoredSessionScope(
+    value.session_scope,
+    value.immutable_db_digest,
+  );
+  if (sessionScope === null) return null;
+  const ready: VerifiedControlledReady = {
+    attestation_id: request.ready_attestation_id,
+    snapshot_id: request.snapshot_id,
+    immutable_db_digest: value.immutable_db_digest,
+    physical: {
+      key: value.physical.key as string,
+      digest: value.immutable_db_digest,
+      size: Number(value.physical.size),
+    },
+    identity: CONTROLLED_PILOT_IDENTITY,
+    profile_digest: EXACT_FOUR_PROFILE_DIGEST,
+    plan_set_digest: EXACT_FOUR_PLAN_SET_DIGEST,
+    dependency_closure_digest: EXACT_FOUR_CLOSURE_DIGEST,
+    ready_manifest_digest: value.ready_manifest_digest,
+    fill_contract_digest: CONTROLLED_FILL_CONTRACT_DIGEST,
+    receipt_proof_digest: value.receipt_proof_digest,
+    coverage_proof_digest: value.coverage_proof_digest,
+    b0_quality_proof_digest: value.b0_quality_proof_digest,
+    b4_quality_proof_digest: value.b4_quality_proof_digest,
+    resolved_universe_digest: value.resolved_universe_digest,
+    environment,
+    signed_projection_document_digest: value.signed_projection_document_digest,
+    session_scope: sessionScope,
+  };
+  return jsonEqual(value, ready) ? ready : null;
+}
+
+async function parseControlledPilotSubmittedState(
+  value: unknown,
+  jobId: string,
+  environment: string,
+): Promise<ControlledPilotSubmittedState | null> {
+  if (!isRecord(value) || !closedShape(value, SUBMITTED_STATE_FIELDS) ||
+      value.identity !== CONTROLLED_PILOT_IDENTITY || value.status !== "SUBMITTED" ||
+      value.job_id !== jobId || value.go !== false ||
+      value.automatic_promotion !== false || value.live_orders_enabled !== false ||
+      value.mass !== false || typeof value.submitted_at !== "string" ||
+      !Number.isFinite(parseCanonicalUtc(value.submitted_at))) return null;
+  const parsedRequest = parseControlledPilotRequest(value.request);
+  if (!parsedRequest.ok || !jsonEqual(value.request, parsedRequest.value) ||
+      parsedRequest.value.idempotency_key !== jobId) return null;
+  const digest = await requestDigest(parsedRequest.value);
+  if (value.request_digest !== digest) return null;
+  const ready = await parseStoredVerifiedReady(
+    value.ready,
+    parsedRequest.value,
+    environment,
+  );
+  if (ready === null || !isRecord(value.spec) ||
+      !isSha256(value.spec.authorization_digest)) return null;
+  const expectedSpec = closedControlledPilotJobSpec({
+    job_id: jobId,
+    idempotency_key: parsedRequest.value.idempotency_key,
+    ready_attestation_id: parsedRequest.value.ready_attestation_id,
+    ready_manifest_digest: ready.ready_manifest_digest,
+    signed_projection_document_digest: ready.signed_projection_document_digest,
+    session_scope: ready.session_scope,
+    snapshot_id: parsedRequest.value.snapshot_id,
+    immutable_db_digest: ready.immutable_db_digest,
+    snapshot_key: ready.physical.key,
+    snapshot_size: ready.physical.size,
+    authorization_digest: value.spec.authorization_digest,
+    request_digest: digest,
+    resolved_universe_digest: ready.resolved_universe_digest,
+    manifest_key: controlledContainerTerminalKey(jobId),
+    execution_id: await controlledPilotExecutionId(jobId, digest),
+  });
+  if (!jsonEqual(value.spec, expectedSpec)) return null;
+  const parsed: ControlledPilotSubmittedState = {
+    identity: CONTROLLED_PILOT_IDENTITY,
+    status: "SUBMITTED",
+    job_id: jobId,
+    request_digest: digest,
+    submitted_at: value.submitted_at,
+    spec: expectedSpec,
+    ready,
+    request: parsedRequest.value,
+    go: false,
+    automatic_promotion: false,
+    live_orders_enabled: false,
+    mass: false,
+  };
+  return jsonEqual(value, parsed) ? parsed : null;
+}
+
 async function putCreateOnly(
   bucket: R2Bucket,
   key: string,
@@ -1849,7 +2036,15 @@ export async function submitControlledPilot(
   const wrote = await putCreateOnly(env.STRUCTURED_BUCKET, stateKey(jobId), submitted);
   if (wrote.conflict) {
     const raced = await loadJsonObject(env.STRUCTURED_BUCKET, stateKey(jobId), STATE_MAX_BYTES);
-    if (!raced || raced.request_digest !== digest) {
+    const parsedRaced = await parseControlledPilotSubmittedState(
+      raced,
+      jobId,
+      environment,
+    );
+    const expectedRaced = parsedRaced === null
+      ? null
+      : { ...submitted, submitted_at: parsedRaced.submitted_at };
+    if (parsedRaced === null || !jsonEqual(parsedRaced, expectedRaced)) {
       return json({ ok: false, error: "idempotency conflict", go: false }, 409);
     }
   }
@@ -1948,12 +2143,15 @@ export async function runControlledPilotJob(env: Env, jobId: string): Promise<vo
   if (!env.STRUCTURED_BUCKET || !env.AI_GATEWAY) return;
   const verified = await verifiedTerminal(env.STRUCTURED_BUCKET, jobId);
   if (verified?.status === "COMPLETED") return;
-  const state = await loadJsonObject(env.STRUCTURED_BUCKET, stateKey(jobId), STATE_MAX_BYTES);
-  if (!state || !isRecord(state.spec) || !isRecord(state.ready) || !isRecord(state.request)) return;
-  const spec = state.spec as unknown as ControlledPilotJobSpec;
-  const request = state.request as unknown as ControlledPilotRequest;
-  const ready = state.ready as unknown as VerifiedControlledReady;
-  const digest = String(state.request_digest);
+  const environment = registries.controlledEnvironment(env);
+  if (!environment) return;
+  const state = await parseControlledPilotSubmittedState(
+    await loadJsonObject(env.STRUCTURED_BUCKET, stateKey(jobId), STATE_MAX_BYTES),
+    jobId,
+    environment,
+  );
+  if (state === null) return;
+  const { spec, request, ready, request_digest: digest } = state;
   const gateway = env.AI_GATEWAY as GatewayRpc;
   const budgetInput = { idempotency_key: request.idempotency_key, request_digest: digest };
   const execution = await loadJsonObject(

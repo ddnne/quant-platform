@@ -31,11 +31,12 @@ export const CONTROLLED_READY_ENVELOPE_FORMAT =
   "controlled-pilot-ready-envelope/v1" as const;
 export const CONTROLLED_TRADER_BATCH_FORMAT =
   "controlled-pilot-trader-authorization-batch/v2" as const;
+export const CONTROLLED_PILOT_KEY_PREFIX = "research/controlled_pilot/";
 export const CONTROLLED_SNAPSHOT_KEY_PREFIX =
-  "research/controlled_pilot/v1/snapshots/";
+  `${CONTROLLED_PILOT_KEY_PREFIX}v1/snapshots/`;
 export const CONTROLLED_READY_KEY_PREFIX =
-  "research/controlled_pilot/v1/ready/";
-export const CONTROLLED_JOB_KEY_PREFIX = "research/controlled_pilot/v1/jobs/";
+  `${CONTROLLED_PILOT_KEY_PREFIX}v1/ready/`;
+export const CONTROLLED_JOB_KEY_PREFIX = `${CONTROLLED_PILOT_KEY_PREFIX}v1/jobs/`;
 
 const IDEMPOTENCY_RE = /^[a-z0-9][a-z0-9._-]{7,63}$/;
 const ATTESTATION_RE = /^[a-zA-Z0-9._:-]{8,128}$/;

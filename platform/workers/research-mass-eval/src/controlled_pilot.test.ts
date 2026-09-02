@@ -581,6 +581,45 @@ describe("controlled cloud execution", () => {
     expect(seeded.budget.heartbeats).toBeGreaterThan(0);
   });
 
+  it("rejects a same-digest state conflict whose canonical initial state was poisoned", async () => {
+    const seeded = await seedEnv();
+    const first = await submitControlledPilot(seeded.env, seeded.request);
+    expect(first.status).toBe(202);
+    const key =
+      `research/controlled_pilot/v1/jobs/${seeded.request.idempotency_key}/state.json`;
+    const stored = await seeded.env.STRUCTURED_BUCKET.get(key);
+    expect(stored).not.toBeNull();
+    const poisoned = await stored!.json<Record<string, unknown>>();
+    (poisoned.spec as Record<string, unknown>).authorization_digest =
+      "sha256:" + "00".repeat(32);
+    await seeded.mem.put(key, JSON.stringify(poisoned));
+
+    const replay = await submitControlledPilot(seeded.env, seeded.request);
+    expect(replay.status).toBe(409);
+    expect(await replay.json()).toMatchObject({ error: "idempotency conflict", go: false });
+    expect(seeded.budget.queried).toBe(0);
+    expect(seeded.budget.reserved).toBe(0);
+    expect(seeded.fetches.n).toBe(0);
+  });
+
+  it("does not run a persisted state that fails the canonical state validator", async () => {
+    const seeded = await seedEnv();
+    expect((await submitControlledPilot(seeded.env, seeded.request)).status).toBe(202);
+    const key =
+      `research/controlled_pilot/v1/jobs/${seeded.request.idempotency_key}/state.json`;
+    const stored = await seeded.env.STRUCTURED_BUCKET.get(key);
+    expect(stored).not.toBeNull();
+    const poisoned = await stored!.json<Record<string, unknown>>();
+    (poisoned.spec as Record<string, unknown>).snapshot_key =
+      "research/controlled_pilot/v1/snapshots/sha256=" + "00".repeat(32) + ".sqlite";
+    await seeded.mem.put(key, JSON.stringify(poisoned));
+
+    await runControlledPilotJob(seeded.env, seeded.request.idempotency_key);
+    expect(seeded.budget.queried).toBe(0);
+    expect(seeded.budget.reserved).toBe(0);
+    expect(seeded.fetches.n).toBe(0);
+  });
+
   it("query never reserves and retry resumes the same reservation", async () => {
     const seeded = await seedEnv();
     const ctx = new WaitCtx();

@@ -777,6 +777,35 @@ describe("POST /v1/children-then-manifest", () => {
     expect(payload.manifest.created).toBe(true);
     expect(mem.putOrder).toEqual(["job/child.json", "job/manifest.json"]);
   });
+
+  it("rejects controlled-pilot reserved keys before writing any object", async () => {
+    const mem = new MemR2();
+    const env = {
+      STRUCTURED_BUCKET: mem.asBucket(),
+      MASS_EVAL_TOKEN: "secret",
+    } as Env;
+    const res = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/children-then-manifest", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-Mass-Eval-Token": "secret",
+        },
+        body: JSON.stringify({
+          children: [{
+            key: "research/controlled_pilot/v1/jobs/controlled-job-1/state.json",
+            data: { request_digest: "poison" },
+          }],
+          manifest: { key: "job/manifest.json", data: { n: 1 } },
+        }),
+      }),
+      env,
+      noopHandlers,
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ error: "controlled_pilot_key_reserved" });
+    expect(mem.putOrder).toEqual([]);
+  });
 });
 
 describe("POST /v1/controlled-pilot request byte cap", () => {

@@ -69,6 +69,7 @@ import {
   controlledPilotStatus,
   submitControlledPilot,
 } from "./controlled_pilot";
+import { CONTROLLED_PILOT_KEY_PREFIX } from "./controlled_pilot_contract";
 
 export const CONTROLLED_PILOT_MAX_REQUEST_BYTES = 8 * 1024;
 
@@ -819,6 +820,12 @@ export async function dispatchMassEvalFetch(
     }
     if (!("data" in body.manifest)) {
       return json({ error: "manifest.data required" }, 400);
+    }
+    if (
+      manifestKey.startsWith(CONTROLLED_PILOT_KEY_PREFIX) ||
+      children.some((child) => child.key.startsWith(CONTROLLED_PILOT_KEY_PREFIX))
+    ) {
+      return json({ error: "controlled_pilot_key_reserved" }, 403);
     }
     // Digest is Worker-computed in putJsonCreateOnly. Pass through only a
     // caller-supplied string; do not hash here.
