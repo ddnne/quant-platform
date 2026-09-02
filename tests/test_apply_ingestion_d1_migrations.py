@@ -121,10 +121,15 @@ def test_npm_wrangler_symlink_must_resolve_to_pinned_package(
     binary.symlink_to(wrong)
     with pytest.raises(owner.GuardedMigrationError, match="pinned local Wrangler"):
         owner._wrangler_prefix("staging")
+    with pytest.raises(owner.GuardedMigrationError, match="pinned local Wrangler"):
+        owner.time_travel_bookmark("staging")
 
 
-def test_time_travel_requires_exact_production_backend() -> None:
+def test_time_travel_requires_exact_production_backend_without_node_modules(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     store = D1()
+    monkeypatch.setattr(owner, "WORKER", tmp_path / "worker-without-node-modules")
     assert owner.time_travel_bookmark("staging", runner=store.runner)["bookmark"] == BOOKMARK
     store.backend_version = "alpha"
     with pytest.raises(owner.GuardedMigrationError, match="production backend"):
@@ -172,7 +177,7 @@ def test_apply_fences_before_spawn_and_returns_process_free_verifying(
             phases_at_spawn.append((str(row[0]), int(row[1])))
         return original(argv, cwd)
 
-    prefix, binding = owner._wrangler_prefix("staging")
+    prefix, binding = owner._runner_wrangler_prefix("staging", runner=runner)
     owner._apply_remote_migrations(
         environment="staging",
         binding=binding,
@@ -192,7 +197,9 @@ def test_spawn_failure_is_sticky_and_cannot_be_silently_resumed() -> None:
     store = D1()
     acquire(store)
     store.apply_returncode = 1
-    prefix, binding = owner._wrangler_prefix("staging")
+    prefix, binding = owner._runner_wrangler_prefix(
+        "staging", runner=store.runner
+    )
     with pytest.raises(owner.GuardedMigrationError, match="apply failed"):
         owner._apply_remote_migrations(
             environment="staging",

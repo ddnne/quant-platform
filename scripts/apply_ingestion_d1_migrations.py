@@ -122,6 +122,22 @@ def _wrangler_prefix(environment: str) -> tuple[list[str], dict[str, str]]:
     return [str(executable)], binding
 
 
+def _runner_wrangler_prefix(
+    environment: str, *, runner: Runner
+) -> tuple[list[str], dict[str, str]]:
+    """Build a Wrangler-shaped command without weakening the live binary gate.
+
+    The injected runner is the process boundary used by pure unit tests.  Live
+    calls use ``_default_runner`` and must resolve the repository-pinned
+    Wrangler before any command is attempted.
+    """
+    if runner is _default_runner:
+        return _wrangler_prefix(environment)
+    binding = canonical_binding(environment)
+    executable = WORKER / "node_modules" / ".bin" / "wrangler"
+    return [str(executable)], binding
+
+
 def _environment_args(binding: Mapping[str, str]) -> list[str]:
     args = ["--config", str(ROOT / binding["config"])]
     if binding["environment"] == "production":
@@ -145,7 +161,7 @@ def _json_output(result: subprocess.CompletedProcess[str], label: str) -> Any:
 def _d1_payloads(
     sql: str, *, environment: str, runner: Runner = _default_runner
 ) -> list[Mapping[str, Any]]:
-    prefix, binding = _wrangler_prefix(environment)
+    prefix, binding = _runner_wrangler_prefix(environment, runner=runner)
     result = runner(
         (
             *prefix,
@@ -215,7 +231,7 @@ def _find_bookmark(value: Any) -> str:
 def time_travel_bookmark(
     environment: str, *, runner: Runner = _default_runner
 ) -> dict[str, str]:
-    prefix, binding = _wrangler_prefix(environment)
+    prefix, binding = _runner_wrangler_prefix(environment, runner=runner)
     common = _environment_args(binding)
     version = runner((*prefix, "--version"), WORKER)
     if version.returncode != 0 or version.stdout.strip() != WRANGLER_VERSION:
@@ -354,7 +370,7 @@ def bootstrap_mutation_lease_authority(
         raise GuardedMigrationError("pre-bootstrap bookmark is invalid")
     current = observe_mutation_lease_authority(environment=environment, runner=runner)
     if current is None:
-        prefix, binding = _wrangler_prefix(environment)
+        prefix, binding = _runner_wrangler_prefix(environment, runner=runner)
         result = runner(
             (
                 *prefix,
