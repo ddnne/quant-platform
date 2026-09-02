@@ -321,54 +321,35 @@ def _experiment_id(reproduction: dict[str, Any]) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-def run_paper(
+def execute_paper_backtest(
     strategy: Any,
     config: PaperRunConfig,
     *,
-    store: JsonPaperStore | None = None,
-) -> PaperRunResult:
-    """Run an offline DRAFT through ``core.run_backtest`` and optionally persist it.
+    am_session_data_view: Any = None,
+) -> tuple[BacktestResult, dict[str, Any], str]:
+    """Canonical paper engine. Does not stamp lifecycle or persist.
 
-    A cheap control-plane snapshot id is computed before and after the run. A
-    concurrent mutation fails closed rather than emitting reproduction
-    metadata for a mixed snapshot.  For this deterministic pure-backtest
-    runner, ``run_id == experiment_id`` by policy.
-
-    W86 financing defaults (when enabled): mid short spread + daily repo
-    series auto-loaded from the paper DB when present; leverage financing
-    uses the same repo without re-applying short spread.
+    Local ``run_paper`` remains DRAFT-only. The Cloudflare Container is the
+    only Controlled PAPER caller and stamps ``Lifecycle.PAPER`` itself.
     """
-    # This importable runtime is deliberately incapable of producing a
-    # controlled PAPER result.  The separately permissioned authority is not
-    # provisioned yet; Python object identity or a private-looking symbol must
-    # never substitute for that OS boundary.  Keep this check before every DB,
-    # feature, engine, or store access.
     if type(config) is not PaperRunConfig:
-        raise TypeError("local paper runtime requires exact PaperRunConfig")
-    lifecycle = config.lifecycle
-    if lifecycle is not Lifecycle.DRAFT:
-        raise PermissionError(
-            "local paper runtime is DRAFT-only; controlled execution is "
-            "PENDING: CONTROLLED_AUTHORITY_UNPROVISIONED"
-        )
+        raise TypeError("paper runtime requires exact PaperRunConfig")
     configured_path = Path(config.db_path or "data/structured/ingestion.sqlite")
     feature_versions = _feature_versions(strategy)
     _require_feature_price_basis(
         feature_versions, price_basis=config.price_basis
     )
     if (
-        config.execution_mode == "am_signal_pm_close"
-        and config.price_basis != PERSONAL_RETROSPECTIVE_ADJUSTED
+        config.lifecycle is Lifecycle.PAPER
+        and config.execution_mode == "am_signal_pm_close"
+        and config.price_basis == PERSONAL_RETROSPECTIVE_ADJUSTED
     ):
         raise ValueError(
-            "am_signal_pm_close is allowed only with PERSONAL_RETROSPECTIVE_ADJUSTED"
+            "Controlled am_signal_pm_close cannot select PERSONAL_RETROSPECTIVE_ADJUSTED"
         )
     feature_hashes = feature_definition_hashes(feature_versions)
     strategy_hash = strategy_definition_hash(strategy)
     commit = git_commit()
-    # Resolve financing (may open DB via PIT for repo auto-load) **before**
-    # the mutation-guard snapshot so a read-side WAL open is not mistaken for
-    # concurrent data mutation during the backtest.
     sf_model, lev_model, financing_load = _build_financing_models(
         config, db_path=configured_path
     )
@@ -387,6 +368,8 @@ def run_paper(
         lookback_days=config.lookback_days,
         price_basis=config.price_basis,
         calendar_as_of=config.calendar_as_of,
+        max_gross_weight=config.max_gross_weight,
+        am_session_data_view=am_session_data_view,
     )
     after = data_snapshot_id(configured_path)
     if before != after:
@@ -394,7 +377,6 @@ def run_paper(
             "paper database changed during the run; retry against a stable "
             "ingestion snapshot so the result is reproducible"
         )
-
     reproduction = _reproducibility(
         backtest,
         config=config,
@@ -405,13 +387,43 @@ def run_paper(
         commit=commit,
         financing_load=financing_load,
     )
-    experiment_id = _experiment_id(reproduction)
+    return backtest, reproduction, _experiment_id(reproduction)
+
+
+def run_paper(
+    strategy: Any,
+    config: PaperRunConfig,
+    *,
+    store: JsonPaperStore | None = None,
+) -> PaperRunResult:
+    """Run an offline DRAFT through ``core.run_backtest`` and optionally persist it.
+
+    A cheap control-plane snapshot id is computed before and after the run. A
+    concurrent mutation fails closed rather than emitting reproduction
+    metadata for a mixed snapshot.  For this deterministic pure-backtest
+    runner, ``run_id == experiment_id`` by policy.
+
+    W86 financing defaults (when enabled): mid short spread + daily repo
+    series auto-loaded from the paper DB when present; leverage financing
+    uses the same repo without re-applying short spread.
+    """
+    # This importable runtime is deliberately incapable of producing a
+    # controlled PAPER result.  Controlled PAPER is Cloudflare/READY-bound and
+    # enters only through the research-mass-eval Worker/Container.  Keep this
+    # check before every DB, feature, engine, or store access.
+    if type(config) is not PaperRunConfig:
+        raise TypeError("local paper runtime requires exact PaperRunConfig")
+    if config.lifecycle is not Lifecycle.DRAFT:
+        raise PermissionError(
+            "local paper runtime is DRAFT-only; controlled execution requires "
+            "Cloudflare/READY evidence (PENDING: CONTROLLED_AUTHORITY_UNPROVISIONED)"
+        )
+    backtest, reproduction, experiment_id = execute_paper_backtest(
+        strategy, config
+    )
     result = PaperRunResult(
         experiment_id=experiment_id,
         run_id=experiment_id,
-        # This importable runner has no PAPER minting authority.  Do not read
-        # caller state again after the entry gate; the only possible local
-        # result label is the literal DRAFT enum.
         lifecycle=Lifecycle.DRAFT,
         backtest=backtest,
         reproducibility=reproduction,

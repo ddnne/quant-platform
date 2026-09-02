@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import timezone
 from typing import Any
 
+from execution.controlled_fill_contract import CONTROLLED_FILL_CONTRACT_DIGEST
 from execution.exact_four_binding import load_exact_four_execution_binding
 from execution.exact_four_claims import (
     ControlledExecutionClaimsV2,
@@ -25,6 +26,7 @@ from execution.exact_four_claims import (
     _validate_current_claim_chain_at,
 )
 from execution.exact_four_codec import (
+    CONTROLLED_PILOT_IDENTITY,
     PILOT_EXECUTION_MODE,
     ExactFourAuthorityContractError,
     _parsed_timestamp,
@@ -40,6 +42,10 @@ from execution.exact_four_protocol import (
     PINNED_EXACT_FOUR_RESULT_SCHEMA_RAW_DIGEST,
     exact_four_result_schema_path,
     load_exact_four_result_schema,
+)
+from selection.controlled_pilot_policy import (
+    ControlledPilotPolicyError,
+    require_controlled_pilot_identity,
 )
 
 
@@ -308,8 +314,14 @@ class ExactFourPilotResultManifestV2:
     automatic_promotion: bool = False
     mass_research_enabled: bool = False
     live_trading_enabled: bool = False
+    identity: str = CONTROLLED_PILOT_IDENTITY
+    fill_contract_digest: str = CONTROLLED_FILL_CONTRACT_DIGEST
 
     def __post_init__(self) -> None:
+        try:
+            require_controlled_pilot_identity(self.identity)
+        except ControlledPilotPolicyError as exc:
+            raise ExactFourAuthorityContractError(str(exc)) from exc
         if (
             type(self.format) is not str
             or self.format != EXACT_FOUR_RESULT_MANIFEST_FORMAT
@@ -348,8 +360,13 @@ class ExactFourPilotResultManifestV2:
             "snapshot_id",
             "ready_manifest_digest",
             "immutable_snapshot_digest",
+            "fill_contract_digest",
         ):
             _require_digest(getattr(self, name), f"result manifest {name}")
+        if self.fill_contract_digest != CONTROLLED_FILL_CONTRACT_DIGEST:
+            raise ExactFourAuthorityContractError(
+                "result manifest fill_contract_digest is not canonical"
+            )
         execution_issued = _parsed_timestamp(
             self.execution_issued_at,
             "result manifest execution_issued_at",
@@ -473,6 +490,7 @@ class ExactFourPilotResultManifestV2:
     def to_canonical_dict(self) -> dict[str, Any]:
         return {
             "format": self.format,
+            "identity": self.identity,
             "execution_mode": self.execution_mode,
             "pilot_run_id": self.pilot_run_id,
             "readiness_attestation_id": self.readiness_attestation_id,
@@ -504,6 +522,7 @@ class ExactFourPilotResultManifestV2:
             "automatic_promotion": self.automatic_promotion,
             "mass_research_enabled": self.mass_research_enabled,
             "live_trading_enabled": self.live_trading_enabled,
+            "fill_contract_digest": self.fill_contract_digest,
         }
 
     @property

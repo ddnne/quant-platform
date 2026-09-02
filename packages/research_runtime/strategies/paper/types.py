@@ -62,11 +62,11 @@ class PaperRunConfig:
     lookback_days: int = 30
     price_basis: str = RAW
     # The importable low-level runtime is an offline fixture/backtest surface.
-    # ``Lifecycle.PAPER`` remains a stable serialization label, but run_paper
-    # and JsonPaperStore reject it.  Only a future OS-isolated authority may
-    # issue controlled PAPER artifacts.
+    # ``run_paper`` and JsonPaperStore remain DRAFT-only. Controlled PAPER is
+    # constructed only by the Cloudflare Container private engine.
     lifecycle: Lifecycle | str = Lifecycle.DRAFT
     calendar_as_of: str | None = None
+    max_gross_weight: float | None = None
     # W85 / w0816t — short-leg financing = f(repo[t] + fixed spread).
     # Default **off** preserves long-only / legacy paper numerics. Enable
     # for CS L-S paper trials (short notional × (repo+spread)/days).
@@ -106,6 +106,14 @@ class PaperRunConfig:
             raise ValueError("starting_capital must be > 0")
         if int(self.lookback_days) < 1:
             raise ValueError("lookback_days must be >= 1")
+        if self.max_gross_weight is not None:
+            try:
+                cap = float(self.max_gross_weight)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("max_gross_weight must be a positive number") from exc
+            if not (cap > 0.0):
+                raise ValueError("max_gross_weight must be a positive number")
+            object.__setattr__(self, "max_gross_weight", cap)
         sens = str(self.short_financing_sensitivity or "mid").strip().lower()
         if sens not in {"low", "mid", "high"}:
             raise ValueError(
@@ -127,18 +135,24 @@ class PaperRunConfig:
             and lifecycle is not Lifecycle.DRAFT
         ):
             raise ValueError(
-                "PERSONAL_RETROSPECTIVE_ADJUSTED is restricted to local DRAFT runs"
+                "PERSONAL_RETROSPECTIVE_ADJUSTED is restricted to local DRAFT; "
+                "Controlled PAPER cannot relabel retrospective data"
             )
         object.__setattr__(
             self, "price_basis", resolved_price_basis
         )
-        if (
-            self.execution_mode == "am_signal_pm_close"
-            and resolved_price_basis != PERSONAL_RETROSPECTIVE_ADJUSTED
-        ):
-            raise ValueError(
-                "am_signal_pm_close is allowed only with PERSONAL_RETROSPECTIVE_ADJUSTED"
-            )
+        if self.execution_mode == "am_signal_pm_close":
+            if lifecycle is Lifecycle.PAPER and resolved_price_basis != RAW:
+                raise ValueError(
+                    "Controlled am_signal_pm_close requires the as-of-safe RAW fill"
+                )
+            if (
+                lifecycle is Lifecycle.DRAFT
+                and resolved_price_basis != PERSONAL_RETROSPECTIVE_ADJUSTED
+            ):
+                raise ValueError(
+                    "DRAFT am_signal_pm_close uses PERSONAL_RETROSPECTIVE_ADJUSTED"
+                )
         if self.universe is not None:
             if getattr(self.universe, "membership_by_date", None) is not None:
                 if not self.universe.membership_by_date:

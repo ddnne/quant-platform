@@ -7,6 +7,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
+from selection.controlled_pilot_policy import CONTROLLED_PILOT_IDENTITY
 from strategies.spec import StrategySpec
 
 
@@ -166,14 +167,10 @@ class PortfolioDecision:
 
 @dataclass(frozen=True)
 class AuthorizedPaperExecutionRequest:
-    """Capability-free authorization for the trusted Paper runtime.
+    """Offline DRAFT paper authorization. Not a Controlled Pilot document.
 
-    This is data, not an executable order: it contains no broker, callable,
-    credential, database path, or transport handle.
-
-    Phase 6.2.3: binds exact READY snapshot (id + manifest digest), universe,
-    period, cost scenario, and expiry so PaperExecutionService cannot silently
-    select a mutable current DB.
+    This type has no READY fields and no controlled identity. Passing
+    ``controlled_pilot_identity`` or READY digests is rejected as unknown.
     """
 
     mode: str
@@ -182,12 +179,6 @@ class AuthorizedPaperExecutionRequest:
     strategy_spec_hash: str
     max_gross_weight: float
     instructions: tuple[str, ...]
-    ready_snapshot_id: str = ""
-    ready_manifest_digest: str = ""
-    readiness_attestation_id: str = ""
-    profile_digest: str = ""
-    plan_set_digest: str = ""
-    dependency_closure_digest: str = ""
     universe: tuple[str, ...] = ()
     period_start: str = ""
     period_end: str = ""
@@ -202,6 +193,91 @@ class AuthorizedPaperExecutionRequest:
         if not 0.0 < float(self.max_gross_weight) <= 1.0:
             raise ValueError("max_gross_weight must be in (0, 1]")
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "authorization_id": self.authorization_id,
+            "strategy_id": self.strategy_id,
+            "strategy_spec_hash": self.strategy_spec_hash,
+            "max_gross_weight": self.max_gross_weight,
+            "instructions": list(self.instructions),
+            "universe": list(self.universe),
+            "period_start": self.period_start,
+            "period_end": self.period_end,
+            "cost_scenario": self.cost_scenario,
+            "expires_at": self.expires_at,
+        }
+
+    @classmethod
+    def from_dict(
+        cls, payload: Mapping[str, Any]
+    ) -> "AuthorizedPaperExecutionRequest":
+        if not isinstance(payload, Mapping):
+            raise ValueError("AuthorizedPaperExecutionRequest must be an object")
+        allowed = {
+            "mode",
+            "authorization_id",
+            "strategy_id",
+            "strategy_spec_hash",
+            "max_gross_weight",
+            "instructions",
+            "universe",
+            "period_start",
+            "period_end",
+            "cost_scenario",
+            "expires_at",
+        }
+        if "controlled_pilot_identity" in payload or payload.get("identity") == CONTROLLED_PILOT_IDENTITY:
+            raise ValueError("Draft authorization cannot carry controlled_pilot_identity")
+        if any(
+            name in payload
+            for name in (
+                "ready_snapshot_id",
+                "ready_manifest_digest",
+                "readiness_attestation_id",
+                "profile_digest",
+                "plan_set_digest",
+                "dependency_closure_digest",
+            )
+        ):
+            raise ValueError("Draft authorization cannot carry READY fields")
+        unknown = sorted(set(payload) - allowed)
+        if unknown:
+            raise ValueError(
+                f"AuthorizedPaperExecutionRequest unknown field(s): {unknown}"
+            )
+        required = {
+            "mode",
+            "authorization_id",
+            "strategy_id",
+            "strategy_spec_hash",
+            "max_gross_weight",
+            "instructions",
+        }
+        missing = sorted(required - set(payload))
+        if missing:
+            raise ValueError(
+                f"AuthorizedPaperExecutionRequest missing field(s): {missing}"
+            )
+        instructions = payload["instructions"]
+        if not isinstance(instructions, (list, tuple)):
+            raise ValueError("instructions must be a list")
+        universe = payload.get("universe", ())
+        if not isinstance(universe, (list, tuple)):
+            raise ValueError("universe must be a list")
+        return cls(
+            mode=str(payload["mode"]),
+            authorization_id=str(payload["authorization_id"]),
+            strategy_id=str(payload["strategy_id"]),
+            strategy_spec_hash=str(payload["strategy_spec_hash"]),
+            max_gross_weight=float(payload["max_gross_weight"]),
+            instructions=tuple(str(item) for item in instructions),
+            universe=tuple(str(item) for item in universe),
+            period_start=str(payload.get("period_start", "")),
+            period_end=str(payload.get("period_end", "")),
+            cost_scenario=str(payload.get("cost_scenario", "default") or "default"),
+            expires_at=str(payload.get("expires_at", "")),
+        )
 
 # Compatibility name for callers that only inspect the structured paper plan.
 TradePlan = AuthorizedPaperExecutionRequest

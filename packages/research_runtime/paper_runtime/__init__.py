@@ -12,6 +12,7 @@ from importlib import import_module
 _EXPORT_MODULES = {
     "DATA_SNAPSHOT_FORMAT": ".snapshot_identity",
     "data_snapshot_id": ".snapshot_identity",
+    "immutable_data_snapshot_id": ".snapshot_identity",
     "RESEARCH_SNAPSHOT_MANIFEST_FORMAT": ".snapshot_identity",
     "LOCAL_SNAPSHOT_MANIFEST_FORMAT": ".snapshot",
     "QUALITY_POLICY_VERSION": ".snapshot",
@@ -57,6 +58,7 @@ __all__ = [
     "SnapshotRejected",
     "begin_snapshot_sync",
     "data_snapshot_id",
+    "immutable_data_snapshot_id",
     "describe_snapshot",
     "fail_snapshot_sync",
     "latest_ready_snapshot",

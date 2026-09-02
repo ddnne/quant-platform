@@ -14,16 +14,22 @@ import sqlite3
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import quote
 
 from data_contracts.personal_history_compact import PERSONAL_HISTORY_COMPACT_NATURAL_KEYS
 from ingestion.common.timeutil import ensure_jst, parse_dt, to_iso
 from storage.schema import NATURAL_KEYS, REVISION_TABLES
 
-from .errors import AsOfRequired, DatabaseNotFound, InvalidAsOf, SnapshotNotReady
+from .errors import (
+    AsOfRequired,
+    DatabaseNotFound,
+    InvalidAsOf,
+    SnapshotNotReady,
+    SnapshotObservationClockError,
+)
 
 # Sentinel default for ``as_of`` on the public API. A bare ``None`` default
 # would collide with an explicit ``None`` argument; this object is distinct,
@@ -44,6 +50,11 @@ _JSON_PAYLOAD_COLS = ("raw_payload", "payload")
 # therefore continues to open and close one connection per query. Ordinary
 # callers never receive this box; it is not a writable connection map.
 _READ_SCOPE_STATE = threading.local()
+
+# Publisher and reader share this bound; the exact signed clocks must still
+# agree. This protects a malformed future clock without turning local wall
+# time into an authority for historical visibility.
+MAX_SNAPSHOT_CLOCK_FUTURE_SKEW = timedelta(minutes=5)
 
 
 class _ReadScopeBox:
@@ -133,6 +144,97 @@ def resolve_db_path(db_path: Any) -> Path:
     return Path(db_path) if db_path is not None else DEFAULT_DB_PATH
 
 
+def snapshot_observed_through(
+    db_path: Any = None, *, expected: str | None = None
+) -> str:
+    """Return the immutable snapshot observation clock, or fail closed.
+
+    Controlled execution never substitutes decision time, an unbounded
+    cutoff, or a dataset watermark for this singleton clock.
+    """
+
+    path = resolve_db_path(db_path)
+    if not path.exists():
+        raise SnapshotObservationClockError(
+            "snapshot observation clock is missing"
+        )
+    conn = _scoped_read_connection(path)
+    close_connection = conn is None
+    try:
+        descriptor_backed = (
+            path.is_absolute()
+            and path.parent in {Path("/dev/fd"), Path("/proc/self/fd")}
+            and path.name.isdigit()
+        )
+        resolved = path if descriptor_backed else path.resolve()
+        uri = "file:" + quote(str(resolved)) + "?mode=ro"
+        if conn is None:
+            conn = sqlite3.connect(uri, uri=True)
+            conn.row_factory = sqlite3.Row
+        tables = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        if "snapshot_observation_clock" not in tables:
+            raise SnapshotObservationClockError(
+                "snapshot observation clock is missing"
+            )
+        rows = conn.execute(
+            "SELECT observed_through FROM snapshot_observation_clock"
+        ).fetchall()
+        if not rows:
+            raise SnapshotObservationClockError(
+                "snapshot observed_through is missing"
+            )
+        if len(rows) != 1:
+            raise SnapshotObservationClockError(
+                "snapshot observation clock is not a singleton"
+            )
+        text = str(rows[0][0] or "")
+        if not text or text.strip() in {"0", "0.0"}:
+            raise SnapshotObservationClockError(
+                "snapshot observation clock is malformed"
+            )
+        try:
+            canonical = normalize_as_of(text)
+        except (AsOfRequired, InvalidAsOf) as exc:
+            raise SnapshotObservationClockError(
+                "snapshot observation clock is malformed"
+            ) from exc
+        if text != canonical:
+            raise SnapshotObservationClockError(
+                "snapshot observation clock is noncanonical"
+            )
+        from ingestion.common.timeutil import now_jst
+
+        if parse_dt(canonical) - now_jst() > MAX_SNAPSHOT_CLOCK_FUTURE_SKEW:
+            raise SnapshotObservationClockError(
+                "snapshot observation clock is in the future"
+            )
+        if expected is not None:
+            expected_canonical = normalize_as_of(expected)
+            if expected != expected_canonical:
+                raise SnapshotObservationClockError(
+                    "manifest observation clock is noncanonical"
+                )
+            if canonical != expected_canonical:
+                raise SnapshotObservationClockError(
+                    "snapshot observation clock does not match manifest"
+                )
+        return canonical
+    except SnapshotObservationClockError:
+        raise
+    except sqlite3.Error as exc:
+        raise SnapshotObservationClockError(
+            "snapshot observation clock is unreadable"
+        ) from exc
+    finally:
+        if close_connection and conn is not None:
+            conn.close()
+
+
 def _local_snapshot_policy(conn: sqlite3.Connection) -> sqlite3.Row | None:
     """Return the singleton snapshot policy row, if the table exists."""
 
@@ -210,6 +312,12 @@ def _open_readonly_sqlite(db_path: Any = None) -> sqlite3.Connection:
             "(scripts/run_ingestion_once.py), or pass db_path= pointing at an "
             "existing ingestion.sqlite."
         )
+    owner_key = _read_scope_key(path)
+    owned = getattr(_READ_SCOPE_STATE, "external_owned", None)
+    if owned and owner_key in owned:
+        raise SnapshotObservationClockError(
+            "second connection to pinned snapshot is forbidden"
+        )
     descriptor_backed = (
         path.is_absolute()
         and path.parent in {Path("/dev/fd"), Path("/proc/self/fd")}
@@ -277,6 +385,11 @@ def _install_readonly_scope(db_path: Any) -> Iterator[None]:
     box = _scope_box()
     active = box.lease(key)
     if active is None:
+        owned = getattr(_READ_SCOPE_STATE, "external_owned", None)
+        if owned and key in owned:
+            raise SnapshotObservationClockError(
+                "pinned snapshot connection was swapped"
+            )
         conn = connect_readonly(db_path)
         try:
             box.store(key, conn, 1)
@@ -319,12 +432,82 @@ def _scoped_read_connection(db_path: Any) -> sqlite3.Connection | None:
     box = getattr(_READ_SCOPE_STATE, "_box", None)
     if not isinstance(box, _ReadScopeBox):
         return None
-    active = box.lease(_read_scope_key(db_path))
+    key = _read_scope_key(db_path)
+    checks = getattr(_READ_SCOPE_STATE, "identity_checks", None)
+    if checks and key in checks:
+        checks[key]()
+    active = box.lease(key)
     if active is None:
         return None
     conn = active[0]
     _deny_managed_preready(conn)
     return conn
+
+
+def _uses_external_read_transaction(db_path: Any) -> bool:
+    """Whether ``db_path`` is inside the verifier-owned pinned transaction."""
+
+    owned = getattr(_READ_SCOPE_STATE, "external_owned", None)
+    return bool(owned and _read_scope_key(db_path) in owned)
+
+
+@contextmanager
+def bind_external_readonly_connection(
+    db_path: Any,
+    connection: sqlite3.Connection,
+    *,
+    identity_check: Callable[[], None],
+) -> Iterator[None]:
+    """Lend one already-pinned connection to PIT reads; caller owns close."""
+
+    key = _read_scope_key(db_path)
+    box = _scope_box()
+    if box.lease(key) is not None:
+        raise SnapshotObservationClockError(
+            "second connection to pinned snapshot is forbidden"
+        )
+    owned = getattr(_READ_SCOPE_STATE, "external_owned", None)
+    if owned is None:
+        owned = {}
+        _READ_SCOPE_STATE.external_owned = owned
+    if key in owned:
+        raise SnapshotObservationClockError(
+            "second connection to pinned snapshot is forbidden"
+        )
+    checks = getattr(_READ_SCOPE_STATE, "identity_checks", None)
+    if checks is None:
+        checks = {}
+        _READ_SCOPE_STATE.identity_checks = checks
+    identity_check()
+    owned[key] = True
+    checks[key] = identity_check
+    box.store(key, connection, 1)
+    box.shape_clear(key)
+    try:
+        yield
+    finally:
+        box.drop(key)
+        owned.pop(key, None)
+        checks.pop(key, None)
+        try:
+            connection.rollback()
+        except sqlite3.Error:
+            pass
+        if box.empty():
+            try:
+                del _READ_SCOPE_STATE._box
+            except AttributeError:
+                pass
+        if not owned:
+            try:
+                del _READ_SCOPE_STATE.external_owned
+            except AttributeError:
+                pass
+        if not checks:
+            try:
+                del _READ_SCOPE_STATE.identity_checks
+            except AttributeError:
+                pass
 
 
 def _decode_row(row: sqlite3.Row) -> dict[str, Any]:
@@ -401,7 +584,9 @@ def run_query(
         # Without an explicit read transaction, a concurrent amendment could
         # archive the visible primary row after the empty-revision check and
         # before the SELECT, producing a mixed-generation result.
-        conn.execute("BEGIN")
+        external_transaction = _uses_external_read_transaction(db_path)
+        if not external_transaction:
+            conn.execute("BEGIN")
         from .cooperative_deadline import check_deadline
         from .read_clock import resolve_read_clock
 
@@ -483,7 +668,8 @@ def run_query(
         return [_decode_row(r) for r in cur.fetchall()]
     finally:
         try:
-            conn.rollback()
+            if not locals().get("external_transaction", False):
+                conn.rollback()
         finally:
             if close_connection:
                 conn.close()
@@ -528,7 +714,9 @@ def _probe_standalone_typed_adjustment_candidates(
             cached_shape = box.shape_get(key)
             if cached_shape is False:
                 return False, []
-        conn.execute("BEGIN")
+        external_transaction = _uses_external_read_transaction(db_path)
+        if not external_transaction:
+            conn.execute("BEGIN")
 
         def _table_exists(table: str) -> bool:
             return (
@@ -627,7 +815,8 @@ def _probe_standalone_typed_adjustment_candidates(
         return True, [_decode_row(row) for row in cursor.fetchall()]
     finally:
         try:
-            conn.rollback()
+            if not locals().get("external_transaction", False):
+                conn.rollback()
         finally:
             if close_connection:
                 conn.close()

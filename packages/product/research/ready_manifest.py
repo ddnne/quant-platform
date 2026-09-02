@@ -23,6 +23,16 @@ from paper_runtime.ready_publication import (
 
 from qp_paths import repo_root
 from selection.budget_ledger import MassResearchDisabledError
+from execution.controlled_fill_contract import (
+    CONTROLLED_FILL_CONTRACT_DIGEST,
+    require_controlled_fill_contract_digest,
+    ControlledFillContractError,
+)
+from selection.controlled_pilot_policy import (
+    CONTROLLED_PILOT_IDENTITY,
+    ControlledPilotPolicyError,
+    require_controlled_pilot_identity,
+)
 from storage.receipt_crypto import (
     PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
     PRODUCTION_RECEIPT_ENVIRONMENT,
@@ -51,6 +61,7 @@ PROOF_DIGEST_FIELDS: tuple[str, ...] = (
     "validation_proof_digest",
     "b0_proof_digest",
     "b4_proof_digest",
+    "fill_contract_digest",
 )
 TIMESTAMP_FIELDS: tuple[str, ...] = ("created_at", "published_at")
 GENERATION_PIN_FIELDS: tuple[str, ...] = (
@@ -183,12 +194,16 @@ class ReadyManifest:
     catalog_generation: str
     created_at: str
     published_at: str
+    identity: str
+    fill_contract_digest: str
+    observed_through: str = ""
     format: str = READY_MANIFEST_FORMAT
     manifest_digest: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         body = {
             "format": self.format,
+            "identity": self.identity,
             "snapshot_id": self.snapshot_id,
             "publication_scope": self.publication_scope,
             "profile_id": self.profile_id,
@@ -218,7 +233,10 @@ class ReadyManifest:
             "catalog_generation": self.catalog_generation,
             "created_at": self.created_at,
             "published_at": self.published_at,
+            "fill_contract_digest": self.fill_contract_digest,
         }
+        if self.observed_through:
+            body["observed_through"] = self.observed_through
         digest = self.manifest_digest or _manifest_digest_for(body)
         return {**body, "manifest_digest": digest}
 
@@ -303,7 +321,39 @@ class ReadyManifest:
             "catalog_generation": pin_or_missing(document.get("catalog_generation")),
             "created_at": pin_or_missing(document.get("created_at")),
             "published_at": pin_or_missing(document.get("published_at")),
+            "identity": str(document.get("identity") or ""),
+            "fill_contract_digest": proof_or_missing(
+                document.get("fill_contract_digest")
+            ),
         }
+        if document.get("observed_through"):
+            body["observed_through"] = pin_or_missing(document.get("observed_through"))
+        scope = body["publication_scope"]
+        identity = body["identity"]
+        if scope == "PILOT":
+            try:
+                body["identity"] = require_controlled_pilot_identity(identity)
+            except ControlledPilotPolicyError as exc:
+                raise MassResearchDisabledError(
+                    "ReadyManifest identity must be exactly "
+                    f"{CONTROLLED_PILOT_IDENTITY!r}"
+                ) from exc
+        elif identity == CONTROLLED_PILOT_IDENTITY:
+            raise MassResearchDisabledError(
+                "Mass ReadyManifest cannot carry controlled_pilot_v1"
+            )
+        elif not identity:
+            raise MassResearchDisabledError("ReadyManifest identity is required")
+        if scope == "PILOT":
+            try:
+                body["fill_contract_digest"] = require_controlled_fill_contract_digest(
+                    body["fill_contract_digest"]
+                )
+            except ControlledFillContractError as exc:
+                raise MassResearchDisabledError(
+                    "ReadyManifest fill_contract_digest must be the governed "
+                    "morning-close to same-day afternoon-close contract"
+                ) from exc
         digest = _manifest_digest_for(body)
         if declared is not None and str(declared) != digest:
             raise MassResearchDisabledError("ReadyManifest manifest_digest mismatch")
@@ -345,6 +395,7 @@ def build_ready_manifest(
     catalog_generation: str | None = None,
     created_at: str | None = None,
     published_at: str | None = None,
+    fill_contract_digest: str | None = None,
 ) -> ReadyManifest:
     """Publisher helper: assemble a ReadyManifest. Omitted proofs stay MISSING.
 
@@ -369,6 +420,16 @@ def build_ready_manifest(
     return ReadyManifest.from_dict(
         {
             "format": READY_MANIFEST_FORMAT,
+            "identity": (
+                CONTROLLED_PILOT_IDENTITY
+                if publication_scope == "PILOT"
+                else "mass_disabled"
+            ),
+            "fill_contract_digest": (
+                CONTROLLED_FILL_CONTRACT_DIGEST
+                if publication_scope == "PILOT"
+                else proof_or_missing(fill_contract_digest)
+            ),
             "snapshot_id": snapshot_id,
             "publication_scope": publication_scope,
             "profile_id": profile_id,
@@ -421,6 +482,7 @@ class ExactFourPilotReadyBinding:
     publication_scope: str = "PILOT"
     profile_id: str = "controlled-pilot/exact-four"
     profile_version: str = "research-data-profile-set/v1"
+    identity: str = CONTROLLED_PILOT_IDENTITY
 
     def __post_init__(self) -> None:
         from research.artifacts import ExperimentPlan
@@ -445,6 +507,12 @@ class ExactFourPilotReadyBinding:
             raise MassResearchDisabledError(
                 "controlled pilot READY identity is not canonical"
             )
+        try:
+            require_controlled_pilot_identity(self.identity)
+        except ControlledPilotPolicyError as exc:
+            raise MassResearchDisabledError(
+                "controlled pilot READY identity is not canonical"
+            ) from exc
 
         if (
             len(self.plans) != PILOT_PLAN_COUNT
@@ -457,6 +525,13 @@ class ExactFourPilotReadyBinding:
         if any(type(plan) is not ExperimentPlan for plan in self.plans):
             raise MassResearchDisabledError(
                 "controlled pilot READY requires exact ExperimentPlan artifacts"
+            )
+        if any(
+            getattr(plan, "identity", None) != CONTROLLED_PILOT_IDENTITY
+            for plan in self.plans
+        ):
+            raise MassResearchDisabledError(
+                "controlled pilot ExperimentPlan identity is not canonical"
             )
         if any(
             type(closure) is not PlanDependencyClosure for closure in self.closures
@@ -605,6 +680,7 @@ class ExactFourPilotReadyBinding:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "identity": self.identity,
             "publication_scope": self.publication_scope,
             "profile_id": self.profile_id,
             "profile_version": self.profile_version,
@@ -614,6 +690,7 @@ class ExactFourPilotReadyBinding:
             "dependency_closure_digest": self.closure_set_digest,
             "required_datasets": list(self.required_datasets),
             "profiles": [profile.to_dict() for profile in self.profiles],
+            "fill_contract_digest": CONTROLLED_FILL_CONTRACT_DIGEST,
         }
 
 
@@ -743,6 +820,41 @@ class VerifiedPilotReadyPublication:
     @property
     def committed_at(self) -> str:
         return str(self.snapshot.committed_at)
+
+    def governed_am_session_data_view(self) -> Any:
+        """Mint the production AM view from this independently verified publication."""
+        from pit.governed_am_view import (
+            _open_verified_controlled_snapshot,
+            _verified_am_scope_fields,
+        )
+
+        manifest = self.snapshot.manifest
+        observed = (
+            str(manifest.get("observed_through") or "")
+            or str(getattr(self, "observed_through", "") or "")
+        )
+        nested = manifest.get("ready_manifest")
+        if isinstance(nested, Mapping) and nested.get("observed_through"):
+            observed = str(nested.get("observed_through"))
+        scope = manifest.get("dependency_scope_evidence")
+        if not isinstance(scope, Mapping):
+            if isinstance(nested, Mapping):
+                scope = nested
+        physical = self.snapshot.artifact_digest
+        if type(physical) is not str or physical != self.readiness.immutable_db_digest:
+            raise MassResearchDisabledError(
+                "publication physical digest is missing or mismatched"
+            )
+        binding = _verified_am_scope_fields(scope if isinstance(scope, Mapping) else None)
+        handle = _open_verified_controlled_snapshot(
+            pinned_path=self.snapshot.db_path,
+            verified_physical_digest=physical,
+            verified_am_product_digests=binding["product_artifact_digests"],
+            verified_am_natural_key_digest=binding["natural_key_digest"],
+            verified_am_natural_key_count=binding["natural_key_count"],
+            expected_observed_through=observed,
+        )
+        return handle.am_session_data_view()
 
 
 def load_exact_four_pilot_ready_binding(
@@ -1383,6 +1495,7 @@ def _publish_exact_four_pilot_ready_snapshot_impl(
     """Use the closed local READY client; no signer or fallback is accepted."""
 
     from paper_runtime.snapshot import (
+        SnapshotRejected,
         _ReadyPublicationProductApi,
         _publish_exact_four_pilot_ready_snapshot_via_authority,
     )
@@ -1391,10 +1504,6 @@ def _publish_exact_four_pilot_ready_snapshot_impl(
         _load_verified_pilot_readiness_bytes,
     )
     from research.research_data_profile import profile_ready
-    from scripts.local_authority_service import (
-        LocalAuthorityError,
-        LocalAuthorityPending,
-    )
 
     try:
         return _publish_exact_four_pilot_ready_snapshot_via_authority(
@@ -1420,9 +1529,10 @@ def _publish_exact_four_pilot_ready_snapshot_impl(
                 ),
             ),
         )
-    except (LocalAuthorityPending, LocalAuthorityError) as exc:
+    except SnapshotRejected as exc:
         raise ReadyPublicationAuthorityPending(
-            "READY authority PENDING; verified active local service is unavailable"
+            "READY authority PENDING; Cloudflare/READY public-key issuer is "
+            "unprovisioned"
         ) from exc
 
 
@@ -1597,6 +1707,20 @@ def validate_ready_manifest_profile_binding(
             "Mass ReadyManifest validation requires a separately governed Mass "
             "authority; Mass Research remains disabled"
         )
+    try:
+        require_controlled_pilot_identity(manifest.identity)
+    except ControlledPilotPolicyError as exc:
+        raise MassResearchDisabledError(
+            "ReadyManifest identity must be exactly "
+            f"{CONTROLLED_PILOT_IDENTITY!r}"
+        ) from exc
+    try:
+        require_controlled_fill_contract_digest(manifest.fill_contract_digest)
+    except ControlledFillContractError as exc:
+        raise MassResearchDisabledError(
+            "ReadyManifest fill_contract_digest must be the governed "
+            "morning-close to same-day afternoon-close contract"
+        ) from exc
 
     governed = profile
     if governed is None:
@@ -1746,6 +1870,7 @@ __all__ = [
     "SCHEMA_REL",
     "UNKNOWN",
     "TIMESTAMP_FIELDS",
+    "CONTROLLED_PILOT_IDENTITY",
     "ExactFourPilotReadyBinding",
     "ReadyManifest",
     "VerifiedPilotReadyPublication",

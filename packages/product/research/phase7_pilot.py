@@ -6,7 +6,6 @@ READY, promotion, a next generation, or the legacy 2,000-catalog evaluation.
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Sequence, final
 
 from research.artifacts import ExperimentPlan
@@ -15,13 +14,11 @@ from research.readiness import (
     VerifiedPilotReadiness,
     verify_pinned_pilot_readiness,
 )
-from selection.budget_ledger import MassResearchDisabledError, ResearchBudgetCapability
+from selection.budget_ledger import MassResearchDisabledError
 from selection.controlled_pilot_policy import (
     ControlledPilotPolicyPin,
     load_controlled_pilot_policy,
 )
-from selection.screen import OfflineExperimentBudget
-from storage.immutable_artifact import ImmutableArtifactStore
 
 PILOT_MIN_HYPOTHESES: int = 2
 PILOT_MAX_HYPOTHESES: int = 32
@@ -75,18 +72,6 @@ def _require_authorized_evaluation_service(
     return service
 
 
-def _require_artifact_store(store: object | None) -> ImmutableArtifactStore:
-    if store is None or not isinstance(store, ImmutableArtifactStore):
-        raise MassResearchDisabledError(
-            "immutable_artifact_store required "
-            "(ImmutableArtifactStore with create_if_absent)"
-        )
-    if not callable(getattr(store, "create_if_absent", None)):
-        raise MassResearchDisabledError(
-            "immutable_artifact_store.create_if_absent required"
-        )
-    return store
-
 
 def _require_signed_readiness(
     readiness: object | None,
@@ -120,60 +105,6 @@ def _require_signed_readiness(
     return readiness
 
 
-def _require_canonical_controlled_budget_policy(
-    budget: ResearchBudgetCapability,
-) -> tuple[ControlledPilotPolicyPin, ResearchBudgetCapability]:
-    """Treat the ledger as storage while deriving limits from the pinned policy."""
-
-    policy = load_controlled_pilot_policy()
-    if type(budget) is not ResearchBudgetCapability:
-        raise MassResearchDisabledError(
-            "controlled pilot budget requires exact ResearchBudgetCapability"
-        )
-    if (
-        type(budget.budget_id) is not str
-        or not budget.budget_id.strip()
-        or budget.budget_id != budget.budget_id.strip()
-    ):
-        raise MassResearchDisabledError(
-            "controlled pilot budget_id must be an exact non-empty string"
-        )
-    if type(budget.ledger_path) is not type(Path()):
-        raise MassResearchDisabledError(
-            "controlled pilot ledger_path must be an exact platform Path"
-        )
-    limits = budget.limits
-    if type(limits) is not OfflineExperimentBudget:
-        raise MassResearchDisabledError(
-            "controlled pilot budget ledger requires exact offline budget storage"
-        )
-    expected = {
-        "max_parallel_experiments": policy.max_parallel_experiments,
-        "max_generations": policy.max_generations,
-        "max_model_calls": policy.max_model_calls,
-        "max_paper_runs": policy.max_paper_runs,
-        "max_input_tokens": policy.max_input_tokens,
-        "max_output_tokens": policy.max_output_tokens,
-        "max_cached_tokens": policy.max_cached_tokens,
-        "max_estimated_cost_micros": policy.max_cost_usd * 1_000_000,
-        "lease_ttl_seconds": policy.lease_ttl_seconds,
-        "automatic_promotion": policy.automatic_promotion,
-    }
-    if limits != OfflineExperimentBudget() or any(
-        getattr(limits, name) != value for name, value in expected.items()
-    ):
-        raise MassResearchDisabledError(
-            "controlled pilot rejects caller budget overrides; canonical "
-            "ControlledPilotPolicyPin is required"
-        )
-    clean_budget = ResearchBudgetCapability(
-        budget_id=budget.budget_id,
-        ledger_path=Path(budget.ledger_path),
-        limits=OfflineExperimentBudget(),
-    )
-    return policy, clean_budget
-
-
 def _require_pilot_hypothesis_count(n: int) -> int:
     if n > PILOT_MAX_HYPOTHESES:
         raise MassResearchDisabledError(
@@ -186,22 +117,35 @@ def _require_pilot_hypothesis_count(n: int) -> int:
     return n
 
 
+def _require_canonical_controlled_policy() -> ControlledPilotPolicyPin:
+    policy = load_controlled_pilot_policy()
+    if (
+        policy.max_parallel_experiments != 2
+        or policy.max_generations != 1
+        or policy.automatic_promotion is not False
+        or policy.plans_exactly != 4
+    ):
+        raise MassResearchDisabledError(
+            "controlled pilot rejects caller budget overrides; canonical "
+            "ControlledPilotPolicyPin is required"
+        )
+    return policy
+
+
 def _validated_controlled_pilot_scheduler_state(
     *,
     expected_environment: str,
     readiness: VerifiedPilotReadiness | None,
-    budget: ResearchBudgetCapability | None,
+    budget: object | None,
     plan: ExperimentPlan | None,
     authorized_evaluation_service: AuthorizedEvaluationService | None,
-    immutable_artifact_store: ImmutableArtifactStore | None,
+    immutable_artifact_store: object | None,
     operator_override: object | None,
 ) -> tuple[
     ControlledPilotPolicyPin,
-    ResearchBudgetCapability,
     ExperimentPlan,
     VerifiedPilotReadiness,
     AuthorizedEvaluationService,
-    ImmutableArtifactStore,
 ]:
     """Validate every authority input before scheduler state is assigned."""
 
@@ -210,11 +154,15 @@ def _validated_controlled_pilot_scheduler_state(
             "operator_override cannot substitute; agent cannot mint "
             "operator_override"
         )
-    if type(budget) is not ResearchBudgetCapability:
-        raise MassResearchDisabledError("ResearchBudgetCapability required")
-    controlled_policy, controlled_budget = (
-        _require_canonical_controlled_budget_policy(budget)
-    )
+    if budget is not None:
+        raise MassResearchDisabledError(
+            "controlled scheduler has no local budget; Worker BudgetLedger only"
+        )
+    if immutable_artifact_store is not None:
+        raise MassResearchDisabledError(
+            "controlled scheduler has no local artifact store"
+        )
+    controlled_policy = _require_canonical_controlled_policy()
     if type(plan) is not ExperimentPlan:
         raise MassResearchDisabledError("ExperimentPlan required")
     from research.ready_manifest import load_exact_four_pilot_ready_binding
@@ -235,14 +183,11 @@ def _validated_controlled_pilot_scheduler_state(
     evaluation_service = _require_authorized_evaluation_service(
         authorized_evaluation_service
     )
-    artifact_store = _require_artifact_store(immutable_artifact_store)
     return (
         controlled_policy,
-        controlled_budget,
         canonical_plan,
         verified_readiness,
         evaluation_service,
-        artifact_store,
     )
 
 
@@ -251,8 +196,6 @@ class ControlledPilotScheduler:
     """Exact pilot scheduler. Fail-closed at construct. Execution stays OFF."""
 
     __slots__ = (
-        "_artifact_store",
-        "_budget_ledger",
         "_controlled_policy",
         "_evaluation_service",
         "_plan",
@@ -268,10 +211,10 @@ class ControlledPilotScheduler:
         *,
         expected_environment: str | None = None,
         readiness: VerifiedPilotReadiness | None = None,
-        budget: ResearchBudgetCapability | None = None,
+        budget: object | None = None,
         plan: ExperimentPlan | None = None,
         authorized_evaluation_service: AuthorizedEvaluationService | None = None,
-        immutable_artifact_store: ImmutableArtifactStore | None = None,
+        immutable_artifact_store: object | None = None,
         operator_override: object | None = None,
         n_hypotheses: int | None = None,
     ) -> None:
@@ -291,11 +234,9 @@ class ControlledPilotScheduler:
             )
         (
             controlled_policy,
-            controlled_budget,
             canonical_plan,
             verified_readiness,
             evaluation_service,
-            artifact_store,
         ) = _validated_controlled_pilot_scheduler_state(
             expected_environment=expected_environment,
             readiness=readiness,
@@ -306,11 +247,9 @@ class ControlledPilotScheduler:
             operator_override=operator_override,
         )
         self._controlled_policy = controlled_policy
-        self._budget_ledger = controlled_budget
         self._plan = canonical_plan
         self._readiness = verified_readiness
         self._evaluation_service = evaluation_service
-        self._artifact_store = artifact_store
 
     def mint_operator_override(self, *args: object, **kwargs: object) -> None:
         raise MassResearchDisabledError("agent cannot mint operator_override")

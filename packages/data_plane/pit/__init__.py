@@ -63,8 +63,14 @@ from .errors import (
     HistoryReadError,
     PitError,
     SnapshotNotReady,
+    SnapshotObservationClockError,
 )
-from .models import PIT_API_VERSION, PitResult
+from .governed_am_view import (
+    GovernedAmSessionDataView,
+    OfflineFixtureAmSessionDataView,
+    VerifiedControlledSnapshotHandle,
+)
+from .models import PIT_API_VERSION, PitReadClock, PitResult
 
 __all__ = [
     # public reads
@@ -93,8 +99,12 @@ __all__ = [
     "SnapshotIdentity",
     "refuse_offline_fixture_for_controlled",
     # result / version
+    "PitReadClock",
     "PitResult",
     "PIT_API_VERSION",
+    "GovernedAmSessionDataView",
+    "OfflineFixtureAmSessionDataView",
+    "VerifiedControlledSnapshotHandle",
     # errors (catch the family with `except PitError`)
     "PitError",
     "HistoryReadError",
@@ -103,6 +113,7 @@ __all__ = [
     "InvalidDataset",
     "DatabaseNotFound",
     "SnapshotNotReady",
+    "SnapshotObservationClockError",
 ]
 
 __version__ = PIT_API_VERSION

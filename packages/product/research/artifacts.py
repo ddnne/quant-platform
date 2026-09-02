@@ -8,6 +8,16 @@ from datetime import date
 from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
+from execution.controlled_fill_contract import (
+    CONTROLLED_FILL_CONTRACT,
+    require_controlled_fill_contract,
+    ControlledFillContractError,
+)
+from selection.controlled_pilot_policy import (
+    CONTROLLED_PILOT_IDENTITY,
+    ControlledPilotPolicyError,
+    require_controlled_pilot_identity,
+)
 from strategies.spec import FeatureRef, StrategySpecError
 
 
@@ -134,6 +144,8 @@ _PLAN_FIELDS = {
     "budget_allocation",
     "execution_enabled",
     "version",
+    "identity",
+    "fill_contract",
 }
 _PLAN_REQUIRED = {
     "version",
@@ -153,6 +165,8 @@ _PLAN_REQUIRED = {
     "risk_policy",
     "budget_allocation",
     "execution_enabled",
+    "identity",
+    "fill_contract",
 }
 
 
@@ -238,6 +252,28 @@ class ExperimentPlan:
             "budget_allocation",
             MappingProxyType(dict(sorted(self.budget_allocation.items()))),
         )
+        try:
+            object.__setattr__(
+                self,
+                "identity",
+                require_controlled_pilot_identity(self.identity),
+            )
+        except ControlledPilotPolicyError as exc:
+            raise ValueError(
+                "ExperimentPlan identity must be exactly "
+                f"{CONTROLLED_PILOT_IDENTITY!r}"
+            ) from exc
+        try:
+            object.__setattr__(
+                self,
+                "fill_contract",
+                MappingProxyType(require_controlled_fill_contract(dict(self.fill_contract))),
+            )
+        except ControlledFillContractError as exc:
+            raise ValueError(
+                "ExperimentPlan fill_contract must be the governed "
+                "morning-close to same-day afternoon-close contract"
+            ) from exc
 
     plan_id: str
     idea_id: str
@@ -256,6 +292,8 @@ class ExperimentPlan:
     research_data_profile_id: str = CORE_RESEARCH_DATA_PROFILE_ID
     execution_enabled: bool = False
     version: str = EXPERIMENT_PLAN_VERSION
+    identity: str = CONTROLLED_PILOT_IDENTITY
+    fill_contract: Mapping[str, Any] = MappingProxyType(dict(CONTROLLED_FILL_CONTRACT))
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "ExperimentPlan":
@@ -311,6 +349,22 @@ class ExperimentPlan:
             budget[key] = raw_value
         if payload.get("execution_enabled") is not False:
             raise ValueError("ExperimentPlan execution_enabled must be false")
+        try:
+            identity = require_controlled_pilot_identity(payload.get("identity"))
+        except ControlledPilotPolicyError as exc:
+            raise ValueError(
+                "ExperimentPlan identity must be exactly "
+                f"{CONTROLLED_PILOT_IDENTITY!r}"
+            ) from exc
+        try:
+            fill_contract = require_controlled_fill_contract(
+                dict(payload.get("fill_contract") or {})
+            )
+        except ControlledFillContractError as exc:
+            raise ValueError(
+                "ExperimentPlan fill_contract must be the governed "
+                "morning-close to same-day afternoon-close contract"
+            ) from exc
         profile_raw = payload.get("research_data_profile_id")
         profile_id = (
             CORE_RESEARCH_DATA_PROFILE_ID
@@ -356,6 +410,8 @@ class ExperimentPlan:
             research_data_profile_id=profile_id,
             execution_enabled=False,
             version=version,
+            identity=identity,
+            fill_contract=MappingProxyType(fill_contract),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -377,6 +433,8 @@ class ExperimentPlan:
             "budget_allocation": dict(self.budget_allocation),
             "execution_enabled": False,
             "version": self.version,
+            "identity": self.identity,
+            "fill_contract": dict(self.fill_contract),
         }
 
 

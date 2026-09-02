@@ -125,7 +125,11 @@ PERSONAL_SHORT_FINANCING_TRACE_SCHEMA = "personal-short-notional-trace/v1"
 PERSONAL_SHORT_FINANCING_ANNUAL_RATES = (0.0, 0.03, 0.10)
 PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE = 0.03
 PERSONAL_SHORT_FINANCING_SESSIONS_PER_YEAR = 245
-PERSONAL_EXACT_FOUR_MAX_BACKTESTS = 25
+PERSONAL_DRAFT_COHORT_MAX_BACKTESTS = 25
+_CANDIDATE_PROCESS_RESULT_SCHEMA = "personal-candidate-process-result/v1"
+_CANDIDATE_PROCESS_STOP_GRACE_SECONDS = 5.0
+_TYPED_BAR_TABLES = ("jquants_daily_bars", "jquants_daily_bars_revisions")
+_GENERIC_BAR_TABLES = ("jquants_records", "jquants_records_revisions")
 
 
 class PersonalResearchInputError(ValueError):
@@ -2069,10 +2073,10 @@ class PersonalResearchService:
             planned_maximum = len(specs) * (self.policy.validation_folds + 2) + int(
                 base_sleeve_required
             )
-            if planned_maximum > PERSONAL_EXACT_FOUR_MAX_BACKTESTS:
+            if planned_maximum > PERSONAL_DRAFT_COHORT_MAX_BACKTESTS:
                 raise PersonalResearchInputError(
                     "closed exact-four cohort exceeds the fixed "
-                    f"{PERSONAL_EXACT_FOUR_MAX_BACKTESTS}-backtest budget"
+                    f"{PERSONAL_DRAFT_COHORT_MAX_BACKTESTS}-backtest budget"
                 )
         cohort_ref: dict[str, str] | None = None
         if cohort is not None:
@@ -2434,7 +2438,7 @@ __all__ = [
     "DEFAULT_PERSONAL_UNIVERSE_ID",
     "PERSONAL_BAR_COVERAGE_EVIDENCE",
     "PERSONAL_DECISION_POLICY",
-    "PERSONAL_EXACT_FOUR_MAX_BACKTESTS",
+    "PERSONAL_DRAFT_COHORT_MAX_BACKTESTS",
     "PERSONAL_EXECUTABLE_COHORT_IDS",
     "PERSONAL_RESEARCH_REPORT_VERSION",
     "PERSONAL_SHORT_FINANCING_ANNUAL_RATES",

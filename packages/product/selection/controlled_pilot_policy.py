@@ -11,6 +11,7 @@ from typing import Any
 from qp_paths import repo_root
 
 
+CONTROLLED_PILOT_IDENTITY = "controlled_pilot_v1"
 CONTROLLED_PILOT_POLICY_ID = "controlled-pilot-policy/v1"
 CONTROLLED_PILOT_POLICY_SCHEMA_URI = "https://json-schema.org/draft/2020-12/schema"
 CONTROLLED_PILOT_POLICY_DIGEST = (
@@ -44,6 +45,23 @@ _POLICY_FIELDS = frozenset(
 
 class ControlledPilotPolicyError(ValueError):
     """Raised when the controlled-pilot policy is malformed or has drifted."""
+
+
+def require_controlled_pilot_identity(value: object) -> str:
+    """Accept only the closed Controlled Pilot discriminant.
+
+    Draft, Personal, Mass, and historical publication-profile strings are not
+    substitutes. Historical artifacts may still carry
+    ``controlled-pilot/exact-four`` as a publication profile id; that is not
+    this runtime identity.
+    """
+
+    if type(value) is not str or value != CONTROLLED_PILOT_IDENTITY:
+        raise ControlledPilotPolicyError(
+            "controlled pilot identity must be exactly "
+            f"{CONTROLLED_PILOT_IDENTITY!r}"
+        )
+    return CONTROLLED_PILOT_IDENTITY
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -259,6 +277,7 @@ def load_controlled_pilot_policy(
 
 
 __all__ = [
+    "CONTROLLED_PILOT_IDENTITY",
     "CONTROLLED_PILOT_POLICY_DIGEST",
     "CONTROLLED_PILOT_POLICY_ID",
     "CONTROLLED_PILOT_POLICY_RAW_DIGEST",
@@ -266,4 +285,5 @@ __all__ = [
     "ControlledPilotPolicyPin",
     "canonical_policy_digest",
     "load_controlled_pilot_policy",
+    "require_controlled_pilot_identity",
 ]
