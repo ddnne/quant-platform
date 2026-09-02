@@ -73,6 +73,10 @@ def _documents(environment: str) -> tuple[
             "compatibility_date": surface["compatibility_date"],
             "usage_model": "standard",
         }
+        if surface["compatibility_flags"]:
+            script_runtime["compatibility_flags"] = copy.deepcopy(
+                surface["compatibility_flags"]
+            )
         migration_tag = live._expected_migration_tag(surface)  # noqa: SLF001
         if migration_tag is not None:
             script_runtime["migration_tag"] = migration_tag
@@ -180,7 +184,8 @@ def test_staging_chain_declares_only_minimum_non_proxy_secrets() -> None:
         "JQUANTS_RPC_CURSOR_HMAC_KEY",
     ]
     assert result["workers"]["caller"]["secret_binding_names"] == [
-        "INGESTION_RUN_TOKEN"
+        "INGESTION_RUN_TOKEN",
+        "OPS_PROJECTION_SIGNING_PKCS8_B64",
     ]
     assert result["workers"]["authority"]["secret_binding_names"] == [
         "RECEIPT_KEY_WRAP_KEY"

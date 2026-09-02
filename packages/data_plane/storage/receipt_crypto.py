@@ -40,25 +40,25 @@ _PINNED_SCOPED_VERIFY_KEYS_PATHS = {
     ),
 }
 PINNED_RECEIPT_AUTHORITY_INSTANCES_RAW_DIGEST = (
-    "sha256:8b7cee2f0fb8d992b28ede1e6ad843381245d78e1cd64b4fc0e1b1ee06462574"
+    "sha256:a5fb439f33956c06c2ea709d716795ea9125ccd87f786169786061de0df351fe"
 )
 PINNED_RECEIPT_AUTHORITY_INSTANCES_DOCUMENT_DIGEST = (
-    "sha256:46e764657aa1f9e71250ca17bda538a68ecf3836cde650f643110236287d3123"
+    "sha256:77c26eddcbf3da9871e5aa5e2624a03c63203239184b1f71af55a79de772ad12"
 )
 PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS = {
     "production": (
-        "sha256:a63f439bbf478ce25795ed2c80ed6e88ddcd344a4c8538713a20410ac58b8f8c"
+        "sha256:e6d7df1b9000481d15b8987f5ffda7f3a0b0c051a43cf0051d04a38e58e372a6"
     ),
     "staging": (
-        "sha256:0fa133cf345bdd1f979beebb18e3873fbad88ac7631fc7d5b07ffaca34e68ac7"
+        "sha256:5104b2d3b85ddbbd44fb9e4ddc2689898232c2e6e175727c71c1ce2cb6ec9bff"
     ),
 }
 PINNED_SCOPED_RECEIPT_REGISTRY_RAW_DIGESTS = {
     "production": (
-        "sha256:3c1237ad4ea822531523ebb1a88339b4d196458ac38a2c0f263ca81c9a456a62"
+        "sha256:c258de1ff4a1d8c917aefe6656f0892a602f8d0de635ca21a4c8d7160d84ab33"
     ),
     "staging": (
-        "sha256:ed4adfef43009c1e8c0801deb7099dc33ff0d50cf5e9fb131eb5313afd2e9db8"
+        "sha256:2e5f91fd38d25ab971c674b4d979e4258748cf3db46e52eb445d5352f5dd4d19"
     ),
 }
 PINNED_RECEIPT_REGISTRY_RAW_DIGEST = (
@@ -563,6 +563,8 @@ def _load_pinned_authority_instances() -> Mapping[str, Mapping[str, Any]]:
         "authority_evidence_r2": {
             "binding", "bucket_name", "raw_prefix", "product_prefix"
         },
+        "raw_r2": {"binding", "bucket_name"},
+        "structured_r2": {"binding", "bucket_name"},
         "durable_object": {"binding", "class_name"},
         "acquisition_service": {"binding", "service", "entrypoint"},
     }

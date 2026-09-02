@@ -189,7 +189,11 @@ def _require_binding_surface(
         else "platform/workers/receipt-evidence-authority/wrangler.toml"
     )
     expected_d1 = resources["d1"]
-    expected_r2 = resources["authority_evidence_r2"]
+    expected_r2 = [
+        resources["authority_evidence_r2"],
+        resources["raw_r2"],
+        resources["structured_r2"],
+    ]
     expected_do = resources["durable_object"]
     expected_service = resources["acquisition_service"]
     if (
@@ -208,7 +212,10 @@ def _require_binding_surface(
         or surface.get("secret_names") != ["RECEIPT_KEY_WRAP_KEY"]
         or surface.get("d1_databases") != [expected_d1]
         or surface.get("r2_buckets")
-        != [{"binding": expected_r2["binding"], "bucket_name": expected_r2["bucket_name"]}]
+        != [
+            {"binding": row["binding"], "bucket_name": row["bucket_name"]}
+            for row in expected_r2
+        ]
         or surface.get("durable_objects")
         != [{"name": expected_do["binding"], "class_name": expected_do["class_name"]}]
         or surface.get("services") != [expected_service]

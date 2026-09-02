@@ -10,13 +10,20 @@ The implementation commit does not provision Cloudflare resources, install a
 secret, run a migration, deploy a Worker, register a key, or make an existing
 receipt eligible for `COMPLETE`.
 
-`AUTHORITY_EVIDENCE_BUCKET` is the authority's sole R2 capability. Immutable
-raw pages, reconciliation evidence, and the signed product artifact use
-disjoint prefixes in that dedicated bucket. Every object is written with an
-atomic create-only condition and immediately read back byte-for-byte before
-issuance. The Receipt Worker has no binding to shared `quant-structured`, so an
-active product-plane Worker cannot replace authority evidence. Account-wide
-Cloudflare administration remains the separately declared residual risk.
+The authority has three exact R2 capabilities, all bound into its signed
+authority-instance digest: the dedicated `AUTHORITY_EVIDENCE_BUCKET`, the
+governed raw bucket, and the governed structured bucket. Raw/product evidence
+in the dedicated bucket uses disjoint prefixes, while reconciliation reads the
+exact raw objects and materializes exact structured objects through create-only
+writes. Every authority artifact is immediately read back byte-for-byte before
+issuance. Account-wide Cloudflare administration remains the separately
+declared residual risk.
+
+`receipt-authority-instances/v1` retains its envelope name as a pre-activation
+contract correction: both scoped registries were empty and `PENDING`, so no
+scoped receipt had acquired `COMPLETE` eligibility. Each registry advances
+from generation 1 to generation 2 and links the prior registry digest; the old
+instance digest remains audit history only.
 
 ## Safety boundary
 
@@ -443,7 +450,7 @@ intentionally refuses to report a production PASS in that state.
 The first deployment, secret installation, public registration capture,
 registry review, ACTIVE deployment, segment re-proof, and final operational
 sign-off remain account-authorized actions. The source Worker has only the
-dedicated authority bucket and no shared `quant-structured` binding. D2/D3
-remain operationally open until the exact live chain and environment/resource-
-bound registry are activated with fresh keys and eligible segments are
-re-proved through the deployed authority path.
+three contract-pinned R2 buckets described above; their names are part of the
+environment/resource-bound authority digest. D2/D3 remain operationally open
+until the exact live chain and scoped registry are activated with fresh keys
+and eligible segments are re-proved through the deployed authority path.

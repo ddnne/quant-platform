@@ -26,19 +26,7 @@ export class ReceiptAuthorityService
   extends WorkerEntrypoint<ReceiptAuthorityEnv>
   implements ReceiptEvidenceAuthorityRpc {
   override fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-    if (url.pathname === "/health" || url.pathname === "/health/ready") {
-      if (request.method !== "GET") {
-        return Promise.resolve(new Response(null, {
-          status: 405,
-          headers: { allow: "GET", "cache-control": "no-store" },
-        }));
-      }
-      return Promise.resolve(Response.json(
-        { ok: true, live: true, worker: "receipt-evidence-authority" },
-        { headers: { "cache-control": "no-store" } },
-      ));
-    }
+    void request;
     return Promise.resolve(new Response(null, {
       status: 404,
       headers: {

@@ -1,11 +1,11 @@
 {
   "schema_version": 3,
   "purpose": "receipt_verification",
-  "generation": 1,
+  "generation": 2,
   "authority_status": "PENDING",
   "environment": "staging",
-  "authority_instance_digest": "sha256:0fa133cf345bdd1f979beebb18e3873fbad88ac7631fc7d5b07ffaca34e68ac7",
-  "prior_registry_digest": null,
+  "authority_instance_digest": "sha256:5104b2d3b85ddbbd44fb9e4ddc2689898232c2e6e175727c71c1ce2cb6ec9bff",
+  "prior_registry_digest": "sha256:794a893e22df462971765f168db233d5478b7ca9b75f311ee565160be5ee49c1",
   "keys": [],
-  "registry_digest": "sha256:794a893e22df462971765f168db233d5478b7ca9b75f311ee565160be5ee49c1"
+  "registry_digest": "sha256:9cb40c06bd2f869a2eedc81082f85db85cf5600a992288cdfa75ce5f1c79cdee"
 }

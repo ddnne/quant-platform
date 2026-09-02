@@ -17,6 +17,14 @@
           "raw_prefix": "raw/receipt-authority/production/",
           "product_prefix": "product/receipt-authority/production/"
         },
+        "raw_r2": {
+          "binding": "RAW_BUCKET",
+          "bucket_name": "quant-raw"
+        },
+        "structured_r2": {
+          "binding": "STRUCTURED_BUCKET",
+          "bucket_name": "quant-structured"
+        },
         "durable_object": {
           "binding": "RECEIPT_EVIDENCE_AUTHORITY_DO",
           "class_name": "ReceiptEvidenceAuthority"
@@ -43,6 +51,14 @@
           "bucket_name": "quant-receipt-evidence-staging",
           "raw_prefix": "raw/receipt-authority/staging/",
           "product_prefix": "product/receipt-authority/staging/"
+        },
+        "raw_r2": {
+          "binding": "RAW_BUCKET",
+          "bucket_name": "quant-raw-staging"
+        },
+        "structured_r2": {
+          "binding": "STRUCTURED_BUCKET",
+          "bucket_name": "quant-structured-staging"
         },
         "durable_object": {
           "binding": "RECEIPT_EVIDENCE_AUTHORITY_DO",

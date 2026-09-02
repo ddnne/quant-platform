@@ -809,10 +809,9 @@ describe("Receipt Evidence Authority in workerd", () => {
   it("has no public HTTP surface and permits provisioning only while PENDING", async () => {
     const rpc = workerExports.default as unknown as ReceiptEvidenceAuthorityRpc & Fetcher;
     const health = await rpc.fetch(new Request("https://authority.invalid/health/ready"));
-    expect(health.status).toBe(200);
+    expect(health.status).toBe(404);
     expect(health.headers.get("cache-control")).toBe("no-store");
-    const healthBody = await health.json() as { live?: boolean };
-    expect(healthBody.live).toBe(true);
+    expect(await health.text()).toBe("");
     const missing = await rpc.fetch(new Request("https://authority.invalid/v1/run"));
     expect(missing.status).toBe(404);
     expect(missing.headers.get("cache-control")).toBe("no-store");
@@ -1207,10 +1206,10 @@ describe("Receipt Evidence Authority in workerd", () => {
 
   it("shares canonical environment/resource authority digests with verifiers", async () => {
     expect(await authorityInstanceDigest("production")).toBe(
-      "sha256:a63f439bbf478ce25795ed2c80ed6e88ddcd344a4c8538713a20410ac58b8f8c",
+      "sha256:e6d7df1b9000481d15b8987f5ffda7f3a0b0c051a43cf0051d04a38e58e372a6",
     );
     expect(await authorityInstanceDigest("staging")).toBe(
-      "sha256:0fa133cf345bdd1f979beebb18e3873fbad88ac7631fc7d5b07ffaca34e68ac7",
+      "sha256:5104b2d3b85ddbbd44fb9e4ddc2689898232c2e6e175727c71c1ce2cb6ec9bff",
     );
   });
 
