@@ -926,21 +926,30 @@ describe("Receipt Evidence Authority in workerd", () => {
   });
 
   it("renders the cross-language product JSONL vector in UTF-8 key order", async () => {
-    const rows = ["z-key", "a-key"].map((naturalKey) => ({
-      source: "jquants" as const,
-      dataset: "indices_bars_daily_topix",
+    const rows = [["日本-債券", "日本語"], ["A-001", "ASCII"]].map(([naturalKey, label]) => ({
+      source: "jsda" as const,
+      dataset: "jsda_otc_bond_reference_prices",
       natural_key: naturalKey,
       event_time: "2024-02-01T00:00:00Z",
       available_at: "2024-02-01T00:00:00Z",
       ingested_at: "2024-02-02T00:00:00Z",
-      payload: `{"key":"${naturalKey}"}`,
-      raw_payload: `{"key":"${naturalKey}"}`,
+      payload: `{"label":"${label}"}`,
+      raw_payload: `{"label":"${label}"}`,
       row_digest: "sha256:" + "0".repeat(64),
     }));
     const body = canonicalProductBody(rows);
-    expect(body.indexOf("a-key")).toBeLessThan(body.indexOf("z-key"));
+    expect(body).toBe(
+      '{"available_at":"2024-02-01T00:00:00Z","dataset":"jsda_otc_bond_reference_prices",' +
+      '"event_time":"2024-02-01T00:00:00Z","ingested_at":"2024-02-02T00:00:00Z",' +
+      '"natural_key":"A-001","payload":"{\\"label\\":\\"ASCII\\"}",' +
+      '"raw_payload":"{\\"label\\":\\"ASCII\\"}","source":"jsda"}\n' +
+      '{"available_at":"2024-02-01T00:00:00Z","dataset":"jsda_otc_bond_reference_prices",' +
+      '"event_time":"2024-02-01T00:00:00Z","ingested_at":"2024-02-02T00:00:00Z",' +
+      '"natural_key":"日本-債券","payload":"{\\"label\\":\\"日本語\\"}",' +
+      '"raw_payload":"{\\"label\\":\\"日本語\\"}","source":"jsda"}\n',
+    );
     expect(await sha256Digest(new TextEncoder().encode(body))).toBe(
-      "sha256:fc5f92e255656fa9c17298cc492b6f72ee1c647fa47a749174ea66c290f9dc8e",
+      "sha256:29c603492f7aca5df78d543161ae31b7d7ea1d76d5256a027198256c98fc8a66",
     );
   });
   it("uses SQLite BINARY-compatible UTF-8 order for non-ASCII natural keys", () => {

@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 from weakref import WeakKeyDictionary, WeakSet
 
 from data_contracts import coverage_contract_for
+from ops.receipt_product import product_artifact_digest
 from storage.coverage_ledger import (
     CollectionReceipt,
     RequiredCoverageSegment,
@@ -1845,7 +1846,9 @@ def _measure_collection_claims(
     raw_manifest_digest = measured_raw_manifest_digest
     if not str(raw_manifest_digest).startswith("sha256:"):
         raise ValueError("trusted raw manifest digest is invalid")
-    structured_digest = _digest(list(structured_rows))
+    # This is the digest signed by the remote authority: exact governed JSONL
+    # artifact bytes, not a logically equivalent JSON array representation.
+    structured_digest = product_artifact_digest(structured_rows)
     policy = coverage_contract_for(required.dataset)
     if (
         policy.structured_reconciliation_required

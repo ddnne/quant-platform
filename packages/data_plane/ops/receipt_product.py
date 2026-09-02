@@ -45,7 +45,7 @@ def canonical_product_artifact_bytes(
         row = {field: raw[field] for field in PRODUCT_ARTIFACT_FIELDS}
         if any(type(value) is not str for value in row.values()):
             raise ValueError("product materialization fields must be exact text")
-        if row["source"] != "jquants" or not row["dataset"]:
+        if row["source"] not in {"jquants", "jsda"} or not row["dataset"]:
             raise ValueError("product materialization source/dataset is invalid")
         identity = (row["source"], row["dataset"], row["natural_key"])
         if identity in identities:
@@ -55,7 +55,10 @@ def canonical_product_artifact_bytes(
     if not normalized:
         raise ValueError("empty product materialization is not signable")
     normalized.sort(
-        key=lambda row: (row["source"], row["dataset"], row["natural_key"])
+        key=lambda row: tuple(
+            row[field].encode("utf-8")
+            for field in ("source", "dataset", "natural_key")
+        )
     )
     return b"".join(
         json.dumps(
@@ -103,10 +106,16 @@ def product_artifact_digest_ordered(
         row = {field: raw[field] for field in PRODUCT_ARTIFACT_FIELDS}
         if any(type(value) is not str for value in row.values()):
             raise ValueError("product materialization fields must be exact text")
-        if row["source"] != "jquants" or not row["dataset"]:
+        if row["source"] not in {"jquants", "jsda"} or not row["dataset"]:
             raise ValueError("product materialization source/dataset is invalid")
         identity = (row["source"], row["dataset"], row["natural_key"])
-        if previous is not None and identity <= previous:
+        binary_identity = tuple(value.encode("utf-8") for value in identity)
+        binary_previous = (
+            None
+            if previous is None
+            else tuple(value.encode("utf-8") for value in previous)
+        )
+        if binary_previous is not None and binary_identity <= binary_previous:
             raise ValueError(
                 "product materialization rows must be unique and ordered"
             )

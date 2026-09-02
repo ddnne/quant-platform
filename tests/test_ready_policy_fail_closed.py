@@ -1419,22 +1419,32 @@ def test_exact_pit_dependency_scope_accepts_complete_receipt_bound_fixture(
 def test_product_jsonl_vector_matches_authority_utf8_order() -> None:
     rows = [
         {
-            "source": "jquants",
-            "dataset": "indices_bars_daily_topix",
+            "source": "jsda",
+            "dataset": "jsda_otc_bond_reference_prices",
             "natural_key": natural_key,
             "event_time": "2024-02-01T00:00:00Z",
             "available_at": "2024-02-01T00:00:00Z",
             "ingested_at": "2024-02-02T00:00:00Z",
-            "payload": f'{{"key":"{natural_key}"}}',
-            "raw_payload": f'{{"key":"{natural_key}"}}',
+            "payload": f'{{"label":"{label}"}}',
+            "raw_payload": f'{{"label":"{label}"}}',
         }
-        for natural_key in ("z-key", "a-key")
+        for natural_key, label in (("日本-債券", "日本語"), ("A-001", "ASCII"))
     ]
     body = canonical_product_artifact_bytes(rows)
-    assert body.index(b"a-key") < body.index(b"z-key")
+    expected = (
+        '{"available_at":"2024-02-01T00:00:00Z","dataset":"jsda_otc_bond_reference_prices",'
+        '"event_time":"2024-02-01T00:00:00Z","ingested_at":"2024-02-02T00:00:00Z",'
+        '"natural_key":"A-001","payload":"{\\"label\\":\\"ASCII\\"}",'
+        '"raw_payload":"{\\"label\\":\\"ASCII\\"}","source":"jsda"}\n'
+        '{"available_at":"2024-02-01T00:00:00Z","dataset":"jsda_otc_bond_reference_prices",'
+        '"event_time":"2024-02-01T00:00:00Z","ingested_at":"2024-02-02T00:00:00Z",'
+        '"natural_key":"日本-債券","payload":"{\\"label\\":\\"日本語\\"}",'
+        '"raw_payload":"{\\"label\\":\\"日本語\\"}","source":"jsda"}\n'
+    ).encode("utf-8")
+    assert body == expected
     assert product_artifact_digest(rows) == (
-        "sha256:fc5f92e255656fa9c17298cc492b6f72"
-        "ee1c647fa47a749174ea66c290f9dc8e"
+        "sha256:29c603492f7aca5df78d543161ae31b7"
+        "d7ea1d76d5256a027198256c98fc8a66"
     )
 
 

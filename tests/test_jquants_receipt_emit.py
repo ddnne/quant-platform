@@ -835,6 +835,7 @@ def test_capture_completion_clock_becomes_pit_available_at(
     tmp_path: Path, receipt_ed25519_keys
 ) -> None:
     from ingestion.jquants.normalize import normalize_generic
+    from ops.receipt_product import product_artifact_digest
 
     calls = {"count": 0}
 
@@ -861,15 +862,12 @@ def test_capture_completion_clock_becomes_pit_available_at(
     )
     context = _bound_context(store, service, req)
     assert context.checked_at == "2026-08-11T09:14:00+09:00"
-    store.upsert(
-        "jquants_records",
-        normalize_generic(
-            [{"Date": "2026-07-31"}],
-            dataset=req.dataset,
-            ingested_at=context.checked_at,
-        ),
-        commit=False,
+    normalized = normalize_generic(
+        [{"Date": "2026-07-31"}],
+        dataset=req.dataset,
+        ingested_at=context.checked_at,
     )
+    store.upsert("jquants_records", normalized, commit=False)
     receipt = service.record_persisted_success(
         store,
         required=req,
@@ -878,6 +876,14 @@ def test_capture_completion_clock_becomes_pit_available_at(
         jquants_collection=handle,
     )
     assert receipt.checked_at == context.checked_at
+    # The test signer may add authority-owned keys, but it must not mask a
+    # different local structured-digest serialization.
+    assert receipt.digests["structured_digest"] == product_artifact_digest(
+        normalized
+    )
+    assert receipt.digests["product_artifact_digest"] == product_artifact_digest(
+        normalized
+    )
     stored = store._conn.execute(
         "SELECT available_at FROM jquants_records WHERE dataset=?",
         (req.dataset,),
