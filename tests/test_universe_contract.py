@@ -286,6 +286,7 @@ def test_observed_universe_breadth_reports_partial_fins_without_a_threshold(
         "overall_ratio": 0.5,
         "minimum_daily_ratio": 0.5,
         "worst_days": ["2024-01-02"],
+        "source_complete_claim": False,
     }
     assert complete["overall_ratio"] == 1.0
     assert partial["overall_ratio"] < complete["overall_ratio"]

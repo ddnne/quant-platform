@@ -167,7 +167,9 @@ def test_trader_batch_compares_ready_universe_and_rejects_duplicates() -> None:
 
 
 def test_am_decision_excludes_noon_master_revision(tmp_path) -> None:
+    from core.execution import morning_close_as_of
     from data_contracts.identity import natural_key
+    from pit.universe_pit import resolve_universe_day_slices
     from research.universe_contract import resolve_tse_prime_with_fins
     from storage.sqlite_store import SqliteStore
 
@@ -251,7 +253,18 @@ def test_am_decision_excludes_noon_master_revision(tmp_path) -> None:
     )
     store._conn.commit()
     store.close()
-    resolved = resolve_tse_prime_with_fins(path, period_start=day, period_end=nxt)
+    slices = resolve_universe_day_slices(
+        path,
+        period_start=day,
+        period_end=nxt,
+        as_of_for_day={
+            day: morning_close_as_of(day),
+            nxt: morning_close_as_of(nxt),
+        },
+    )
+    resolved = resolve_tse_prime_with_fins(
+        slices, period_start=day, period_end=nxt
+    )
     assert resolved.codes_for(day) == ("1001",)
     assert "1002" in resolved.codes_for(nxt)
 
@@ -392,7 +405,11 @@ def test_synthetic_am_timestamps_on_daily_bars_are_rejected(tmp_path) -> None:
 
 
 def test_noon_ingested_backdated_master_excluded_at_1130(tmp_path) -> None:
+    import sqlite3
+
+    from core.execution import morning_close_as_of
     from data_contracts.identity import natural_key
+    from pit.universe_pit import resolve_universe_day_slices
     from research.universe_contract import resolve_tse_prime_with_fins
     from storage.sqlite_store import SqliteStore
 
@@ -482,14 +499,35 @@ def test_noon_ingested_backdated_master_excluded_at_1130(tmp_path) -> None:
     store._conn.commit()
     store.close()
     live = resolve_tse_prime_with_fins(
-        path, period_start=day, period_end=day, observed_through=f"{day}T11:30:00+09:00"
+        resolve_universe_day_slices(
+            path,
+            period_start=day,
+            period_end=day,
+            as_of_for_day={day: morning_close_as_of(day)},
+        ),
+        period_start=day,
+        period_end=day,
     )
     assert live.codes_for(day) == ("1001",)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "UPDATE snapshot_observation_clock SET observed_through=?",
+            (f"{day}T15:30:00+09:00",),
+        )
     later = resolve_tse_prime_with_fins(
-        path, period_start=day, period_end=day, observed_through=f"{day}T15:30:00+09:00"
+        resolve_universe_day_slices(
+            path,
+            period_start=day,
+            period_end=day,
+            as_of_for_day={day: morning_close_as_of(day)},
+        ),
+        period_start=day,
+        period_end=day,
     )
-    # Snapshot freeze at 15:30 does not make noon-ingested rows visible at 11:30.
-    assert later.codes_for(day) == ("1001",)
+    # The immutable observation clock is distinct from the decision clock:
+    # once the snapshot has observed the backfill, its officially 08:00 fact
+    # is eligible for the historical 11:30 decision without moving event time.
+    assert later.codes_for(day) == ("1001", "1002")
 
 
 def test_carried_position_10x_move_without_target_caps_actual_gross(tmp_path) -> None:
@@ -626,9 +664,10 @@ def test_tampered_prior_am_lookback_is_excluded(tmp_path) -> None:
 
 
 def test_missing_observed_through_rejects_universe(tmp_path) -> None:
+    from core.execution import morning_close_as_of
     from data_contracts.identity import natural_key
-    from research.universe_contract import resolve_tse_prime_with_fins
-    from selection.budget_ledger import MassResearchDisabledError
+    from pit.errors import PitError
+    from pit.universe_pit import resolve_universe_day_slices
     from storage.sqlite_store import SqliteStore
 
     day = "2024-04-01"
@@ -660,12 +699,19 @@ def test_missing_observed_through_rejects_universe(tmp_path) -> None:
     store = SqliteStore(path)
     store.upsert("jquants_records", rows)
     store.close()
-    with pytest.raises(MassResearchDisabledError, match="observed_through|observation clock"):
-        resolve_tse_prime_with_fins(path, period_start=day, period_end=day)
+    with pytest.raises(PitError, match="observation cutoff|observation clock"):
+        resolve_universe_day_slices(
+            path,
+            period_start=day,
+            period_end=day,
+            as_of_for_day={day: morning_close_as_of(day)},
+        )
 
 
 def test_historical_backfill_does_not_use_current_snapshot_clock_as_infinity(tmp_path) -> None:
+    from core.execution import morning_close_as_of
     from data_contracts.identity import natural_key
+    from pit.universe_pit import resolve_universe_day_slices
     from research.universe_contract import resolve_tse_prime_with_fins
     from storage.sqlite_store import SqliteStore
 
@@ -710,7 +756,16 @@ def test_historical_backfill_does_not_use_current_snapshot_clock_as_infinity(tmp
     store._conn.execute("INSERT INTO snapshot_observation_clock VALUES (?)", (f"{day}T11:30:00+09:00",))
     store._conn.commit()
     store.close()
-    resolved = resolve_tse_prime_with_fins(path, period_start=day, period_end=day)
+    resolved = resolve_tse_prime_with_fins(
+        resolve_universe_day_slices(
+            path,
+            period_start=day,
+            period_end=day,
+            as_of_for_day={day: morning_close_as_of(day)},
+        ),
+        period_start=day,
+        period_end=day,
+    )
     assert resolved.codes_for(day) == ("1001",)
 
 
@@ -735,11 +790,10 @@ def test_exact_four_ready_datasets_include_am() -> None:
 
 def test_controlled_rejects_missing_observation_tables(tmp_path) -> None:
     from _coreseed import TRADING_DAYS, seed_governed_am_pm_session_db
-    from core import RAW, run_backtest, standard_cost
     from core.execution import morning_close_as_of
     from core.universe import membership_at
-    from core.strategy_protocol import OrderIntent
     import sqlite3
+    from pit.errors import PitError
 
     code = "1332"
     days = TRADING_DAYS
@@ -756,30 +810,10 @@ def test_controlled_rejects_missing_observation_tables(tmp_path) -> None:
     conn.commit()
     conn.close()
 
-    class AlwaysLong:
-        strategy_id = "always_long"
-        params: dict = {}
-
-        def on_bar(self, ctx):
-            return [OrderIntent(code=code, target_weight=0.5)]
-
-    res = run_backtest(
-        AlwaysLong(),
-        days[0],
-        days[-1],
-        db_path=db,
-        universe=membership_at(morning_close_as_of(days[0]), db_path=db, codes=(code,)),
-        execution_mode="am_signal_pm_close",
-        price_basis=RAW,
-        cost_model=standard_cost(bps=0.0),
-        max_gross_weight=0.5,
-    )
-    assert res.trades == []
-    assert res.equity_curve == []
-    assert res.metadata["authentic_am_session_evidence"] is False
-    assert res.metrics["selection_eligible"] is False
-    reason = res.metadata.get("am_session_evidence_reason") or ""
-    assert "missing_verified_production_am_capability" in reason or "observation_clock" in reason
+    with pytest.raises(PitError, match="observation cutoff"):
+        membership_at(
+            morning_close_as_of(days[0]), db_path=db, codes=(code,)
+        )
 
 
 def test_controlled_rejects_forged_am_row_self_hash(tmp_path) -> None:

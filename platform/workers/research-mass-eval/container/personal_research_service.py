@@ -3475,7 +3475,7 @@ class JobManager:
 def default_runner(
     spec: JobSpecLike,
     *,
-    work_root: Path,
+    work_root: Path | None = None,
     deadline: Any | None = None,
 ) -> dict[str, Any]:
     from pit.cooperative_deadline import install_deadline
@@ -3491,6 +3491,8 @@ def default_runner(
                 "execution_id": spec.execution_id,
                 "runner_version": spec.runner_version,
             }
+        if work_root is None:
+            raise RuntimeError("ephemeral work_root is required")
         if isinstance(spec, SnapshotJobSpec):
             return execute_snapshot_job(spec, work_root=work_root, deadline=deadline)
         if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):

@@ -72,9 +72,22 @@ def read_snapshot_observed_through(conn: sqlite3.Connection) -> str | None:
     """Return the immutable snapshot observation cutoff, if the file has one."""
 
     try:
+        listing = conn.execute(
+            "SELECT type FROM sqlite_master "
+            "WHERE name = 'snapshot_observation_clock'"
+        ).fetchone()
+        if listing is not None:
+            if str(listing[0]) != "table":
+                raise PitError("snapshot observation clock is not a table")
+            rows = conn.execute(
+                "SELECT observed_through FROM snapshot_observation_clock"
+            ).fetchall()
+            if len(rows) != 1 or rows[0][0] is None or not str(rows[0][0]).strip():
+                raise PitError("snapshot observation clock is not a valid singleton")
+            return str(rows[0][0])
         return _manifest_observed_through(conn)
-    except sqlite3.Error:
-        return None
+    except sqlite3.Error as exc:
+        raise PitError("snapshot observation clock is unreadable") from exc
 
 
 def draft_observation_clock(*, captured_at: str | None = None) -> tuple[str, str]:
