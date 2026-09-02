@@ -1,0 +1,30 @@
+{
+  "schema_version": "controlled-json-canonical-v1",
+  "profile": "ECMASCRIPT_FINITE_SAFE_INTEGER_UTF16_KEYS_UTF8",
+  "vectors": [
+    { "name": "negative_zero", "input_json": "-0", "canonical_json": "0" },
+    { "name": "float_zero", "input_json": "0.0", "canonical_json": "0" },
+    { "name": "float_one", "input_json": "1.0", "canonical_json": "1" },
+    { "name": "small_exponent", "input_json": "1e-7", "canonical_json": "1e-7" },
+    { "name": "subnormal", "input_json": "5e-324", "canonical_json": "5e-324" },
+    { "name": "safe_positive_edge", "input_json": "9007199254740991", "canonical_json": "9007199254740991" },
+    { "name": "safe_negative_edge", "input_json": "-9007199254740991", "canonical_json": "-9007199254740991" },
+    {
+      "name": "utf16_key_order",
+      "input_json": "{\"\":2,\"𐀀\":1,\"a\":0}",
+      "canonical_json": "{\"a\":0,\"𐀀\":1,\"\":2}"
+    },
+    {
+      "name": "nested",
+      "input_json": "{\"z\":[-0,1.0,{\"b\":1e-7,\"a\":null}],\"a\":true}",
+      "canonical_json": "{\"a\":true,\"z\":[0,1,{\"a\":null,\"b\":1e-7}]}"
+    },
+    { "name": "positive_unsafe_integer", "input_json": "9007199254740992", "reject": "UNSAFE_INTEGER" },
+    { "name": "positive_unsafe_nonrepresentable_integer", "input_json": "9007199254740993", "reject": "UNSAFE_INTEGER" },
+    { "name": "negative_unsafe_integer", "input_json": "-9007199254740992", "reject": "UNSAFE_INTEGER" },
+    { "name": "large_integer_float", "input_json": "1e20", "reject": "UNSAFE_INTEGER" },
+    { "name": "nan", "runtime_number": "NaN", "reject": "NON_FINITE" },
+    { "name": "positive_infinity", "runtime_number": "Infinity", "reject": "NON_FINITE" },
+    { "name": "negative_infinity", "runtime_number": "-Infinity", "reject": "NON_FINITE" }
+  ]
+}

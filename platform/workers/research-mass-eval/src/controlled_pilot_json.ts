@@ -124,11 +124,23 @@ export async function sha256Digest(bytes: Uint8Array | string): Promise<string> 
 }
 
 export function canonicalJson(value: unknown): string {
-  if (typeof value === "number" && !Number.isFinite(value)) {
-    throw new StrictJsonError("canonical JSON number is not finite");
+  if (value === null) return "null";
+  if (typeof value === "boolean" || typeof value === "string") {
+    return JSON.stringify(value);
   }
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new StrictJsonError("canonical JSON number is not finite");
+    }
+    if (Number.isInteger(value) && !Number.isSafeInteger(value)) {
+      throw new StrictJsonError("canonical JSON integer is outside the safe range");
+    }
+    return JSON.stringify(value);
+  }
   if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  if (typeof value !== "object") {
+    throw new StrictJsonError("value is not canonical JSON");
+  }
   const rec = value as Record<string, unknown>;
   return `{${Object.keys(rec)
     .sort()

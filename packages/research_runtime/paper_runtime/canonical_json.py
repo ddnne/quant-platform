@@ -2,9 +2,9 @@
 
 Profile:
 - UTF-8 bytes, not ASCII-escaped non-ASCII
-- objects with lexicographic key order
+- objects with UTF-16 key order, matching ECMAScript
 - arrays in given order
-- finite numbers only; integers stay integers
+- finite numbers only; unsafe integer values are rejected
 - strings as JSON strings (UTF-8, required escapes only)
 - timestamps remain canonical UTC strings, never Date objects
 - no NaN/Infinity, no extra whitespace
@@ -13,8 +13,9 @@ Profile:
 from __future__ import annotations
 
 import hashlib
-import json
 from typing import Any
+
+from data_contracts.identity import canonical_finite_safe_json
 
 
 class CanonicalJsonError(ValueError):
@@ -23,13 +24,7 @@ class CanonicalJsonError(ValueError):
 
 def canonical_json_dumps(value: Any) -> str:
     try:
-        text = json.dumps(
-            value,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        )
+        text = canonical_finite_safe_json(value)
     except (TypeError, ValueError) as exc:
         raise CanonicalJsonError("value is not canonical JSON") from exc
     return text
