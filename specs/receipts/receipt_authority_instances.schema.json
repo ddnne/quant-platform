@@ -27,6 +27,24 @@
         "product_prefix": {"type": "string", "pattern": "^product/receipt-authority/(production|staging)/$"}
       }
     },
+    "rawR2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["binding", "bucket_name"],
+      "properties": {
+        "binding": {"const": "RAW_BUCKET"},
+        "bucket_name": {"type": "string", "minLength": 1}
+      }
+    },
+    "structuredR2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["binding", "bucket_name"],
+      "properties": {
+        "binding": {"const": "STRUCTURED_BUCKET"},
+        "bucket_name": {"type": "string", "minLength": 1}
+      }
+    },
     "durableObject": {
       "type": "object",
       "additionalProperties": false,
@@ -60,12 +78,16 @@
           "required": [
             "d1",
             "authority_evidence_r2",
+            "raw_r2",
+            "structured_r2",
             "durable_object",
             "acquisition_service"
           ],
           "properties": {
             "d1": {"$ref": "#/$defs/d1"},
             "authority_evidence_r2": {"$ref": "#/$defs/authorityR2"},
+            "raw_r2": {"$ref": "#/$defs/rawR2"},
+            "structured_r2": {"$ref": "#/$defs/structuredR2"},
             "durable_object": {"$ref": "#/$defs/durableObject"},
             "acquisition_service": {"$ref": "#/$defs/acquisitionService"}
           }

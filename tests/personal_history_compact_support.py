@@ -1,4 +1,4 @@
-"""Shared compact-v7 SQLite fixtures. Prefer production CREATE SQL."""
+"""Shared compact-v8 SQLite fixtures. Prefer production CREATE SQL."""
 
 from __future__ import annotations
 
@@ -25,15 +25,48 @@ def stamp_compact_manifest(
     format_name: str = PERSONAL_HISTORY_COMPACT_FORMAT,
     *,
     status: str = PERSONAL_HISTORY_COMPACT_COMPLETE_STATUS,
+    observed_through: str | None = "2099-01-01T00:00:00+09:00",
+    revision_window_calendar_days: int = 40,
+    revision_coverage: str = "WINDOW_COMPLETE",
 ) -> None:
     connection.execute(
         f"CREATE TABLE IF NOT EXISTS {PERSONAL_HISTORY_MANIFEST_TABLE} ("
-        "singleton INTEGER PRIMARY KEY, format TEXT, status TEXT)"
+        "singleton INTEGER PRIMARY KEY, format TEXT, status TEXT, "
+        "observed_through TEXT, revision_window_calendar_days INTEGER, "
+        "revision_coverage TEXT)"
     )
+    columns = {
+        str(row[1])
+        for row in connection.execute(
+            f"PRAGMA table_info({PERSONAL_HISTORY_MANIFEST_TABLE})"
+        )
+    }
+    if "observed_through" not in columns:
+        connection.execute(
+            f"ALTER TABLE {PERSONAL_HISTORY_MANIFEST_TABLE} "
+            "ADD COLUMN observed_through TEXT"
+        )
+    if "revision_window_calendar_days" not in columns:
+        connection.execute(
+            f"ALTER TABLE {PERSONAL_HISTORY_MANIFEST_TABLE} "
+            "ADD COLUMN revision_window_calendar_days INTEGER"
+        )
+    if "revision_coverage" not in columns:
+        connection.execute(
+            f"ALTER TABLE {PERSONAL_HISTORY_MANIFEST_TABLE} "
+            "ADD COLUMN revision_coverage TEXT"
+        )
     connection.execute(
         f"INSERT OR REPLACE INTO {PERSONAL_HISTORY_MANIFEST_TABLE}"
-        "(singleton, format, status) VALUES (1, ?, ?)",
-        (format_name, status),
+        "(singleton, format, status, observed_through, "
+        "revision_window_calendar_days, revision_coverage) VALUES (1, ?, ?, ?, ?, ?)",
+        (
+            format_name,
+            status,
+            observed_through,
+            revision_window_calendar_days,
+            revision_coverage,
+        ),
     )
 
 

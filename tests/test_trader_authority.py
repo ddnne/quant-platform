@@ -37,8 +37,10 @@ def _row(*, key_id: str, status: str | None = "active") -> dict[str, object]:
 
 def _document(*rows: dict[str, object]) -> dict[str, object]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "purpose": "controlled_trader_authorization_verification",
+        "environment": "production",
+        "authority_instance_id": "trader-authority/production/v1",
         "keys": list(rows),
     }
 
@@ -83,6 +85,7 @@ def _signed_authorization(
         "expires_at": (issued + timedelta(seconds=ttl_seconds)).isoformat(),
         "key_id": key_id,
         "issuer": "ControlledTraderAuthorizationService/v1",
+        "identity": "controlled_pilot_v1",
     }
     body["authorization_id"] = "sha256:" + hashlib.sha256(
         _canonical(body)

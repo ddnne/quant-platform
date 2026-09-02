@@ -241,14 +241,10 @@ def test_generic_event_time_from_disclosed_date():
     assert out[0]["available_at"] == "2025-05-01T09:00:00+09:00"
 
 
-def test_generic_key_falls_back_to_row_hash_when_no_identity_fields():
+def test_generic_premium_key_rejects_missing_identity_fields():
     rows = [{"SomethingUnrelated": "x"}]
-    out = normalize_generic(rows, dataset="markets_breakdown", ingested_at=ING)
-    nk = out[0]["natural_key"]
-    assert nk.startswith("hash:sha256:")
-    assert len(nk.removeprefix("hash:sha256:")) == 64
-    # event_time falls back to available_at (ingested) when no date present
-    assert out[0]["event_time"] == ING
+    with pytest.raises(ValueError, match="governed natural-key field Date"):
+        normalize_generic(rows, dataset="markets_breakdown", ingested_at=ING)
 
 
 def test_generic_unknown_dataset_raises():

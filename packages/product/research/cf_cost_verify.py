@@ -95,6 +95,7 @@ def run_cost_on_off_compare(
     repo_by_date: Mapping[str, float] | None = None,
     adv_by_code: Mapping[str, float] | None = None,
     job_id: str | None = None,
+    artifact_put: Any | None = None,
 ) -> dict[str, Any]:
     """Compare cost ON vs OFF and high vs low ADV on the daily_path held book.
 
@@ -302,11 +303,12 @@ def run_cost_on_off_compare(
     if not dry_run:
         import json
 
+        if artifact_put is None:
+            raise RuntimeError("closed artifact put port is required")
         from research.cf_mass_eval_stage import RESEARCH_ARTIFACT_BUCKET
-        from research.r2_io import put_research_artifact
 
         key = f"research/eval/job={jid}/cost_verify.json"
-        put_research_artifact(
+        artifact_put(
             RESEARCH_ARTIFACT_BUCKET,
             key,
             json.dumps(out, default=str).encode("utf-8"),

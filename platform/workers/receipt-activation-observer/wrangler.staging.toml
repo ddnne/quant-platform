@@ -12,6 +12,11 @@ binding = "PREMIUM_RECEIPT_OPERATOR"
 service = "quant-platform-ingestion-premium-staging"
 entrypoint = "PremiumReceiptAuditEvidenceService"
 
+[[services]]
+binding = "JSDA_INGESTION"
+service = "quant-platform-ingestion-jsda-staging"
+entrypoint = "JsdaReadinessService"
+
 [observability]
 enabled = true
 head_sampling_rate = 1

@@ -7,8 +7,9 @@ import {
   reset,
 } from "cloudflare:test";
 import { beforeEach, describe, expect, inject, it } from "vitest";
-import worker from "../src/testing";
+import worker, { writeFixtureCutover } from "../src/testing";
 import type { JsdaWorkerEnv } from "../src/env";
+import { closedReceiptEnv } from "./receipt_test_authority";
 import {
   loadJob,
   loadRunClosure,
@@ -33,18 +34,7 @@ const migrations = inject<Array<{ name: string; queries: string[] }>>(
 beforeEach(async () => {
   await reset();
   await applyD1Migrations(runtimeEnv.DB, migrations);
-  await runtimeEnv.DB.prepare(
-    `UPDATE jsda_v3_cutover_control
-        SET phase='v3_active', activated_at=?, activated_source_sha=?,
-            drain_evidence_digest=?
-      WHERE singleton=1 AND phase='bridge'`,
-  )
-    .bind(
-      "2026-08-25T01:29:00.000Z",
-      "a".repeat(40),
-      `sha256:${"b".repeat(64)}`,
-    )
-    .run();
+  await writeFixtureCutover(runtimeEnv.DB);
 });
 
 const ARCHIVE_A = "https://market.jsda.or.jp/archive/data/otc-20020802.csv";
@@ -77,7 +67,7 @@ async function deliver(body: unknown, id: string) {
     },
   ]);
   const ctx = createExecutionContext();
-  await worker.queue(batch, runtimeEnv, ctx);
+  await worker.queue(batch, closedReceiptEnv(runtimeEnv), ctx);
   return getQueueResult(batch, ctx);
 }
 

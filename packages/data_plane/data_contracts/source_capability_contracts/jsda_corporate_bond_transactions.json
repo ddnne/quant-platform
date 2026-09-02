@@ -1,0 +1,58 @@
+{
+  "policy_version": "source-capability/v3",
+  "dataset_id": "jsda_corporate_bond_transactions",
+  "source": "jsda",
+  "upstream_locator": "/shiryoshitsu/toukei/saiken_torihiki/",
+  "official_evidence_url": "https://www.jsda.or.jp/shiryoshitsu/toukei/saiken_torihiki/",
+  "history_mode": "periodic_archive",
+  "earliest_official_availability": "2015-11-04",
+  "historical_research_eligible": true,
+  "tip_only_operational": false,
+  "supported_query_parameters": ["year"],
+  "publication_calendar": {
+    "kind": "official_annual_archive",
+    "timezone": "Asia/Tokyo",
+    "index_url": "https://www.jsda.or.jp/shiryoshitsu/toukei/saiken_torihiki/",
+    "required_periods": "official_archive_periods_only"
+  },
+  "entitlement_semantics": {
+    "clamp_before_earliest": false,
+    "subscription_floor": null
+  },
+  "collection_window": {
+    "grain": "official_archive_year",
+    "open": "2015-11-04",
+    "close": "latest_official_annual_archive"
+  },
+  "freshness_sla": {
+    "expected_after": "official_publication",
+    "usable_by": "after_ingestion",
+    "timezone": "Asia/Tokyo",
+    "rule": "official_annual_archive"
+  },
+  "event_time": {
+    "policy": "source_trade_date",
+    "fields": ["trade_date"]
+  },
+  "available_at": {
+    "policy": "ingest_time_conservative_when_publication_timestamp_unknown",
+    "field": null,
+    "known_publication_lag": null
+  },
+  "revision_semantics": {
+    "policy": "new_revision_available_no_earlier_than_correction_publication_or_ingestion",
+    "generation_on_revision": true
+  },
+  "research_profile_eligibility": {
+    "include_in": ["historical_research", "core_historical"],
+    "exclude_from": ["calendar_day_inventory"],
+    "exclusion_reason": "Required segments are official archive periods only.",
+    "historical_research": true,
+    "tip_only": false,
+    "dataset_complete_claim": false
+  },
+  "required_domain_semantics": {
+    "basis": "official_archive_periods",
+    "empty_success_policy": "never_complete"
+  }
+}

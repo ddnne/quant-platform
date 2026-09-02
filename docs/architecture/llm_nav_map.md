@@ -119,6 +119,7 @@ Details + exceptions: ADR §5.
 | A3 seal raw+struct months | `scripts/issue_receipts_parallel.py` | residual + [`../proof/complete_plus8_r2_raw_seal_20260813.md`](../proof/complete_plus8_r2_raw_seal_20260813.md); **never** invent COMPLETE; R2 mirror OK if usable raw |
 | Packaging / paths | `pyproject.toml`, `qp_paths.py` | this map + layout migration |
 | LLM-friendly refactor | plane READMEs + `tests/test_plane_import_boundaries.py` | [ADR](./adr_llm_friendly_refactor.md) (**Accepted**); residual for live status |
+| Phase 6.3.2 identity / path freeze | `CONTROLLED_PILOT_IDENTITY`, Draft purpose IDs; live-order code removed (Git is the archive) | [ADR simplification](./adr_phase632_architecture_simplification.md) (**Accepted**) |
 | New research hyp / daily_path_DD | `research.daily_path_eval` · `research.eval_registry` · `research.cf_mass_eval_job` | [ADR recording](./adr_research_recording.md) — **completion requires an R2 `research/eval/job={id}/` put**; no new `run_wNN` script |
 | Existing `run_w*` / wave proofs | **deleted** | [`wave_assets_deprecated.md`](./wave_assets_deprecated.md) |
 | Legacy eval recording | `research.eval_registry` (offline/R2 artifact helper only) | the former Ops-D1 migration owner was removed; Mass remains NO-GO |
@@ -189,6 +190,7 @@ Full policy: ADR §5.2.
 | `docs/architecture/adr_llm_friendly_refactor.md` | **Accepted ADR (Grok 2026-08-12)** |
 | `docs/architecture/adr_research_recording.md` | **Accepted** — experiment SoT = R2 + D1 index; no wave-script warehouse |
 | `docs/architecture/adr_historical_raw_acceleration.md` | Track A ADR (infra/execute evidence in proof/) |
+| `docs/architecture/adr_phase632_architecture_simplification.md` | **Accepted (2026-09-02)** — three active paths; identity `controlled_pilot_v1`; live-order six-principal/WebAuthn deleted from the working tree |
 | `docs/complete_segment_checklist.md` | **current** COMPLETE evidence contract (not residual counts) |
 | `docs/phase6_snapshot_publication.md` | domain (READY publication machine; production READY still **NO-GO**) |
 | `docs/phase61_production_runbook.md` | runbook (not residual counts) |
@@ -240,7 +242,7 @@ Test tiers: `tests/README.md` (G0/G1/G2; ADR §12 / B1-d).
 | Sync / D1 | `sync_d1_to_sqlite.py`, `report_d1_local_sync_lag.py`, `restore_local_complete_from_receipt.py` | ops |
 | Projection | `export_ops_projection.py`, `publish_ops_projection.py`, `ops_status.py` | ops (**dedicated append-only generation; pointer-last activation**) |
 | Paper / agents | CLIs deleted; `paper_runtime` APIs + `agents/` | research / product |
-| Validation | `run_phase35_validation.py`, `run_phase4_accept.py` | edge / features |
+| Validation | `run_phase35_validation.py` | edge |
 | Codegen | `generate_governed_js.py`, `verify_governed_js_drift.py` | contracts → Workers |
 
 Shared ROOT bootstrap: `scripts/_bootstrap.py` (`ensure_repo_root`) — **B1-e partial**  

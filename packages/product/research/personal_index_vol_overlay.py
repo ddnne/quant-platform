@@ -28,6 +28,8 @@ from research.factor_cohorts import (
     AM_PM_BASE_SLEEVE_ID,
     AM_PM_BASE_SLEEVE_SCHEMA,
     AM_SIGNAL_PM_CLOSE_EXECUTION_MODE,
+    DRAFT_AM_PM_SMILE_COHORT_PURPOSE_ID,
+    DRAFT_VOL_OVERLAY_COHORT_PURPOSE_ID,
     canonical_authoritative_session_dates as _canonical_authoritative_session_dates,
     canonical_trading_calendar_digest,
     get_research_cohort,
@@ -1147,6 +1149,7 @@ def evaluate_index_vol_overlays(
             "hedge_formula": "h=clip(-g*beta,-1.5,1.5)",
         },
         "candidate_policy": {
+            "purpose_id": DRAFT_VOL_OVERLAY_COHORT_PURPOSE_ID,
             "declared_count": len(OVERLAY_CANDIDATES),
             "evaluated_count": evaluated_count,
             "post_result_selection": "NOT_PERFORMED",
@@ -1382,7 +1385,7 @@ def _common_validity_for_date(
     if len(ids) != len(unique_ids):
         reasons.append("candidate_ids_not_unique")
     if unique_ids != expected:
-        reasons.append("candidate_identity_not_exact_four")
+        reasons.append("candidate_identity_not_draft_smile_cohort")
     by_id = {
         str(row.get("candidate_id") or ""): row
         for row in day_rows
@@ -1910,6 +1913,7 @@ def evaluate_index_smile_transport_overlays(
             "causal_claim": False,
         },
         "candidate_policy": {
+            "purpose_id": DRAFT_AM_PM_SMILE_COHORT_PURPOSE_ID,
             "declared_count": len(SMILE_TRANSPORT_CANDIDATES),
             "evaluated_count": evaluated_count,
             "post_result_selection": "NOT_PERFORMED",
@@ -3538,6 +3542,7 @@ def evaluate_index_vol_overlays_am_pm(
                 "EVALUATED" if evaluated_count == len(results) else "NOT_EVALUATED"
             ),
             "candidate_policy": {
+                "purpose_id": DRAFT_VOL_OVERLAY_COHORT_PURPOSE_ID,
                 "declared_count": len(OVERLAY_AM_PM_CANDIDATES),
                 "evaluated_count": evaluated_count,
                 "post_result_selection": "NOT_PERFORMED",
@@ -3684,7 +3689,7 @@ def _am_pm_common_validity_for_date(
         for row in day_rows
     }
     if len(by_identity) != len(day_rows):
-        reasons.append("candidate_identity_not_exact_four")
+        reasons.append("candidate_identity_not_draft_smile_cohort")
     for candidate in SMILE_TRANSPORT_AM_PM_CANDIDATES:
         reasons.extend(
             _am_pm_transport_row_issues(
@@ -4025,6 +4030,7 @@ def evaluate_index_smile_transport_overlays_am_pm(
                 "causal_claim": False,
             },
             "candidate_policy": {
+                "purpose_id": DRAFT_AM_PM_SMILE_COHORT_PURPOSE_ID,
                 "declared_count": len(SMILE_TRANSPORT_AM_PM_CANDIDATES),
                 "evaluated_count": evaluated_count,
                 "post_result_selection": "NOT_PERFORMED",

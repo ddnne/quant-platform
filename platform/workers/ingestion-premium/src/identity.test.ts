@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { daysAgoJst, newRunId, sessionCloseJst, todayJst, toJstIso } from "./identity";
+import { datasetById } from "./catalog";
+import { daysAgoJst, naturalKey, newRunId, sessionCloseJst, todayJst, toJstIso } from "./identity";
 
 const UUID = "11111111-1111-4111-8111-111111111111";
 
@@ -27,6 +28,19 @@ describe("sessionCloseJst", () => {
     expect(sessionCloseJst("2025-04-01")).toBe("2025-04-01T15:30:00+09:00");
     expect(sessionCloseJst("2025-04-01", "morning")).toBe(
       "2025-04-01T11:30:00+09:00",
+    );
+  });
+});
+
+describe("naturalKey", () => {
+  it("rejects rows that omit governed required natural-key fields", async () => {
+    const spec = datasetById("equities_bars_daily");
+    expect(spec).toBeDefined();
+    await expect(naturalKey({ Close: 100 }, spec!)).rejects.toThrow(
+      /governed natural-key field/,
+    );
+    expect(await naturalKey({ Code: "8697", Date: "2025-04-01" }, spec!)).toBe(
+      '{"Code":"8697","Date":"2025-04-01"}',
     );
   });
 });

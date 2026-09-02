@@ -23,6 +23,11 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from selection.budget_ledger import MassResearchDisabledError
+from selection.controlled_pilot_policy import (
+    CONTROLLED_PILOT_IDENTITY,
+    ControlledPilotPolicyError,
+    require_controlled_pilot_identity,
+)
 
 
 TRADER_AUTHORIZATION_FORMAT = "verified-trader-authorization/v1"
@@ -30,7 +35,7 @@ TRADER_AUTHORIZATION_ISSUER = "ControlledTraderAuthorizationService/v1"
 TRADER_AUTHORIZATION_ALGORITHM = "Ed25519"
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 PINNED_TRADER_AUTHORIZATION_REGISTRY_DIGEST = (
-    "sha256:14c1968604545135545c7dc13d353110b9148d911edd0dababe80bb07381096c"
+    "sha256:ca52153e148fc0603a6073cd2eecb7eeaa058345eefc4dbfa882664fc1640e49"
 )
 DEFAULT_TRADER_AUTHORIZATION_PUBLIC_KEYS_PATH = (
     Path(__file__).resolve().parents[3]
@@ -47,7 +52,7 @@ def _now() -> datetime:
 def _canonical_bytes(payload: Mapping[str, Any]) -> bytes:
     return json.dumps(
         dict(payload),
-        ensure_ascii=True,
+        ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
         allow_nan=False,
@@ -90,7 +95,7 @@ class TraderAuthorizationPublicKeyRegistry:
         cls, document: Mapping[str, Any]
     ) -> "TraderAuthorizationPublicKeyRegistry":
         if (
-            document.get("schema_version") != 1
+            document.get("schema_version") != 2
             or document.get("purpose")
             != "controlled_trader_authorization_verification"
         ):
@@ -201,6 +206,7 @@ class VerifiedTraderAuthorization:
     key_id: str
     signature: str
     issuer: str = TRADER_AUTHORIZATION_ISSUER
+    identity: str = CONTROLLED_PILOT_IDENTITY
 
     def __post_init__(self) -> None:
         # Do not admit str/float subclasses or stateful coercion objects into
@@ -258,6 +264,7 @@ class TraderAuthorizationBinding:
     cost_scenario: str
     issued_at: str
     expires_at: str
+    identity: str = CONTROLLED_PILOT_IDENTITY
 
     def __post_init__(self) -> None:
         values = tuple(
@@ -306,6 +313,7 @@ _AUTHORIZATION_STRING_FIELDS = (
     "key_id",
     "signature",
     "issuer",
+    "identity",
 )
 
 _BINDING_STRING_FIELDS = (
@@ -326,6 +334,7 @@ _BINDING_STRING_FIELDS = (
     "cost_scenario",
     "issued_at",
     "expires_at",
+    "identity",
 )
 
 
@@ -373,7 +382,15 @@ def _materialize_authorization(
         "expires_at": values["expires_at"],
         "key_id": values["key_id"],
         "issuer": values["issuer"],
+        "identity": values["identity"],
     }
+    try:
+        body["identity"] = require_controlled_pilot_identity(body["identity"])
+    except ControlledPilotPolicyError as exc:
+        raise MassResearchDisabledError(
+            "VerifiedTraderAuthorization identity must be exactly "
+            f"{CONTROLLED_PILOT_IDENTITY!r}"
+        ) from exc
     return body, values["signature"]
 
 
@@ -407,7 +424,14 @@ def _materialize_binding(binding: TraderAuthorizationBinding) -> dict[str, Any]:
     ):
         if _SHA256_RE.fullmatch(values[name]) is None:
             raise ValueError(f"TraderAuthorizationBinding {name} is not sha256")
-    return {**values, "max_gross_weight": gross}
+    try:
+        identity = require_controlled_pilot_identity(values["identity"])
+    except ControlledPilotPolicyError as exc:
+        raise ValueError(
+            "TraderAuthorizationBinding identity must be exactly "
+            f"{CONTROLLED_PILOT_IDENTITY!r}"
+        ) from exc
+    return {**values, "identity": identity, "max_gross_weight": gross}
 
 
 def _verify_pinned_trader_authorization(

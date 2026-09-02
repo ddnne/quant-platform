@@ -57,6 +57,7 @@ import {
   personalAcquisitionCacheR2Outbound,
 } from "./personal_acquisition_cache_r2";
 import { sha256Hex } from "./sha256";
+import { CONTROLLED_PILOT_KEY_PREFIX } from "./controlled_pilot_contract";
 
 const RESULT_MAX_BYTES = 512 * 1024 * 1024;
 const MANIFEST_MAX_BYTES = 64 * 1024;
@@ -156,6 +157,20 @@ function snapshotObjectMatches(
   );
 }
 
+async function exactTerminalExists(
+  env: R2Env,
+  key: string,
+  identity: { jobId: string; requestDigest: string },
+): Promise<boolean> {
+  const terminal = await env.STRUCTURED_BUCKET.head(key);
+  return (
+    terminal?.customMetadata?.job_id === identity.jobId &&
+    terminal.customMetadata.request_digest === identity.requestDigest &&
+    (terminal.customMetadata.status === "COMPLETED" ||
+      terminal.customMetadata.status === "FAILED")
+  );
+}
+
 async function putResult(
   request: Request,
   env: R2Env,
@@ -174,6 +189,15 @@ async function putResult(
     return existingMatches(existing, identity)
       ? responseJson({ ok: true, created: false, key })
       : responseJson({ error: "immutable result conflict" }, 409);
+  }
+  if (
+    await exactTerminalExists(
+      env,
+      personalResearchManifestKey(identity.jobId),
+      identity,
+    )
+  ) {
+    return responseJson({ error: "terminal already exists" }, 409);
   }
   let put: R2Object | null;
   try {
@@ -356,6 +380,15 @@ async function putSnapshotGzip(
       ? responseJson({ ok: true, created: false, key })
       : responseJson({ error: "immutable snapshot conflict" }, 409);
   }
+  if (
+    await exactTerminalExists(
+      env,
+      personalSnapshotManifestKey(identity.jobId),
+      identity,
+    )
+  ) {
+    return responseJson({ error: "terminal already exists" }, 409);
+  }
   let put: R2Object | null;
   try {
     put = await env.STRUCTURED_BUCKET.put(key, request.body, {
@@ -438,11 +471,22 @@ async function putSnapshotManifest(
     const snapshotKey =
       typeof manifest.snapshot_key === "string" ? manifest.snapshot_key : "";
     const rawHex = rawDigest.startsWith("sha256:") ? rawDigest.slice(7) : "";
+    const observedThrough =
+      typeof manifest.observed_through === "string" ? manifest.observed_through : "";
+    const revisionDays = manifest.revision_window_calendar_days;
+    const revisionCoverage =
+      typeof manifest.revision_coverage === "string" ? manifest.revision_coverage : "";
     if (
       !DIGEST_RE.test(rawDigest) ||
       !DIGEST_RE.test(gzipDigest) ||
       !SHA_HEX_RE.test(rawHex) ||
-      snapshotKey !== personalSnapshotObjectKey(rawHex)
+      snapshotKey !== personalSnapshotObjectKey(rawHex) ||
+      !observedThrough ||
+      typeof revisionDays !== "number" ||
+      !Number.isInteger(revisionDays) ||
+      revisionDays < 1 ||
+      (revisionCoverage !== "WINDOW_COMPLETE" &&
+        revisionCoverage !== "BOUNDED_WINDOW")
     ) {
       return responseJson({ error: "completed snapshot identity is invalid" }, 400);
     }
@@ -734,6 +778,12 @@ export async function personalResearchR2Outbound(
   const key = url.pathname.startsWith("/") ? url.pathname.slice(1) : url.pathname;
   if (url.hostname !== "research.r2" || url.search || url.hash || key.includes("%")) {
     return responseJson({ error: "R2 request denied" }, 403);
+  }
+  // The generic personal-container capability must never reach Controlled Pilot
+  // objects. Controlled jobs receive a separately bound handler whose runtime
+  // context is tied to the deterministic job container.
+  if (key.startsWith(CONTROLLED_PILOT_KEY_PREFIX)) {
+    return responseJson({ error: "controlled R2 prefix denied" }, 403);
   }
   if (
     (request.method === "GET" || request.method === "HEAD") &&

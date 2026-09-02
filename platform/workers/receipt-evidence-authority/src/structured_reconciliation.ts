@@ -17,6 +17,10 @@ import {
   type Capture,
 } from "./raw_capture";
 import {
+  isJsdaPersistedRequest,
+  parseJsdaStructuredRows,
+} from "./jsda_capture";
+import {
   compareUtf8Text,
   materializeProduct,
   type CanonicalStructuredRow,
@@ -31,6 +35,8 @@ type D1Operation = {
   request_digest: string;
   run_id: number;
   environment: string;
+  source: string;
+  contract_id: string;
   dataset: string;
   segment_id: string;
   segment_start: string;
@@ -54,7 +60,7 @@ export async function initializeD1Operation(
     operationId: string;
     requestDigest: string;
     request: ReceiptIssueRequestV1;
-    initial: JquantsAcquisitionRequestV2;
+    initial: Capture["initialRequest"];
     capture: Capture;
     checkedAt: string;
   },
@@ -72,8 +78,8 @@ export async function initializeD1Operation(
   await env.DB.prepare(
     `INSERT OR IGNORE INTO ingestion_run_log
      (ran_at,source,runtime,status,detail,authority_operation_id)
-     VALUES (?,'jquants','receipt-evidence-authority','RUNNING',?,?)`,
-  ).bind(input.checkedAt, runDetail, input.operationId).run();
+     VALUES (?,?, 'receipt-evidence-authority','RUNNING',?,?)`,
+  ).bind(input.checkedAt, input.request.source, runDetail, input.operationId).run();
   const run = await env.DB.prepare(
     `SELECT id,ran_at,source,runtime,status,detail,authority_operation_id
        FROM ingestion_run_log WHERE authority_operation_id=?`,
@@ -88,7 +94,7 @@ export async function initializeD1Operation(
   }>();
   if (
     run === null || !Number.isSafeInteger(run.id) || run.id <= 0 ||
-    run.source !== "jquants" || run.runtime !== "receipt-evidence-authority" ||
+    run.source !== input.request.source || run.runtime !== "receipt-evidence-authority" ||
     run.status !== "RUNNING" || run.detail !== runDetail ||
     run.authority_operation_id !== input.operationId ||
     !Number.isFinite(Date.parse(run.ran_at))
@@ -104,19 +110,21 @@ export async function initializeD1Operation(
   );
   await env.DB.prepare(
     `INSERT OR IGNORE INTO receipt_authority_operations
-     (operation_id,request_digest,run_id,environment,dataset,segment_id,
+     (operation_id,request_digest,run_id,environment,source,contract_id,dataset,segment_id,
       segment_start,segment_end,state,raw_manifest_key,raw_manifest_digest,
       raw_page_count,raw_row_count,raw_bytes,checked_at,updated_at)
-     VALUES (?,?,?,?,?,?,?,?,'COLLECTING',?,?,?,?,?,?,?)`,
+     VALUES (?,?,?,?,?,?,?,?,?,?,'COLLECTING',?,?,?,?,?,?,?)`,
   ).bind(
     input.operationId,
     input.requestDigest,
     run.id,
     input.request.environment,
+    input.request.source,
+    input.request.contract_id,
     input.request.dataset_id,
     input.request.segment_id,
-    input.initial.segment_start,
-    input.initial.segment_end,
+    input.request.expected_key_start,
+    input.request.expected_key_end,
     input.capture.rawManifestKey,
     input.capture.rawManifestDigest,
     rawPageCount,
@@ -131,9 +139,10 @@ export async function initializeD1Operation(
   if (
     row === null || row.request_digest !== input.requestDigest ||
     row.run_id !== run.id || row.environment !== input.request.environment ||
+    row.source !== input.request.source || row.contract_id !== input.request.contract_id ||
     row.dataset !== input.request.dataset_id || row.segment_id !== input.request.segment_id ||
-    row.segment_start !== input.initial.segment_start ||
-    row.segment_end !== input.initial.segment_end ||
+    row.segment_start !== input.request.expected_key_start ||
+    row.segment_end !== input.request.expected_key_end ||
     row.raw_manifest_key !== input.capture.rawManifestKey ||
     row.raw_manifest_digest !== input.capture.rawManifestDigest ||
     row.raw_page_count !== rawPageCount || row.raw_row_count !== rawRowCount ||
@@ -143,6 +152,26 @@ export async function initializeD1Operation(
   return { runId: run.id, checkedAt: run.ran_at };
 }
 
+async function productNaturalKey(
+  row: Record<string, unknown>,
+  spec: DatasetSpec,
+): Promise<string> {
+  if (spec.id.startsWith("jsda_") && typeof row.job_type === "string") {
+    const picked: Record<string, unknown> = {};
+    for (const field of ["source", "job_type", "segment_id", "target_url"] as const) {
+      const value = row[field];
+      if (typeof value !== "string" || value.length === 0) {
+        throw new Error(
+          `governed natural-key field ${field} is absent; structured product is rejected`,
+        );
+      }
+      picked[field] = value;
+    }
+    return stableJson(picked);
+  }
+  return naturalKey(row, spec);
+}
+
 async function normalizeRows(
   rows: Record<string, unknown>[],
   spec: DatasetSpec,
@@ -150,11 +179,11 @@ async function normalizeRows(
 ): Promise<CanonicalStructuredRow[]> {
   const result: CanonicalStructuredRow[] = [];
   for (const row of rows) {
-    const key = await naturalKey(row, spec);
+    const key = await productNaturalKey(row, spec);
     const availableAt = pickAvailableAt(row, spec.id, checkedAt);
     const normalized = {
       natural_key: key,
-      source: "jquants" as const,
+      source: spec.id.startsWith("jsda_") ? "jsda" as const : "jquants" as const,
       dataset: spec.id,
       event_time: pickEventTime(row, spec) ?? availableAt,
       available_at: availableAt,
@@ -228,24 +257,51 @@ export async function reconcileStructured(
     spec: DatasetSpec;
     checkedAt: string;
   },
-): Promise<{ count: number; digest: string; manifestKey: string }> {
+): Promise<{
+    count: number;
+    digest: string;
+    artifactKey: string;
+    artifactByteCount: number;
+    manifestKey: string;
+    manifestByteCount: number;
+    manifestDigest: string;
+    naturalKeyDigest: string;
+  }> {
   if (!input.capture.paginationExhausted || !input.capture.discoveryExhausted) {
     throw new Error("structured reconciliation requires exhausted raw evidence");
   }
   let rawCount = 0;
   const expectedRows: CanonicalStructuredRow[] = [];
-  const resolved = await resolveGovernedRequest(
-    input.capture.initialRequest,
-    input.capture.initialRequest.environment,
-    new Date(input.checkedAt),
-  );
+  const jsda = isJsdaPersistedRequest(input.capture.initialRequest)
+    ? input.capture.initialRequest
+    : null;
+  const resolved = jsda === null
+    ? await resolveGovernedRequest(
+      input.capture.initialRequest as JquantsAcquisitionRequestV2,
+      input.capture.initialRequest.environment,
+      new Date(input.checkedAt),
+    )
+    : null;
   for (const page of input.capture.pages) {
-    const bytes = await loadRawPage(env.AUTHORITY_EVIDENCE_BUCKET, page);
-    const rawEvidence = parseStrictRawPage(bytes, resolved.route);
-    if (rawEvidence.providerState !== page.metadata.provider_pagination_state) {
-      throw new Error("persisted provider pagination differs from raw bytes");
+    const bytes = await loadRawPage(env.RAW_BUCKET, page);
+    let rawRows: Record<string, unknown>[];
+    if (jsda !== null) {
+      rawRows = parseJsdaStructuredRows(bytes, jsda.job_type, jsda.frontier_json, {
+        datasetId: jsda.dataset_id,
+        targetUrl: jsda.target_url,
+        publicationLabelDate: jsda.segment_start,
+        quoteEffectiveDate: null,
+      });
+    } else {
+      if (resolved === null) {
+        throw new Error("structured reconciliation requires exhausted raw evidence");
+      }
+      const rawEvidence = parseStrictRawPage(bytes, resolved.route);
+      if (rawEvidence.providerState !== page.metadata.provider_pagination_state) {
+        throw new Error("persisted provider pagination differs from raw bytes");
+      }
+      rawRows = rawEvidence.rows;
     }
-    const rawRows = rawEvidence.rows;
     if (rawRows.length !== page.rowCount) {
       throw new Error("persisted raw row count differs from live capture");
     }
@@ -279,7 +335,7 @@ export async function reconcileStructured(
       raw_payload: row.raw_payload,
     });
     if (
-      row.source !== "jquants" || row.dataset !== input.spec.id ||
+      (row.source !== "jquants" && row.source !== "jsda") || row.dataset !== input.spec.id ||
       measured !== row.row_digest
     ) throw new Error("structured D1 row changed after canonical normalization");
   }
@@ -309,9 +365,18 @@ export async function reconcileStructured(
     operation.structured_manifest_key !== product.manifestKey ||
     operation.structured_digest !== product.digest
   ) throw new Error("structured D1 commit state failed");
+  const naturalKeyDigest = await canonicalDigest({
+    operation_id: input.operationId,
+    natural_keys: stored.map((row) => row.natural_key),
+  });
   return {
     count: product.count,
     digest: product.digest,
+    artifactKey: product.artifactKey,
+    artifactByteCount: product.artifactByteCount,
     manifestKey: product.manifestKey,
+    manifestByteCount: product.manifestByteCount,
+    manifestDigest: product.manifestDigest,
+    naturalKeyDigest,
   };
 }

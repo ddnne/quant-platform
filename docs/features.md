@@ -166,7 +166,3 @@ call.
 * ``tests/test_features_compute.py`` — built-in feature correctness,
   ``as_of``-required behavior, input validation, look-ahead guard, registry
   versioning, reproducibility.
-* ``tests/test_phase4_real_db_smoke.py`` — F6: end-to-end
-  ``run_backtest`` with a feature-driven strategy on a real-DB path.
-
-Live smokes are marked ``@pytest.mark.live`` and skipped by default.

@@ -445,6 +445,52 @@ function authority(
   );
 }
 
+async function exactTerminalExists(
+  env: R2Env,
+  expected: Identity,
+  input: PersonalIndexOverlayFamilyInputManifest,
+): Promise<boolean> {
+  const object = await env.STRUCTURED_BUCKET.get(
+    personalIndexOverlayFamilyTerminalManifestKey(
+      expected.jobId,
+      expected.cohortId,
+    ),
+  );
+  if (
+    !object ||
+    object.size < 1 ||
+    object.size > PERSONAL_INDEX_VOL_OVERLAY_2023_TERMINAL_MAX_BYTES
+  ) {
+    return false;
+  }
+  try {
+    const parsed: unknown = JSON.parse(
+      new TextDecoder().decode(await object.arrayBuffer()),
+    );
+    const requestDigest = await personalIndexVolOverlay2023RequestDigest(
+      {
+        job_id: expected.jobId,
+        cohort_id: expected.cohortId,
+        base_job_id: input.base.job_id,
+        svi_job_id: input.svi.job_id,
+      },
+      expected.inputDigest,
+    );
+    return (
+      isObject(parsed) &&
+      authority(parsed, expected, input) &&
+      parsed.schema_version ===
+        personalIndexOverlayFamilyTerminalSchema(expected.cohortId) &&
+      parsed.runner_version ===
+        personalIndexOverlayFamilyRunnerVersion(expected.cohortId) &&
+      parsed.request_digest === requestDigest &&
+      (parsed.status === "COMPLETED" || parsed.status === "FAILED")
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function childrenExist(
   env: R2Env,
   terminal: JsonObject,
@@ -584,6 +630,12 @@ async function putOutput(
     if (document.status === "COMPLETED" && !(await childrenExist(env, document, expected))) {
       return json({ error: "overlay manifest children mismatch" }, 409);
     }
+  }
+  if (
+    !(await env.STRUCTURED_BUCKET.head(key)) &&
+    (await exactTerminalExists(env, expected, input.manifest))
+  ) {
+    return json({ error: "overlay terminal already exists" }, 409);
   }
   const stored = await putBytesCreateOnly(
     env.STRUCTURED_BUCKET,

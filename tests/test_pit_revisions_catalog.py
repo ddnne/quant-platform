@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+
+from _coreseed import draft_pit_observation_clock
 from ingestion.jquants.normalize import normalize_daily_bars, normalize_generic
 from pit import get_equity_bars_daily, get_equity_master, get_market_calendar
 from storage.sqlite_store import SqliteStore
@@ -10,6 +13,12 @@ from storage.sqlite_store import SqliteStore
 ORIGINAL_AT = "2025-04-02T09:00:00+09:00"
 AMENDED_AT = "2025-04-20T09:00:00+09:00"
 SESSION_CLOSE_AT = "2025-04-01T15:30:00+09:00"
+
+
+@pytest.fixture(autouse=True)
+def _bound_draft_observation_clock():
+    with draft_pit_observation_clock(AMENDED_AT):
+        yield
 
 
 def test_original_revision_is_visible_before_later_amendment(tmp_path):

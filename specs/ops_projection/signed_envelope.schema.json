@@ -15,7 +15,7 @@
       "additionalProperties": false,
       "required": [
         "schema_version", "environment", "resource_identity", "generation_id", "content_digest", "source_db_digest",
-        "generated_at", "producer_commit_sha", "contract_digest", "registry_digest",
+        "generated_at", "producer_commit_sha", "worker_version_id", "contract_digest", "registry_digest",
         "coverage_policy_version", "coverage_policy_digest", "projection_status", "source_generation",
         "source_snapshot_generation", "source_cursor", "export_cursor", "applied_cursor",
         "coverage_status_digest", "dataset_coverage", "b0_status", "b0_evidence_digest",
@@ -30,6 +30,10 @@
         "source_db_digest": { "$ref": "#/$defs/sha256" },
         "generated_at": { "type": "string", "format": "date-time" },
         "producer_commit_sha": { "type": "string", "minLength": 1 },
+        "worker_version_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
         "contract_digest": { "$ref": "#/$defs/sha256" },
         "registry_digest": { "$ref": "#/$defs/sha256" },
         "coverage_policy_version": { "type": "string", "minLength": 1 },

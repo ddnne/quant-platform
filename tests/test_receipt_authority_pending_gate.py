@@ -108,12 +108,20 @@ def test_active_key_url_and_resource_bypass_is_rejected(
 
 def test_active_principal_declaration_is_never_pending(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    manifest = copy.deepcopy(pending.load_and_validate_manifest())
-    manifest["principals"]["receipt"]["authority_status"] = "ACTIVE"
-    monkeypatch.setattr(pending, "load_and_validate_manifest", lambda: manifest)
+    original = json.loads(
+        pending.SCOPED_REGISTRY_PATHS["production"].read_text(encoding="utf-8")
+    )
+    active = copy.deepcopy(original)
+    active["authority_status"] = "ACTIVE"
+    active["keys"] = [{"status": "active"}]
+    path = tmp_path / "production.json"
+    _write_json(path, active)
+    monkeypatch.setitem(pending.SCOPED_REGISTRY_PATHS, "production", path)
     with pytest.raises(
-        pending.PendingReceiptAuthorityError, match="inactive PENDING contract"
+        pending.PendingReceiptAuthorityError,
+        match="active, unscoped, or malformed",
     ):
         pending.validate_pending_receipt_authority("production")
 

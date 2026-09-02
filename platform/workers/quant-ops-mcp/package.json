@@ -8,7 +8,7 @@
     "test": "node --experimental-test-module-mocks --test test/*.test.mjs && vitest run --config vitest.runtime.config.ts && vitest run --config vitest.harness.config.ts",
     "typecheck": "tsc --noEmit",
     "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
-    "deploy": "wrangler deploy --config=wrangler.toml --env=production",
+    "deploy": "python3 ../../scripts/predeploy_ops_projection_gate.py --environment production && python3 ../../scripts/cloudflare_binding_manifest.py --deploy-tagged --config wrangler.toml --env production",
     "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"
   },
   "dependencies": {

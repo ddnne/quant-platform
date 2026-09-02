@@ -44,24 +44,20 @@ from research.cost_models import (
     liquidity_cost_multipliers,
     load_repo_rate_series_from_rows,
 )
+from pit.personal_research_view import PersonalResearchDataView
 from research.eval_loaders import (
-    DEFAULT_BARS_MIRROR_DIR,
     bars_rich_to_close_panel,
     collect_liquidity_bar_rows,
-    load_bars_ndjson_rich,
+    load_bars_from_sqlite_rich,
     load_fins_earnings_date_from_sqlite,
     load_fins_events_from_sqlite,
     load_margin_from_sqlite,
-    load_margin_ndjson,
     load_repo_rows_from_sqlite,
     load_short_ratio_series_from_sqlite,
     merge_event_calendars,
-    resolve_bars_path,
-    resolve_margin_path,
 )
 from research.eval_tracks import EVAL_TRACK_LIQ_LARGE, EVAL_TRACKS
 from research.eval_universe import (
-    DEFAULT_SQLITE,
     select_eval_universe,
 )
 from research.eval_windows import DEFAULT_PERIODS
@@ -97,8 +93,9 @@ def run_class_hyp_multi_year_eval(
     hold_days: int = DEFAULT_HOLD_DAYS,
     macro_mode: str = "rate_change",
     one_way_cost: float = DEFAULT_ONE_WAY_COST,
-    mirror_dir: str | Path = DEFAULT_BARS_MIRROR_DIR,
-    sqlite_path: str | Path = DEFAULT_SQLITE,
+    view: Any | None = None,
+    mirror_dir: str | Path | None = None,
+    sqlite_path: str | Path | None = None,
     include_cross_section: bool = True,
     include_cross_section_hold_10: bool = True,
     include_cross_section_hold_10_mom3: bool = True,
@@ -160,7 +157,15 @@ def run_class_hyp_multi_year_eval(
         if h < 1:
             raise ValueError(f"hold_days must be >= 1, got {hold_days!r}")
 
+    if mirror_dir is not None or sqlite_path is not None:
+        raise TypeError(
+            "offline multiyear cannot take raw mirror/sqlite market paths; "
+            "pass PersonalResearchDataView"
+        )
+    if not isinstance(view, PersonalResearchDataView):
+        raise TypeError("eval sqlite loaders require PersonalResearchDataView")
     as_of_s = max(
+
         (
             str(p.get("period_end") or p.get("end") or "")[:10]
             for p in period_list
@@ -169,13 +174,13 @@ def run_class_hyp_multi_year_eval(
     )
     if not as_of_s:
         raise ValueError("as_of is required (PIT has no latest default)")
-    repo_rows = load_repo_rows_from_sqlite(sqlite_path, as_of=as_of_s)
+    repo_rows = load_repo_rows_from_sqlite(view, as_of=as_of_s)
     repo_series = (
         load_repo_rate_series_from_rows(repo_rows) if repo_rows else None
     )
     repo_load_note = {
         "source": "local_sqlite_jsda_repo_rates",
-        "path": str(sqlite_path),
+        "view_kind": getattr(view, "kind", None),
         "n_rows": len(repo_rows),
         "as_of": as_of_s,
         "series_n_dates": (
@@ -195,7 +200,7 @@ def run_class_hyp_multi_year_eval(
     fins_global_end = "2026-12-31"
     fins_summary_events = (
         load_fins_events_from_sqlite(
-            sqlite_path,
+            view,
             codes=selected,
             start=fins_global_start,
             end=fins_global_end,
@@ -208,7 +213,7 @@ def run_class_hyp_multi_year_eval(
         include_event_post or include_fundamentals_price
     ):
         earn_date_events = load_fins_earnings_date_from_sqlite(
-            sqlite_path,
+            view,
             codes=selected,
             start=fins_global_start,
             end=fins_global_end,
@@ -221,7 +226,7 @@ def run_class_hyp_multi_year_eval(
         event_source = "fins_summary"
     fins_load_note = {
         "source": "local_sqlite_jquants_records_" + event_source.replace("+", "_"),
-        "path": str(sqlite_path),
+        "view_kind": getattr(view, "kind", None),
         "n_codes": len(fins_events),
         "n_events": sum(len(v) for v in fins_events.values()),
         "n_events_fins_summary": sum(len(v) for v in fins_summary_events.values()),
@@ -242,7 +247,7 @@ def run_class_hyp_multi_year_eval(
 
     short_series_full = (
         load_short_ratio_series_from_sqlite(
-            sqlite_path, section="0050", start="2014-01-01", end="2026-12-31"
+            view, section="0050", start="2014-01-01", end="2026-12-31"
         )
         if include_flow_demand
         else []
@@ -303,16 +308,13 @@ def run_class_hyp_multi_year_eval(
         year = p.get("year")
         p_start = str(p.get("period_start") or "")[:10] or None
         p_end = str(p.get("period_end") or "")[:10] or None
-        bars_path = p.get("bars_path") or resolve_bars_path(
-            pid, mirror_dir=mirror_dir
-        )
-        if bars_path is None or not Path(bars_path).exists():
+        if not p_start or not p_end:
             _push_status(
                 {
                     "period_id": pid,
                     "year": year,
                     "status": "skipped",
-                    "skip_reason": f"bars mirror missing for {pid}",
+                    "skip_reason": f"bars period missing for {pid}",
                 }
             )
             continue
@@ -327,12 +329,13 @@ def run_class_hyp_multi_year_eval(
             else:
                 period_max_days = 80
 
-            rich = load_bars_ndjson_rich(
-                bars_path,
+            rich = load_bars_from_sqlite_rich(
+                view,
                 codes=selected,
-                max_days=period_max_days,
                 period_start=p_start,
                 period_end=p_end,
+                max_days=period_max_days,
+                decision_date=p_end,
             )
             bars = bars_rich_to_close_panel(rich)
             if not bars:
@@ -562,18 +565,13 @@ def run_class_hyp_multi_year_eval(
                 )
 
             if include_flow_demand:
-                margin_path = resolve_margin_path(pid, mirror_dir=mirror_dir)
-                if margin_path is not None and Path(margin_path).exists():
-                    margin = load_margin_ndjson(margin_path, codes=selected)
-                    margin_src = f"ndjson:{margin_path}"
-                else:
-                    margin = load_margin_from_sqlite(
-                        sqlite_path,
-                        codes=selected,
-                        start=p_start or (f"{year}-01-01" if year else None),
-                        end=p_end or (f"{year}-12-31" if year else None),
-                    )
-                    margin_src = "sqlite:markets_margin_interest"
+                margin = load_margin_from_sqlite(
+                    view,
+                    codes=selected,
+                    start=p_start or (f"{year}-01-01" if year else None),
+                    end=p_end or (f"{year}-12-31" if year else None),
+                )
+                margin_src = "personal_research_data_view"
                 short_slice = [
                     (d, r)
                     for d, r in short_series_full

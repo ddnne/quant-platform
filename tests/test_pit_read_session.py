@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pit.query as query_module
 import pytest
+from _coreseed import write_snapshot_observation_clock
 from ingestion.jquants.normalize import normalize_daily_bars
 from storage.sqlite_store import SqliteStore
 
@@ -36,6 +37,7 @@ def _database(tmp_path: Path, name: str, close: float) -> Path:
     )[0]
     with SqliteStore(path) as store:
         store.upsert("jquants_daily_bars", [row])
+        write_snapshot_observation_clock(store, AS_OF)
     return path
 
 

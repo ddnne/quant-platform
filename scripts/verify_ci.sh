@@ -102,6 +102,8 @@ echo "==> J-Quants acquisition target registry"
 "$py" scripts/generate_jquants_acquisition_registry.py
 echo "==> generated Quant Ops canonical routing authority"
 "$py" scripts/verify_governed_js_drift.py
+echo "==> generated controlled_pilot_v1 contract"
+"$py" scripts/verify_controlled_pilot_v1_drift.py
 echo "==> installed SourceCapability wheel authority"
 "$py" scripts/verify_source_capability_wheel.py \
   --uv "$uv_cmd" --python "$py"

@@ -130,6 +130,14 @@ def test_per_row_required_domain_semantics_are_frozen() -> None:
             "official_archive_publication_days",
             "never_complete",
         ),
+        "jsda_corporate_bond_transactions": (
+            "official_archive_periods",
+            "never_complete",
+        ),
+        "jsda_tokyo_repo_rates": (
+            "official_time_series_file",
+            "never_complete",
+        ),
         **{
             dataset_id: (
                 "publication_windows_from_official_start",

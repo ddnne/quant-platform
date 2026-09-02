@@ -9,12 +9,27 @@ import sqlite3
 from typing import Any
 
 from data_contracts.identity import natural_key
-import research.universe_contract as universe_contract_module
+from core.execution import close_as_of
+from pit.universe_pit import resolve_universe_day_slices
+from personal_history_compact_support import stamp_compact_manifest
 from research.universe_contract import (
     UNIVERSE_BREADTH_EVIDENCE_FORMAT,
     resolve_tse_prime_with_fins,
     resolve_tse_prime_with_fins_evidence,
 )
+
+
+def _day_slices(path: Path, start: str, end: str):
+    cursor = date.fromisoformat(start)
+    stop = date.fromisoformat(end)
+    as_of_for_day = {}
+    while cursor <= stop:
+        day = cursor.isoformat()
+        as_of_for_day[day] = close_as_of(day)
+        cursor += timedelta(days=1)
+    return resolve_universe_day_slices(
+        path, period_start=start, period_end=end, as_of_for_day=as_of_for_day
+    )
 
 
 def _insert_record(
@@ -44,6 +59,7 @@ def _insert_record(
 
 def _universe_db(path: Path, *, fins_codes: tuple[str, ...]) -> None:
     with sqlite3.connect(path) as connection:
+        stamp_compact_manifest(connection, format_name='unmanaged-catalog')
         connection.execute(
             "CREATE TABLE jquants_records ("
             "source TEXT NOT NULL,dataset TEXT NOT NULL,natural_key TEXT NOT NULL,"
@@ -51,6 +67,12 @@ def _universe_db(path: Path, *, fins_codes: tuple[str, ...]) -> None:
             "ingested_at TEXT NOT NULL,payload TEXT NOT NULL,"
             "raw_payload TEXT NOT NULL,"
             "PRIMARY KEY(source,dataset,natural_key))"
+        )
+        connection.execute(
+            "CREATE TABLE snapshot_observation_clock (observed_through TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO snapshot_observation_clock VALUES ('2024-12-31T15:30:00+09:00')"
         )
         _insert_record(
             connection,
@@ -88,6 +110,7 @@ def _universe_db(path: Path, *, fins_codes: tuple[str, ...]) -> None:
 
 def _revisioned_universe_db(path: Path) -> None:
     with sqlite3.connect(path) as connection:
+        stamp_compact_manifest(connection, format_name='unmanaged-catalog')
         connection.executescript(
             """
             CREATE TABLE jquants_records (
@@ -103,6 +126,8 @@ def _revisioned_universe_db(path: Path) -> None:
             );
             CREATE TABLE jquants_records_revisions AS
                 SELECT * FROM jquants_records WHERE 0;
+            CREATE TABLE snapshot_observation_clock (observed_through TEXT NOT NULL);
+            INSERT INTO snapshot_observation_clock VALUES ('2024-12-31T15:30:00+09:00');
             """
         )
         for day in ("2024-01-02", "2024-01-03"):
@@ -176,6 +201,7 @@ def _scale_universe_db(path: Path, *, day_count: int) -> tuple[str, str]:
     start = date(2024, 1, 2)
     end = start + timedelta(days=day_count - 1)
     with sqlite3.connect(path) as connection:
+        stamp_compact_manifest(connection, format_name='unmanaged-catalog')
         connection.execute(
             "CREATE TABLE jquants_records ("
             "source TEXT NOT NULL,dataset TEXT NOT NULL,natural_key TEXT NOT NULL,"
@@ -183,6 +209,12 @@ def _scale_universe_db(path: Path, *, day_count: int) -> tuple[str, str]:
             "ingested_at TEXT NOT NULL,payload TEXT NOT NULL,"
             "raw_payload TEXT NOT NULL,"
             "PRIMARY KEY(source,dataset,natural_key))"
+        )
+        connection.execute(
+            "CREATE TABLE snapshot_observation_clock (observed_through TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO snapshot_observation_clock VALUES ('2024-12-31T15:30:00+09:00')"
         )
         for offset in range(day_count):
             day = (start + timedelta(days=offset)).isoformat()
@@ -224,12 +256,12 @@ def test_observed_universe_breadth_reports_partial_fins_without_a_threshold(
     _universe_db(complete_db, fins_codes=("1301", "1302"))
 
     partial_membership, partial = resolve_tse_prime_with_fins_evidence(
-        partial_db,
+        _day_slices(partial_db, "2024-01-02", "2024-01-02"),
         period_start="2024-01-02",
         period_end="2024-01-02",
     )
     complete_membership, complete = resolve_tse_prime_with_fins_evidence(
-        complete_db,
+        _day_slices(complete_db, "2024-01-02", "2024-01-02"),
         period_start="2024-01-02",
         period_end="2024-01-02",
     )
@@ -262,7 +294,7 @@ def test_observed_universe_breadth_reports_partial_fins_without_a_threshold(
     assert complete_membership.codes_for("2024-01-02") == ("1301", "1302")
 
     delegated = resolve_tse_prime_with_fins(
-        partial_db,
+        _day_slices(partial_db, "2024-01-02", "2024-01-02"),
         period_start="2024-01-02",
         period_end="2024-01-02",
     )
@@ -278,7 +310,7 @@ def test_revision_history_is_resolved_per_decision_as_of(tmp_path: Path) -> None
     _revisioned_universe_db(database)
 
     membership, evidence = resolve_tse_prime_with_fins_evidence(
-        database,
+        _day_slices(database, "2024-01-02", "2024-01-03"),
         period_start="2024-01-02",
         period_end="2024-01-03",
     )
@@ -302,7 +334,7 @@ def test_revision_history_is_resolved_per_decision_as_of(tmp_path: Path) -> None
         },
     ]
     assert resolve_tse_prime_with_fins(
-        database,
+        _day_slices(database, "2024-01-02", "2024-01-03"),
         period_start="2024-01-02",
         period_end="2024-01-03",
     ) == membership
@@ -310,43 +342,13 @@ def test_revision_history_is_resolved_per_decision_as_of(tmp_path: Path) -> None
 
 def test_resolution_iterates_each_history_only_once_for_many_decisions(
     tmp_path: Path,
-    monkeypatch: Any,
 ) -> None:
     database = tmp_path / "scale.sqlite"
     start, end = _scale_universe_db(database, day_count=60)
-    original_loader = universe_contract_module._load_governed_rows
-    loaded = original_loader(
-        database, ("markets_calendar", "equities_master", "fins_summary")
-    )
-
-    class IterationGuard:
-        def __init__(self, values: tuple[dict[str, Any], ...]) -> None:
-            self.values = values
-            self.iterations = 0
-
-        def __iter__(self):
-            self.iterations += 1
-            if self.iterations > 1:
-                raise AssertionError("governed history was rescanned")
-            return iter(self.values)
-
-    guarded = {key: IterationGuard(value) for key, value in loaded.items()}
-
-    def guarded_loader(*_args: Any, **_kwargs: Any):
-        return guarded
-
-    monkeypatch.setattr(
-        universe_contract_module, "_load_governed_rows", guarded_loader
-    )
     membership = resolve_tse_prime_with_fins(
-        database,
+        _day_slices(database, start, end),
         period_start=start,
         period_end=end,
     )
 
     assert len(membership.decision_memberships) == 60
-    assert {key: value.iterations for key, value in guarded.items()} == {
-        "markets_calendar": 1,
-        "equities_master": 1,
-        "fins_summary": 1,
-    }

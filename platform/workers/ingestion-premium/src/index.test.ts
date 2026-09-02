@@ -29,6 +29,11 @@ function testEnv(overrides: Partial<Env> = {}): Env {
     RAW_BUCKET: {} as R2Bucket,
     STRUCTURED_BUCKET: {} as R2Bucket,
     DB: stubD1(),
+    OPS_PROJECTION_DB: stubD1(),
+    OPS_PROJECTION_SIGNING_PKCS8_B64: "dGVzdA==",
+    OPS_PROJECTION_VERIFY_SPKI_B64: "dGVzdA==",
+    OPS_PROJECTION_SIGNING_KEY_ID: "ops-projection-cloud-test-v1",
+    OPS_PROJECTION_ENVIRONMENT: "production",
     ...overrides,
   };
 }
@@ -195,6 +200,19 @@ describe("ingestion-premium health", () => {
     expect(typeof json.datasets).toBe("number");
     expect(json.datasets).toBeGreaterThan(0);
     expect(json.ok).toBe(false);
+  });
+
+  it("serves private /health/ready without COMPLETE or research READY", async () => {
+    const env = testEnv();
+    const res = await worker.fetch(
+      new Request("https://ingestion-premium.test/health/ready"),
+      env,
+    );
+    expect(res.status).toBe(503);
+    const body = await res.text();
+    expect(body).not.toContain("COMPLETE");
+    expect(body).not.toContain("READY");
+    expect(JSON.parse(body).live).toBe(true);
   });
 
   it("rejects POST /health with 405 and does not leak secrets or COMPLETE", async () => {

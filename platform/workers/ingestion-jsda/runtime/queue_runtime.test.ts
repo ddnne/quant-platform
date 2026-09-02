@@ -9,7 +9,12 @@ import {
   waitOnExecutionContext,
 } from "cloudflare:test";
 import { beforeEach, describe, expect, inject, it } from "vitest";
-import worker from "../src/testing";
+import worker, {
+  FIXTURE_CUTOVER_SOURCE_SHA,
+  FIXTURE_DRAIN_EVIDENCE_DIGEST,
+  FIXTURE_V3_CUTOVER_PIN,
+  writeFixtureCutover,
+} from "../src/testing";
 import type { JsdaWorkerEnv } from "../src/env";
 import {
   claimJob,
@@ -33,27 +38,25 @@ import {
 import { enqueueRoots } from "../src/queue_producer";
 import { putImmutableRaw, putQueueAuditReceipt } from "../src/raw_store";
 import { sha256Hex } from "../src/sha256";
+import {
+  closedReceiptEnv,
+  issuedClosedJsdaResult,
+  persistClosedJsdaLedger,
+} from "./receipt_test_authority";
+
 
 const runtimeEnv = env as JsdaWorkerEnv;
 const migrations = inject<
   Array<{ name: string; queries: string[] }>
 >("jsdaD1Migrations");
 
+async function activateFixtureCutover(): Promise<void> {
+  await writeFixtureCutover(runtimeEnv.DB);
+}
+
 beforeEach(async () => {
   await reset();
   await applyD1Migrations(runtimeEnv.DB, migrations);
-  await runtimeEnv.DB.prepare(
-    `UPDATE jsda_v3_cutover_control
-        SET phase='v3_active', activated_at=?, activated_source_sha=?,
-            drain_evidence_digest=?
-      WHERE singleton=1 AND phase='bridge'`,
-  )
-    .bind(
-      "2026-08-25T01:29:00.000Z",
-      "a".repeat(40),
-      `sha256:${"b".repeat(64)}`,
-    )
-    .run();
 });
 
 const ROLLING_URL =
@@ -87,30 +90,12 @@ async function deliver(body: unknown, id: string) {
     },
   ]);
   const ctx = createExecutionContext();
-  await worker.queue(batch, runtimeEnv, ctx);
+  await worker.queue(batch, closedReceiptEnv(runtimeEnv), ctx);
   return getQueueResult(batch, ctx);
 }
 
-describe("JSDA Queue v2 in the Workers runtime", () => {
+describe("JSDA Queue v2 pending cutover", () => {
   it("separates liveness from cutover-bound product readiness", async () => {
-    const ready = await worker.fetch(
-      new Request("https://ingestion-jsda.test/health/ready"),
-      runtimeEnv,
-    );
-    expect(ready.status).toBe(200);
-    await expect(ready.json()).resolves.toMatchObject({
-      ok: true,
-      liveness: true,
-      product_ready: true,
-      cutover: "V3_ACTIVE",
-    });
-
-    await runtimeEnv.DB.prepare(
-      `UPDATE jsda_v3_cutover_control
-          SET phase='bridge', activated_at=NULL, activated_source_sha=NULL,
-              drain_evidence_digest=NULL
-        WHERE singleton=1`,
-    ).run();
     const live = await worker.fetch(
       new Request("https://ingestion-jsda.test/health"),
       runtimeEnv,
@@ -121,6 +106,9 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
       liveness: true,
       product_ready: false,
       cutover: "PENDING",
+      activated_source_sha: null,
+      cutover_config_digest: null,
+      drain_evidence_digest: null,
     });
     const pending = await worker.fetch(
       new Request("https://ingestion-jsda.test/health/ready"),
@@ -132,15 +120,25 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
       product_ready: false,
       cutover: "PENDING",
     });
+
+    await activateFixtureCutover();
+    const ready = await worker.fetch(
+      new Request("https://ingestion-jsda.test/health/ready"),
+      runtimeEnv,
+    );
+    expect(ready.status).toBe(200);
+    await expect(ready.json()).resolves.toMatchObject({
+      ok: true,
+      liveness: true,
+      product_ready: true,
+      cutover: "V3_ACTIVE",
+      activated_source_sha: FIXTURE_CUTOVER_SOURCE_SHA,
+      cutover_config_digest: FIXTURE_V3_CUTOVER_PIN.configDigest,
+      drain_evidence_digest: FIXTURE_DRAIN_EVIDENCE_DIGEST,
+    });
   });
 
   it("fails closed until audited v3 cutover activation", async () => {
-    await runtimeEnv.DB.prepare(
-      `UPDATE jsda_v3_cutover_control
-          SET phase='bridge', activated_at=NULL, activated_source_sha=NULL,
-              drain_evidence_digest=NULL
-        WHERE singleton=1`,
-    ).run();
     const response = await worker.fetch(
       new Request("https://ingestion-jsda.test/v1/run", {
         method: "POST",
@@ -156,6 +154,12 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
       "SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v3",
     ).first<{ n: number }>();
     expect(count?.n).toBe(0);
+  });
+});
+
+describe("JSDA Queue v2 in the Workers runtime", () => {
+  beforeEach(async () => {
+    await activateFixtureCutover();
   });
 
   it("dispatches Cron roots once per scheduled instant and persists all datasets", async () => {
@@ -1114,6 +1118,10 @@ describe("JSDA Queue v2 in the Workers runtime", () => {
 });
 
 describe("JSDA descendant run closure", () => {
+  beforeEach(async () => {
+    await activateFixtureCutover();
+  });
+
   async function seedWaitingRoot(fileUrls: string[]) {
     const root = await makeRootJob(
       "jsda_otc_bond_reference_prices",
@@ -1523,5 +1531,252 @@ describe("JSDA descendant run closure", () => {
     expect((await loadRunClosure(runtimeEnv.DB, root.run_key))?.closure_state).toBe(
       "completed",
     );
+  });
+});
+
+describe("JSDA trusted receipt terminal closure", () => {
+  beforeEach(async () => {
+    await activateFixtureCutover();
+  });
+
+  async function deliverWith(
+    env: JsdaWorkerEnv,
+    body: unknown,
+    id: string,
+  ) {
+    const batch = createMessageBatch("quant-jsda-ingestion-test", [
+      {
+        id,
+        timestamp: new Date("2026-08-25T01:30:00.000Z"),
+        attempts: 1,
+        body,
+      },
+    ]);
+    const ctx = createExecutionContext();
+    await worker.queue(batch, env, ctx);
+    return getQueueResult(batch, ctx);
+  }
+
+  async function seedCompletedFile(): Promise<JsdaQueueJob> {
+    const root = await makeRootJob(
+      "jsda_otc_bond_reference_prices",
+      "cron",
+      "2026-08-25T01:30:00.000Z",
+    );
+    await registerJob(runtimeEnv.DB, root);
+    const terminal = await makeChildJob(
+      root,
+      await descriptorForFile(
+        "https://market.jsda.or.jp/archive/data/otc-20020802.csv",
+      ),
+    );
+    await registerJob(runtimeEnv.DB, terminal);
+    const terminalBody = new TextEncoder().encode(
+      "年月日,銘柄コード,銘柄名\n2002-08-02,1301,TEST BOND\n",
+    );
+    const terminalDigest = await sha256Hex(terminalBody);
+    const audit = await putQueueAuditReceipt(runtimeEnv.RAW_BUCKET, {
+      event: "completed",
+      work_key: terminal.work_key,
+      run_key: terminal.run_key,
+      dataset: terminal.dataset,
+      job_type: terminal.job_type,
+      segment_id: terminal.segment_id,
+      target_url: terminal.target_url,
+      parent_work_key: terminal.parent_work_key,
+      contract_digest: terminal.contract_digest,
+      attempt: 1,
+      cursor: 0,
+      frontier_size: 1,
+      raw_key: "raw/jsda/jsda_otc_bond_reference_prices/file_otc/receipt.csv",
+      content_digest: terminalDigest,
+      reason_code: null,
+      detail: "receipt terminal fixture",
+      recorded_at: "2026-08-25T01:31:00.000Z",
+    });
+    await runtimeEnv.RAW_BUCKET.put(
+      "raw/jsda/jsda_otc_bond_reference_prices/file_otc/receipt.csv",
+      terminalBody,
+      { customMetadata: { sha256: terminalDigest } },
+    );
+    await runtimeEnv.DB.prepare(
+      `UPDATE jsda_acquisition_jobs_v3
+          SET state='completed', completed_at=?, audit_receipt_key=?,
+              audit_receipt_digest=?, content_digest=?, raw_key=?,
+              last_error=NULL, updated_at=?
+        WHERE work_key=?`,
+    )
+      .bind(
+        "2026-08-25T01:31:00.000Z",
+        audit.key,
+        audit.digest,
+        terminalDigest,
+        "raw/jsda/jsda_otc_bond_reference_prices/file_otc/receipt.csv",
+        "2026-08-25T01:31:00.000Z",
+        terminal.work_key,
+      )
+      .run();
+    await runtimeEnv.DB.prepare(
+      `UPDATE jsda_observations
+          SET state='completed', content_digest=?, raw_key=?, observed_at=?, updated_at=?
+        WHERE observation_key=? AND work_key=?`,
+    )
+      .bind(
+        terminalDigest,
+        "raw/jsda/jsda_otc_bond_reference_prices/file_otc/receipt.csv",
+        "2026-08-25T01:31:00.000Z",
+        "2026-08-25T01:31:00.000Z",
+        terminal.work_key,
+        terminal.work_key,
+      )
+      .run();
+    return terminal;
+  }
+
+  async function issuedResult(
+    request: Record<string, unknown>,
+    _terminal: JsdaQueueJob,
+    replayed = false,
+  ) {
+    return issuedClosedJsdaResult(runtimeEnv.DB, request, replayed);
+  }
+
+  it("does not ack PENDING/SKIPPED terminal JSDA while the trusted receipt is absent", async () => {
+    const terminal = await seedCompletedFile();
+    const env = {
+      ...runtimeEnv,
+      RECEIPT_AUTHORITY_OPERATION_MODE: "PENDING",
+      RECEIPT_AUTHORITY_ENVIRONMENT: "production",
+    } as JsdaWorkerEnv;
+    const result = await deliverWith(env, terminal, "pending-no-ack");
+    expect(result.explicitAcks).toEqual([]);
+    expect(result.retryMessages.map((message) => message.msgId)).toEqual([
+      "pending-no-ack",
+    ]);
+    const row = await loadJob(runtimeEnv.DB, terminal.work_key);
+    expect(row?.state).toBe("completed");
+    expect(row?.last_error).toMatch(/^RECEIPT_PENDING:/);
+  });
+
+  it("repairs missing receipt on terminal redelivery and acks duplicate post-receipt", async () => {
+    const terminal = await seedCompletedFile();
+    let calls = 0;
+    const authority = {
+      async issue_for_segment(request: Record<string, unknown>) {
+        calls += 1;
+        expect(request.source).toBe("jsda");
+        expect(request.work_key).toBe(terminal.work_key);
+        expect(request.raw_object_key).toBe(
+          "raw/jsda/jsda_otc_bond_reference_prices/file_otc/receipt.csv",
+        );
+        if (calls === 1) throw new Error("injected issuance failure after complete");
+        const result = await issuedResult(request, terminal, calls > 2);
+        if (calls === 2) {
+          await persistClosedJsdaLedger(runtimeEnv.DB, request, result.operation_id);
+        }
+        return result;
+      },
+      async recover_issue(request: Record<string, unknown>) {
+        return issuedResult(request, terminal, true);
+      },
+    };
+    const env = {
+      ...runtimeEnv,
+      RECEIPT_AUTHORITY_OPERATION_MODE: "ACTIVE",
+      RECEIPT_AUTHORITY_ENVIRONMENT: "production",
+      RECEIPT_EVIDENCE_AUTHORITY: authority,
+    } as unknown as JsdaWorkerEnv;
+    const failed = await deliverWith(env, terminal, "repair-first");
+    expect(failed.explicitAcks).toEqual([]);
+    expect((await loadJob(runtimeEnv.DB, terminal.work_key))?.last_error)
+      .toMatch(/^RECEIPT_REPAIR:/);
+    const repaired = await deliverWith(env, terminal, "repair-second");
+    expect((await loadJob(runtimeEnv.DB, terminal.work_key))?.last_error).toBeNull();
+    expect(repaired.explicitAcks).toEqual(["repair-second"]);
+    expect((await loadJob(runtimeEnv.DB, terminal.work_key))?.last_error).toBeNull();
+    const duplicate = await deliverWith(env, terminal, "repair-duplicate");
+    expect(duplicate.explicitAcks).toEqual(["repair-duplicate"]);
+    expect(calls).toBe(3);
+  });
+
+  it("does not ack a completed JSDA job when receipt mode is missing", async () => {
+    const terminal = await seedCompletedFile();
+    const env = {
+      ...runtimeEnv,
+      RECEIPT_AUTHORITY_OPERATION_MODE: undefined,
+      RECEIPT_AUTHORITY_ENVIRONMENT: "production",
+    } as unknown as JsdaWorkerEnv;
+    const result = await deliverWith(env, terminal, "missing-mode");
+    expect(result.explicitAcks).toEqual([]);
+    expect(result.retryMessages.map((message) => message.msgId)).toEqual([
+      "missing-mode",
+    ]);
+    expect((await loadJob(runtimeEnv.DB, terminal.work_key))?.last_error)
+      .toMatch(/^RECEIPT_PENDING:/);
+  });
+
+  it("rejects a stale SUCCESS receipt for another work_key/raw object", async () => {
+    const terminal = await seedCompletedFile();
+    await runtimeEnv.DB.prepare(
+      `INSERT INTO collection_receipts
+       (source,dataset,segment_id,segment_start,segment_end,expected_scope,
+        expected_items,observed_items,raw_page_count,raw_row_count,
+        structured_row_count,pagination_exhausted,digests_json,run_id,status,
+        error,checked_at)
+       VALUES ('jsda',?,?, '2002-08-02','2002-08-02','{}',1,1,1,1,1,1,'{}',99,'SUCCESS',NULL,?)`,
+    ).bind(terminal.dataset, terminal.segment_id, "2026-08-01T00:00:00.000Z").run();
+    let calls = 0;
+    const env = {
+      ...runtimeEnv,
+      RECEIPT_AUTHORITY_OPERATION_MODE: "ACTIVE",
+      RECEIPT_AUTHORITY_ENVIRONMENT: "production",
+      RECEIPT_EVIDENCE_AUTHORITY: {
+        async issue_for_segment(request: Record<string, unknown>) {
+          calls += 1;
+          expect(request.work_key).toBe(terminal.work_key);
+          expect(request.raw_object_key).toBe(
+            "raw/jsda/jsda_otc_bond_reference_prices/file_otc/receipt.csv",
+          );
+          throw new Error("stale receipt must not skip the current locator");
+        },
+        async recover_issue() {
+          throw new Error("stale receipt must not recover");
+        },
+      },
+    } as unknown as JsdaWorkerEnv;
+    const result = await deliverWith(env, terminal, "stale-receipt");
+    expect(result.explicitAcks).toEqual([]);
+    expect(calls).toBe(1);
+    expect((await loadJob(runtimeEnv.DB, terminal.work_key))?.last_error)
+      .toMatch(/^RECEIPT_REPAIR:/);
+  });
+
+  it("replays the exact current locator idempotently", async () => {
+    const terminal = await seedCompletedFile();
+    const seen: string[] = [];
+    const env = {
+      ...runtimeEnv,
+      RECEIPT_AUTHORITY_OPERATION_MODE: "ACTIVE",
+      RECEIPT_AUTHORITY_ENVIRONMENT: "production",
+      RECEIPT_EVIDENCE_AUTHORITY: {
+        async issue_for_segment(request: Record<string, unknown>) {
+          seen.push(String(request.request_nonce));
+          const result = await issuedResult(request, terminal, seen.length > 1);
+          if (seen.length === 1) {
+            await persistClosedJsdaLedger(runtimeEnv.DB, request, result.operation_id);
+          }
+          return result;
+        },
+        async recover_issue(request: Record<string, unknown>) {
+          return issuedResult(request, terminal, true);
+        },
+      },
+    } as unknown as JsdaWorkerEnv;
+    const first = await deliverWith(env, terminal, "idempotent-first");
+    const second = await deliverWith(env, terminal, "idempotent-second");
+    expect(first.explicitAcks).toEqual(["idempotent-first"]);
+    expect(second.explicitAcks).toEqual(["idempotent-second"]);
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toBe(seen[1]);
   });
 });

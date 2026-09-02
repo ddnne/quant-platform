@@ -12,6 +12,7 @@ import {
   json,
   putChildrenThenManifest,
   readBoundedJson,
+  readBoundedRequestBytes,
 } from "./http";
 import { parseRequest } from "./parse_request";
 import { runProposeThesis } from "./propose_thesis";
@@ -64,6 +65,13 @@ import {
   type PersonalOptionSidecarProduceRequest,
 } from "./personal_option_sidecar_producer_contract";
 import type { Env, MassEvalJobResult, MassEvalRequest } from "./types";
+import {
+  controlledPilotStatus,
+  submitControlledPilot,
+} from "./controlled_pilot";
+import { CONTROLLED_PILOT_KEY_PREFIX } from "./controlled_pilot_contract";
+
+export const CONTROLLED_PILOT_MAX_REQUEST_BYTES = 8 * 1024;
 
 export type MassEvalFetchHandlers = {
   runMassEval: (env: Env, req: MassEvalRequest) => Promise<MassEvalJobResult>;
@@ -123,6 +131,17 @@ export type MassEvalFetchHandlers = {
     env: Env,
     jobIds: string[],
   ) => Promise<Response>;
+  submitControlledPilot?: (
+    env: Env,
+    body: unknown,
+    ctx?: ExecutionContext,
+    rawBytes?: Uint8Array,
+  ) => Promise<Response>;
+  controlledPilotStatus?: (
+    env: Env,
+    jobId: string,
+    ctx?: ExecutionContext,
+  ) => Promise<Response>;
 };
 
 /** HTTP path dispatch. Orchestration stays in index.ts; R2 put stays in http.ts. */
@@ -130,8 +149,48 @@ export async function dispatchMassEvalFetch(
   request: Request,
   env: Env,
   handlers: MassEvalFetchHandlers,
+  ctx?: ExecutionContext,
 ): Promise<Response> {
   const url = new URL(request.url);
+  const controlledJob = url.pathname.match(/^\/v1\/controlled-pilot\/([^/]+)$/);
+
+  if (url.pathname === "/v1/controlled-pilot" || controlledJob) {
+    if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    if (!env.STRUCTURED_BUCKET || !env.AI_GATEWAY) {
+      return json({ error: "controlled pilot unavailable" }, 503);
+    }
+    if (controlledJob) {
+      if (request.method !== "GET") {
+        return json({ error: "GET required" }, 405);
+      }
+      const jobId = decodeURIComponent(controlledJob[1]!);
+      if (handlers.controlledPilotStatus) {
+        return handlers.controlledPilotStatus(env, jobId, ctx);
+      }
+      return controlledPilotStatus(env, jobId, ctx);
+    }
+    if (request.method !== "POST") {
+      return json({ error: "POST required" }, 405);
+    }
+    const bounded = await readBoundedRequestBytes(
+      request,
+      CONTROLLED_PILOT_MAX_REQUEST_BYTES,
+    );
+    if (!bounded.ok) return json({ error: bounded.error }, bounded.status);
+    const rawBytes = bounded.bytes;
+    let body: unknown;
+    try {
+      body = JSON.parse(new TextDecoder().decode(rawBytes));
+    } catch {
+      body = undefined;
+    }
+    if (handlers.submitControlledPilot) {
+      return handlers.submitControlledPilot(env, body, ctx, rawBytes);
+    }
+    return submitControlledPilot(env, body, ctx, rawBytes);
+  }
 
   if (url.pathname === "/v1/personal-index-vol-overlay-2023") {
     if (request.method !== "POST") {
@@ -532,12 +591,13 @@ export async function dispatchMassEvalFetch(
     return handlers.personalResearchStatus(env, jobId);
   }
 
-  if (url.pathname === "/health" || url.pathname === "/") {
+  if (url.pathname === "/health" || url.pathname === "/health/ready" || url.pathname === "/") {
     if (request.method !== "GET") {
       return json({ error: "GET required" }, 405);
     }
     return json({
       ok: true,
+      live: true,
       service: "quant-platform-research-mass-eval",
       version: env.MASS_EVAL_VERSION,
     });
@@ -760,6 +820,12 @@ export async function dispatchMassEvalFetch(
     }
     if (!("data" in body.manifest)) {
       return json({ error: "manifest.data required" }, 400);
+    }
+    if (
+      manifestKey.startsWith(CONTROLLED_PILOT_KEY_PREFIX) ||
+      children.some((child) => child.key.startsWith(CONTROLLED_PILOT_KEY_PREFIX))
+    ) {
+      return json({ error: "controlled_pilot_key_reserved" }, 403);
     }
     // Digest is Worker-computed in putJsonCreateOnly. Pass through only a
     // caller-supplied string; do not hash here.

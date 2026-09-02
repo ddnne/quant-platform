@@ -8,7 +8,10 @@
       "key_id": "readiness-20260825-v1",
       "algorithm": "Ed25519",
       "public_key_b64": "ZOse2JOo725wYTZbey1wcqnwjfGAPbs/BfddkY/8Pdg=",
-      "status": "revoked"
+      "status": "revoked",
+      "not_before": "2026-01-01T00:00:00Z",
+      "not_after": "2099-01-01T00:00:00Z",
+      "revoked_at": "2026-08-25T00:00:00Z"
     }
   ]
 }

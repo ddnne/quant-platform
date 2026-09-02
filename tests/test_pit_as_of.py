@@ -27,6 +27,7 @@ from pit import (
 )
 from pit.query import normalize_as_of
 from storage.sqlite_store import SqliteStore
+from personal_history_compact_support import stamp_compact_manifest
 
 
 # --- helpers ---------------------------------------------------------------
@@ -44,6 +45,15 @@ def _seed(tmp_path, table: str, rows: list[dict]) -> "object":
     if rows:
         store.upsert(table, rows)
     store.close()
+    import sqlite3
+    connection = sqlite3.connect(path)
+    stamp_compact_manifest(
+        connection,
+        format_name="unmanaged-catalog",
+        observed_through="2099-01-01T00:00:00+09:00",
+    )
+    connection.commit()
+    connection.close()
     return path
 
 

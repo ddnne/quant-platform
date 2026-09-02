@@ -148,10 +148,23 @@ def test_service_rejects_missing_snapshot_database(tmp_path):
 
 
 def test_service_rejects_mismatched_profile_digest(tmp_path):
+    from paper_runtime.execution import (
+        AuthorizedPaperExecutionRequest as RuntimeRequest,
+        PaperExecutionService as RuntimeService,
+    )
+
     plan, spec, config, _db = _build(tmp_path)
-    object.__setattr__(plan, "profile_digest", "sha256:" + "0" * 64)
-    with pytest.raises(PaperExecutionRejected, match="offline fixture"):
-        PaperExecutionService().execute(plan, spec, config)
+    dto = RuntimeRequest(
+        authorization_id=plan.authorization_id,
+        mode=plan.mode,
+        strategy=spec,
+        strategy_spec_hash=plan.strategy_spec_hash,
+        config=config,
+        max_gross=plan.max_gross_weight,
+        profile_digest="sha256:" + "0" * 64,
+    )
+    with pytest.raises(PaperExecutionRejected, match="DRAFT-only|READY"):
+        RuntimeService().execute(dto)
 
 
 def test_runtime_dto_delegates_to_strong_service(tmp_path):
@@ -168,7 +181,6 @@ def test_runtime_dto_delegates_to_strong_service(tmp_path):
         strategy_spec_hash=plan.strategy_spec_hash,
         config=config,
         max_gross=plan.max_gross_weight,
-        ready_snapshot_id=plan.ready_snapshot_id,
     )
     result = RuntimeService().execute(dto)
     assert result.experiment_id

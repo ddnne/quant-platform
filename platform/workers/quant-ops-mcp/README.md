@@ -52,10 +52,11 @@ closed on unreviewed schema drift.
 
 ## Migrations
 
-This component README does not authorize remote D1 mutation. The canonical
-manifest currently has no owner command for either target; staging and
-production application needs a reviewed authority path and immutable remote
-evidence. See
+This component README does not authorize remote D1 mutation. `quant-ingest`
+migrations are owned by the single JSDA cutover command under the same-D1 CAS
+lease; the projection and quota databases remain separate migration targets.
+Staging precedes production and the operator records immutable remote evidence.
+See
 [`docs/operations/current_production_runbook.md`](../../../docs/operations/current_production_runbook.md).
 
 Wrangler resolves the independent source migration directories from each binding:
@@ -69,30 +70,18 @@ owns or writes that database.
 
 ## Publish
 
-The publisher creates an `OPEN` generation, inserts and verifies every expected
-row count, seals it, and flips the active pointer last:
+`ingestion-premium` is the only production publisher. Its scheduled handler
+derives bounded metadata from `quant-ingest`, writes a create-only R2 export,
+creates an `OPEN` generation in `OPS_PROJECTION_DB`, rehashes every projected
+table, transitions it to `SEALED`, and moves the active pointer last. The old
+Mac-local publisher is a refusal-only compatibility CLI and cannot mutate D1.
 
-```bash
-.venv/bin/python scripts/publish_ops_projection.py \
-  --db data/structured/ingestion.sqlite \
-  --refresh-coverage \
-  --apply-remote
-```
-
-The publisher derives source/export cursors from the latest COMPLETE,
-content-addressed authenticated D1 sync audit and requires exact equality with
-the local applied cursor. Remote publication accepts only the governed local
-mirror path. Production signing is disabled until a dedicated full-source
-authority owns derivation and signing; HOME paths and environment private keys
-are not signing inputs. Public consumers use the chained, verify-only registry
-in `specs/ops_projection/verify_public_keys.json`. Python and Worker code pin
-its complete document digest, body digest, generation, and prior audit pointer;
-runtime vars cannot replace that root. Generation 1 is an audit-only revocation
-record and is structurally unusable as a verifier registry.
-
-No date is assumed for the storage hot window. A diagnostic render may supply a
-reviewed `--storage-hot-cutoff YYYY-MM-DD`; remote publication rejects this
-caller-selected policy until it is backed by a governed configuration.
+Signing remains operationally closed while the environment-specific registry
+has no active key or the Worker signing/SPKI bindings are unprovisioned. Public
+consumers use the chained, verify-only registries under
+`specs/ops_projection/`; Python and Worker code pin their complete document
+identity. Deploy Premium first, wait for a fresh `SEALED` generation, then let
+`predeploy_ops_projection_gate.py` authorize the MCP deployment.
 
 ## Verify and deploy
 

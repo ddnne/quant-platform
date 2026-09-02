@@ -66,6 +66,22 @@ def test_receipt_authority_uses_dedicated_evidence_and_premium_owned_migrations(
                 "binding": "AUTHORITY_EVIDENCE_BUCKET",
                 "bucket_name": evidence_bucket,
             },
+            {
+                "binding": "RAW_BUCKET",
+                "bucket_name": {
+                    "base": "quant-raw",
+                    "production": "quant-raw",
+                    "staging": "quant-raw-staging",
+                }[environment],
+            },
+            {
+                "binding": "STRUCTURED_BUCKET",
+                "bucket_name": {
+                    "base": "quant-structured",
+                    "production": "quant-structured",
+                    "staging": "quant-structured-staging",
+                }[environment],
+            },
         ]
         assert len(surface["d1_databases"]) == 1
         assert "migrations_dir" not in surface["d1_databases"][0]
@@ -107,11 +123,24 @@ def test_all_named_entrypoints_and_governed_dos_have_exact_rpc_inventories() -> 
                 "rpc_methods": ["staging_recovery_audit_evidence"],
             },
         ],
+        "ingestion-jsda": [{
+            "name": "JsdaReadinessService",
+            "handlers": ["class"],
+            "fetch_reserved_special": True,
+            "rpc_methods": [],
+        }],
         "research-ai-gateway": [{
             "name": "GatewayService",
             "handlers": ["class"],
             "fetch_reserved_special": False,
-            "rpc_methods": ["complete"],
+            "rpc_methods": [
+                "cancelControlledPaper",
+                "complete",
+                "finalizeControlledPaper",
+                "heartbeatControlledPaper",
+                "queryControlledPaper",
+                "reserveControlledPaper",
+            ],
         }],
     }
     for environment in ("base", "production", "staging"):
@@ -150,8 +179,10 @@ def test_all_named_entrypoints_and_governed_dos_have_exact_rpc_inventories() -> 
         "rpc_methods": [
             "cancelPreProvider",
             "finalizeExact",
+            "finalizeOwnedPaper",
             "heartbeat",
             "markProviderStarted",
+            "queryOwned",
             "release",
             "reserve",
             "reserveOwned",
@@ -238,6 +269,82 @@ def test_every_active_durable_object_needs_exactly_one_inventory_policy(
         manifest_module.build_manifest()
 
 
+def _recompute_binding_digests(manifest: dict) -> dict:
+    body = {key: value for key, value in manifest.items() if key != "manifest_digest"}
+    body["ops_binding_identity_digest"] = (
+        manifest_module.quant_ops_binding_identity_digest(body["workers"])
+    )
+    manifest["ops_binding_identity_digest"] = body["ops_binding_identity_digest"]
+    manifest["manifest_digest"] = manifest_module._canonical_digest(body)
+    return manifest
+
+
+def test_ops_mcp_bindings_never_use_ingestion_ops_db() -> None:
+    manifest = manifest_module.build_manifest()
+    for environment, expected in manifest_module._OPS_D1_IDENTITY.items():
+        rows = manifest["workers"]["quant-ops-mcp"][environment]["d1_databases"]
+        actual = tuple(manifest_module._ops_d1_row(row) for row in rows)
+        assert actual == expected
+        assert all(row["binding"] != "OPS_DB" for row in rows)
+        assert all(
+            row["database_name"]
+            not in {"quant-ingest", "quant-ingest-staging"}
+            for row in rows
+        )
+
+    drifted = copy.deepcopy(manifest)
+    drifted["workers"]["quant-ops-mcp"]["production"]["d1_databases"] = [
+        {
+            "binding": "OPS_DB",
+            "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
+            "database_name": "quant-ingest",
+        }
+    ]
+    _recompute_binding_digests(drifted)
+    with pytest.raises(ValueError, match="dedicated projection/quota"):
+        manifest_module.validate_manifest(drifted)
+
+
+def test_ops_projection_cannot_reuse_ingestion_database_id() -> None:
+    manifest = manifest_module.build_manifest()
+    ingest_id = manifest["workers"]["ingestion-premium"]["production"][
+        "d1_databases"
+    ][0]["database_id"]
+    drifted = copy.deepcopy(manifest)
+    for row in drifted["workers"]["quant-ops-mcp"]["production"]["d1_databases"]:
+        if row["binding"] == "OPS_PROJECTION_DB":
+            row["database_id"] = ingest_id
+    _recompute_binding_digests(drifted)
+    with pytest.raises(ValueError, match="dedicated projection/quota"):
+        manifest_module.validate_manifest(drifted)
+
+
+def test_ops_quota_migration_ledger_cannot_drift() -> None:
+    manifest = manifest_module.build_manifest()
+    drifted = copy.deepcopy(manifest)
+    for row in drifted["workers"]["quant-ops-mcp"]["staging"]["d1_databases"]:
+        if row["binding"] == "QUOTA_DB":
+            row["migrations_table"] = "d1_migrations"
+    _recompute_binding_digests(drifted)
+    with pytest.raises(ValueError, match="dedicated projection/quota"):
+        manifest_module.validate_manifest(drifted)
+
+
+def test_premium_owns_jsda_v2_v3_migrations_in_production_and_staging() -> None:
+    manifest = manifest_module.build_manifest()
+    for environment in ("base", "production", "staging"):
+        premium = manifest["workers"]["ingestion-premium"][environment][
+            "d1_databases"
+        ]
+        assert [row["binding"] for row in premium] == ["DB", "OPS_PROJECTION_DB"]
+        assert premium[0]["migrations_dir"] == "migrations"
+        assert premium[1]["migrations_table"] == "d1_migrations_ops_projection"
+        jsda = manifest["workers"]["ingestion-jsda"][environment]["d1_databases"]
+        assert len(jsda) == 1
+        assert jsda[0]["binding"] == "DB"
+        assert "migrations_dir" not in jsda[0]
+
+
 def test_quant_ops_mcp_object_capability_is_self_only() -> None:
     manifest = manifest_module.build_manifest()
     for environment in ("base", "production", "staging"):
@@ -282,21 +389,38 @@ def test_receipt_activation_observer_is_staging_only_and_capability_minimal() ->
     observer = manifest_module.build_manifest()["workers"][
         "receipt-activation-observer"
     ]
-    for environment in ("base", "production"):
-        surface = observer[environment]
-        assert surface["workers_dev"] is False
-        assert surface["services"] == []
+    base = observer["base"]
+    assert base["workers_dev"] is False
+    assert base["services"] == []
+    production = observer["production"]
+    assert production["workers_dev"] is False
+    assert production["vars"]["ENVIRONMENT"] == "disabled"
+    assert production["services"] == [
+        {
+            "binding": "JSDA_INGESTION",
+            "entrypoint": "JsdaReadinessService",
+            "service": "quant-platform-ingestion-jsda",
+        },
+    ]
+    for surface in (base, production):
         assert surface["secret_names"] == []
         assert surface["route"] is None
         assert surface["routes"] == []
     staging = observer["staging"]
     assert staging["workers_dev"] is True
     assert staging["preview_urls"] is False
-    assert staging["services"] == [{
-        "binding": "PREMIUM_RECEIPT_OPERATOR",
-        "entrypoint": "PremiumReceiptAuditEvidenceService",
-        "service": "quant-platform-ingestion-premium-staging",
-    }]
+    assert staging["services"] == [
+        {
+            "binding": "JSDA_INGESTION",
+            "entrypoint": "JsdaReadinessService",
+            "service": "quant-platform-ingestion-jsda-staging",
+        },
+        {
+            "binding": "PREMIUM_RECEIPT_OPERATOR",
+            "entrypoint": "PremiumReceiptAuditEvidenceService",
+            "service": "quant-platform-ingestion-premium-staging",
+        },
+    ]
     assert staging["worker_entrypoints"] == []
     assert staging["durable_object_class_handlers"] == []
     for field in (
@@ -968,7 +1092,10 @@ def test_research_mass_eval_staging_workers_dev_secret_and_production_unchanged(
     assert production["name"] == "quant-platform-research-mass-eval"
     assert production["workers_dev"] is True
     assert production["preview_urls"] is False
-    assert production["secret_names"] == ["MASS_EVAL_TOKEN"]
+    assert production["secret_names"] == [
+        "MASS_EVAL_TOKEN",
+        "READY_ED25519_PRIVATE_KEY",
+    ]
     assert production["route"] is None
     assert production["routes"] == []
     assert production["r2_buckets"] == [
@@ -978,7 +1105,10 @@ def test_research_mass_eval_staging_workers_dev_secret_and_production_unchanged(
     assert staging["name"] == "quant-platform-research-mass-eval-staging"
     assert staging["workers_dev"] is True
     assert staging["preview_urls"] is False
-    assert staging["secret_names"] == ["MASS_EVAL_TOKEN"]
+    assert staging["secret_names"] == [
+        "MASS_EVAL_TOKEN",
+        "READY_ED25519_PRIVATE_KEY",
+    ]
     assert staging["route"] is None
     assert staging["routes"] == []
     assert staging["r2_buckets"] == [
@@ -1017,3 +1147,37 @@ def test_declared_production_secret_names_are_exact_policy() -> None:
     drifted["workers"]["ingestion-jsda"]["production"]["secret_names"] = []
     with pytest.raises(ValueError, match="secrets.required drifted"):
         manifest_module.validate_manifest(drifted)
+
+
+def test_parse_selected_deployment_requires_exact_sha_and_100_percent() -> None:
+    sha = "a" * 40
+    payload = {
+        "id": "dep-1",
+        "versions": [
+            {
+                "version_id": "ver-1",
+                "percentage": 100,
+                "annotations": {
+                    "workers/tag": sha,
+                    "workers/message": sha,
+                },
+            }
+        ],
+    }
+    selected = manifest_module.parse_selected_deployment(payload, sha)
+    assert selected["deployment_id"] == "dep-1"
+    assert selected["version_id"] == "ver-1"
+    with pytest.raises(ValueError, match="exact merged SHA"):
+        manifest_module.parse_selected_deployment(payload, "b" * 40)
+    substring = json.dumps(payload) + sha[4:12]
+    with pytest.raises(ValueError):
+        manifest_module.parse_selected_deployment("not-json " + sha, sha)
+    split = {
+        "id": "dep-1",
+        "versions": [
+            {"version_id": "ver-1", "percentage": 90, "annotations": {"workers/tag": sha, "workers/message": sha}},
+            {"version_id": "ver-2", "percentage": 10, "annotations": {"workers/tag": sha, "workers/message": sha}},
+        ],
+    }
+    with pytest.raises(ValueError, match="exactly one version"):
+        manifest_module.parse_selected_deployment(split, sha)

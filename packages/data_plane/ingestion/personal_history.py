@@ -4,11 +4,16 @@ This is deliberately not an ingestion authority.  It stores compact PIT rows
 and request-page digests in a dedicated local SQLite file, but never issues a
 receipt, updates Coverage/READY, or claims that an observed window is complete.
 
-The master history needs special care.  The historical endpoint can return a
-dated snapshot but cannot reconstruct when a later correction was originally
-published.  Personal research therefore uses the explicit approximation
-``Date=D -> available_at=D 08:00 JST``.  That approximation is recorded on
-every checkpoint and is forbidden as controlled/live evidence.
+Master and bar facts are insert-only vintages.  ``ingested_at`` is always the
+actual first observation time and is never backdated onto the official event
+clock.  The first observation may retain official ``available_at`` only when
+the source-capability publication clock is present; otherwise the vintage is
+retrospective DRAFT at the observation stamp.  A later changed-content
+refresh uses ``available_at = max(official publication, first observed
+changed-content time)`` and the actual ``ingested_at``.  Identical content
+stays idempotent.  Completed segments inside a bounded revision window are
+re-checked; history outside that window stays explicitly stale and is never
+silently treated as revision-complete.
 """
 
 from __future__ import annotations
@@ -63,7 +68,7 @@ def personal_snapshot_data_floor() -> str:
     """Earliest day a personal snapshot can hydrate bars.
 
     The floor is the latest ``earliest_official_availability`` among the
-    compact-v7 source contracts. It is not a hardcoded calendar date.
+    compact-v8 source contracts. It is not a hardcoded calendar date.
     """
 
     return max(_official_availability(dataset) for dataset in PERSONAL_HISTORY_DATASETS)
@@ -73,12 +78,21 @@ PERSONAL_HISTORY_FORMAT = PERSONAL_HISTORY_COMPACT_FORMAT
 PERSONAL_RESEARCH_STATE = "PERSONAL_DRAFT"
 PERSONAL_COMPLETENESS_CLAIM = "NONE"
 PERSONAL_CONTROLLED_ELIGIBILITY = "FORBIDDEN"
-MASTER_AVAILABILITY_POLICY = "scheduled_snapshot_approximation/date_08:00_jst/v1"
+MASTER_AVAILABILITY_POLICY = (
+    "observed_vintage/first_official_08:00_jst/correction_observation_time/v1"
+)
 CALENDAR_AVAILABILITY_POLICY = "historical_calendar_event_time/v1"
 FINS_AVAILABILITY_POLICY = (
     "explicit_disc_timestamp_else_next_calendar_day_00:00_jst/v1"
 )
-BARS_AVAILABILITY_POLICY = "canonical_session_close/v1"
+BARS_AVAILABILITY_POLICY = (
+    "observed_vintage/first_session_close/correction_observation_time/v1"
+)
+# Bounded correction discovery: do not refetch unbounded history each run.
+# Documented window is trailing calendar days from the hydrator clock.
+DEFAULT_REVISION_WINDOW_CALENDAR_DAYS = 40
+REVISION_COVERAGE_WINDOW_COMPLETE = "WINDOW_COMPLETE"
+REVISION_COVERAGE_BOUNDED_WINDOW = "BOUNDED_WINDOW"
 DEFAULT_LOOKBACK_SESSIONS = 10
 DEFAULT_CALENDAR_WINDOW_DAYS = 180
 DEFAULT_TOPIX_CODE_ESTIMATE = 2_200
@@ -183,14 +197,16 @@ class PersonalHistorySummary:
     history_scope_version: str = PERSONAL_HISTORY_SCOPE_VERSION
     history_scope_digest: str = PERSONAL_HISTORY_SCOPE_DIGEST
     status: str = "COMPLETE_DRAFT"
+    revision_window_calendar_days: int = DEFAULT_REVISION_WINDOW_CALENDAR_DAYS
+    revision_coverage: str = REVISION_COVERAGE_BOUNDED_WINDOW
 
     def to_dict(self) -> dict[str, Any]:
         body = asdict(self)
         body["segment_counts"] = dict(self.segment_counts)
         body["warning"] = (
             "DRAFT observations only: no receipt, Coverage, READY, or source "
-            "completeness claim; master correction publication time is not "
-            "reconstructed"
+            "completeness claim; corrections are discovered only inside the "
+            "bounded revision window"
         )
         return body
 
@@ -805,12 +821,12 @@ def _compact_master(
             for row in compact
         ]
     )
-    expected_available = _master_availability(snapshot_day)
+    official_available = _master_availability(snapshot_day)
     normalized = JN.normalize_generic(
         compact,
         dataset="equities_master",
         ingested_at=ingested_at,
-        available_at=expected_available,
+        available_at=official_available,
     )
     for row in normalized:
         row["raw_payload"] = None
@@ -819,13 +835,11 @@ def _compact_master(
             raise PersonalHistoryError(
                 "equities_master event_time date does not equal snapshot_date"
             )
-        if str(row["available_at"]) != expected_available:
+        if str(row["available_at"]) != official_available:
             raise PersonalHistoryError(
-                "equities_master available_at must be snapshot_date 08:00 JST"
+                "equities_master first-vintage available_at must be "
+                "snapshot_date 08:00 JST"
             )
-        _require_ingested_not_before(
-            row["ingested_at"], row["available_at"], "equities_master"
-        )
     return normalized, digest
 
 
@@ -1097,17 +1111,116 @@ def _compact_bars(
     )
     for row in normalized:
         row["raw_payload"] = None
-        if (
-            str(row["event_time"]) != session_close
-            or str(row["available_at"]) != session_close
-        ):
+        if str(row["event_time"]) != session_close:
             raise PersonalHistoryError(
-                "equities_bars_daily timestamps must be the official session close"
+                "equities_bars_daily event_time must be the official session close"
             )
-        _require_ingested_not_before(
-            row["ingested_at"], row["available_at"], "equities_bars_daily"
-        )
+        if str(row["available_at"]) != session_close:
+            raise PersonalHistoryError(
+                "equities_bars_daily first-vintage available_at must be "
+                "the official session close"
+            )
     return normalized
+
+
+_MASTER_CONTENT_FIELDS = (
+    "Code",
+    "MarketCode",
+    "Sector17Code",
+    "Sector33Code",
+    "ScaleCategory",
+    "SourceScaleCategory",
+)
+_BAR_CONTENT_FIELDS = (
+    "Code",
+    "Close",
+    "Volume",
+    "TurnoverValue",
+    "AdjustmentClose",
+    "AdjustmentVolume",
+    "MorningAdjustmentClose",
+    "AfternoonAdjustmentClose",
+    "MorningTurnoverValue",
+    "AfternoonTurnoverValue",
+    "MorningAdjustmentVolume",
+    "AfternoonAdjustmentVolume",
+    "MarketCapitalization",
+)
+
+
+def _payload_mapping(row: Mapping[str, Any]) -> dict[str, Any]:
+    raw = row.get("payload")
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise PersonalHistoryError("compact fact payload is invalid") from exc
+    if not isinstance(parsed, dict):
+        raise PersonalHistoryError("compact fact payload is invalid")
+    return parsed
+
+
+def _fact_content_digest(dataset: str, payload: Mapping[str, Any]) -> str:
+    fields = (
+        _MASTER_CONTENT_FIELDS
+        if dataset == "equities_master"
+        else _BAR_CONTENT_FIELDS
+    )
+    return _canonical_digest({field: payload.get(field) for field in fields})
+
+
+def _stored_master_content_digest(row: sqlite3.Row) -> str:
+    return _canonical_digest(
+        {
+            "Code": row["code"],
+            "MarketCode": row["market_code"],
+            "Sector17Code": row["sector_17_code"],
+            "Sector33Code": row["sector_33_code"],
+            "ScaleCategory": row["scale_category"],
+            "SourceScaleCategory": row["source_scale_category"],
+        }
+    )
+
+
+def _stored_bar_content_digest(row: sqlite3.Row) -> str:
+    return _canonical_digest(
+        {
+            "Code": row["code"],
+            "Close": row["close"],
+            "Volume": row["volume"],
+            "TurnoverValue": row["turnover_value"],
+            "AdjustmentClose": row["adjustment_close"],
+            "AdjustmentVolume": row["adjustment_volume"],
+            "MorningAdjustmentClose": row["morning_adjustment_close"],
+            "AfternoonAdjustmentClose": row["afternoon_adjustment_close"],
+            "MorningTurnoverValue": row["morning_turnover_value"],
+            "AfternoonTurnoverValue": row["afternoon_turnover_value"],
+            "MorningAdjustmentVolume": row["morning_adjustment_volume"],
+            "AfternoonAdjustmentVolume": row["afternoon_adjustment_volume"],
+            "MarketCapitalization": row["market_cap"],
+        }
+    )
+
+
+def _vintage_clocks(*, official: str, stamp: str, first: bool) -> tuple[str, str]:
+    """Return ``(available_at, ingested_at)`` for one compact vintage.
+
+    ``ingested_at`` is the actual observation stamp. First backfill keeps
+    official ``available_at`` when the trusted source publication clock is
+    present. Corrections use ``max(official, stamp)`` for availability.
+    """
+
+    observed = _canonical_jst(stamp, "observed vintage clock")
+    official_text = str(official or "").strip()
+    if not official_text:
+        return stamp, stamp
+    official_dt = _canonical_jst(official_text, "official vintage clock")
+    if first:
+        return official_text, stamp
+    available_dt = official_dt if official_dt >= observed else observed
+    available = official_text if available_dt == official_dt else stamp
+    return available, stamp
 
 
 class PersonalHistoryHydrator:
@@ -1136,6 +1249,7 @@ class PersonalHistoryHydrator:
         self.minimum_free_bytes = int(minimum_free_bytes)
         self.wal_checkpoint_segments = int(wal_checkpoint_segments)
         self._new_segments = 0
+        self._hydrate_started_at: str | None = None
         _assert_personal_draft_store_is_unmanaged(store)
         self._connection: sqlite3.Connection = store._conn
         self._ensure_checkpoint_schema()
@@ -1228,6 +1342,9 @@ class PersonalHistoryHydrator:
                 master_availability_policy TEXT NOT NULL,
                 fins_availability_policy TEXT NOT NULL,
                 master_revision_pit INTEGER NOT NULL DEFAULT 0,
+                observed_through TEXT,
+                revision_window_calendar_days INTEGER,
+                revision_coverage TEXT,
                 updated_at TEXT NOT NULL,
                 last_error TEXT,
                 CHECK (research_state = 'PERSONAL_DRAFT'),
@@ -1307,6 +1424,44 @@ class PersonalHistoryHydrator:
                 "ADD COLUMN selection_evidence_json TEXT"
             )
             self._connection.commit()
+        columns = {
+            str(row[1])
+            for row in self._connection.execute(
+                "PRAGMA table_info(personal_history_segments)"
+            )
+        }
+        if "revision_checked_at" not in columns:
+            self._connection.execute(
+                "ALTER TABLE personal_history_segments "
+                "ADD COLUMN revision_checked_at TEXT"
+            )
+        if "revision_state" not in columns:
+            self._connection.execute(
+                "ALTER TABLE personal_history_segments "
+                "ADD COLUMN revision_state TEXT"
+            )
+        manifest_columns = {
+            str(row[1])
+            for row in self._connection.execute(
+                "PRAGMA table_info(personal_history_manifest)"
+            )
+        }
+        if "observed_through" not in manifest_columns:
+            self._connection.execute(
+                "ALTER TABLE personal_history_manifest "
+                "ADD COLUMN observed_through TEXT"
+            )
+        if "revision_window_calendar_days" not in manifest_columns:
+            self._connection.execute(
+                "ALTER TABLE personal_history_manifest "
+                "ADD COLUMN revision_window_calendar_days INTEGER"
+            )
+        if "revision_coverage" not in manifest_columns:
+            self._connection.execute(
+                "ALTER TABLE personal_history_manifest "
+                "ADD COLUMN revision_coverage TEXT"
+            )
+        self._connection.commit()
 
     def _assert_compact_tables_match_builder_ddl(self) -> None:
         """Reject lookalike compact tables that IF NOT EXISTS would otherwise keep."""
@@ -1376,11 +1531,29 @@ class PersonalHistoryHydrator:
         self._connection.commit()
 
     def _manifest_status(self, status: str, error: str | None = None) -> None:
-        self._connection.execute(
-            "UPDATE personal_history_manifest SET status=?,updated_at=?,last_error=? "
-            "WHERE singleton=1",
-            (status, now_iso(), error),
-        )
+        stamp = now_iso()
+        if status == "COMPLETE_DRAFT":
+            revision_coverage = self._revision_coverage()
+            self._connection.execute(
+                "UPDATE personal_history_manifest "
+                "SET status=?,updated_at=?,last_error=?,observed_through=?,"
+                "revision_window_calendar_days=?,revision_coverage=? "
+                "WHERE singleton=1",
+                (
+                    status,
+                    stamp,
+                    error,
+                    stamp,
+                    DEFAULT_REVISION_WINDOW_CALENDAR_DAYS,
+                    revision_coverage,
+                ),
+            )
+        else:
+            self._connection.execute(
+                "UPDATE personal_history_manifest SET status=?,updated_at=?,last_error=? "
+                "WHERE singleton=1",
+                (status, stamp, error),
+            )
         self._connection.commit()
 
     def _checkpoint(self, dataset: str, segment_id: str) -> sqlite3.Row | None:
@@ -1399,14 +1572,22 @@ class PersonalHistoryHydrator:
         query_end: str,
         params: Mapping[str, Any],
         pit_policy: str,
+        force_revision: bool = False,
     ) -> sqlite3.Row | None:
         checkpoint = self._checkpoint(dataset, segment_id)
-        if checkpoint is not None and checkpoint["state"] in _TERMINAL_STATES:
+        if (
+            checkpoint is not None
+            and checkpoint["state"] in _TERMINAL_STATES
+            and not force_revision
+        ):
             return checkpoint
         if checkpoint is not None and checkpoint["state"] not in _RETRYABLE_STATES:
-            raise PersonalHistoryError(
-                f"unknown checkpoint state {checkpoint['state']!r}"
-            )
+            if not (
+                force_revision and checkpoint["state"] in _TERMINAL_STATES
+            ):
+                raise PersonalHistoryError(
+                    f"unknown checkpoint state {checkpoint['state']!r}"
+                )
         started = now_iso()
         self._connection.execute(
             """
@@ -1460,9 +1641,14 @@ class PersonalHistoryHydrator:
         allow_observed_empty: bool = False,
         membership_digest: str | None = None,
         expected_rows: int | None = None,
+        force_revision: bool = False,
     ) -> _SegmentOutcome:
         existing = self._checkpoint(dataset, segment_id)
-        if existing is not None and existing["state"] in _TERMINAL_STATES:
+        if (
+            existing is not None
+            and existing["state"] in _TERMINAL_STATES
+            and not force_revision
+        ):
             outcome = _SegmentOutcome(
                 dataset=dataset,
                 segment_id=segment_id,
@@ -1482,6 +1668,7 @@ class PersonalHistoryHydrator:
             query_end=query_end,
             params=params,
             pit_policy=pit_policy,
+            force_revision=force_revision,
         )
         if checkpoint is not None:
             outcome = _SegmentOutcome(
@@ -1578,7 +1765,9 @@ class PersonalHistoryHydrator:
             if scan is not None:
                 self._upsert_shared_fins_scan(scan)
             if dataset in ("equities_master", "equities_bars_daily"):
-                written = self._insert_compact_facts(dataset, rows)
+                written = self._insert_compact_facts(
+                    dataset, rows, revision=force_revision
+                )
             else:
                 written = self.store.upsert("jquants_records", rows, commit=False)
             self._connection.execute(
@@ -1588,7 +1777,8 @@ class PersonalHistoryHydrator:
                     page_evidence_json=?,selection_evidence_json=?,
                     response_digest=?,facts_digest=?,
                     membership_digest=?,expected_rows=?,observed_ratio=?,
-                    finished_at=?,error=NULL
+                    finished_at=?,error=NULL,
+                    revision_checked_at=?,revision_state=?
                 WHERE dataset=? AND segment_id=?
                 """,
                 (
@@ -1608,6 +1798,8 @@ class PersonalHistoryHydrator:
                         else None
                     ),
                     now_iso(),
+                    now_iso(),
+                    "CHECKED",
                     dataset,
                     segment_id,
                 ),
@@ -1731,14 +1923,72 @@ class PersonalHistoryHydrator:
             )
         return bar_start, [seed_days[-1], *bar_days]
 
-    def _hydrate_master(self, master_days: Sequence[str]) -> None:
+    def _revision_window_start(self) -> str:
+        today = _canonical_jst(now_iso(), "hydrator clock").date()
+        return (
+            today - timedelta(days=DEFAULT_REVISION_WINDOW_CALENDAR_DAYS)
+        ).isoformat()
+
+    def _observed_this_run(self, existing: sqlite3.Row) -> bool:
+        started = self._hydrate_started_at
+        finished = str(existing["finished_at"] or "")
+        return bool(started and finished and finished >= started)
+
+    def _mark_revision_out_of_window(self, dataset: str, segment_id: str) -> None:
+        self._connection.execute(
+            """
+            UPDATE personal_history_segments
+            SET revision_state='OUT_OF_WINDOW'
+            WHERE dataset=? AND segment_id=?
+            """,
+            (dataset, segment_id),
+        )
+        self._connection.commit()
+
+    def _revision_coverage(self) -> str:
+        window_start = self._revision_window_start()
+        stale = self._connection.execute(
+            """
+            SELECT 1 FROM personal_history_segments
+            WHERE dataset IN ('equities_master','equities_bars_daily')
+              AND state IN ('OBSERVED','OBSERVED_EMPTY')
+              AND (
+                query_start < ?
+                OR revision_state = 'OUT_OF_WINDOW'
+              )
+            LIMIT 1
+            """,
+            (window_start,),
+        ).fetchone()
+        return (
+            REVISION_COVERAGE_BOUNDED_WINDOW
+            if stale is not None
+            else REVISION_COVERAGE_WINDOW_COMPLETE
+        )
+
+    def _hydrate_master(
+        self, master_days: Sequence[str], *, revision_only: bool = False
+    ) -> None:
         previous_digest: str | None = None
         master_floor = _official_availability("equities_master")
+        window_start = self._revision_window_start()
         for day in master_days:
             if day < master_floor:
                 raise PersonalHistoryError(
                     "equities_master query is before official availability"
                 )
+            segment_id = f"master:{day}"
+            if revision_only:
+                existing = self._checkpoint("equities_master", segment_id)
+                if existing is None or existing["state"] not in _TERMINAL_STATES:
+                    continue
+                if self._observed_this_run(existing):
+                    previous_digest = existing["membership_digest"]
+                    continue
+                if day < window_start:
+                    self._mark_revision_out_of_window("equities_master", segment_id)
+                    previous_digest = existing["membership_digest"]
+                    continue
 
             def transform(rows: Sequence[Mapping[str, Any]], stamp: str):
                 normalized, digest = _compact_master(
@@ -1748,12 +1998,13 @@ class PersonalHistoryHydrator:
 
             outcome = self._run_segment(
                 dataset="equities_master",
-                segment_id=f"master:{day}",
+                segment_id=segment_id,
                 query_start=day,
                 query_end=day,
                 params={"date": day},
                 pit_policy=MASTER_AVAILABILITY_POLICY,
                 transform=transform,
+                force_revision=revision_only,
             )
             previous_digest = outcome.membership_digest
 
@@ -1860,7 +2111,11 @@ class PersonalHistoryHydrator:
         return first
 
     def _hydrate_bars(
-        self, *, bar_start: str, trading: Sequence[str]
+        self,
+        *,
+        bar_start: str,
+        trading: Sequence[str],
+        revision_only: bool = False,
     ) -> None:
         snapshots = self._master_memberships()
         first_fins = self._first_visible_fins_by_code()
@@ -1873,6 +2128,7 @@ class PersonalHistoryHydrator:
         visible: set[str] = set()
         current_month: str | None = None
         month_committed = False
+        window_start = self._revision_window_start()
         fins_events = tuple(
             sorted((when, code) for code, when in first_fins.items())
         )
@@ -1930,9 +2186,23 @@ class PersonalHistoryHydrator:
                     self._release_acquired_raw()
                 month_committed = False
             current_month = month
+            segment_id = f"bars:{day}"
+            force_revision = False
+            if revision_only:
+                existing = self._checkpoint("equities_bars_daily", segment_id)
+                if existing is None or existing["state"] not in _TERMINAL_STATES:
+                    continue
+                if self._observed_this_run(existing):
+                    continue
+                if day < window_start:
+                    self._mark_revision_out_of_window(
+                        "equities_bars_daily", segment_id
+                    )
+                    continue
+                force_revision = True
             outcome = self._run_segment(
                 dataset="equities_bars_daily",
-                segment_id=f"bars:{day}",
+                segment_id=segment_id,
                 query_start=day,
                 query_end=day,
                 params={"date": day},
@@ -1945,38 +2215,54 @@ class PersonalHistoryHydrator:
                 ),
                 membership_digest=current_digest,
                 expected_rows=len(expected),
+                force_revision=force_revision,
             )
             started = True
             if not outcome.skipped:
                 month_committed = True
         if not started:
+            if revision_only:
+                return
             raise PersonalHistoryError(
                 "TOPIX intersect PIT-visible fins is empty for the research window"
             )
         if month_committed:
             self._release_acquired_raw()
 
+    def _latest_compact_master(self, snapshot_date: str, code: str) -> sqlite3.Row | None:
+        return self._connection.execute(
+            """
+            SELECT * FROM personal_history_compact_master
+            WHERE snapshot_date=? AND code=?
+            ORDER BY available_at DESC, ingested_at DESC
+            LIMIT 1
+            """,
+            (snapshot_date, code),
+        ).fetchone()
+
+    def _latest_compact_bar(self, code: str, day: str) -> sqlite3.Row | None:
+        return self._connection.execute(
+            """
+            SELECT * FROM personal_history_compact_bars
+            WHERE code=? AND date=?
+            ORDER BY available_at DESC, ingested_at DESC
+            LIMIT 1
+            """,
+            (code, day),
+        ).fetchone()
+
     def _insert_compact_facts(
-        self, dataset: str, rows: Sequence[Mapping[str, Any]]
+        self,
+        dataset: str,
+        rows: Sequence[Mapping[str, Any]],
+        *,
+        revision: bool = False,
     ) -> int:
-        """Insert already-normalized master/bar rows into compact WITHOUT ROWID tables."""
+        """Insert-only compact vintages. Identical content is idempotent."""
 
         if not rows:
             return 0
-
-        def payload_of(row: Mapping[str, Any]) -> Mapping[str, Any]:
-            raw = row.get("payload")
-            if isinstance(raw, Mapping):
-                return raw
-            try:
-                parsed = json.loads(raw)
-            except (TypeError, json.JSONDecodeError) as exc:
-                raise PersonalHistoryError("compact fact payload is invalid") from exc
-            if not isinstance(parsed, dict):
-                raise PersonalHistoryError("compact fact payload is invalid")
-            return parsed
-
-        values: list[tuple[Any, ...]]
+        written = 0
         if dataset == "equities_master":
             sql = """
                 INSERT INTO personal_history_compact_master (
@@ -1985,24 +2271,39 @@ class PersonalHistoryHydrator:
                     scale_category,source_scale_category
                 ) VALUES (?,?,?,?,?,?,?,?,?,?)
                 """
-            values = []
             for row in rows:
-                payload = payload_of(row)
-                values.append(
+                payload = _payload_mapping(row)
+                snapshot_date = str(payload.get("Date") or "")[:10]
+                code = str(payload.get("Code") or "")
+                official = str(row["available_at"])
+                stamp = str(row["ingested_at"])
+                latest = self._latest_compact_master(snapshot_date, code)
+                digest = _fact_content_digest(dataset, payload)
+                if latest is not None and _stored_master_content_digest(latest) == digest:
+                    continue
+                available_at, ingested_at = _vintage_clocks(
+                    official=official,
+                    stamp=stamp,
+                    first=latest is None and not revision,
+                )
+                self._connection.execute(
+                    sql,
                     (
-                        str(payload.get("Date") or "")[:10],
-                        str(payload.get("Code") or ""),
+                        snapshot_date,
+                        code,
                         row["event_time"],
-                        row["available_at"],
-                        row["ingested_at"],
+                        available_at,
+                        ingested_at,
                         payload.get("MarketCode"),
                         payload.get("Sector17Code"),
                         payload.get("Sector33Code"),
                         payload.get("ScaleCategory"),
                         payload.get("SourceScaleCategory"),
-                    )
+                    ),
                 )
-        elif dataset == "equities_bars_daily":
+                written += 1
+            return written
+        if dataset == "equities_bars_daily":
             sql = """
                 INSERT INTO personal_history_compact_bars (
                     code,date,event_time,available_at,ingested_at,
@@ -2013,16 +2314,29 @@ class PersonalHistoryHydrator:
                     market_cap
                 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """
-            values = []
             for row in rows:
-                payload = payload_of(row)
-                values.append(
+                payload = _payload_mapping(row)
+                code = str(payload.get("Code") or "")
+                day = str(payload.get("Date") or "")[:10]
+                official = str(row["available_at"])
+                stamp = str(row["ingested_at"])
+                latest = self._latest_compact_bar(code, day)
+                digest = _fact_content_digest(dataset, payload)
+                if latest is not None and _stored_bar_content_digest(latest) == digest:
+                    continue
+                available_at, ingested_at = _vintage_clocks(
+                    official=official,
+                    stamp=stamp,
+                    first=latest is None and not revision,
+                )
+                self._connection.execute(
+                    sql,
                     (
-                        str(payload.get("Code") or ""),
-                        str(payload.get("Date") or "")[:10],
+                        code,
+                        day,
                         row["event_time"],
-                        row["available_at"],
-                        row["ingested_at"],
+                        available_at,
+                        ingested_at,
                         payload.get("Close"),
                         payload.get("Volume"),
                         payload.get("TurnoverValue"),
@@ -2035,14 +2349,13 @@ class PersonalHistoryHydrator:
                         payload.get("MorningAdjustmentVolume"),
                         payload.get("AfternoonAdjustmentVolume"),
                         payload.get("MarketCapitalization"),
-                    )
+                    ),
                 )
-        else:
-            raise PersonalHistoryError(
-                f"personal history cannot write {dataset} as compact facts"
-            )
-        self._connection.executemany(sql, values)
-        return len(values)
+                written += 1
+            return written
+        raise PersonalHistoryError(
+            f"personal history cannot write {dataset} as compact facts"
+        )
 
     def _upsert_shared_fins_scan(self, scan: Mapping[str, Any]) -> None:
         scan_digest = str(scan["scan_digest"])
@@ -2251,51 +2564,34 @@ class PersonalHistoryHydrator:
             raise PersonalHistoryError(
                 "personal history generic master or bars remain"
             )
-        expected_master = int(
-            self._connection.execute(
-                "SELECT COALESCE(SUM(rows_written),0) "
-                "FROM personal_history_segments "
-                "WHERE dataset='equities_master' "
-                "AND state IN ('OBSERVED','OBSERVED_EMPTY')"
-            ).fetchone()[0]
-        )
         compact_master = int(
             self._connection.execute(
-                "SELECT COUNT(*) FROM personal_history_compact_master"
-            ).fetchone()[0]
-        )
-        if expected_master < 1 or compact_master != expected_master:
-            raise PersonalHistoryError(
-                "personal history compact master does not match completed checkpoints"
-            )
-        expected_bars = int(
-            self._connection.execute(
-                "SELECT COALESCE(SUM(rows_written),0) "
-                "FROM personal_history_segments "
-                "WHERE dataset='equities_bars_daily' "
-                "AND state IN ('OBSERVED','OBSERVED_EMPTY')"
+                "SELECT COUNT(DISTINCT snapshot_date || char(0) || code) "
+                "FROM personal_history_compact_master"
             ).fetchone()[0]
         )
         compact_bars = int(
             self._connection.execute(
-                "SELECT COUNT(*) FROM personal_history_compact_bars"
+                "SELECT COUNT(DISTINCT date || char(0) || code) "
+                "FROM personal_history_compact_bars"
             ).fetchone()[0]
         )
-        if expected_bars < 1 or compact_bars != expected_bars:
+        if compact_master < 1 or compact_bars < 1:
             raise PersonalHistoryError(
-                "personal history compact bars do not match completed checkpoints"
+                "personal history compact master or bars are empty"
             )
         master_mismatch = self._connection.execute(
             """
             SELECT 1 FROM personal_history_segments AS segments
             LEFT JOIN (
-                SELECT snapshot_date,COUNT(*) AS row_count
+                SELECT snapshot_date,COUNT(DISTINCT code) AS row_count
                 FROM personal_history_compact_master
                 GROUP BY snapshot_date
             ) AS compact ON compact.snapshot_date=segments.query_start
             WHERE segments.dataset='equities_master'
               AND segments.state IN ('OBSERVED','OBSERVED_EMPTY')
-              AND COALESCE(compact.row_count,0) <> segments.rows_written
+              AND segments.rows_written > 0
+              AND COALESCE(compact.row_count,0) = 0
             LIMIT 1
             """
         ).fetchone()
@@ -2308,13 +2604,20 @@ class PersonalHistoryHydrator:
             """
             SELECT 1 FROM personal_history_segments AS segments
             LEFT JOIN (
-                SELECT date,COUNT(*) AS row_count
+                SELECT date,COUNT(DISTINCT code) AS row_count
                 FROM personal_history_compact_bars
                 GROUP BY date
             ) AS bars ON bars.date=segments.query_start
             WHERE segments.dataset='equities_bars_daily'
               AND segments.state IN ('OBSERVED','OBSERVED_EMPTY')
-              AND COALESCE(bars.row_count,0) <> segments.rows_written
+              AND segments.rows_written > 0
+              AND (
+                COALESCE(bars.row_count,0) = 0
+                OR (
+                    segments.expected_rows IS NOT NULL
+                    AND COALESCE(bars.row_count,0) <> segments.expected_rows
+                )
+              )
             LIMIT 1
             """
         ).fetchone()
@@ -2340,7 +2643,7 @@ class PersonalHistoryHydrator:
             raise PersonalHistoryError(
                 "personal history compact rows violate compact PIT invariants"
             )
-        self._assert_compact_v7_timestamps()
+        self._assert_compact_timestamps()
         for table in _TYPED_JQUANTS_TABLES:
             remaining = int(
                 self._connection.execute(
@@ -2374,45 +2677,34 @@ class PersonalHistoryHydrator:
             )
         self._validate_shared_fins_scan_evidence()
 
-    def _assert_compact_v7_timestamps(self) -> None:
-        canonical_ingested = (
-            "ingested_at IS NULL "
-            "OR length(ingested_at) <> 25 "
-            "OR ingested_at NOT GLOB '????-??-??T??:??:??+09:00'"
+    def _assert_compact_timestamps(self) -> None:
+        canonical = (
+            "length({col}) <> 25 "
+            "OR {col} NOT GLOB '????-??-??T??:??:??+09:00'"
         )
         if self._connection.execute(
             """
             SELECT 1 FROM personal_history_compact_master
-            WHERE available_at IS NOT snapshot_date || 'T08:00:00+09:00'
-            LIMIT 1
-            """
-        ).fetchone() is not None:
-            raise PersonalHistoryError(
-                "personal history compact master available_at is not "
-                "snapshot_date 08:00 JST"
-            )
-        if self._connection.execute(
-            """
-            SELECT 1 FROM personal_history_compact_master
             WHERE substr(event_time,1,10) IS NOT snapshot_date
+               OR available_at < snapshot_date || 'T08:00:00+09:00'
             LIMIT 1
             """
         ).fetchone() is not None:
             raise PersonalHistoryError(
                 "personal history compact master event_time date does not "
-                "equal snapshot_date"
+                "equal snapshot_date or available_at precedes snapshot_date "
+                "08:00 JST"
             )
         if self._connection.execute(
             f"""
             SELECT 1 FROM personal_history_compact_master
-            WHERE {canonical_ingested}
-               OR ingested_at < available_at
+            WHERE {canonical.format(col="ingested_at")}
+               OR {canonical.format(col="available_at")}
             LIMIT 1
             """
         ).fetchone() is not None:
             raise PersonalHistoryError(
-                "personal history compact master ingested_at is not "
-                "canonical or precedes available_at"
+                "personal history compact master ingested_at is not canonical"
             )
         if self._connection.execute(
             """
@@ -2421,44 +2713,31 @@ class PersonalHistoryHydrator:
                     WHEN date < '2024-11-05' THEN 'T15:00:00+09:00'
                     ELSE 'T15:30:00+09:00'
                   END
-               OR available_at IS NOT date || CASE
-                    WHEN date < '2024-11-05' THEN 'T15:00:00+09:00'
-                    ELSE 'T15:30:00+09:00'
-                  END
+               OR available_at < event_time
+               OR substr(event_time,1,10) IS NOT date
             LIMIT 1
             """
         ).fetchone() is not None:
             raise PersonalHistoryError(
-                "personal history compact bar timestamps are not the "
-                "official session close"
-            )
-        if self._connection.execute(
-            """
-            SELECT 1 FROM personal_history_compact_bars
-            WHERE substr(event_time,1,10) IS NOT date
-               OR substr(available_at,1,10) IS NOT date
-            LIMIT 1
-            """
-        ).fetchone() is not None:
-            raise PersonalHistoryError(
-                "personal history compact bar date does not match timestamps"
+                "personal history compact bar event_time is not the "
+                "official session close or available_at precedes it"
             )
         if self._connection.execute(
             f"""
             SELECT 1 FROM personal_history_compact_bars
-            WHERE {canonical_ingested}
-               OR ingested_at < available_at
+            WHERE {canonical.format(col="ingested_at")}
+               OR {canonical.format(col="available_at")}
             LIMIT 1
             """
         ).fetchone() is not None:
             raise PersonalHistoryError(
-                "personal history compact bars ingested_at is not "
-                "canonical or precedes available_at"
+                "personal history compact bars ingested_at is not canonical"
             )
 
     def hydrate(self) -> PersonalHistorySummary:
         self._outcomes = []
         self._new_segments = 0
+        self._hydrate_started_at = now_iso()
         self._manifest_status("BUILDING")
         try:
             before = self._new_segments
@@ -2482,6 +2761,11 @@ class PersonalHistoryHydrator:
             self._hydrate_bars(bar_start=bar_start, trading=trading)
             self._checkpoint_wal()
             self._guard_capacity(phase="after bars stage")
+            self._hydrate_master(master_days, revision_only=True)
+            self._hydrate_bars(
+                bar_start=bar_start, trading=trading, revision_only=True
+            )
+            self._checkpoint_wal()
             self._manifest_status("VALIDATING")
             self._validate_draft_boundary()
             hydrated_days = [
@@ -2500,6 +2784,7 @@ class PersonalHistoryHydrator:
             actual_lookback = sum(
                 1 for day in hydrated_days if day < self.plan.period_start
             )
+            revision_coverage = self._revision_coverage()
             self._manifest_status("COMPLETE_DRAFT")
             self._checkpoint_wal()
         except Exception as exc:
@@ -2521,6 +2806,8 @@ class PersonalHistoryHydrator:
             database_bytes=self._database_footprint(),
             actual_lookback_sessions=actual_lookback,
             lookback_truncated=actual_lookback < requested_lookback,
+            revision_window_calendar_days=DEFAULT_REVISION_WINDOW_CALENDAR_DAYS,
+            revision_coverage=revision_coverage,
         )
 
 
@@ -2532,6 +2819,9 @@ __all__ = [
     "DEFAULT_GENERIC_JSON_STORAGE_BYTES_PER_ROW",
     "DEFAULT_LOOKBACK_SESSIONS",
     "DEFAULT_MAX_DATABASE_BYTES",
+    "DEFAULT_REVISION_WINDOW_CALENDAR_DAYS",
+    "REVISION_COVERAGE_BOUNDED_WINDOW",
+    "REVISION_COVERAGE_WINDOW_COMPLETE",
     "FINS_AVAILABILITY_POLICY",
     "MASTER_AVAILABILITY_POLICY",
     "PERSONAL_COMPLETENESS_CLAIM",

@@ -50,21 +50,26 @@ def _use_closed_test_ledger(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def provenance(collector: str, label: str) -> dict[str, object]:
+def provenance(
+    collector: str,
+    label: str,
+    *,
+    response_digest: str | None = None,
+) -> dict[str, object]:
     return {
         "schema_version": release.OBSERVATION_SCHEMA_VERSION,
         "collector": collector,
         "evidence_id": str(uuid.uuid5(uuid.NAMESPACE_URL, label)),
         "observed_at": OBSERVED_AT,
         "source_sha": SHA,
-        "response_digest": "sha256:" + "e" * 64,
+        "response_digest": response_digest or ("sha256:" + "e" * 64),
     }
 
 
 def payload() -> dict[str, object]:
     workers = tuple(sorted(release._ACTIVE_WORKERS))
     version = "11111111-1111-4111-8111-111111111111"
-    binding_digest = "sha256:" + "c" * 64
+    surfaces = release._canonical_worker_surfaces()
     restore = {
         "evidence_id": "33333333-3333-4333-8333-333333333333",
         "verified_at": OBSERVED_AT,
@@ -98,10 +103,18 @@ def payload() -> dict[str, object]:
             environment: {
                 "version_id": version,
                 "source_sha": SHA,
-                "effective_bindings_digest": binding_digest,
+                "effective_bindings": release.binding_identity(
+                    surfaces[worker][environment]
+                ),
+                "effective_bindings_digest": release.binding_identity_digest(
+                    surfaces[worker][environment]
+                ),
                 "provenance": provenance(
                     "cloudflare-workers-versions-api/v1",
                     f"deployment:{worker}:{environment}",
+                    response_digest=release.binding_identity_digest(
+                        surfaces[worker][environment]
+                    ),
                 ),
             }
             for environment in ("staging", "production")
@@ -164,6 +177,7 @@ def payload() -> dict[str, object]:
                             "http_status": 200,
                             "product_ready": True,
                             "cutover": "V3_ACTIVE",
+                            "activated_source_sha": SHA,
                             "response_digest": "sha256:" + "e" * 64,
                         }
                         if worker == "quant-platform-ingestion-jsda"
@@ -308,10 +322,35 @@ def test_cli_rejects_before_reading_any_caller_document(tmp_path: Path) -> None:
     output = tmp_path / "release"
     with pytest.raises(
         release.ReleaseObservationAuthorityUnavailable,
-        match="signed release-observation authority",
+        match="observation keys are unprovisioned",
     ):
         release.main([str(missing), "--output-dir", str(output)])
     assert not output.exists()
+
+
+def test_private_jsda_collector_envelope_binds_exact_response_bytes() -> None:
+    import hashlib
+
+    exact = b'{"ok":true,"product_ready":false}'
+    digest = "sha256:" + hashlib.sha256(exact).hexdigest()
+    envelope = {
+        "schema_version": release.OBSERVATION_SCHEMA_VERSION,
+        "collector": "private-jsda-health-ready/v1",
+        "transport": "private-service-binding",
+        "binding_name": "JSDA_INGESTION",
+        "endpoint": "/health/ready",
+        "http_status": 503,
+        "exact_response_b64": __import__("base64").b64encode(exact).decode(),
+        "exact_response_bytes": len(exact),
+        "response_digest": digest,
+        "exact_response_utf8": exact.decode(),
+    }
+    verified = release.verify_private_release_observation(envelope)
+    assert verified["binding_name"] == "JSDA_INGESTION"
+    with pytest.raises(release.ReleaseObservationAuthorityUnavailable):
+        release.verify_private_release_observation(
+            {**envelope, "response_digest": "sha256:" + "e" * 64}
+        )
 
 
 def test_public_builder_never_treats_even_invalid_json_as_evidence() -> None:
@@ -337,7 +376,7 @@ def test_writer_guard_is_independent_of_a_replaced_builder(
     assert not output.exists()
 
 
-def test_pending_authority_contract_matches_missing_jsda_collector_transport() -> None:
+def test_pending_authority_contract_pins_implemented_jsda_collector() -> None:
     contract = json.loads(
         (ROOT / "specs/cloudflare/release_observation_authority.json").read_text(
             encoding="utf-8"
@@ -352,9 +391,10 @@ def test_pending_authority_contract_matches_missing_jsda_collector_transport() -
         "target_worker": "quant-platform-ingestion-jsda",
         "endpoint": "/health/ready",
         "transport": "private-service-binding",
-        "binding_name": None,
-        "transport_implemented": False,
-        "status": "HOLD",
+        "binding_name": "JSDA_INGESTION",
+        "transport_implemented": True,
+        "collector_worker": "receipt-activation-observer",
+        "status": "PENDING",
     }
     bindings = json.loads(
         (ROOT / "specs/cloudflare/active_worker_bindings.json").read_text(
@@ -362,7 +402,17 @@ def test_pending_authority_contract_matches_missing_jsda_collector_transport() -
         )
     )["workers"]["ingestion-jsda"]
     for environment in ("base", "staging", "production"):
-        assert bindings[environment]["services"] == []
+        assert bindings[environment]["services"] == [
+            {
+                "binding": "RECEIPT_EVIDENCE_AUTHORITY",
+                "entrypoint": "ReceiptAuthorityService",
+                "service": (
+                    "quant-platform-receipt-evidence-authority-staging"
+                    if environment == "staging"
+                    else "quant-platform-receipt-evidence-authority"
+                ),
+            }
+        ]
         assert bindings[environment]["workers_dev"] is False
         assert bindings[environment]["preview_urls"] is False
         assert bindings[environment]["routes"] == []
@@ -412,6 +462,11 @@ def test_release_evidence_rejects_secrets_provider_tokens_and_local_paths() -> N
     secret["quant_mcp"]["unexpected_api_token"] = "do-not-publish"  # type: ignore[index]
     with pytest.raises(ValueError, match="secret-shaped key"):
         validate_untrusted_candidate(secret)
+
+    leaked_inventory = payload()
+    leaked_inventory["quant_mcp"]["secret_names"] = ["INGESTION_RUN_TOKEN"]  # type: ignore[index]
+    with pytest.raises(ValueError, match="secret-shaped key"):
+        validate_untrusted_candidate(leaked_inventory)
 
     provider_tokens = (
         "gho_abcdefghijklmn" + "opqrstuvwxyz123456",
@@ -481,6 +536,34 @@ def test_release_evidence_requires_check_build_deploy_and_smoke_identity() -> No
     with pytest.raises(ValueError, match="deployed source/version"):
         validate_untrusted_candidate(facts)
 
+    facts = payload()
+    facts["deployments"]["quant-platform-ops-read-mcp"]["production"][  # type: ignore[index]
+        "effective_bindings_digest"
+    ] = "sha256:" + "c" * 64
+    with pytest.raises(ValueError, match="canonical Worker/environment binding identity"):
+        validate_untrusted_candidate(facts)
+
+    facts = payload()
+    facts["deployments"]["quant-platform-ops-read-mcp"]["production"][  # type: ignore[index]
+        "effective_bindings"
+    ] = {"d1_databases": [{"binding": "OPS_DB", "database_name": "quant-ingest"}]}
+    with pytest.raises(ValueError, match="canonical Worker/environment binding identity"):
+        validate_untrusted_candidate(facts)
+
+    facts = payload()
+    del facts["deployments"]["quant-platform-ops-read-mcp"]["production"][  # type: ignore[index]
+        "effective_bindings"
+    ]
+    with pytest.raises(ValueError, match="schema drift"):
+        validate_untrusted_candidate(facts)
+
+    facts = payload()
+    facts["deployments"]["quant-platform-ops-read-mcp"]["production"][  # type: ignore[index]
+        "provenance"
+    ]["response_digest"] = "sha256:" + "e" * 64
+    with pytest.raises(ValueError, match="observed canonical binding identity digest"):
+        validate_untrusted_candidate(facts)
+
 
 @pytest.mark.parametrize(
     ("field", "value"),
@@ -489,6 +572,7 @@ def test_release_evidence_requires_check_build_deploy_and_smoke_identity() -> No
         ("http_status", 503),
         ("product_ready", False),
         ("cutover", "PENDING"),
+        ("activated_source_sha", "f" * 40),
         ("response_digest", "sha256:" + "d" * 64),
     ],
 )
@@ -502,6 +586,24 @@ def test_jsda_smoke_requires_ready_endpoint_and_bound_ready_response(
         validate_untrusted_candidate(facts)
 
 
+def test_mcp_tool_schema_digest_includes_description_and_version() -> None:
+    tool = {
+        "name": "ops_status",
+        "description": "Active immutable Ops projection summary",
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+        "outputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+    }
+    baseline = release.mcp_tool_schema_digest([tool])
+    drifted = release.mcp_tool_schema_digest(
+        [{**tool, "description": tool["description"] + " (drift)"}]
+    )
+    versioned = release.mcp_tool_schema_digest([tool], server_version="0.2.1")
+    assert baseline != drifted
+    assert baseline != versioned
+    assert drifted.startswith("sha256:")
+    assert versioned.startswith("sha256:")
+
+
 def test_jsda_smoke_rejects_generic_health_pass_schema() -> None:
     facts = payload()
     jsda = facts["smoke"]["production"]["quant-platform-ingestion-jsda"]  # type: ignore[index]
@@ -510,6 +612,7 @@ def test_jsda_smoke_rejects_generic_health_pass_schema() -> None:
         "http_status",
         "product_ready",
         "cutover",
+        "activated_source_sha",
         "response_digest",
     ):
         del jsda[field]

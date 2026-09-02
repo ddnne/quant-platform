@@ -365,6 +365,80 @@ def validate_postflight_connection(
     }
 
 
+
+INVARIANT_MANIFEST = ROOT / "specs" / "cloudflare" / "quant_ingest_schema_invariants.json"
+
+
+def _independent_invariants() -> dict[str, Any]:
+    try:
+        document = json.loads(INVARIANT_MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise IngestionMigrationError("canonical schema invariant manifest is missing") from exc
+    if (
+        document.get("schema_version") != "quant-ingest-schema-invariants/v1"
+        or document.get("trigger_count") != 45
+        or document.get("index_count") != 47
+        or document.get("receipt_authority_foreign_key_count") != 3
+        or type(document.get("triggers")) is not list
+        or type(document.get("indexes")) is not list
+    ):
+        raise IngestionMigrationError("canonical schema invariant manifest is invalid")
+    return document
+
+
+def _sqlite_master_names(conn: sqlite3.Connection, kind: str) -> set[str]:
+    sql = "SELECT name FROM main.sqlite_master WHERE type=?"
+    if kind == "index":
+        sql += " AND name NOT LIKE 'sqlite_%'"
+    return {str(row[0]) for row in conn.execute(sql, (kind,))}
+
+
+def reject_unknown_pre_0020_objects(conn: sqlite3.Connection) -> None:
+    """Reject sqlite_master objects that 0020 rebuild would silently drop."""
+    expected = _independent_invariants()
+    expected_triggers = {row["name"] for row in expected["triggers"]}
+    expected_indexes = {row["name"] for row in expected["indexes"]}
+    observed_triggers = _sqlite_master_names(conn, "trigger")
+    observed_indexes = _sqlite_master_names(conn, "index")
+    bootstrap_objects = {
+        name
+        for name in observed_triggers | observed_indexes
+        if name.startswith("quant_ingest_mutation_")
+    }
+    unknown_triggers = sorted(observed_triggers - expected_triggers - bootstrap_objects)
+    unknown_indexes = sorted(observed_indexes - expected_indexes - bootstrap_objects)
+    if unknown_triggers or unknown_indexes:
+        raise IngestionMigrationError(
+            "preflight has unknown triggers/indexes that 0020 would drop: "
+            + ", ".join(unknown_triggers + unknown_indexes)
+        )
+    if len(expected_triggers) != 45 or len(expected_indexes) != 47:
+        raise IngestionMigrationError("canonical 45 triggers/47 indexes drifted")
+    expected_fks = {
+        (str(row["table"]), str(row["from"]), str(row["ref_table"]), str(row["to"]))
+        for row in expected.get("receipt_authority_foreign_keys") or []
+    }
+    if len(expected_fks) != 3:
+        raise IngestionMigrationError("canonical 3 receipt-authority foreign keys drifted")
+    tables = {name for name, *_ in expected_fks}
+    observed_fks: set[tuple[str, str, str, str]] = set()
+    present = _sqlite_master_names(conn, "table")
+    for table in tables:
+        if table not in present:
+            continue
+        for fk in conn.execute(f"PRAGMA foreign_key_list({table})").fetchall():
+            # id, seq, table, from, to, ...
+            observed_fks.add((table, str(fk[3]), str(fk[2]), str(fk[4])))
+    if present.issuperset(tables) and observed_fks != expected_fks:
+        raise IngestionMigrationError(
+            "canonical receipt-authority foreign keys mismatch"
+        )
+    extra_fk_tables = observed_fks - expected_fks
+    if extra_fk_tables and present.issuperset(tables):
+        raise IngestionMigrationError(
+            "canonical receipt-authority foreign keys mismatch"
+        )
+
 def validate_preflight_connection(
     conn: sqlite3.Connection,
     *,
@@ -394,6 +468,9 @@ def validate_preflight_connection(
         raise IngestionMigrationError(
             "preflight has non-canonical tables: " + ", ".join(extra_tables)
         )
+    pending = list(MIGRATION_NAMES[len(history):])
+    if any(name.startswith("0020_") for name in pending):
+        reject_unknown_pre_0020_objects(conn)
 
     simulated = sqlite3.connect(":memory:")
     try:

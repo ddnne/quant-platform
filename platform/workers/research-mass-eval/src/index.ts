@@ -50,9 +50,14 @@ import {
   submitPersonalIndexVolOverlay2023,
 } from "./personal_index_vol_overlay_2023";
 import type { PersonalResearchRequest } from "./personal_research_contract";
+import {
+  controlledPilotStatus,
+  submitControlledPilot,
+} from "./controlled_pilot";
 
 export { ContainerProxy } from "./personal_research_container";
 export { PersonalResearchContainer };
+export { PilotReadyPublicationService } from "./ready_publication";
 
 const RESEARCH_PREFIX = "research/mass_eval";
 
@@ -344,7 +349,7 @@ async function runDailyPath(
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     return dispatchMassEvalFetch(request, env, {
       runMassEval,
       runDailyPath,
@@ -376,6 +381,8 @@ export default {
         });
       },
       personalResearchBatchStatus,
-    });
+      submitControlledPilot,
+      controlledPilotStatus,
+    }, ctx);
   },
 };

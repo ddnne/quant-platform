@@ -49,32 +49,309 @@ CREATE TABLE IF NOT EXISTS jsda_acquisition_jobs_v3 (
            (job_type != 'discover_root' AND parent_work_key IS NOT NULL))
 );
 
--- Deployment is a separate, explicit cutover.  While phase=bridge, drained
--- v2 instances may finish in-flight writes and the bridge copies them.  The
--- v3 Worker itself refuses product work until a separate audited cutover
--- authority changes this singleton to v3_active after old consumers/Cron are
--- stopped and leases drain.  Hand-written UPDATE is not an activation proof.
+-- Deployment is a separate, explicit one-way cutover.  While phase=bridge,
+-- drained v1/v2 instances may finish in-flight writes and the v2 bridge
+-- copies them.  The v3 Worker refuses product Cron/Queue until this singleton
+-- is v3_active with a Git source SHA, the compiled cutover config digest, and
+-- a distinct content-addressed drain-evidence digest.  Those two digests are
+-- not interchangeable.  Active facts are immutable; reverse transitions are
+-- forbidden.  SQLite CHECK/WHEN treat NULL as pass, so every required fact
+-- uses IS NOT NULL before length/GLOB compares.  INSERT OR REPLACE must not
+-- reverse activation: a side-table insert guard survives REPLACE's internal
+-- DELETE (recursive_triggers stays off).
 CREATE TABLE IF NOT EXISTS jsda_v3_cutover_control (
     singleton                 INTEGER PRIMARY KEY CHECK (singleton = 1),
     phase                     TEXT NOT NULL CHECK (phase IN ('bridge', 'v3_active')),
     activated_at              TEXT,
     activated_source_sha      TEXT,
+    cutover_config_digest     TEXT,
     drain_evidence_digest     TEXT,
     CHECK (
         phase = 'bridge'
         OR (
             activated_at IS NOT NULL
+            AND activated_source_sha IS NOT NULL
+            AND cutover_config_digest IS NOT NULL
+            AND drain_evidence_digest IS NOT NULL
+            AND substr(activated_at, -1) = 'Z'
+            AND substr(activated_at, 5, 1) = '-'
+            AND substr(activated_at, 8, 1) = '-'
+            AND substr(activated_at, 11, 1) = 'T'
+            AND substr(activated_at, 14, 1) = ':'
+            AND substr(activated_at, 17, 1) = ':'
+            AND substr(activated_at, 1, 4) GLOB '[0-9][0-9][0-9][0-9]'
+            AND substr(activated_at, 6, 2) GLOB '[0-9][0-9]'
+            AND substr(activated_at, 9, 2) GLOB '[0-9][0-9]'
+            AND substr(activated_at, 12, 2) GLOB '[0-9][0-9]'
+            AND substr(activated_at, 15, 2) GLOB '[0-9][0-9]'
+            AND substr(activated_at, 18, 2) GLOB '[0-9][0-9]'
+            AND (
+                length(activated_at) = 20
+                OR (
+                    substr(activated_at, 20, 1) = '.'
+                    AND length(activated_at) >= 22
+                    AND substr(activated_at, 21, length(activated_at) - 21)
+                        NOT GLOB '*[^0-9]*'
+                )
+            )
             AND length(activated_source_sha) = 40
             AND activated_source_sha NOT GLOB '*[^0-9a-f]*'
-            AND substr(drain_evidence_digest, 1, 7) = 'sha256:'
+            AND length(cutover_config_digest) = 71
+            AND substr(cutover_config_digest, 1, 7) = 'sha256:'
+            AND substr(cutover_config_digest, 8) NOT GLOB '*[^0-9a-f]*'
             AND length(drain_evidence_digest) = 71
+            AND substr(drain_evidence_digest, 1, 7) = 'sha256:'
             AND substr(drain_evidence_digest, 8) NOT GLOB '*[^0-9a-f]*'
+            AND cutover_config_digest != drain_evidence_digest
         )
     )
 );
 
-INSERT OR IGNORE INTO jsda_v3_cutover_control (singleton, phase)
-VALUES (1, 'bridge');
+CREATE TABLE IF NOT EXISTS jsda_v3_cutover_insert_guard (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1)
+);
+
+CREATE TABLE IF NOT EXISTS jsda_v3_drain_evidence (
+    drain_evidence_digest TEXT PRIMARY KEY,
+    observed_at           TEXT NOT NULL,
+    document_json         TEXT NOT NULL,
+    CHECK (
+        drain_evidence_digest IS NOT NULL
+        AND length(drain_evidence_digest) = 71
+        AND substr(drain_evidence_digest, 1, 7) = 'sha256:'
+        AND substr(drain_evidence_digest, 8) NOT GLOB '*[^0-9a-f]*'
+        AND observed_at IS NOT NULL
+        AND substr(observed_at, -1) = 'Z'
+        AND substr(observed_at, 5, 1) = '-'
+        AND substr(observed_at, 8, 1) = '-'
+        AND substr(observed_at, 11, 1) = 'T'
+        AND substr(observed_at, 14, 1) = ':'
+        AND substr(observed_at, 17, 1) = ':'
+        AND substr(observed_at, 1, 4) GLOB '[0-9][0-9][0-9][0-9]'
+        AND substr(observed_at, 6, 2) GLOB '[0-9][0-9]'
+        AND substr(observed_at, 9, 2) GLOB '[0-9][0-9]'
+        AND substr(observed_at, 12, 2) GLOB '[0-9][0-9]'
+        AND substr(observed_at, 15, 2) GLOB '[0-9][0-9]'
+        AND substr(observed_at, 18, 2) GLOB '[0-9][0-9]'
+        AND (
+            length(observed_at) = 20
+            OR (
+                substr(observed_at, 20, 1) = '.'
+                AND length(observed_at) >= 22
+                AND substr(observed_at, 21, length(observed_at) - 21)
+                    NOT GLOB '*[^0-9]*'
+            )
+        )
+        AND document_json IS NOT NULL
+        AND length(document_json) > 1
+    )
+);
+
+CREATE TRIGGER IF NOT EXISTS jsda_v3_drain_evidence_no_update
+BEFORE UPDATE ON jsda_v3_drain_evidence
+BEGIN
+    SELECT RAISE(ABORT, 'JSDA v3 drain evidence is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS jsda_v3_drain_evidence_no_delete
+BEFORE DELETE ON jsda_v3_drain_evidence
+BEGIN
+    SELECT RAISE(ABORT, 'JSDA v3 drain evidence is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS jsda_v3_cutover_no_delete
+BEFORE DELETE ON jsda_v3_cutover_control
+BEGIN
+    SELECT RAISE(ABORT, 'JSDA v3 cutover control cannot be deleted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS jsda_v3_cutover_guard_no_delete
+BEFORE DELETE ON jsda_v3_cutover_insert_guard
+BEGIN
+    SELECT RAISE(ABORT, 'JSDA v3 cutover insert guard cannot be deleted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS jsda_v3_cutover_no_second_insert
+BEFORE INSERT ON jsda_v3_cutover_control
+WHEN EXISTS (
+    SELECT 1 FROM jsda_v3_cutover_insert_guard WHERE singleton = 1
+)
+BEGIN
+    SELECT RAISE(ABORT, 'JSDA v3 cutover control cannot be replaced');
+END;
+
+CREATE TRIGGER IF NOT EXISTS jsda_v3_cutover_mark_inserted
+AFTER INSERT ON jsda_v3_cutover_control
+BEGIN
+    INSERT INTO jsda_v3_cutover_insert_guard (singleton)
+    SELECT 1
+    WHERE NOT EXISTS (
+        SELECT 1 FROM jsda_v3_cutover_insert_guard WHERE singleton = 1
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS jsda_v3_cutover_immutable_active
+BEFORE UPDATE ON jsda_v3_cutover_control
+WHEN OLD.phase = 'v3_active'
+BEGIN
+    SELECT RAISE(ABORT, 'JSDA v3 cutover is immutable after activation');
+END;
+
+CREATE TRIGGER IF NOT EXISTS jsda_v3_cutover_activate_requires_facts
+BEFORE UPDATE ON jsda_v3_cutover_control
+WHEN OLD.phase = 'bridge' AND NEW.phase = 'v3_active' AND NOT (
+    NEW.activated_at IS NOT NULL
+    AND NEW.activated_source_sha IS NOT NULL
+    AND NEW.cutover_config_digest IS NOT NULL
+    AND NEW.drain_evidence_digest IS NOT NULL
+    AND substr(NEW.activated_at, -1) = 'Z'
+    AND substr(NEW.activated_at, 5, 1) = '-'
+    AND substr(NEW.activated_at, 8, 1) = '-'
+    AND substr(NEW.activated_at, 11, 1) = 'T'
+    AND substr(NEW.activated_at, 14, 1) = ':'
+    AND substr(NEW.activated_at, 17, 1) = ':'
+    AND substr(NEW.activated_at, 1, 4) GLOB '[0-9][0-9][0-9][0-9]'
+    AND substr(NEW.activated_at, 6, 2) GLOB '[0-9][0-9]'
+    AND substr(NEW.activated_at, 9, 2) GLOB '[0-9][0-9]'
+    AND substr(NEW.activated_at, 12, 2) GLOB '[0-9][0-9]'
+    AND substr(NEW.activated_at, 15, 2) GLOB '[0-9][0-9]'
+    AND substr(NEW.activated_at, 18, 2) GLOB '[0-9][0-9]'
+    AND (
+        length(NEW.activated_at) = 20
+        OR (
+            substr(NEW.activated_at, 20, 1) = '.'
+            AND length(NEW.activated_at) >= 22
+            AND substr(NEW.activated_at, 21, length(NEW.activated_at) - 21)
+                NOT GLOB '*[^0-9]*'
+        )
+    )
+    AND length(NEW.activated_source_sha) = 40
+    AND NEW.activated_source_sha NOT GLOB '*[^0-9a-f]*'
+    AND length(NEW.cutover_config_digest) = 71
+    AND substr(NEW.cutover_config_digest, 1, 7) = 'sha256:'
+    AND substr(NEW.cutover_config_digest, 8) NOT GLOB '*[^0-9a-f]*'
+    AND length(NEW.drain_evidence_digest) = 71
+    AND substr(NEW.drain_evidence_digest, 1, 7) = 'sha256:'
+    AND substr(NEW.drain_evidence_digest, 8) NOT GLOB '*[^0-9a-f]*'
+    AND NEW.cutover_config_digest != NEW.drain_evidence_digest
+    AND EXISTS (
+        SELECT 1 FROM jsda_v3_drain_evidence
+         WHERE drain_evidence_digest = NEW.drain_evidence_digest
+    )
+)
+BEGIN
+    SELECT RAISE(ABORT, 'JSDA v3 cutover activation is incomplete');
+END;
+
+INSERT INTO jsda_v3_cutover_control (singleton, phase)
+SELECT 1, 'bridge'
+WHERE NOT EXISTS (
+    SELECT 1 FROM jsda_v3_cutover_control WHERE singleton = 1
+);
+
+-- Live production still writes the original v1 table.  After activation the
+-- v3 Worker is the only writer; late v1 rows must not land.
+CREATE TRIGGER IF NOT EXISTS jsda_v1_jobs_insert_retired
+BEFORE INSERT ON jsda_acquisition_jobs
+WHEN (SELECT phase FROM jsda_v3_cutover_control WHERE singleton=1) = 'v3_active'
+BEGIN
+    SELECT RAISE(ABORT, 'JSDA v1 acquisition graph is retired');
+END;
+
+CREATE TRIGGER IF NOT EXISTS jsda_v1_jobs_update_retired
+BEFORE UPDATE ON jsda_acquisition_jobs
+WHEN (SELECT phase FROM jsda_v3_cutover_control WHERE singleton=1) = 'v3_active'
+BEGIN
+    SELECT RAISE(ABORT, 'JSDA v1 acquisition graph is retired');
+END;
+
+CREATE TRIGGER IF NOT EXISTS jsda_v1_jobs_delete_retired
+BEFORE DELETE ON jsda_acquisition_jobs
+WHEN (SELECT phase FROM jsda_v3_cutover_control WHERE singleton=1) = 'v3_active'
+BEGIN
+    SELECT RAISE(ABORT, 'JSDA v1 acquisition graph is retired');
+END;
+
+-- Late v1 writers during bridge are fenced into an append-only copy so a write
+-- after the initial populated snapshot cannot be lost.
+CREATE TABLE IF NOT EXISTS jsda_v1_bridge_writes (
+    job_id      TEXT PRIMARY KEY,
+    dataset     TEXT NOT NULL,
+    job_type    TEXT NOT NULL,
+    target_url  TEXT NOT NULL,
+    segment_id  TEXT,
+    state       TEXT NOT NULL,
+    attempt     INTEGER NOT NULL,
+    priority    INTEGER NOT NULL,
+    reason_code TEXT,
+    detail      TEXT,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    lease_until TEXT,
+    bridged_at  TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS jsda_v1_jobs_insert_bridge
+AFTER INSERT ON jsda_acquisition_jobs
+WHEN (SELECT phase FROM jsda_v3_cutover_control WHERE singleton=1) = 'bridge'
+BEGIN
+    INSERT INTO jsda_v1_bridge_writes (
+        job_id, dataset, job_type, target_url, segment_id, state, attempt,
+        priority, reason_code, detail, created_at, updated_at, lease_until,
+        bridged_at
+    )
+    VALUES (
+        NEW.job_id, NEW.dataset, NEW.job_type, NEW.target_url, NEW.segment_id,
+        NEW.state, NEW.attempt, NEW.priority, NEW.reason_code, NEW.detail,
+        NEW.created_at, NEW.updated_at, NEW.lease_until, NEW.updated_at
+    )
+    ON CONFLICT(job_id) DO UPDATE SET
+        dataset=excluded.dataset,
+        job_type=excluded.job_type,
+        target_url=excluded.target_url,
+        segment_id=excluded.segment_id,
+        state=excluded.state,
+        attempt=excluded.attempt,
+        priority=excluded.priority,
+        reason_code=excluded.reason_code,
+        detail=excluded.detail,
+        created_at=excluded.created_at,
+        updated_at=excluded.updated_at,
+        lease_until=excluded.lease_until,
+        bridged_at=excluded.bridged_at
+    WHERE jsda_v1_bridge_writes.updated_at <= excluded.updated_at;
+END;
+
+CREATE TRIGGER IF NOT EXISTS jsda_v1_jobs_update_bridge
+AFTER UPDATE ON jsda_acquisition_jobs
+WHEN (SELECT phase FROM jsda_v3_cutover_control WHERE singleton=1) = 'bridge'
+BEGIN
+    INSERT INTO jsda_v1_bridge_writes (
+        job_id, dataset, job_type, target_url, segment_id, state, attempt,
+        priority, reason_code, detail, created_at, updated_at, lease_until,
+        bridged_at
+    )
+    VALUES (
+        NEW.job_id, NEW.dataset, NEW.job_type, NEW.target_url, NEW.segment_id,
+        NEW.state, NEW.attempt, NEW.priority, NEW.reason_code, NEW.detail,
+        NEW.created_at, NEW.updated_at, NEW.lease_until, NEW.updated_at
+    )
+    ON CONFLICT(job_id) DO UPDATE SET
+        dataset=excluded.dataset,
+        job_type=excluded.job_type,
+        target_url=excluded.target_url,
+        segment_id=excluded.segment_id,
+        state=excluded.state,
+        attempt=excluded.attempt,
+        priority=excluded.priority,
+        reason_code=excluded.reason_code,
+        detail=excluded.detail,
+        created_at=excluded.created_at,
+        updated_at=excluded.updated_at,
+        lease_until=excluded.lease_until,
+        bridged_at=excluded.bridged_at
+    WHERE jsda_v1_bridge_writes.updated_at <= excluded.updated_at;
+END;
 
 -- Close the old-Worker write race before taking the populated snapshot.  The
 -- bridge deliberately updates only the v2/common columns; a resumed migration
@@ -184,6 +461,13 @@ END;
 
 CREATE TRIGGER IF NOT EXISTS jsda_v2_jobs_update_retired
 BEFORE UPDATE ON jsda_acquisition_jobs_v2
+WHEN (SELECT phase FROM jsda_v3_cutover_control WHERE singleton=1) = 'v3_active'
+BEGIN
+    SELECT RAISE(ABORT, 'JSDA v2 acquisition graph is retired');
+END;
+
+CREATE TRIGGER IF NOT EXISTS jsda_v2_jobs_delete_retired
+BEFORE DELETE ON jsda_acquisition_jobs_v2
 WHEN (SELECT phase FROM jsda_v3_cutover_control WHERE singleton=1) = 'v3_active'
 BEGIN
     SELECT RAISE(ABORT, 'JSDA v2 acquisition graph is retired');

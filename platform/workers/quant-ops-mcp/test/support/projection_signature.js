@@ -20,7 +20,7 @@ function validateEnvelope(envelope) {
   if (envelope.schema_version !== ENVELOPE_SCHEMA) return "unsupported envelope schema";
   const required = [
     "generation_id", "content_digest", "source_db_digest", "generated_at",
-    "producer_commit_sha", "contract_digest", "registry_digest",
+    "producer_commit_sha", "worker_version_id", "contract_digest", "registry_digest",
     "coverage_policy_version", "coverage_policy_digest", "projection_status",
     "source_generation", "source_snapshot_generation", "source_cursor",
     "export_cursor", "applied_cursor", "coverage_status_digest", "b0_status",

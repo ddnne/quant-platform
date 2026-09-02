@@ -7,7 +7,7 @@ workers_dev = false
 preview_urls = false
 
 [secrets]
-required = ["INGESTION_RUN_TOKEN"]
+required = ["INGESTION_RUN_TOKEN", "OPS_PROJECTION_SIGNING_PKCS8_B64"]
 
 [[r2_buckets]]
 binding = "RAW_BUCKET"
@@ -17,12 +17,23 @@ bucket_name = "quant-raw-staging"
 binding = "STRUCTURED_BUCKET"
 bucket_name = "quant-structured-staging"
 
+[[r2_buckets]]
+binding = "AUTHORITY_EVIDENCE_BUCKET"
+bucket_name = "quant-receipt-evidence-staging"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "quant-ingest-staging"
 database_id = "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb"
 migrations_dir = "migrations"
 migrations_table = "d1_migrations_ingestion"
+
+[[d1_databases]]
+binding = "OPS_PROJECTION_DB"
+database_name = "quant-ops-projection-staging"
+database_id = "68ee96d5-766c-4832-836b-54c079bd6265"
+migrations_dir = "../quant-ops-mcp/migrations/projection"
+migrations_table = "d1_migrations_ops_projection"
 
 [[services]]
 binding = "RECEIPT_EVIDENCE_AUTHORITY"
@@ -33,6 +44,10 @@ entrypoint = "ReceiptAuthorityService"
 INGEST_CONCURRENCY = "2"
 RECEIPT_AUTHORITY_ENVIRONMENT = "staging"
 RECEIPT_AUTHORITY_OPERATION_MODE = "PENDING"
+OPS_PROJECTION_ENVIRONMENT = "staging"
+OPS_PROJECTION_SIGNING_KEY_ID = "ops-projection-cloud-staging-v1"
+# OPS_PROJECTION_VERIFY_SPKI_B64 is provisioned after key review. Missing
+# SPKI fails publication closed. Deploy Premium before MCP.
 
 [observability]
 enabled = true

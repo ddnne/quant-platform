@@ -1,22 +1,31 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "purpose": "ops_projection_verification",
-  "generation": 2,
+  "generation": 3,
   "authority_status": "PENDING",
+  "authority_instance": "ops-projection-cloud",
   "prior_registry_digest": "sha256:bb1dc1ae823784db8b53147891d425b027c02cbf022023a74affa2ce46909abe",
   "keys": [
     {
       "key_id": "ops-projection-20260825-v1",
       "algorithm": "Ed25519",
       "public_key_base64": "1fECBb/uNUSmIn9p0AXiwBkWaAXr/FHA557sGGNpA48=",
-      "status": "revoked"
+      "status": "revoked",
+      "environment": "production",
+      "not_before": "2026-08-25T00:00:00Z",
+      "not_after": "2026-08-26T00:00:00Z",
+      "revoked_at": "2026-08-26T00:00:00Z"
     },
     {
       "key_id": "ops-projection-20260826-v2",
       "algorithm": "Ed25519",
       "public_key_base64": "TYEP0a2rGvyHGhgpXNexnTdptUgK41RU+H5N26FaKc0=",
-      "status": "pending"
+      "status": "pending",
+      "environment": "production",
+      "not_before": "2026-08-26T00:00:00Z",
+      "not_after": "2027-08-26T00:00:00Z",
+      "revoked_at": null
     }
   ],
-  "registry_digest": "sha256:7e27a111b0cd8f78e40c78011489fc8ce834e9d1c31487b2e5cd6237fa1ab1d6"
+  "registry_digest": "sha256:32bd179616eb9e848a47d56c38c2e12b243249b05321a0999fed53d22cd47362"
 }

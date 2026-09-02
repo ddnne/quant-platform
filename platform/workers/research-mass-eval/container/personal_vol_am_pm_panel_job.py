@@ -878,7 +878,12 @@ def execute_vol_am_pm_panel_job(
     *,
     opener: Callable = _open_input,
     uploader: Callable = _put_bytes,
+    deadline: Any | None = None,
 ) -> dict[str, Any]:
+    from pit.cooperative_deadline import check_deadline
+
+    del deadline
+    check_deadline()
     try:
         manifest = load_input_manifest(spec, opener=opener)
         with tempfile.TemporaryDirectory(prefix=f"vol-panel-{spec.job_id}-") as raw_root:

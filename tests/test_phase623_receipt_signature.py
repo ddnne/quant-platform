@@ -118,25 +118,42 @@ def test_reconciled_evidence_and_verified_closure_are_deeply_immutable(
         raw_records=({"Date": "2025-01-01"},),
         structured_records=({"Date": "2025-01-01"},),
         checked_at="2025-04-01T00:00:01+00:00",
-        extra_evidence={"audit": {"sources": ["official"]}},
     )
 
     with pytest.raises(TypeError):
         evidence.required.expected_scope["selection"]["markets"] = ("evil",)
     with pytest.raises(TypeError):
-        evidence.extra_digests["audit"]["sources"] = ("evil",)
+        evidence.extra_digests["product_manifest_digest"] = "sha256:" + "f" * 64
 
     closure = verify(auth.issue(evidence), required=required)
     with pytest.raises(TypeError):
         closure.expected_scope["selection"]["markets"] = ("evil",)
     with pytest.raises(TypeError):
-        closure.extra_digests["audit"]["sources"] = ("evil",)
+        closure.extra_digests["product_manifest_digest"] = "sha256:" + "f" * 64
     forged_closure = replace(
         closure,
         _claims={"source": "evil"},
     )
     with pytest.raises(TypeError, match="verifier-minted"):
         _ = forged_closure.source
+
+
+def test_unknown_nested_audit_extra_is_not_valid_v3_evidence(
+    receipt_ed25519_keys: SimpleNamespace,
+) -> None:
+    authority = _SignedReceiptAuthority(
+        signing_key=receipt_ed25519_keys.signing_key
+    )
+    required = _calendar_required()
+    receipt = _issue(
+        authority,
+        required,
+        extra_evidence={"audit": {"sources": ["official"]}},
+    )
+
+    with pytest.raises(ReceiptVerificationError, match="digest inventory"):
+        verify(receipt, required=required)
+    assert not is_complete_eligible_receipt(receipt)
 
 
 def test_forged_signature_rejected(receipt_ed25519_keys: SimpleNamespace):
@@ -370,7 +387,7 @@ def test_signature_transplant_onto_mutated_outer_receipt_rejected(
     assert status != "COMPLETE"
 
 
-def test_extra_digests_cannot_override_standard_claims(
+def test_standard_claim_overrides_are_partitioned_but_unknown_v3_extra_is_rejected(
     receipt_ed25519_keys: SimpleNamespace,
 ):
     from storage.coverage_ledger import compute_raw_digest
@@ -396,8 +413,9 @@ def test_extra_digests_cannot_override_standard_claims(
     assert body["extra_digests"]["origin"] == "operator-note"
     assert receipt.digests["raw"] == compute_raw_digest(raw)
     assert receipt.digests["raw"] != "sha256:" + "f" * 64
-    verify(receipt, required=req, raw=raw)
-    assert is_complete_eligible_receipt(receipt)
+    with pytest.raises(ReceiptVerificationError, match="digest inventory"):
+        verify(receipt, required=req, raw=raw)
+    assert not is_complete_eligible_receipt(receipt)
 
 
 @pytest.mark.parametrize(

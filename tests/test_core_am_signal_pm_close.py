@@ -287,16 +287,21 @@ def test_new_position_has_no_pre_fill_am_to_pm_return(tmp_path):
 
 def test_am_mode_rejects_non_personal_price_basis(tmp_path):
     db = _seed(tmp_path)
-    with pytest.raises(ValueError, match="PERSONAL_RETROSPECTIVE_ADJUSTED"):
-        run_backtest(
-            BuyOnce(),
-            D0,
-            D3,
-            db_path=db,
-            universe=_uni(db),
-            execution_mode="am_signal_pm_close",
-            price_basis=RAW,
-        )
+    res = run_backtest(
+        BuyOnce(),
+        D0,
+        D3,
+        db_path=db,
+        universe=_uni(db),
+        execution_mode="am_signal_pm_close",
+        price_basis=RAW,
+        cost_model=standard_cost(bps=0.0),
+    )
+    assert res.trades == []
+    assert res.metadata["authentic_am_session_evidence"] is False
+    assert "missing_verified_production_am_capability" in (
+        res.metadata.get("am_session_evidence_reason") or ""
+    )
     with pytest.raises(UnsupportedPriceBasis):
         run_backtest(
             BuyOnce(),
@@ -376,8 +381,9 @@ def test_complete_am_run_is_comparable(tmp_path):
     db = _seed(tmp_path, madjc=100.0, aadjc=100.0)
     res = _run(db, BuyOnce())
     assert res.metrics["comparable"] is True
-    assert res.metrics["selection_eligible"] is True
-    assert res.metrics["comparison_eligible"] is True
+    assert res.metrics["selection_eligible"] is False
+    assert res.metrics["comparison_eligible"] is False
+    assert res.metadata["authentic_am_session_evidence"] is False
     assert res.metrics["incomplete_valuation"] is False
     assert res.metadata["information_cutoff"] == "11:30:00+09:00"
     assert res.metadata["operational_usable_by"] == "12:30:00+09:00"

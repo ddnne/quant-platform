@@ -27,7 +27,7 @@ from research.cf_mass_eval_job import (
     refuse_missing_capability,
     resolve_or_stage_panels,
 )
-from research.daily_path_eval import git_sha
+
 from research.evaluation_ir import encode_evaluation_ir
 from research.eval_registry import PROTOCOL_DAILY_PATH, is_daily_path_complete_cell
 from research.freezes import MASS_RESEARCH
@@ -55,28 +55,12 @@ def invoke_cf_daily_path(
     spec = dict(job_spec)
     spec["eval_kind"] = "daily_path"
     spec["write_artifacts"] = bool(spec.get("write_artifacts"))
+    if http_post is None:
+        raise CfMassEvalError("closed JSON client is required")
     patched_url = worker_url.rstrip("/") + "/v1/daily-path"
 
     def _post(*, url: str, body: bytes, headers: dict[str, str]) -> Any:
-        # invoke_cf_mass_eval_worker builds /v1/mass-eval; ignore that url.
-        from urllib.error import HTTPError
-        from urllib.request import Request, urlopen
-
-        if http_post is not None:
-            return http_post(url=patched_url, body=body, headers=headers)
-        req = Request(patched_url, data=body, method="POST", headers=headers)
-        try:
-            with urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except HTTPError as exc:
-            detail = ""
-            try:
-                detail = exc.read().decode("utf-8")[:2000]
-            except Exception:
-                detail = str(exc)
-            raise CfMassEvalError(
-                f"daily-path HTTP {exc.code}: {detail}"
-            ) from exc
+        return http_post(url=patched_url, body=body, headers=headers)
 
     return invoke_cf_mass_eval_worker(
         spec,
@@ -105,9 +89,12 @@ def run_cf_daily_path_fanout(
     panels_prefix: str | None = None,
     track: str | None = None,
     write_artifacts: bool = False,
+    git_sha: str | None = None,
 ) -> dict[str, Any]:
     from research.eval_tracks import infer_eval_track
+    from research.mass_disabled import refuse_mass_host_entrypoint
 
+    refuse_mass_host_entrypoint("run_cf_daily_path_fanout")
     t0 = time.perf_counter()
     jid = str(job_id or f"eval-cf-dp-{uuid4().hex[:10]}")
     track = track or infer_eval_track(max_codes=max_codes)
@@ -300,7 +287,7 @@ def run_cf_daily_path_fanout(
         "longest_isolate_sec": round(longest, 3) if longest is not None else None,
         "wall_sec": round(time.perf_counter() - t0, 3),
         "table_path": str(table_path),
-        "git_sha": git_sha(cwd=ROOT),
+        "git_sha": git_sha,
         "factory_version": FANOUT_VERSION,
         "promote_as_main": False,
         "go": False,
@@ -356,6 +343,7 @@ def run_both_track_sleeve_fanout(
     max_days: int = DEFAULT_MAX_DAYS,
     one_way_cost: float = DEFAULT_ONE_WAY,
     universe_pool: Sequence[str] | None = None,
+    git_sha: str | None = None,
 ) -> dict[str, Any]:
     from research.combo_basket_compare import compare_mid_vs_liq
     from research.eval_tracks import (
@@ -510,7 +498,7 @@ def run_both_track_sleeve_fanout(
         "universe_select": "adv_desc_skip_missing_bars_and_fins",
         "compare": compare,
         "table_path": str(table_path),
-        "git_sha": git_sha(cwd=ROOT),
+        "git_sha": git_sha,
         "factory_version": BOTH_TRACK_SLEEVE_FANOUT_VERSION,
         "promote_as_main": False,
         "go": False,
@@ -528,14 +516,5 @@ def run_both_track_sleeve_fanout(
         json.dumps(pack, indent=2, default=str) + "\n", encoding="utf-8"
     )
     if not dry_run:
-        from research.cf_mass_eval_stage import RESEARCH_ARTIFACT_BUCKET
-        from research.r2_io import put_research_artifact
-
-        key = f"research/eval/job={jid}/both_track.json"
-        put_research_artifact(
-            RESEARCH_ARTIFACT_BUCKET,
-            key,
-            json.dumps(pack, default=str).encode("utf-8"),
-        )
-        pack["r2_keys"] = {"both_track": key}
+        raise RuntimeError("closed artifact put port is required")
     return pack

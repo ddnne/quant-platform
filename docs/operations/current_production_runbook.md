@@ -112,61 +112,46 @@ secret-name set. It reads names and binding kinds only; values are never
 requested or printed. Missing authentication, missing names, and unexpected
 names all fail closed. Wrangler is `4.125.0`.
 
-## 2. D1 migration policy: source-only HOLD
+## 2. D1 migration policy: single Cloudflare operator
 
-Do not hand-loop SQL files or run a remote D1 migration command from this
-revision. `ingestion-premium` remains the source owner for `quant-ingest`, and
-`quant-ops-mcp` remains the source owner for `quant-ops-projection` and
-`quant-ops-quota`, but source ownership is not remote mutation authority. The
-frozen manifest deliberately sets the `quant-ingest` owner command to `null`,
-remote mutation to `false`, and both staging and production to `HOLD`.
+Do not hand-loop SQL files or invoke `wrangler d1 migrations apply` directly.
+`ingestion-premium` owns the `quant-ingest` chain; the only staging/production
+mutation entry is:
+
+```bash
+.venv/bin/python scripts/activate_jsda_v3_cutover.py --environment staging --activate --yes
+# After staging is ACTIVATED at the same reviewed source SHA:
+.venv/bin/python scripts/activate_jsda_v3_cutover.py --environment production --activate --yes
+```
+
+Use `scripts/apply_ingestion_d1_migrations.py --environment ENV --check` for a
+read-only observation. The canonical chain currently ends at
+`0023_mutation_lease`; never apply only a prefix.
 
 Migration 0012 copies the populated v2 JSDA graph into a separately constrained
-v3 graph, installs v2-to-v3 bridge triggers before copying, and never drops v2
-data. Every statement is resumable, but neither a migration-history row nor a
-local file proves exact remote schema, data preservation, exclusion, or the
-source SHA that executed.
+v3 graph, installs v1/v2 retire triggers, and never drops v1/v2 data. Every
+statement is resumable, but neither a migration-history row nor a local file
+proves exact remote schema, data preservation, exclusion, or the source SHA
+that executed.
 
 [`scripts/d1_ingestion_migration_validation.py`](../../scripts/d1_ingestion_migration_validation.py)
-provides exact local preflight/postflight validation. The current
-[`scripts/apply_ingestion_d1_migrations.py`](../../scripts/apply_ingestion_d1_migrations.py)
-is a fail-closed observation/HOLD and recovery implementation despite its
-legacy filename; it publishes no authorized remote apply path. In particular:
+provides exact ephemeral schema/history validation. The operator then:
 
-1. the canonical reservation identity is exactly environment, canonical D1
-   database ID, source SHA, and canonical manifest digest;
-2. a local `O_EXCL` reservation is only a crash/audit marker on one host. It is
-   not a durable cross-host lock and never authorizes remote mutation;
-3. staging remains `HOLD` until a trusted remote lock supplies cross-host
-   exclusion and a control-plane attestation binds the executing source SHA;
-4. production obtains staging evidence by independently querying and exporting
-   the canonical staging D1 binding. It accepts no caller staging JSON, path,
-   encrypted backup, or key, and remains `HOLD` even when staging is exact until
-   the same trusted control plane attests the staging source SHA;
-5. Time Travel bookmarks and verified AES-256-GCM exports are rollback material
-   only. A backup, its key, restore result, or digest is never migration or
-   staging authority;
-6. exact preflight, simulated canonical replay, exact postflight, empty FK
-   check, exact history, and v2/v3 preservation remain mandatory after a future
-   authority is added. They do not substitute for that authority.
+1. records a small create-only control intent before changing Cron;
+2. stops writers, observes two stable drains, pauses the Queue, and verifies
+   the drain again so a post-pause enqueue cannot race the bookmark;
+3. records the Time Travel bookmark and undo command in the remote D1 run before
+   applying any migration;
+4. acquires the same-D1 CAS lease, crosses the `remote_spawned` fence, applies
+   the canonical chain with a bounded Wrangler subprocess, and verifies exact
+   schema/history;
+5. activates the new source SHA and restores the exact prior Queue/Cron state.
 
-The recovery command classifies a fresh canonical observation with exactly
-these semantics:
-
-- `APPLIED` (`RECOVERED_APPLIED_EXACT`): exact canonical postflight and zero
-  pending migrations;
-- `NOT_APPLIED` (`RECOVERED_NOT_APPLIED`): the live identity, bookmark,
-  validation result, and pending inventory exactly match the recorded preflight
-  baseline;
-- `UNKNOWN`: every unavailable, changed, partial, malformed, or otherwise
-  ambiguous state.
-
-Recovery classification does not prove which source SHA performed an earlier
-mutation, grant mutation authority, initiate rollback, or authorize a blind
-retry. `UNKNOWN` remains `HOLD` for manual investigation. Before publishing any
-remote apply procedure, implement and independently review a trusted remote
-lock/control-plane service keyed by the canonical reservation identity and
-capable of producing a source-SHA attestation.
+The local control intent is a few-kilobyte crash-recovery cache, not authority.
+Remote D1 plus live Cloudflare version/config/Queue/Cron observations are the
+source of truth. Whole-file local D1 exports are not part of cutover. Rollback
+uses the recorded Time Travel bookmark after writers are stopped and the Queue
+is paused and drained.
 
 The source-manifest consistency check does not contact or mutate Cloudflare:
 
@@ -174,78 +159,78 @@ The source-manifest consistency check does not contact or mutate Cloudflare:
 .venv/bin/python scripts/cloudflare_d1_migration_manifest.py
 ```
 
-If a prior HOLD observation already created the canonical `UNKNOWN`
-reservation for the exact clean source SHA and manifest, the following recovery
-command is permitted. It performs read-only live D1 queries/exports and changes
-only that canonical local reservation; it accepts no caller path, database,
-backup, key, evidence, run ID, or source SHA. It never applies or rolls back a
-remote migration:
+If the process exits after it has created a run, resume only that run ID:
 
 ```bash
-.venv/bin/python scripts/apply_ingestion_d1_migrations.py \
-  --environment staging \
-  --recover
+.venv/bin/python scripts/activate_jsda_v3_cutover.py \
+  --environment staging --resume --run-id RUN_ID --yes
 ```
 
-Use `--environment production` only to classify an existing production
-reservation. A terminal recovery result remains evidence, not remote mutation
-authority. Any error leaves `UNKNOWN` in place and blocks retry/promotion.
+For an explicit rollback, use the same environment/run ID with `--rollback
+--yes`. If live state matches neither the recorded target nor undo state, the
+operator fails closed for manual inspection.
 
 JSDA observation identity lives in
 `platform/workers/ingestion-premium/migrations/0012_jsda_observation_identity.sql`
 and precedes migration 0013 in the canonical `quant-ingest` chain. The Worker
 reads/writes v3 after this source revision. Do not roll it back to a v2-only
 Worker while retaining post-cutover D1 state. A rollback across this boundary
-is coordinated: stop writers, restore the recorded Time Travel bookmark (or
-verified encrypted export), then restore the old Worker. AES material supports
-that rollback only; it does not authorize it. Any unrecorded prefix,
-recorded-but-partial state, or malformed state is `UNKNOWN`, remains `HOLD`, and
-requires review rather than automatic resume.
+is coordinated by the operator: stop writers, pause and drain the Queue,
+restore the recorded Time Travel bookmark, then restore the old Worker.
 
-When a future trusted authority applies the migration, it intentionally leaves
-`jsda_v3_cutover_control.phase` at `bridge`. The v3 Worker returns/retries
-`JSDA_V3_CUTOVER_PENDING` and the v2 bridge rejects stale updates that would
-overwrite newer v3 state. Do not hand edit the singleton. Activation requires a
-separate reviewed authority that proves Cron/producer/consumer disablement,
-zero in-flight leases, the deployed v3 source SHA, and an immutable
-drain-evidence digest before setting `v3_active`; the database then aborts any
-late v2 insert/update. That activation authority is not implemented by the
-HOLD/recovery script or the production Worker entrypoint. The production
-entrypoint uses an explicitly disabled verifier: even a hand-written, formally
-valid `v3_active` row reports `AUTHORITY_DISABLED` and cannot enable product
-work. Source migration readiness is therefore not a claim that production JSDA
-is already cut over.
+When 0012 is applied it leaves `jsda_v3_cutover_control.phase` at `bridge`.
+Safe JSDA writer sequence is: stop old v1/v2 Cron and consumers, drain
+leases/jobs/main queue to zero, persist rollback evidence, migrate, deploy and
+activate v3. Product Cron/Queue stay fail-closed until
+`v3_active`. Activation is one-way; D1 forbids reverse transition, INSERT
+OR REPLACE, and late v1 `jsda_acquisition_jobs` writes.
 
-`GET /health` is liveness only and reports `product_ready` plus the observed
-cutover phase. It must never be used as the JSDA product smoke. Deployment
-acceptance must call `GET /health/ready` and require HTTP 200,
-`product_ready:true`, and `cutover:"V3_ACTIVE"` for the deployed source SHA and
-version. The canonical release observation must bind its response digest to the
-collector provenance digest. A generic `GET /health` `PASS`, a mismatched
-digest, or HTTP 503 with `PENDING`/`AUTHORITY_DISABLED` is not a successful
-product deployment.
+[`scripts/activate_jsda_v3_cutover.py`](../../scripts/activate_jsda_v3_cutover.py)
+directly observes Cloudflare state. `--check` never mutates. `--activate`
+requires double-observed zero jobs/leases/backlog, stopped old Cron/consumers,
+preserved DLQ, canonical bindings and a pre-migration Time Travel bookmark.
+Production additionally requires a remote staging `ACTIVATED` run for the same
+source SHA plus matching live Worker/config/Queue/Cron observations. Caller
+JSON or a local admission file is not authority. Cloud Ops Projection
+publication is the ingestion-premium scheduled publisher, not Mac-local SQLite.
 
-There is currently no reachable collector for that endpoint: JSDA has
-`workers_dev=false`, `preview_urls=false`, no route, and no Service Binding
-consumer in the frozen binding manifest. Therefore JSDA product smoke and
-release publication remain HOLD. Do not substitute caller-supplied HTTP JSON;
-a future private Service Binding collector must capture and authority-sign the
-exact response bytes for staging and production.
+`GET /health` is liveness only. Deployment acceptance must call
+`GET /health/ready` and require HTTP 200, `product_ready:true`,
+`cutover:"V3_ACTIVE"`, `activated_source_sha` equal to the Cloudflare build
+commit SHA, plus distinct `cutover_config_digest` and
+`drain_evidence_digest`. A generic `GET /health` `PASS` is not product
+deployment.
 
-## 3. Publish the signed Ops projection
+The JSDA Worker has no public route. Cutover acceptance therefore uses the
+remote D1 activation record and authenticated Cloudflare control-plane
+observations; `/health/ready` remains an internal product-readiness response,
+not migration authority.
 
-Projection SQL is applied only to `quant-ops-projection`.
+## 3. Publish the signed Ops projection (HOLD)
 
-```bash
-.venv/bin/python scripts/publish_ops_projection.py \
-  --db data/structured/ingestion.sqlite \
-  --snapshot-dir data/research_snapshots \
-  --apply-remote
-```
+Do not publish from Mac-local `data/structured/ingestion.sqlite` or
+`data/research_snapshots`. Persistent data is R2 authority plus D1 metadata;
+Container SQLite is ephemeral only.
 
-The publisher refuses a COMPLETE-count regression and requires the dedicated
-Ops projection signing key. See
-[`projection_publish_guard.md`](projection_publish_guard.md).
+Safe cloud-only order, still HOLD:
+
+1. Apply projection/quota migrations `0001`/`0002` to **staging** dedicated D1
+   (`quant-ops-projection-staging`, `quant-ops-quota-staging`).
+2. Publish one SEALED generation from the ingestion-premium scheduled
+   publisher into the dedicated staging projection D1. Mac-local
+   `publish_ops_projection.py --apply-remote` is disabled. Do not switch MCP
+   traffic onto an empty dedicated D1. `npm run deploy` in quant-ops-mcp
+   fails closed unless a signed SEALED active generation is present.
+3. Deploy staging MCP bound to the dedicated staging projection/quota D1.
+4. 17-tool / schema / generation smoke against staging.
+5. Repeat migrate/publish for production dedicated D1.
+6. Switch production MCP bindings only after a SEALED generation exists.
+7. Production 17-tool smoke.
+
+Until the cloud-side publisher exists, keep live MCP on its current binding
+and leave dedicated projection/quota DBs unpublished. See
+[`projection_publish_guard.md`](projection_publish_guard.md) for the
+COMPLETE-count guard once a publisher exists.
 
 ## 4. Remote Ops MCP
 

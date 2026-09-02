@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import math
-import subprocess
-from pathlib import Path
 from contextvars import ContextVar
 from typing import Any, Mapping, Sequence
 
@@ -33,18 +31,6 @@ def _finite_num(v: object) -> bool:
     except (TypeError, ValueError):
         return False
     return math.isfinite(f)
-
-
-def git_sha(*, cwd: Path | None = None) -> str | None:
-    try:
-        out = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"],
-            cwd=str(cwd) if cwd is not None else None,
-            text=True,
-        )
-        return out.strip() or None
-    except (OSError, subprocess.CalledProcessError):
-        return None
 
 
 def summarize_path(pack: Mapping[str, Any]) -> dict[str, Any]:

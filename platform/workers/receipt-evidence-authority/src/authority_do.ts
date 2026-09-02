@@ -14,7 +14,7 @@ import {
   initializeAuditRecoveryStore,
   recoverAuditRecoveryCanary,
 } from "./audit_recovery_store";
-import { requireDerivedClaims } from "./claims_validation";
+import { requirePersistedDerivedClaims } from "./claims_validation";
 import { authorityInstanceScope } from "./authority_instance";
 import {
   unwrapEd25519PrivateKey,
@@ -1134,9 +1134,15 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
   async #appendIssued(
     operationId: string,
     requestDigest: string,
+    rawRequest: ReceiptIssueRequestV1,
     rawClaims: UnsignedReceiptClaimsV3,
   ): Promise<ReceiptAuthorityIssuedRecord> {
-    const claims = requireDerivedClaims(rawClaims);
+    const row = this.#requireOperation(operationId, requestDigest);
+    const claims = await requirePersistedDerivedClaims(
+      rawClaims,
+      rawRequest,
+      row.request_digest,
+    );
     const authorityScope = await authorityInstanceScope(this.env);
     if (
       claims.environment !== authorityScope.environment ||
@@ -1144,7 +1150,6 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     ) {
       throw new Error("receipt claims are not bound to this authority instance");
     }
-    const row = this.#requireOperation(operationId, requestDigest);
     const claimsJson = canonicalJson(claims);
     const claimsDigest = await sha256Digest(claimsJson);
     if (row.claims_digest !== null && row.claims_digest !== claimsDigest) {
@@ -1371,8 +1376,9 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
       appendDerived: (
         operationId: string,
         requestDigest: string,
+        request: ReceiptIssueRequestV1,
         claims: UnsignedReceiptClaimsV3,
-      ) => this.#appendIssued(operationId, requestDigest, claims),
+      ) => this.#appendIssued(operationId, requestDigest, request, claims),
       finalizeCommitted: (
         operationId: string,
         requestDigest: string,

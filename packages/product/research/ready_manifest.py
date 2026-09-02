@@ -9,15 +9,30 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 from weakref import WeakKeyDictionary
 
+from pit import PitError
+from paper_runtime.ready_publication import (
+    ReadyPublicationService,
+    VerifiedPublicationEvidence,
+)
+
 from qp_paths import repo_root
 from selection.budget_ledger import MassResearchDisabledError
+from execution.controlled_fill_contract import (
+    CONTROLLED_FILL_CONTRACT_DIGEST,
+    require_controlled_fill_contract_digest,
+    ControlledFillContractError,
+)
+from selection.controlled_pilot_policy import (
+    CONTROLLED_PILOT_IDENTITY,
+    ControlledPilotPolicyError,
+    require_controlled_pilot_identity,
+)
 from storage.receipt_crypto import (
     PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
     PRODUCTION_RECEIPT_ENVIRONMENT,
@@ -46,6 +61,7 @@ PROOF_DIGEST_FIELDS: tuple[str, ...] = (
     "validation_proof_digest",
     "b0_proof_digest",
     "b4_proof_digest",
+    "fill_contract_digest",
 )
 TIMESTAMP_FIELDS: tuple[str, ...] = ("created_at", "published_at")
 GENERATION_PIN_FIELDS: tuple[str, ...] = (
@@ -178,12 +194,16 @@ class ReadyManifest:
     catalog_generation: str
     created_at: str
     published_at: str
+    identity: str
+    fill_contract_digest: str
+    observed_through: str = ""
     format: str = READY_MANIFEST_FORMAT
     manifest_digest: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         body = {
             "format": self.format,
+            "identity": self.identity,
             "snapshot_id": self.snapshot_id,
             "publication_scope": self.publication_scope,
             "profile_id": self.profile_id,
@@ -213,7 +233,10 @@ class ReadyManifest:
             "catalog_generation": self.catalog_generation,
             "created_at": self.created_at,
             "published_at": self.published_at,
+            "fill_contract_digest": self.fill_contract_digest,
         }
+        if self.observed_through:
+            body["observed_through"] = self.observed_through
         digest = self.manifest_digest or _manifest_digest_for(body)
         return {**body, "manifest_digest": digest}
 
@@ -298,7 +321,39 @@ class ReadyManifest:
             "catalog_generation": pin_or_missing(document.get("catalog_generation")),
             "created_at": pin_or_missing(document.get("created_at")),
             "published_at": pin_or_missing(document.get("published_at")),
+            "identity": str(document.get("identity") or ""),
+            "fill_contract_digest": proof_or_missing(
+                document.get("fill_contract_digest")
+            ),
         }
+        if document.get("observed_through"):
+            body["observed_through"] = pin_or_missing(document.get("observed_through"))
+        scope = body["publication_scope"]
+        identity = body["identity"]
+        if scope == "PILOT":
+            try:
+                body["identity"] = require_controlled_pilot_identity(identity)
+            except ControlledPilotPolicyError as exc:
+                raise MassResearchDisabledError(
+                    "ReadyManifest identity must be exactly "
+                    f"{CONTROLLED_PILOT_IDENTITY!r}"
+                ) from exc
+        elif identity == CONTROLLED_PILOT_IDENTITY:
+            raise MassResearchDisabledError(
+                "Mass ReadyManifest cannot carry controlled_pilot_v1"
+            )
+        elif not identity:
+            raise MassResearchDisabledError("ReadyManifest identity is required")
+        if scope == "PILOT":
+            try:
+                body["fill_contract_digest"] = require_controlled_fill_contract_digest(
+                    body["fill_contract_digest"]
+                )
+            except ControlledFillContractError as exc:
+                raise MassResearchDisabledError(
+                    "ReadyManifest fill_contract_digest must be the governed "
+                    "morning-close to same-day afternoon-close contract"
+                ) from exc
         digest = _manifest_digest_for(body)
         if declared is not None and str(declared) != digest:
             raise MassResearchDisabledError("ReadyManifest manifest_digest mismatch")
@@ -340,6 +395,7 @@ def build_ready_manifest(
     catalog_generation: str | None = None,
     created_at: str | None = None,
     published_at: str | None = None,
+    fill_contract_digest: str | None = None,
 ) -> ReadyManifest:
     """Publisher helper: assemble a ReadyManifest. Omitted proofs stay MISSING.
 
@@ -364,6 +420,16 @@ def build_ready_manifest(
     return ReadyManifest.from_dict(
         {
             "format": READY_MANIFEST_FORMAT,
+            "identity": (
+                CONTROLLED_PILOT_IDENTITY
+                if publication_scope == "PILOT"
+                else "mass_disabled"
+            ),
+            "fill_contract_digest": (
+                CONTROLLED_FILL_CONTRACT_DIGEST
+                if publication_scope == "PILOT"
+                else proof_or_missing(fill_contract_digest)
+            ),
             "snapshot_id": snapshot_id,
             "publication_scope": publication_scope,
             "profile_id": profile_id,
@@ -416,6 +482,7 @@ class ExactFourPilotReadyBinding:
     publication_scope: str = "PILOT"
     profile_id: str = "controlled-pilot/exact-four"
     profile_version: str = "research-data-profile-set/v1"
+    identity: str = CONTROLLED_PILOT_IDENTITY
 
     def __post_init__(self) -> None:
         from research.artifacts import ExperimentPlan
@@ -440,6 +507,12 @@ class ExactFourPilotReadyBinding:
             raise MassResearchDisabledError(
                 "controlled pilot READY identity is not canonical"
             )
+        try:
+            require_controlled_pilot_identity(self.identity)
+        except ControlledPilotPolicyError as exc:
+            raise MassResearchDisabledError(
+                "controlled pilot READY identity is not canonical"
+            ) from exc
 
         if (
             len(self.plans) != PILOT_PLAN_COUNT
@@ -452,6 +525,13 @@ class ExactFourPilotReadyBinding:
         if any(type(plan) is not ExperimentPlan for plan in self.plans):
             raise MassResearchDisabledError(
                 "controlled pilot READY requires exact ExperimentPlan artifacts"
+            )
+        if any(
+            getattr(plan, "identity", None) != CONTROLLED_PILOT_IDENTITY
+            for plan in self.plans
+        ):
+            raise MassResearchDisabledError(
+                "controlled pilot ExperimentPlan identity is not canonical"
             )
         if any(
             type(closure) is not PlanDependencyClosure for closure in self.closures
@@ -600,6 +680,7 @@ class ExactFourPilotReadyBinding:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "identity": self.identity,
             "publication_scope": self.publication_scope,
             "profile_id": self.profile_id,
             "profile_version": self.profile_version,
@@ -609,6 +690,7 @@ class ExactFourPilotReadyBinding:
             "dependency_closure_digest": self.closure_set_digest,
             "required_datasets": list(self.required_datasets),
             "profiles": [profile.to_dict() for profile in self.profiles],
+            "fill_contract_digest": CONTROLLED_FILL_CONTRACT_DIGEST,
         }
 
 
@@ -738,6 +820,41 @@ class VerifiedPilotReadyPublication:
     @property
     def committed_at(self) -> str:
         return str(self.snapshot.committed_at)
+
+    def governed_am_session_data_view(self) -> Any:
+        """Mint the production AM view from this independently verified publication."""
+        from pit.governed_am_view import (
+            _open_verified_controlled_snapshot,
+            _verified_am_scope_fields,
+        )
+
+        manifest = self.snapshot.manifest
+        observed = (
+            str(manifest.get("observed_through") or "")
+            or str(getattr(self, "observed_through", "") or "")
+        )
+        nested = manifest.get("ready_manifest")
+        if isinstance(nested, Mapping) and nested.get("observed_through"):
+            observed = str(nested.get("observed_through"))
+        scope = manifest.get("dependency_scope_evidence")
+        if not isinstance(scope, Mapping):
+            if isinstance(nested, Mapping):
+                scope = nested
+        physical = self.snapshot.artifact_digest
+        if type(physical) is not str or physical != self.readiness.immutable_db_digest:
+            raise MassResearchDisabledError(
+                "publication physical digest is missing or mismatched"
+            )
+        binding = _verified_am_scope_fields(scope if isinstance(scope, Mapping) else None)
+        handle = _open_verified_controlled_snapshot(
+            pinned_path=self.snapshot.db_path,
+            verified_physical_digest=physical,
+            verified_am_product_digests=binding["product_artifact_digests"],
+            verified_am_natural_key_digest=binding["natural_key_digest"],
+            verified_am_natural_key_count=binding["natural_key_count"],
+            expected_observed_through=observed,
+        )
+        return handle.am_session_data_view()
 
 
 def load_exact_four_pilot_ready_binding(
@@ -1104,596 +1221,14 @@ def build_profile_bound_ready_manifest_from_snapshot_document(
 
 
 def _verify_exact_four_pit_dependency_scope(
-    db_path: str | Path,
+    applied_mirror: object,
     binding: ExactFourPilotReadyBinding,
 ) -> dict[str, Any]:
-    """Prove the exact natural-key closure consumed by the controlled pilot.
+    """Product façade: the trusted service owns pre-READY reads."""
 
-    A single historical row cannot prove a period.  This gate derives the
-    versioned daily universe from the candidate snapshot, enumerates every
-    calendar/master/bar/TOPIX/financials key needed by that universe and its
-    longest lookback, enforces ``available_at <= decision as_of``, and then
-    requires every selected key to belong to a current v4 signed collection
-    closure whose structured digest reproduces from the local database.
-    """
-    from core.execution import close_as_of
-    from data_contracts import coverage_contract_for
-    from data_contracts.identity import natural_key as contract_natural_key
-    from research.universe_contract import (
-        EXACT_FOUR_UNIVERSE_RULE_DIGEST,
-        resolve_tse_prime_with_fins,
-    )
-    from storage.coverage_ledger import CollectionReceipt
-    from ops.receipt_product import (
-        canonical_product_artifact_bytes,
-        product_artifact_body_digest,
-        product_artifact_digest,
-    )
-    from storage.verified_receipt import require_verified_collection_closure
-
-    periods = {
-        (str(profile.period_start), str(profile.period_end))
-        for profile in binding.profiles
-    }
-    if len(periods) != 1:
-        raise MassResearchDisabledError(
-            "exact-four plans must share one governed universe period"
-        )
-    period_start, period_end = next(iter(periods))
-    max_lookback = max(
-        int(scope["required_lookback_trading_days"])
-        for profile in binding.profiles
-        for scope in profile.dataset_scopes
-    )
-    resolved_universe = resolve_tse_prime_with_fins(
-        db_path,
-        period_start=period_start,
-        period_end=period_end,
-    )
-
-    source = Path(db_path)
-    if not source.is_file():
-        raise MassResearchDisabledError(
-            f"PIT dependency scope database is missing: {source}"
-        )
-    uri = "file:" + str(source.resolve()) + "?mode=ro"
-    try:
-        conn = sqlite3.connect(uri, uri=True)
-        conn.row_factory = sqlite3.Row
-    except sqlite3.Error as exc:
-        raise MassResearchDisabledError(
-            "cannot open PIT dependency scope database"
-        ) from exc
-    try:
-        columns = {
-            str(row[1])
-            for row in conn.execute("PRAGMA table_info(jquants_records)")
-        }
-        required_columns = {
-            "source",
-            "dataset",
-            "natural_key",
-            "event_time",
-            "available_at",
-            "ingested_at",
-            "payload",
-            "raw_payload",
-        }
-        if not required_columns <= columns:
-            raise MassResearchDisabledError(
-                "PIT dependency scope requires canonical jquants_records columns"
-            )
-        required_datasets = tuple(binding.required_datasets)
-        expected_exact = {
-            "equities_bars_daily",
-            "equities_master",
-            "fins_summary",
-            "indices_bars_daily_topix",
-            "markets_calendar",
-        }
-        if set(required_datasets) != expected_exact:
-            raise MassResearchDisabledError(
-                "exact-four PIT verifier dataset closure drifted"
-            )
-        placeholders = ",".join("?" for _ in required_datasets)
-        raw_rows = conn.execute(
-            "SELECT * FROM jquants_records WHERE source='jquants' "
-            f"AND dataset IN ({placeholders}) "
-            "ORDER BY dataset,event_time,natural_key",
-            required_datasets,
-        ).fetchall()
-        rows_by_dataset: dict[str, list[dict[str, Any]]] = {
-            dataset_id: [] for dataset_id in required_datasets
-        }
-
-        def _as_datetime(value: Any, label: str) -> datetime:
-            try:
-                parsed = datetime.fromisoformat(
-                    str(value).replace("Z", "+00:00")
-                )
-            except (TypeError, ValueError) as exc:
-                raise MassResearchDisabledError(
-                    f"PIT dependency scope {label} is malformed"
-                ) from exc
-            if parsed.tzinfo is None:
-                raise MassResearchDisabledError(
-                    f"PIT dependency scope {label} lacks timezone"
-                )
-            return parsed
-
-        def _payload_value(payload: Mapping[str, Any], *names: str) -> str:
-            for name in names:
-                value = payload.get(name)
-                if value is not None and str(value).strip():
-                    return str(value).strip()
-            return ""
-
-        for raw in raw_rows:
-            original = dict(raw)
-            dataset_id = str(original["dataset"])
-            payload_raw: Any = original.get("payload")
-            if isinstance(payload_raw, str):
-                try:
-                    payload_raw = json.loads(payload_raw)
-                except json.JSONDecodeError as exc:
-                    raise MassResearchDisabledError(
-                        f"{dataset_id} payload is not JSON"
-                    ) from exc
-            if not isinstance(payload_raw, Mapping):
-                raise MassResearchDisabledError(
-                    f"{dataset_id} payload is missing"
-                )
-            payload = {str(key): value for key, value in payload_raw.items()}
-            expected_key = contract_natural_key(payload, dataset_id)
-            if (
-                expected_key.startswith("hash:sha256:")
-                or original.get("natural_key") != expected_key
-            ):
-                raise MassResearchDisabledError(
-                    f"{dataset_id} natural key is noncanonical"
-                )
-            rows_by_dataset[dataset_id].append(
-                {
-                    "original": original,
-                    "payload": payload,
-                    "natural_key": str(original["natural_key"]),
-                    "event_date": str(original["event_time"])[:10],
-                    "event_at": _as_datetime(
-                        original["event_time"], f"{dataset_id}.event_time"
-                    ),
-                    "available_at": _as_datetime(
-                        original["available_at"], f"{dataset_id}.available_at"
-                    ),
-                }
-            )
-
-        calendar_by_date: dict[str, dict[str, Any]] = {}
-        for row in rows_by_dataset["markets_calendar"]:
-            day = row["event_date"]
-            if day in calendar_by_date:
-                raise MassResearchDisabledError(
-                    f"markets_calendar duplicates natural date {day}"
-                )
-            calendar_by_date[day] = row
-
-        start_clock = _as_datetime(close_as_of(period_start), "period_start")
-        prior_trading = sorted(
-            day
-            for day, row in calendar_by_date.items()
-            if day < period_start
-            and row["available_at"] <= start_clock
-            and _payload_value(
-                row["payload"], "HolidayDivision", "HolDiv", "holiday_division"
-            )
-            == "1"
-        )
-        if len(prior_trading) < max_lookback:
-            raise MassResearchDisabledError(
-                "PIT dependency scope lacks the exact calendar lookback: "
-                f"visible={len(prior_trading)}, required={max_lookback}"
-            )
-        lookback_dates = tuple(prior_trading[-max_lookback:])
-        scope_start = lookback_dates[0] if lookback_dates else period_start
-
-        cursor = datetime.fromisoformat(scope_start).date()
-        end_date = datetime.fromisoformat(period_end).date()
-        calendar_dates: list[str] = []
-        while cursor <= end_date:
-            calendar_dates.append(cursor.isoformat())
-            cursor = cursor.fromordinal(cursor.toordinal() + 1)
-        selected_keys: dict[str, set[str]] = {
-            dataset_id: set() for dataset_id in required_datasets
-        }
-        trading_dates: list[str] = []
-        for day in calendar_dates:
-            row = calendar_by_date.get(day)
-            if row is None:
-                raise MassResearchDisabledError(
-                    f"markets_calendar missing exact scope date {day}"
-                )
-            if row["available_at"] > _as_datetime(close_as_of(day), day):
-                raise MassResearchDisabledError(
-                    f"markets_calendar {day} is late at decision time"
-                )
-            selected_keys["markets_calendar"].add(row["natural_key"])
-            if _payload_value(
-                row["payload"], "HolidayDivision", "HolDiv", "holiday_division"
-            ) == "1":
-                trading_dates.append(day)
-        in_period_trading = tuple(
-            day for day in trading_dates if period_start <= day <= period_end
-        )
-        if tuple(resolved_universe.membership_by_date) != in_period_trading:
-            raise MassResearchDisabledError(
-                "resolved universe decision dates do not equal the exact calendar"
-            )
-        first_membership = resolved_universe.codes_for(in_period_trading[0])
-
-        def _row_code(row: Mapping[str, Any]) -> str:
-            return _payload_value(row["payload"], "Code", "code")
-
-        for day in in_period_trading:
-            decision_clock = _as_datetime(close_as_of(day), day)
-            members = resolved_universe.codes_for(day)
-            visible_master = [
-                row
-                for row in rows_by_dataset["equities_master"]
-                if row["event_date"] <= day
-                and row["event_at"] <= decision_clock
-                and row["available_at"] <= decision_clock
-            ]
-            if not visible_master:
-                raise MassResearchDisabledError(
-                    f"equities_master missing daily PIT snapshot for {day}"
-                )
-            latest_snapshot = max(row["event_date"] for row in visible_master)
-            master_by_code = {
-                _row_code(row): row
-                for row in visible_master
-                if row["event_date"] == latest_snapshot and _row_code(row)
-            }
-            missing_master = sorted(set(members) - set(master_by_code))
-            if missing_master:
-                raise MassResearchDisabledError(
-                    f"equities_master missing resolved members at {day}: "
-                    f"{missing_master[:5]}"
-                )
-            for code in members:
-                selected_keys["equities_master"].add(
-                    master_by_code[code]["natural_key"]
-                )
-                fins = [
-                    row
-                    for row in rows_by_dataset["fins_summary"]
-                    if _row_code(row) == code
-                    and row["event_at"] <= decision_clock
-                    and row["available_at"] <= decision_clock
-                ]
-                if not fins:
-                    raise MassResearchDisabledError(
-                        f"fins_summary missing or late for {code} at {day}"
-                    )
-                latest_fins = max(
-                    fins,
-                    key=lambda row: (
-                        row["event_at"],
-                        row["available_at"],
-                        row["natural_key"],
-                    ),
-                )
-                selected_keys["fins_summary"].add(latest_fins["natural_key"])
-
-        for day in trading_dates:
-            decision_clock = _as_datetime(close_as_of(day), day)
-            members = (
-                resolved_universe.codes_for(day)
-                if day >= period_start
-                else first_membership
-            )
-            for code in members:
-                matches = [
-                    row
-                    for row in rows_by_dataset["equities_bars_daily"]
-                    if row["event_date"] == day
-                    and _row_code(row) == code
-                    and row["event_at"] <= decision_clock
-                    and row["available_at"] <= decision_clock
-                ]
-                if len(matches) != 1:
-                    raise MassResearchDisabledError(
-                        "equities_bars_daily natural-key closure missing/late for "
-                        f"{code}/{day}: rows={len(matches)}"
-                    )
-                selected_keys["equities_bars_daily"].add(
-                    matches[0]["natural_key"]
-                )
-            topix = [
-                row
-                for row in rows_by_dataset["indices_bars_daily_topix"]
-                if row["event_date"] == day
-                and row["event_at"] <= decision_clock
-                and row["available_at"] <= decision_clock
-            ]
-            if len(topix) != 1:
-                raise MassResearchDisabledError(
-                    "indices_bars_daily_topix exact trading-date closure "
-                    f"missing/late for {day}: rows={len(topix)}"
-                )
-            selected_keys["indices_bars_daily_topix"].add(
-                topix[0]["natural_key"]
-            )
-
-        receipt_columns = {
-            str(row[1])
-            for row in conn.execute("PRAGMA table_info(collection_receipts)")
-        }
-        required_receipt_columns = {
-            "source",
-            "dataset",
-            "segment_id",
-            "segment_start",
-            "segment_end",
-            "expected_scope",
-            "expected_items",
-            "observed_items",
-            "raw_page_count",
-            "raw_row_count",
-            "structured_row_count",
-            "pagination_exhausted",
-            "digests_json",
-            "run_id",
-            "status",
-            "error",
-            "checked_at",
-        }
-        if not required_receipt_columns <= receipt_columns:
-            raise MassResearchDisabledError(
-                "PIT dependency scope requires signed collection receipt columns"
-            )
-        product_columns = {
-            str(row[1])
-            for row in conn.execute(
-                "PRAGMA table_info(receipt_product_materializations)"
-            )
-        }
-        required_product_columns = {
-            "operation_id", "run_id", "source", "dataset", "segment_id",
-            "artifact_key", "artifact_digest", "artifact_body", "row_count",
-            "byte_count",
-            "manifest_key", "manifest_digest", "raw_manifest_key",
-            "raw_manifest_digest", "raw_page_count", "raw_row_count",
-            "raw_bytes", "committed_at",
-        }
-        if not required_product_columns <= product_columns:
-            raise MassResearchDisabledError(
-                "PIT dependency scope requires receipt product materializations"
-            )
-        run_columns = {
-            str(row[1])
-            for row in conn.execute("PRAGMA table_info(ingestion_run_log)")
-        }
-        if "authority_operation_id" not in run_columns:
-            raise MassResearchDisabledError(
-                "PIT dependency scope requires authority-bound ingestion runs"
-            )
-        receipt_rows = conn.execute(
-            "SELECT * FROM collection_receipts WHERE source='jquants' "
-            f"AND dataset IN ({placeholders}) ORDER BY checked_at,run_id",
-            required_datasets,
-        ).fetchall()
-        verified_segments: dict[
-            str, list[tuple[str, str, str, str]]
-        ] = {
-            dataset_id: [] for dataset_id in required_datasets
-        }
-        for raw in receipt_rows:
-            stored = dict(raw)
-            dataset_id = str(stored["dataset"])
-            try:
-                expected_scope = json.loads(str(stored["expected_scope"]))
-                digests = json.loads(str(stored["digests_json"]))
-                receipt = CollectionReceipt(
-                    source=str(stored["source"]),
-                    dataset=dataset_id,
-                    segment_id=str(stored["segment_id"]),
-                    segment_start=str(stored["segment_start"]),
-                    segment_end=str(stored["segment_end"]),
-                    expected_scope=expected_scope,
-                    expected_items=(
-                        None
-                        if stored["expected_items"] is None
-                        else int(stored["expected_items"])
-                    ),
-                    observed_items=int(stored["observed_items"]),
-                    raw_page_count=int(stored["raw_page_count"]),
-                    raw_row_count=int(stored["raw_row_count"]),
-                    structured_row_count=int(stored["structured_row_count"]),
-                    pagination_exhausted=bool(stored["pagination_exhausted"]),
-                    digests=digests,
-                    run_id=int(stored["run_id"]),
-                    status=str(stored["status"]),
-                    error=(
-                        None if stored["error"] is None else str(stored["error"])
-                    ),
-                    checked_at=str(stored["checked_at"]),
-                )
-                closure = require_verified_collection_closure(
-                    receipt,
-                    expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
-                    expected_authority_instance_digest=(
-                        PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
-                    ),
-                    expected_policy_version=coverage_contract_for(
-                        dataset_id
-                    ).policy_version,
-                )
-                segment_rows = [
-                    row["original"]
-                    for row in rows_by_dataset[dataset_id]
-                    if closure.segment_start[:10]
-                    <= row["event_date"]
-                    <= closure.segment_end[:10]
-                ]
-                segment_rows.sort(key=lambda row: str(row["natural_key"]))
-                product_rows = conn.execute(
-                    "SELECT * FROM receipt_product_materializations "
-                    "WHERE source=? AND dataset=? AND segment_id=? AND run_id=?",
-                    (
-                        closure.source,
-                        closure.dataset,
-                        closure.segment_id,
-                        closure.run_id,
-                    ),
-                ).fetchall()
-                if len(product_rows) != 1:
-                    continue
-                product = dict(product_rows[0])
-                run_rows = conn.execute(
-                    "SELECT id,source,runtime,status,authority_operation_id "
-                    "FROM ingestion_run_log WHERE id=?",
-                    (closure.run_id,),
-                ).fetchall()
-                raw_manifests = conn.execute(
-                    "SELECT dataset,run_id,manifest_key,page_count,row_count,"
-                    "raw_bytes,data_digest FROM raw_retention_manifests "
-                    "WHERE dataset=? AND run_id=?",
-                    (closure.dataset, closure.run_id),
-                ).fetchall()
-                observed_product_digest = product_artifact_digest(segment_rows)
-                if (
-                    closure.status != "SUCCESS"
-                    or not closure.pagination_exhausted
-                    or not closure.discovery_exhausted
-                    or len(segment_rows) != closure.structured_row_count
-                    or observed_product_digest != closure.structured_digest
-                    or product["artifact_digest"] != observed_product_digest
-                    or product_artifact_body_digest(product["artifact_body"])
-                    != observed_product_digest
-                    or len(product["artifact_body"].encode("utf-8"))
-                    != product["byte_count"]
-                    or canonical_product_artifact_bytes(segment_rows).decode(
-                        "utf-8"
-                    )
-                    != product["artifact_body"]
-                    or product["row_count"] != closure.structured_row_count
-                    or product["raw_manifest_digest"]
-                    != closure.raw_manifest_digest
-                    or product["raw_page_count"] != closure.raw_page_count
-                    or product["raw_row_count"] != closure.raw_row_count
-                    or len(run_rows) != 1
-                    or run_rows[0]["id"] != closure.run_id
-                    or run_rows[0]["source"] != closure.source
-                    or run_rows[0]["runtime"] != "receipt-evidence-authority"
-                    or run_rows[0]["status"] != "SUCCESS"
-                    or run_rows[0]["authority_operation_id"]
-                    != product["operation_id"]
-                    or len(raw_manifests) != 1
-                    or raw_manifests[0]["manifest_key"]
-                    != product["raw_manifest_key"]
-                    or raw_manifests[0]["page_count"]
-                    != closure.raw_page_count
-                    or raw_manifests[0]["row_count"]
-                    != closure.raw_row_count
-                    or raw_manifests[0]["raw_bytes"] != product["raw_bytes"]
-                    or raw_manifests[0]["data_digest"]
-                    != closure.raw_manifest_digest
-                ):
-                    continue
-            except Exception:
-                continue
-            verified_segments[dataset_id].append(
-                (
-                    closure.segment_start[:10],
-                    closure.segment_end[:10],
-                    closure.receipt_digest,
-                    closure.structured_digest,
-                )
-            )
-
-        entries: list[dict[str, Any]] = []
-        for dataset_id in required_datasets:
-            selected = selected_keys[dataset_id]
-            if not selected:
-                raise MassResearchDisabledError(
-                    f"PIT dependency scope selected no keys for {dataset_id}"
-                )
-            row_by_key = {
-                row["natural_key"]: row for row in rows_by_dataset[dataset_id]
-            }
-            used_receipts: set[str] = set()
-            used_products: set[str] = set()
-            for natural_key in selected:
-                event_date = row_by_key[natural_key]["event_date"]
-                matches = [
-                    (receipt_digest, product_digest)
-                    for segment_start, segment_end, receipt_digest, product_digest
-                    in verified_segments[dataset_id]
-                    if segment_start <= event_date <= segment_end
-                ]
-                if not matches:
-                    raise MassResearchDisabledError(
-                        "PIT dependency scope natural key is not bound to a "
-                        f"current signed receipt: {dataset_id}/{natural_key}"
-                    )
-                receipt_digest, product_digest = sorted(matches)[-1]
-                used_receipts.add(receipt_digest)
-                used_products.add(product_digest)
-            entries.append(
-                {
-                    "dataset_id": dataset_id,
-                    "natural_key_count": len(selected),
-                    "natural_key_digest": canonical_digest(sorted(selected)),
-                    "receipt_digests": sorted(used_receipts),
-                    "receipt_set_digest": canonical_digest(
-                        sorted(used_receipts)
-                    ),
-                    "product_artifact_digests": sorted(used_products),
-                    "product_artifact_set_digest": canonical_digest(
-                        sorted(used_products)
-                    ),
-                }
-            )
-    except sqlite3.Error as exc:
-        raise MassResearchDisabledError(
-            "PIT dependency scope query failed closed"
-        ) from exc
-    finally:
-        conn.close()
-    body = {
-        "format": "pit-dependency-scope-proof/v1",
-        "status": "PASS",
-        "profile_digest": binding.profile_digest,
-        "plan_set_digest": binding.plan_set_digest,
-        "dependency_closure_digest": binding.closure_set_digest,
-        "universe_rule_digest": EXACT_FOUR_UNIVERSE_RULE_DIGEST,
-        "resolved_universe_digest": (
-            resolved_universe.resolved_membership_digest
-        ),
-        "universe_daily_summary": [
-            {
-                "decision_date": day,
-                "member_count": len(codes),
-                "membership_digest": canonical_digest(list(codes)),
-            }
-            for day, codes in resolved_universe.decision_memberships
-        ],
-        "period_start": period_start,
-        "period_end": period_end,
-        "lookback_trading_days": max_lookback,
-        "entries": entries,
-        "product_materialization_digest": canonical_digest(
-            [
-                {
-                    "dataset_id": entry["dataset_id"],
-                    "product_artifact_digests": entry[
-                        "product_artifact_digests"
-                    ],
-                }
-                for entry in entries
-            ]
-        ),
-    }
-    return {**body, "proof_digest": canonical_digest(body)}
+    return ReadyPublicationService().request_verified_publication(
+        applied_mirror, binding
+    ).as_dict()
 
 
 def _verify_projection_evidence_facts(
@@ -1960,6 +1495,7 @@ def _publish_exact_four_pilot_ready_snapshot_impl(
     """Use the closed local READY client; no signer or fallback is accepted."""
 
     from paper_runtime.snapshot import (
+        SnapshotRejected,
         _ReadyPublicationProductApi,
         _publish_exact_four_pilot_ready_snapshot_via_authority,
     )
@@ -1968,10 +1504,6 @@ def _publish_exact_four_pilot_ready_snapshot_impl(
         _load_verified_pilot_readiness_bytes,
     )
     from research.research_data_profile import profile_ready
-    from scripts.local_authority_service import (
-        LocalAuthorityError,
-        LocalAuthorityPending,
-    )
 
     try:
         return _publish_exact_four_pilot_ready_snapshot_via_authority(
@@ -1997,9 +1529,10 @@ def _publish_exact_four_pilot_ready_snapshot_impl(
                 ),
             ),
         )
-    except (LocalAuthorityPending, LocalAuthorityError) as exc:
+    except SnapshotRejected as exc:
         raise ReadyPublicationAuthorityPending(
-            "READY authority PENDING; verified active local service is unavailable"
+            "READY authority PENDING; Cloudflare/READY public-key issuer is "
+            "unprovisioned"
         ) from exc
 
 
@@ -2174,6 +1707,20 @@ def validate_ready_manifest_profile_binding(
             "Mass ReadyManifest validation requires a separately governed Mass "
             "authority; Mass Research remains disabled"
         )
+    try:
+        require_controlled_pilot_identity(manifest.identity)
+    except ControlledPilotPolicyError as exc:
+        raise MassResearchDisabledError(
+            "ReadyManifest identity must be exactly "
+            f"{CONTROLLED_PILOT_IDENTITY!r}"
+        ) from exc
+    try:
+        require_controlled_fill_contract_digest(manifest.fill_contract_digest)
+    except ControlledFillContractError as exc:
+        raise MassResearchDisabledError(
+            "ReadyManifest fill_contract_digest must be the governed "
+            "morning-close to same-day afternoon-close contract"
+        ) from exc
 
     governed = profile
     if governed is None:
@@ -2323,6 +1870,7 @@ __all__ = [
     "SCHEMA_REL",
     "UNKNOWN",
     "TIMESTAMP_FIELDS",
+    "CONTROLLED_PILOT_IDENTITY",
     "ExactFourPilotReadyBinding",
     "ReadyManifest",
     "VerifiedPilotReadyPublication",

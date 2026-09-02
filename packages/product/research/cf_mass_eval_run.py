@@ -7,13 +7,12 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from uuid import uuid4
+
+from research.closed_clients import ClosedDeployPort, ClosedJsonClient
 
 from research.cf_mass_eval_job import (
     CF_MASS_EVAL_VERSION,
@@ -42,7 +41,7 @@ from research.cf_mass_eval_stage import (
     stage_real_panels_to_r2,
 )
 from research.eval_windows import DEFAULT_REAL_MULTIYEAR_PERIODS
-from research.r2_io import put_research_artifact
+
 
 MASS_EVAL_DEPLOY_ENV = "QP_ALLOW_MASS_EVAL_DEPLOY"
 
@@ -55,77 +54,44 @@ def mass_eval_deploy_allowed() -> bool:
 def invoke_cf_mass_eval_worker(
     job_spec: Mapping[str, Any],
     *,
+    client: ClosedJsonClient | None = None,
+    http_post: Callable[..., Any] | None = None,
     worker_url: str = DEFAULT_WORKER_URL,
     token: str | None = None,
     timeout: int = 120,
-    http_post: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     refused = refuse_missing_capability("mass_screen")
     if refused is not None:
         return refused
-    url = worker_url.rstrip("/") + "/v1/mass-eval"
-    tok = (token if token is not None else resolve_research_run_token()) or ""
-    body = json.dumps(dict(job_spec), default=str).encode("utf-8")
-    headers = {
-        "Content-Type": "application/json",
-        "User-Agent": "quant-platform-cf-mass-eval/1.0",
-    }
-    if tok:
-        headers["Authorization"] = f"Bearer {tok}"
-        headers["X-Research-Run-Token"] = tok
-        headers["X-Mass-Eval-Token"] = tok
-        headers["X-Ingestion-Token"] = tok
-
     t0 = time.perf_counter()
-    if http_post is not None:
-        raw_resp = http_post(url=url, body=body, headers=headers)
-        latency = time.perf_counter() - t0
-        if isinstance(raw_resp, Mapping):
-            return {
-                **dict(raw_resp),
-                "invoke_latency_sec": round(latency, 3),
-                "worker_url": url,
-            }
-        text = raw_resp if isinstance(raw_resp, str) else raw_resp.decode("utf-8")
+    if client is not None:
+        payload = dict(client.post(dict(job_spec)))
+        payload["invoke_latency_sec"] = round(time.perf_counter() - t0, 3)
+        return payload
+    if http_post is None:
+        raise CfMassEvalError("closed JSON client is required")
+    url = worker_url.rstrip("/") + "/v1/mass-eval"
+    body = json.dumps(dict(job_spec), default=str).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    raw_resp = http_post(url=url, body=body, headers=headers)
+    latency = time.perf_counter() - t0
+    if isinstance(raw_resp, Mapping):
         return {
-            **json.loads(text),
+            **dict(raw_resp),
             "invoke_latency_sec": round(latency, 3),
             "worker_url": url,
         }
-
-    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8")
-            status = int(resp.status)
-    except urllib.error.HTTPError as exc:
-        detail = ""
-        try:
-            detail = exc.read().decode("utf-8")[:2000]
-        except Exception:
-            detail = str(exc)
-        raise CfMassEvalError(
-            f"CF mass-eval HTTP {exc.code}: {detail}"
-        ) from exc
-    except urllib.error.URLError as exc:
-        raise CfMassEvalError(f"CF mass-eval network error: {exc}") from exc
-    latency = time.perf_counter() - t0
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise CfMassEvalError(
-            f"CF mass-eval non-json (HTTP {status}): {raw[:500]}"
-        ) from exc
-    if not isinstance(payload, dict):
-        raise CfMassEvalError("CF mass-eval response not an object")
-    payload["invoke_latency_sec"] = round(latency, 3)
-    payload["worker_url"] = url
-    payload["http_status"] = status
-    return payload
+    text = raw_resp if isinstance(raw_resp, str) else raw_resp.decode("utf-8")
+    return {
+        **json.loads(text),
+        "invoke_latency_sec": round(latency, 3),
+        "worker_url": url,
+    }
 
 
 def deploy_cf_mass_eval_worker(
     *,
+    deployer: ClosedDeployPort | None = None,
     wrangler: str | Path | None = None,
     timeout: int = 300,
 ) -> dict[str, Any]:
@@ -133,36 +99,12 @@ def deploy_cf_mass_eval_worker(
         raise CfMassEvalError(
             "wrangler deploy refused without QP_ALLOW_MASS_EVAL_DEPLOY=1"
         )
-    wr = Path(wrangler) if wrangler else _DEFAULT_WRANGLER
-    if not wr.is_file():
-        alt = _WORKER_DIR / "node_modules" / ".bin" / "wrangler"
-        wr = alt if alt.is_file() else wr
-    if not wr.is_file():
-        raise CfMassEvalError(f"wrangler not found: {wr}")
-    if not _WORKER_CONFIG.is_file():
-        raise CfMassEvalError(f"worker config missing: {_WORKER_CONFIG}")
-    proc = subprocess.run(
-        [str(wr), "deploy", f"--config={_WORKER_CONFIG}"],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        cwd=str(_WORKER_DIR),
-    )
-    combined = (proc.stdout or "") + "\n" + (proc.stderr or "")
-    if proc.returncode != 0:
-        raise CfMassEvalError(
-            f"wrangler deploy failed rc={proc.returncode}: {combined[-2000:]}"
-        )
-    url = DEFAULT_WORKER_URL
-    for line in combined.splitlines():
-        if "workers.dev" in line and "https://" in line:
-            for part in line.split():
-                if part.startswith("https://") and "workers.dev" in part:
-                    url = part.strip()
-                    break
+    if deployer is None:
+        raise CfMassEvalError("closed deploy port is required")
+    del wrangler, timeout
+    combined = deployer.deploy()
     return {
         "status": "deployed",
-        "worker_url": url,
         "wrangler_rc": 0,
         "log_tail": combined[-1500:],
     }
@@ -176,16 +118,13 @@ def put_local_fallback_artifacts(
     dry_run: bool = False,
     staging_dir: str | Path | None = None,
 ) -> list[dict[str, Any]]:
+    from research.mass_disabled import refuse_mass_host_entrypoint
+
+    refuse_mass_host_entrypoint("put_local_fallback_artifacts")
     paths = design_mass_factory_paths(str(job_spec.get("job_id") or "unknown"))
-    put_fn = r2_put or (
-        lambda bucket, key, body: put_research_artifact(
-            bucket,
-            key,
-            body,
-            dry_run=dry_run,
-            staging_dir=staging_dir,
-        )
-    )
+    if r2_put is None:
+        raise CfMassEvalError("closed artifact put port is required")
+    put_fn = r2_put
     puts: list[dict[str, Any]] = []
     artifacts = {
         paths["manifest_r2_key"]: {
@@ -233,6 +172,9 @@ def run_cf_mass_eval_job(
     skip_invoke: bool = False,
     timeout: int = 300,
 ) -> dict[str, Any]:
+    from research.mass_disabled import refuse_mass_host_entrypoint
+
+    refuse_mass_host_entrypoint("run_cf_mass_eval_job")
     refused = refuse_missing_capability("mass_screen")
     if refused is not None:
         return refused

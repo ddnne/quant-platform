@@ -25,7 +25,7 @@ def test_controlled_boundary_is_pending_without_io(
     service = ControlledPilotExecutionService()
 
     def forbidden(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("unprovisioned Controlled boundary attempted I/O")
+        raise AssertionError("Controlled boundary attempted I/O")
 
     monkeypatch.setattr(socket, "socket", forbidden)
     monkeypatch.setattr(Path, "open", forbidden)
@@ -36,7 +36,7 @@ def test_controlled_boundary_is_pending_without_io(
 
     assert raised.value.status == "PENDING"
     assert raised.value.reason_code == CONTROLLED_AUTHORITY_UNPROVISIONED
-    assert CONTROLLED_AUTHORITY_UNPROVISIONED in str(raised.value)
+    assert "Worker/Container" in str(raised.value)
 
 
 @pytest.mark.parametrize(
@@ -58,8 +58,12 @@ def test_controlled_constructor_has_no_injection_surface(
 def test_controlled_execute_has_no_legacy_local_request_surface() -> None:
     service = ControlledPilotExecutionService()
 
-    with pytest.raises(TypeError, match="unexpected keyword argument"):
-        service.execute(config=object())  # type: ignore[call-arg]
+    with pytest.raises(ControlledPilotPending, match="Worker/Container"):
+        service.execute()
+    with pytest.raises(ControlledPilotPending, match="Worker/Container"):
+        service.execute(config=object())
+    with pytest.raises(ControlledPilotPending, match="Worker/Container"):
+        service.execute(object(), object(), db_path="/tmp/attacker.sqlite")
 
 
 def test_controlled_pending_boundary_is_final() -> None:

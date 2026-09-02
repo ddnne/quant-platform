@@ -4,12 +4,9 @@ Public import remains ``research.eval_loaders``. Empty / missing → empty or No
 """
 from __future__ import annotations
 
-import sqlite3
-from pathlib import Path
+from datetime import date, timedelta
 from statistics import mean
 from typing import Any, Mapping, Sequence
-
-from qp_paths import repo_root
 from features.class_signals import (
     DEFAULT_NKY_VOL_LONG_N,
     DEFAULT_NKY_VOL_SHORT_N,
@@ -19,25 +16,91 @@ from features.class_signals import (
     REPO_CURVE_SHORT_TENOR,
     TRADING_DAYS_ANN,
 )
+from pit.history_reads import HISTORY_READ_PAGE_SIZE
+from pit.personal_research_view import PersonalResearchDataView
 from research.eval_loaders import (
-    DEFAULT_BARS_MIRROR_DIR,
-    _code_like,
-    _code_of,
-    _date_of,
-    _event_time_filters,
     _fnum,
-    _iter_ndjson,
-    _open_ro,
     _payload_map,
-    _period_year,
 )
-from research.eval_universe import DEFAULT_SQLITE
+from core.execution import close_as_of, morning_close_as_of
 from research.fins_summary_keys import (
     FINS_SUMMARY_EQ_KEY,
     FINS_SUMMARY_EQAR_KEY,
     FINS_SUMMARY_OFFICIAL_KEYS,
     FINS_SUMMARY_TA_KEY,
 )
+
+
+def _require_view(view: Any) -> PersonalResearchDataView:
+    if not isinstance(view, PersonalResearchDataView):
+        raise TypeError("eval sqlite loaders require PersonalResearchDataView")
+    return view
+
+
+def _dataset_pages(
+    view: PersonalResearchDataView,
+    *,
+    dataset: str,
+    codes: Sequence[str] = (),
+    start: str | None = None,
+    end: str | None = None,
+):
+    bound = _require_view(view)
+    window_start = str(start or end or "")[:10]
+    window_end = str(end or start or "")[:10]
+    if not window_start or not window_end:
+        raise ValueError("as_of is required (PIT has no latest default)")
+    from datetime import date as _date
+    from datetime import timedelta as _timedelta
+
+    cursor = _date.fromisoformat(window_start)
+    stop = _date.fromisoformat(window_end)
+    while cursor <= stop:
+        day = cursor.isoformat()
+        yield from bound.iter_decision_pages(
+            decision_date=day,
+            dataset=dataset,
+            codes=codes,
+            start=day,
+            end=day,
+            page_size=HISTORY_READ_PAGE_SIZE,
+        )
+        cursor += _timedelta(days=1)
+
+
+def _wall_as_of(
+    end: str | None, start: str | None = None, *, cutoff: str = "morning_close"
+) -> str:
+    day = str(end or start or "").strip()[:10]
+    if not day:
+        raise ValueError("as_of is required (PIT has no latest default)")
+    if cutoff == "morning_close":
+        return morning_close_as_of(day)
+    return close_as_of(day)
+
+
+def _visible_at(
+    available: str,
+    day: str,
+    cutoff: str,
+    *,
+    event_time: str = "",
+    decision_date: str | None = None,
+) -> bool:
+    if not available:
+        return False
+    limit_day = str(decision_date or day)[:10]
+    limit = (
+        morning_close_as_of(limit_day)
+        if cutoff == "morning_close"
+        else close_as_of(limit_day)
+    )
+    if available > limit:
+        return False
+    et = str(event_time or "")
+    if et and et > limit:
+        return False
+    return True
 
 
 def _margin_total(pl: Mapping[str, Any]) -> float | None:
@@ -56,22 +119,39 @@ def _margin_total(pl: Mapping[str, Any]) -> float | None:
 
 
 def _index_close_pairs(
-    con: sqlite3.Connection, sql: str, params: Sequence[Any]
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    cutoff: str = "morning_close",
+    decision_date: str | None = None,
 ) -> list[tuple[str, float]]:
-    out: list[tuple[str, float]] = []
-    for _nk, event_time, payload in con.execute(sql, params):
-        pl = _payload_map(payload)
+    chosen: dict[str, tuple[str, str, float]] = {}
+    for row in rows:
+        pl = _payload_map(row.get("payload"))
         if pl is None:
             continue
+        event_time = row.get("event_time")
         d = str(pl.get("Date") or str(event_time or "")[:10])[:10]
         c = pl.get("C") if pl.get("C") is not None else pl.get("Close")
         if not d or c is None or c == "":
             continue
+        available = str(row.get("available_at") or "")
+        if not _visible_at(
+            available,
+            d,
+            cutoff,
+            event_time=str(event_time or ""),
+            decision_date=decision_date or d,
+        ):
+            continue
         try:
-            out.append((d, float(c)))
+            price = float(c)
         except (TypeError, ValueError):
             continue
-    return out
+        ingested = str(row.get("ingested_at") or "")
+        previous = chosen.get(d)
+        if previous is None or (available, ingested) >= previous[:2]:
+            chosen[d] = (available, ingested, price)
+    return sorted((day, rec[2]) for day, rec in chosen.items())
 
 
 def _annualized_realized_vol(
@@ -98,35 +178,37 @@ def _annualized_realized_vol(
 
 
 def load_topix_close_series_from_sqlite(
-    db_path: str | Path = DEFAULT_SQLITE,
+    view: PersonalResearchDataView,
     *,
     start: str | None = None,
     end: str | None = None,
 ) -> list[tuple[str, float]]:
     """Load TOPIX closes from indices_bars_daily_topix (prefer) or code 0000."""
-    con = _open_ro(db_path)
-    if con is None:
-        return []
-    try:
-        filt, params = _event_time_filters(start, end)
-        sql = (
-            "SELECT natural_key, event_time, payload FROM jquants_records "
-            "WHERE dataset = 'indices_bars_daily_topix'"
-            f"{filt} ORDER BY event_time ASC"
+    rows = [
+        row
+        for page in _dataset_pages(
+            view,
+            dataset="indices_bars_daily_topix",
+            start=start,
+            end=end,
         )
-        out = _index_close_pairs(con, sql, params)
-        if out:
-            return out
-        sql2 = (
-            "SELECT natural_key, event_time, payload FROM jquants_records "
-            "WHERE dataset = 'indices_bars_daily' "
-            "AND (natural_key LIKE '%\"Code\":\"0000\"%' "
-            "OR natural_key LIKE '%\"code\":\"0000\"%')"
-            f"{filt} ORDER BY event_time ASC"
+        for row in page
+    ]
+    out = _index_close_pairs(rows)
+    if out:
+        return out
+    rows = [
+        row
+        for page in _dataset_pages(
+            view,
+            dataset="indices_bars_daily",
+            codes=("0000",),
+            start=start,
+            end=end,
         )
-        return _index_close_pairs(con, sql2, params)
-    finally:
-        con.close()
+        for row in page
+    ]
+    return _index_close_pairs(rows)
 
 
 def build_nky_vol_series(
@@ -181,41 +263,8 @@ def build_nky_vol_series(
     }
 
 
-def load_topix_close_series_from_ndjson(
-    path: str | Path,
-    *,
-    start: str | None = None,
-    end: str | None = None,
-) -> list[tuple[str, float]]:
-    """Load TOPIX closes from a local indices_bars_daily_topix ndjson mirror."""
-    p = Path(path)
-    if not p.is_file():
-        return []
-    p_start = str(start)[:10] if start else None
-    p_end = str(end)[:10] if end else None
-    by_date: dict[str, float] = {}
-    for payload in _iter_ndjson(p, payload_or_row=True):
-        d = str(payload.get("Date") or payload.get("date") or "")[:10]
-        if not d:
-            continue
-        if p_start and d < p_start:
-            continue
-        if p_end and d > p_end:
-            continue
-        c = payload.get("C")
-        if c is None:
-            c = payload.get("Close") or payload.get("close")
-        try:
-            px = float(c)  # type: ignore[arg-type]
-        except (TypeError, ValueError):
-            continue
-        if px > 0:
-            by_date[d] = px
-    return sorted(by_date.items(), key=lambda x: x[0])
-
-
 def load_nky_vol_series_from_sqlite(
-    db_path: str | Path = DEFAULT_SQLITE,
+    view: PersonalResearchDataView,
     *,
     start: str | None = None,
     end: str | None = None,
@@ -237,27 +286,10 @@ def load_nky_vol_series_from_sqlite(
         except ValueError:
             load_start = start
 
-    nk_pairs: list[tuple[str, float]] = []
-    if pref in {"ndjson_topix", "topix", "auto", "ndjson"}:
-        topix_ndjson = (
-            repo_root()
-            / ".glm-logs"
-            / "w0815ba_w60_long_multisignal"
-            / "r2_mirror"
-            / "indices_bars_daily_topix.ndjson"
-        )
-        nk_pairs = load_topix_close_series_from_ndjson(
-            topix_ndjson, start=load_start, end=end
-        )
-    if (not nk_pairs) and pref in {
-        "nk225f",
-        "sqlite",
-        "sqlite_topix",
-        "sqlite_nk225f",
-    }:
-        nk_pairs = load_topix_close_series_from_sqlite(
-            db_path, start=load_start, end=end
-        )
+    del pref
+    nk_pairs = load_topix_close_series_from_sqlite(
+        view, start=load_start, end=end
+    )
     return build_nky_vol_series(
         nk_pairs,
         short_n=short_n,
@@ -268,45 +300,56 @@ def load_nky_vol_series_from_sqlite(
 
 
 def load_opt225_regime_bundle_for_eval(
+    view: PersonalResearchDataView,
     *,
-    log_dir: str | Path | None = None,
     short_n: int = DEFAULT_NKY_VOL_SHORT_N,
     long_n: int = DEFAULT_NKY_VOL_LONG_N,
 ) -> dict[str, Any] | None:
-    """Load cached options_225 series and build regime maps for factory/CF."""
+    """Load digest-locked option sidecar via the typed view. HOLD if absent."""
+    bound = _require_view(view)
+    payload = bound.read_option_sidecar()
+    if payload is None:
+        return None
     try:
         from research.options_225_vol_series import (
+            DATASET_ID,
             DEFAULT_OPT225_LONG_N,
             DEFAULT_OPT225_SHORT_N,
+            OPTIONS_225_VOL_SERIES_VERSION,
             build_opt225_regime_bundle,
-            load_opt225_series_cache,
         )
     except Exception:
         return None
-    cache = load_opt225_series_cache(log_dir)
-    if not cache:
-        return None
     sn = int(short_n) if short_n else DEFAULT_OPT225_SHORT_N
     ln = int(long_n) if long_n else DEFAULT_OPT225_LONG_N
+    if payload.get("opt225_regime"):
+        regime = dict(payload["opt225_regime"])
+        source = dict(regime.get("source") or {})
+        dataset = str(source.get("dataset") or payload.get("dataset") or "")
+        version = str(source.get("version") or payload.get("version") or "")
+        if dataset != DATASET_ID or version != OPTIONS_225_VOL_SERIES_VERSION:
+            return None
+        return regime
     return build_opt225_regime_bundle(
-        cache.get("base_vol_series") or [],
-        cache.get("atm_iv_series") or [],
-        cache.get("spread_series"),
-        skew_rows=cache.get("skew_series") or None,
-        term_rows=cache.get("cm_term_series") or None,
-        basevol_delta_rows=cache.get("basevol_delta_series") or None,
+        list(payload.get("base_vol_series") or []),
+        list(payload.get("atm_iv_series") or []),
+        payload.get("spread_series"),
+        skew_rows=payload.get("skew_series") or None,
+        term_rows=payload.get("cm_term_series") or None,
+        basevol_delta_rows=payload.get("basevol_delta_series") or None,
         short_n=sn,
         long_n=ln,
     )
 
 
 def fins_summary_ta_eqar_stats(
-    db_path: str | Path = DEFAULT_SQLITE,
+    view: PersonalResearchDataView,
     *,
+    as_of: str,
     limit: int | None = None,
 ) -> dict[str, Any]:
     """Count TA / EqAR / Eq non-null rates in fins_summary payloads."""
-    db = Path(db_path)
+    _require_view(view)
     out: dict[str, Any] = {
         "dataset": "fins_summary",
         "official_keys": dict(FINS_SUMMARY_OFFICIAL_KEYS),
@@ -316,81 +359,68 @@ def fins_summary_ta_eqar_stats(
         "n_eq_nonnull": 0,
         "ncta_nonnull": 0,
         "invent": False,
+        "evidence_kind": "PERSONAL_RETROSPECTIVE_DIAGNOSTIC",
+        "feeds_controlled": False,
+        "feeds_comparable_strategy_metrics": False,
     }
-    if not db.exists():
-        out["error"] = "sqlite_missing"
-        return out
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-    try:
-        sql = "SELECT payload FROM jquants_records WHERE dataset = 'fins_summary'"
-        if limit:
-            sql += f" LIMIT {int(limit)}"
-        n = n_ta = n_eqar = n_eq = n_ncta = 0
-        for (payload,) in con.execute(sql):
-            pl = _payload_map(payload)
-            if pl is None:
-                continue
-            n += 1
-            if _fnum(pl.get(FINS_SUMMARY_TA_KEY)) is not None:
-                n_ta += 1
-            if _fnum(pl.get(FINS_SUMMARY_EQAR_KEY)) is not None:
-                n_eqar += 1
-            if _fnum(pl.get(FINS_SUMMARY_EQ_KEY)) is not None:
-                n_eq += 1
-            if _fnum(pl.get("NCTA")) is not None:
-                n_ncta += 1
-        out.update(
-            {
-                "n_rows": n,
-                "n_ta_nonnull": n_ta,
-                "n_eqar_nonnull": n_eqar,
-                "n_eq_nonnull": n_eq,
-                "ncta_nonnull": n_ncta,
-                "ta_rate": (n_ta / n) if n else None,
-                "eqar_rate": (n_eqar / n) if n else None,
-                "eq_rate": (n_eq / n) if n else None,
-                "ncta_rate": (n_ncta / n) if n else None,
-            }
+    decision = str(as_of)[:10]
+    rows = [
+        row
+        for page in view.iter_decision_pages(
+            decision_date=decision,
+            dataset="fins_summary",
+            codes=(),
+            start="1900-01-01",
+            end=decision,
+            page_size=HISTORY_READ_PAGE_SIZE,
         )
-    finally:
-        con.close()
+        for row in page
+    ]
+    if limit is not None:
+        rows = rows[: int(limit)]
+    n = n_ta = n_eqar = n_eq = n_ncta = 0
+    for row in rows:
+        pl = _payload_map(row.get("payload"))
+        if pl is None:
+            continue
+        n += 1
+        if _fnum(pl.get(FINS_SUMMARY_TA_KEY)) is not None:
+            n_ta += 1
+        if _fnum(pl.get(FINS_SUMMARY_EQAR_KEY)) is not None:
+            n_eqar += 1
+        if _fnum(pl.get(FINS_SUMMARY_EQ_KEY)) is not None:
+            n_eq += 1
+        if _fnum(pl.get("NCTA")) is not None:
+            n_ncta += 1
+    out.update(
+        {
+            "n_rows": n,
+            "n_ta_nonnull": n_ta,
+            "n_eqar_nonnull": n_eqar,
+            "n_eq_nonnull": n_eq,
+            "ncta_nonnull": n_ncta,
+            "ta_rate": (n_ta / n) if n else None,
+            "eqar_rate": (n_eqar / n) if n else None,
+            "eq_rate": (n_eq / n) if n else None,
+            "ncta_rate": (n_ncta / n) if n else None,
+        }
+    )
     return out
 
 
 def repo_history_plane_status(
-    db_path: str | Path = DEFAULT_SQLITE,
+    view: PersonalResearchDataView,
 ) -> dict[str, Any]:
-    """Disclose sqlite history vs D1 hot tip vs PIT fail-closed."""
-    db = Path(db_path)
-    n = 0
-    mn = mx = None
-    tenors = 0
-    missing = not db.is_file()
-    if not missing:
-        con = sqlite3.connect(str(db))
-        try:
-            n, mn, mx = con.execute(
-                "SELECT COUNT(*), MIN(as_of_date), MAX(as_of_date) "
-                "FROM jsda_repo_rates"
-            ).fetchone()
-            tenors = int(
-                con.execute(
-                    "SELECT COUNT(DISTINCT tenor) FROM jsda_repo_rates"
-                ).fetchone()[0]
-                or 0
-            )
-        except sqlite3.Error:
-            n = 0
-        finally:
-            con.close()
+    """JSDA repo is not a compact personal-view dataset."""
+    _require_view(view)
     return {
         "dataset": "jsda_tokyo_repo_rates",
         "table": "jsda_repo_rates",
-        "sqlite_rows": int(n or 0),
-        "sqlite_min": mn,
-        "sqlite_max": mx,
-        "sqlite_tenors": int(tenors or 0),
-        "sqlite_missing": missing,
+        "sqlite_rows": 0,
+        "sqlite_min": None,
+        "sqlite_max": None,
+        "sqlite_tenors": 0,
+        "sqlite_missing": True,
         "d1_role": "hot_tip_only",
         "pit_path": "fail_closed_until_READY",
         "invent_complete": False,
@@ -399,65 +429,21 @@ def repo_history_plane_status(
 
 
 def load_repo_rows_from_sqlite(
-    db_path: str | Path = DEFAULT_SQLITE,
+    view: PersonalResearchDataView,
     *,
     as_of: str,
     start: str | None = None,
     end: str | None = None,
     tenor_contains: str | None = "overnight",
 ) -> list[dict[str, Any]]:
-    """Load jsda_repo_rates rows from local SQLite with PIT available_at gate.
-
-    ``as_of`` is required (keyword-only). SQL always applies
-    ``available_at IS NOT NULL AND available_at <= as_of``.
-    ``start`` / ``end`` bound ``as_of_date`` only (additive range, not a PIT
-    substitute). Missing ``as_of`` / empty string raises.
-    """
-    as_of_s = str(as_of).strip() if as_of is not None else ""
-    if not as_of_s:
-        raise ValueError("as_of is required (PIT has no latest default)")
-    db = Path(db_path)
-    if not db.exists():
-        return []
-    con = sqlite3.connect(str(db))
-    try:
-        sql = (
-            "SELECT as_of_date, tenor, rate_type, rate, available_at, event_time "
-            "FROM jsda_repo_rates WHERE rate IS NOT NULL "
-            "AND available_at IS NOT NULL AND available_at <= ?"
-        )
-        params: list[Any] = [as_of_s]
-        if start:
-            sql += " AND as_of_date >= ?"
-            params.append(str(start)[:10])
-        if end:
-            sql += " AND as_of_date <= ?"
-            params.append(str(end)[:10])
-        if tenor_contains:
-            sql += " AND lower(tenor) LIKE ?"
-            params.append(f"%{str(tenor_contains).lower()}%")
-        sql += " ORDER BY as_of_date ASC"
-        rows: list[dict[str, Any]] = []
-        for as_of_date, tenor, rate_type, rate, available_at, event_time in con.execute(
-            sql, params
-        ):
-            rows.append(
-                {
-                    "as_of_date": str(as_of_date)[:10],
-                    "tenor": tenor,
-                    "rate_type": rate_type,
-                    "rate": float(rate) if rate is not None else None,
-                    "available_at": available_at,
-                    "event_time": event_time,
-                }
-            )
-        return rows
-    finally:
-        con.close()
+    """Repo rows are not served through the personal compact view."""
+    del as_of, start, end, tenor_contains
+    _require_view(view)
+    return []
 
 
 def load_repo_rows_all_tenors_from_sqlite(
-    db_path: str | Path = DEFAULT_SQLITE,
+    view: PersonalResearchDataView,
     *,
     as_of: str,
     start: str | None = None,
@@ -465,7 +451,7 @@ def load_repo_rows_all_tenors_from_sqlite(
 ) -> list[dict[str, Any]]:
     """Load all JSDA Tokyo repo tenors (for curve-shape proxy). PIT-gated on as_of."""
     return load_repo_rows_from_sqlite(
-        db_path, as_of=as_of, start=start, end=end, tenor_contains=None
+        view, as_of=as_of, start=start, end=end, tenor_contains=None
     )
 
 
@@ -514,116 +500,66 @@ def build_repo_curve_series(
     }
 
 
-def resolve_margin_path(
-    period_id: str,
-    *,
-    mirror_dir: str | Path = DEFAULT_BARS_MIRROR_DIR,
-) -> Path | None:
-    """Map period_id → markets_margin_interest local ndjson if present."""
-    d = Path(mirror_dir)
-    year = _period_year(period_id)
-    if year is None:
-        return None
-    for c in (
-        d / f"markets_margin_interest_y{year}_q4.ndjson",
-        d / f"markets_margin_interest_y{year}_full.ndjson",
-    ):
-        if c.exists():
-            return c
-    return None
-
-
-def load_margin_ndjson(
-    path: str | Path,
-    *,
-    codes: Sequence[str] | None = None,
-) -> dict[str, list[tuple[str, float]]]:
-    """Load markets_margin_interest ndjson → ``{code: [(date, total_vol), ...]}``."""
-    code_filter = {str(c).strip() for c in codes} if codes else None
-    by_code: dict[str, dict[str, float]] = {}
-    for payload in _iter_ndjson(path):
-        code = _code_of(payload)
-        date = _date_of(payload)
-        if not code or not date:
-            continue
-        if code_filter is not None and code not in code_filter:
-            continue
-        total = _margin_total(payload)
-        if total is None:
-            continue
-        by_code.setdefault(code, {})[date] = total
-    return {code: sorted(dmap.items(), key=lambda x: x[0]) for code, dmap in by_code.items()}
-
-
 def load_margin_from_sqlite(
-    db_path: str | Path = DEFAULT_SQLITE,
+    view: PersonalResearchDataView,
     *,
     codes: Sequence[str] | None = None,
     start: str | None = None,
     end: str | None = None,
 ) -> dict[str, list[tuple[str, float]]]:
-    """Load margin interest levels from jquants_records (research offline)."""
-    con = _open_ro(db_path)
-    if con is None:
-        return {}
+    """Load margin interest levels from a typed research view."""
     code_list = [str(c).strip() for c in (codes or []) if str(c).strip()]
-    try:
-        filt, params = _event_time_filters(start, end)
-        like_sql, like_params = _code_like(code_list)
-        sql = (
-            "SELECT natural_key, event_time, payload FROM jquants_records "
-            "WHERE dataset = 'markets_margin_interest'"
-            f"{filt}{like_sql} ORDER BY event_time ASC"
-        )
-        params.extend(like_params)
-        by_code: dict[str, dict[str, float]] = {}
-        code_set = set(code_list) if code_list else None
-        for _nk, event_time, payload in con.execute(sql, params):
-            pl = _payload_map(payload)
+    by_code: dict[str, dict[str, float]] = {}
+    code_set = set(code_list) if code_list else None
+    for page in _dataset_pages(
+        view,
+        dataset="markets_margin_interest",
+        codes=code_list,
+        start=start,
+        end=end,
+    ):
+        for row in page:
+            pl = _payload_map(row.get("payload"))
             if pl is None:
                 continue
             code = str(pl.get("Code") or "").strip()
             if not code or (code_set is not None and code not in code_set):
                 continue
-            date = str(pl.get("Date") or str(event_time or "")[:10])[:10]
+            date = str(pl.get("Date") or str(row.get("event_time") or "")[:10])[:10]
             if not date:
                 continue
             total = _margin_total(pl)
             if total is None:
                 continue
             by_code.setdefault(code, {})[date] = total
-        return {
-            c: sorted(dmap.items(), key=lambda x: x[0]) for c, dmap in by_code.items()
-        }
-    finally:
-        con.close()
+    return {
+        c: sorted(dmap.items(), key=lambda item: item[0])
+        for c, dmap in by_code.items()
+    }
 
 
 def load_short_ratio_series_from_sqlite(
-    db_path: str | Path = DEFAULT_SQLITE,
+    view: PersonalResearchDataView,
     *,
     section: str = "0050",
     start: str | None = None,
     end: str | None = None,
 ) -> list[tuple[str, float]]:
     """Load market-level short ratio for one S33 section → sorted (date, ratio)."""
-    con = _open_ro(db_path)
-    if con is None:
-        return []
-    try:
-        filt, params = _event_time_filters(start, end)
-        sql = (
-            "SELECT event_time, payload FROM jquants_records "
-            "WHERE dataset = 'markets_short_ratio' AND natural_key LIKE ?"
-            f"{filt} ORDER BY event_time ASC"
-        )
-        params = [f'%"{section}"%', *params]
-        out: dict[str, float] = {}
-        for event_time, payload in con.execute(sql, params):
-            pl = _payload_map(payload)
+    out: dict[str, float] = {}
+    for page in _dataset_pages(
+        view,
+        dataset="markets_short_ratio",
+        start=start,
+        end=end,
+    ):
+        for row in page:
+            pl = _payload_map(row.get("payload"))
             if pl is None:
                 continue
-            date = str(pl.get("Date") or str(event_time or "")[:10])[:10]
+            if str(pl.get("S33") or pl.get("Section") or "") != str(section):
+                continue
+            date = str(pl.get("Date") or str(row.get("event_time") or "")[:10])[:10]
             if not date:
                 continue
             try:
@@ -635,153 +571,206 @@ def load_short_ratio_series_from_sqlite(
             if sell == 0.0:
                 continue
             out[date] = (with_r + no_r) / sell
-        return sorted(out.items(), key=lambda x: x[0])
-    finally:
-        con.close()
+    return sorted(out.items(), key=lambda item: item[0])
+
+
+def _fins_event_from_row(row: Mapping[str, Any]) -> dict[str, Any] | None:
+    event_time = row.get("event_time")
+    pl = _payload_map(row.get("payload"))
+    if pl is None:
+        return None
+    code = str(pl.get("Code") or "").strip()
+    disc = str(
+        pl.get("DiscDate")
+        or pl.get("DisclosedDate")
+        or str(event_time or "")[:10]
+    )[:10]
+    if not code or not disc:
+        return None
+    disc_time = pl.get("DiscTime") or pl.get("DisclosedTime")
+    if disc_time is not None:
+        disc_time = str(disc_time).strip() or None
+    eq = _fnum(pl.get(FINS_SUMMARY_EQ_KEY))
+    if eq is None:
+        eq = _fnum(pl.get("ShEq"))
+    return {
+        "code": code,
+        "disc_no": str(pl.get("DiscNo") or ""),
+        "natural_key": str(row.get("natural_key") or ""),
+        "disc_date": disc,
+        "disc_time": disc_time,
+        "eps": _fnum(pl.get("EPS")),
+        "feps": _fnum(pl.get("FEPS")),
+        "bps": _fnum(pl.get("BPS")),
+        "roe": _fnum(pl.get("ROE")),
+        "div_ann": _fnum(pl.get("DivAnn")),
+        "np": _fnum(pl.get("NP")),
+        "sales": _fnum(pl.get("Sales")),
+        "eq": eq,
+        "ta": _fnum(pl.get(FINS_SUMMARY_TA_KEY)),
+        "eq_ar": _fnum(pl.get(FINS_SUMMARY_EQAR_KEY)),
+        "event_time": str(event_time) if event_time else None,
+        "available_at": str(row.get("available_at") or "") or None,
+        "ingested_at": str(row.get("ingested_at") or "") or None,
+        "source": "fins_summary",
+    }
+
+
+def _fins_vintage_visible_at(event: Mapping[str, Any]) -> str:
+    walls = [
+        str(event.get(name) or "")
+        for name in ("event_time", "available_at", "ingested_at")
+        if str(event.get(name) or "")
+    ]
+    return max(walls, default="")
+
+
+def _fins_effective_date(visible_at: str, cutoff: str) -> str:
+    day = str(visible_at)[:10]
+    if not day:
+        return ""
+    wall = morning_close_as_of(day) if cutoff == "morning_close" else close_as_of(day)
+    if len(str(visible_at)) == 10 or str(visible_at) <= wall:
+        return day
+    return (date.fromisoformat(day) + timedelta(days=1)).isoformat()
 
 
 def load_fins_events_from_sqlite(
-    db_path: str | Path = DEFAULT_SQLITE,
+    view: PersonalResearchDataView,
     *,
     codes: Sequence[str] | None = None,
     start: str | None = None,
     end: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Load fins_summary disclosure events → ``{code: [event_dict, ...]}``."""
-    con = _open_ro(db_path)
-    if con is None:
-        return {}
+    """Load fins_summary events via one forward revision sweep."""
+    bound = _require_view(view)
     code_list = [str(c).strip() for c in (codes or []) if str(c).strip()]
-    try:
-        cols = {
-            r[1]
-            for r in con.execute("PRAGMA table_info(jquants_records)").fetchall()
-        }
-        has_aa = "available_at" in cols
-        aa_sel = ", available_at" if has_aa else ""
-        filt, params = _event_time_filters(start, end)
-        like_sql, like_params = _code_like(code_list)
-        sql = (
-            "SELECT natural_key, event_time, payload"
-            f"{aa_sel} FROM jquants_records "
-            "WHERE dataset = 'fins_summary'"
-            f"{filt}{like_sql} ORDER BY event_time ASC"
-        )
-        params.extend(like_params)
-        code_set = set(code_list) if code_list else None
-        by_code: dict[str, list[dict[str, Any]]] = {}
-        for row in con.execute(sql, params):
-            if has_aa:
-                _nk, event_time, payload, row_aa = row
-            else:
-                _nk, event_time, payload = row
-                row_aa = None
-            pl = _payload_map(payload)
-            if pl is None:
+    code_set = set(code_list) if code_list else None
+    window_start = str(start or end or "")[:10]
+    window_end = str(end or start or "")[:10]
+    if not window_start or not window_end:
+        raise ValueError("as_of is required (PIT has no latest default)")
+    vintages: dict[str, list[dict[str, Any]]] = {}
+    for page in bound.iter_revision_pages(
+        dataset="fins_summary",
+        codes=code_list,
+        start=window_start,
+        end=window_end,
+        page_size=HISTORY_READ_PAGE_SIZE,
+    ):
+        for row in page:
+            event = _fins_event_from_row(row)
+            if event is None:
                 continue
-            code = str(pl.get("Code") or "").strip()
-            if not code or (code_set is not None and code not in code_set):
+            code = str(event.pop("code"))
+            if code_set is not None and code not in code_set:
                 continue
-            disc = str(
-                pl.get("DiscDate") or pl.get("DisclosedDate") or str(event_time or "")[:10]
-            )[:10]
-            if not disc:
-                continue
-            disc_time = pl.get("DiscTime") or pl.get("DisclosedTime")
-            if disc_time is not None:
-                disc_time = str(disc_time).strip() or None
-            eq = _fnum(pl.get(FINS_SUMMARY_EQ_KEY))
-            if eq is None:
-                eq = _fnum(pl.get("ShEq"))
-            by_code.setdefault(code, []).append(
-                {
-                    "disc_date": disc,
-                    "disc_time": disc_time,
-                    "eps": _fnum(pl.get("EPS")),
-                    "feps": _fnum(pl.get("FEPS")),
-                    "bps": _fnum(pl.get("BPS")),
-                    "roe": _fnum(pl.get("ROE")),
-                    "div_ann": _fnum(pl.get("DivAnn")),
-                    "np": _fnum(pl.get("NP")),
-                    "sales": _fnum(pl.get("Sales")),
-                    "eq": eq,
-                    "ta": _fnum(pl.get(FINS_SUMMARY_TA_KEY)),
-                    "eq_ar": _fnum(pl.get(FINS_SUMMARY_EQAR_KEY)),
-                    "event_time": str(event_time) if event_time else None,
-                    "available_at": str(row_aa) if row_aa else None,
-                    "source": "fins_summary",
-                }
+            disc_no = str(event.pop("disc_no") or "")
+            key = str(event.pop("natural_key") or "") or (
+                f"{code}|{event['disc_date']}|{disc_no}"
             )
-        for _code, events in by_code.items():
-            events.sort(key=lambda e: e["disc_date"])
-            last_eps = None
-            last_ta = None
-            for ev in events:
-                ev["prior_eps"] = last_eps
-                ev["prior_ta"] = last_ta
-                if ev.get("eps") is not None:
-                    last_eps = ev["eps"]
-                if ev.get("ta") is not None:
-                    last_ta = ev["ta"]
-        return by_code
-    finally:
-        con.close()
+            event["_code"] = code
+            event["_natural_key"] = key
+            event["_decision_cutoff"] = bound.decision_cutoff
+            vintages.setdefault(key, []).append(event)
+    by_code: dict[str, list[dict[str, Any]]] = {}
+    for key, rows in vintages.items():
+        rows.sort(
+            key=lambda event: (
+                _fins_vintage_visible_at(event),
+                str(event.get("ingested_at") or ""),
+            )
+        )
+        latest = dict(rows[-1])
+        code = str(latest.pop("_code"))
+        latest["_natural_key"] = key
+        latest["_revision_vintages"] = tuple(
+            {name: value for name, value in row.items() if name != "_code"}
+            for row in rows
+        )
+        visible_at = _fins_vintage_visible_at(latest)
+        latest["source_disc_date"] = latest.get("disc_date")
+        latest["source_event_time"] = latest.get("event_time")
+        latest["disc_date"] = _fins_effective_date(
+            visible_at,
+            str(latest.get("_decision_cutoff") or "morning_close"),
+        )
+        latest["event_time"] = visible_at or latest.get("event_time")
+        by_code.setdefault(code, []).append(latest)
+    for _code, events in by_code.items():
+        events.sort(key=lambda e: (e["disc_date"], str(e.get("event_time") or "")))
+        last_eps = None
+        last_ta = None
+        for ev in events:
+            ev["prior_eps"] = last_eps
+            ev["prior_ta"] = last_ta
+            if ev.get("eps") is not None:
+                last_eps = ev["eps"]
+            if ev.get("ta") is not None:
+                last_ta = ev["ta"]
+    return by_code
 
 
 def load_fins_earnings_date_from_sqlite(
-    db_path: str | Path = DEFAULT_SQLITE,
+    view: PersonalResearchDataView,
     *,
     codes: Sequence[str] | None = None,
     start: str | None = None,
     end: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Load fins_earnings_date calendar. Missing PubDate uses SchDate."""
-    con = _open_ro(db_path)
-    if con is None:
-        return {}
     code_list = [str(c).strip() for c in (codes or []) if str(c).strip()]
-    try:
-        filt, params = _event_time_filters(start, end)
-        like_sql, like_params = _code_like(code_list)
-        sql = (
-            "SELECT natural_key, event_time, payload FROM jquants_records "
-            "WHERE dataset = 'fins_earnings_date'"
-            f"{filt}{like_sql} ORDER BY event_time ASC"
+    code_set = set(code_list) if code_list else None
+    rows = [
+        row
+        for page in _dataset_pages(
+            view,
+            dataset="fins_earnings_date",
+            codes=code_list,
+            start=start,
+            end=end,
         )
-        params.extend(like_params)
-        code_set = set(code_list) if code_list else None
-        by_code: dict[str, list[dict[str, Any]]] = {}
-        for _nk, event_time, payload in con.execute(sql, params):
-            pl = _payload_map(payload)
-            if pl is None:
-                continue
-            code = str(pl.get("Code") or "").strip()
-            if not code or (code_set is not None and code not in code_set):
-                continue
-            pub = str(pl.get("PubDate") or "")[:10] or None
-            sch = str(pl.get("SchDate") or "")[:10] or None
-            disc = pub or sch or str(event_time or "")[:10]
-            if not disc:
-                continue
-            by_code.setdefault(code, []).append(
-                {
-                    "disc_date": disc,
-                    "pub_date": pub,
-                    "sch_date": sch,
-                    "eps": None,
-                    "feps": None,
-                    "bps": None,
-                    "prior_eps": None,
-                    "source": "fins_earnings_date",
-                    "event_time": str(event_time) if event_time else None,
-                    "fq_name": pl.get("FQName"),
-                }
-            )
-        for _code, events in by_code.items():
-            events.sort(key=lambda e: e["disc_date"])
-        return by_code
-    finally:
-        con.close()
+        for row in page
+    ]
+    chosen: dict[tuple[str, str], tuple[str, str, dict[str, Any]]] = {}
+    for row in rows:
+        event_time = row.get("event_time")
+        pl = _payload_map(row.get("payload"))
+        if pl is None:
+            continue
+        code = str(pl.get("Code") or "").strip()
+        if not code or (code_set is not None and code not in code_set):
+            continue
+        pub = str(pl.get("PubDate") or "")[:10] or None
+        sch = str(pl.get("SchDate") or "")[:10] or None
+        disc = pub or sch or str(event_time or "")[:10]
+        if not disc:
+            continue
+        available = str(row.get("available_at") or "")
+        if not _visible_at(available, disc, "morning_close", event_time=str(row.get("event_time") or ""), decision_date=end or disc):
+            continue
+        ingested = str(row.get("ingested_at") or "")
+        event = {
+            "disc_date": disc,
+            "pub_date": pub,
+            "sch_date": sch,
+            "eps": None,
+            "feps": None,
+            "bps": None,
+            "prior_eps": None,
+            "source": "fins_earnings_date",
+            "event_time": str(event_time) if event_time else None,
+            "fq_name": pl.get("FQName"),
+        }
+        previous = chosen.get((code, disc))
+        if previous is None or (available, ingested) >= previous[:2]:
+            chosen[(code, disc)] = (available, ingested, event)
+    by_code: dict[str, list[dict[str, Any]]] = {}
+    for (code, _disc), (_a, _i, event) in chosen.items():
+        by_code.setdefault(code, []).append(event)
+    for _code, events in by_code.items():
+        events.sort(key=lambda e: e["disc_date"])
+    return by_code
 
 
 def merge_event_calendars(
@@ -828,12 +817,29 @@ def load_fins_latest_asof_map(
     """Per code: sorted (disc_date, event) for as-of PIT lookup."""
     out: dict[str, list[tuple[str, dict[str, Any]]]] = {}
     for code, events in events_by_code.items():
-        pairs = [
-            (str(e["disc_date"])[:10], dict(e))
-            for e in events
-            if e.get("disc_date")
-        ]
-        pairs.sort(key=lambda x: x[0])
+        pairs: list[tuple[str, dict[str, Any]]] = []
+        for event in events:
+            stream = event.get("_revision_vintages")
+            revisions = (
+                stream
+                if isinstance(stream, (tuple, list)) and stream
+                else (event,)
+            )
+            for raw in revisions:
+                if not isinstance(raw, Mapping) or not raw.get("disc_date"):
+                    continue
+                vintage = dict(raw)
+                visible_at = _fins_vintage_visible_at(vintage)
+                if not visible_at:
+                    visible_at = str(vintage["disc_date"])[:10]
+                pairs.append((visible_at, vintage))
+        pairs.sort(
+            key=lambda item: (
+                item[0],
+                str(item[1].get("_natural_key") or ""),
+                str(item[1].get("ingested_at") or ""),
+            )
+        )
         out[str(code)] = pairs
     return out
 
@@ -842,12 +848,43 @@ def fins_asof(
     series: Sequence[tuple[str, dict[str, Any]]],
     date: str,
 ) -> dict[str, Any] | None:
-    """Last fins event with disc_date <= date (PIT by event date; disclosed)."""
+    """Resolve each natural-key vintage at ``date``, then choose latest filing."""
     d = str(date)[:10]
-    hit = None
-    for ed, ev in series:
-        if ed <= d:
-            hit = ev
+    current: dict[str, dict[str, Any]] = {}
+    for visible_at, raw in series:
+        event = dict(raw)
+        cutoff = str(event.get("_decision_cutoff") or "morning_close")
+        decision_at = (
+            morning_close_as_of(d)
+            if cutoff == "morning_close"
+            else close_as_of(d)
+        )
+        visible = str(visible_at)
+        if len(visible) == 10:
+            is_visible = visible <= d
         else:
-            break
+            is_visible = visible <= decision_at
+        if not is_visible:
+            continue
+        natural = str(event.get("_natural_key") or "") or (
+            f"{event.get('disc_date')}|{event.get('event_time')}"
+        )
+        current[natural] = event
+    if not current:
+        return None
+    ordered = sorted(
+        current.values(),
+        key=lambda event: (
+            str(event.get("disc_date") or "")[:10],
+            str(event.get("event_time") or ""),
+            str(event.get("available_at") or ""),
+            str(event.get("ingested_at") or ""),
+        ),
+    )
+    hit = dict(ordered[-1])
+    prior = ordered[-2] if len(ordered) > 1 else None
+    hit["prior_eps"] = None if prior is None else prior.get("eps")
+    hit["prior_ta"] = None if prior is None else prior.get("ta")
+    for name in ("_revision_vintages", "_natural_key", "_decision_cutoff"):
+        hit.pop(name, None)
     return hit

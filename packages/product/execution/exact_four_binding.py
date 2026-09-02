@@ -5,6 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from execution.controlled_fill_contract import (
+    CONTROLLED_FILL_CONTRACT_DIGEST,
+    require_controlled_fill_contract_digest,
+    ControlledFillContractError,
+)
 from execution.exact_four_codec import (
     EXACT_FOUR_BINDING_FORMAT,
     PILOT_EXECUTION_MODE,
@@ -18,7 +23,10 @@ from execution.exact_four_codec import (
 from research.ready_manifest import load_exact_four_pilot_ready_binding
 from research.universe_contract import EXACT_FOUR_UNIVERSE_RULE_DIGEST
 from selection.controlled_pilot_policy import (
+    CONTROLLED_PILOT_IDENTITY,
+    ControlledPilotPolicyError,
     ControlledPilotPolicyPin,
+    require_controlled_pilot_identity,
     load_controlled_pilot_policy,
 )
 
@@ -83,6 +91,7 @@ class PlanExecutionBinding:
     period_start: str
     period_end: str
     cost_scenario: str
+    fill_contract_digest: str = CONTROLLED_FILL_CONTRACT_DIGEST
     format: str = PLAN_EXECUTION_BINDING_FORMAT
 
     def __post_init__(self) -> None:
@@ -161,6 +170,10 @@ class PlanExecutionBinding:
         period_end = _require_date(self.period_end, "period_end")
         if period_start > period_end:
             raise ExactFourAuthorityContractError("plan period is reversed")
+        try:
+            require_controlled_fill_contract_digest(self.fill_contract_digest)
+        except ControlledFillContractError as exc:
+            raise ExactFourAuthorityContractError(str(exc)) from exc
         object.__setattr__(self, "feature_pins", pins)
 
     def to_canonical_dict(self) -> dict[str, Any]:
@@ -191,6 +204,7 @@ class PlanExecutionBinding:
             "period_start": self.period_start,
             "period_end": self.period_end,
             "cost_scenario": self.cost_scenario,
+            "fill_contract_digest": self.fill_contract_digest,
         }
 
     @property
@@ -297,6 +311,7 @@ def _compiled_plan_bindings() -> tuple[PlanExecutionBinding, ...]:
                 period_start=closure.period_start,
                 period_end=closure.period_end,
                 cost_scenario=closure.cost_dependency.dependency_id,
+                fill_contract_digest=CONTROLLED_FILL_CONTRACT_DIGEST,
             )
         )
     return tuple(compiled)
@@ -321,13 +336,19 @@ class ExactFourExecutionBinding:
     budget_scope_digest: str
     execution_limit_set_digest: str
     lease_ttl_seconds: int
+    fill_contract_digest: str = CONTROLLED_FILL_CONTRACT_DIGEST
     format: str = EXACT_FOUR_BINDING_FORMAT
     execution_mode: str = PILOT_EXECUTION_MODE
     automatic_promotion: bool = False
     mass_research_enabled: bool = False
     live_trading_enabled: bool = False
+    identity: str = CONTROLLED_PILOT_IDENTITY
 
     def __post_init__(self) -> None:
+        try:
+            require_controlled_pilot_identity(self.identity)
+        except ControlledPilotPolicyError as exc:
+            raise ExactFourAuthorityContractError(str(exc)) from exc
         if type(self.format) is not str or self.format != EXACT_FOUR_BINDING_FORMAT:
             raise ExactFourAuthorityContractError(
                 "exact-four execution binding format is not canonical"
@@ -420,11 +441,22 @@ class ExactFourExecutionBinding:
             raise ExactFourAuthorityContractError(
                 "exact-four aggregate lineage does not match governed compiler output"
             )
+        try:
+            require_controlled_fill_contract_digest(self.fill_contract_digest)
+        except ControlledFillContractError as exc:
+            raise ExactFourAuthorityContractError(str(exc)) from exc
+        if any(
+            item.fill_contract_digest != self.fill_contract_digest for item in plans
+        ):
+            raise ExactFourAuthorityContractError(
+                "plan fill contracts must match the aggregate fill contract"
+            )
         object.__setattr__(self, "plan_bindings", plans)
 
     def to_canonical_dict(self) -> dict[str, Any]:
         return {
             "format": self.format,
+            "identity": self.identity,
             "execution_mode": self.execution_mode,
             "policy": self.policy.to_dict(),
             "artifact_cardinality": self.artifact_cardinality.to_dict(),
@@ -443,6 +475,7 @@ class ExactFourExecutionBinding:
             "budget_scope_digest": self.budget_scope_digest,
             "execution_limit_set_digest": self.execution_limit_set_digest,
             "lease_ttl_seconds": self.lease_ttl_seconds,
+            "fill_contract_digest": self.fill_contract_digest,
             "automatic_promotion": self.automatic_promotion,
             "mass_research_enabled": self.mass_research_enabled,
             "live_trading_enabled": self.live_trading_enabled,
@@ -487,12 +520,95 @@ def load_exact_four_execution_binding() -> ExactFourExecutionBinding:
             ]
         ),
         lease_ttl_seconds=policy.lease_ttl_seconds,
+        fill_contract_digest=CONTROLLED_FILL_CONTRACT_DIGEST,
     )
 
+
+def controlled_pilot_v1_contract() -> dict[str, Any]:
+    """Machine-readable closed binding for Worker/Container Controlled Pilot."""
+
+    from data_contracts.coverage import coverage_policy_set_binding
+    from execution.controlled_fill_contract import controlled_fill_contract
+    from paper_runtime.readiness_attestation import EXACT_FOUR_DATASET_IDS
+    from research.experiment_plans import PILOT_EXPERIMENT_PLAN_IDS
+    from research.universe_contract import EXACT_FOUR_UNIVERSE_RULE_DIGEST as RULE
+
+    binding = load_exact_four_execution_binding()
+    source = load_exact_four_pilot_ready_binding()
+    datasets = list(EXACT_FOUR_DATASET_IDS)
+    coverage = dict(coverage_policy_set_binding(datasets))
+    membership_digest = canonical_authority_digest(sorted(set(datasets)))
+    plan_ids = list(PILOT_EXPERIMENT_PLAN_IDS)
+    plans = [
+        {
+            "ordinal": item.ordinal,
+            "plan_id": item.plan_id,
+            "plan_digest": item.plan_digest,
+            "plan_binding_digest": item.binding_digest,
+            "strategy_spec_id": item.strategy_spec_id,
+            "strategy_spec_version": item.strategy_spec_version,
+            "strategy_spec_hash": item.strategy_spec_hash,
+            "max_gross_weight_ppm": item.max_gross_weight_ppm,
+            "max_paper_runs": item.max_paper_runs,
+            "risk_execution_limit_digest": item.risk_execution_limit_digest,
+            "period_start": item.period_start,
+            "period_end": item.period_end,
+            "fill_contract_digest": item.fill_contract_digest,
+        }
+        for item in binding.plan_bindings
+    ]
+    if [row["plan_id"] for row in plans] != plan_ids:
+        raise ExactFourAuthorityContractError(
+            "controlled_pilot_v1 plan order is not the canonical four"
+        )
+    contract = {
+        "format": "controlled-pilot-v1-binding/v1",
+        "identity": CONTROLLED_PILOT_IDENTITY,
+        "runner_version": "controlled-pilot-container/v1",
+        "generation": 1,
+        "max_parallel": 2,
+        "plan_count": 4,
+        "child_count": 10,
+        "max_gross_weight_ppm": 500_000,
+        "automatic_promotion": False,
+        "mass_research_enabled": False,
+        "live_trading_enabled": False,
+        "plan_ids": plan_ids,
+        "plans": plans,
+        "fill_contract": controlled_fill_contract(),
+        "fill_contract_digest": CONTROLLED_FILL_CONTRACT_DIGEST,
+        "dataset_ids": datasets,
+        "dataset_membership_digest": membership_digest,
+        "profile_id": binding.publication_profile_id,
+        "profile_version": binding.publication_profile_version,
+        "profile_digest": binding.profile_set_digest,
+        "plan_set_digest": binding.plan_set_digest,
+        "dependency_closure_digest": binding.dependency_closure_set_digest,
+        "universe_rule_digest": RULE,
+        "coverage_policy_version": coverage["policy_version"],
+        "coverage_policy_digest": coverage["policy_digest"],
+        "policy_digest": binding.policy.policy_digest,
+        "budget_scope_digest": binding.budget_scope_digest,
+        "execution_limit_set_digest": binding.execution_limit_set_digest,
+        "lease_ttl_seconds": binding.lease_ttl_seconds,
+        "exact_four_binding_digest": binding.binding_digest,
+        "required_dataset_membership_digest": (
+            binding.required_dataset_membership_digest
+        ),
+        "source_required_datasets": list(source.required_datasets),
+    }
+    contract["contract_digest"] = canonical_authority_digest(
+        {key: value for key, value in contract.items() if key != "contract_digest"}
+    )
+    return contract
+
+
 __all__ = [
+    "CONTROLLED_PILOT_IDENTITY",
     "ControlledPilotArtifactCardinality",
     "ExactFourExecutionBinding",
     "FeatureExecutionPin",
     "PlanExecutionBinding",
+    "controlled_pilot_v1_contract",
     "load_exact_four_execution_binding",
 ]

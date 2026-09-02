@@ -335,6 +335,27 @@ def _evaluate_ready_publication_fixture(
             f"{item.name}: {item.reason}" for item in bundle.failures()
         )
         raise SnapshotRejected(f"READY publication policy failed: {detail}")
+    from pit.query import normalize_as_of
+    exported_at = None
+    try:
+        row = conn.execute(
+            "SELECT observed_through FROM snapshot_observation_clock"
+        ).fetchone()
+        if row and row[0]:
+            raw = str(row[0])
+            if raw.endswith("+00:00"):
+                raw = raw[:-6] + "+09:00"
+            exported_at = normalize_as_of(raw)
+    except Exception:
+        exported_at = None
+    if exported_at is None:
+        raise SnapshotRejected("authenticated exported_at is missing")
+    bundle.items.append(ReadyEvidenceItem(
+        name="AuthenticatedExportedAt",
+        passed=True,
+        reason=None,
+        detail={"exported_at": exported_at},
+    ))
     return (*result, coverage_proof_id, bundle.to_dict())
 
 

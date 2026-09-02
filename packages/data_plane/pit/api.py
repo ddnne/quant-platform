@@ -38,6 +38,7 @@ from data_contracts.personal_history_compact import (
     PERSONAL_HISTORY_COMPACT_FORMAT,
     PERSONAL_HISTORY_COMPACT_MASTER_TABLE,
     compact_history_state,
+    compact_rebuild_reason,
 )
 from data_contracts.source_capability import (
     apply_official_query_clamp,
@@ -203,6 +204,7 @@ def _catalog_partition_rows(
         db_path,
         as_of=as_of,
         table="jquants_records",
+        dataset_id=dataset,
         extra_where=" AND ".join(where),
         params=bound,
         order_by=order_by,
@@ -292,8 +294,8 @@ def _catalog_market_calendar(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
     return out
 
 
-def _compact_v7_or_legacy(db_path: Any) -> bool:
-    """Return True for exclusive valid compact v7; False for genuine legacy.
+def _compact_v8_or_legacy(db_path: Any) -> bool:
+    """Return True for exclusive valid compact v8; False for genuine legacy.
 
     Invalid marker/schema and mixed typed/generic equity rows raise rather
     than silently falling back to typed/catalog reads.
@@ -304,21 +306,22 @@ def _compact_v7_or_legacy(db_path: Any) -> bool:
         conn = connect_readonly(db_path)
     try:
         state = compact_history_state(conn)
-        if state == "invalid":
-            raise PitError("compact v7 marker or schema is invalid")
-        if state == "mixed":
+        if state in {"invalid", "mixed"}:
             raise PitError(
-                "cannot mix compact with typed or generic equity master or bars"
+                compact_rebuild_reason(conn)
+                or "compact schema is invalid; rebuild as personal-draft-history/v8"
             )
         return state == "compact"
     except sqlite3.Error as exc:
-        raise PitError("compact v7 marker or schema is invalid") from exc
+        raise PitError(
+            "compact schema is invalid; rebuild as personal-draft-history/v8"
+        ) from exc
     finally:
         if close_connection:
             conn.close()
 
 
-def _compact_v7_metadata(enabled: bool) -> dict[str, Any] | None:
+def _compact_v8_metadata(enabled: bool) -> dict[str, Any] | None:
     if not enabled:
         return None
     return {"personal_history_format": PERSONAL_HISTORY_COMPACT_FORMAT}
@@ -378,7 +381,7 @@ def _canonical_compact_bar_row(row: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _compact_v7_rows(
+def _compact_v8_rows(
     db_path: Any,
     *,
     as_of: str,
@@ -423,7 +426,7 @@ def _latest_master_snapshot_date(
     code filter so a delisted code cannot resurrect from an older snapshot.
     """
     if compact_enabled:
-        compact_marker = _compact_v7_rows(
+        compact_marker = _compact_v8_rows(
             db_path,
             as_of=as_of,
             table=PERSONAL_HISTORY_COMPACT_MASTER_TABLE,
@@ -497,7 +500,7 @@ def get_equity_master(
         min(as_of_iso[:10], contract.earliest_official_availability),
         contract,
     )
-    compact_enabled = _compact_v7_or_legacy(db_path)
+    compact_enabled = _compact_v8_or_legacy(db_path)
     selected_snapshot = None
     if latest_snapshot:
         selected_snapshot = _latest_master_snapshot_date(
@@ -511,7 +514,7 @@ def get_equity_master(
                 "latest_snapshot": True,
                 "snapshot_date": None,
             }
-            extra.update(_compact_v7_metadata(compact_enabled) or {})
+            extra.update(_compact_v8_metadata(compact_enabled) or {})
             return _result(
                 [],
                 as_of=as_of_iso,
@@ -531,7 +534,7 @@ def get_equity_master(
     if compact_enabled:
         rows = [
             _canonical_compact_master_row(row)
-            for row in _compact_v7_rows(
+            for row in _compact_v8_rows(
                 db_path,
                 as_of=as_of_iso,
                 table=PERSONAL_HISTORY_COMPACT_MASTER_TABLE,
@@ -587,7 +590,7 @@ def get_equity_master(
     if latest_snapshot:
         extra["latest_snapshot"] = True
         extra["snapshot_date"] = selected_snapshot
-    extra.update(_compact_v7_metadata(compact_enabled) or {})
+    extra.update(_compact_v8_metadata(compact_enabled) or {})
     return _result(
         rows,
         as_of=as_of_iso,
@@ -649,14 +652,14 @@ def get_equity_bars_daily(
         clauses.append("date <= ?")
         params.append(_date_bound(to_event))
     bar_where = " AND ".join(clauses) if clauses else None
-    compact_enabled = _compact_v7_or_legacy(db_path)
+    compact_enabled = _compact_v8_or_legacy(db_path)
     if compact_enabled:
         compact_order = (
             "date DESC, code DESC" if latest_n is not None else "code, date"
         )
         rows = [
             _canonical_compact_bar_row(row)
-            for row in _compact_v7_rows(
+            for row in _compact_v8_rows(
                 db_path,
                 as_of=as_of_iso,
                 table=PERSONAL_HISTORY_COMPACT_BARS_TABLE,
@@ -718,7 +721,7 @@ def get_equity_bars_daily(
     extra: dict[str, Any] = {}
     if latest_n is not None:
         extra["latest_n"] = latest_n
-    extra.update(_compact_v7_metadata(compact_enabled) or {})
+    extra.update(_compact_v8_metadata(compact_enabled) or {})
     return _result(
         rows,
         as_of=as_of_iso,
@@ -768,7 +771,7 @@ def first_invalid_adjusted_close(
     from_date = _date_bound(from_event) if from_event is not None else None
     to_date = _date_bound(to_event) if to_event is not None else None
 
-    if _compact_v7_or_legacy(db_path):
+    if _compact_v8_or_legacy(db_path):
         clauses: list[str] = []
         params: list[Any] = []
         if requested_codes:
@@ -783,7 +786,7 @@ def first_invalid_adjusted_close(
         if to_date is not None:
             clauses.append("date <= ?")
             params.append(to_date)
-        for row in _compact_v7_rows(
+        for row in _compact_v8_rows(
             db_path,
             as_of=as_of_iso,
             table=PERSONAL_HISTORY_COMPACT_BARS_TABLE,
@@ -848,6 +851,7 @@ def get_market_calendar(
         db_path,
         as_of=as_of_iso,
         table="jquants_market_calendar",
+        dataset_id="markets_calendar",
         extra_where=" AND ".join(clauses) if clauses else None,
         params=params,
         order_by="date",
@@ -982,6 +986,7 @@ def get_jquants_records(
         db_path,
         as_of=as_of_iso,
         table="jquants_records",
+        dataset_id=dataset_value,
         extra_where=" AND ".join(clauses),
         params=params,
         order_by=", ".join(_JQUANTS_PAGE_ORDER),

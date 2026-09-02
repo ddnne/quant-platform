@@ -211,19 +211,27 @@
       "segment_granularity": "official_archive_index_day"
     },
     "jsda_tokyo_repo_rates": {
+      "policy_version": "collection-coverage/v3",
       "collection_scope": "jsda_authoritative_tokyo_repo_timeseries",
       "history_target_start": "2012-10-29",
       "history_target_end_rule": "latest_jsda_publication",
       "coverage_mode": "authoritative_time_series_reconciled",
+      "history_mode": "bounded_history",
+      "required_domain_basis": "official_time_series_file",
+      "empty_success_policy": "never_complete",
       "expected_frequency": "trading_day",
       "universe_rule": "all_tenors_and_publication_days_in_official_timeseries_file",
       "segment_granularity": "source_time_series_file"
     },
     "jsda_corporate_bond_transactions": {
+      "policy_version": "collection-coverage/v3",
       "collection_scope": "jsda_governed_corporate_transactions",
       "history_target_start": "2015-11-04",
       "history_target_end_rule": "latest_official_annual_archive",
       "coverage_mode": "event_window_reconciled",
+      "history_mode": "periodic_archive",
+      "required_domain_basis": "official_archive_periods",
+      "empty_success_policy": "never_complete",
       "expected_frequency": "event_driven",
       "universe_rule": "all_transactions_in_official_publication_files",
       "segment_granularity": "official_archive_year"

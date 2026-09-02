@@ -1,0 +1,9 @@
+name = "quant-platform-research-mass-eval-lease-runtime"
+main = "../../platform/workers/research-mass-eval/runtime/lease_runtime_worker.ts"
+compatibility_date = "2026-08-01"
+workers_dev = false
+preview_urls = false
+
+[[r2_buckets]]
+binding = "STRUCTURED_BUCKET"
+bucket_name = "quant-structured-lease-runtime"

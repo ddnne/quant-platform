@@ -16,6 +16,20 @@ only. Do not launch Mass / READY / Phase7 / `cf_premium_backfill` from residual 
 
 **Mandatory local CI:** [`verify_ci.sh`](verify_ci.sh) (active Worker lanes in parallel; no `VERIFY_*` skips). It pins `uv 0.11.26`, runs `uv sync --frozen --extra dev`, the complete Python suite with two file-scoped pytest workers, the Evaluation IR freeze, verifies the machine-readable Cloudflare binding manifest, then runs each Worker through `npm ci`, tests, typecheck, base/production/staging Wrangler dry-runs, and generated-types checks. The legacy catalog is not compiled into CI or Worker source. Wrangler, TypeScript, and Workers types are exact-versioned. Never `--legacy-peer-deps`; never skip missing dependencies; never live `wrangler deploy`.
 
+[`activate_jsda_v3_cutover.py`](activate_jsda_v3_cutover.py) observes
+Cloudflare JSDA state twice. `--check` is read-only; `--activate --yes`
+mutates only after zero/current observations. Caller JSON is not authority.
+Required non-secret env names: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
+Queue pause/resume uses Wrangler `queues pause-delivery` /
+`resume-delivery`. Cron stop/restore uses
+`PUT /accounts/{account_id}/workers/scripts/{script}/schedules` because
+Wrangler 4.125.0 has no schedule mutation command.
+
+Ops Projection cloud publication is `ingestion-premium` scheduled work.
+Deploy Premium before MCP. MCP keeps its current dedicated D1 binding until a
+SEALED generation exists; `predeploy_ops_projection_gate.py` fails MCP deploy
+closed until that generation verifies. Do not commit placeholder verify keys.
+
 [`finding_ledger_ci.py`](finding_ledger_ci.py) runs before source-integration CI.
 It validates the exact tracked ledger schema and OPEN P0 inventory, but it does
 not authorize a deployment, release, or source-safety decision. Independent
@@ -108,32 +122,26 @@ Phase 6 hardening utilities:
   artifact is rollback material only. Its header, restore verification, key,
   or digest never attests the executing source SHA and never grants migration
   or staging authority.
-- `d1_ingestion_migration_validation.py` — restore a remote export locally,
-  require canonical migration-history prefix and FK/integrity checks, replay
-  pending 0011-0018 on an isolated copy, and prove exact final schema plus
-  populated v2-to-v3 JSDA preservation. Recorded partial/malformed states fail.
-- `apply_ingestion_d1_migrations.py` — a source-only fail-closed D1
-  observation/HOLD and recovery implementation; its legacy filename does not
-  make it a remote mutation authority. The canonical reservation identity is
-  environment + canonical database ID + source SHA + canonical manifest
-  digest. Local create-only/`O_EXCL` files are single-host crash markers, not a
-  cross-host lock, so both staging and production remain `HOLD` until a trusted
-  remote lock and control-plane source-SHA attestation exist. Production
-  independently re-observes the canonical staging D1 and accepts no caller
-  staging JSON, path, backup, or key. Recovery classifies
-  `RECOVERED_APPLIED_EXACT` as `APPLIED` only for exact canonical postflight
-  with zero pending, and `RECOVERED_NOT_APPLIED` as `NOT_APPLIED` only when a
-  fresh live observation exactly matches the recorded baseline; every other
-  state stays `UNKNOWN`. No recovery result grants mutation authority or
-  permits a blind retry. This revision publishes no remote apply command.
+- `d1_ingestion_migration_validation.py` — validate the canonical migration
+  history, schema, triggers and populated v2-to-v3 preservation on an isolated
+  ephemeral database. Recorded partial or malformed states fail.
+- `apply_ingestion_d1_migrations.py --check` — read-only remote D1 migration,
+  schema and Time Travel observation. Its mutation helper is private to the
+  cutover operator and runs under the same-D1 CAS lease.
+- `activate_jsda_v3_cutover.py` — the only staging/production mutation entry.
+  It stops writers, drains and pauses the Queue, records the Time Travel
+  bookmark and undo command, applies the canonical chain under a short D1
+  lease, verifies, and restores the prior Cron/Queue state. `--resume` and
+  `--rollback` require the original run ID. The small local create-only control
+  intent is crash-recovery cache only; remote D1 plus live Cloudflare state are
+  authoritative. Whole-file D1 exports are not part of this path.
 - `build_release_evidence.py` — **publication PENDING / fail-closed**. The
   former normalized JSON format is retained only as a private schema-regression
-  helper; collector names, UUIDs and digests supplied by a caller are not
-  evidence. The production builder and CLI always stop until a dedicated
-  release-observation authority signs the exact response bytes. The JSDA
-  `/health/ready` collector also needs a private Service Binding; the current
-  binding inventory has no such route. The exact PENDING/HOLD contract is
-  `specs/cloudflare/release_observation_authority.json`. A6 remains OPEN.
+  helper; caller-supplied names, UUIDs and digests are not evidence. The private
+  JSDA `/health/ready` collector now runs through the observer Service Binding,
+  but publication remains closed until the release-observation key is active
+  and the exact response bytes are signed. The exact contract is
+  `specs/cloudflare/release_observation_authority.json`.
 
 Rollback-only production backup example (timestamps and final SHA must be the
 observed values):
@@ -256,26 +264,3 @@ python3 scripts/run_phase35_validation.py --db ./ingestion.sqlite --validation-j
 終了コード: `0`=失敗なし、`1`=いずれかのチェックが失敗（or 週次で未実装 stub が残存）。
 
 詳細は [docs/phase35_validation_matrix.md](../docs/phase35_validation_matrix.md) を参照。
-
-## run_phase4_accept.py（Phase 4 accept レポート）
-
-Phase 4 の features registry + バックテスト閉路の健全性をチェックして JSON レポートを出力。
-
-```bash
-# Offline: フィクスチャ DB を構築して ~20+ 日の feature バックテストを走らせる。
-python3 scripts/run_phase4_accept.py
-
-# Live: 実 DB で 50 銘柄サンプル + 50 日以上の BT + B0 strict を通す。
-QP_LIVE=1 QP_DB=data/structured/ingestion.sqlite \
-    python3 scripts/run_phase4_accept.py
-```
-
-主なオプション:
-
-- `--db PATH` — 構造化 DB へのパス（offline 未指定時は一時フィクスチャを生成）。
-- `--out PATH` — 出力 JSON の直接指定（省略時は `data/reports/phase4_accept_<ts>.json`）。
-- `--reports-dir DIR` — `--out` 省略時の出力ディレクトリ。
-- `--live-sample-codes N` — Live 時のサンプル銘柄数（既定 50）。
-- `--min-trading-days N` — BT の最小取引日数（offline 既定 20、live 既定 50）。
-
-終了コード: `0`=全セクション ok、`1`=いずれかのセクションが基準未達。

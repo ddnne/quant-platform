@@ -64,7 +64,7 @@ os.environ.pop("QP_ALLOW_LOCAL_MARKET_DATA", None)
 os.environ.pop("QP_REPO_ROOT", None)
 os.environ.pop("QP_RESEARCH_COMMAND", None)
 
-from research import personal_cli
+from cf_platform import personal_offline_cli as personal_cli
 
 buf = io.StringIO()
 with redirect_stderr(buf):
@@ -100,7 +100,7 @@ os.environ["QP_ALLOW_LOCAL_MARKET_DATA"] = "1"
 os.environ.pop("QP_REPO_ROOT", None)
 os.environ.pop("QP_RESEARCH_COMMAND", None)
 
-from research import personal_cli
+from cf_platform import personal_offline_cli as personal_cli
 
 buf = io.StringIO()
 with redirect_stderr(buf):
@@ -179,6 +179,7 @@ expected = {
         "SnapshotRejected",
         "begin_snapshot_sync",
         "data_snapshot_id",
+        "immutable_data_snapshot_id",
         "describe_snapshot",
         "fail_snapshot_sync",
         "latest_ready_snapshot",

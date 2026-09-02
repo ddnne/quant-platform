@@ -2,7 +2,7 @@
 
 Emits both drop_parents and drop_children cuts for the two pending KEEP
 24df sleeves. Does not flip RECONSTITUTION_APPLY. Does not mutate members.
-Does not invent Sharpe. Live R2 put is refused; dry_run stages only.
+Does not invent Sharpe.
 """
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from typing import Any, Mapping, Sequence
 
 from research.eval_flags import (
     CATALOG_AND_PLUS_N_STOPPED,
-    CURRENT_EVAL_WAVE,
     EVENT_THREE_AND_PLUS_N_STOPPED,
     RECONSTITUTION_APPLY,
 )
@@ -379,68 +378,6 @@ def reconstitution_evidence_pack(
         },
         "sleeves": sleeves,
         "apply": bool(RECONSTITUTION_APPLY),
-        "go": False,
-        "not_a_pass": True,
-    }
-
-
-def write_reconstitution_evidence_pack(
-    occupancy_by_track: Mapping[str, Mapping[str, float]] | None = None,
-    *,
-    wave: str | None = None,
-    root: str | Path | None = None,
-    cells_root: str | Path | None = None,
-    cells_by_track: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
-    dry_run: bool = True,
-    put_r2: bool = False,
-    staging_dir: str | Path | None = None,
-) -> dict[str, Any]:
-    """Write local JSON. dry_run stages R2 payload. Never live-puts."""
-    if put_r2 and not dry_run:
-        raise ValueError(
-            "reconstitution evidence never live-puts R2; pass dry_run=True"
-        )
-    from research.combo_basket_catalog import KEEP_BOTH_SLEEVES_JOB
-
-    pack = reconstitution_evidence_pack(
-        occupancy_by_track,
-        cells_root=cells_root,
-        cells_by_track=cells_by_track,
-    )
-    wave_id = str(wave or CURRENT_EVAL_WAVE)
-    job = f"eval-reconstitution-evidence-{wave_id}"
-    if root is not None:
-        ops = Path(root)
-        ops.mkdir(parents=True, exist_ok=True)
-    else:
-        from qp_paths import repo_root
-
-        ops = repo_root() / "data" / "ops" / "research_eval"
-        ops.mkdir(parents=True, exist_ok=True)
-    body = json.dumps(pack, ensure_ascii=True, indent=2, default=str)
-    path = ops / f"{job}.json"
-    path.write_text(body, encoding="utf-8")
-    put: dict[str, Any] | None = None
-    if dry_run:
-        from research.cf_mass_eval_stage import RESEARCH_ARTIFACT_BUCKET
-        from research.r2_io import put_research_artifact
-
-        put = put_research_artifact(
-            RESEARCH_ARTIFACT_BUCKET,
-            f"research/eval/job={job}/reconstitution_evidence.json",
-            body.encode("utf-8"),
-            dry_run=True,
-            staging_dir=staging_dir,
-        )
-    return {
-        "job_id": job,
-        "path": str(path),
-        "keep_sleeves_job": KEEP_BOTH_SLEEVES_JOB,
-        "pack": pack,
-        "put": put,
-        "dry_run": True,
-        "put_r2": False,
-        "apply": bool(pack.get("apply")) and bool(RECONSTITUTION_APPLY),
         "go": False,
         "not_a_pass": True,
     }

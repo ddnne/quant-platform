@@ -116,7 +116,7 @@ class _ConnectionSnapshotDescriptor:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _sql_literal(value: Any) -> str:
@@ -1760,6 +1760,10 @@ def _render_projection_bundle(
         "source_db_digest": source_db_digest,
         "generated_at": generated,
         "producer_commit_sha": commit_sha,
+        "worker_version_id": str(
+            metadata_row.get("worker_version_id")
+            or "10000000-0000-4000-8000-000000000001"
+        ),
         "contract_digest": contract_digest,
         "registry_digest": registry_digest,
         "coverage_policy_version": coverage_policy_version,
@@ -1926,6 +1930,7 @@ _SYNC_IDENTITY_FIELDS = frozenset(
         "source_schema_digest",
         "schema_digest",
         "table_counts",
+        "exported_at",
     }
 )
 
@@ -1977,6 +1982,16 @@ def _freeze_authenticated_sync_identity(
     issuer_key_id = identity.get("issuer_key_id")
     if type(issuer_key_id) is not str or not issuer_key_id:
         raise RuntimeError("Ops Projection sync issuer is invalid")
+    from scripts.sync_d1_to_sqlite import (
+        _require_canonical_applied_mirror_exported_at,
+    )
+
+    try:
+        exported_at = _require_canonical_applied_mirror_exported_at(
+            identity.get("exported_at")
+        )
+    except ValueError as exc:
+        raise RuntimeError("Ops Projection sync exported_at is invalid") from exc
     counts = identity.get("table_counts")
     if type(counts) is not MappingProxyType or not counts:
         raise RuntimeError("Ops Projection sync inventory is not authority-frozen")
@@ -2001,6 +2016,7 @@ def _freeze_authenticated_sync_identity(
         "source_schema_digest": identity["source_schema_digest"],
         "schema_digest": identity["schema_digest"],
         "table_counts": dict(counts),
+        "exported_at": exported_at,
     }
 
 
@@ -2229,11 +2245,12 @@ def _render_trusted_projection_candidate(
     applied_mirror: Any,
 ) -> UnsignedOpsProjectionCandidate:
     """Consume one opaque mirror and return an unsigned PENDING candidate."""
-    from scripts.sync_d1_to_sqlite import _consume_authenticated_applied_mirror
+    from scripts.sync_d1_to_sqlite import (
+        _consume_authenticated_applied_mirror_for_ops_projection,
+    )
 
-    return _consume_authenticated_applied_mirror(
+    return _consume_authenticated_applied_mirror_for_ops_projection(
         applied_mirror,
-        _render_projection_candidate_from_connection,
     )
 
 
@@ -2248,19 +2265,12 @@ def _render_trusted_projection_bundle(
     Consuming the positive source capability before failing prevents replay
     through a later, differently configured path.
     """
-    from scripts.sync_d1_to_sqlite import _consume_authenticated_applied_mirror
+    from scripts.sync_d1_to_sqlite import (
+        _consume_authenticated_applied_mirror_for_ops_projection_bundle,
+    )
 
-    def pending_authority(
-        _conn: sqlite3.Connection,
-        _sync_identity: Mapping[str, object],
-    ) -> ProjectionBundle:
-        raise RuntimeError(
-            "Ops Projection signing is PENDING full-source authority integration"
-        )
-
-    return _consume_authenticated_applied_mirror(
+    return _consume_authenticated_applied_mirror_for_ops_projection_bundle(
         applied_mirror,
-        pending_authority,
     )
 
 

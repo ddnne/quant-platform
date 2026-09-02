@@ -1,7 +1,6 @@
 """Mass-eval wrangler deploy is opt-in fail-closed. Not GO."""
 from __future__ import annotations
 
-import subprocess
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -35,7 +34,7 @@ def test_mass_eval_deploy_allowed_is_exactly_one(monkeypatch) -> None:
 
 def test_deploy_cf_mass_eval_worker_fail_closed_without_env(monkeypatch) -> None:
     monkeypatch.delenv(MASS_EVAL_DEPLOY_ENV, raising=False)
-    monkeypatch.setattr(subprocess, "run", _explode)
+    monkeypatch.setattr("ops.worker_deploy.subprocess.run", _explode)
     with pytest.raises(CfMassEvalError, match="QP_ALLOW_MASS_EVAL_DEPLOY") as ei:
         deploy_cf_mass_eval_worker()
     assert MASS_EVAL_DEPLOY_ENV in str(ei.value)
@@ -61,8 +60,19 @@ def test_deploy_cf_mass_eval_worker_invokes_wrangler_when_env_one(
             stderr="",
         )
 
-    monkeypatch.setattr(subprocess, "run", _fake_run)
-    out = deploy_cf_mass_eval_worker(wrangler=wr)
+    monkeypatch.setattr("ops.worker_deploy.subprocess.run", _fake_run)
+
+    class _Deployer:
+        def deploy(self) -> str:
+            from ops.worker_deploy import deploy_wrangler_worker
+
+            return deploy_wrangler_worker(
+                wrangler=wr,
+                config=Path("platform/workers/research-mass-eval/wrangler.toml"),
+                cwd=Path("platform/workers/research-mass-eval"),
+            )
+
+    out = deploy_cf_mass_eval_worker(deployer=_Deployer())
     assert calls, "wrangler subprocess must be invoked"
     cmd = calls[0]
     assert cmd[0] == str(wr)
@@ -73,25 +83,24 @@ def test_deploy_cf_mass_eval_worker_invokes_wrangler_when_env_one(
 
 
 def test_run_cf_mass_eval_job_capability_refuse_skips_deploy(monkeypatch) -> None:
+    from selection.budget_ledger import MassResearchDisabledError
+
     monkeypatch.delenv(MASS_EVAL_DEPLOY_ENV, raising=False)
-    monkeypatch.setattr(subprocess, "run", _explode)
-    job = run_cf_mass_eval_job(
-        job_id="cap-deny-deploy",
-        logic_ids=["nky_vol_abs_level"],
-        mode="synthetic",
-        stage_panels=False,
-    )
-    assert job["ok"] is False
-    assert job["error"] == "capability_missing"
-    assert job["go"] is False
-    assert "deploy" not in job or job.get("deploy") is None
+    monkeypatch.setattr("ops.worker_deploy.subprocess.run", _explode)
+    with pytest.raises(MassResearchDisabledError, match="run_cf_mass_eval_job"):
+        run_cf_mass_eval_job(
+            job_id="cap-deny-deploy",
+            logic_ids=["nky_vol_abs_level"],
+            mode="synthetic",
+            stage_panels=False,
+        )
 
 
 def test_run_cf_mass_eval_job_records_deploy_failed_without_env(
     monkeypatch,
 ) -> None:
     monkeypatch.delenv(MASS_EVAL_DEPLOY_ENV, raising=False)
-    monkeypatch.setattr(subprocess, "run", _explode)
+    monkeypatch.setattr("ops.worker_deploy.subprocess.run", _explode)
     monkeypatch.setattr(
         "research.cf_mass_eval_job.require_capability",
         lambda name, caps=None: {
@@ -107,13 +116,13 @@ def test_run_cf_mass_eval_job_records_deploy_failed_without_env(
         raise urllib.error.URLError("offline")
 
     monkeypatch.setattr(urllib.request, "urlopen", _no_net)
-    job = run_cf_mass_eval_job(
-        job_id="deploy-denied",
-        logic_ids=["nky_vol_abs_level"],
-        mode="synthetic",
-        stage_panels=False,
-        dry_run_r2=True,
-    )
-    assert job["deploy"]["status"] == "deploy_failed"
-    assert MASS_EVAL_DEPLOY_ENV in str(job["deploy"]["error"])
-    assert job["status"] == "invoke_failed"
+    from selection.budget_ledger import MassResearchDisabledError
+
+    with pytest.raises(MassResearchDisabledError, match="run_cf_mass_eval_job"):
+        run_cf_mass_eval_job(
+            job_id="deploy-denied",
+            logic_ids=["nky_vol_abs_level"],
+            mode="synthetic",
+            stage_panels=False,
+            dry_run_r2=True,
+        )

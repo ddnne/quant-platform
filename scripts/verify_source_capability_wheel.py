@@ -39,7 +39,9 @@ EXPECTED_CONTRACT_FILES = frozenset(
         "fins_earnings_date.json",
         "fins_summary.json",
         "indices_bars_daily_topix.json",
+        "jsda_corporate_bond_transactions.json",
         "jsda_otc_bond_reference_prices.json",
+        "jsda_tokyo_repo_rates.json",
         "markets_calendar.json",
     }
 )
@@ -193,10 +195,10 @@ def _installed_probe(expected_prefix: Path) -> dict[str, Any]:
         )
     contracts = all_source_capability_contracts()
     contract_ids = frozenset(contract.dataset_id for contract in contracts)
-    if len(contracts) != 11 or contract_ids != {
+    if len(contracts) != 13 or contract_ids != {
         name.removesuffix(".json") for name in EXPECTED_CONTRACT_FILES
     }:
-        raise AssertionError("installed SourceCapability registry is not exact-11")
+        raise AssertionError("installed SourceCapability registry is not exact-13")
 
     for contract in contracts:
         derived = derive_collection_coverage_v3(contract)

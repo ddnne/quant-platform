@@ -16,14 +16,15 @@ and selected signed-receipt verification:
   one verified selected receipt per segment and no failing checks
 - honest status_counts always written on change
 
-Post-seal checklist (preferred after a tip seal):
+Local fixture re-aggregation example (preferred after a tip seal):
 
 ```bash
 .venv/bin/python scripts/sync_dataset_coverage_from_segments.py \\
   --db data/structured/ingestion.sqlite --datasets fins_earnings_date
-.venv/bin/python scripts/publish_ops_projection.py \\
-  --db data/structured/ingestion.sqlite --apply-remote
 ```
+
+This local command never publishes production Ops Projection data. Cloud
+publication is scheduled work in ``ingestion-premium``.
 
 Prefer one-dataset mode when only one dataset's segs flipped COMPLETE.
 Use ``--dry-run`` first. Mass / READY remain OFF; this does not declare READY.

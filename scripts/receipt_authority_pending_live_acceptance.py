@@ -253,13 +253,16 @@ def _expected_bindings(surface: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
             "namespace_id": "<LIVE_NAMESPACE_ID>",
         })
     for row in surface["services"]:
-        add({
-            "entrypoint": row["entrypoint"],
+        binding = {
             "environment": "production",
             "name": row["binding"],
             "service": row["service"],
             "type": "service",
-        })
+        }
+        entrypoint = row.get("entrypoint")
+        if type(entrypoint) is str and entrypoint:
+            binding["entrypoint"] = entrypoint
+        add(binding)
     for row in surface["ratelimits"]:
         add({
             "name": row["name"],
@@ -725,9 +728,6 @@ def validate_live_pending_receipt_chain(
         "source_sha": reviewed_sha,
         "source_provenance": "VERIFIED_EXACT_MODULE_BYTES",
         "authority_instance_digest": pending["authority_instance_digest"],
-        "authority_principal_manifest_digest": pending[
-            "authority_principal_manifest_digest"
-        ],
         "binding_manifest_raw_digest": pending["binding_manifest_raw_digest"],
         "scoped_registry_raw_digest": pending["scoped_registry_raw_digest"],
         "scoped_registry_digest": pending["scoped_registry_digest"],

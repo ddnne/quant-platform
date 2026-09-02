@@ -102,6 +102,7 @@ def test_typed_service_and_durable_object_refinements_are_required() -> None:
     mass_staging = expected_types("research-mass-eval", "staging")
     gateway = expected_types("research-ai-gateway", "production")
     secrets = expected_types("ingestion-secrets", "production")
+    observer = expected_types("receipt-activation-observer", "production")
     assert mass["AI_GATEWAY"] == "Service"
     assert mass["MASS_EVAL_TOKEN"] == "string"
     assert mass_staging["MASS_EVAL_TOKEN"] == "string"
@@ -110,6 +111,7 @@ def test_typed_service_and_durable_object_refinements_are_required() -> None:
         'DurableObjectNamespace<import("./src/index").BudgetLedger>'
     )
     assert secrets["PROXY_RATE_LIMITER"] == "RateLimit"
+    assert observer["JSDA_INGESTION"] == "Service"
     assert expected_types("ingestion-jsda", "production")["CF_VERSION_METADATA"] == (
         "WorkerVersionMetadata"
     )

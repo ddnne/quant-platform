@@ -9,6 +9,9 @@ import json
 from datetime import date
 from pathlib import Path
 
+import pytest
+
+from _coreseed import draft_pit_observation_clock
 from cf_platform.ingest_premium.coverage import EXPECTED_START
 from data_contracts.canonical import canonical_dataset_for
 from data_contracts.coverage import coverage_contract_for
@@ -35,6 +38,12 @@ OFFICIAL_START = "2008-05-07"
 OFFICIAL_START_MONTH = "2008-05"
 NOT_REQUIRED_START = "2006-08-13"
 EXCLUDED_STATUS = "excluded_official_unavailable"
+
+
+@pytest.fixture(autouse=True)
+def _bound_draft_observation_clock():
+    with draft_pit_observation_clock("2026-08-01T15:30:00+09:00"):
+        yield
 
 
 def _month_ids(start: date, end: date) -> list[str]:

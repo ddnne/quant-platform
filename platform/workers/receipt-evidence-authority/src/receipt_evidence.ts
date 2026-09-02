@@ -2,7 +2,7 @@ import {
   canonicalDigest,
   canonicalJson,
 } from "../../ingestion-secrets/src/jquants_acquisition_registry";
-import type { JquantsAcquisitionRequestV2 } from "../../ingestion-secrets/src/jquants_acquisition_types";
+
 import type { DatasetSpec } from "../../ingestion-premium/src/catalog";
 import {
   capturedOfficialCalendarDescriptor,
@@ -14,25 +14,34 @@ import type {
   JsonValue,
   ReceiptAuthorityEnv,
   ReceiptAuthorityIssuedRecord,
+  GovernedSource,
+  SegmentGrain,
   UnsignedReceiptClaimsV3,
 } from "./types";
 
-function expectedScope(spec: DatasetSpec, initial: JquantsAcquisitionRequestV2): {
+export function canonicalReceiptExpectedScope(spec: DatasetSpec, initial: {
+  segment_start: string;
+  segment_end: string;
+  segment_grain: SegmentGrain;
+}): {
   scope: Record<string, JsonValue>;
   expectedItems: number | null;
 } {
   const eventDriven = spec.coverage.expected_frequency === "event_driven";
+  const jsda = spec.id.startsWith("jsda_");
   return {
     scope: {
       coverage_mode: spec.coverage.coverage_mode,
       expected_frequency: spec.coverage.expected_frequency,
-      expected_item_unit: eventDriven ? "source_event" : "source_query",
+      expected_item_unit: jsda
+        ? "official_archive_file"
+        : eventDriven ? "source_event" : "source_query",
       segment_end: initial.segment_end,
       segment_start: initial.segment_start,
       universe_rule: spec.coverage.universe_rule,
-      segment_granularity: "calendar_month",
+      segment_granularity: initial.segment_grain,
     },
-    expectedItems: eventDriven ? null : 1,
+    expectedItems: eventDriven && !jsda ? null : 1,
   };
 }
 
@@ -41,16 +50,28 @@ export async function measuredClaims(input: {
   requestDigest: string;
   runId: number;
   spec: DatasetSpec;
+  segmentGrain: SegmentGrain;
   capture: Capture;
   structuredCount: number;
   structuredDigest: string;
+  productManifestDigest: string;
+  artifactKey: string;
+  artifactByteCount: number;
+  manifestKey: string;
+  manifestByteCount: number;
+  naturalKeyDigest: string;
+  contractId: string;
   checkedAt: string;
 }): Promise<UnsignedReceiptClaimsV3> {
   if (!input.capture.paginationExhausted || !input.capture.discoveryExhausted) {
     throw new Error("receipt capture did not independently prove exhaustion");
   }
   const authorityScope = await authorityInstanceScope(input.env);
-  const { scope, expectedItems } = expectedScope(input.spec, input.capture.initialRequest);
+  const { scope, expectedItems } = canonicalReceiptExpectedScope(input.spec, {
+    segment_start: input.capture.initialRequest.segment_start,
+    segment_end: input.capture.initialRequest.segment_end,
+    segment_grain: input.segmentGrain,
+  });
   const rawCount = input.capture.pages.reduce((total, page) => total + page.rowCount, 0);
   if (rawCount !== input.structuredCount) {
     throw new Error("raw and structured counts do not reconcile");
@@ -62,7 +83,8 @@ export async function measuredClaims(input: {
     environment: authorityScope.environment,
     authority_instance_digest: authorityScope.authorityInstanceDigest,
     coverage_policy_version: "collection-coverage/v3" as const,
-    source: "jquants" as const,
+    source: (input.spec.id.startsWith("jsda_") ? "jsda" : "jquants") as GovernedSource,
+    contract_id: input.contractId,
     dataset: input.spec.id,
     segment_id: input.capture.initialRequest.segment_id,
     segment_start: input.capture.initialRequest.segment_start,
@@ -101,6 +123,15 @@ export async function measuredClaims(input: {
     error: null,
     pagination_exhausted: input.capture.paginationExhausted,
     discovery_exhausted: input.capture.discoveryExhausted,
+    receipt_issue_digest: input.requestDigest,
+    artifact_key: input.artifactKey,
+    artifact_byte_count: input.artifactByteCount,
+    manifest_key: input.manifestKey,
+    manifest_byte_count: input.manifestByteCount,
+    raw_manifest_key: input.capture.rawManifestKey,
+    raw_manifest_byte_count: input.capture.rawManifestByteCount,
+    raw_byte_count: input.capture.pages.reduce((total, page) => total + page.size, 0),
+    natural_key_digest: input.naturalKeyDigest,
     source_request_digest: await canonicalDigest(input.capture.initialRequest),
     raw_manifest_digest: input.capture.rawManifestDigest,
     raw_digest: input.capture.rawDigest,
@@ -113,6 +144,8 @@ export async function measuredClaims(input: {
       acquisition_collection_manifest_file_digest: input.capture.manifestFileDigest,
       acquisition_collection_digest: input.capture.collectionDigest,
       acquisition_terminal_chain_digest: input.capture.terminalChainDigest,
+      product_artifact_digest: input.structuredDigest,
+      product_manifest_digest: input.productManifestDigest,
       ...officialCalendarDigests,
     },
   };
@@ -127,7 +160,7 @@ export function receiptFromIssued(
 ): CollectionReceiptV3 {
   const claims = issued.claims;
   return {
-    source: "jquants",
+    source: claims.source,
     dataset: claims.dataset,
     segment_id: claims.segment_id,
     segment_start: claims.segment_start,

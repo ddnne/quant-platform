@@ -13,6 +13,7 @@ import stat
 import pytest
 import pit
 
+from _coreseed import draft_pit_observation_clock
 from personal_history_compact_support import (
     insert_compact_bar,
     insert_compact_master,
@@ -287,12 +288,15 @@ def test_materialize_accepts_typed_personal_bars_with_generic_calendar(
         "min_event_date": "2024-01-02",
         "max_event_date": "2024-12-30",
     }
-    assert pit.get_jquants_records(
-        as_of="2025-01-01", dataset="equities_bars_daily", db_path=snapshot.db_path
-    ).rows == []
-    bars = pit.get_equity_bars_daily(
-        as_of="2025-01-01", db_path=snapshot.db_path
-    ).rows
+    with draft_pit_observation_clock("2025-01-01T00:00:00+09:00"):
+        assert pit.get_jquants_records(
+            as_of="2025-01-01",
+            dataset="equities_bars_daily",
+            db_path=snapshot.db_path,
+        ).rows == []
+        bars = pit.get_equity_bars_daily(
+            as_of="2025-01-01", db_path=snapshot.db_path
+        ).rows
     assert [(row["date"], row["close"]) for row in bars] == [
         ("2024-01-02", 100.0),
         ("2024-12-30", 110.0),
@@ -395,11 +399,12 @@ def test_materialize_neutralizes_only_the_copy_of_a_managed_non_ready_database(
     assert marker[:2] == ("PERSONAL_DRAFT", "SYNCED")
     assert json.loads(marker[2]) == manifest["source_policy_provenance"]
 
-    rows = pit.get_jquants_records(
-        as_of="2025-01-02T15:30:00+09:00",
-        dataset="markets_calendar",
-        db_path=snapshot.db_path,
-    ).rows
+    with draft_pit_observation_clock("2025-01-02T15:30:00+09:00"):
+        rows = pit.get_jquants_records(
+            as_of="2025-01-02T15:30:00+09:00",
+            dataset="markets_calendar",
+            db_path=snapshot.db_path,
+        ).rows
     assert len(rows) == 4
     assert verify_personal_snapshot(snapshot) == snapshot
 

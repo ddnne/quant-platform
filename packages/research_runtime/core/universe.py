@@ -32,6 +32,12 @@ from types import MappingProxyType
 from typing import Any
 
 import pit
+from data_contracts.membership_runs import (
+    RunLengthMembershipMap,
+    coalesce_daily_memberships,
+    stream_membership_digest,
+    validate_membership_runs,
+)
 
 from .strategy_protocol import EquityMaster
 
@@ -83,7 +89,9 @@ class ResolvedDailyUniverse:
             raise RawFixedUniverseError(
                 "daily resolved universe requires a governed rule, period, and digest"
             )
+        existing_runs = getattr(universe, "membership_runs", ())
         copied: dict[str, tuple[str, ...]] = {}
+        interned: dict[tuple[str, ...], tuple[str, ...]] = {}
         for day, values in raw.items():
             if isinstance(values, (str, bytes)):
                 raise RawFixedUniverseError(
@@ -102,29 +110,52 @@ class ResolvedDailyUniverse:
                 raise RawFixedUniverseError(
                     "daily resolved universe has an invalid date or membership"
                 )
-            copied[normalized_day] = codes
-        if not copied:
+            copied[normalized_day] = interned.setdefault(codes, codes)
+        try:
+            if existing_runs:
+                runs = validate_membership_runs(
+                    existing_runs,
+                    period_start=period_start,
+                    period_end=period_end,
+                )
+                if copied:
+                    from_daily = validate_membership_runs(
+                        coalesce_daily_memberships(tuple(copied.items())),
+                        period_start=period_start,
+                        period_end=period_end,
+                    )
+                    if from_daily != runs:
+                        raise RawFixedUniverseError(
+                            "daily resolved universe membership runs disagree with its map"
+                        )
+            else:
+                if not copied:
+                    raise RawFixedUniverseError("daily resolved universe is empty")
+                runs = validate_membership_runs(
+                    coalesce_daily_memberships(tuple(copied.items())),
+                    period_start=period_start,
+                    period_end=period_end,
+                )
+        except ValueError as exc:
+            raise RawFixedUniverseError(str(exc)) from exc
+        if not runs:
             raise RawFixedUniverseError("daily resolved universe is empty")
-        canonical = {
-            "rule_id": rule_id,
-            "rule_version": rule_version,
-            "rule_digest": rule_digest,
-            "period_start": period_start,
-            "period_end": period_end,
-            "decision_memberships": [
-                {"decision_date": day, "codes": list(copied[day])}
-                for day in sorted(copied)
-            ],
-        }
-        expected_digest = _canonical_digest(canonical)
-        if (
-            resolved_digest != expected_digest
-            or proof != "controlled-resolved-universe:" + expected_digest
-        ):
+        expected_digest = stream_membership_digest(
+            rule_id=rule_id,
+            rule_version=rule_version,
+            rule_digest=rule_digest,
+            period_start=period_start,
+            period_end=period_end,
+            runs=runs,
+        )
+        if resolved_digest != expected_digest or proof not in {
+            "controlled-resolved-universe:" + expected_digest,
+            "personal-draft-resolved-universe:" + expected_digest,
+        }:
             raise RawFixedUniverseError(
                 "daily resolved universe membership digest does not match its map"
             )
-        self.membership_by_date = MappingProxyType(copied)
+        self.membership_by_date = RunLengthMembershipMap(runs)
         self.resolved_membership_digest = expected_digest
         self.rule_digest = rule_digest
         self.membership_proof = proof

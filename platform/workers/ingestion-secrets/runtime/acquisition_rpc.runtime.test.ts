@@ -763,7 +763,11 @@ describe("governed J-Quants WorkerEntrypoint RPC", () => {
     expect(await response.json()).toEqual({ error: "not found" });
     expect(fetchMock).not.toHaveBeenCalled();
     const health = await rpc.fetch(new Request("https://ingestion-secrets.test/health"));
-    expect(await health.json()).toEqual({ ok: true, worker: "ingestion-secrets" });
+    expect(await health.json()).toEqual({
+      ok: true,
+      live: true,
+      worker: "ingestion-secrets",
+    });
   });
 
   it("enforces the first-day 01:00 JST closed-month cutoff", async () => {

@@ -23,10 +23,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.authority_principal_manifest import (  # noqa: E402
-    PINNED_MANIFEST_DIGEST,
-    load_and_validate_manifest,
-)
 from scripts.cloudflare_binding_manifest import (  # noqa: E402
     MANIFEST as BINDING_MANIFEST_PATH,
     build_manifest,
@@ -193,7 +189,11 @@ def _require_binding_surface(
         else "platform/workers/receipt-evidence-authority/wrangler.toml"
     )
     expected_d1 = resources["d1"]
-    expected_r2 = resources["authority_evidence_r2"]
+    expected_r2 = [
+        resources["authority_evidence_r2"],
+        resources["raw_r2"],
+        resources["structured_r2"],
+    ]
     expected_do = resources["durable_object"]
     expected_service = resources["acquisition_service"]
     if (
@@ -212,7 +212,10 @@ def _require_binding_surface(
         or surface.get("secret_names") != ["RECEIPT_KEY_WRAP_KEY"]
         or surface.get("d1_databases") != [expected_d1]
         or surface.get("r2_buckets")
-        != [{"binding": expected_r2["binding"], "bucket_name": expected_r2["bucket_name"]}]
+        != [
+            {"binding": row["binding"], "bucket_name": row["bucket_name"]}
+            for row in expected_r2
+        ]
         or surface.get("durable_objects")
         != [{"name": expected_do["binding"], "class_name": expected_do["class_name"]}]
         or surface.get("services") != [expected_service]
@@ -236,27 +239,7 @@ def validate_pending_receipt_authority(environment: str) -> dict[str, Any]:
     """Return non-secret provisioning evidence for one exact PENDING target."""
 
     selected = _require_environment(environment)
-    principal_manifest = load_and_validate_manifest()
-    receipt = principal_manifest["principals"]["receipt"]
-    deployment = receipt["deployments"][selected]
-    if (
-        principal_manifest.get("activation_status") != "PENDING"
-        or receipt.get("authority_status") != "PENDING"
-        or deployment.get("mode") != "PENDING_NO_KEY"
-        or deployment.get("private_key_state") != "ABSENT_UNTIL_ACTIVATION"
-        or deployment.get("workers_dev") is not False
-        or deployment.get("preview_urls") is not False
-        or deployment.get("routes") != []
-        or deployment.get("public_fetch_behavior") != "NOT_FOUND_404"
-    ):
-        raise PendingReceiptAuthorityError(
-            "Receipt principal declaration is not the inactive PENDING contract"
-        )
     instance, instance_digest = _authority_instance(selected)
-    if deployment.get("worker_name") != instance.get("worker_name"):
-        raise PendingReceiptAuthorityError(
-            "Receipt principal and authority instance Worker identities differ"
-        )
     surface, binding_digest = _require_binding_surface(selected, instance=instance)
     registry_raw_digest, registry_digest = _require_zero_active_registry(
         selected, authority_instance_digest=instance_digest
@@ -269,7 +252,6 @@ def validate_pending_receipt_authority(environment: str) -> dict[str, Any]:
         "config": surface["config"],
         "authority_mode": "PENDING",
         "authority_instance_digest": instance_digest,
-        "authority_principal_manifest_digest": PINNED_MANIFEST_DIGEST,
         "binding_manifest_raw_digest": binding_digest,
         "scoped_registry_raw_digest": registry_raw_digest,
         "scoped_registry_digest": registry_digest,

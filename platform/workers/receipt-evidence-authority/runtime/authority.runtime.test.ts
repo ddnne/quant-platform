@@ -6,6 +6,7 @@ import {
   runInDurableObject,
 } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, inject, it } from "vitest";
+import receiptClaimsSchema from "../../../../packages/data_plane/storage/authorities/receipts/signed_receipt_claims.schema.json";
 import {
   fetchGovernedPage,
   type AcquisitionEnv,
@@ -16,6 +17,9 @@ import type {
 import { canonicalDigest, canonicalJson, sha256Digest } from "../src/canonical";
 import { ReceiptEvidenceAuthority } from "../src/authority_do";
 import { authorityInstanceDigest } from "../src/authority_instance";
+import { requirePersistedDerivedClaims } from "../src/claims_validation";
+import { canonicalReceiptExpectedScope } from "../src/receipt_evidence";
+import { datasetById } from "../../ingestion-premium/src/catalog";
 import {
   capturedOfficialCalendarDescriptor,
   loadCaptureState,
@@ -35,6 +39,7 @@ import type {
   ReceiptAuthorityEnv,
   ReceiptEvidenceAuthorityRpc,
   ReceiptIssueRequestV1,
+  UnsignedReceiptClaimsV3,
 } from "../src/types";
 
 const runtimeEnv = env as ReceiptAuthorityEnv;
@@ -47,9 +52,24 @@ const request: ReceiptIssueRequestV1 = {
   schema_version: "receipt-evidence-issue-request/v1",
   operation: "issue_for_segment",
   environment: "production",
+  source: "jquants",
+  contract_id: "jquants_premium_core",
   dataset_id: "indices_bars_daily_topix",
+  segment_grain: "calendar_month",
   segment_id: "2024-02",
+  expected_key_start: "2024-02-01",
+  expected_key_end: "2024-02-29",
   request_nonce: "a".repeat(64),
+};
+
+const amRequest: ReceiptIssueRequestV1 = {
+  ...request,
+  dataset_id: "equities_bars_daily_am",
+  segment_grain: "same_trading_day_am_snapshot",
+  segment_id: "2026-09-02",
+  expected_key_start: "2026-09-02",
+  expected_key_end: "2026-09-02",
+  request_nonce: "f".repeat(64),
 };
 
 const acquisitionEnv: AcquisitionEnv = {
@@ -468,6 +488,8 @@ beforeEach(async () => {
   (runtimeEnv as unknown as { AUTHORITY_MODE: string }).AUTHORITY_MODE = "ACTIVE";
   (runtimeEnv as unknown as { ACTIVATED_KEY_ID?: string }).ACTIVATED_KEY_ID =
     undefined;
+  (runtimeEnv as unknown as { RECEIPT_KEY_GENERATION: string })
+    .RECEIPT_KEY_GENERATION = "1";
   await applyD1Migrations(runtimeEnv.DB, migrations);
   installSinglePageUpstream();
 });
@@ -522,9 +544,17 @@ describe("Receipt Evidence Authority in workerd", () => {
           (SELECT COUNT(*) FROM receipt_authority_structured_rows) AS rows,
           (SELECT COUNT(*) FROM receipt_product_materializations) AS products`,
       ).first(),
-      r2: (await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.list()).objects
-        .map((object) => object.key)
-        .sort(),
+      r2: {
+        authority: (await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.list()).objects
+          .map((object) => object.key)
+          .sort(),
+        raw: (await runtimeEnv.RAW_BUCKET.list()).objects
+          .map((object) => object.key)
+          .sort(),
+        structured: (await runtimeEnv.STRUCTURED_BUCKET.list()).objects
+          .map((object) => object.key)
+          .sort(),
+      },
     });
     const before = await snapshot();
     const formerPrivateMethods = [
@@ -577,6 +607,146 @@ describe("Receipt Evidence Authority in workerd", () => {
     }
     expect(rejected).toBe(true);
     expect(await snapshot()).toEqual(before);
+  });
+
+  it("accepts canonical AM daily claims only against the real DO-persisted request grain", async () => {
+    installAuthorityAcquisition();
+    const { stub } = await activateRegisteredTestKey();
+    const monthlyIssued = await stub.issue_for_segment(request);
+    const unsigned = JSON.parse(
+      new TextDecoder().decode(decodeBase64(monthlyIssued.receipt.digests.signed_body_b64)),
+    ) as Record<string, unknown>;
+    for (const field of ["version", "parser_normalizer_version", "issuer_id", "issued_at"]) {
+      delete unsigned[field];
+    }
+    const monthlyClaims = unsigned as unknown as UnsignedReceiptClaimsV3;
+    // AM acquisition remains independently PENDING, but begin() durably records
+    // the canonical request digest before that closed acquisition gate runs.
+    await expect(runInDurableObject(
+      stub,
+      (instance) => instance.issue_for_segment(amRequest),
+    )).rejects.toThrow("J-Quants acquisition request rejected");
+    const operationId = await canonicalDigest(amRequest);
+    const persistedRequestDigest = await runInDurableObject(
+      stub,
+      async (_instance, state) => state.storage.sql.exec<{ request_digest: string }>(
+        "SELECT request_digest FROM authority_operations WHERE operation_id=?",
+        operationId,
+      ).one().request_digest,
+    );
+    expect(persistedRequestDigest).toBe(operationId);
+
+    const dailyClaims: UnsignedReceiptClaimsV3 = {
+      ...monthlyClaims,
+      dataset: amRequest.dataset_id,
+      segment_id: amRequest.segment_id,
+      segment_start: amRequest.expected_key_start,
+      segment_end: amRequest.expected_key_end,
+    };
+    await expect(requirePersistedDerivedClaims(
+      dailyClaims,
+      amRequest,
+      persistedRequestDigest,
+    )).rejects.toThrow("claims failed invariant validation");
+
+    const amSpec = datasetById(amRequest.dataset_id);
+    expect(amSpec).toBeDefined();
+    const canonicalDailyScope = canonicalReceiptExpectedScope(amSpec!, {
+      segment_start: amRequest.expected_key_start,
+      segment_end: amRequest.expected_key_end,
+      segment_grain: amRequest.segment_grain,
+    });
+    const canonicalDailyClaims: UnsignedReceiptClaimsV3 = {
+      ...dailyClaims,
+      receipt_issue_digest: persistedRequestDigest,
+      expected_scope: canonicalDailyScope.scope,
+      expected_items: canonicalDailyScope.expectedItems,
+    };
+    await expect(requirePersistedDerivedClaims(
+      canonicalDailyClaims,
+      amRequest,
+      persistedRequestDigest,
+    )).resolves.toEqual(canonicalDailyClaims);
+    const missingProductDigest = { ...canonicalDailyClaims.extra_digests };
+    delete missingProductDigest.product_manifest_digest;
+    await expect(requirePersistedDerivedClaims(
+      { ...canonicalDailyClaims, extra_digests: missingProductDigest },
+      amRequest,
+      persistedRequestDigest,
+    )).rejects.toThrow("claims failed invariant validation");
+    await expect(requirePersistedDerivedClaims(
+      {
+        ...canonicalDailyClaims,
+        extra_digests: {
+          ...canonicalDailyClaims.extra_digests,
+          EXPECTED_EMPTY_WITH_EVIDENCE: "sha256:" + "e".repeat(64),
+        },
+      },
+      amRequest,
+      persistedRequestDigest,
+    )).rejects.toThrow("claims failed invariant validation");
+    await expect(requirePersistedDerivedClaims(
+      {
+        ...canonicalDailyClaims,
+        extra_digests: {
+          ...canonicalDailyClaims.extra_digests,
+          product_artifact_digest: "sha256:" + "f".repeat(64),
+        },
+      },
+      amRequest,
+      persistedRequestDigest,
+    )).rejects.toThrow("claims failed invariant validation");
+    await expect(requirePersistedDerivedClaims(
+      { ...canonicalDailyClaims, receipt_issue_digest: monthlyClaims.receipt_issue_digest },
+      amRequest,
+      persistedRequestDigest,
+    )).rejects.toThrow("claims failed invariant validation");
+
+    const registryGrainSubstitution = {
+      ...amRequest,
+      segment_grain: "calendar_month" as const,
+      segment_id: "2026-09",
+      expected_key_start: "2026-09-01",
+      expected_key_end: "2026-09-30",
+    };
+    await expect(requirePersistedDerivedClaims(
+      {
+        ...canonicalDailyClaims,
+        segment_id: registryGrainSubstitution.segment_id,
+        segment_start: registryGrainSubstitution.expected_key_start,
+        segment_end: registryGrainSubstitution.expected_key_end,
+      },
+      registryGrainSubstitution,
+      persistedRequestDigest,
+    )).rejects.toThrow("governed inventory");
+    const monthlyRequestDigest = await canonicalDigest(request);
+    await expect(requirePersistedDerivedClaims(
+      canonicalDailyClaims,
+      request,
+      monthlyRequestDigest,
+    )).rejects.toThrow("claims failed invariant validation");
+    await expect(requirePersistedDerivedClaims(
+      monthlyClaims,
+      amRequest,
+      persistedRequestDigest,
+    )).rejects.toThrow("claims failed invariant validation");
+    await expect(requirePersistedDerivedClaims(
+      monthlyClaims,
+      request,
+      persistedRequestDigest,
+    )).rejects.toThrow("request preimage differs from persisted digest");
+  });
+
+  it("emits exactly the package-owned signed claims schema key set", async () => {
+    installAuthorityAcquisition();
+    const { stub } = await activateRegisteredTestKey();
+    const issued = await stub.issue_for_segment(request);
+    const claims = JSON.parse(
+      new TextDecoder().decode(decodeBase64(issued.receipt.digests.signed_body_b64)),
+    ) as Record<string, unknown>;
+    const emitted = Object.keys(claims).sort();
+    expect(emitted).toEqual([...receiptClaimsSchema.required].sort());
+    expect(emitted).toEqual(Object.keys(receiptClaimsSchema.properties).sort());
   });
 
   it.each([
@@ -756,21 +926,30 @@ describe("Receipt Evidence Authority in workerd", () => {
   });
 
   it("renders the cross-language product JSONL vector in UTF-8 key order", async () => {
-    const rows = ["z-key", "a-key"].map((naturalKey) => ({
-      source: "jquants" as const,
-      dataset: "indices_bars_daily_topix",
+    const rows = [["日本-債券", "日本語"], ["A-001", "ASCII"]].map(([naturalKey, label]) => ({
+      source: "jsda" as const,
+      dataset: "jsda_otc_bond_reference_prices",
       natural_key: naturalKey,
       event_time: "2024-02-01T00:00:00Z",
       available_at: "2024-02-01T00:00:00Z",
       ingested_at: "2024-02-02T00:00:00Z",
-      payload: `{"key":"${naturalKey}"}`,
-      raw_payload: `{"key":"${naturalKey}"}`,
+      payload: `{"label":"${label}"}`,
+      raw_payload: `{"label":"${label}"}`,
       row_digest: "sha256:" + "0".repeat(64),
     }));
     const body = canonicalProductBody(rows);
-    expect(body.indexOf("a-key")).toBeLessThan(body.indexOf("z-key"));
+    expect(body).toBe(
+      '{"available_at":"2024-02-01T00:00:00Z","dataset":"jsda_otc_bond_reference_prices",' +
+      '"event_time":"2024-02-01T00:00:00Z","ingested_at":"2024-02-02T00:00:00Z",' +
+      '"natural_key":"A-001","payload":"{\\"label\\":\\"ASCII\\"}",' +
+      '"raw_payload":"{\\"label\\":\\"ASCII\\"}","source":"jsda"}\n' +
+      '{"available_at":"2024-02-01T00:00:00Z","dataset":"jsda_otc_bond_reference_prices",' +
+      '"event_time":"2024-02-01T00:00:00Z","ingested_at":"2024-02-02T00:00:00Z",' +
+      '"natural_key":"日本-債券","payload":"{\\"label\\":\\"日本語\\"}",' +
+      '"raw_payload":"{\\"label\\":\\"日本語\\"}","source":"jsda"}\n',
+    );
     expect(await sha256Digest(new TextEncoder().encode(body))).toBe(
-      "sha256:fc5f92e255656fa9c17298cc492b6f72ee1c647fa47a749174ea66c290f9dc8e",
+      "sha256:29c603492f7aca5df78d543161ae31b7d7ea1d76d5256a027198256c98fc8a66",
     );
   });
   it("uses SQLite BINARY-compatible UTF-8 order for non-ASCII natural keys", () => {
@@ -793,10 +972,14 @@ describe("Receipt Evidence Authority in workerd", () => {
   });
   it("has no public HTTP surface and permits provisioning only while PENDING", async () => {
     const rpc = workerExports.default as unknown as ReceiptEvidenceAuthorityRpc & Fetcher;
-    const response = await rpc.fetch(new Request("https://authority.invalid/health"));
-    expect(response.status).toBe(404);
-    expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(await response.text()).toBe("");
+    const health = await rpc.fetch(new Request("https://authority.invalid/health/ready"));
+    expect(health.status).toBe(404);
+    expect(health.headers.get("cache-control")).toBe("no-store");
+    expect(await health.text()).toBe("");
+    const missing = await rpc.fetch(new Request("https://authority.invalid/v1/run"));
+    expect(missing.status).toBe(404);
+    expect(missing.headers.get("cache-control")).toBe("no-store");
+    expect(await missing.text()).toBe("");
 
     const stub = runtimeEnv.RECEIPT_EVIDENCE_AUTHORITY_DO.getByName(
       "receipt:production",
@@ -1187,10 +1370,10 @@ describe("Receipt Evidence Authority in workerd", () => {
 
   it("shares canonical environment/resource authority digests with verifiers", async () => {
     expect(await authorityInstanceDigest("production")).toBe(
-      "sha256:a63f439bbf478ce25795ed2c80ed6e88ddcd344a4c8538713a20410ac58b8f8c",
+      "sha256:e6d7df1b9000481d15b8987f5ffda7f3a0b0c051a43cf0051d04a38e58e372a6",
     );
     expect(await authorityInstanceDigest("staging")).toBe(
-      "sha256:0fa133cf345bdd1f979beebb18e3873fbad88ac7631fc7d5b07ffaca34e68ac7",
+      "sha256:5104b2d3b85ddbbd44fb9e4ddc2689898232c2e6e175727c71c1ce2cb6ec9bff",
     );
   });
 
@@ -1286,12 +1469,15 @@ describe("Receipt Evidence Authority in workerd", () => {
     expect(acquisitionCalls()).toBe(3);
     const prefix =
       `raw/receipt-authority/production/equities_master/2024-02/${operationId.slice(7)}/`;
-    const before = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.list({ prefix });
-    const calendarKeys = before.objects
+    const beforeRaw = await runtimeEnv.RAW_BUCKET.list({ prefix });
+    const beforeAuthority = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.list({
+      prefix,
+    });
+    const calendarKeys = beforeRaw.objects
       .map((object) => object.key)
       .filter((key) => key.endsWith("/official-calendar.json"));
     expect(calendarKeys).toHaveLength(1);
-    const captureStateKey = before.objects
+    const captureStateKey = beforeAuthority.objects
       .map((object) => object.key)
       .find((key) => key.endsWith("/capture-state.json"));
     expect(captureStateKey).toBeDefined();
@@ -1329,9 +1515,15 @@ describe("Receipt Evidence Authority in workerd", () => {
     expect(
       recovered.receipt.digests.extra_digests.official_calendar_evidence_digest,
     ).toBe(expectedCalendarEvidenceDigest);
-    const after = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.list({ prefix });
-    expect(after.objects.map((object) => object.key).sort()).toEqual(
-      before.objects.map((object) => object.key).sort(),
+    const afterRaw = await runtimeEnv.RAW_BUCKET.list({ prefix });
+    const afterAuthority = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.list({
+      prefix,
+    });
+    expect(afterRaw.objects.map((object) => object.key).sort()).toEqual(
+      beforeRaw.objects.map((object) => object.key).sort(),
+    );
+    expect(afterAuthority.objects.map((object) => object.key).sort()).toEqual(
+      beforeAuthority.objects.map((object) => object.key).sort(),
     );
     expect(acquisitionCalls()).toBe(3);
   });
@@ -1343,7 +1535,7 @@ describe("Receipt Evidence Authority in workerd", () => {
       request_nonce: "c".repeat(64),
     };
     const interrupted = await interruptAfterDurableCapture(interruptedRequest);
-    await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.delete(
+    await runtimeEnv.RAW_BUCKET.delete(
       interrupted.state.capture.rawManifestKey,
     );
     await evictDurableObject(interrupted.stub);
@@ -1368,8 +1560,8 @@ describe("Receipt Evidence Authority in workerd", () => {
       request_nonce: "d".repeat(64),
     });
     const manifestKey = interrupted.state.capture.rawManifestKey;
-    await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.delete(manifestKey);
-    await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.put(
+    await runtimeEnv.RAW_BUCKET.delete(manifestKey);
+    await runtimeEnv.RAW_BUCKET.put(
       manifestKey,
       canonicalJson({ substituted: true }),
     );
@@ -1385,8 +1577,8 @@ describe("Receipt Evidence Authority in workerd", () => {
       request_nonce: "0".repeat(63) + "6",
     });
     const rawKey = interrupted.state.capture.pages[0]!.key;
-    await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.delete(rawKey);
-    await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.put(
+    await runtimeEnv.RAW_BUCKET.delete(rawKey);
+    await runtimeEnv.RAW_BUCKET.put(
       rawKey,
       '{"data":[{"Date":"2024-02-01","Open":999,"Close":2}],"pagination_key":null}',
     );
@@ -1405,8 +1597,8 @@ describe("Receipt Evidence Authority in workerd", () => {
     });
     const calendar = interrupted.state.capture.officialCalendarEvidence;
     if (calendar === null) throw new Error("test official calendar missing");
-    await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.delete(calendar.key);
-    await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.put(calendar.key, '{"data":[]}');
+    await runtimeEnv.RAW_BUCKET.delete(calendar.key);
+    await runtimeEnv.RAW_BUCKET.put(calendar.key, '{"data":[]}');
     await expect(loadCaptureState(runtimeEnv, interrupted.context)).rejects.toThrow(
       "immutable official calendar changed after capture",
     );
@@ -1503,7 +1695,7 @@ describe("Receipt Evidence Authority in workerd", () => {
     expect(interrupted.state.capture.pages).toHaveLength(2);
     const forgedState = structuredClone(interrupted.state);
     const first = forgedState.capture.pages[0]!;
-    const rawObject = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.get(first.key);
+    const rawObject = await runtimeEnv.RAW_BUCKET.get(first.key);
     if (rawObject === null) throw new Error("test raw page missing");
     const raw = new Uint8Array(await rawObject.arrayBuffer());
     const forged = await forgeSegmentExhaustion(new Response(raw, {
@@ -1617,7 +1809,7 @@ describe("Receipt Evidence Authority in workerd", () => {
       { attempt_ordinal: 2, state: "CAPTURED" },
     ]);
     expect(attempts[0]!.attempt_id).not.toBe(attempts[1]!.attempt_id);
-    const rawObjects = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.list({
+    const rawObjects = await runtimeEnv.RAW_BUCKET.list({
       prefix: `raw/receipt-authority/production/${request.dataset_id}/${request.segment_id}/${operationId.slice(7)}/`,
     });
     expect(rawObjects.objects.some((object) =>
@@ -1743,6 +1935,8 @@ describe("Receipt Evidence Authority in workerd", () => {
     expect(receiptCount?.count).toBe(0);
     expect(acquisitionCalls).toBe(0);
     expect((await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.list()).objects).toEqual([]);
+    expect((await runtimeEnv.RAW_BUCKET.list()).objects).toEqual([]);
+    expect((await runtimeEnv.STRUCTURED_BUCKET.list()).objects).toEqual([]);
     await runInDurableObject(stub, async (_instance, state) => {
       expect(state.storage.sql.exec<{ count: number }>(
         "SELECT COUNT(*) AS count FROM authority_operations",
@@ -2052,13 +2246,14 @@ describe("Receipt Evidence Authority in workerd", () => {
       completeness: "ACQUIRED",
     });
     const product = await runtimeEnv.DB.prepare(
-      `SELECT artifact_key,artifact_digest,row_count,manifest_key
+      `SELECT artifact_key,artifact_digest,row_count,manifest_key,raw_manifest_key
          FROM receipt_product_materializations WHERE run_id=?`,
     ).bind(operation!.run_id).first<{
       artifact_key: string;
       artifact_digest: string;
       row_count: number;
       manifest_key: string;
+      raw_manifest_key: string;
     }>();
     expect(product).not.toBeNull();
     expect(product!.artifact_digest).toBe(
@@ -2071,15 +2266,29 @@ describe("Receipt Evidence Authority in workerd", () => {
     expect(product!.manifest_key).toMatch(
       /^product\/receipt-authority\/production\//,
     );
-    const artifact = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.get(
+    const artifact = await runtimeEnv.STRUCTURED_BUCKET.get(
       product!.artifact_key,
     );
     expect(artifact).not.toBeNull();
     expect(await sha256Digest(new Uint8Array(await artifact!.arrayBuffer())))
       .toBe(product!.artifact_digest);
     expect(await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.get(
+      product!.artifact_key,
+    )).toBeNull();
+    expect(await runtimeEnv.RAW_BUCKET.get(product!.artifact_key)).toBeNull();
+    expect(await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.get(
       product!.manifest_key,
     )).not.toBeNull();
+    expect(await runtimeEnv.STRUCTURED_BUCKET.get(product!.manifest_key))
+      .toBeNull();
+    expect(await runtimeEnv.RAW_BUCKET.get(product!.manifest_key)).toBeNull();
+    expect(await runtimeEnv.RAW_BUCKET.get(product!.raw_manifest_key))
+      .not.toBeNull();
+    expect(await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.get(
+      product!.raw_manifest_key,
+    )).toBeNull();
+    expect(await runtimeEnv.STRUCTURED_BUCKET.get(product!.raw_manifest_key))
+      .toBeNull();
     expect(await runtimeEnv.DB.prepare(
       `SELECT COUNT(*) AS count FROM jquants_records
         WHERE source='jquants' AND dataset='indices_bars_daily_topix'`,
@@ -2243,5 +2452,280 @@ describe("Receipt Evidence Authority in workerd", () => {
       ).toArray()
     );
     expect(keyRows.map((row) => row.key_generation)).toEqual([1, 2]);
+  });
+
+  it("issues an ACTIVE native JSDA receipt from persisted raw without JQUANTS_ACQUISITION", async () => {
+    const { stub } = await activateRegisteredTestKey();
+    let acquisitionCalls = 0;
+    (runtimeEnv as unknown as Record<string, unknown>).JQUANTS_ACQUISITION = {
+      fetch_governed_page: async () => {
+        acquisitionCalls += 1;
+        throw new Error("JQUANTS_ACQUISITION must not be called for JSDA");
+      },
+    };
+    const csv = "年月日,銘柄コード,銘柄名\n2002-08-02,1301,TEST BOND\n";
+    const bytes = new TextEncoder().encode(csv);
+    const digest = await sha256Digest(bytes);
+    const hex = digest.slice("sha256:".length);
+    const rawKey =
+      `raw/jsda/jsda_otc_bond_reference_prices/file_2002-08-02_otc/${hex}.csv`;
+    await runtimeEnv.RAW_BUCKET.put(rawKey, bytes, {
+      customMetadata: { sha256: hex },
+    });
+    const { queueContractDigest } = await import(
+      "../../ingestion-jsda/src/queue_contract"
+    );
+    const contract = await queueContractDigest();
+    const rootKey = "jsda:v2:root:jsda_otc_bond_reference_prices:cron:2026-08-01";
+    await runtimeEnv.DB.prepare(
+      `INSERT INTO jsda_acquisition_jobs_v3
+       (work_key,run_key,dataset,job_type,target_url,segment_id,parent_work_key,
+        contract_digest,state,attempt,cursor,requested_by,requested_at,
+        first_seen_at,updated_at)
+       VALUES (?,?,?,?,?,?,NULL,?,'queued',0,0,'cron',
+               '2026-08-01T00:00:00.000Z','2026-08-01T00:00:00.000Z',
+               '2026-08-01T00:00:00.000Z')`,
+    ).bind(
+      rootKey,
+      rootKey,
+      "jsda_otc_bond_reference_prices",
+      "discover_root",
+      "https://market.jsda.or.jp/shijyo/saiken/baibai/baisanchi/index.html",
+      "index_root_2026-08-01",
+      contract,
+    ).run();
+    const workKey = "jsda:v2:file:jsda_otc_bond_reference_prices:testhash0001";
+    await runtimeEnv.DB.prepare(
+      `INSERT INTO jsda_acquisition_jobs_v3
+       (work_key,run_key,dataset,job_type,target_url,segment_id,parent_work_key,
+        contract_digest,state,attempt,cursor,content_digest,raw_key,
+        audit_receipt_key,audit_receipt_digest,requested_by,requested_at,
+        first_seen_at,updated_at,completed_at)
+       VALUES (?,?,?,?,?,?,?,?, 'completed',1,0,?,?,?,?, 'cron',
+               '2026-08-01T00:00:00.000Z','2026-08-01T00:00:00.000Z',
+               '2026-08-01T00:00:00.000Z','2026-08-01T00:00:01.000Z')`,
+    ).bind(
+      workKey,
+      rootKey,
+      "jsda_otc_bond_reference_prices",
+      "fetch_file",
+      "https://market.jsda.or.jp/archive/data/otc-20020802.csv",
+      "file_2002-08-02_otc",
+      rootKey,
+      contract,
+      hex,
+      rawKey,
+      "audit/jsda/queue/test/completed.json",
+      hex,
+    ).run();
+    const jsdaRequest: ReceiptIssueRequestV1 = {
+      schema_version: "receipt-evidence-issue-request/v1",
+      operation: "issue_for_segment",
+      environment: "production",
+      source: "jsda",
+      contract_id: "jsda_governed_otc_reference_archive",
+      dataset_id: "jsda_otc_bond_reference_prices",
+      segment_grain: "source_time_series_file",
+      segment_id: "file_2002-08-02_otc",
+      expected_key_start: "2002-08-02",
+      expected_key_end: "2002-08-02",
+      request_nonce: "b".repeat(64),
+      work_key: workKey,
+      expected_contract_digest: contract,
+      raw_object_key: rawKey,
+    };
+    const issued = await stub.issue_for_segment(jsdaRequest);
+    expect(issued.state).toBe("FINALIZED");
+    expect(issued.receipt.source).toBe("jsda");
+    expect(issued.receipt.digests.eligibility).toBe("TRUSTED_COLLECTION");
+    expect(acquisitionCalls).toBe(0);
+    const replay = await stub.issue_for_segment(jsdaRequest);
+    expect(replay.replayed).toBe(true);
+    expect(replay.receipt_digest).toBe(issued.receipt_digest);
+    expect(acquisitionCalls).toBe(0);
+  });
+
+  it("refuses JSDA COMPLETE for wrong digest, non-exhausted frontier, and PARSE_ZERO", async () => {
+    const { stub } = await activateRegisteredTestKey();
+    (runtimeEnv as unknown as Record<string, unknown>).JQUANTS_ACQUISITION = {
+      fetch_governed_page: async () => {
+        throw new Error("JQUANTS_ACQUISITION must not be called for JSDA");
+      },
+    };
+    const { queueContractDigest } = await import(
+      "../../ingestion-jsda/src/queue_contract"
+    );
+    const contract = await queueContractDigest();
+    const rootKey = "jsda:v2:root:jsda_otc_bond_reference_prices:cron:2026-08-01";
+    await runtimeEnv.DB.prepare(
+      `INSERT INTO jsda_acquisition_jobs_v3
+       (work_key,run_key,dataset,job_type,target_url,segment_id,parent_work_key,
+        contract_digest,state,attempt,cursor,requested_by,requested_at,
+        first_seen_at,updated_at)
+       VALUES (?,?,?,?,?,?,NULL,?,'queued',0,0,'cron',
+               '2026-08-01T00:00:00.000Z','2026-08-01T00:00:00.000Z',
+               '2026-08-01T00:00:00.000Z')`,
+    ).bind(
+      rootKey,
+      rootKey,
+      "jsda_otc_bond_reference_prices",
+      "discover_root",
+      "https://market.jsda.or.jp/shijyo/saiken/baibai/baisanchi/index.html",
+      "index_root_2026-08-01",
+      contract,
+    ).run();
+    const csv = "年月日,銘柄コード,銘柄名\n2002-08-02,1301,TEST BOND\n";
+    const bytes = new TextEncoder().encode(csv);
+    const digest = await sha256Digest(bytes);
+    const hex = digest.slice("sha256:".length);
+    const rawKey =
+      `raw/jsda/jsda_otc_bond_reference_prices/file_2002-08-02_bad/${hex}.csv`;
+    await runtimeEnv.RAW_BUCKET.put(rawKey, bytes, {
+      customMetadata: { sha256: hex },
+    });
+    const workKey = "jsda:v2:file:jsda_otc_bond_reference_prices:wrongdigest01";
+    await runtimeEnv.DB.prepare(
+      `INSERT INTO jsda_acquisition_jobs_v3
+       (work_key,run_key,dataset,job_type,target_url,segment_id,parent_work_key,
+        contract_digest,state,attempt,cursor,content_digest,raw_key,
+        audit_receipt_key,audit_receipt_digest,requested_by,requested_at,
+        first_seen_at,updated_at,completed_at)
+       VALUES (?,?,?,?,?,?,?,?, 'completed',1,0,?,?,?,?, 'cron',
+               '2026-08-01T00:00:00.000Z','2026-08-01T00:00:00.000Z',
+               '2026-08-01T00:00:00.000Z','2026-08-01T00:00:01.000Z')`,
+    ).bind(
+      workKey,
+      rootKey,
+      "jsda_otc_bond_reference_prices",
+      "fetch_file",
+      "https://market.jsda.or.jp/archive/data/otc-20020802.csv",
+      "file_2002-08-02_bad",
+      rootKey,
+      contract,
+      "ff".repeat(32),
+      rawKey,
+      "audit/jsda/queue/test/wrong.json",
+      "ff".repeat(32),
+    ).run();
+    await expect(runInDurableObject(stub, (instance) => instance.issue_for_segment({
+      schema_version: "receipt-evidence-issue-request/v1",
+      operation: "issue_for_segment",
+      environment: "production",
+      source: "jsda",
+      contract_id: "jsda_governed_otc_reference_archive",
+      dataset_id: "jsda_otc_bond_reference_prices",
+      segment_grain: "source_time_series_file",
+      segment_id: "file_2002-08-02_bad",
+      expected_key_start: "2002-08-02",
+      expected_key_end: "2002-08-02",
+      request_nonce: "c".repeat(64),
+      work_key: workKey,
+      expected_contract_digest: contract,
+      raw_object_key: rawKey,
+    }))).rejects.toThrow(/digest differs|not trusted/);
+
+    const empty = new TextEncoder().encode("年月日,銘柄コード,銘柄名\n");
+    const emptyDigest = await sha256Digest(empty);
+    const emptyHex = emptyDigest.slice("sha256:".length);
+    const emptyKey =
+      `raw/jsda/jsda_otc_bond_reference_prices/file_2002-08-02_zero/${emptyHex}.csv`;
+    await runtimeEnv.RAW_BUCKET.put(emptyKey, empty, {
+      customMetadata: { sha256: emptyHex },
+    });
+    const zeroKey = "jsda:v2:file:jsda_otc_bond_reference_prices:parsezero0001";
+    await runtimeEnv.DB.prepare(
+      `INSERT INTO jsda_acquisition_jobs_v3
+       (work_key,run_key,dataset,job_type,target_url,segment_id,parent_work_key,
+        contract_digest,state,attempt,cursor,content_digest,raw_key,
+        audit_receipt_key,audit_receipt_digest,requested_by,requested_at,
+        first_seen_at,updated_at,completed_at)
+       VALUES (?,?,?,?,?,?,?,?, 'completed',1,0,?,?,?,?, 'cron',
+               '2026-08-01T00:00:00.000Z','2026-08-01T00:00:00.000Z',
+               '2026-08-01T00:00:00.000Z','2026-08-01T00:00:01.000Z')`,
+    ).bind(
+      zeroKey,
+      rootKey,
+      "jsda_otc_bond_reference_prices",
+      "fetch_file",
+      "https://market.jsda.or.jp/archive/data/otc-20020802.csv",
+      "file_2002-08-02_zero",
+      rootKey,
+      contract,
+      emptyHex,
+      emptyKey,
+      "audit/jsda/queue/test/zero.json",
+      emptyHex,
+    ).run();
+    await expect(runInDurableObject(stub, (instance) => instance.issue_for_segment({
+      schema_version: "receipt-evidence-issue-request/v1",
+      operation: "issue_for_segment",
+      environment: "production",
+      source: "jsda",
+      contract_id: "jsda_governed_otc_reference_archive",
+      dataset_id: "jsda_otc_bond_reference_prices",
+      segment_grain: "source_time_series_file",
+      segment_id: "file_2002-08-02_zero",
+      expected_key_start: "2002-08-02",
+      expected_key_end: "2002-08-02",
+      request_nonce: "d".repeat(64),
+      work_key: zeroKey,
+      expected_contract_digest: contract,
+      raw_object_key: emptyKey,
+    }))).rejects.toThrow(/PARSE_ZERO/);
+
+    const html = new TextEncoder().encode("<html><a href='/a.csv'>a</a></html>");
+    const htmlDigest = await sha256Digest(html);
+    const htmlHex = htmlDigest.slice("sha256:".length);
+    const htmlKey =
+      `raw/jsda/jsda_otc_bond_reference_prices/index_root_2026-08-01/${htmlHex}.html`;
+    await runtimeEnv.RAW_BUCKET.put(htmlKey, html, {
+      customMetadata: { sha256: htmlHex },
+    });
+    const frontier = JSON.stringify([
+      {
+        job_type: "fetch_file",
+        target_url: "https://market.jsda.or.jp/archive/data/otc-20020802.csv",
+        segment_id: "file_2002-08-02_otc",
+      },
+    ]);
+    await runtimeEnv.DB.prepare(
+      `UPDATE jsda_acquisition_jobs_v3
+          SET state='completed', attempt=1, cursor=0, frontier_json=?,
+              content_digest=?, raw_key=?, audit_receipt_key=?,
+              audit_receipt_digest=?, completed_at=?, updated_at=?
+        WHERE work_key=?`,
+    ).bind(
+      frontier,
+      htmlHex,
+      htmlKey,
+      "audit/jsda/queue/test/root.json",
+      htmlHex,
+      "2026-08-01T00:00:01.000Z",
+      "2026-08-01T00:00:01.000Z",
+      rootKey,
+    ).run();
+    await runtimeEnv.DB.prepare(
+      `INSERT INTO jsda_job_closures
+       (work_key,run_key,parent_work_key,job_type,closure_state,frontier_exhausted,
+        descendant_total,descendant_completed,descendant_rejected,
+        descendant_failed_transient,descendant_nonterminal,updated_at)
+       VALUES (?,?,NULL,'discover_root','open',0,1,0,0,0,1,?)`,
+    ).bind(rootKey, rootKey, "2026-08-01T00:00:00.000Z").run();
+    await expect(runInDurableObject(stub, (instance) => instance.issue_for_segment({
+      schema_version: "receipt-evidence-issue-request/v1",
+      operation: "issue_for_segment",
+      environment: "production",
+      source: "jsda",
+      contract_id: "jsda_governed_otc_reference_archive",
+      dataset_id: "jsda_otc_bond_reference_prices",
+      segment_grain: "official_archive_index_day",
+      segment_id: "index_root_2026-08-01",
+      expected_key_start: "2026-08-01",
+      expected_key_end: "2026-08-01",
+      request_nonce: "e".repeat(64),
+      work_key: rootKey,
+      expected_contract_digest: contract,
+      raw_object_key: htmlKey,
+    }))).rejects.toThrow(/not exhausted/);
   });
 });

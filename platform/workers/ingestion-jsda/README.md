@@ -60,11 +60,22 @@ npx wrangler queues create quant-jsda-ingestion
 npx wrangler queues create quant-jsda-ingestion-dlq
 npx wrangler queues create quant-jsda-ingestion-rejects
 printf '%s' "$INGESTION_RUN_TOKEN" | npx wrangler secret put INGESTION_RUN_TOKEN
-npx wrangler deploy
+npm run deploy:unsafe-dev
 ```
 
-Apply `ingestion-premium/migrations/0012_jsda_observation_identity.sql` through
-the canonical `quant-ingest` migration owner before deploying this Worker.
+Apply the full pending `quant-ingest` chain through `0023` only through
+`scripts/activate_jsda_v3_cutover.py`. Do not hand-loop SQL or apply a prefix.
+The operator stops writers, drains and pauses the Queue, persists a Time Travel
+bookmark/undo record, migrates under the D1 CAS lease, verifies, and restores
+the exact prior Cron/Queue state. Product Cron/Queue stay fail-closed until
+`v3_active`.
+`npm run deploy` and `npm run deploy:staging` route through
+`scripts/activate_jsda_v3_cutover.py`; direct Wrangler deployment is named
+`deploy:unsafe-dev` and is not a staging/production release path. The operator observes Cloudflare
+state directly. Caller JSON is not authority.
+`/health/ready` exposes `activated_source_sha`, `cutover_config_digest`, and
+`drain_evidence_digest` after a real D1 activation. Those facts plus the
+compiled config pin are not cryptographic proof.
 
 Production uses `quant-jsda-ingestion`, `quant-jsda-ingestion-dlq`, and the
 unconsumed terminal quarantine queue `quant-jsda-ingestion-rejects`.

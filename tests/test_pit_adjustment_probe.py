@@ -18,10 +18,32 @@ from core.engine import (
 )
 from ingestion.jquants.normalize import normalize_daily_bars, normalize_generic
 from paper_runtime.personal_prepared_frame import _personal_prepared_frame_scope
-from storage.sqlite_store import SqliteStore
+from storage.sqlite_store import SqliteStore as _SqliteStore
+from personal_history_compact_support import stamp_compact_manifest
+
+
+class SqliteStore(_SqliteStore):
+    def __exit__(self, *args):
+        result = super().__exit__(*args)
+        try:
+            _stamp_observation(Path(self.path))
+        except Exception:
+            try:
+                _stamp_observation(Path(self._path))
+            except Exception:
+                pass
+        return result
 
 AS_OF = "2025-06-01T09:00:00+09:00"
 CODE = "8697"
+
+def _stamp_observation(path: Path) -> None:
+    with sqlite3.connect(path) as connection:
+        stamp_compact_manifest(
+            connection,
+            format_name="unmanaged-catalog",
+            observed_through=AS_OF,
+        )
 
 
 def _source_bar(day: str, adjusted: Any = 100.0, *, code: str = CODE) -> dict:
@@ -53,6 +75,7 @@ def _typed_bar(
 
 
 def _first_invalid_from_public(path: Path) -> dict[str, Any] | None:
+    _stamp_observation(path)
     rows = pit.get_equity_bars_daily(
         as_of=AS_OF,
         codes=(CODE,),

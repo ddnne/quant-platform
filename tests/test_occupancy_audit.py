@@ -24,7 +24,6 @@ def test_write_usable_eval_snapshot_local_only(tmp_path) -> None:
         {"mid_n_explore": {}, "liq_large": {}},
         wave="test24em",
         root=tmp_path,
-        put_r2=False,
     )
     assert out["go"] is False
     assert out["yaml_still_present"] is False
@@ -43,7 +42,6 @@ def test_write_eval_wave_pack_local_only(tmp_path) -> None:
         {"mid_n_explore": {"x": 0.4}, "liq_large": {"x": 0.41}},
         wave="test24ep",
         root=tmp_path,
-        put_r2=False,
     )
     assert out["go"] is False
     assert out["not_a_pass"] is True
@@ -125,7 +123,6 @@ def test_load_ops_occupancy_prefers_maps_over_cells(tmp_path) -> None:
         {"mid_n_explore": {"new": 0.3}, "liq_large": {"new": 0.31}},
         wave="testmaps",
         root=tmp_path,
-        put_r2=False,
     )
     occ = load_ops_occupancy(tmp_path)
     assert occ["mid_n_explore"]["new"] == 0.3
@@ -142,7 +139,6 @@ def test_load_ops_occupancy_overlays_newer_cells(tmp_path) -> None:
         {"mid_n_explore": {"old": 0.2}, "liq_large": {"old": 0.21}},
         wave="testold",
         root=tmp_path,
-        put_r2=False,
     )
     time.sleep(0.05)
     newer = [{"logic_id": "fresh", "occupancy": 0.4}]
@@ -157,44 +153,6 @@ def test_load_ops_occupancy_overlays_newer_cells(tmp_path) -> None:
     assert occ["mid_n_explore"]["fresh"] == 0.4
     assert occ["liq_large"]["old"] == 0.21
     assert occ["liq_large"]["fresh"] == 0.4
-
-
-def test_put_r2_uses_worker_artifact_put(tmp_path, monkeypatch) -> None:
-    from research.occupancy_audit import _put_eval_bytes, write_eval_wave_pack
-
-    seen: list[tuple[str, bytes]] = []
-
-    def _fake_put(bucket, key, body, **kwargs):
-        assert kwargs.get("dry_run") is not True
-        seen.append((key, body))
-        return {"status": "put_ok", "bytes": len(body)}
-
-    monkeypatch.setattr("research.r2_io.put_research_artifact", _fake_put)
-    put = _put_eval_bytes(
-        job="eval-occupancy-maps-test24ep",
-        r2name="occupancy_maps.json",
-        body=b'{"go": false}',
-        put_r2=True,
-    )
-    assert put is not None
-    assert put["status"] == "put_ok"
-    assert seen == [
-        (
-            "research/eval/job=eval-occupancy-maps-test24ep/occupancy_maps.json",
-            b'{"go": false}',
-        )
-    ]
-    seen.clear()
-    out = write_eval_wave_pack(
-        {"mid_n_explore": {"x": 0.4}, "liq_large": {"x": 0.41}},
-        wave="test24ep",
-        root=tmp_path,
-        put_r2=True,
-    )
-    assert out["go"] is False
-    assert out["puts"]
-    assert all(p.get("status") == "put_ok" for p in out["puts"])
-    assert any(key.endswith("/occupancy_maps.json") for key, _ in seen)
 
 
 def test_run_eval_wave_local_stub_never_writes(tmp_path) -> None:
@@ -213,7 +171,6 @@ def test_run_eval_wave_local_stub_never_writes(tmp_path) -> None:
         {"mid_n_explore": {"x": 0.4}, "liq_large": {"x": 0.4}},
         wave="test24eq",
         root=tmp_path,
-        put_r2=False,
         propose=True,
         invoke=_invoke,
     )

@@ -10,8 +10,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import bindingManifest from "../../../../specs/cloudflare/active_worker_bindings.json" with { type: "json" };
 
 import {
-  BINDING_MANIFEST_DIGEST,
   BINDING_MANIFEST_SCHEMA_VERSION,
+  OPS_BINDING_IDENTITY_DIGEST,
   QuantOpsMcpAgent,
 } from "../src/agent.js";
 
@@ -123,12 +123,14 @@ describe("QuantOpsMcpAgent inherited RPC inventory", () => {
     const expected = handler.framework_rpc_inventory;
     expect(handler.name).toBe("QuantOpsMcpAgent");
     expect(BINDING_MANIFEST_SCHEMA_VERSION).toBe(bindingManifest.schema_version);
-    expect(BINDING_MANIFEST_DIGEST).toBe(bindingManifest.manifest_digest);
+    expect(OPS_BINDING_IDENTITY_DIGEST).toBe(
+      bindingManifest.ops_binding_identity_digest,
+    );
     expect(QuantOpsMcpAgent.bindingManifestSchemaVersion).toBe(
       bindingManifest.schema_version,
     );
-    expect(QuantOpsMcpAgent.bindingManifestDigest).toBe(
-      bindingManifest.manifest_digest,
+    expect(QuantOpsMcpAgent.opsBindingIdentityDigest).toBe(
+      bindingManifest.ops_binding_identity_digest,
     );
     expect(expected.own_custom_pre_init_rpc_methods).toEqual(
       preConstructionOwnMethods,

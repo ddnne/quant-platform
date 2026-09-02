@@ -16,6 +16,7 @@ import {
 } from "./pagination_proof";
 import { exactKeys, isPlainObject, isSha256 } from "./canonical";
 import type {
+  JsdaPersistedRequestV1,
   ReceiptAuthorityEnv,
   ReceiptIssueRequestV1,
 } from "./types";
@@ -32,12 +33,13 @@ export type CapturedPage = {
 };
 
 export type Capture = {
-  initialRequest: JquantsAcquisitionRequestV2;
+  initialRequest: JquantsAcquisitionRequestV2 | JsdaPersistedRequestV1;
   pages: CapturedPage[];
   rawManifestKey: string;
   rawManifestDigest: string;
   rawDigest: string;
   manifestFileDigest: string;
+  rawManifestByteCount: number;
   collectionDigest: string;
   terminalChainDigest: string;
   acquisitionExpiresAt: string;
@@ -101,6 +103,7 @@ const CAPTURE_KEYS = [
   "rawManifestDigest",
   "rawDigest",
   "manifestFileDigest",
+  "rawManifestByteCount",
   "collectionDigest",
   "terminalChainDigest",
   "acquisitionExpiresAt",
@@ -155,6 +158,7 @@ type DerivedCaptureArtifacts = Pick<
   | "rawManifestDigest"
   | "rawDigest"
   | "manifestFileDigest"
+  | "rawManifestByteCount"
   | "collectionDigest"
   | "terminalChainDigest"
   | "acquisitionExpiresAt"
@@ -371,6 +375,7 @@ async function deriveCaptureArtifacts(input: {
       ? input.pages[0]!.digest
       : await canonicalDigest({ pages: pageManifest }),
     manifestFileDigest: await sha256Digest(manifestJson),
+    rawManifestByteCount: new TextEncoder().encode(manifestJson).byteLength,
     collectionDigest,
     terminalChainDigest: terminal.metadata.chain_digest,
     acquisitionExpiresAt: terminal.metadata.acquisition_expires_at,
@@ -393,6 +398,8 @@ function requireStoredCapture(
     value.rawManifestKey !== `${prefix}manifest.json` ||
     !isSha256(value.rawManifestDigest) || !isSha256(value.rawDigest) ||
     !isSha256(value.manifestFileDigest) || !isSha256(value.collectionDigest) ||
+    !Number.isSafeInteger(value.rawManifestByteCount) ||
+    Number(value.rawManifestByteCount) < 1 ||
     !isSha256(value.terminalChainDigest) ||
     !canonicalIso(value.acquisitionExpiresAt) ||
     value.paginationExhausted !== true || value.discoveryExhausted !== true
@@ -457,6 +464,7 @@ function requireStoredCapture(
     rawManifestDigest: value.rawManifestDigest,
     rawDigest: value.rawDigest,
     manifestFileDigest: value.manifestFileDigest,
+    rawManifestByteCount: Number(value.rawManifestByteCount),
     collectionDigest: value.collectionDigest,
     terminalChainDigest: value.terminalChainDigest,
     acquisitionExpiresAt: value.acquisitionExpiresAt,
@@ -475,7 +483,7 @@ async function reproveCapture(
   const calendarProof = stored.officialCalendarEvidence === null
     ? null
     : await loadOfficialCalendarEvidence(
-      env.AUTHORITY_EVIDENCE_BUCKET,
+      env.RAW_BUCKET,
       stored.officialCalendarEvidence,
       initial,
     );
@@ -484,7 +492,7 @@ async function reproveCapture(
   const now = new Date();
   for (let index = 0; index < stored.pages.length; index += 1) {
     const claimed = stored.pages[index]!;
-    const bytes = await loadRawPage(env.AUTHORITY_EVIDENCE_BUCKET, claimed);
+    const bytes = await loadRawPage(env.RAW_BUCKET, claimed);
     const response = new Response(bytes, {
       status: claimed.responseStatus,
       headers: claimed.headers,
@@ -550,6 +558,7 @@ async function reproveCapture(
     rawManifestDigest: artifacts.rawManifestDigest,
     rawDigest: artifacts.rawDigest,
     manifestFileDigest: artifacts.manifestFileDigest,
+    rawManifestByteCount: artifacts.rawManifestByteCount,
     collectionDigest: artifacts.collectionDigest,
     terminalChainDigest: artifacts.terminalChainDigest,
     acquisitionExpiresAt: artifacts.acquisitionExpiresAt,
@@ -560,11 +569,14 @@ async function reproveCapture(
   if (canonicalJson(restored) !== canonicalJson(stored)) {
     throw new Error("durable capture summary differs from independent reproof");
   }
-  const manifest = await env.AUTHORITY_EVIDENCE_BUCKET.get(artifacts.rawManifestKey);
+  const manifest = await env.RAW_BUCKET.get(artifacts.rawManifestKey);
   if (manifest === null) throw new Error("immutable capture manifest disappeared");
   const manifestBytes = new Uint8Array(await manifest.arrayBuffer());
   if (await sha256Digest(manifestBytes) !== artifacts.manifestFileDigest) {
     throw new Error("immutable capture manifest digest differs");
+  }
+  if (manifestBytes.byteLength !== artifacts.rawManifestByteCount) {
+    throw new Error("immutable capture manifest byte count differs");
   }
   decodeCanonicalObject(manifestBytes, "immutable capture manifest");
   const manifestText = new TextDecoder("utf-8", {
@@ -742,7 +754,7 @@ export async function captureCollection(
       const rawCalendar = verified.officialCalendarRaw;
       const calendarKey = `${prefix}official-calendar.json`;
       await putCreateOnly(
-        env.AUTHORITY_EVIDENCE_BUCKET,
+        env.RAW_BUCKET,
         calendarKey,
         rawCalendar.bytes,
         {
@@ -766,7 +778,7 @@ export async function captureCollection(
         businessDates: rawCalendar.proof.businessDates,
       };
       officialCalendarProof = await loadOfficialCalendarEvidence(
-        env.AUTHORITY_EVIDENCE_BUCKET,
+        env.RAW_BUCKET,
         officialCalendarEvidence,
         initialRequest,
       );
@@ -779,7 +791,7 @@ export async function captureCollection(
     }
     const digest = await sha256Digest(body);
     const key = `${prefix}page-${String(index).padStart(6, "0")}.json`;
-    await putCreateOnly(env.AUTHORITY_EVIDENCE_BUCKET, key, body, {
+    await putCreateOnly(env.RAW_BUCKET, key, body, {
       authority: "receipt",
       operation_id: operationId,
       capture_attempt_id: captureAttemptId,
@@ -827,7 +839,7 @@ export async function captureCollection(
     prefix,
   });
   await putCreateOnly(
-    env.AUTHORITY_EVIDENCE_BUCKET,
+    env.RAW_BUCKET,
     artifacts.rawManifestKey,
     artifacts.manifestJson,
     {
@@ -845,6 +857,7 @@ export async function captureCollection(
     rawManifestDigest: artifacts.rawManifestDigest,
     rawDigest: artifacts.rawDigest,
     manifestFileDigest: artifacts.manifestFileDigest,
+    rawManifestByteCount: artifacts.rawManifestByteCount,
     collectionDigest: artifacts.collectionDigest,
     terminalChainDigest: artifacts.terminalChainDigest,
     acquisitionExpiresAt: artifacts.acquisitionExpiresAt,

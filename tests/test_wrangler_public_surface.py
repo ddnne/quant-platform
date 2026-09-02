@@ -34,7 +34,9 @@ PRODUCT_WORKERS = INTERNAL_PRODUCT + tuple(sorted(WORKERS_DEV_TRUE_EXCEPTIONS))
 
 PRODUCTION_D1_ID = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 PRODUCTION_KV_ID = "cbbfc9439c3e4a789fa103777d38f39e"
-PRODUCTION_BUCKETS = frozenset({"quant-raw", "quant-structured"})
+PRODUCTION_BUCKETS = frozenset(
+    {"quant-raw", "quant-structured", "quant-receipt-evidence"}
+)
 PRODUCTION_BINDING_IDS = frozenset({PRODUCTION_D1_ID, PRODUCTION_KV_ID}) | PRODUCTION_BUCKETS
 STAGING_D1_ID = "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb"
 OPS_PROJECTION_D1_ID = "1b497e8a-5c69-4e19-ae2e-89a8f3185272"
@@ -42,7 +44,13 @@ OPS_QUOTA_D1_ID = "d2c4bddd-7970-495c-aa05-ff28cbc1f6b6"
 OPS_PROJECTION_STAGING_D1_ID = "68ee96d5-766c-4832-836b-54c079bd6265"
 OPS_QUOTA_STAGING_D1_ID = "a27f8ce9-82cb-4eec-abac-9c3385ce40e1"
 STAGING_KV_ID = "4402f398df93412ebe6774d1bc603142"
-STAGING_BUCKETS = frozenset({"quant-raw-staging", "quant-structured-staging"})
+STAGING_BUCKETS = frozenset(
+    {
+        "quant-raw-staging",
+        "quant-structured-staging",
+        "quant-receipt-evidence-staging",
+    }
+)
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -145,11 +153,25 @@ def test_staging_uses_distinct_names_and_resources() -> None:
         env = staging.get("env") or {}
         assert "production" not in env, name
 
-    for name in ("ingestion-jsda", "ingestion-premium"):
+    staging_databases = {
+        "ingestion-jsda": {
+            "DB": ("quant-ingest-staging", STAGING_D1_ID),
+        },
+        "ingestion-premium": {
+            "DB": ("quant-ingest-staging", STAGING_D1_ID),
+            "OPS_PROJECTION_DB": (
+                "quant-ops-projection-staging",
+                OPS_PROJECTION_STAGING_D1_ID,
+            ),
+        },
+    }
+    for name, expected in staging_databases.items():
         staging = _load(_staging_toml(name))
         databases = staging.get("d1_databases") or []
-        assert {row["database_id"] for row in databases} == {STAGING_D1_ID}, name
-        assert {row["database_name"] for row in databases} == {"quant-ingest-staging"}, name
+        assert {
+            row["binding"]: (row["database_name"], row["database_id"])
+            for row in databases
+        } == expected, name
 
     r2_expected = {
         "ingestion-jsda": {"quant-raw-staging"},
@@ -189,10 +211,11 @@ def test_research_mass_eval_staging_is_token_gated_workers_dev_only() -> None:
 
     assert production.get("workers_dev") is True
     assert production.get("preview_urls") is False
-    assert production.get("secrets") == {"required": ["MASS_EVAL_TOKEN"]}
+    required_secrets = ["MASS_EVAL_TOKEN", "READY_ED25519_PRIVATE_KEY"]
+    assert production.get("secrets") == {"required": required_secrets}
     assert production_env.get("workers_dev") is True
     assert production_env.get("preview_urls") is False
-    assert production_env.get("secrets") == {"required": ["MASS_EVAL_TOKEN"]}
+    assert production_env.get("secrets") == {"required": required_secrets}
     assert production.get("route") is None
     assert production.get("routes") in (None, [])
     assert production_env.get("route") is None
@@ -201,7 +224,7 @@ def test_research_mass_eval_staging_is_token_gated_workers_dev_only() -> None:
     assert staging["name"] == "quant-platform-research-mass-eval-staging"
     assert staging.get("workers_dev") is True
     assert staging.get("preview_urls") is False
-    assert staging.get("secrets") == {"required": ["MASS_EVAL_TOKEN"]}
+    assert staging.get("secrets") == {"required": required_secrets}
     assert staging.get("route") is None
     assert staging.get("routes") in (None, [])
     assert "env" not in staging or "production" not in (staging.get("env") or {})

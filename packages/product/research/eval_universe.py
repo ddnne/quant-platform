@@ -206,8 +206,10 @@ def select_eval_universe(
     pool: Sequence[str] | None = None,
     period_start: str = "2019-01-01",
     period_end: str = "2019-10-21",
+    view: Any | None = None,
 ) -> list[str]:
     """Liquidity-first universe. Missing bars/fins → skip. Never invent."""
+    from pit.personal_research_view import PersonalResearchDataView
     from research.eval_loaders import (
         load_bars_from_sqlite_rich,
         load_fins_events_from_sqlite,
@@ -219,13 +221,17 @@ def select_eval_universe(
     if not want:
         # Head-N list slice is forbidden on both eval tracks.
         return []
+    if not isinstance(view, PersonalResearchDataView):
+        return []
     rich = load_bars_from_sqlite_rich(
+        view,
         codes=want,
         period_start=period_start,
         period_end=period_end,
+        decision_date=period_end,
     )
     fins = load_fins_events_from_sqlite(
-        codes=want, start=period_start, end=period_end
+        view, codes=want, start=period_start, end=period_end
     )
     scored: list[dict[str, Any]] = []
     for code in want:

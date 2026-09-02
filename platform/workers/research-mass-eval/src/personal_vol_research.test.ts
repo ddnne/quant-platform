@@ -551,7 +551,7 @@ describe("POST /v1/personal-vol-research", () => {
           received = request;
           return {
             research_mode: "personal_draft_screening",
-            exact_four: true,
+            purpose_id: "draft_vol_overlay_cohort_v1",
             go: false,
           };
         },
@@ -681,11 +681,12 @@ describe("personal vol immutable artifact", () => {
     });
     expect((result.strategies as unknown[])).toHaveLength(4);
     expect(result.execution_contract).toMatchObject({
-      exact_four: true,
-      exact_four_evaluation_complete: true,
-      exact_four_common_window_comparable: true,
+      purpose_id: "draft_vol_overlay_cohort_v1",
+      cohort_evaluation_complete: true,
+      cohort_common_window_comparable: true,
       common_successful_windows: ["y2021_full", "y2023_full", "y2025_q4"],
     });
+    expect(result.execution_contract).not.toHaveProperty("exact_four");
     expect(mem.order.indexOf(`${prefix}/report.json`)).toBeGreaterThanOrEqual(0);
     expect(mem.order.indexOf(`${prefix}/manifest.json`)).toBeGreaterThan(
       mem.order.indexOf(`${prefix}/report.json`),
@@ -730,8 +731,9 @@ describe("personal vol immutable artifact", () => {
       });
     }
     expect(result.execution_contract).toMatchObject({
-      exact_four_evaluation_complete: false,
-      exact_four_common_window_comparable: false,
+      purpose_id: "draft_vol_overlay_cohort_v1",
+      cohort_evaluation_complete: false,
+      cohort_common_window_comparable: false,
     });
     expect(result.execution_summary).toEqual(
       expect.arrayContaining([
@@ -770,8 +772,9 @@ describe("personal vol immutable artifact", () => {
     );
 
     expect(result.execution_contract).toMatchObject({
-      exact_four_evaluation_complete: false,
-      exact_four_common_window_comparable: false,
+      purpose_id: "draft_vol_overlay_cohort_v1",
+      cohort_evaluation_complete: false,
+      cohort_common_window_comparable: false,
       common_successful_windows: [],
     });
     expect(result.execution_summary).toEqual(

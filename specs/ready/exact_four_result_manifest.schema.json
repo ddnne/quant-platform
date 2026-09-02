@@ -6,6 +6,7 @@
   "additionalProperties": false,
   "required": [
     "format",
+    "identity",
     "execution_mode",
     "pilot_run_id",
     "readiness_attestation_id",
@@ -35,10 +36,12 @@
     "automatic_promotion",
     "mass_research_enabled",
     "live_trading_enabled",
+    "fill_contract_digest",
     "manifest_id"
   ],
   "properties": {
     "format": { "const": "exact-four-pilot-result-manifest/v2" },
+    "identity": { "const": "controlled_pilot_v1" },
     "execution_mode": { "const": "paper" },
     "pilot_run_id": { "$ref": "#/$defs/nonEmpty" },
     "readiness_attestation_id": { "$ref": "#/$defs/digest" },
@@ -90,6 +93,9 @@
     "automatic_promotion": { "const": false },
     "mass_research_enabled": { "const": false },
     "live_trading_enabled": { "const": false },
+    "fill_contract_digest": {
+      "const": "sha256:678985a0f7b142eeecd693ebe28bff822916bc815889f0b39e2841830377377d"
+    },
     "manifest_id": { "$ref": "#/$defs/digest" }
   },
   "$defs": {

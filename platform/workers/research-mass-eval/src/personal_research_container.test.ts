@@ -4,10 +4,57 @@ const containerRegistry = vi.hoisted(() => ({
   outboundByHost: undefined as
     | Record<string, (...args: never[]) => unknown>
     | undefined,
+  outboundHandlers: undefined as
+    | Record<string, (...args: never[]) => unknown>
+    | undefined,
 }));
 
 vi.mock("@cloudflare/containers", () => ({
   Container: class {
+    schedules: Array<{ when: number; callback: string; payload: unknown }> = [];
+    scheduleHistory: number[] = [];
+    removedHosts: string[] = [];
+    outboundClearCount = 0;
+    destroyCount = 0;
+    scheduleFailures = 0;
+    outboundClearFailures = 0;
+    destroyFailures = 0;
+
+    async schedule(when: number, callback: string, payload: unknown) {
+      if (this.scheduleFailures > 0) {
+        this.scheduleFailures -= 1;
+        throw new Error("schedule unavailable");
+      }
+      const item = { when, callback, payload };
+      this.schedules.push(item);
+      this.scheduleHistory.push(when);
+      return item;
+    }
+
+    deleteSchedules(callback: string) {
+      this.schedules = this.schedules.filter((item) => item.callback !== callback);
+    }
+
+    async removeOutboundByHost(host: string) {
+      this.removedHosts.push(host);
+    }
+
+    async setOutboundByHosts(handlers: Record<string, unknown>) {
+      if (this.outboundClearFailures > 0) {
+        this.outboundClearFailures -= 1;
+        throw new Error("outbound refresh unavailable");
+      }
+      if (Object.keys(handlers).length === 0) this.outboundClearCount += 1;
+    }
+
+    async destroy() {
+      if (this.destroyFailures > 0) {
+        this.destroyFailures -= 1;
+        throw new Error("destroy unavailable");
+      }
+      this.destroyCount += 1;
+    }
+
     static get outboundByHost() {
       return containerRegistry.outboundByHost;
     }
@@ -16,6 +63,16 @@ vi.mock("@cloudflare/containers", () => ({
       value: Record<string, (...args: never[]) => unknown>,
     ) {
       containerRegistry.outboundByHost = value;
+    }
+
+    static get outboundHandlers() {
+      return containerRegistry.outboundHandlers;
+    }
+
+    static set outboundHandlers(
+      value: Record<string, (...args: never[]) => unknown>,
+    ) {
+      containerRegistry.outboundHandlers = value;
     }
   },
   ContainerProxy: class {},
@@ -29,6 +86,7 @@ import {
   personalJobContainerName,
 } from "./personal_research_contract";
 import { personalHistorySourceOutbound } from "./personal_history_source";
+import * as controlledPilot from "./controlled_pilot";
 import {
   PersonalResearchContainer,
   submitPersonalResearch,
@@ -38,7 +96,7 @@ import type { Env } from "./types";
 
 const SHA = "a".repeat(64);
 const REQUEST: PersonalResearchRequest = {
-  cohort_id: "diverse-core-v1",
+  cohort_id: "diverse-core-am-pm-v1",
   job_id: "exact-four-container",
   snapshot_key: `research/personal/snapshots/sha256=${SHA}.sqlite.gz`,
   snapshot_sha256: SHA,
@@ -137,6 +195,38 @@ function sequentialRunnerEnv(
   };
 }
 
+function controlledStorage() {
+  const values = new Map<string, unknown>();
+  return {
+    values,
+    storage: {
+      get: async (key: string) => values.get(key),
+      put: async (key: string, value: unknown) => { values.set(key, value); },
+      delete: async (keys: string | string[]) => {
+        for (const key of Array.isArray(keys) ? keys : [keys]) values.delete(key);
+      },
+    },
+  };
+}
+
+type ControlledSchedule = {
+  when: number;
+  callback: string;
+  payload: { job_id: string; next_due: number };
+};
+
+function takeActiveControlledSchedule(
+  container: PersonalResearchContainer & { schedules: ControlledSchedule[] },
+  values: Map<string, unknown>,
+): ControlledSchedule {
+  const activeDue = values.get("controlled_resume_next_due");
+  const index = container.schedules.findIndex(
+    (item) => item.payload.next_due === activeDue,
+  );
+  if (index < 0) throw new Error("missing active controlled schedule");
+  return container.schedules.splice(index, 1)[0]!;
+}
+
 describe("personal research Container admission", () => {
   it("registers the private R2 handler through the Container base setter", () => {
     expect(containerRegistry.outboundByHost?.["research.r2"]).toBe(
@@ -145,6 +235,9 @@ describe("personal research Container admission", () => {
     expect(containerRegistry.outboundByHost?.["history.source"]).toBe(
       personalHistorySourceOutbound,
     );
+    expect(containerRegistry.outboundByHost?.["controlled.r2"]).toBeDefined();
+    expect(containerRegistry.outboundHandlers?.controlledPilotSnapshot).toBeDefined();
+    expect(containerRegistry.outboundHandlers?.controlledPilotWriter).toBeDefined();
     expect(new PersonalResearchContainer().enableInternet).toBe(false);
     expect(
       Object.prototype.hasOwnProperty.call(
@@ -152,6 +245,150 @@ describe("personal research Container admission", () => {
         "outboundByHost",
       ),
     ).toBe(false);
+  });
+
+  it("uses the SDK scheduler and preserves one bounded controlled deadline", async () => {
+    const { values, storage } = controlledStorage();
+    const container = new PersonalResearchContainer();
+    Object.assign(container as object, { ctx: { storage }, env: {} });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+
+    await container.scheduleControlledPilot("controlled-job-schedule");
+    const firstDeadline = values.get("controlled_resume_deadline");
+    clock.mockReturnValue(1_001_000);
+    await container.scheduleControlledPilot("controlled-job-schedule");
+
+    const scheduled = (container as unknown as {
+      schedules: ControlledSchedule[];
+    }).schedules;
+    expect(Object.prototype.hasOwnProperty.call(PersonalResearchContainer.prototype, "alarm")).toBe(false);
+    expect(firstDeadline).toBe(values.get("controlled_resume_deadline"));
+    expect(scheduled).toEqual([
+      {
+        when: 5,
+        callback: "resumeControlledPilot",
+        payload: { job_id: "controlled-job-schedule", next_due: 1_005_000 },
+      },
+      {
+        when: 65,
+        callback: "resumeControlledPilot",
+        payload: { job_id: "controlled-job-schedule", next_due: 1_005_000 },
+      },
+    ]);
+    const run = vi.spyOn(controlledPilot, "runControlledPilotJob").mockResolvedValue();
+    let polls = 0;
+    const status = vi.spyOn(controlledPilot, "controlledPilotStatus").mockImplementation(async () => {
+      polls += 1;
+      const phase = polls <= 13 ? "SUBMITTED" : polls === 14 ? "FINALIZE_RETRY" : "COMPLETED";
+      return Response.json({ status: phase }, { status: phase === "COMPLETED" ? 200 : 202 });
+    });
+    for (let index = 0; index < 15; index += 1) {
+      const active = takeActiveControlledSchedule(
+        container as PersonalResearchContainer & { schedules: ControlledSchedule[] },
+        values,
+      );
+      clock.mockReturnValue(active.payload.next_due);
+      await container.resumeControlledPilot(active.payload);
+    }
+    expect(run).toHaveBeenCalledTimes(15);
+    expect(status).toHaveBeenCalledTimes(15);
+    expect(values.has("controlled_resume_deadline")).toBe(false);
+    expect((container as unknown as { schedules: unknown[] }).schedules).toHaveLength(0);
+    expect((container as unknown as { scheduleHistory: number[] }).scheduleHistory).toContain(60);
+    expect((container as unknown as { outboundClearCount: number }).outboundClearCount).toBeGreaterThan(0);
+    clock.mockRestore();
+  });
+
+  it("recovers a failed initial schedule on replay without moving a live due time", async () => {
+    const { values, storage } = controlledStorage();
+    const container = new PersonalResearchContainer() as PersonalResearchContainer & {
+      scheduleFailures: number;
+      schedules: Array<{ payload: { next_due: number } }>;
+    };
+    Object.assign(container as object, { ctx: { storage }, env: {} });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    container.scheduleFailures = 4;
+
+    await expect(container.scheduleControlledPilot("controlled-job-recover")).rejects.toThrow(
+      "controlled resume scheduler unavailable",
+    );
+    expect(values.has("controlled_resume_next_due")).toBe(false);
+    container.scheduleFailures = 0;
+    await container.scheduleControlledPilot("controlled-job-recover");
+    const due = values.get("controlled_resume_next_due");
+    expect(container.schedules).toHaveLength(2);
+
+    clock.mockReturnValue(Number(due) + 30_000);
+    await container.scheduleControlledPilot("controlled-job-recover");
+    expect(container.schedules).toHaveLength(2);
+    expect(values.get("controlled_resume_next_due")).toBe(due);
+    clock.mockRestore();
+  });
+
+  it("prearms a same-generation watchdog before awaiting controlled work", async () => {
+    const { values, storage } = controlledStorage();
+    const container = new PersonalResearchContainer() as PersonalResearchContainer & {
+      schedules: ControlledSchedule[];
+    };
+    Object.assign(container as object, { ctx: { storage }, env: {} });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    await container.scheduleControlledPilot("controlled-job-watchdog");
+    const first = takeActiveControlledSchedule(container, values);
+    const generation = first.payload.next_due;
+    let releaseRun: (() => void) | undefined;
+    const blockedRun = new Promise<void>((resolve) => { releaseRun = resolve; });
+    vi.spyOn(controlledPilot, "runControlledPilotJob").mockReturnValue(blockedRun);
+    vi.spyOn(controlledPilot, "controlledPilotStatus").mockResolvedValue(
+      Response.json({ status: "SUBMITTED" }, { status: 202 }),
+    );
+    clock.mockReturnValue(generation);
+
+    const resumed = container.resumeControlledPilot(first.payload);
+    await vi.waitFor(() => {
+      expect(
+        container.schedules.filter((item) => item.payload.next_due === generation),
+      ).toHaveLength(2);
+    });
+    expect(values.get("controlled_resume_next_due")).toBe(generation);
+
+    releaseRun?.();
+    await resumed;
+    expect(values.get("controlled_resume_next_due")).not.toBe(generation);
+    clock.mockRestore();
+  });
+
+  it("keeps cleanup durable until the container is destroyed and outbound is atomically cleared", async () => {
+    const { values, storage } = controlledStorage();
+    const container = new PersonalResearchContainer() as PersonalResearchContainer & {
+      outboundClearFailures: number;
+      destroyCount: number;
+      schedules: Array<{ payload: { job_id: string; next_due: number } }>;
+    };
+    Object.assign(container as object, { ctx: { storage }, env: {} });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const expire = vi.spyOn(controlledPilot, "expireControlledPilotJob").mockResolvedValue();
+    await container.scheduleControlledPilot("controlled-job-cleanup");
+    const first = takeActiveControlledSchedule(container, values);
+    clock.mockReturnValue(1_000_000 + 180 * 60 * 1_000);
+    container.outboundClearFailures = 2;
+
+    await container.resumeControlledPilot(first.payload);
+    expect(values.get("controlled_job_id")).toBe("controlled-job-cleanup");
+    expect(container.destroyCount).toBe(1);
+    expect(
+      container.schedules.some(
+        (item) => item.payload.next_due === values.get("controlled_resume_next_due"),
+      ),
+    ).toBe(true);
+
+    const retry = takeActiveControlledSchedule(container, values);
+    clock.mockReturnValue(retry.payload.next_due);
+    await container.resumeControlledPilot(retry.payload);
+    expect(values.has("controlled_job_id")).toBe(false);
+    expect(container.destroyCount).toBe(2);
+    expect(expire).toHaveBeenCalledTimes(2);
+    expire.mockRestore();
+    clock.mockRestore();
   });
 
   it("rejects a missing snapshot before starting the Container", async () => {
@@ -206,14 +443,14 @@ describe("personal research Container admission", () => {
     const body = await (forwarded as Request).json();
     expect(body).toMatchObject({
       cohort_digest:
-        "sha256:ea37baf3423e5d84e61d4c80c59bdfe8184342dd3dee28646bd339cd45085a84",
-      cohort_id: "diverse-core-v1",
+        "sha256:0c9fc5cba93c68cbfec3951a56f09949674c1a01cb4d4d4cf406082c01033c10",
+      cohort_id: "diverse-core-am-pm-v1",
       runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
       snapshot_key: REQUEST.snapshot_key,
       snapshot_sha256: SHA,
       universe_id: "topix500",
       universe_rule_digest:
-        "sha256:5034530267f4a358a80d9426fcfedfb1162b9f71c1024b54b4b39fe3547d53c6",
+        "sha256:8ca72cf8c134ad082605fd948cf005b73124643b106a68521174b009442046fb",
     });
   });
 
@@ -230,7 +467,7 @@ describe("personal research Container admission", () => {
     expect(new URL(forwarded.url).pathname).toBe("/v1/run");
     expect(await forwarded.json()).toMatchObject({
       cohort_digest:
-        "sha256:77136481d8a6b20fb8dc8188b8d6adb2837050b8185a8f8abac92ca10811adde",
+        "sha256:0c9fc5cba93c68cbfec3951a56f09949674c1a01cb4d4d4cf406082c01033c10",
       cohort_id: "diverse-core-am-pm-v1",
       runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
       universe_id: "topix500",

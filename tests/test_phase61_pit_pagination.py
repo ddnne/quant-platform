@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pit.query as pit_query
 import pytest
+from _coreseed import write_snapshot_observation_clock
 from data_access import QuantDataAccess, QuantDataConfig
 from pit import get_jquants_records
 from storage.sqlite_store import SqliteStore
@@ -34,6 +35,7 @@ def test_data_access_page_size_200_is_bounded_in_sql(tmp_path, monkeypatch):
     path = tmp_path / "ready.sqlite"
     with SqliteStore(path) as store:
         store.upsert("jquants_records", [_record(index) for index in range(205)])
+        write_snapshot_observation_clock(store, AS_OF)
 
     decoded: list[dict] = []
     real_decode = pit_query._decode_row
@@ -95,6 +97,7 @@ def test_keyset_cursor_uses_source_tiebreaker_and_binds_snapshot_query(tmp_path)
     ]
     with SqliteStore(path) as store:
         store.upsert("jquants_records", tied)
+        write_snapshot_observation_clock(store, AS_OF)
 
     common = {
         "as_of": AS_OF,

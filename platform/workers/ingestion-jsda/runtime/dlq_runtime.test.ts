@@ -7,8 +7,9 @@ import {
   reset,
 } from "cloudflare:test";
 import { beforeEach, describe, expect, inject, it } from "vitest";
-import worker from "../src/testing";
+import worker, { writeFixtureCutover } from "../src/testing";
 import type { JsdaWorkerEnv } from "../src/env";
+import { closedReceiptEnv } from "./receipt_test_authority";
 import { loadJob, loadRunClosure, registerJob } from "../src/job_store";
 import {
   descriptorForFile,
@@ -26,18 +27,7 @@ const migrations = inject<Array<{ name: string; queries: string[] }>>(
 beforeEach(async () => {
   await reset();
   await applyD1Migrations(runtimeEnv.DB, migrations);
-  await runtimeEnv.DB.prepare(
-    `UPDATE jsda_v3_cutover_control
-        SET phase='v3_active', activated_at=?, activated_source_sha=?,
-            drain_evidence_digest=?
-      WHERE singleton=1 AND phase='bridge'`,
-  )
-    .bind(
-      "2026-08-25T01:29:00.000Z",
-      "a".repeat(40),
-      `sha256:${"b".repeat(64)}`,
-    )
-    .run();
+  await writeFixtureCutover(runtimeEnv.DB);
 });
 
 const FILE_A = "https://market.jsda.or.jp/archive/data/otc-20020802.csv";
@@ -57,7 +47,7 @@ async function deliverOn(
     },
   ]);
   const ctx = createExecutionContext();
-  await worker.queue(batch, runtimeEnv, ctx);
+  await worker.queue(batch, closedReceiptEnv(runtimeEnv), ctx);
   return getQueueResult(batch, ctx);
 }
 
@@ -246,6 +236,63 @@ describe("JSDA DLQ terminal convergence", () => {
       "waiting_children",
     );
     expect(await passCount(root.run_key)).toBe(0);
+  });
+
+  it("terminally audits a legacy v1 DLQ body without minting COMPLETE", async () => {
+    const legacyBodies = [
+      {
+        id: "dlq-legacy-otc-v1",
+        body: {
+          version: "jsda-dataset-job/v1",
+          dataset: "jsda_otc_bond_reference_prices",
+          job_id: "jsda:v1:otc:2026-08-29",
+          requested_at: "2026-08-29T01:30:00.000Z",
+          requested_by: "cron",
+        },
+      },
+      {
+        id: "dlq-legacy-corp-v1",
+        body: {
+          version: "jsda-dataset-job/v1",
+          dataset: "jsda_corporate_bond_transactions",
+          job_id: "jsda:v1:corp:2026-08-30",
+          requested_at: "2026-08-30T01:30:00.000Z",
+          requested_by: "cron",
+        },
+      },
+    ];
+    for (const { id, body } of legacyBodies) {
+      const result = await deliverOn(
+        "quant-jsda-ingestion-dlq-test",
+        body,
+        id,
+        0,
+      );
+      expect(result.explicitAcks).toEqual([id]);
+      expect(result.retryMessages).toEqual([]);
+      const rejected = await runtimeEnv.DB.prepare(
+        `SELECT reason_code, body_json FROM jsda_queue_rejects_v2
+          WHERE message_id=?`,
+      )
+        .bind(id)
+        .first<{ reason_code: string; body_json: string }>();
+      expect(rejected?.reason_code).toBe("dead_letter_invalid_job_schema");
+      expect(rejected?.body_json).not.toContain("COMPLETE");
+      expect(JSON.parse(rejected?.body_json ?? "{}")).toMatchObject({
+        kind: "object",
+        keys: ["dataset", "job_id", "requested_at", "requested_by", "version"],
+      });
+    }
+    const jobs = await runtimeEnv.DB.prepare(
+      "SELECT COUNT(*) AS n FROM jsda_acquisition_jobs_v3",
+    ).first<{ n: number }>();
+    expect(jobs?.n).toBe(0);
+    const completeLogs = await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS n FROM ingestion_run_log
+        WHERE status IN ('pass', 'COMPLETE')
+           OR instr(lower(coalesce(detail, '')), 'complete') > 0`,
+    ).first<{ n: number }>();
+    expect(completeLogs?.n).toBe(0);
   });
 
   it("records invalid DLQ deliveries as reject evidence before ack", async () => {

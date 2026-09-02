@@ -161,12 +161,22 @@ describe("Receipt activation observer runtime boundary", () => {
 
   it("freezes no storage/secret/DO/named RPC binding and one staging service", () => {
     const worker = bindingManifest.workers["receipt-activation-observer"];
-    for (const environment of ["base", "production"] as const) {
-      const surface = worker[environment];
+    const base = worker.base;
+    expect(base.workers_dev).toBe(false);
+    expect(base.services).toEqual([]);
+    const production = worker.production;
+    expect(production.workers_dev).toBe(false);
+    expect(production.services).toEqual([
+      {
+        binding: "JSDA_INGESTION",
+        service: "quant-platform-ingestion-jsda",
+        entrypoint: "JsdaReadinessService",
+      },
+    ]);
+    for (const surface of [base, production]) {
       expect(surface.workers_dev).toBe(false);
       expect(surface.routes).toEqual([]);
       expect(surface.route).toBeNull();
-      expect(surface.services).toEqual([]);
       expect(surface.secret_names).toEqual([]);
       expect(surface.d1_databases).toEqual([]);
       expect(surface.r2_buckets).toEqual([]);
@@ -180,11 +190,18 @@ describe("Receipt activation observer runtime boundary", () => {
     expect(worker.staging).toMatchObject({
       workers_dev: true,
       preview_urls: false,
-      services: [{
-        binding: "PREMIUM_RECEIPT_OPERATOR",
-        service: "quant-platform-ingestion-premium-staging",
-        entrypoint: "PremiumReceiptAuditEvidenceService",
-      }],
+      services: [
+        {
+          binding: "JSDA_INGESTION",
+          service: "quant-platform-ingestion-jsda-staging",
+          entrypoint: "JsdaReadinessService",
+        },
+        {
+          binding: "PREMIUM_RECEIPT_OPERATOR",
+          service: "quant-platform-ingestion-premium-staging",
+          entrypoint: "PremiumReceiptAuditEvidenceService",
+        },
+      ],
       secret_names: [],
       worker_entrypoints: [],
       durable_object_class_handlers: [],

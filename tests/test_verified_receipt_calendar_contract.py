@@ -28,6 +28,7 @@ from storage.verified_receipt import (
 from tests.receipt_test_support import (
     _SignedReceiptAuthority,
     _reconcile_collection_evidence,
+    build_test_signed_digest_fields,
 )
 
 
@@ -35,6 +36,13 @@ _ACQUISITION_DIGESTS = (
     "acquisition_collection_manifest_file_digest",
     "acquisition_collection_digest",
     "acquisition_terminal_chain_digest",
+)
+_PRODUCT_DIGESTS = (
+    "product_artifact_digest",
+    "product_manifest_digest",
+)
+_AUTHORITY_BASE_DIGESTS = frozenset(
+    (*_ACQUISITION_DIGESTS, *_PRODUCT_DIGESTS)
 )
 _MASTER_CALENDAR_DIGESTS = (
     "official_calendar_evidence_digest",
@@ -44,7 +52,19 @@ _MASTER_CALENDAR_DIGESTS = (
     "official_calendar_binding_digest",
 )
 _JQUANTS_AUTHORITY_DIGESTS = frozenset(
-    (*_ACQUISITION_DIGESTS, *_MASTER_CALENDAR_DIGESTS)
+    (*_AUTHORITY_BASE_DIGESTS, *_MASTER_CALENDAR_DIGESTS)
+)
+_V3_ONLY_RECEIPT_FIELDS = (
+    "contract_id",
+    "receipt_issue_digest",
+    "artifact_key",
+    "artifact_byte_count",
+    "manifest_key",
+    "manifest_byte_count",
+    "raw_manifest_key",
+    "raw_manifest_byte_count",
+    "raw_byte_count",
+    "natural_key_digest",
 )
 
 
@@ -127,12 +147,36 @@ def _signed_claims(receipt) -> dict[str, object]:
     return json.loads(base64.b64decode(receipt.digests["signed_body_b64"]))
 
 
+def _resign_v3_extra_digests(receipt, signing_key, extras: dict[str, object]):
+    """Return a self-consistent v3 signature around an adversarial inventory."""
+    claims = _signed_claims(receipt)
+    for field in ("version", "parser_normalizer_version", "issuer_id", "issued_at"):
+        claims.pop(field)
+    claims["extra_digests"] = dict(extras)
+    claims["observation_digest"] = canonical_evidence_digest(
+        {
+            key: value
+            for key, value in claims.items()
+            if key != "observation_digest"
+        }
+    )
+    return replace(
+        receipt,
+        digests=build_test_signed_digest_fields(
+            signing_key=signing_key,
+            closure_claims=claims,
+        ),
+    )
+
+
 def _downgrade_for_audit(receipt, signing_key, version: str):
     digests = dict(receipt.digests)
     claims = json.loads(base64.b64decode(digests["signed_body_b64"]))
     claims["version"] = version
     claims.pop("environment")
     claims.pop("authority_instance_digest")
+    for field in _V3_ONLY_RECEIPT_FIELDS:
+        claims.pop(field)
     scope = {
         key: claims[key]
         for key in (
@@ -206,8 +250,9 @@ def test_v3_master_requires_exact_calendar_digest_inventory(
 @pytest.mark.parametrize(
     ("dataset", "expected"),
     [
-        ("markets_calendar", frozenset(_ACQUISITION_DIGESTS)),
+        ("markets_calendar", _AUTHORITY_BASE_DIGESTS),
         ("equities_master", _JQUANTS_AUTHORITY_DIGESTS),
+        ("jsda_otc_bond_reference_prices", _AUTHORITY_BASE_DIGESTS),
     ],
 )
 def test_canonical_test_producer_emits_dataset_authority_inventory(
@@ -221,7 +266,8 @@ def test_canonical_test_producer_emits_dataset_authority_inventory(
     claims = _signed_claims(receipt)
     extras = claims["extra_digests"]
     assert isinstance(extras, dict)
-    assert frozenset(extras) & _JQUANTS_AUTHORITY_DIGESTS == expected
+    assert frozenset(extras) == expected
+    assert len(extras) == (10 if dataset == "equities_master" else 5)
     _verify(receipt, required)
 
 
@@ -288,7 +334,7 @@ def test_v3_jquants_rejects_each_missing_common_acquisition_digest(
         _verify(receipt, required)
 
 
-def test_v3_non_jquants_forbids_jquants_authority_digests(
+def test_v3_jsda_forbids_master_calendar_digest_inventory(
     receipt_ed25519_keys,
 ) -> None:
     required, receipt = _issue(
@@ -301,6 +347,89 @@ def test_v3_non_jquants_forbids_jquants_authority_digests(
         match="J-Quants authority digest inventory",
     ):
         _verify(receipt, required)
+
+
+@pytest.mark.parametrize("missing", _ACQUISITION_DIGESTS)
+def test_v3_jsda_rejects_each_missing_acquisition_digest(
+    receipt_ed25519_keys, missing: str
+) -> None:
+    extras = _extras(calendar=False)
+    extras.pop(missing)
+    required, receipt = _issue(
+        receipt_ed25519_keys,
+        dataset="jsda_otc_bond_reference_prices",
+        extras=extras,
+        include_common=False,
+    )
+    with pytest.raises(
+        ReceiptVerificationError,
+        match="J-Quants authority digest inventory",
+    ):
+        _verify(receipt, required)
+
+
+@pytest.mark.parametrize("missing", _PRODUCT_DIGESTS)
+def test_v3_rejects_each_missing_product_digest_in_validly_resigned_claims(
+    receipt_ed25519_keys, missing: str
+) -> None:
+    required, receipt = _issue(
+        receipt_ed25519_keys,
+        dataset="markets_calendar",
+        extras={},
+    )
+    extras = dict(_signed_claims(receipt)["extra_digests"])
+    extras.pop(missing)
+    regressed = _resign_v3_extra_digests(
+        receipt,
+        receipt_ed25519_keys.signing_key,
+        extras,
+    )
+
+    with pytest.raises(ReceiptVerificationError, match="digest inventory"):
+        _verify(regressed, required)
+
+
+def test_v3_rejects_unknown_digest_in_validly_resigned_claims(
+    receipt_ed25519_keys,
+) -> None:
+    required, receipt = _issue(
+        receipt_ed25519_keys,
+        dataset="markets_calendar",
+        extras={},
+    )
+    extras = dict(_signed_claims(receipt)["extra_digests"])
+    extras["unknown_authority_digest"] = _digest("unknown-authority-digest")
+    regressed = _resign_v3_extra_digests(
+        receipt,
+        receipt_ed25519_keys.signing_key,
+        extras,
+    )
+
+    with pytest.raises(ReceiptVerificationError, match="digest inventory"):
+        _verify(regressed, required)
+
+
+def test_v3_rejects_product_artifact_mismatch_in_validly_resigned_claims(
+    receipt_ed25519_keys,
+) -> None:
+    required, receipt = _issue(
+        receipt_ed25519_keys,
+        dataset="markets_calendar",
+        extras={},
+    )
+    extras = dict(_signed_claims(receipt)["extra_digests"])
+    extras["product_artifact_digest"] = _digest("wrong-product-artifact")
+    regressed = _resign_v3_extra_digests(
+        receipt,
+        receipt_ed25519_keys.signing_key,
+        extras,
+    )
+
+    with pytest.raises(
+        ReceiptVerificationError,
+        match="product artifact digest does not bind structured digest",
+    ):
+        _verify(regressed, required)
 
 
 @pytest.mark.parametrize(

@@ -5,6 +5,7 @@ import {
   parsePersonalSnapshotBuildRequest,
   personalSnapshotObjectKey,
   personalSnapshotRequestDigest,
+  verifySnapshotObservationEvidence,
 } from "./personal_snapshot_contract";
 
 const NOW = new Date("2026-08-30T03:00:00.000Z");
@@ -75,5 +76,47 @@ describe("personal snapshot request contract", () => {
         NOW,
       ).ok,
     ).toBe(true);
+  });
+});
+
+describe("snapshot observation evidence", () => {
+  const sqlite = {
+    observed_through: "2025-01-02T16:00:00+09:00",
+    revision_window_calendar_days: 40,
+    revision_coverage: "BOUNDED_WINDOW",
+  };
+
+  it("accepts matching immutable observation evidence", () => {
+    expect(
+      verifySnapshotObservationEvidence(
+        {
+          status: "COMPLETED",
+          observed_through: sqlite.observed_through,
+          revision_window_calendar_days: 40,
+          revision_coverage: "BOUNDED_WINDOW",
+        },
+        sqlite,
+      ).ok,
+    ).toBe(true);
+  });
+
+  it("rejects a broadened observed_through or missing revision evidence", () => {
+    expect(
+      verifySnapshotObservationEvidence(
+        {
+          status: "COMPLETED",
+          observed_through: "2099-01-01T00:00:00+09:00",
+          revision_window_calendar_days: 40,
+          revision_coverage: "BOUNDED_WINDOW",
+        },
+        sqlite,
+      ).ok,
+    ).toBe(false);
+    expect(
+      verifySnapshotObservationEvidence(
+        { status: "COMPLETED", observed_through: sqlite.observed_through },
+        sqlite,
+      ).ok,
+    ).toBe(false);
   });
 });

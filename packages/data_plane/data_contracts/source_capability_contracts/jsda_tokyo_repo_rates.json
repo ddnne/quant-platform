@@ -1,0 +1,58 @@
+{
+  "policy_version": "source-capability/v3",
+  "dataset_id": "jsda_tokyo_repo_rates",
+  "source": "jsda",
+  "upstream_locator": "/shiryoshitsu/toukei/trr/index.html",
+  "official_evidence_url": "https://www.jsda.or.jp/shiryoshitsu/toukei/trr/index.html",
+  "history_mode": "bounded_history",
+  "earliest_official_availability": "2012-10-29",
+  "historical_research_eligible": true,
+  "tip_only_operational": false,
+  "supported_query_parameters": [],
+  "publication_calendar": {
+    "kind": "official_time_series_file",
+    "timezone": "Asia/Tokyo",
+    "index_url": "https://www.jsda.or.jp/shiryoshitsu/toukei/trr/index.html",
+    "required_domain": "dates_present_in_official_time_series_file"
+  },
+  "entitlement_semantics": {
+    "clamp_before_earliest": false,
+    "subscription_floor": null
+  },
+  "collection_window": {
+    "grain": "source_time_series_file",
+    "open": "2012-10-29",
+    "close": "latest_jsda_publication"
+  },
+  "freshness_sla": {
+    "expected_after": "official_publication",
+    "usable_by": "after_ingestion",
+    "timezone": "Asia/Tokyo",
+    "rule": "official_time_series_file"
+  },
+  "event_time": {
+    "policy": "source_observation_date",
+    "fields": ["as_of_date"]
+  },
+  "available_at": {
+    "policy": "ingest_time_conservative_when_publication_timestamp_unknown",
+    "field": null,
+    "known_publication_lag": null
+  },
+  "revision_semantics": {
+    "policy": "source_file_replacement_capture_new_generation",
+    "generation_on_revision": true
+  },
+  "research_profile_eligibility": {
+    "include_in": ["historical_research", "core_historical"],
+    "exclude_from": ["calendar_day_inventory"],
+    "exclusion_reason": "The official time-series file is the required domain; calendar gaps are not empty COMPLETE segments.",
+    "historical_research": true,
+    "tip_only": false,
+    "dataset_complete_claim": false
+  },
+  "required_domain_semantics": {
+    "basis": "official_time_series_file",
+    "empty_success_policy": "never_complete"
+  }
+}
