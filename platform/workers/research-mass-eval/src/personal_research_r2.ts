@@ -57,7 +57,7 @@ import {
   personalAcquisitionCacheR2Outbound,
 } from "./personal_acquisition_cache_r2";
 import { sha256Hex } from "./sha256";
-import { controlledContainerR2Outbound } from "./controlled_pilot_container_r2";
+import { CONTROLLED_PILOT_KEY_PREFIX } from "./controlled_pilot_contract";
 
 const RESULT_MAX_BYTES = 512 * 1024 * 1024;
 const MANIFEST_MAX_BYTES = 64 * 1024;
@@ -779,8 +779,12 @@ export async function personalResearchR2Outbound(
   if (url.hostname !== "research.r2" || url.search || url.hash || key.includes("%")) {
     return responseJson({ error: "R2 request denied" }, 403);
   }
-  const controlled = await controlledContainerR2Outbound(request, env, key);
-  if (controlled) return controlled;
+  // The generic personal-container capability must never reach Controlled Pilot
+  // objects. Controlled jobs receive a separately bound handler whose runtime
+  // context is tied to the deterministic job container.
+  if (key.startsWith(CONTROLLED_PILOT_KEY_PREFIX)) {
+    return responseJson({ error: "controlled R2 prefix denied" }, 403);
+  }
   if (
     (request.method === "GET" || request.method === "HEAD") &&
     parseTerminalManifestKey(key)

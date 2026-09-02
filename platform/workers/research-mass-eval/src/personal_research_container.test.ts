@@ -160,6 +160,7 @@ describe("personal research Container admission", () => {
     );
     expect(containerRegistry.outboundByHost?.["controlled.r2"]).toBeDefined();
     expect(containerRegistry.outboundHandlers?.controlledPilotSnapshot).toBeDefined();
+    expect(containerRegistry.outboundHandlers?.controlledPilotWriter).toBeDefined();
     expect(new PersonalResearchContainer().enableInternet).toBe(false);
     expect(
       Object.prototype.hasOwnProperty.call(

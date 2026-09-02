@@ -57,6 +57,7 @@ import {
   StrictJsonError,
 } from "./controlled_pilot_json";
 import { CONTROLLED_R2_HOST } from "./controlled_pilot_r2";
+import { CONTROLLED_WRITER_R2_HOST } from "./controlled_pilot_container_r2";
 import * as registries from "./controlled_pilot_registries";
 import type { PinnedVerifyKey } from "./controlled_pilot_registries";
 import { verifiedPersonalResearchContainer } from "./personal_research_runner";
@@ -82,6 +83,7 @@ export {
 
 const SHA256_RE = /^sha256:[0-9a-f]{64}$/;
 const CONTROLLED_OUTBOUND_HANDLER = "controlledPilotSnapshot";
+const CONTROLLED_WRITER_OUTBOUND_HANDLER = "controlledPilotWriter";
 const MIN_TTL_MS = 60_000;
 const MAX_TTL_MS = 86_400_000;
 const STATE_MAX_BYTES = 16 * 1024;
@@ -781,7 +783,7 @@ type BoundContainer = {
   setOutboundByHost: (
     hostname: string,
     method: string,
-    params: ControlledPhysicalSnapshot,
+    params: unknown,
   ) => Promise<void>;
   removeOutboundByHost: (hostname: string) => Promise<void>;
 };
@@ -790,18 +792,34 @@ async function bindPhysicalOutbound(
   env: Env,
   containerName: string,
   physical: ControlledPhysicalSnapshot,
+  writer: { job_id: string; request_digest: string },
 ): Promise<BoundContainer> {
   const target = (await verifiedPersonalResearchContainer(env, containerName)) as BoundContainer;
   if (typeof target.setOutboundByHost !== "function" || typeof target.removeOutboundByHost !== "function") {
     throw new Error("controlled container outbound policy is unavailable");
   }
   await target.setOutboundByHost(CONTROLLED_R2_HOST, CONTROLLED_OUTBOUND_HANDLER, physical);
+  try {
+    await target.setOutboundByHost(
+      CONTROLLED_WRITER_R2_HOST,
+      CONTROLLED_WRITER_OUTBOUND_HANDLER,
+      writer,
+    );
+  } catch (error) {
+    await target.removeOutboundByHost(CONTROLLED_R2_HOST);
+    throw error;
+  }
   return target;
 }
 
 async function unbindPhysicalOutbound(target: BoundContainer | null): Promise<void> {
   if (!target) return;
-  await target.removeOutboundByHost(CONTROLLED_R2_HOST);
+  const removed = await Promise.allSettled([
+    target.removeOutboundByHost(CONTROLLED_R2_HOST),
+    target.removeOutboundByHost(CONTROLLED_WRITER_R2_HOST),
+  ]);
+  const failed = removed.find((result) => result.status === "rejected");
+  if (failed?.status === "rejected") throw failed.reason;
 }
 
 async function invokeBudget(
@@ -1174,6 +1192,38 @@ type PersistedChildRef = {
 
 class PersistedChildConflict extends Error {}
 
+function controlledArtifactBindings(
+  request: ControlledPilotRequest,
+  ready: VerifiedControlledReady,
+  authorizationDigest: string,
+): Record<string, unknown> {
+  return {
+    authorization_digest: authorizationDigest,
+    ready_attestation_id: ready.attestation_id,
+    snapshot_id: ready.snapshot_id,
+    immutable_db_digest: ready.immutable_db_digest,
+    snapshot_key: ready.physical.key,
+    snapshot_size: ready.physical.size,
+    profile_digest: ready.profile_digest,
+    plan_set_digest: ready.plan_set_digest,
+    dependency_closure_digest: ready.dependency_closure_digest,
+    ready_manifest_digest: ready.ready_manifest_digest,
+    signed_projection_document_digest: ready.signed_projection_document_digest,
+    session_scope: ready.session_scope,
+    resolved_universe_digest: ready.resolved_universe_digest,
+    universe_rule_digest: EXACT_FOUR_UNIVERSE_RULE_DIGEST,
+    fill_contract_digest: CONTROLLED_FILL_CONTRACT_DIGEST,
+    exact_four_binding_digest: EXACT_FOUR_BINDING_DIGEST,
+    idempotency_key: request.idempotency_key,
+    generation: CONTROLLED_PILOT_GENERATION,
+    max_parallel: CONTROLLED_PILOT_MAX_PARALLEL,
+    max_gross_weight_ppm: CONTROLLED_MAX_GROSS_WEIGHT_PPM,
+    automatic_promotion: false,
+    live_orders_enabled: false,
+    mass: false,
+  };
+}
+
 async function persistChild(
   bucket: R2Bucket,
   key: string,
@@ -1222,29 +1272,7 @@ async function persistBoundChildren(
   } catch (error) {
     return { ok: false, conflict: false, error: error instanceof Error ? error.message : "lineage" };
   }
-  const bindings = {
-    authorization_digest: authorizationDigest,
-    ready_attestation_id: ready.attestation_id,
-    snapshot_id: ready.snapshot_id,
-    immutable_db_digest: ready.immutable_db_digest,
-    snapshot_key: ready.physical.key,
-    snapshot_size: ready.physical.size,
-    profile_digest: ready.profile_digest,
-    plan_set_digest: ready.plan_set_digest,
-    dependency_closure_digest: ready.dependency_closure_digest,
-    ready_manifest_digest: ready.ready_manifest_digest,
-    resolved_universe_digest: ready.resolved_universe_digest,
-    universe_rule_digest: EXACT_FOUR_UNIVERSE_RULE_DIGEST,
-    fill_contract_digest: CONTROLLED_FILL_CONTRACT_DIGEST,
-    exact_four_binding_digest: EXACT_FOUR_BINDING_DIGEST,
-    idempotency_key: request.idempotency_key,
-    generation: CONTROLLED_PILOT_GENERATION,
-    max_parallel: CONTROLLED_PILOT_MAX_PARALLEL,
-    max_gross_weight_ppm: CONTROLLED_MAX_GROSS_WEIGHT_PPM,
-    automatic_promotion: false,
-    live_orders_enabled: false,
-    mass: false,
-  };
+  const bindings = controlledArtifactBindings(request, ready, authorizationDigest);
   // Close every semantic/body binding before the first immutable child write.
   // Lineage is added only after the referenced persisted bytes exist.
   try {
@@ -1354,6 +1382,8 @@ function bindingsFromManifest(manifest: Record<string, unknown>): Record<string,
     plan_set_digest: manifest.plan_set_digest,
     dependency_closure_digest: manifest.dependency_closure_digest,
     ready_manifest_digest: manifest.ready_manifest_digest,
+    signed_projection_document_digest: manifest.signed_projection_document_digest,
+    session_scope: manifest.session_scope,
     resolved_universe_digest: manifest.resolved_universe_digest,
     universe_rule_digest: manifest.universe_rule_digest,
     fill_contract_digest: manifest.fill_contract_digest,
@@ -1416,54 +1446,35 @@ function restoredContainerArtifact(
   return { payload, lineage: document.lineage };
 }
 
-function readyFromManifest(manifest: Record<string, unknown>): VerifiedControlledReady {
-  return {
-    attestation_id: String(manifest.ready_attestation_id || ""),
-    snapshot_id: String(manifest.snapshot_id || ""),
-    immutable_db_digest: String(manifest.immutable_db_digest || ""),
-    physical: {
-      key: String(manifest.snapshot_key || ""),
-      digest: String(manifest.immutable_db_digest || ""),
-      size: Number(manifest.snapshot_size || 0),
-    },
-    identity: CONTROLLED_PILOT_IDENTITY,
-    profile_digest: String(manifest.profile_digest || ""),
-    plan_set_digest: String(manifest.plan_set_digest || ""),
-    dependency_closure_digest: String(manifest.dependency_closure_digest || ""),
-    ready_manifest_digest: String(manifest.ready_manifest_digest || ""),
-    fill_contract_digest: CONTROLLED_FILL_CONTRACT_DIGEST,
-    receipt_proof_digest: "",
-    coverage_proof_digest: "",
-    b0_quality_proof_digest: "",
-    b4_quality_proof_digest: "",
-    resolved_universe_digest: String(manifest.resolved_universe_digest || ""),
-    environment: "",
-    signed_projection_document_digest: String(manifest.signed_projection_document_digest || ""),
-    session_scope: {
-      format: "controlled-session-scope/v1",
-      dependency_scope_proof_digest: "sha256:" + "0".repeat(64),
-      physical_db_digest: String(manifest.immutable_db_digest || ""),
-      observed_through: "1970-01-01T00:00:00Z",
-      entries: [] as unknown as ControlledSessionScope["entries"],
-    },
-  };
-}
-
 async function reverifyManifest(
   bucket: R2Bucket,
   expectedJobId: string,
   expectedDigest: string,
+  authority: ReverifiedControlledSubmission,
 ): Promise<boolean> {
   try {
     const manifest = await loadJsonObject(bucket, manifestKey(expectedJobId));
+    const authoritativeBindings = controlledArtifactBindings(
+      authority.state.request,
+      authority.ready,
+      authority.authorization_digest,
+    );
+    const manifestFields = new Set([
+      "identity",
+      "format",
+      "request_digest",
+      ...Object.keys(authoritativeBindings),
+      "plan_ids",
+      "children",
+    ]);
     if (
-      !manifest || manifest.format !== "controlled-pilot-paper-bundle/v2" ||
+      !manifest || !closedShape(manifest, manifestFields) ||
+      manifest.format !== "controlled-pilot-paper-bundle/v2" ||
       manifest.request_digest !== expectedDigest || manifest.identity !== CONTROLLED_PILOT_IDENTITY ||
-      manifest.idempotency_key !== expectedJobId ||
-      manifest.fill_contract_digest !== CONTROLLED_FILL_CONTRACT_DIGEST ||
-      manifest.generation !== CONTROLLED_PILOT_GENERATION ||
-      manifest.max_parallel !== CONTROLLED_PILOT_MAX_PARALLEL ||
-      manifest.automatic_promotion !== false || manifest.live_orders_enabled !== false || manifest.mass !== false
+      authority.state.job_id !== expectedJobId ||
+      authority.state.request_digest !== expectedDigest ||
+      !jsonEqual(bindingsFromManifest(manifest), authoritativeBindings) ||
+      !jsonEqual(manifest.plan_ids, [...EXACT_FOUR_PLAN_IDS])
     ) return false;
     const refs = manifest.children;
     const expected = childOrder(controlledJobPrefix(expectedJobId));
@@ -1491,7 +1502,7 @@ async function reverifyManifest(
       selection: restored[8]!.payload,
       knowledge: restored[9]!.payload,
     };
-    const semantic = await validateContainerArtifacts(container, readyFromManifest(manifest));
+    const semantic = await validateContainerArtifacts(container, authority.ready);
     for (let index = 0; index < 4; index += 1) {
       if (Object.keys(restored[index]!.lineage).length !== 0) return false;
       if (!jsonEqual(restored[index + 4]!.lineage, {
@@ -1722,6 +1733,12 @@ type ControlledPilotSubmittedState = {
   mass: false;
 };
 
+type ReverifiedControlledSubmission = {
+  state: ControlledPilotSubmittedState;
+  ready: VerifiedControlledReady;
+  authorization_digest: string;
+};
+
 async function parseStoredSessionScope(
   value: unknown,
   physicalDigest: string,
@@ -1880,6 +1897,68 @@ async function parseControlledPilotSubmittedState(
   return jsonEqual(value, parsed) ? parsed : null;
 }
 
+async function reverifyControlledSubmission(
+  env: Env,
+  jobId: string,
+  expectedDigest?: string,
+): Promise<ReverifiedControlledSubmission | null> {
+  if (!env.STRUCTURED_BUCKET) return null;
+  const environment = registries.controlledEnvironment(env);
+  if (!environment) return null;
+  const state = await parseControlledPilotSubmittedState(
+    await loadJsonObject(env.STRUCTURED_BUCKET, stateKey(jobId), STATE_MAX_BYTES),
+    jobId,
+    environment,
+  );
+  if (state === null || (expectedDigest && state.request_digest !== expectedDigest)) {
+    return null;
+  }
+  const readyBytes = await loadBytes(
+    env.STRUCTURED_BUCKET,
+    controlledReadyKey(state.request.ready_attestation_id),
+  );
+  if (!readyBytes) return null;
+  const verifiedReady = await verifyControlledReadyEnvelopeBytes(
+    readyBytes,
+    state.request.snapshot_id,
+    environment,
+    await registries.loadPinnedReadyKeys(environment),
+  );
+  if (
+    !verifiedReady.ok ||
+    verifiedReady.value.attestation_id !== state.request.ready_attestation_id ||
+    !jsonEqual(verifiedReady.value, state.ready)
+  ) {
+    return null;
+  }
+  const authorizationBytes = await loadBytes(
+    env.STRUCTURED_BUCKET,
+    controlledTraderAuthorizationKey(
+      state.request.idempotency_key,
+      state.request.ready_attestation_id,
+    ),
+  );
+  if (!authorizationBytes) return null;
+  const verifiedAuthorization = await verifyTraderAuthorizationBatchBytes(
+    authorizationBytes,
+    state.request,
+    verifiedReady.value,
+    state.request_digest,
+    await registries.loadPinnedTraderKeys(environment),
+  );
+  if (
+    !verifiedAuthorization.ok ||
+    verifiedAuthorization.authorization_digest !== state.spec.authorization_digest
+  ) {
+    return null;
+  }
+  return {
+    state,
+    ready: verifiedReady.value,
+    authorization_digest: verifiedAuthorization.authorization_digest,
+  };
+}
+
 async function putCreateOnly(
   bucket: R2Bucket,
   key: string,
@@ -1909,21 +1988,25 @@ function terminalResponse(
 }
 
 async function verifiedTerminal(
-  bucket: R2Bucket,
+  env: Env,
   jobId: string,
   expectedDigest?: string,
+  preverified?: ReverifiedControlledSubmission,
 ): Promise<
   | { status: "COMPLETED"; manifest: Record<string, unknown> }
   | { status: "FAILED" | "UNKNOWN"; error: string }
   | null
 > {
+  const bucket = env.STRUCTURED_BUCKET;
+  if (!bucket) return null;
   const manifest = await loadJsonObject(bucket, manifestKey(jobId));
   if (!manifest) return null;
   if (expectedDigest && manifest.request_digest !== expectedDigest) {
     return { status: "FAILED", error: "idempotency conflict" };
   }
   const digest = String(manifest.request_digest || expectedDigest || "");
-  if (!digest || !(await reverifyManifest(bucket, jobId, digest))) {
+  const authority = preverified ?? await reverifyControlledSubmission(env, jobId, digest);
+  if (!digest || !authority || !(await reverifyManifest(bucket, jobId, digest, authority))) {
     return { status: "FAILED", error: "terminal manifest failed re-verification", };
   }
   return { status: "COMPLETED", manifest };
@@ -1953,7 +2036,7 @@ export async function submitControlledPilot(
   if (!environment) return json({ ok: false, error: "controlled environment is invalid", go: false }, 503);
   const digest = await requestDigest(request);
   const jobId = request.idempotency_key;
-  const existing = await verifiedTerminal(env.STRUCTURED_BUCKET, jobId, digest);
+  const existing = await verifiedTerminal(env, jobId, digest);
   if (existing) {
     if (existing.status !== "COMPLETED") {
       return terminalResponse(jobId, existing.status, { error: existing.error });
@@ -2071,7 +2154,7 @@ export async function controlledPilotStatus(
   ctx?: { waitUntil(promise: Promise<unknown>): void },
 ): Promise<Response> {
   if (!env.STRUCTURED_BUCKET) return json({ ok: false, error: "STRUCTURED_BUCKET not bound", go: false }, 503);
-  const terminal = await verifiedTerminal(env.STRUCTURED_BUCKET, jobId);
+  const terminal = await verifiedTerminal(env, jobId);
   if (terminal) {
     if (terminal.status !== "COMPLETED") {
       return terminalResponse(jobId, terminal.status, { error: terminal.error });
@@ -2088,8 +2171,10 @@ export async function controlledPilotStatus(
   if (!state && !pending && !execution) {
     return json({ ok: false, error: "job_not_found", job_id: jobId, go: false }, 404);
   }
-  void ctx;
   const status = pending || execution?.stage === "CONTAINER_COMPLETED" ? "FINALIZE_RETRY" : "SUBMITTED";
+  if (status === "FINALIZE_RETRY" && ctx && typeof ctx.waitUntil === "function") {
+    ctx.waitUntil(scheduleControlledResume(env, jobId, jobId));
+  }
   return json({
     ok: true,
     accepted: true,
@@ -2141,16 +2226,11 @@ async function scheduleControlledResume(env: Env, idempotencyKey: string, jobId:
 
 export async function runControlledPilotJob(env: Env, jobId: string): Promise<void> {
   if (!env.STRUCTURED_BUCKET || !env.AI_GATEWAY) return;
-  const verified = await verifiedTerminal(env.STRUCTURED_BUCKET, jobId);
-  if (verified?.status === "COMPLETED") return;
-  const environment = registries.controlledEnvironment(env);
-  if (!environment) return;
-  const state = await parseControlledPilotSubmittedState(
-    await loadJsonObject(env.STRUCTURED_BUCKET, stateKey(jobId), STATE_MAX_BYTES),
-    jobId,
-    environment,
-  );
-  if (state === null) return;
+  const authority = await reverifyControlledSubmission(env, jobId);
+  if (!authority) return;
+  const verified = await verifiedTerminal(env, jobId, authority.state.request_digest, authority);
+  if (verified) return;
+  const state = authority.state;
   const { spec, request, ready, request_digest: digest } = state;
   const gateway = env.AI_GATEWAY as GatewayRpc;
   const budgetInput = { idempotency_key: request.idempotency_key, request_digest: digest };
@@ -2205,7 +2285,10 @@ export async function runControlledPilotJob(env: Env, jobId: string): Promise<vo
     const containerName = await controlledPilotContainerName(request.idempotency_key);
     let bound: BoundContainer | null = null;
     try {
-      bound = await bindPhysicalOutbound(env, containerName, ready.physical);
+      bound = await bindPhysicalOutbound(env, containerName, ready.physical, {
+        job_id: jobId,
+        request_digest: digest,
+      });
       let executed: Awaited<ReturnType<typeof callContainer>>;
       if (!containerAccepted) {
         executed = await callContainer(env, spec, containerName);
@@ -2274,6 +2357,7 @@ export async function runControlledPilotJob(env: Env, jobId: string): Promise<vo
       execution_id: spec.execution_id,
       go: false,
     });
+    await scheduleControlledResume(env, request.idempotency_key, jobId);
     return;
   }
   const commit = await putChildrenThenManifest(env.STRUCTURED_BUCKET, [], {
@@ -2281,7 +2365,7 @@ export async function runControlledPilotJob(env: Env, jobId: string): Promise<vo
     data: persistedManifest,
   });
   if (!commit.ok) return;
-  const ok = await reverifyManifest(env.STRUCTURED_BUCKET, jobId, digest);
+  const ok = await reverifyManifest(env.STRUCTURED_BUCKET, jobId, digest, authority);
   if (!ok) {
     await putCreateOnly(env.STRUCTURED_BUCKET, `${CONTROLLED_JOB_KEY_PREFIX}${jobId}/failed.json`, {
       identity: CONTROLLED_PILOT_IDENTITY,

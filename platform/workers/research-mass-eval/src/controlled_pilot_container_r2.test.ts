@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import pythonTerminalFixture from "../../../../tests/fixtures/controlled_pilot_python_terminals.json";
-import { CONTROLLED_PILOT_RUNNER_VERSION } from "./controlled_pilot_contract";
+import {
+  CONTROLLED_PILOT_RUNNER_VERSION,
+  controlledPilotContainerName,
+} from "./controlled_pilot_contract";
 import {
   CONTROLLED_JSON_TYPE,
   CONTROLLED_LEASE_CLOCK_SKEW_SECONDS,
@@ -10,6 +13,7 @@ import {
   CONTROLLED_LEASE_TTL_SECONDS,
   CONTROLLED_TERMINAL_MAX_BYTES,
   controlledContainerR2Outbound,
+  controlledPilotWriterR2Outbound,
   readBoundedBody,
   type BoundedReadTrace,
 } from "./controlled_pilot_container_r2";
@@ -266,6 +270,67 @@ function parseLease(bucket: ReturnType<typeof casBucket>, key = leaseKeyOf()): R
 function leaseEtag(bucket: ReturnType<typeof casBucket>): string {
   return bucket.objects.get(leaseKeyOf())!.etag;
 }
+
+describe("controlled writer platform binding", () => {
+  it("rejects forged controlled headers unless params and actual container id match", async () => {
+    const bucket = casBucket();
+    const containerName = await controlledPilotContainerName(jobId);
+    const expectedContainerId = `do:${containerName}`;
+    const env = {
+      STRUCTURED_BUCKET: bucket,
+      PERSONAL_RESEARCH_CONTAINER: {
+        idFromName: (name: string) => ({
+          toString: () => `do:${name}`,
+        }),
+      },
+    };
+    const key = `research/controlled_pilot/v1/jobs/${jobId}/container-stage.json`;
+    const stage = {
+      identity: "controlled_pilot_v1",
+      job_id: jobId,
+      request_digest: requestDigest,
+      execution_id: requestDigest,
+      runner_version: CONTROLLED_PILOT_RUNNER_VERSION,
+      status: "QUEUED",
+    };
+    const bytes = new TextEncoder().encode(JSON.stringify(stage));
+    const digest = await sha256(bytes);
+    const request = () => new Request(`http://research.r2/${key}`, {
+      method: "PUT",
+      headers: {
+        ...identityHeaders,
+        "content-length": String(bytes.byteLength),
+        "x-content-sha256": digest,
+      },
+      body: bytes,
+    });
+    const params = { job_id: jobId, request_digest: requestDigest };
+
+    const spoofed = await controlledPilotWriterR2Outbound(request(), env, {
+      containerId: "do:unrelated-personal-container",
+      className: "PersonalResearchContainer",
+      params,
+    });
+    expect(spoofed.status).toBe(403);
+    expect(bucket.objects.size).toBe(0);
+
+    const poisonedParams = await controlledPilotWriterR2Outbound(request(), env, {
+      containerId: expectedContainerId,
+      className: "PersonalResearchContainer",
+      params: { ...params, request_digest: `sha256:${"cd".repeat(32)}` },
+    });
+    expect(poisonedParams.status).toBe(403);
+    expect(bucket.objects.size).toBe(0);
+
+    const written = await controlledPilotWriterR2Outbound(request(), env, {
+      containerId: expectedContainerId,
+      className: "PersonalResearchContainer",
+      params,
+    });
+    expect(written.status).toBe(201);
+    expect(bucket.objects.has(key)).toBe(true);
+  });
+});
 
 describe("controlled terminal atomic CAS", () => {
   beforeEach(() => {

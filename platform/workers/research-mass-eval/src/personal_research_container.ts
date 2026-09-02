@@ -24,6 +24,7 @@ import {
   writeSubmittedState,
 } from "./personal_job_state";
 import { personalResearchR2Outbound } from "./personal_research_r2";
+import { controlledPilotWriterR2Outbound } from "./controlled_pilot_container_r2";
 import {
   CONTROLLED_R2_HOST,
   controlledPilotR2Outbound,
@@ -33,6 +34,10 @@ import { verifiedPersonalResearchContainer } from "./personal_research_runner";
 import type { Env } from "./types";
 
 export { ContainerProxy };
+
+const CONTROLLED_JOB_STORAGE_KEY = "controlled_job_id";
+const CONTROLLED_RESUME_ATTEMPTS_KEY = "controlled_resume_attempts";
+const CONTROLLED_RESUME_MAX_ATTEMPTS = 12;
 
 function responseJson(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
@@ -51,19 +56,39 @@ export class PersonalResearchContainer extends Container<Env> {
   enableInternet = false;
 
   async scheduleControlledPilot(jobId: string): Promise<void> {
-    await this.ctx.storage.put("controlled_job_id", jobId);
+    const existing = await this.ctx.storage.get(CONTROLLED_JOB_STORAGE_KEY);
+    if (existing !== jobId) {
+      await this.ctx.storage.put(CONTROLLED_JOB_STORAGE_KEY, jobId);
+      await this.ctx.storage.put(CONTROLLED_RESUME_ATTEMPTS_KEY, 0);
+    }
     await this.ctx.storage.setAlarm(Date.now() + 250);
   }
 
   async alarm(): Promise<void> {
-    const jobId = await this.ctx.storage.get("controlled_job_id");
+    const jobId = await this.ctx.storage.get(CONTROLLED_JOB_STORAGE_KEY);
     if (typeof jobId !== "string" || !jobId) return;
+    const storedAttempts = await this.ctx.storage.get(CONTROLLED_RESUME_ATTEMPTS_KEY);
+    const attempts = typeof storedAttempts === "number" && Number.isSafeInteger(storedAttempts)
+      ? storedAttempts
+      : 0;
+    if (attempts >= CONTROLLED_RESUME_MAX_ATTEMPTS) {
+      return;
+    }
+    const nextAttempts = attempts + 1;
+    await this.ctx.storage.put(CONTROLLED_RESUME_ATTEMPTS_KEY, nextAttempts);
     const { runControlledPilotJob, controlledPilotStatus } = await import("./controlled_pilot");
     await runControlledPilotJob(this.env, jobId);
     const status = await controlledPilotStatus(this.env, jobId);
     if (status.status === 202) {
-      await this.ctx.storage.setAlarm(Date.now() + 5_000);
+      if (nextAttempts < CONTROLLED_RESUME_MAX_ATTEMPTS) {
+        await this.ctx.storage.setAlarm(Date.now() + 5_000);
+      }
+      return;
     }
+    await this.ctx.storage.delete([
+      CONTROLLED_JOB_STORAGE_KEY,
+      CONTROLLED_RESUME_ATTEMPTS_KEY,
+    ]);
   }
 }
 
@@ -73,6 +98,7 @@ export class PersonalResearchContainer extends Container<Env> {
 // the proxy's fail-closed 520 response.
 PersonalResearchContainer.outboundHandlers = {
   controlledPilotSnapshot: controlledPilotR2Outbound,
+  controlledPilotWriter: controlledPilotWriterR2Outbound,
 };
 PersonalResearchContainer.outboundByHost = {
   "research.r2": personalResearchR2Outbound,

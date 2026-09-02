@@ -1,3 +1,5 @@
+import type { OutboundHandlerContext } from "@cloudflare/containers";
+
 import {
   CONTROLLED_JOB_KEY_PREFIX,
   CONTROLLED_PILOT_CONTRACT,
@@ -5,6 +7,7 @@ import {
   CONTROLLED_PILOT_IDENTITY,
   CONTROLLED_PILOT_MAX_PARALLEL,
   CONTROLLED_PILOT_PLAN_COUNT,
+  controlledPilotContainerName,
 } from "./controlled_pilot_contract";
 import { decodeStrictJson, isRecord } from "./controlled_pilot_json";
 import { sha256Hex } from "./sha256";
@@ -46,6 +49,18 @@ const LEASE_RE = new RegExp(
 
 type R2Env = { STRUCTURED_BUCKET: R2Bucket };
 type ControlledObject = "stage" | "terminal" | "lease";
+
+export const CONTROLLED_WRITER_R2_HOST = "research.r2";
+export type ControlledWriterOutboundParams = {
+  job_id: string;
+  request_digest: string;
+};
+
+type ControlledWriterEnv = R2Env & {
+  PERSONAL_RESEARCH_CONTAINER?: {
+    idFromName(name: string): { toString(): string };
+  };
+};
 
 const REQUIRED_HEADERS = [
   "x-personal-job-id",
@@ -1271,4 +1286,53 @@ export async function controlledContainerR2Outbound(
     return putLease(request, env, key, parsed.jobId);
   }
   return putCreateOnlyControlled(request, env, key, parsed.kind, parsed.jobId);
+}
+
+/**
+ * Controlled write capability installed only as a runtime host override.
+ * Container identity comes from the Containers platform context, while the
+ * job/request pair comes from Worker-controlled override parameters. Neither
+ * can be supplied by the container through HTTP headers.
+ */
+export async function controlledPilotWriterR2Outbound(
+  request: Request,
+  env: ControlledWriterEnv,
+  ctx: OutboundHandlerContext<ControlledWriterOutboundParams>,
+): Promise<Response> {
+  const url = new URL(request.url);
+  const key = url.pathname.startsWith("/") ? url.pathname.slice(1) : url.pathname;
+  const params = ctx.params as unknown;
+  if (
+    url.hostname !== CONTROLLED_WRITER_R2_HOST ||
+    url.search ||
+    url.hash ||
+    key.includes("%") ||
+    !isRecord(params) ||
+    Object.keys(params).length !== 2 ||
+    !JOB_RE.test(String(params.job_id || "")) ||
+    !DIGEST_RE.test(String(params.request_digest || "")) ||
+    !env.PERSONAL_RESEARCH_CONTAINER
+  ) {
+    return responseJson({ error: "controlled writer context denied" }, 403);
+  }
+  const parsed = parseControlledContainerObject(key);
+  if (
+    !parsed ||
+    parsed.jobId !== params.job_id ||
+    request.headers.get("x-personal-job-id") !== params.job_id ||
+    request.headers.get("x-personal-request-digest") !== params.request_digest
+  ) {
+    return responseJson({ error: "controlled writer binding denied" }, 403);
+  }
+  const containerName = await controlledPilotContainerName(params.job_id as string);
+  const expectedContainerId = env.PERSONAL_RESEARCH_CONTAINER
+    .idFromName(containerName)
+    .toString();
+  if (ctx.containerId !== expectedContainerId) {
+    return responseJson({ error: "controlled writer container denied" }, 403);
+  }
+  return (
+    (await controlledContainerR2Outbound(request, env, key)) ??
+    responseJson({ error: "controlled writer key denied" }, 403)
+  );
 }

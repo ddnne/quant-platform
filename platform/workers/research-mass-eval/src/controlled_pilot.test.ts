@@ -202,6 +202,7 @@ function mockContainer(options?: {
     | "semantic_reordered_selection"
     | "semantic_rebound_knowledge";
   delay?: { complete: boolean };
+  scheduled?: string[];
 }): Env["PERSONAL_RESEARCH_CONTAINER"] {
   const outbound = new Map<string, unknown>();
   const fetches = options?.fetches ?? { n: 0, post: 0 };
@@ -209,6 +210,9 @@ function mockContainer(options?: {
   return {
     getByName() {
       const target: Record<string, unknown> = {
+        scheduleControlledPilot: async (jobId: string) => {
+          options?.scheduled?.push(jobId);
+        },
         fetch: async (request: Request) => {
           const url = new URL(request.url);
           if (url.pathname === "/ready") return readyProbe();
@@ -412,6 +416,7 @@ async function seedEnv(options?: {
   vi.spyOn(registries, "loadPinnedReadyKeys").mockReturnValue(fixturePublicKey());
   vi.spyOn(registries, "loadPinnedTraderKeys").mockReturnValue(fixturePublicKey());
   const fetches = options?.fetches ?? { n: 0, post: 0 };
+  const scheduled: string[] = [];
   const env = {
     STRUCTURED_BUCKET: mem.asBucket(),
     AI_GATEWAY: mockGateway(budget),
@@ -421,11 +426,12 @@ async function seedEnv(options?: {
       fetches,
       tamper: options?.tamper,
       delay: options?.delay,
+      scheduled,
     }),
     MASS_EVAL_TOKEN: "secret",
     ENVIRONMENT: "staging",
   } as unknown as Env;
-  return { env, mem, logicalId, physicalId, budget, request, fetches };
+  return { env, mem, logicalId, physicalId, budget, request, fetches, scheduled };
 }
 
 const VERIFIER_NOW = Date.parse(String(fixtureKeys.verifier_now || "2026-09-02T12:00:30+00:00"));
@@ -620,6 +626,24 @@ describe("controlled cloud execution", () => {
     expect(seeded.fetches.n).toBe(0);
   });
 
+  it("does not run a self-consistent stored state with a forged authorization digest", async () => {
+    const seeded = await seedEnv();
+    expect((await submitControlledPilot(seeded.env, seeded.request)).status).toBe(202);
+    const key =
+      `research/controlled_pilot/v1/jobs/${seeded.request.idempotency_key}/state.json`;
+    const stored = await seeded.env.STRUCTURED_BUCKET.get(key);
+    expect(stored).not.toBeNull();
+    const poisoned = await stored!.json<Record<string, unknown>>();
+    (poisoned.spec as Record<string, unknown>).authorization_digest =
+      `sha256:${"00".repeat(32)}`;
+    await seeded.mem.put(key, JSON.stringify(poisoned));
+
+    await runControlledPilotJob(seeded.env, seeded.request.idempotency_key);
+    expect(seeded.budget.queried).toBe(0);
+    expect(seeded.budget.reserved).toBe(0);
+    expect(seeded.fetches.n).toBe(0);
+  });
+
   it("query never reserves and retry resumes the same reservation", async () => {
     const seeded = await seedEnv();
     const ctx = new WaitCtx();
@@ -714,7 +738,7 @@ describe("controlled cloud execution", () => {
     ]);
   });
 
-  it("finalize failure leaves nonterminal state and no terminal artifact", async () => {
+  it("schedules and resumes the same job after an immediate finalize failure", async () => {
     const seeded = await seedEnv({ loseFinalize: true });
     const ctx = new WaitCtx();
     await submitControlledPilot(seeded.env, seeded.request, ctx);
@@ -724,6 +748,63 @@ describe("controlled cloud execution", () => {
     expect(body.status).toBe("FINALIZE_RETRY");
     expect(body.manifest).toBeUndefined();
     expect(seeded.mem.putOrder.some((key) => key.endsWith("/manifest.json"))).toBe(false);
+    expect(seeded.scheduled).toEqual([seeded.request.idempotency_key]);
+
+    const statusCtx = new WaitCtx();
+    const retryStatus = await controlledPilotStatus(
+      seeded.env,
+      seeded.request.idempotency_key,
+      statusCtx,
+    );
+    expect(((await retryStatus.json()) as { status: string }).status).toBe("FINALIZE_RETRY");
+    await statusCtx.pending;
+    expect(seeded.scheduled).toEqual([
+      seeded.request.idempotency_key,
+      seeded.request.idempotency_key,
+    ]);
+
+    await runControlledPilotJob(seeded.env, seeded.request.idempotency_key);
+    const completed = await controlledPilotStatus(seeded.env, seeded.request.idempotency_key);
+    expect(((await completed.json()) as { status: string }).status).toBe("COMPLETED");
+    expect(seeded.budget.reserved).toBe(1);
+    expect(seeded.fetches.post).toBe(1);
+  });
+
+  it("rejects completed terminals when signed READY or Trader lineage is tampered in R2", async () => {
+    for (const lineage of ["ready", "authorization"] as const) {
+      const seeded = await seedEnv();
+      const ctx = new WaitCtx();
+      await submitControlledPilot(seeded.env, seeded.request, ctx);
+      await ctx.pending;
+      const before = await controlledPilotStatus(seeded.env, seeded.request.idempotency_key);
+      expect(((await before.json()) as { status: string }).status).toBe("COMPLETED");
+
+      if (lineage === "ready") {
+        const tampered = structuredClone(readyFixture) as {
+          attestation: Record<string, unknown>;
+        };
+        tampered.attestation.ready_manifest_digest = `sha256:${"00".repeat(32)}`;
+        await seeded.mem.put(
+          controlledReadyKey(seeded.request.ready_attestation_id),
+          JSON.stringify(tampered),
+        );
+      } else {
+        const tampered = structuredClone(traderFixture) as Record<string, unknown>;
+        tampered.request_digest = `sha256:${"00".repeat(32)}`;
+        await seeded.mem.put(
+          controlledTraderAuthorizationKey(
+            seeded.request.idempotency_key,
+            seeded.request.ready_attestation_id,
+          ),
+          JSON.stringify(tampered),
+        );
+      }
+
+      const status = await controlledPilotStatus(seeded.env, seeded.request.idempotency_key);
+      expect(((await status.json()) as { status: string }).status).toBe("FAILED");
+      const replay = await submitControlledPilot(seeded.env, seeded.request);
+      expect(((await replay.json()) as { status: string }).status).toBe("FAILED");
+    }
   });
 
   it("rejects missing trader authorization and does not reserve", async () => {

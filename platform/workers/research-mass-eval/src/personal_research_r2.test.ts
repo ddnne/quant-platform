@@ -8,7 +8,8 @@ import { personalResearchR2Outbound } from "./personal_research_r2";
 import { CONTROLLED_PILOT_RUNNER_VERSION } from "./controlled_pilot_contract";
 import { CONTROLLED_JSON_TYPE,
   CONTROLLED_LEASE_MAX_BYTES,
-  CONTROLLED_LEASE_TTL_SECONDS } from "./controlled_pilot_container_r2";
+  CONTROLLED_LEASE_TTL_SECONDS,
+  controlledContainerR2Outbound } from "./controlled_pilot_container_r2";
 
 import { PERSONAL_SNAPSHOT_FORMAT } from "./personal_snapshot_contract";
 import { sha256Hex } from "./sha256";
@@ -707,6 +708,43 @@ function casBucket(hooks?: { afterLeaseGet?: () => void }) {
 }
 
 describe("controlled container R2 production router", () => {
+  async function routeControlled(
+    request: Request,
+    env: { STRUCTURED_BUCKET: R2Bucket },
+  ): Promise<Response> {
+    const key = new URL(request.url).pathname.slice(1);
+    return (await controlledContainerR2Outbound(request, env, key)) ??
+      new Response(null, { status: 403 });
+  }
+
+  it("always denies the full controlled prefix through the generic personal capability", async () => {
+    const bucket = casBucket();
+    const forged = {
+      "content-type": CONTROLLED_JSON_TYPE,
+      "content-length": "2",
+      "x-personal-job-id": "controlled-job-1",
+      "x-personal-request-digest": `sha256:${"ab".repeat(32)}`,
+      "x-personal-runner-version": CONTROLLED_PILOT_RUNNER_VERSION,
+      "x-personal-job-kind": "controlled-pilot",
+    };
+    for (const key of [
+      "research/controlled_pilot/v1/jobs/controlled-job-1/container-stage.json",
+      "research/controlled_pilot/v1/ready/forged.json",
+      "research/controlled_pilot/future/object.json",
+    ]) {
+      const response = await personalResearchR2Outbound(
+        new Request(`http://research.r2/${key}`, {
+          method: "PUT",
+          headers: forged,
+          body: "{}",
+        }),
+        { STRUCTURED_BUCKET: bucket },
+      );
+      expect(response.status).toBe(403);
+    }
+    expect(bucket.objects.size).toBe(0);
+  });
+
   it("allows only closed stage/terminal keys with runner_version and create-only identity", async () => {
     const jobId = "controlled-job-1";
     const requestDigest = `sha256:${"ab".repeat(32)}`;
@@ -732,19 +770,19 @@ describe("controlled container R2 production router", () => {
       "x-personal-job-kind": "controlled-pilot",
       "x-content-sha256": digest,
     };
-    const created = await personalResearchR2Outbound(
+    const created = await routeControlled(
       new Request(`http://research.r2/${key}`, { method: "PUT", headers, body: bytes }),
       env,
     );
     expect(created.status).toBe(201);
-    const again = await personalResearchR2Outbound(
+    const again = await routeControlled(
       new Request(`http://research.r2/${key}`, { method: "PUT", headers, body: bytes }),
       env,
     );
     expect(again.status).toBe(200);
     const different = new TextEncoder().encode(JSON.stringify({ ...bodyObj, execution_id: `sha256:${"cd".repeat(32)}` }));
     const differentDigest = `sha256:${hex(await crypto.subtle.digest("SHA-256", different))}`;
-    const conflict = await personalResearchR2Outbound(
+    const conflict = await routeControlled(
       new Request(`http://research.r2/${key}`, {
         method: "PUT",
         headers: { ...headers, "content-length": String(different.byteLength), "x-content-sha256": differentDigest },
@@ -753,7 +791,7 @@ describe("controlled container R2 production router", () => {
       env,
     );
     expect(conflict.status).toBe(409);
-    const missingRunner = await personalResearchR2Outbound(
+    const missingRunner = await routeControlled(
       new Request(`http://research.r2/${key}`, {
         method: "PUT",
         headers: {
@@ -769,7 +807,7 @@ describe("controlled container R2 production router", () => {
       env,
     );
     expect(missingRunner.status).toBe(403);
-    const arbitrary = await personalResearchR2Outbound(
+    const arbitrary = await routeControlled(
       new Request(`http://research.r2/research/controlled_pilot/v1/jobs/${jobId}/evil.json`, {
         method: "PUT",
         headers,
@@ -794,7 +832,7 @@ describe("controlled container R2 production router", () => {
     };
     const leaseBytes = new TextEncoder().encode(JSON.stringify(leaseObj));
     const leaseDigest = `sha256:${hex(await crypto.subtle.digest("SHA-256", leaseBytes))}`;
-    const createdLease = await personalResearchR2Outbound(
+    const createdLease = await routeControlled(
       new Request(`http://research.r2/${leaseKey}`, {
         method: "PUT",
         headers: {
@@ -831,7 +869,7 @@ describe("controlled container R2 production router", () => {
     };
     const terminalBytes = new TextEncoder().encode(JSON.stringify(terminalObj));
     const terminalDigest = `sha256:${hex(await crypto.subtle.digest("SHA-256", terminalBytes))}`;
-    const terminalDenied = await personalResearchR2Outbound(
+    const terminalDenied = await routeControlled(
       new Request(`http://research.r2/${terminalKey}`, {
         method: "PUT",
         headers: { ...headers, "content-length": String(terminalBytes.byteLength), "x-content-sha256": terminalDigest },
@@ -840,7 +878,7 @@ describe("controlled container R2 production router", () => {
       env,
     );
     expect(terminalDenied.status).toBe(409);
-    const terminal = await personalResearchR2Outbound(
+    const terminal = await routeControlled(
       new Request(`http://research.r2/${terminalKey}`, {
         method: "PUT",
         headers: {
@@ -855,7 +893,7 @@ describe("controlled container R2 production router", () => {
       env,
     );
     expect(terminal.status).toBe(201);
-    const conflictLease = await personalResearchR2Outbound(
+    const conflictLease = await routeControlled(
       new Request(`http://research.r2/${leaseKey}`, {
         method: "PUT",
         headers: {
@@ -879,7 +917,7 @@ describe("controlled container R2 production router", () => {
     };
     const takeoverBytes = new TextEncoder().encode(JSON.stringify(takeoverObj));
     const takeoverDigest = `sha256:${hex(await crypto.subtle.digest("SHA-256", takeoverBytes))}`;
-    const takeover = await personalResearchR2Outbound(
+    const takeover = await routeControlled(
       new Request(`http://research.r2/${leaseKey}`, {
         method: "PUT",
         headers: {
@@ -893,7 +931,7 @@ describe("controlled container R2 production router", () => {
       env,
     );
     expect(takeover.status).toBe(412);
-    const malformed = await personalResearchR2Outbound(
+    const malformed = await routeControlled(
       new Request(`http://research.r2/${leaseKey}`, {
         method: "PUT",
         headers: {
@@ -909,7 +947,7 @@ describe("controlled container R2 production router", () => {
     expect(malformed.status).toBeGreaterThanOrEqual(400);
     const lying = new TextEncoder().encode("x".repeat(64));
     const lyingDigest = `sha256:${hex(await crypto.subtle.digest("SHA-256", lying))}`;
-    const falseSmall = await personalResearchR2Outbound(
+    const falseSmall = await routeControlled(
       new Request(`http://research.r2/${key}`, {
         method: "PUT",
         headers: { ...headers, "content-length": "4", "x-content-sha256": lyingDigest },
@@ -919,7 +957,7 @@ describe("controlled container R2 production router", () => {
     );
     expect([400, 413].includes(falseSmall.status)).toBe(true);
     const oversized = new Uint8Array(CONTROLLED_LEASE_MAX_BYTES + 1);
-    const noHeader = await personalResearchR2Outbound(
+    const noHeader = await routeControlled(
       new Request(`http://research.r2/${leaseKey}`, {
         method: "PUT",
         headers: {
@@ -1010,7 +1048,7 @@ describe("controlled terminal lease CAS fence", () => {
   ) {
     const bytes = new TextEncoder().encode(JSON.stringify(value));
     const digest = `sha256:${hex(await crypto.subtle.digest("SHA-256", bytes))}`;
-    return personalResearchR2Outbound(
+    return controlledContainerR2Outbound(
       new Request(`http://research.r2/${key}`, {
         method: "PUT",
         headers: {
@@ -1022,7 +1060,8 @@ describe("controlled terminal lease CAS fence", () => {
         body: bytes,
       }),
       env,
-    );
+      key,
+    ) as Promise<Response>;
   }
 
   it("rejects a stale owner after takeover between lease GET and terminal CAS", async () => {
@@ -1057,13 +1096,14 @@ describe("controlled terminal lease CAS fence", () => {
       "x-personal-fencing-token": "2",
     });
     expect(current.status).toBe(201);
-    const got = await personalResearchR2Outbound(
+    const got = await controlledContainerR2Outbound(
       new Request(`http://research.r2/${terminalKey}`, {
         method: "GET",
         headers: identityHeaders,
       }),
       env,
-    );
+      terminalKey,
+    ) as Response;
     expect(got.status).toBe(200);
     expect(JSON.parse(await got.text()).status).toBe("COMPLETED");
 
@@ -1081,13 +1121,14 @@ describe("controlled terminal lease CAS fence", () => {
     const storedLease = bucket.objects.get(leaseKey);
     expect(storedLease).toBeTruthy();
     expect(JSON.parse(new TextDecoder().decode(storedLease!.body)).status).toBe("TERMINAL");
-    const storedTerminal = await personalResearchR2Outbound(
+    const storedTerminal = await controlledContainerR2Outbound(
       new Request(`http://research.r2/${terminalKey}`, {
         method: "GET",
         headers: identityHeaders,
       }),
       env,
-    );
+      terminalKey,
+    ) as Response;
     expect(JSON.parse(await storedTerminal.text()).status).toBe("COMPLETED");
   });
 });
