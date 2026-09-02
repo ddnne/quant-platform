@@ -522,6 +522,24 @@ describe("strict JSON and Python-generated fixtures", () => {
     ).toBe(false);
   });
 
+  it("rejects controlled session entry substitution outside the dependency proof", async () => {
+    const tampered = structuredClone(readyFixture) as {
+      controlled_session_scope: { entries: Array<Record<string, unknown>> };
+    };
+    tampered.controlled_session_scope.entries[0]!.natural_key_digest =
+      "sha256:" + "00".repeat(32);
+    const verified = await verifyControlledReadyEnvelope(
+      tampered,
+      fixtureKeys.logical_snapshot_id,
+      "staging",
+      fixturePublicKey(),
+    );
+    expect(verified).toEqual({
+      ok: false,
+      error: "READY controlled session scope does not match dependency proof",
+    });
+  });
+
   it("parses committed production and staging registries from imported documents", async () => {
     expect(await registries.assertRegistryDigests()).toBe(true);
     const readyProd = await registries.loadPinnedReadyKeys("production");

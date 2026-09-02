@@ -165,6 +165,14 @@ const ENVELOPE_FIELDS = new Set([
   "dependency_scope_evidence", "signed_projection_document", "controlled_session_scope",
 ]);
 const PHYSICAL_FIELDS = new Set(["key", "digest", "size"]);
+const CONTROLLED_SESSION_ENTRY_FIELDS = new Set([
+  "dataset_id", "natural_key_count", "natural_key_digest",
+  "product_artifact_digests", "product_artifact_set_digest",
+]);
+const DEPENDENCY_SCOPE_ENTRY_FIELDS = new Set([
+  ...CONTROLLED_SESSION_ENTRY_FIELDS,
+  "receipt_digests", "receipt_set_digest",
+]);
 const MANIFEST_FIELDS = new Set([
   "format", "snapshot_id", "publication_scope", "profile_id", "profile_version", "profile_digest",
   "plan_ids", "plan_set_digest", "dependency_closure_digest", "universe_rule_digest", "resolved_universe_digest",
@@ -288,6 +296,7 @@ export async function verifyControlledReadyEnvelope(
   const manifest = document.ready_manifest;
   const attestation = document.attestation;
   const signedProjection = document.signed_projection_document;
+  const dependencyScope = document.dependency_scope_evidence;
   const sessionScope = document.controlled_session_scope;
   if (!isRecord(physical) || !closedShape(physical, PHYSICAL_FIELDS)) {
     return { ok: false, error: "READY envelope physical snapshot identity is invalid" };
@@ -298,7 +307,7 @@ export async function verifyControlledReadyEnvelope(
   if (!isRecord(attestation) || !closedShape(attestation, ATTESTATION_FIELDS)) {
     return { ok: false, error: "READY attestation sidecar shape is invalid" };
   }
-  if (!isRecord(signedProjection) || !isRecord(document.dependency_scope_evidence) ||
+  if (!isRecord(signedProjection) || !isRecord(dependencyScope) ||
       !isRecord(sessionScope) ||
       !closedShape(sessionScope, new Set([
         "format", "dependency_scope_proof_digest", "physical_db_digest", "observed_through", "entries",
@@ -441,23 +450,60 @@ export async function verifyControlledReadyEnvelope(
       attestation.signed_projection_document_digest) {
     return { ok: false, error: "READY signed Ops Projection document digest is invalid" };
   }
-  const dependencyScopeBody = { ...document.dependency_scope_evidence };
+  const dependencyScopeBody = { ...dependencyScope };
   const declaredDependencyScopeDigest = dependencyScopeBody.proof_digest;
   delete dependencyScopeBody.proof_digest;
   if (!isSha256(declaredDependencyScopeDigest) ||
       declaredDependencyScopeDigest !== sessionScope.dependency_scope_proof_digest ||
       (await sha256Digest(canonicalJson(dependencyScopeBody))) !== declaredDependencyScopeDigest ||
+      dependencyScope.physical_db_digest !== digest ||
       !isRecord(manifest.pit_contract_digests) ||
       manifest.pit_contract_digests.dependency_scope !==
         sessionScope.dependency_scope_proof_digest) {
     return { ok: false, error: "READY dependency scope digest is invalid" };
   }
-  const sessionDatasets: unknown[] = [];
+  const dependencyEntries = dependencyScope.entries;
+  if (!Array.isArray(dependencyEntries) ||
+      dependencyEntries.length !== EXACT_FOUR_DATASET_IDS.length) {
+    return { ok: false, error: "READY dependency scope entries are invalid" };
+  }
+  const expectedSessionEntries: ControlledSessionScope["entries"] = [];
+  for (const datasetId of EXACT_FOUR_DATASET_IDS) {
+    const matches = dependencyEntries.filter(
+      (entry) => isRecord(entry) && entry.dataset_id === datasetId,
+    );
+    if (matches.length !== 1) {
+      return { ok: false, error: "READY dependency scope entries are invalid" };
+    }
+    const entry = matches[0]!;
+    if (!closedShape(entry, DEPENDENCY_SCOPE_ENTRY_FIELDS) ||
+        !Number.isSafeInteger(entry.natural_key_count) || Number(entry.natural_key_count) < 1 ||
+        !isSha256(entry.natural_key_digest) || !Array.isArray(entry.receipt_digests) ||
+        entry.receipt_digests.length < 1 ||
+        entry.receipt_digests.some((value: unknown) => !isSha256(value)) ||
+        new Set(entry.receipt_digests).size !== entry.receipt_digests.length ||
+        !isSha256(entry.receipt_set_digest) ||
+        entry.receipt_set_digest !== await sha256Digest(canonicalJson(entry.receipt_digests)) ||
+        !Array.isArray(entry.product_artifact_digests) ||
+        entry.product_artifact_digests.length < 1 ||
+        entry.product_artifact_digests.some((value: unknown) => !isSha256(value)) ||
+        new Set(entry.product_artifact_digests).size !== entry.product_artifact_digests.length ||
+        !isSha256(entry.product_artifact_set_digest) ||
+        entry.product_artifact_set_digest !==
+          await sha256Digest(canonicalJson(entry.product_artifact_digests))) {
+      return { ok: false, error: "READY dependency scope entries are invalid" };
+    }
+    expectedSessionEntries.push({
+      dataset_id: datasetId,
+      natural_key_count: Number(entry.natural_key_count),
+      natural_key_digest: entry.natural_key_digest,
+      product_artifact_digests: [...entry.product_artifact_digests] as string[],
+      product_artifact_set_digest: entry.product_artifact_set_digest,
+    });
+  }
   for (const entry of sessionScope.entries) {
-    if (!isRecord(entry) || !closedShape(entry, new Set([
-      "dataset_id", "natural_key_count", "natural_key_digest",
-      "product_artifact_digests", "product_artifact_set_digest",
-    ])) || !Number.isSafeInteger(entry.natural_key_count) || Number(entry.natural_key_count) < 1 ||
+    if (!isRecord(entry) || !closedShape(entry, CONTROLLED_SESSION_ENTRY_FIELDS) ||
+      !Number.isSafeInteger(entry.natural_key_count) || Number(entry.natural_key_count) < 1 ||
       !isSha256(entry.natural_key_digest) || !Array.isArray(entry.product_artifact_digests) ||
       entry.product_artifact_digests.length < 1 ||
       entry.product_artifact_digests.some((value) => !isSha256(value)) ||
@@ -466,10 +512,9 @@ export async function verifyControlledReadyEnvelope(
       entry.product_artifact_set_digest !== await sha256Digest(canonicalJson(entry.product_artifact_digests))) {
       return { ok: false, error: "READY controlled session scope entry is invalid" };
     }
-    sessionDatasets.push(entry.dataset_id);
   }
-  if (!jsonEqual(sessionDatasets, [...EXACT_FOUR_DATASET_IDS])) {
-    return { ok: false, error: "READY controlled session dataset scope is invalid" };
+  if (!jsonEqual(sessionScope.entries, expectedSessionEntries)) {
+    return { ok: false, error: "READY controlled session scope does not match dependency proof" };
   }
   const verifiedAt = parseTime(attestation.verified_at);
   const expires = parseTime(attestation.expires_at);
