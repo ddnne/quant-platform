@@ -18,10 +18,10 @@
   "policy_digest": "sha256:60fc8438f7dd4914c9fec99ae53476b9a514a80d0411b7ab07dc7e9963d5f319",
   "profile_digest": "sha256:ccad8a7ab0cf9af80cabc68a0b8a5111c064b578d211495423dae56333b8bf63",
   "purpose": "controlled_trader_authorization_verification",
-  "ready_attestation_id": "ready-44adc3f6d5ae7366d411a9ef8765c449ffdd540844f653a3fb1f948dba3e677a",
-  "ready_manifest_digest": "sha256:b1173c3bbfc9adbe2e7b99d11e7616b368299372602cf687eb1fe17d214742df",
-  "request_digest": "sha256:6dbaa9f6fbc782d710f9efdfde3d49e49e38eb13d7c033bd5fbcf4e0b59b7c50",
-  "resolved_universe_digest": "sha256:1a695e645a6d24355be1b2bf39fdc3513bce7d6512752dfbce423ff8b9ac6700",
+  "ready_attestation_id": "ready-25fcedb81a0dde0d1a2e0e664437e4b3f7b32c10a0d1d26c89b56b40912fd0a1",
+  "ready_manifest_digest": "sha256:272f7acd0af21968a128485b6a1baf638553456ce3e89e00fc67671d99cd38c4",
+  "request_digest": "sha256:145391bb4256789548162dbda97d9d531a9bdab82e5492b3419ae7fe67d15e2e",
+  "resolved_universe_digest": "sha256:d2a896a01bf1b1d203efc9a7f28b29c3e15712fa5e5f89cde4bd16ba459dfa8a",
   "rows": [
     {
       "ordinal": 1,
@@ -57,7 +57,7 @@
     }
   ],
   "schema_version": 2,
-  "signature": "ed25519:CuRLQdKg2SDZG9wCPrCSAVDlsRZxh9/pXSoKk/93FLAQbf6W/i9YIcthmHd7zurTwPfLcAQ8m0cqf+dEdPLCAg==",
+  "signature": "ed25519:qfz2Ob1+Ul6j0ttnLG4lb+vRxOvK7FZdL14nDJOavABtRmiin5BwPWGN9Qzd92tfXBy/1qES7D3d3Ia8l/pLAQ==",
   "snapshot_id": "sha256:29058b15274a0bdf21e1946a7f363843b40b7a3ed338c8548ff1c8a97ab01d1b",
   "snapshot_key": "research/controlled_pilot/v1/snapshots/sha256=1d673408ef5efa994659ecfe0082056807538233971523e120a01c5f79c57b5b.sqlite",
   "snapshot_size": 32
