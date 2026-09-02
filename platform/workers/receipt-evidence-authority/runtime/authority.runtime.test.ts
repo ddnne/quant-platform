@@ -17,6 +17,8 @@ import { canonicalDigest, canonicalJson, sha256Digest } from "../src/canonical";
 import { ReceiptEvidenceAuthority } from "../src/authority_do";
 import { authorityInstanceDigest } from "../src/authority_instance";
 import { requirePersistedDerivedClaims } from "../src/claims_validation";
+import { canonicalReceiptExpectedScope } from "../src/receipt_evidence";
+import { datasetById } from "../../ingestion-premium/src/catalog";
 import {
   capturedOfficialCalendarDescriptor,
   loadCaptureState,
@@ -644,7 +646,25 @@ describe("Receipt Evidence Authority in workerd", () => {
       dailyClaims,
       amRequest,
       persistedRequestDigest,
-    )).resolves.toEqual(dailyClaims);
+    )).rejects.toThrow("claims failed invariant validation");
+
+    const amSpec = datasetById(amRequest.dataset_id);
+    expect(amSpec).toBeDefined();
+    const canonicalDailyScope = canonicalReceiptExpectedScope(amSpec!, {
+      segment_start: amRequest.expected_key_start,
+      segment_end: amRequest.expected_key_end,
+      segment_grain: amRequest.segment_grain,
+    });
+    const canonicalDailyClaims: UnsignedReceiptClaimsV3 = {
+      ...dailyClaims,
+      expected_scope: canonicalDailyScope.scope,
+      expected_items: canonicalDailyScope.expectedItems,
+    };
+    await expect(requirePersistedDerivedClaims(
+      canonicalDailyClaims,
+      amRequest,
+      persistedRequestDigest,
+    )).resolves.toEqual(canonicalDailyClaims);
 
     const registryGrainSubstitution = {
       ...amRequest,
@@ -655,7 +675,7 @@ describe("Receipt Evidence Authority in workerd", () => {
     };
     await expect(requirePersistedDerivedClaims(
       {
-        ...dailyClaims,
+        ...canonicalDailyClaims,
         segment_id: registryGrainSubstitution.segment_id,
         segment_start: registryGrainSubstitution.expected_key_start,
         segment_end: registryGrainSubstitution.expected_key_end,
@@ -665,7 +685,7 @@ describe("Receipt Evidence Authority in workerd", () => {
     )).rejects.toThrow("governed inventory");
     const monthlyRequestDigest = await canonicalDigest(request);
     await expect(requirePersistedDerivedClaims(
-      dailyClaims,
+      canonicalDailyClaims,
       request,
       monthlyRequestDigest,
     )).rejects.toThrow("claims failed invariant validation");

@@ -15,12 +15,14 @@ import type {
   ReceiptAuthorityEnv,
   ReceiptAuthorityIssuedRecord,
   GovernedSource,
+  SegmentGrain,
   UnsignedReceiptClaimsV3,
 } from "./types";
 
-function expectedScope(spec: DatasetSpec, initial: {
+export function canonicalReceiptExpectedScope(spec: DatasetSpec, initial: {
   segment_start: string;
   segment_end: string;
+  segment_grain: SegmentGrain;
 }): {
   scope: Record<string, JsonValue>;
   expectedItems: number | null;
@@ -37,9 +39,7 @@ function expectedScope(spec: DatasetSpec, initial: {
       segment_end: initial.segment_end,
       segment_start: initial.segment_start,
       universe_rule: spec.coverage.universe_rule,
-      segment_granularity: jsda
-        ? spec.coverage.segment_granularity
-        : "calendar_month",
+      segment_granularity: initial.segment_grain,
     },
     expectedItems: eventDriven && !jsda ? null : 1,
   };
@@ -50,6 +50,7 @@ export async function measuredClaims(input: {
   requestDigest: string;
   runId: number;
   spec: DatasetSpec;
+  segmentGrain: SegmentGrain;
   capture: Capture;
   structuredCount: number;
   structuredDigest: string;
@@ -66,7 +67,11 @@ export async function measuredClaims(input: {
     throw new Error("receipt capture did not independently prove exhaustion");
   }
   const authorityScope = await authorityInstanceScope(input.env);
-  const { scope, expectedItems } = expectedScope(input.spec, input.capture.initialRequest);
+  const { scope, expectedItems } = canonicalReceiptExpectedScope(input.spec, {
+    segment_start: input.capture.initialRequest.segment_start,
+    segment_end: input.capture.initialRequest.segment_end,
+    segment_grain: input.segmentGrain,
+  });
   const rawCount = input.capture.pages.reduce((total, page) => total + page.rowCount, 0);
   if (rawCount !== input.structuredCount) {
     throw new Error("raw and structured counts do not reconcile");

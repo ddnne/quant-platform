@@ -1,9 +1,12 @@
 import {
   canonicalDigest,
+  canonicalJson,
   exactKeys,
   isPlainObject,
   isSha256,
 } from "./canonical";
+import { datasetById } from "../../ingestion-premium/src/catalog";
+import { canonicalReceiptExpectedScope } from "./receipt_evidence";
 import {
   issueIdentity,
   requireReceiptRequest,
@@ -92,6 +95,14 @@ function requireDerivedClaims(
   const requiredExtraDigests = value.dataset === "equities_master"
     ? [...REQUIRED_ACQUISITION_DIGESTS, ...REQUIRED_MASTER_CALENDAR_DIGESTS]
     : [...REQUIRED_ACQUISITION_DIGESTS];
+  const spec = datasetById(persistedRequest.dataset_id);
+  const governedExpected = spec?.coverage.policy_version === "collection-coverage/v3"
+    ? canonicalReceiptExpectedScope(spec, {
+      segment_start: persistedRequest.expected_key_start,
+      segment_end: persistedRequest.expected_key_end,
+      segment_grain: persistedRequest.segment_grain,
+    })
+    : null;
   const requestIdentityMatches =
     value.environment === persistedRequest.environment &&
     value.source === persistedRequest.source &&
@@ -100,6 +111,10 @@ function requireDerivedClaims(
     value.segment_id === persistedRequest.segment_id &&
     value.segment_start === persistedRequest.expected_key_start &&
     value.segment_end === persistedRequest.expected_key_end &&
+    governedExpected !== null &&
+    isPlainObject(value.expected_scope) &&
+    canonicalJson(value.expected_scope) === canonicalJson(governedExpected.scope) &&
+    value.expected_items === governedExpected.expectedItems &&
     segmentMatchesGrain(
       persistedRequest.source,
       persistedRequest.segment_grain,

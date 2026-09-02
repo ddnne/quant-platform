@@ -258,6 +258,7 @@ export async function executeReceiptRequest(
     requestDigest,
     runId: operation.runId,
     spec,
+    segmentGrain: identity.segment_grain,
     capture,
     structuredCount: structured.count,
     structuredDigest: structured.digest,
