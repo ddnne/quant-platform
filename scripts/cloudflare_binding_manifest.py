@@ -309,7 +309,15 @@ _COMMON_PACKAGE_SCRIPTS = {
 _PINNED_PACKAGE_SCRIPTS = {
     "ingestion-jsda": {
         **_COMMON_PACKAGE_SCRIPTS,
-        "deploy": _WRANGLER_PACKAGE_SCRIPT_POLICY["deploy"],
+        "deploy": (
+            "python3 ../../../scripts/activate_jsda_v3_cutover.py "
+            "--environment production --activate --yes"
+        ),
+        "deploy:staging": (
+            "python3 ../../../scripts/activate_jsda_v3_cutover.py "
+            "--environment staging --activate --yes"
+        ),
+        "deploy:unsafe-dev": "wrangler deploy --config=wrangler.toml --env=\"\"",
         "tail": _WRANGLER_PACKAGE_SCRIPT_POLICY["tail"],
         "test": (
             "vitest run --config vitest.config.ts && "

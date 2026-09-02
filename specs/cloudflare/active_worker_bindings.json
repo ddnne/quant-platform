@@ -60,7 +60,7 @@
     ],
     "unclassified": "REJECT"
   },
-  "manifest_digest": "sha256:16935d628bd982e72e874df43ca44b3d2d2527cbfedba0ce30c968953fccaf0b",
+  "manifest_digest": "sha256:94d27861eb2b71980cd5ff5c070624c3668726c754e653fa542f649abe505f64",
   "schema_version": "cloudflare-active-worker-bindings/v9",
   "test_harness_surfaces": {
     "ingestion-jsda": {
@@ -770,7 +770,9 @@
   "worker_package_scripts": {
     "ingestion-jsda": {
       "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
-      "deploy": "wrangler deploy --config=wrangler.toml --env=production",
+      "deploy": "python3 ../../../scripts/activate_jsda_v3_cutover.py --environment production --activate --yes",
+      "deploy:staging": "python3 ../../../scripts/activate_jsda_v3_cutover.py --environment staging --activate --yes",
+      "deploy:unsafe-dev": "wrangler deploy --config=wrangler.toml --env=\"\"",
       "tail": "wrangler tail --config=wrangler.toml --env=production",
       "test": "vitest run --config vitest.config.ts && vitest run --config vitest.runtime.config.ts",
       "typecheck": "tsc --noEmit",
