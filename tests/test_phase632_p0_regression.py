@@ -1400,9 +1400,10 @@ def test_injected_cancellation_after_final_link_removes_artifact(
 def test_timeout_does_not_unbounded_join_or_publish_late_success() -> None:
     import importlib.util
     import json
+    import multiprocessing
     import sys
-    import time
     import threading
+    import time
 
     root = Path(__file__).resolve().parents[1]
     module_path = (
@@ -1424,7 +1425,8 @@ def test_timeout_does_not_unbounded_join_or_publish_late_success() -> None:
     from research.factor_cohorts import get_research_cohort, is_am_pm_factor_cohort
     from research.personal_universe import personal_research_universe_rule_digest
 
-    entered = threading.Event()
+    process_context = multiprocessing.get_context("fork")
+    entered = process_context.Event()
     uploads: list[tuple[str, dict]] = []
     wrote = threading.Event()
 
@@ -1447,6 +1449,7 @@ def test_timeout_does_not_unbounded_join_or_publish_late_success() -> None:
         runner,
         max_job_seconds=0.05,
         terminal_uploader=uploader,
+        process_context=process_context,
     )
     cohort_id = "diverse-core-am-pm-v1"
     body = {
@@ -1464,7 +1467,12 @@ def test_timeout_does_not_unbounded_join_or_publish_late_success() -> None:
         ),
     }
     request_digest = "sha256:" + hashlib.sha256(
-        json.dumps(body, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
+        json.dumps(
+            body,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
     ).hexdigest()
     job = service.JobSpec.from_document(
         {

@@ -17,6 +17,7 @@ import urllib.error
 import urllib.parse
 from dataclasses import replace
 from email.message import Message
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -932,7 +933,7 @@ def test_python_container_defaults_to_am_diverse_and_allows_am_ids() -> None:
 
 
 def test_production_default_runner_starts_and_quiesces_under_spawn(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     container_root = str(MODULE_PATH.parent)
     if container_root not in sys.path:
@@ -945,9 +946,10 @@ def test_production_default_runner_starts_and_quiesces_under_spawn(
             for name in template.__dataclass_fields__
         }
     )
-    monkeypatch.setenv("QP_JOB_ROOT", "/etc")
+    missing_work_root = tmp_path / "missing-work-root"
+    runner = partial(spawn_service.default_runner, work_root=missing_work_root)
     supervisor = spawn_service._ProcessGroupSupervisor(
-        spawn_service.default_runner,
+        runner,
         spec,
         work_root=tmp_path,
     )
@@ -959,7 +961,29 @@ def test_production_default_runner_starts_and_quiesces_under_spawn(
     assert outcome.quiescent is True
     assert outcome.result is None
     assert outcome.error is not None
-    assert "ephemeral temporary storage" in outcome.error
+    assert "No such file or directory" in outcome.error
+
+
+def test_spawn_start_failure_is_quiescent_and_cleans_result_root(
+    tmp_path: Path,
+) -> None:
+    def unpicklable_runner(_spec):
+        return {}
+
+    supervisor = service._ProcessGroupSupervisor(
+        unpicklable_runner,
+        _job("a" * 64, job_id="spawn-start-failure"),
+        work_root=tmp_path,
+    )
+
+    supervisor.start()
+    outcome = supervisor.wait()
+
+    assert outcome.quiescent is True
+    assert outcome.result is None
+    assert outcome.error is not None
+    assert "local object" in outcome.error
+    assert not tuple(tmp_path.glob(".job-supervisor-*"))
 
 
 def test_success_archive_excludes_generated_sqlite_and_manifest_is_closed(

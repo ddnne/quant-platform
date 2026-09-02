@@ -21,6 +21,7 @@ import urllib.request
 import zlib
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from functools import partial
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -3735,17 +3736,20 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
 def main() -> None:
     env_root = os.environ.get("QP_JOB_ROOT")
     work_root = bind_container_work_root(None if not env_root else Path(env_root))
-    server = ThreadingHTTPServer(("0.0.0.0", 8080), PersonalResearchHandler)
-    server.daemon_threads = True
-    PersonalResearchHandler.manager = JobManager(
-        default_runner,
-        on_terminal=server.shutdown,
-        work_root=work_root,
-    )
+    server: ThreadingHTTPServer | None = None
     try:
+        server = ThreadingHTTPServer(("0.0.0.0", 8080), PersonalResearchHandler)
+        server.daemon_threads = True
+        runner = partial(default_runner, work_root=work_root)
+        PersonalResearchHandler.manager = JobManager(
+            runner,
+            on_terminal=server.shutdown,
+            work_root=work_root,
+        )
         server.serve_forever()
     finally:
-        server.server_close()
+        if server is not None:
+            server.server_close()
         shutil.rmtree(work_root, ignore_errors=True)
 
 

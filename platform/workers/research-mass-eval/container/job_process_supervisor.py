@@ -125,6 +125,7 @@ class JobProcessSupervisor:
         self._kill_grace_seconds = kill_grace_seconds
         self._process_context = process_context or multiprocessing.get_context("spawn")
         self._process: Any | None = None
+        self._process_started = False
         self._group_id: int | None = None
         self._identity_confirmed = False
         self._result_root: Path | None = None
@@ -160,6 +161,7 @@ class JobProcessSupervisor:
             )
             self._process = process
             process.start()
+            self._process_started = True
             self._group_id = int(process.pid) if process.pid else None
             ready_writer.close()
             if (
@@ -175,8 +177,9 @@ class JobProcessSupervisor:
                 self.stop()
         except BaseException as error:
             self._start_error = _safe_detail(error)
-            if self._process is None:
+            if not self._process_started:
                 self._quiescent = True
+                self._group_id = None
             else:
                 self.stop()
         finally:
@@ -184,7 +187,7 @@ class JobProcessSupervisor:
             ready_reader.close()
 
     def _process_state(self) -> str:
-        if self._process is None:
+        if self._process is None or not self._process_started:
             return "dead"
         try:
             return "alive" if self._process.is_alive() else "dead"
@@ -248,7 +251,11 @@ class JobProcessSupervisor:
             if self._wait_quiescent(self._term_grace_seconds):
                 return True
             self._signal_group(signal.SIGKILL)
-            if not self._identity_confirmed and self._process is not None:
+            if (
+                not self._identity_confirmed
+                and self._process is not None
+                and self._process_started
+            ):
                 try:
                     self._process.kill()
                 except (AssertionError, OSError, ValueError):
@@ -290,7 +297,9 @@ class JobProcessSupervisor:
 
     def wait(self) -> SupervisedJobOutcome:
         if self._start_error is not None:
-            return SupervisedJobOutcome(self._quiescent, error=self._start_error)
+            outcome = SupervisedJobOutcome(self._quiescent, error=self._start_error)
+            self.close()
+            return outcome
         while self._process_state() == "alive":
             self._reap_leader(0.05)
         if not self._wait_quiescent(0) and not self.stop():
