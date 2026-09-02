@@ -11,6 +11,25 @@ const containerRegistry = vi.hoisted(() => ({
 
 vi.mock("@cloudflare/containers", () => ({
   Container: class {
+    schedules: Array<{ when: number; callback: string; payload: unknown }> = [];
+    scheduleHistory: number[] = [];
+    removedHosts: string[] = [];
+
+    async schedule(when: number, callback: string, payload: unknown) {
+      const item = { when, callback, payload };
+      this.schedules.push(item);
+      this.scheduleHistory.push(when);
+      return item;
+    }
+
+    deleteSchedules(callback: string) {
+      this.schedules = this.schedules.filter((item) => item.callback !== callback);
+    }
+
+    async removeOutboundByHost(host: string) {
+      this.removedHosts.push(host);
+    }
+
     static get outboundByHost() {
       return containerRegistry.outboundByHost;
     }
@@ -42,6 +61,7 @@ import {
   personalJobContainerName,
 } from "./personal_research_contract";
 import { personalHistorySourceOutbound } from "./personal_history_source";
+import * as controlledPilot from "./controlled_pilot";
 import {
   PersonalResearchContainer,
   submitPersonalResearch,
@@ -168,6 +188,55 @@ describe("personal research Container admission", () => {
         "outboundByHost",
       ),
     ).toBe(false);
+  });
+
+  it("uses the SDK scheduler and preserves one bounded controlled deadline", async () => {
+    const values = new Map<string, unknown>();
+    const storage = {
+      get: async (key: string) => values.get(key),
+      put: async (key: string, value: unknown) => { values.set(key, value); },
+      delete: async (keys: string | string[]) => {
+        for (const key of Array.isArray(keys) ? keys : [keys]) values.delete(key);
+      },
+    };
+    const container = new PersonalResearchContainer();
+    Object.assign(container as object, { ctx: { storage }, env: {} });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+
+    await container.scheduleControlledPilot("controlled-job-schedule");
+    const firstDeadline = values.get("controlled_resume_deadline");
+    clock.mockReturnValue(2_000_000);
+    await container.scheduleControlledPilot("controlled-job-schedule");
+
+    const scheduled = (container as unknown as {
+      schedules: Array<{ when: number; callback: string; payload: unknown }>;
+    }).schedules;
+    expect(Object.prototype.hasOwnProperty.call(PersonalResearchContainer.prototype, "alarm")).toBe(false);
+    expect(firstDeadline).toBe(values.get("controlled_resume_deadline"));
+    expect(scheduled).toEqual([{
+      when: 5,
+      callback: "resumeControlledPilot",
+      payload: { job_id: "controlled-job-schedule" },
+    }]);
+    const run = vi.spyOn(controlledPilot, "runControlledPilotJob").mockResolvedValue();
+    let polls = 0;
+    const status = vi.spyOn(controlledPilot, "controlledPilotStatus").mockImplementation(async () => {
+      polls += 1;
+      const phase = polls <= 13 ? "SUBMITTED" : polls === 14 ? "FINALIZE_RETRY" : "COMPLETED";
+      return Response.json({ status: phase }, { status: phase === "COMPLETED" ? 200 : 202 });
+    });
+    for (let index = 0; index < 15; index += 1) {
+      await container.resumeControlledPilot({ job_id: "controlled-job-schedule" });
+    }
+    expect(run).toHaveBeenCalledTimes(15);
+    expect(status).toHaveBeenCalledTimes(15);
+    expect(values.has("controlled_resume_deadline")).toBe(false);
+    expect((container as unknown as { schedules: unknown[] }).schedules).toHaveLength(0);
+    expect((container as unknown as { scheduleHistory: number[] }).scheduleHistory).toContain(60);
+    expect([...new Set((container as unknown as { removedHosts: string[] }).removedHosts)].sort()).toEqual([
+      "controlled.r2", "research.r2",
+    ]);
+    clock.mockRestore();
   });
 
   it("rejects a missing snapshot before starting the Container", async () => {

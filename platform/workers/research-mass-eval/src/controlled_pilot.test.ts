@@ -203,8 +203,9 @@ function mockContainer(options?: {
     | "semantic_rebound_knowledge";
   delay?: { complete: boolean };
   scheduled?: string[];
+  outbound?: Map<string, unknown>;
 }): Env["PERSONAL_RESEARCH_CONTAINER"] {
-  const outbound = new Map<string, unknown>();
+  const outbound = options?.outbound ?? new Map<string, unknown>();
   const fetches = options?.fetches ?? { n: 0, post: 0 };
   const jobs = new Map<string, Record<string, unknown>>();
   return {
@@ -417,6 +418,7 @@ async function seedEnv(options?: {
   vi.spyOn(registries, "loadPinnedTraderKeys").mockReturnValue(fixturePublicKey());
   const fetches = options?.fetches ?? { n: 0, post: 0 };
   const scheduled: string[] = [];
+  const outbound = new Map<string, unknown>();
   const env = {
     STRUCTURED_BUCKET: mem.asBucket(),
     AI_GATEWAY: mockGateway(budget),
@@ -427,11 +429,12 @@ async function seedEnv(options?: {
       tamper: options?.tamper,
       delay: options?.delay,
       scheduled,
+      outbound,
     }),
     MASS_EVAL_TOKEN: "secret",
     ENVIRONMENT: "staging",
   } as unknown as Env;
-  return { env, mem, logicalId, physicalId, budget, request, fetches, scheduled };
+  return { env, mem, logicalId, physicalId, budget, request, fetches, scheduled, outbound };
 }
 
 const VERIFIER_NOW = Date.parse(String(fixtureKeys.verifier_now || "2026-09-02T12:00:30+00:00"));
@@ -807,6 +810,24 @@ describe("controlled cloud execution", () => {
     }
   });
 
+  it("keeps an immutable completed terminal valid after admission credentials expire", async () => {
+    const seeded = await seedEnv();
+    const ctx = new WaitCtx();
+    await submitControlledPilot(seeded.env, seeded.request, ctx);
+    await ctx.pending;
+    expect(((await (await controlledPilotStatus(
+      seeded.env,
+      seeded.request.idempotency_key,
+    )).json()) as { status: string }).status).toBe("COMPLETED");
+
+    const readyExpiry = Date.parse(String((readyFixture.attestation as { expires_at: string }).expires_at));
+    const traderExpiry = Date.parse(String((traderFixture as { expires_at: string }).expires_at));
+    vi.mocked(Date.now).mockReturnValue(Math.max(readyExpiry, traderExpiry) + 1);
+
+    const historical = await controlledPilotStatus(seeded.env, seeded.request.idempotency_key);
+    expect(((await historical.json()) as { status: string }).status).toBe("COMPLETED");
+  });
+
   it("rejects missing trader authorization and does not reserve", async () => {
     const seeded = await seedEnv({ skipAuth: true });
     const ctx = new WaitCtx();
@@ -844,13 +865,11 @@ describe("controlled cloud execution", () => {
 
   it("GET is lookup-only and does not start container work", async () => {
     const seeded = await seedEnv();
-    const ctx = new WaitCtx();
-    const first = await submitControlledPilot(seeded.env, seeded.request, ctx);
+    const first = await submitControlledPilot(seeded.env, seeded.request);
     expect(first.status).toBe(202);
     const lookup = await controlledPilotStatus(seeded.env, seeded.request.idempotency_key);
     expect(lookup.status).toBe(202);
     expect(seeded.fetches.post).toBe(0);
-    await ctx.pending;
   });
 
   it("does not cancel a still-running job and resumes after 120s", async () => {
@@ -867,6 +886,53 @@ describe("controlled cloud execution", () => {
     const body = (await status.json()) as { status: string };
     expect(body.status).toBe("COMPLETED");
     expect(seeded.fetches.post).toBe(1);
+  });
+
+  it("keeps late-write capabilities while RUNNING and releases them only after terminal", async () => {
+    const delay = { complete: false };
+    const seeded = await seedEnv({ delay });
+    const ctx = new WaitCtx();
+    await submitControlledPilot(seeded.env, seeded.request, ctx);
+    await ctx.pending;
+
+    expect([...seeded.outbound.keys()].sort()).toEqual(["controlled.r2", "research.r2"]);
+    await runControlledPilotJob(seeded.env, seeded.request.idempotency_key);
+    expect([...seeded.outbound.keys()].sort()).toEqual(["controlled.r2", "research.r2"]);
+    expect(seeded.fetches.post).toBe(1);
+
+    delay.complete = true;
+    await runControlledPilotJob(seeded.env, seeded.request.idempotency_key);
+    expect(seeded.outbound.size).toBe(0);
+    expect(((await (await controlledPilotStatus(
+      seeded.env,
+      seeded.request.idempotency_key,
+    )).json()) as { status: string }).status).toBe("COMPLETED");
+  });
+
+  it("continues beyond twelve pending polls and completes a finalize retry", async () => {
+    const delay = { complete: false };
+    const seeded = await seedEnv({ delay, loseFinalize: true });
+    const ctx = new WaitCtx();
+    await submitControlledPilot(seeded.env, seeded.request, ctx);
+    await ctx.pending;
+    for (let index = 0; index < 13; index += 1) {
+      await runControlledPilotJob(seeded.env, seeded.request.idempotency_key);
+    }
+    expect(seeded.fetches.post).toBe(1);
+    expect(seeded.budget.cancelled).toBe(0);
+
+    delay.complete = true;
+    await runControlledPilotJob(seeded.env, seeded.request.idempotency_key);
+    expect(((await (await controlledPilotStatus(
+      seeded.env,
+      seeded.request.idempotency_key,
+    )).json()) as { status: string }).status).toBe("FINALIZE_RETRY");
+    await runControlledPilotJob(seeded.env, seeded.request.idempotency_key);
+    expect(((await (await controlledPilotStatus(
+      seeded.env,
+      seeded.request.idempotency_key,
+    )).json()) as { status: string }).status).toBe("COMPLETED");
+    expect(seeded.budget.finalized).toBe(2);
   });
 
   it("rejects reordered and duplicated container children", async () => {
@@ -989,12 +1055,13 @@ describe("controlled cloud execution", () => {
     }
   });
 
-  it("cancels budget on container error without a terminal success artifact", async () => {
+  it("keeps a transient container error resumable without publishing success", async () => {
     const errored = await seedEnv({ failContainer: "error" });
     const ctx = new WaitCtx();
     await submitControlledPilot(errored.env, errored.request, ctx);
     await ctx.pending;
-    expect(errored.budget.cancelled).toBeGreaterThan(0);
+    expect(errored.budget.cancelled).toBe(0);
+    expect(errored.scheduled).toEqual([errored.request.idempotency_key]);
     expect(errored.mem.putOrder.some((key) => key.endsWith("/manifest.json"))).toBe(false);
   });
 });

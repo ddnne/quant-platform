@@ -24,7 +24,10 @@ import {
   writeSubmittedState,
 } from "./personal_job_state";
 import { personalResearchR2Outbound } from "./personal_research_r2";
-import { controlledPilotWriterR2Outbound } from "./controlled_pilot_container_r2";
+import {
+  CONTROLLED_LEASE_TTL_SECONDS,
+  controlledPilotWriterR2Outbound,
+} from "./controlled_pilot_container_r2";
 import {
   CONTROLLED_R2_HOST,
   controlledPilotR2Outbound,
@@ -36,8 +39,15 @@ import type { Env } from "./types";
 export { ContainerProxy };
 
 const CONTROLLED_JOB_STORAGE_KEY = "controlled_job_id";
-const CONTROLLED_RESUME_ATTEMPTS_KEY = "controlled_resume_attempts";
-const CONTROLLED_RESUME_MAX_ATTEMPTS = 12;
+const CONTROLLED_RESUME_DEADLINE_KEY = "controlled_resume_deadline";
+const CONTROLLED_RESUME_DELAY_KEY = "controlled_resume_delay";
+const CONTROLLED_RESUME_PHASE_KEY = "controlled_resume_phase";
+const CONTROLLED_RESUME_CALLBACK = "resumeControlledPilot";
+const CONTROLLED_RESUME_INITIAL_SECONDS = 5;
+const CONTROLLED_RESUME_MAX_SECONDS = 60;
+const CONTROLLED_OUTER_MS = 180 * 60 * 1_000;
+const CONTROLLED_RESUME_WINDOW_MS =
+  CONTROLLED_OUTER_MS + CONTROLLED_LEASE_TTL_SECONDS * 1_000;
 
 function responseJson(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
@@ -55,40 +65,126 @@ export class PersonalResearchContainer extends Container<Env> {
   sleepAfter = "180m";
   enableInternet = false;
 
+  private async scheduleControlledCallback(jobId: string, delay: number): Promise<void> {
+    this.deleteSchedules(CONTROLLED_RESUME_CALLBACK);
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await this.schedule(delay, CONTROLLED_RESUME_CALLBACK, { job_id: jobId });
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError;
+  }
+
   async scheduleControlledPilot(jobId: string): Promise<void> {
     const existing = await this.ctx.storage.get(CONTROLLED_JOB_STORAGE_KEY);
     if (existing !== jobId) {
       await this.ctx.storage.put(CONTROLLED_JOB_STORAGE_KEY, jobId);
-      await this.ctx.storage.put(CONTROLLED_RESUME_ATTEMPTS_KEY, 0);
+      await this.ctx.storage.put(
+        CONTROLLED_RESUME_DEADLINE_KEY,
+        Date.now() + CONTROLLED_RESUME_WINDOW_MS,
+      );
+      await this.ctx.storage.put(CONTROLLED_RESUME_DELAY_KEY, CONTROLLED_RESUME_INITIAL_SECONDS);
+      await this.ctx.storage.delete(CONTROLLED_RESUME_PHASE_KEY);
     }
-    await this.ctx.storage.setAlarm(Date.now() + 250);
+    const storedDelay = await this.ctx.storage.get(CONTROLLED_RESUME_DELAY_KEY);
+    const delay = typeof storedDelay === "number" && storedDelay >= CONTROLLED_RESUME_INITIAL_SECONDS
+      ? Math.min(storedDelay, CONTROLLED_RESUME_MAX_SECONDS)
+      : CONTROLLED_RESUME_INITIAL_SECONDS;
+    await this.scheduleControlledCallback(jobId, delay);
   }
 
-  async alarm(): Promise<void> {
-    const jobId = await this.ctx.storage.get(CONTROLLED_JOB_STORAGE_KEY);
-    if (typeof jobId !== "string" || !jobId) return;
-    const storedAttempts = await this.ctx.storage.get(CONTROLLED_RESUME_ATTEMPTS_KEY);
-    const attempts = typeof storedAttempts === "number" && Number.isSafeInteger(storedAttempts)
-      ? storedAttempts
-      : 0;
-    if (attempts >= CONTROLLED_RESUME_MAX_ATTEMPTS) {
-      return;
+  private async clearControlledResume(): Promise<void> {
+    this.deleteSchedules(CONTROLLED_RESUME_CALLBACK);
+    await this.ctx.storage.delete([
+      CONTROLLED_JOB_STORAGE_KEY,
+      CONTROLLED_RESUME_DEADLINE_KEY,
+      CONTROLLED_RESUME_DELAY_KEY,
+      CONTROLLED_RESUME_PHASE_KEY,
+    ]);
+  }
+
+  private async releaseControlledOutbound(): Promise<void> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const removed = await Promise.allSettled([
+        this.removeOutboundByHost(CONTROLLED_R2_HOST),
+        this.removeOutboundByHost("research.r2"),
+      ]);
+      const failed = removed.find((result) => result.status === "rejected");
+      if (!failed) return;
+      if (failed.status === "rejected") lastError = failed.reason;
     }
-    const nextAttempts = attempts + 1;
-    await this.ctx.storage.put(CONTROLLED_RESUME_ATTEMPTS_KEY, nextAttempts);
-    const { runControlledPilotJob, controlledPilotStatus } = await import("./controlled_pilot");
-    await runControlledPilotJob(this.env, jobId);
-    const status = await controlledPilotStatus(this.env, jobId);
-    if (status.status === 202) {
-      if (nextAttempts < CONTROLLED_RESUME_MAX_ATTEMPTS) {
-        await this.ctx.storage.setAlarm(Date.now() + 5_000);
+    throw lastError;
+  }
+
+  async resumeControlledPilot(payload: unknown): Promise<void> {
+    const payloadJob = typeof payload === "object" && payload !== null &&
+      Object.keys(payload).length === 1 && typeof (payload as { job_id?: unknown }).job_id === "string"
+      ? (payload as { job_id: string }).job_id
+      : "";
+    const jobId = await this.ctx.storage.get(CONTROLLED_JOB_STORAGE_KEY);
+    if (!payloadJob || payloadJob !== jobId) return;
+    const deadline = await this.ctx.storage.get(CONTROLLED_RESUME_DEADLINE_KEY);
+    const controlled = await import("./controlled_pilot");
+    const now = Date.now();
+    const cleanupAt = typeof deadline === "number"
+      ? deadline - CONTROLLED_LEASE_TTL_SECONDS * 1_000
+      : Number.NaN;
+    if (!Number.isFinite(cleanupAt) || now >= cleanupAt) {
+      try {
+        await controlled.expireControlledPilotJob(this.env, payloadJob, false);
+        await this.releaseControlledOutbound();
+        await this.clearControlledResume();
+      } catch {
+        if (typeof deadline === "number" && now < deadline) {
+          await this.scheduleControlledCallback(payloadJob, CONTROLLED_RESUME_MAX_SECONDS);
+        } else {
+          await this.clearControlledResume();
+        }
       }
       return;
     }
-    await this.ctx.storage.delete([
-      CONTROLLED_JOB_STORAGE_KEY,
-      CONTROLLED_RESUME_ATTEMPTS_KEY,
-    ]);
+    try {
+      await controlled.runControlledPilotJob(this.env, payloadJob, false);
+    } catch {
+      // A transient Worker/RPC error is retried below within the fixed deadline.
+    }
+    let phase = "SUBMITTED";
+    try {
+      const response = await controlled.controlledPilotStatus(this.env, payloadJob);
+      const body = await response.clone().json() as { status?: unknown };
+      if (body.status === "FINALIZE_RETRY") {
+        phase = "FINALIZE_RETRY";
+        await this.releaseControlledOutbound();
+      }
+      if (response.status === 200 && (body.status === "COMPLETED" || body.status === "FAILED")) {
+        try {
+          await this.releaseControlledOutbound();
+        } catch {
+          await this.scheduleControlledCallback(payloadJob, CONTROLLED_RESUME_INITIAL_SECONDS);
+          return;
+        }
+        await this.clearControlledResume();
+        return;
+      }
+    } catch {
+      // Status/R2 failures use the same bounded retry below.
+    }
+    const previousPhase = await this.ctx.storage.get(CONTROLLED_RESUME_PHASE_KEY);
+    const previousDelay = await this.ctx.storage.get(CONTROLLED_RESUME_DELAY_KEY);
+    const delay = previousPhase !== phase
+      ? CONTROLLED_RESUME_INITIAL_SECONDS
+      : Math.min(
+          typeof previousDelay === "number" ? previousDelay * 2 : CONTROLLED_RESUME_INITIAL_SECONDS,
+          CONTROLLED_RESUME_MAX_SECONDS,
+        );
+    await this.ctx.storage.put(CONTROLLED_RESUME_PHASE_KEY, phase);
+    await this.ctx.storage.put(CONTROLLED_RESUME_DELAY_KEY, delay);
+    await this.scheduleControlledCallback(payloadJob, delay);
   }
 }
 
