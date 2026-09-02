@@ -438,11 +438,22 @@ async function putSnapshotManifest(
     const snapshotKey =
       typeof manifest.snapshot_key === "string" ? manifest.snapshot_key : "";
     const rawHex = rawDigest.startsWith("sha256:") ? rawDigest.slice(7) : "";
+    const observedThrough =
+      typeof manifest.observed_through === "string" ? manifest.observed_through : "";
+    const revisionDays = manifest.revision_window_calendar_days;
+    const revisionCoverage =
+      typeof manifest.revision_coverage === "string" ? manifest.revision_coverage : "";
     if (
       !DIGEST_RE.test(rawDigest) ||
       !DIGEST_RE.test(gzipDigest) ||
       !SHA_HEX_RE.test(rawHex) ||
-      snapshotKey !== personalSnapshotObjectKey(rawHex)
+      snapshotKey !== personalSnapshotObjectKey(rawHex) ||
+      !observedThrough ||
+      typeof revisionDays !== "number" ||
+      !Number.isInteger(revisionDays) ||
+      revisionDays < 1 ||
+      (revisionCoverage !== "WINDOW_COMPLETE" &&
+        revisionCoverage !== "BOUNDED_WINDOW")
     ) {
       return responseJson({ error: "completed snapshot identity is invalid" }, 400);
     }

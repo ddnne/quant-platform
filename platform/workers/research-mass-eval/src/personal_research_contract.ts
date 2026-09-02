@@ -198,8 +198,20 @@ export function parsePersonalResearchRequest(
 
   const cohortId = raw.cohort_id;
   if (
+    typeof cohortId === "string" &&
+    (PERSONAL_RESEARCH_LEGACY_COHORT_IDS as readonly string[]).includes(
+      cohortId,
+    )
+  ) {
+    return {
+      ok: false,
+      error:
+        "legacy diverse-core-v1/session-close/next-close cohorts are OfflineFixture DRAFT-only",
+    };
+  }
+  if (
     typeof cohortId !== "string" ||
-    !PERSONAL_RESEARCH_COHORT_IDS.some((value) => value === cohortId)
+    !PERSONAL_RESEARCH_AM_PM_COHORT_IDS.some((value) => value === cohortId)
   ) {
     return {
       ok: false,

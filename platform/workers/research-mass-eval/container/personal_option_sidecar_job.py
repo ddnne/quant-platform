@@ -573,7 +573,12 @@ def execute_option_sidecar_job(
     *,
     opener: Callable = _open_input,
     uploader: Callable = _put_bytes,
+    deadline: Any | None = None,
 ) -> dict[str, Any]:
+    from pit.cooperative_deadline import check_deadline
+
+    del deadline
+    check_deadline()
     try:
         manifest = load_input_manifest(spec, opener=opener)
         sidecars: dict[str, Any] = {}

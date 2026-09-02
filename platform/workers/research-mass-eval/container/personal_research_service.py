@@ -9,9 +9,7 @@ import json
 import os
 import re
 import shutil
-import signal
 import sqlite3
-import subprocess
 import sys
 import tarfile
 import tempfile
@@ -113,12 +111,6 @@ MAX_RESULT_BYTES = 512 * 1024 * 1024
 # Compressed R2/HTTP transport (gzip or legacy raw sqlite).
 MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024 * 1024
 MAX_BASE_SLEEVE_ARTIFACT_BYTES = 16 * 1024 * 1024
-_SINGLE_THREAD_NUMERIC_ENV = {
-    "OMP_NUM_THREADS": "1",
-    "OPENBLAS_NUM_THREADS": "1",
-    "MKL_NUM_THREADS": "1",
-    "NUMEXPR_NUM_THREADS": "1",
-}
 
 _JOB_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _SHA_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -134,16 +126,20 @@ _SNAPSHOT_RE = re.compile(
 DEFAULT_PERSONAL_COHORT_ID = "diverse-core-am-pm-v1"
 PERSONAL_EXECUTABLE_COHORT_IDS = frozenset(
     {
-        "price-relative-v1",
-        "fundamental-relative-v1",
-        "diverse-core-v1",
-        "compact-market-diverse-v1",
-        "sector-relative-ls-v1",
         "price-relative-am-pm-v1",
         "fundamental-relative-am-pm-v1",
         "diverse-core-am-pm-v1",
         "compact-market-diverse-am-pm-v1",
         "sector-relative-ls-am-pm-v1",
+    }
+)
+PERSONAL_LEGACY_DRAFT_ONLY_COHORT_IDS = frozenset(
+    {
+        "price-relative-v1",
+        "fundamental-relative-v1",
+        "diverse-core-v1",
+        "compact-market-diverse-v1",
+        "sector-relative-ls-v1",
     }
 )
 COMPACT_MARKET_COHORT_IDS = frozenset(
@@ -298,6 +294,11 @@ class JobSpec:
         return spec
 
     def validate(self) -> None:
+        if self.cohort_id in PERSONAL_LEGACY_DRAFT_ONLY_COHORT_IDS:
+            raise JobInputError(
+                "legacy diverse-core-v1/session-close/next-close cohorts are "
+                "OfflineFixture DRAFT-only and are rejected at JobSpec parsing"
+            )
         if self.cohort_id not in PERSONAL_EXECUTABLE_COHORT_IDS:
             raise JobInputError("cohort_id is not executable by personal research")
         if _DIGEST_RE.fullmatch(self.cohort_digest) is None:
@@ -580,6 +581,23 @@ def download_snapshot(spec: JobSpec, destination: Path) -> None:
             destination.unlink(missing_ok=True)
 
 
+def verify_snapshot_observation_evidence(
+    manifest: Mapping[str, Any],
+    *,
+    observed_through: str,
+    revision_window_calendar_days: int,
+    revision_coverage: str,
+) -> None:
+    if str(manifest.get("observed_through") or "") != str(observed_through):
+        raise RuntimeError("snapshot observed_through mismatch")
+    if int(manifest.get("revision_window_calendar_days")) != int(
+        revision_window_calendar_days
+    ):
+        raise RuntimeError("snapshot revision_window_calendar_days mismatch")
+    if str(manifest.get("revision_coverage") or "") != str(revision_coverage):
+        raise RuntimeError("snapshot revision_coverage mismatch")
+
+
 def verify_sqlite(path: Path) -> None:
     uri = f"file:{path.resolve()}?mode=ro"
     connection = sqlite3.connect(uri, uri=True)
@@ -679,12 +697,16 @@ def _validated_base_sleeve_reference(
         return None
     if not expected_profile or source_count != 1:
         raise RuntimeError("qp-research emitted an unexpected base sleeve source")
+    if not isinstance(reference, dict):
+        raise RuntimeError("qp-research base sleeve reference is invalid")
+    reference = {
+        key: value for key, value in reference.items() if key != "path"
+    }
     expected_fields = {
         "archive_member",
         "artifact_schema_version",
         "candidate_count_contribution",
         "cohort_id",
-        "path",
         "ranking_role",
         "role",
         "schema_version",
@@ -692,7 +714,7 @@ def _validated_base_sleeve_reference(
         "strategy_id",
         "universe_id",
     }
-    if not isinstance(reference, dict) or set(reference) != expected_fields:
+    if set(reference) != expected_fields:
         raise RuntimeError("qp-research base sleeve reference is invalid")
     expected_schema = identity["base_sleeve_schema"]
     expected_strategy = identity["base_sleeve_strategy_id"]
@@ -710,7 +732,11 @@ def _validated_base_sleeve_reference(
         or not isinstance(reference.get("archive_member"), str)
     ):
         raise RuntimeError("qp-research base sleeve reference is invalid")
-    artifact = _require_output_artifact(reference, "path", output_root)
+    artifact = _require_output_artifact(
+        {"path": str(output_root / str(reference["archive_member"]))},
+        "path",
+        output_root,
+    )
     archive_member = artifact.relative_to(output_root.resolve(strict=True)).as_posix()
     if (
         archive_member != reference["archive_member"]
@@ -943,26 +969,6 @@ def _safe_detail(error: BaseException) -> str:
     return " ".join(f"{type(error).__name__}: {error}".split())[:500]
 
 
-def _stdout_summary(stdout: str) -> tuple[dict[str, Any] | None, str]:
-    lines = [line for line in stdout.splitlines() if line.strip()]
-    if not lines:
-        return None, "no_summary"
-    try:
-        parsed = json.loads(lines[-1])
-    except json.JSONDecodeError:
-        return None, "invalid_summary"
-    if not isinstance(parsed, dict):
-        return None, "invalid_summary"
-    return parsed, "ok"
-
-
-def _process_crash_message(process: subprocess.CompletedProcess[str]) -> str:
-    detail = " ".join((process.stderr or "").split())[-400:]
-    return (
-        f"qp-research exited {process.returncode}: {detail or 'no diagnostic'}"
-    )
-
-
 def _sanitize_error_detail(value: Any) -> str:
     if not isinstance(value, str):
         return "no detail"
@@ -1078,54 +1084,63 @@ def _manifest_base(spec: JobSpec, *, started_at: str, finished_at: str) -> dict[
     }
 
 
-def _run_research_process(
-    args: Sequence[str],
+def _run_direct_research(
+    spec: JobSpec,
     *,
-    cwd: str,
-    env: Mapping[str, str],
-    timeout: float,
-) -> subprocess.CompletedProcess[str]:
-    """Run qp-research in a killable process group, including its four children."""
+    database: Path,
+    output: Path,
+    timeout_seconds: float,
+    deadline: Any | None = None,
+    clock: Callable[[], float] | None = None,
+) -> Any:
+    """Run the typed personal service in-process with a cooperative deadline."""
 
-    process = subprocess.Popen(
-        args,
-        cwd=cwd,
-        env=dict(env),
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
+    from cf_platform.container_data_view import ContainerEphemeralDataView
+    from pit.cooperative_deadline import CooperativeDeadline, DeadlineExceeded
+    from research.personal_service import (
+        PersonalResearchRequest,
+        PersonalResearchService,
+    )
+
+    from pit.cooperative_deadline import install_deadline
+
+    monotonic_clock = clock or time.monotonic
+    active = deadline or CooperativeDeadline(
+        deadline_monotonic=monotonic_clock() + float(timeout_seconds),
+        clock=monotonic_clock,
     )
     try:
-        stdout, stderr = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired as error:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        stdout, stderr = process.communicate()
-        raise subprocess.TimeoutExpired(
-            cmd=error.cmd,
-            timeout=error.timeout,
-            output=stdout,
-            stderr=stderr,
+        with install_deadline(active):
+            view = ContainerEphemeralDataView.bind(
+                database,
+                artifact_root=output,
+                decision_cutoff="morning_close",
+            )
+            return PersonalResearchService().run(
+                PersonalResearchRequest(
+                    data_view=view,
+                    period_start=spec.period_start,
+                    period_end=spec.period_end,
+                    cohort_id=spec.cohort_id,
+                    universe_id=spec.universe_id,
+                    deadline=active,
+                )
+            )
+    except DeadlineExceeded as error:
+        raise RuntimeError(
+            f"personal research exceeded the {timeout_seconds:g}-second limit"
         ) from error
-    return subprocess.CompletedProcess(
-        args=args,
-        returncode=int(process.returncode or 0),
-        stdout=stdout,
-        stderr=stderr,
-    )
 
 
 def execute_job(
     spec: JobSpec,
     *,
     work_root: Path,
-    command: Sequence[str],
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     downloader: Callable[[JobSpec, Path], None] = download_snapshot,
     uploader: Callable[..., None] = _put,
+    deadline: Any | None = None,
+    clock: Callable[[], float] | None = None,
 ) -> dict[str, Any]:
     started_at = _now()
     job_root = Path(tempfile.mkdtemp(prefix=f"job-{spec.job_id}-", dir=work_root))
@@ -1138,53 +1153,64 @@ def execute_job(
             if _sha256_file(database) != spec.snapshot_sha256:
                 raise RuntimeError("snapshot sha256 mismatch after persistence")
             verify_sqlite(database)
-            args = [
-                *command,
-                "--db",
-                str(database),
-                "--start",
-                spec.period_start,
-                "--end",
-                spec.period_end,
-                "--output",
-                str(output),
-                "--cohort",
-                spec.cohort_id,
-                "--universe",
-                spec.universe_id,
-            ]
-            process_env = {
-                **os.environ,
-                "PYTHONUNBUFFERED": "1",
-                **_SINGLE_THREAD_NUMERIC_ENV,
-                # Child opens the R2 snapshot copied into this job temp dir.
-                "QP_ALLOW_LOCAL_MARKET_DATA": "1",
+            direct_kwargs: dict[str, Any] = {
+                "database": database,
+                "output": output,
+                "timeout_seconds": timeout_seconds,
             }
             try:
-                process = _run_research_process(
-                    args,
-                    cwd=os.environ.get("QP_REPO_ROOT", "/app"),
-                    env=process_env,
-                    timeout=timeout_seconds,
-                )
-            except subprocess.TimeoutExpired as exc:
-                if timeout_seconds % 60 == 0:
-                    limit = f"{int(timeout_seconds / 60)}-minute"
-                else:
-                    limit = f"{timeout_seconds:g}-second"
-                raise RuntimeError(
-                    f"qp-research exceeded the {limit} limit"
-                ) from exc
-            summary, summary_status = _stdout_summary(process.stdout or "")
-            if summary is None:
-                if process.returncode not in {0, 2}:
-                    raise RuntimeError(_process_crash_message(process))
-                if summary_status == "no_summary":
-                    raise RuntimeError("qp-research emitted no result document")
-                raise RuntimeError("qp-research result document is invalid")
-            if process.returncode not in {0, 1, 2}:
-                raise RuntimeError(_process_crash_message(process))
-            if process.returncode == 1:
+                import inspect as _inspect
+
+                params = _inspect.signature(_run_direct_research).parameters
+            except (TypeError, ValueError):
+                params = {}
+            if "deadline" in params:
+                direct_kwargs["deadline"] = deadline
+            if "clock" in params:
+                direct_kwargs["clock"] = clock
+            run = _run_direct_research(spec, **direct_kwargs)
+            returned_reference = getattr(run, "base_sleeve_artifact", None)
+            if isinstance(returned_reference, dict):
+                base_sleeve_artifact = dict(returned_reference)
+                base_sleeve_artifact.pop("path", None)
+            elif returned_reference is None:
+                base_sleeve_artifact = None
+            else:
+                raise RuntimeError("base sleeve artifact reference is invalid")
+            summary = {
+                "report_id": run.report_id,
+                "report_json": str(
+                    (output / run.report_json.archive_member).resolve()
+                ),
+                "report_markdown": str(
+                    (output / run.report_markdown.archive_member).resolve()
+                ),
+                "snapshot_id": run.snapshot.snapshot_id,
+                "logical_data_snapshot_id": run.snapshot.logical_data_snapshot_id,
+                "candidate_count": run.candidate_count,
+                "evaluated_count": run.evaluated_count,
+                "hold_count": run.hold_count,
+                "unexpected_errors": run.unexpected_errors,
+                "cohort_id": run.cohort_id,
+                "cohort_digest": run.cohort_digest,
+                "universe_id": run.universe_id,
+                "universe_rule_digest": run.universe_rule_digest,
+                "execution_mode": run.execution_mode,
+                "execution_contract_digest": run.execution_contract_digest,
+                "base_sleeve_artifact": base_sleeve_artifact,
+                "non_candidate_source_backtest_count": (
+                    run.non_candidate_source_backtest_count
+                ),
+                "live_orders_enabled": getattr(run, "live_orders_enabled", False),
+                "automatic_promotion": getattr(run, "automatic_promotion", False),
+                "model_calls": getattr(run, "model_calls", 0),
+                "estimated_ai_cost_usd": getattr(run, "estimated_ai_cost_usd", 0.0),
+                "go": getattr(run, "go", False),
+                "ready_snapshot_declared": getattr(
+                    run, "ready_snapshot_declared", False
+                ),
+            }
+            if run.exit_code == 1:
                 raise RuntimeError(_candidate_failure_message(summary, output))
             evaluated_count = summary.get("evaluated_count")
             hold_count = summary.get("hold_count")
@@ -1239,10 +1265,10 @@ def execute_job(
                     "qp-research execution_contract_digest does not match repository contract"
                 )
             expected_exit_code = 0 if evaluated_count == 4 else 2
-            if process.returncode != expected_exit_code:
+            if run.exit_code != expected_exit_code:
                 raise RuntimeError(
-                    "qp-research exit/result contract mismatch: "
-                    f"exit={process.returncode}, evaluated_count={evaluated_count}"
+                    "personal research exit/result contract mismatch: "
+                    f"exit={run.exit_code}, evaluated_count={evaluated_count}"
                 )
             _require_output_artifact(summary, "report_json", output)
             _require_output_artifact(summary, "report_markdown", output)
@@ -1375,7 +1401,10 @@ def _bar_session_coverage(
 def _session_coverage(connection: sqlite3.Connection) -> dict[str, Any]:
     state = compact_history_state(connection)
     if state == "invalid":
-        raise RuntimeError("snapshot compact v7 marker or schema is invalid")
+        raise RuntimeError(
+            "snapshot compact v8 marker or schema is invalid; "
+            "rebuild as personal-draft-history/v8"
+        )
     if state == "mixed":
         raise RuntimeError(
             "snapshot cannot mix compact with typed or generic bars"
@@ -1454,11 +1483,19 @@ def execute_snapshot_job(
     work_root: Path,
     uploader: Callable[..., None] = _put,
     client_factory: Callable[[SnapshotJobSpec], Any] | None = None,
+    deadline: Any | None = None,
 ) -> dict[str, Any]:
+    from pit.cooperative_deadline import check_deadline
+
+    del deadline
+    check_deadline()
     started_at = _now()
     job_root = Path(tempfile.mkdtemp(prefix=f"snapshot-{spec.job_id}-", dir=work_root))
     gzip_key: str | None = None
     client: Any = None
+    sqlite_observed = ""
+    sqlite_revision_days = 0
+    sqlite_revision_coverage = ""
     try:
         try:
             database = job_root / "personal-history.sqlite"
@@ -1496,6 +1533,11 @@ def execute_snapshot_job(
             )
             summary = hydrator.hydrate()
             coverage = _session_coverage(store._conn)
+            observation = store._conn.execute(
+                "SELECT observed_through, revision_window_calendar_days, "
+                "revision_coverage FROM personal_history_manifest "
+                "WHERE singleton=1"
+            ).fetchone()
             store._conn.close()
             verify_sqlite(database)
             raw_bytes = database.stat().st_size
@@ -1510,6 +1552,18 @@ def execute_snapshot_job(
                     "compressed snapshot exceeds 4 GiB transport cap"
                 )
             gzip_digest = "sha256:" + _sha256_file(gzip_path)
+            if (
+                observation is None
+                or not str(observation[0] or "").strip()
+                or observation[1] is None
+                or not str(observation[2] or "").strip()
+            ):
+                raise RuntimeError(
+                    "snapshot sqlite is missing immutable observation evidence"
+                )
+            sqlite_observed = str(observation[0])
+            sqlite_revision_days = int(observation[1])
+            sqlite_revision_coverage = str(observation[2])
             gzip_key = (
                 "research/personal/snapshots/sha256="
                 f"{raw_digest[7:]}.sqlite.gz"
@@ -1526,6 +1580,9 @@ def execute_snapshot_job(
                     spec, started_at=started_at, finished_at=_now()
                 ),
                 "status": "COMPLETED",
+                "observed_through": sqlite_observed,
+                "revision_window_calendar_days": sqlite_revision_days,
+                "revision_coverage": sqlite_revision_coverage,
                 "data_start": summary.bar_start,
                 "calendar_start": plan.calendar_start,
                 "calendar_end": spec.period_end,
@@ -1552,6 +1609,13 @@ def execute_snapshot_job(
                 "error": _safe_detail(error),
             }
         manifest = {**manifest, **_snapshot_cache_metrics(client)}
+        if manifest.get("status") == "COMPLETED":
+            verify_snapshot_observation_evidence(
+                manifest,
+                observed_through=sqlite_observed,
+                revision_window_calendar_days=sqlite_revision_days,
+                revision_coverage=sqlite_revision_coverage,
+            )
         manifest_bytes = _canonical_bytes(manifest)
         manifest_digest = "sha256:" + hashlib.sha256(manifest_bytes).hexdigest()
         uploader(
@@ -1593,6 +1657,8 @@ class JobManager:
         terminal_uploader: Callable[..., None] | None = None,
         terminal_reader: Callable[[JobSpecLike], dict[str, Any] | None] | None = None,
         retry_schedule: Sequence[float] | None = None,
+        clock: Callable[[], float] | None = None,
+        work_root: Path | None = None,
     ) -> None:
         if max_job_seconds <= 0:
             raise ValueError("max_job_seconds must be positive")
@@ -1602,9 +1668,13 @@ class JobManager:
         self._terminal_uploader = terminal_uploader or _put
         self._terminal_reader = terminal_reader
         self._retry_schedule = tuple(retry_schedule or self._RETRY_SCHEDULE)
+        self._clock = clock or time.monotonic
+        self._work_root = work_root
         self._lock = threading.Lock()
         self._jobs: dict[str, dict[str, Any]] = {}
         self._specs: dict[str, JobSpecLike] = {}
+        self._deadlines: dict[str, Any] = {}
+        self._worker: threading.Thread | None = None
         self._active_job_id: str | None = None
         self._accepting = True
         self._watchdog: threading.Timer | None = None
@@ -1643,6 +1713,13 @@ class JobManager:
             self._jobs[spec.job_id] = record
             self._specs[spec.job_id] = spec
             self._active_job_id = spec.job_id
+            from pit.cooperative_deadline import CooperativeDeadline
+
+            deadline = CooperativeDeadline(
+                deadline_monotonic=self._clock() + self._max_job_seconds,
+                clock=self._clock,
+            )
+            self._deadlines[spec.job_id] = deadline
             watchdog = threading.Timer(
                 self._max_job_seconds,
                 self._expire,
@@ -1655,8 +1732,9 @@ class JobManager:
                 target=self._execute,
                 args=(spec,),
                 name=f"personal-research-{spec.job_id}",
-                daemon=True,
+                daemon=False,
             )
+            self._worker = thread
             thread.start()
             return dict(record)
 
@@ -1935,11 +2013,23 @@ class JobManager:
 
     def _expire(self, job_id: str) -> None:
         spec: JobSpecLike | None = None
+        worker: threading.Thread | None = None
+        deadline: Any | None = None
         with self._lock:
             if self._active_job_id != job_id or not self._accepting:
                 return
             record = self._jobs[job_id]
             spec = self._specs.get(job_id)
+            deadline = self._deadlines.get(job_id)
+            worker = self._worker
+            self._accepting = False
+        if deadline is not None:
+            cancel = getattr(deadline, "cancel", None)
+            if callable(cancel):
+                cancel()
+        if worker is not None and worker is not threading.current_thread():
+            worker.join(timeout=min(0.05, float(self._max_job_seconds)))
+        with self._lock:
             self._jobs[job_id] = {
                 **record,
                 "status": "FAILED",
@@ -1950,7 +2040,7 @@ class JobManager:
                 "finished_at": _now(),
                 "go": False,
             }
-            self._accepting = False
+            self._active_job_id = None
         if spec is not None:
             self._write_timeout_terminal(spec)
 
@@ -1961,7 +2051,19 @@ class JobManager:
             self._jobs[spec.job_id]["status"] = "RUNNING"
             self._jobs[spec.job_id]["started_at"] = _now()
         try:
-            result = self._runner(spec)
+            deadline = self._deadlines.get(spec.job_id)
+            from pit.cooperative_deadline import DeadlineExceeded, install_deadline
+
+            with install_deadline(deadline):
+                try:
+                    result = self._runner(spec, deadline=deadline)
+                except TypeError:
+                    result = self._runner(spec)
+        except DeadlineExceeded:
+            with self._lock:
+                if not self._accepting:
+                    return
+            return
         except Exception as error:  # upload or service failure after job execution
             result = self._failure_terminal(spec, _safe_detail(error))
             with self._lock:
@@ -1995,29 +2097,39 @@ class JobManager:
             return None if record is None else dict(record)
 
 
-def default_runner(spec: JobSpecLike) -> dict[str, Any]:
-    if isinstance(spec, SnapshotJobSpec):
-        work_root = Path(os.environ.get("QP_JOB_ROOT", "/tmp/personal-research"))
-        work_root.mkdir(parents=True, exist_ok=True)
-        return execute_snapshot_job(spec, work_root=work_root)
-    if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):
-        return execute_overlay_job(spec)
-    if isinstance(spec, PersonalSvi2023JobSpec):
-        return execute_svi_job(spec)
-    if isinstance(spec, PersonalVolAmPmPanelJobSpec):
-        return execute_vol_am_pm_panel_job(spec)
-    if isinstance(spec, PersonalOptionSidecarJobSpec):
-        return execute_option_sidecar_job(spec)
-    work_root = Path(os.environ.get("QP_JOB_ROOT", "/tmp/personal-research"))
-    work_root.mkdir(parents=True, exist_ok=True)
-    command = tuple(
-        value
-        for value in os.environ.get("QP_RESEARCH_COMMAND", "/app/scripts/qp-research").split()
-        if value
-    )
-    if not command:
-        raise RuntimeError("QP_RESEARCH_COMMAND is empty")
-    return execute_job(spec, work_root=work_root, command=command)
+def default_runner(
+    spec: JobSpecLike,
+    *,
+    work_root: Path,
+    deadline: Any | None = None,
+) -> dict[str, Any]:
+    from pit.cooperative_deadline import install_deadline
+
+    with install_deadline(deadline):
+        if isinstance(spec, SnapshotJobSpec):
+            return execute_snapshot_job(spec, work_root=work_root, deadline=deadline)
+        if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):
+            return execute_overlay_job(spec, deadline=deadline)
+        if isinstance(spec, PersonalSvi2023JobSpec):
+            return execute_svi_job(spec, deadline=deadline)
+        if isinstance(spec, PersonalVolAmPmPanelJobSpec):
+            return execute_vol_am_pm_panel_job(spec, deadline=deadline)
+        if isinstance(spec, PersonalOptionSidecarJobSpec):
+            return execute_option_sidecar_job(spec, deadline=deadline)
+        return execute_job(spec, work_root=work_root, deadline=deadline)
+
+
+def bind_container_work_root(path: Path | None = None) -> Path:
+    """Create an owned ephemeral job root under the platform temp directory."""
+
+    from pit.personal_research_view import platform_temp_root, require_ephemeral_path
+
+    temp_root = platform_temp_root()
+    if path is None:
+        return Path(tempfile.mkdtemp(prefix="personal-research-", dir=temp_root))
+    requested = require_ephemeral_path(Path(path))
+    requested.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix="job-root-", dir=requested))
 
 
 class PersonalResearchHandler(BaseHTTPRequestHandler):
@@ -2124,11 +2236,18 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    env_root = os.environ.get("QP_JOB_ROOT")
+    work_root = bind_container_work_root(None if not env_root else Path(env_root))
+
+    def runner(spec: JobSpecLike, deadline: Any | None = None) -> dict[str, Any]:
+        return default_runner(spec, work_root=work_root, deadline=deadline)
+
     server = ThreadingHTTPServer(("0.0.0.0", 8080), PersonalResearchHandler)
     server.daemon_threads = True
     PersonalResearchHandler.manager = JobManager(
-        default_runner,
+        runner,
         on_terminal=server.shutdown,
+        work_root=work_root,
     )
     try:
         server.serve_forever()

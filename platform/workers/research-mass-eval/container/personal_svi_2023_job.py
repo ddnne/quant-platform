@@ -1429,7 +1429,12 @@ def execute_svi_job(
     *,
     input_opener: OpenInput = _open_input,
     uploader: Callable[[PersonalSvi2023JobSpec, str, bytes], str] = _put_bytes,
+    deadline: Any | None = None,
 ) -> dict[str, Any]:
+    from pit.cooperative_deadline import check_deadline
+
+    del deadline
+    check_deadline()
     try:
         manifest = load_input_manifest(spec, opener=input_opener)
         panel = load_panel(spec, manifest, opener=input_opener)

@@ -18,12 +18,11 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
-import tempfile
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
+
+from ops.json_post import JsonPostError, post_json_object
+from ops.r2_cli import R2CliError, get_r2_object
 
 from qp_paths import repo_root
 
@@ -165,33 +164,14 @@ def _post_worker_children_then_manifest(
             parsed = loaded
         return parsed
 
-    req = urllib.request.Request(url, data=payload, method="POST", headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8")
-            status = int(resp.status)
-    except urllib.error.HTTPError as exc:
-        detail = ""
-        try:
-            detail = exc.read().decode("utf-8")[:2000]
-        except Exception:
-            detail = str(exc)
+        return post_json_object(
+            url=url, body=payload, headers=headers, timeout=timeout
+        )
+    except JsonPostError as exc:
         raise R2IOError(
-            f"{WORKER_CHILDREN_THEN_MANIFEST_ERROR}: HTTP {exc.code}: {detail}"
+            f"{WORKER_CHILDREN_THEN_MANIFEST_ERROR}: {exc}"
         ) from exc
-    except urllib.error.URLError as exc:
-        raise R2IOError(
-            f"{WORKER_CHILDREN_THEN_MANIFEST_ERROR}: network error: {exc}"
-        ) from exc
-    try:
-        loaded = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise R2IOError(
-            f"{WORKER_CHILDREN_THEN_MANIFEST_ERROR}: non-json (HTTP {status})"
-        ) from exc
-    if not isinstance(loaded, dict):
-        raise R2IOError(WORKER_CHILDREN_THEN_MANIFEST_ERROR)
-    return loaded
 
 
 def put_children_then_manifest_via_worker(
@@ -234,6 +214,8 @@ def put_children_then_manifest_via_worker(
             "staged_paths": staged or None,
         }
 
+    if http_post is None:
+        raise R2IOError("closed artifact put port is required")
     url = _bound_worker_url(worker_url)
     tok = _bound_worker_token(token)
     if not url or not tok:
@@ -369,47 +351,34 @@ def default_r2_get_object(
     config: str | Path | None = None,
     timeout: int = 300,
 ) -> bytes:
-    """Fetch one R2 object body via ``wrangler r2 object get`` (remote)."""
+    """Fetch one R2 object body via the ops R2 CLI client (remote)."""
     wr = Path(wrangler) if wrangler else DEFAULT_WRANGLER
     cfg = Path(config) if config else DEFAULT_WRANGLER_CONFIG
-    if not wr.is_file():
-        raise R2IOError(
-            f"wrangler binary not found for R2 get: {wr}. "
-            "Inject r2_get= or supply local_paths / pre-parsed rows."
-        )
-    with tempfile.NamedTemporaryFile(
-        prefix="r2fc_get_", suffix=".bin", delete=False
-    ) as tmp:
-        tmp_path = Path(tmp.name)
     try:
-        proc = subprocess.run(
-            [
-                str(wr),
-                "r2",
-                "object",
-                "get",
-                f"{bucket}/{key}",
-                f"--file={tmp_path}",
-                "--remote",
-                f"--config={cfg}",
-            ],
-            capture_output=True,
-            text=True,
+        return get_r2_object(
+            bucket,
+            key,
+            wrangler=wr,
+            config=cfg,
+            cwd=REPO_ROOT,
             timeout=timeout,
-            cwd=str(REPO_ROOT),
         )
-        if proc.returncode != 0:
-            combined = (proc.stderr or "") + (proc.stdout or "")
-            raise R2IOError(
-                f"r2 get failed for {bucket}/{key} rc={proc.returncode}: "
-                f"{combined[-1200:]}"
-            )
-        return tmp_path.read_bytes()
-    finally:
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+    except R2CliError as exc:
+        raise R2IOError(str(exc)) from exc
+
+
+def try_r2_get_json(bucket: str, key: str, *, timeout: int = 60) -> dict[str, Any] | None:
+    """Best-effort remote R2 JSON get. None on miss; not artifact authority."""
+
+    try:
+        raw = default_r2_get_object(bucket, key, timeout=timeout)
+    except (R2IOError, OSError):
+        return None
+    try:
+        obj = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
+        return None
+    return obj if isinstance(obj, dict) else None
 
 
 __all__ = [
@@ -424,6 +393,7 @@ __all__ = [
     "WORKER_PUT_URL_ENV",
     "default_r2_get_object",
     "default_r2_put",
+    "try_r2_get_json",
     "put_children_then_manifest_via_worker",
     "put_research_artifact",
     "python_cli_put_is_not_immutable_authority",

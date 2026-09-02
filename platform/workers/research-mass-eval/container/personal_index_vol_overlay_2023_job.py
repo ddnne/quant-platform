@@ -1217,7 +1217,12 @@ def execute_overlay_job(
     overlay_opener: Callable[[PersonalIndexVolOverlay2023JobSpec, str], Any] = _open_overlay,
     svi_opener: Callable[[PersonalSvi2023JobSpec, str], Any] | None = None,
     uploader: Callable[[PersonalIndexVolOverlay2023JobSpec, str, bytes], str] = _put_bytes,
+    deadline: Any | None = None,
 ) -> dict[str, Any]:
+    from pit.cooperative_deadline import check_deadline
+
+    del deadline
+    check_deadline()
     if spec.is_am_pm_smile_transport:
         return execute_am_pm_smile_transport_job(
             spec,

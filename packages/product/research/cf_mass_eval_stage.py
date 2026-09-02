@@ -11,16 +11,15 @@ from research.cf_mass_eval_thicken import (
     attach_nky_proxy,
     attach_opt225_regime,
 )
+from pit.personal_research_view import PersonalResearchDataView
 from research.eval_loaders import (
     bars_rich_to_close_panel,
     load_bars_from_sqlite_rich,
-    load_bars_ndjson_rich,
-    resolve_bars_path,
 )
 from research.eval_universe import select_eval_universe
 from research.eval_windows import DEFAULT_REAL_MULTIYEAR_PERIODS
 from research.complete21 import COMPLETE_21_DATASETS
-from research.r2_io import put_research_artifact
+
 
 RESEARCH_ARTIFACT_BUCKET: str = "quant-structured"
 RESEARCH_ARTIFACT_PREFIX: str = "research/mass_eval"
@@ -80,8 +79,13 @@ def build_real_period_panel(
     codes: Sequence[str] | None = None,
     max_codes: int = DEFAULT_MAX_CODES,
     max_days: int = DEFAULT_MAX_DAYS,
-    mirror_dir: str | Path | None = None,
+    view: Any | None = None,
 ) -> dict[str, Any]:
+    from research.mass_disabled import refuse_mass_host_entrypoint
+
+    refuse_mass_host_entrypoint("build_real_period_panel")
+    if not isinstance(view, PersonalResearchDataView):
+        raise TypeError("eval sqlite loaders require PersonalResearchDataView")
     p = normalize_period_row(period)
     pid = str(p["period_id"])
     pool = (
@@ -90,38 +94,18 @@ def build_real_period_panel(
         else [str(c).strip() for c in codes if str(c).strip()]
     )
     selected = select_eval_universe(max_codes=int(max_codes), pool=pool)
-    if mirror_dir is not None:
-        bars_path = resolve_bars_path(
-            pid, mirror_dir=mirror_dir, prefer_full=True
-        )
-    else:
-        bars_path = resolve_bars_path(pid, prefer_full=True)
-    if bars_path is None or not Path(bars_path).exists():
-        return {
-            **p,
-            "status": "missing_bars",
-            "bars": {},
-            "dataset": PRIMARY_BARS_DATASET,
-            "source": "mirror_missing",
-            "n_codes": 0,
-            "n_days": 0,
-        }
-    rich = load_bars_ndjson_rich(
-        bars_path,
+    start = str(p.get("period_start") or "")[:10]
+    end = str(p.get("period_end") or "")[:10]
+    if not start or not end:
+        raise ValueError("as_of is required (PIT has no latest default)")
+    rich = load_bars_from_sqlite_rich(
+        view,
         codes=selected,
+        period_start=start,
+        period_end=end,
         max_days=int(max_days),
-        period_start=p.get("period_start"),
-        period_end=p.get("period_end"),
+        decision_date=end,
     )
-    missing = [c for c in selected if c not in rich]
-    if missing:
-        extra = load_bars_from_sqlite_rich(
-            codes=missing,
-            period_start=str(p.get("period_start") or ""),
-            period_end=str(p.get("period_end") or ""),
-            max_days=int(max_days),
-        )
-        rich.update(extra)
     close = bars_rich_to_close_panel(rich)
     bars_json: dict[str, list[list[Any]]] = {
         code: [[d, float(px)] for d, px in pairs]
@@ -148,9 +132,9 @@ def build_real_period_panel(
                 continue
         if vals:
             adv_by_code[str(code)] = sum(vals) / len(vals)
-    nky_meta = attach_nky_proxy(bars_json, p)
-    opt225_meta = attach_opt225_regime()
-    thicken_meta = _build_thicken_sidecars(p, codes=selected)
+    nky_meta = attach_nky_proxy(bars_json, p, view)
+    opt225_meta = attach_opt225_regime(view)
+    thicken_meta = _build_thicken_sidecars(p, codes=selected, view=view)
 
     n_days = max(
         (len(v) for k, v in bars_json.items() if not str(k).startswith("__")),
@@ -163,7 +147,7 @@ def build_real_period_panel(
         "bars": bars_json,
         "adv_by_code": adv_by_code,
         "dataset": PRIMARY_BARS_DATASET,
-        "source": f"complete22_mirror:{Path(bars_path).name}",
+        "source": "personal_research_data_view",
         "n_codes": n_eq,
         "n_days": n_days,
         **nky_meta,
@@ -183,9 +167,12 @@ def stage_real_panels_to_r2(
     staging_dir: str | Path | None = None,
     r2_put: Callable[..., Mapping[str, Any]] | None = None,
     panels_prefix: str | None = None,
+    view: Any | None = None,
 ) -> dict[str, Any]:
     from research.cf_mass_eval_job import CF_MASS_EVAL_WAVE
+    from research.mass_disabled import refuse_mass_host_entrypoint
 
+    refuse_mass_host_entrypoint("stage_real_panels_to_r2")
     wave = CF_MASS_EVAL_WAVE
     jid = str(job_id).strip() or "unknown"
     period_list = [
@@ -193,15 +180,9 @@ def stage_real_panels_to_r2(
         for p in (periods or DEFAULT_REAL_MULTIYEAR_PERIODS)
     ]
     prefix = panels_prefix or f"{RESEARCH_ARTIFACT_PREFIX}/job={jid}/panels"
-    put_fn = r2_put or (
-        lambda bucket, key, body: put_research_artifact(
-            bucket,
-            key,
-            body,
-            dry_run=dry_run,
-            staging_dir=staging_dir,
-        )
-    )
+    if r2_put is None:
+        raise RuntimeError("closed artifact put port is required")
+    put_fn = r2_put
     panels: list[dict[str, Any]] = []
     puts: list[dict[str, Any]] = []
     for raw in period_list:
@@ -210,6 +191,7 @@ def stage_real_panels_to_r2(
             codes=codes,
             max_codes=max_codes,
             max_days=max_days,
+            view=view,
         )
         key = f"{prefix}/{panel['period_id']}.json"
         body = json.dumps(panel, indent=2, default=str).encode("utf-8")
