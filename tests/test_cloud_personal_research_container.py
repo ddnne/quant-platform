@@ -3109,6 +3109,7 @@ def test_controlled_container_runs_canonical_four_with_independent_artifacts(
     papers = result["papers"]
     assert len(papers) == 4
     assert {row["lifecycle"] for row in papers} == {"Paper"}
+    assert {row["price_basis"] for row in papers} == {"RAW"}
     assert len({row["strategy_spec_hash"] for row in papers}) == 4
     assert len(result["risks"]) == 4
     assert all("audit_id" in row for row in result["risks"])

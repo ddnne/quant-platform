@@ -4,6 +4,7 @@ import { json } from "./http_json";
 import {
   CONTROLLED_CHILD_COUNT,
   CONTROLLED_FILL_CONTRACT_DIGEST,
+  CONTROLLED_FILL_EXECUTION_MODE,
   CONTROLLED_JOB_KEY_PREFIX,
   CONTROLLED_MAX_GROSS_WEIGHT_PPM,
   CONTROLLED_PILOT_GENERATION,
@@ -998,6 +999,7 @@ async function validateContainerArtifacts(
     if (
       paper.identity !== CONTROLLED_PILOT_IDENTITY || paper.kind !== "paper" ||
       paper.lifecycle !== "Paper" || !isRecord(paper.metrics) ||
+      paper.execution_mode !== CONTROLLED_FILL_EXECUTION_MODE || paper.price_basis !== "RAW" ||
       paper.automatic_promotion !== false || paper.live_orders_enabled !== false || paper.mass !== false
     ) {
       lineageError("paper semantic body violates the controlled Paper policy");
@@ -1545,8 +1547,8 @@ async function callContainer(
         row.lifecycle !== "Paper" ||
         !row.metrics ||
         row.fill_contract_digest !== CONTROLLED_FILL_CONTRACT_DIGEST ||
-        row.execution_mode === "next_close" ||
-        row.price_basis === "PERSONAL_RETROSPECTIVE_ADJUSTED",
+        row.execution_mode !== CONTROLLED_FILL_EXECUTION_MODE ||
+        row.price_basis !== "RAW",
     )
   ) {
     return { ok: false, error: "controlled container did not return Paper evidence" };

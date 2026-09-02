@@ -194,6 +194,8 @@ function mockContainer(options?: {
     | "knowledge_missing_id"
     | "knowledge_wrong_digest"
     | "post_digest_injection"
+    | "non_raw_price_basis"
+    | "noncanonical_execution_mode"
     | "missing_semantic_field"
     | "missing_knowledge_payload_field"
     | "semantic_rebound_risk"
@@ -243,6 +245,16 @@ function mockContainer(options?: {
             }
             if (options?.tamper === "post_digest_injection") {
               result.papers[0]!.injected_after_closed_schema = true;
+              delete result.papers[0]!.semantic_digest;
+              result.papers[0]!.semantic_digest = await sha256Digest(canonicalJson(result.papers[0]!));
+            }
+            if (options?.tamper === "non_raw_price_basis") {
+              result.papers[0]!.price_basis = "PIT_ADJUSTED";
+              delete result.papers[0]!.semantic_digest;
+              result.papers[0]!.semantic_digest = await sha256Digest(canonicalJson(result.papers[0]!));
+            }
+            if (options?.tamper === "noncanonical_execution_mode") {
+              result.papers[0]!.execution_mode = "arbitrary_close";
               delete result.papers[0]!.semantic_digest;
               result.papers[0]!.semantic_digest = await sha256Digest(canonicalJson(result.papers[0]!));
             }
@@ -365,6 +377,8 @@ async function seedEnv(options?: {
     | "knowledge_missing_id"
     | "knowledge_wrong_digest"
     | "post_digest_injection"
+    | "non_raw_price_basis"
+    | "noncanonical_execution_mode"
     | "missing_semantic_field"
     | "missing_knowledge_payload_field"
     | "semantic_rebound_risk"
@@ -746,6 +760,8 @@ describe("controlled cloud execution", () => {
       "knowledge_missing_id",
       "knowledge_wrong_digest",
       "post_digest_injection",
+      "non_raw_price_basis",
+      "noncanonical_execution_mode",
       "missing_semantic_field",
       "missing_knowledge_payload_field",
       "semantic_rebound_risk",
@@ -792,6 +808,47 @@ describe("controlled cloud execution", () => {
     const status = await controlledPilotStatus(seeded.env, seeded.request.idempotency_key);
     const parsed = (await status.json()) as { status: string };
     expect(parsed.status).not.toBe("COMPLETED");
+  });
+
+  it("rejects persisted Paper fill-policy fields even when semantic and byte digests are rebound", async () => {
+    for (const [field, value] of [
+      ["price_basis", "PIT_ADJUSTED"],
+      ["execution_mode", "arbitrary_close"],
+    ] as const) {
+      const seeded = await seedEnv();
+      const ctx = new WaitCtx();
+      await submitControlledPilot(seeded.env, seeded.request, ctx);
+      await ctx.pending;
+      const completed = await controlledPilotStatus(seeded.env, seeded.request.idempotency_key);
+      expect(((await completed.json()) as { status: string }).status).toBe("COMPLETED");
+
+      const prefix = `research/controlled_pilot/v1/jobs/${seeded.request.idempotency_key}`;
+      const paperKey = `${prefix}/paper/1.json`;
+      const raw = await seeded.env.STRUCTURED_BUCKET.get(paperKey);
+      expect(raw).not.toBeNull();
+      const body = JSON.parse(
+        new TextDecoder().decode(new Uint8Array(await raw!.arrayBuffer())),
+      ) as Record<string, unknown>;
+      const semanticBody = body.semantic_body as Record<string, unknown>;
+      semanticBody[field] = value;
+      body.semantic_digest = await sha256Digest(canonicalJson(semanticBody));
+      body.result_id = body.semantic_digest;
+      const tamperedBytes = new TextEncoder().encode(JSON.stringify(body, null, 2));
+      const tamperedDigest = await sha256Digest(tamperedBytes);
+      await seeded.mem.put(paperKey, tamperedBytes);
+
+      const manifestKey = `${prefix}/manifest.json`;
+      const manifestObject = await seeded.env.STRUCTURED_BUCKET.get(manifestKey);
+      const manifest = JSON.parse(
+        new TextDecoder().decode(new Uint8Array(await manifestObject!.arrayBuffer())),
+      ) as { children: Array<Record<string, unknown>> };
+      manifest.children[0]!.persisted_byte_digest = tamperedDigest;
+      manifest.children[0]!.size = tamperedBytes.byteLength;
+      await seeded.mem.put(manifestKey, JSON.stringify(manifest, null, 2));
+
+      const status = await controlledPilotStatus(seeded.env, seeded.request.idempotency_key);
+      expect(((await status.json()) as { status: string }).status).not.toBe("COMPLETED");
+    }
   });
 
   it("cancels budget on container error without a terminal success artifact", async () => {

@@ -1064,6 +1064,7 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
                 "ready_attestation_id": document.get("ready_attestation_id"),
                 "fill_contract_digest": CONTROLLED_FILL_CONTRACT_DIGEST,
                 "execution_mode": CONTROLLED_FILL_EXECUTION_MODE,
+                "price_basis": RAW,
                 "strategy_spec_id": plan.strategy_spec_id,
                 "strategy_spec_hash": plan.strategy_spec_hash,
                 "strategy_spec_version": plan.strategy_spec_version,
