@@ -16,6 +16,11 @@ vi.mock("../src/projection_signature.js", async (importOriginal) => {
         ? projectionVerifierState.verifier(generation)
         : actual.verifyPinnedProjectionGeneration(generation);
     },
+    verifyActiveOpsProjection(generation, env) {
+      return projectionVerifierState.verifier
+        ? projectionVerifierState.verifier(generation)
+        : actual.verifyActiveOpsProjection(generation, env);
+    },
   };
 });
 
@@ -33,6 +38,7 @@ import {
   PROJECTED_CONTENT_TABLES,
   projectedManifestDigest,
   projectedTableContent,
+  resetProjectedContentCache,
 } from "../src/projection_content.js";
 
 const projectionMigrations = inject("opsProjectionD1Migrations");
@@ -40,6 +46,7 @@ const quotaMigrations = inject("opsQuotaD1Migrations");
 
 beforeEach(async () => {
   projectionVerifierState.verifier = null;
+  resetProjectedContentCache();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   await reset();
@@ -118,7 +125,12 @@ async function seedSignedGeneration(
   ).bind(
     generationId,
     generatedAt,
-    JSON.stringify({ schema: "ops-storage/runtime-v1", counts: { marker } }),
+    JSON.stringify({
+      schema: "ops-storage/runtime-v1",
+      generation: generationId,
+      source_db_digest: digest("2"),
+      counts: { marker },
+    }),
   ).run();
   const contentManifest = {};
   for (const table of PROJECTED_CONTENT_TABLES) {
@@ -137,6 +149,7 @@ async function seedSignedGeneration(
     source_db_digest: digest("2"),
     generated_at: generatedAt,
     producer_commit_sha: "a".repeat(40),
+    worker_version_id: "10000000-0000-4000-8000-000000000001",
     contract_digest: digest("3"),
     registry_digest: digest("4"),
     coverage_policy_version: "collection-coverage/v3",

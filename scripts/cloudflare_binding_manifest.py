@@ -15,6 +15,7 @@ import re
 import sys
 import tomllib
 from pathlib import Path
+import subprocess
 from typing import Any
 
 
@@ -254,6 +255,7 @@ PRODUCTION_SECRET_NAMES: dict[str, tuple[str, ...]] = {
         "DATA_EXPORT_TOKEN",
         "INGESTION_RUN_TOKEN",
         "JQUANTS_API_KEY",
+        "OPS_PROJECTION_SIGNING_PKCS8_B64",
     ),
     "ingestion-secrets": (
         "JQUANTS_API_KEY",
@@ -273,7 +275,10 @@ PRODUCTION_SECRET_NAMES: dict[str, tuple[str, ...]] = {
 
 STAGING_SECRET_NAMES: dict[str, tuple[str, ...]] = {
     "receipt-activation-observer": (),
-    "ingestion-premium": ("INGESTION_RUN_TOKEN",),
+    "ingestion-premium": (
+        "INGESTION_RUN_TOKEN",
+        "OPS_PROJECTION_SIGNING_PKCS8_B64",
+    ),
     "ingestion-secrets": (
         "JQUANTS_API_KEY",
         "JQUANTS_RPC_CURSOR_HMAC_KEY",
@@ -294,7 +299,10 @@ _WRANGLER_PACKAGE_SCRIPT_POLICY = {
         "--outdir .wrangler-dry-run"
     ),
     "cf-typegen": 'wrangler types --config=wrangler.toml --env=""',
-    "deploy": "wrangler deploy --config=wrangler.toml --env=production",
+    "deploy": (
+        "python3 ../../scripts/cloudflare_binding_manifest.py --deploy-tagged "
+        "--config wrangler.toml --env production"
+    ),
     "dev": 'wrangler dev --config=wrangler.toml --env=""',
     "tail": "wrangler tail --config=wrangler.toml --env=production",
     "types": (
@@ -327,6 +335,7 @@ _PINNED_PACKAGE_SCRIPTS = {
     "ingestion-premium": {
         **_COMMON_PACKAGE_SCRIPTS,
         "cf-typegen": _WRANGLER_PACKAGE_SCRIPT_POLICY["cf-typegen"],
+        "deploy": _WRANGLER_PACKAGE_SCRIPT_POLICY["deploy"],
         "test": (
             "vitest run --config vitest.config.ts && "
             "vitest run --config vitest.runtime.config.ts"
@@ -343,7 +352,11 @@ _PINNED_PACKAGE_SCRIPTS = {
     },
     "quant-ops-mcp": {
         **_COMMON_PACKAGE_SCRIPTS,
-        "deploy": _WRANGLER_PACKAGE_SCRIPT_POLICY["deploy"],
+        "deploy": (
+            "python3 ../../scripts/predeploy_ops_projection_gate.py "
+            "--environment production && python3 ../../scripts/cloudflare_binding_manifest.py "
+            "--deploy-tagged --config wrangler.toml --env production"
+        ),
         "test": (
             "node --experimental-test-module-mocks --test test/*.test.mjs && "
             "vitest run --config vitest.runtime.config.ts && "
@@ -433,6 +446,7 @@ WORKER_ENTRYPOINT_RPC_POLICY: dict[
             ("staging_recovery_audit_evidence",),
         ),
     },
+    "ingestion-jsda": {},
     "research-ai-gateway": {
         "GatewayService": (
             False,
@@ -597,6 +611,60 @@ FRAMEWORK_DURABLE_OBJECT_POLICY: dict[str, dict[str, dict[str, Any]]] = {
 }
 
 
+BINDING_MANIFEST_SCHEMA_VERSION = "cloudflare-active-worker-bindings/v10"
+
+_OPS_D1_IDENTITY: dict[str, tuple[tuple[str, str, str, str, str], ...]] = {
+    "base": (
+        (
+            "OPS_PROJECTION_DB",
+            "quant-ops-projection",
+            "1b497e8a-5c69-4e19-ae2e-89a8f3185272",
+            "migrations/projection",
+            "d1_migrations_ops_projection",
+        ),
+        (
+            "QUOTA_DB",
+            "quant-ops-quota",
+            "d2c4bddd-7970-495c-aa05-ff28cbc1f6b6",
+            "migrations/quota",
+            "d1_migrations_ops_quota",
+        ),
+    ),
+    "production": (
+        (
+            "OPS_PROJECTION_DB",
+            "quant-ops-projection",
+            "1b497e8a-5c69-4e19-ae2e-89a8f3185272",
+            "migrations/projection",
+            "d1_migrations_ops_projection",
+        ),
+        (
+            "QUOTA_DB",
+            "quant-ops-quota",
+            "d2c4bddd-7970-495c-aa05-ff28cbc1f6b6",
+            "migrations/quota",
+            "d1_migrations_ops_quota",
+        ),
+    ),
+    "staging": (
+        (
+            "OPS_PROJECTION_DB",
+            "quant-ops-projection-staging",
+            "68ee96d5-766c-4832-836b-54c079bd6265",
+            "migrations/projection",
+            "d1_migrations_ops_projection",
+        ),
+        (
+            "QUOTA_DB",
+            "quant-ops-quota-staging",
+            "a27f8ce9-82cb-4eec-abac-9c3385ce40e1",
+            "migrations/quota",
+            "d1_migrations_ops_quota",
+        ),
+    ),
+}
+
+
 def _canonical_digest(value: Any) -> str:
     rendered = json.dumps(
         value,
@@ -606,6 +674,102 @@ def _canonical_digest(value: Any) -> str:
         allow_nan=False,
     ).encode("utf-8")
     return "sha256:" + hashlib.sha256(rendered).hexdigest()
+
+
+def _resource_identity_rows(
+    surface: dict[str, Any],
+    table: str,
+    fields: tuple[str, ...],
+    type_name: str,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for raw in surface.get(table) or []:
+        row = {"type": type_name}
+        for field in fields:
+            if field in raw:
+                row[field] = raw[field]
+        rows.append(row)
+    return rows
+
+
+def binding_identity(surface: dict[str, Any]) -> dict[str, Any]:
+    """Names, resource IDs, types, and migration identity for one Worker env."""
+    return {
+        "d1_databases": _resource_identity_rows(
+            surface,
+            "d1_databases",
+            (
+                "binding",
+                "database_id",
+                "database_name",
+                "migrations_dir",
+                "migrations_table",
+            ),
+            "D1Database",
+        ),
+        "durable_objects": _resource_identity_rows(
+            surface,
+            "durable_objects",
+            ("class_name", "name", "script_name"),
+            "DurableObject",
+        ),
+        "kv_namespaces": _resource_identity_rows(
+            surface, "kv_namespaces", ("binding", "id"), "KVNamespace"
+        ),
+        "name": surface.get("name"),
+        "queue_consumers": _resource_identity_rows(
+            surface,
+            "queue_consumers",
+            ("dead_letter_queue", "queue"),
+            "QueueConsumer",
+        ),
+        "queue_producers": _resource_identity_rows(
+            surface, "queue_producers", ("binding", "queue"), "QueueProducer"
+        ),
+        "r2_buckets": _resource_identity_rows(
+            surface, "r2_buckets", ("binding", "bucket_name"), "R2Bucket"
+        ),
+        "ratelimits": _resource_identity_rows(
+            surface, "ratelimits", ("name", "namespace_id"), "RateLimit"
+        ),
+        "secret_names": list(surface.get("secret_names") or []),
+        "services": _resource_identity_rows(
+            surface,
+            "services",
+            ("binding", "entrypoint", "service"),
+            "Service",
+        ),
+    }
+
+
+def binding_identity_digest(surface: dict[str, Any]) -> str:
+    return _canonical_digest(binding_identity(surface))
+
+
+def quant_ops_binding_identity(workers: dict[str, Any]) -> dict[str, Any]:
+    ops = workers["quant-ops-mcp"]
+    return {
+        "environments": {
+            environment: binding_identity(ops[environment])
+            for environment in ("base", "production", "staging")
+        },
+        "schema_version": "quant-ops-mcp-binding-identity/v1",
+        "worker": "quant-ops-mcp",
+    }
+
+
+def quant_ops_binding_identity_digest(workers: dict[str, Any]) -> str:
+    return _canonical_digest(quant_ops_binding_identity(workers))
+
+
+def _ops_d1_row(row: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    return (
+        str(row.get("binding")),
+        str(row.get("database_name")),
+        str(row.get("database_id")),
+        str(row.get("migrations_dir")),
+        str(row.get("migrations_table")),
+    )
 
 
 def _quant_ops_agents_dependency() -> dict[str, str]:
@@ -997,9 +1161,10 @@ def build_manifest() -> dict[str, Any]:
         if (WORKER_ROOT / worker / "wrangler.test.toml").is_file()
     }
     body = {
-        "schema_version": "cloudflare-active-worker-bindings/v9",
+        "schema_version": BINDING_MANIFEST_SCHEMA_VERSION,
         "active_workers": list(ACTIVE_WORKERS),
         "config_key_policy": CONFIG_KEY_POLICY,
+        "ops_binding_identity_digest": quant_ops_binding_identity_digest(workers),
         "test_harness_surfaces": test_harness_surfaces,
         "toolchain_policy": TOOLCHAIN,
         "worker_package_scripts": {
@@ -1017,6 +1182,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         "active_workers",
         "config_key_policy",
         "manifest_digest",
+        "ops_binding_identity_digest",
         "schema_version",
         "test_harness_surfaces",
         "toolchain_policy",
@@ -1024,7 +1190,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         "workers",
     }:
         raise ValueError("binding manifest fields are not closed")
-    if manifest["schema_version"] != "cloudflare-active-worker-bindings/v9":
+    if manifest["schema_version"] != BINDING_MANIFEST_SCHEMA_VERSION:
         raise ValueError("binding manifest schema_version drift")
     if DEFAULT_FETCH_RESERVED_SPECIAL_POLICY != frozenset(ACTIVE_WORKERS):
         raise ValueError("default fetch reserved-special policy drift")
@@ -1350,18 +1516,31 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             raise ValueError(
                 f"receipt-activation-observer/{environment}: environment policy drift"
             )
-    for environment in ("base", "production"):
-        observer = workers["receipt-activation-observer"][environment]
-        if observer["workers_dev"] is not False or observer["services"] != []:
-            raise ValueError(
-                f"receipt-activation-observer/{environment}: public surface drift"
-            )
+    observer_base = workers["receipt-activation-observer"]["base"]
+    if observer_base["workers_dev"] is not False or observer_base["services"] != []:
+        raise ValueError("receipt-activation-observer/base: public surface drift")
+    observer_production = workers["receipt-activation-observer"]["production"]
+    if observer_production["workers_dev"] is not False or observer_production["services"] != [
+        {
+            "binding": "JSDA_INGESTION",
+            "service": "quant-platform-ingestion-jsda",
+        },
+    ]:
+        raise ValueError(
+            "receipt-activation-observer/production: HOLD JSDA collector binding drift"
+        )
     observer_staging = workers["receipt-activation-observer"]["staging"]
-    if observer_staging["workers_dev"] is not True or observer_staging["services"] != [{
-        "binding": "PREMIUM_RECEIPT_OPERATOR",
-        "entrypoint": "PremiumReceiptAuditEvidenceService",
-        "service": "quant-platform-ingestion-premium-staging",
-    }]:
+    if observer_staging["workers_dev"] is not True or observer_staging["services"] != [
+        {
+            "binding": "JSDA_INGESTION",
+            "service": "quant-platform-ingestion-jsda-staging",
+        },
+        {
+            "binding": "PREMIUM_RECEIPT_OPERATOR",
+            "entrypoint": "PremiumReceiptAuditEvidenceService",
+            "service": "quant-platform-ingestion-premium-staging",
+        },
+    ]:
         raise ValueError(
             "receipt-activation-observer/staging: operator binding drift"
         )
@@ -1470,6 +1649,14 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         premium_vars = workers["ingestion-premium"][environment]["vars"]
         if premium_vars != {
             "INGEST_CONCURRENCY": "2" if environment == "staging" else "6",
+            "OPS_PROJECTION_ENVIRONMENT": (
+                "staging" if environment == "staging" else "production"
+            ),
+            "OPS_PROJECTION_SIGNING_KEY_ID": (
+                "ops-projection-cloud-staging-v1"
+                if environment == "staging"
+                else "ops-projection-20260826-v2"
+            ),
             "RECEIPT_AUTHORITY_ENVIRONMENT": (
                 "staging" if environment == "staging" else "production"
             ),
@@ -1479,39 +1666,14 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
                 f"ingestion-premium/{environment}: Receipt environment policy drift"
             )
 
-    expected_ops_databases = {
-        "base": {
-            ("OPS_PROJECTION_DB", "quant-ops-projection", "migrations/projection"),
-            ("QUOTA_DB", "quant-ops-quota", "migrations/quota"),
-        },
-        "production": {
-            ("OPS_PROJECTION_DB", "quant-ops-projection", "migrations/projection"),
-            ("QUOTA_DB", "quant-ops-quota", "migrations/quota"),
-        },
-        "staging": {
-            (
-                "OPS_PROJECTION_DB",
-                "quant-ops-projection-staging",
-                "migrations/projection",
-            ),
-            ("QUOTA_DB", "quant-ops-quota-staging", "migrations/quota"),
-        },
-    }
-    for environment, expected in expected_ops_databases.items():
+    for environment, expected in _OPS_D1_IDENTITY.items():
         ops_surface = workers["quant-ops-mcp"][environment]
         databases = ops_surface["d1_databases"]
-        actual = {
-            (
-                str(row.get("binding")),
-                str(row.get("database_name")),
-                str(row.get("migrations_dir")),
-            )
-            for row in databases
-        }
+        actual = tuple(_ops_d1_row(row) for row in databases)
         if actual != expected:
             raise ValueError(
                 f"quant-ops-mcp/{environment}: dedicated projection/quota "
-                f"bindings drifted: {sorted(actual)}"
+                f"bindings drifted: {list(actual)}"
             )
         if ops_surface["durable_objects"] != [{
             "class_name": "QuantOpsMcpAgent",
@@ -1568,12 +1730,106 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             )
 
     body = {key: value for key, value in manifest.items() if key != "manifest_digest"}
+    if manifest["ops_binding_identity_digest"] != quant_ops_binding_identity_digest(
+        workers
+    ):
+        raise ValueError("ops binding identity digest drift")
     if manifest["manifest_digest"] != _canonical_digest(body):
         raise ValueError("binding manifest digest drift")
 
 
 def _render(manifest: dict[str, Any]) -> str:
     return json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+
+
+def _clean_merged_sha() -> str:
+    from scripts.receipt_authority_pending_gate import _require_exact_clean_source
+
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    sha = (completed.stdout or "").strip()
+    _require_exact_clean_source(sha)
+    return sha
+
+
+_SHA40 = re.compile(r"^[0-9a-f]{40}$")
+
+
+def parse_selected_deployment(payload: object, expected_sha: str) -> dict[str, str]:
+    if not _SHA40.fullmatch(expected_sha):
+        raise ValueError("expected SHA is not a clean merged Git SHA")
+    document = payload
+    if isinstance(payload, str):
+        try:
+            document = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise ValueError("deployment observation is not JSON") from exc
+    if not isinstance(document, dict):
+        raise ValueError("deployment observation is malformed")
+    result = document.get("result") if isinstance(document.get("result"), dict) else {}
+    versions = document.get("versions")
+    if versions is None:
+        versions = result.get("versions")
+    if not isinstance(versions, list) or len(versions) != 1 or not isinstance(versions[0], dict):
+        raise ValueError("deployment must select exactly one version")
+    row = versions[0]
+    if row.get("percentage") != 100:
+        raise ValueError("deployment must route 100 percent to one version")
+    version_id = row.get("version_id") or row.get("id")
+    annotations = row.get("annotations") if isinstance(row.get("annotations"), dict) else {}
+    tag = annotations.get("workers/tag") or row.get("tag")
+    message = annotations.get("workers/message") or row.get("message")
+    if tag != expected_sha or message != expected_sha:
+        raise ValueError("selected version tag/message is not the exact merged SHA")
+    if not isinstance(version_id, str) or not version_id:
+        raise ValueError("selected version id is missing")
+    deployment_id = document.get("id") or document.get("deployment_id")
+    if isinstance(document.get("result"), dict):
+        deployment_id = deployment_id or document["result"].get("id")
+    if not isinstance(deployment_id, str) or not deployment_id:
+        raise ValueError("selected deployment id is missing")
+    return {
+        "deployment_id": deployment_id,
+        "version_id": version_id,
+        "tag": expected_sha,
+        "traffic_percent": "100",
+    }
+
+
+def deploy_tagged(*, config: str, environment: str) -> None:
+    sha = _clean_merged_sha()
+    if not _SHA40.fullmatch(sha):
+        raise ValueError("merged SHA is not 40 hex")
+    argv = [
+        "wrangler",
+        "deploy",
+        "--config",
+        config,
+        "--tag",
+        sha,
+        "--message",
+        sha,
+    ]
+    if environment:
+        argv.extend(["--env", environment])
+    completed = subprocess.run(argv, check=False)
+    if completed.returncode != 0:
+        raise ValueError("tagged wrangler deploy failed")
+    observed = subprocess.run(
+        ["wrangler", "deployments", "status", "--config", config, "--json"]
+        + (["--env", environment] if environment else []),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if observed.returncode != 0:
+        raise ValueError("tagged deploy could not observe selected version")
+    parse_selected_deployment(observed.stdout or "", sha)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1584,7 +1840,13 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="print canonical active Worker paths, one per line",
     )
+    parser.add_argument("--deploy-tagged", action="store_true")
+    parser.add_argument("--config", default="wrangler.toml")
+    parser.add_argument("--env", dest="environment", default="production")
     args = parser.parse_args(argv)
+    if args.deploy_tagged:
+        deploy_tagged(config=args.config, environment=args.environment)
+        return 0
     if args.write and args.print_worker_paths:
         parser.error("--write and --print-worker-paths are mutually exclusive")
     if args.print_worker_paths:

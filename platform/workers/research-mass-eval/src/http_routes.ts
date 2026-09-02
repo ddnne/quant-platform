@@ -590,12 +590,13 @@ export async function dispatchMassEvalFetch(
     return handlers.personalResearchStatus(env, jobId);
   }
 
-  if (url.pathname === "/health" || url.pathname === "/") {
+  if (url.pathname === "/health" || url.pathname === "/health/ready" || url.pathname === "/") {
     if (request.method !== "GET") {
       return json({ error: "GET required" }, 405);
     }
     return json({
       ok: true,
+      live: true,
       service: "quant-platform-research-mass-eval",
       version: env.MASS_EVAL_VERSION,
     });

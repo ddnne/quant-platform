@@ -118,12 +118,12 @@ TDnet) are **not** in the schedule.
 
 This component README is not a remote-mutation runbook. Do not initialize or
 migrate D1, put secrets, or deploy from commands copied from historical docs.
-The canonical migration manifest currently authorizes no remote mutation and
-keeps staging and production on HOLD pending cross-host exclusion and trusted
-source-SHA attestation. Use
+The canonical migration manifest designates
+`scripts/activate_jsda_v3_cutover.py` as the only staging/production mutation
+entry; direct Wrangler migration loops are forbidden. Use
 [`docs/operations/current_production_runbook.md`](../../../docs/operations/current_production_runbook.md)
-for the current preconditions and HOLD state. Dry-run/typecheck commands remain
-safe; live changes require a future reviewed authority path.
+for its D1 lease, Time Travel, staging-first and recovery preconditions.
+Dry-run/typecheck commands remain safe.
 
 ## Local sync (Phase 3.5 S6)
 

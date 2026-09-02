@@ -142,7 +142,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--publish-ops",
         action="store_true",
-        help="After a successful sync, run scripts/publish_ops_projection.py (default off).",
+        help="Disabled production authority; cloud publication is ingestion-premium.",
     )
     p.add_argument(
         "--apply-remote-ops",
@@ -2135,7 +2135,12 @@ def _maybe_publish_ops_projection(db_path, *, apply_remote: bool = False) -> int
         str(db_path),
     ]
     if apply_remote:
-        cmd.append("--apply-remote")
+        print(
+            "ERROR: --publish-ops --apply-remote is disabled; "
+            "cloud publication is ingestion-premium scheduled work",
+            file=sys.stderr,
+        )
+        return 7
     print("[sync] publishing ops projection")
     completed = subprocess.run(cmd, check=False)
     return int(completed.returncode)

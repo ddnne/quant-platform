@@ -253,13 +253,16 @@ def _expected_bindings(surface: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
             "namespace_id": "<LIVE_NAMESPACE_ID>",
         })
     for row in surface["services"]:
-        add({
-            "entrypoint": row["entrypoint"],
+        binding = {
             "environment": "production",
             "name": row["binding"],
             "service": row["service"],
             "type": "service",
-        })
+        }
+        entrypoint = row.get("entrypoint")
+        if type(entrypoint) is str and entrypoint:
+            binding["entrypoint"] = entrypoint
+        add(binding)
     for row in surface["ratelimits"]:
         add({
             "name": row["name"],

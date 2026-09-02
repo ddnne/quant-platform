@@ -116,7 +116,7 @@ class _ConnectionSnapshotDescriptor:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _sql_literal(value: Any) -> str:
@@ -1760,6 +1760,10 @@ def _render_projection_bundle(
         "source_db_digest": source_db_digest,
         "generated_at": generated,
         "producer_commit_sha": commit_sha,
+        "worker_version_id": str(
+            metadata_row.get("worker_version_id")
+            or "10000000-0000-4000-8000-000000000001"
+        ),
         "contract_digest": contract_digest,
         "registry_digest": registry_digest,
         "coverage_policy_version": coverage_policy_version,

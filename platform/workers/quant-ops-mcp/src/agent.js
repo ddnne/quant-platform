@@ -9,13 +9,17 @@ import { z } from "zod";
 
 import { OPS_TOOLS, callOpsTool } from "./domain.js";
 import { DurableDailyQuota, quotaCost, QuotaExceeded } from "./quota.js";
-import { acceptedOpsToolSchemaDigest } from "./tool_schema_digest.js";
+import {
+  acceptedOpsToolSchemaDigest,
+  OPS_MCP_SERVER_NAME,
+  OPS_MCP_SERVER_VERSION,
+} from "./tool_schema_digest.js";
 
 export const OPS_TOOL_SCHEMA_META_KEY = "quant-platform/tool-schema-digest";
 export const BINDING_MANIFEST_SCHEMA_VERSION =
-  "cloudflare-active-worker-bindings/v9";
-export const BINDING_MANIFEST_DIGEST =
-  "sha256:9674f9d6a362d116cf8c9b545cbf2a5e9d0a2ad5e496cc820b6ca07aef3ef1c3";
+  "cloudflare-active-worker-bindings/v10";
+export const OPS_BINDING_IDENTITY_DIGEST =
+  "sha256:881176391253aed791eeca79c264384838fe9f6edfc8f33e48c2353e450cb6e3";
 
 /** @param {Record<string, unknown>} schema */
 function zodFromJsonSchema(schema) {
@@ -67,7 +71,7 @@ export async function buildOpsMcpServer(env, props) {
       },
       async (args) => {
         try {
-          const value = await callOpsTool(env.OPS_PROJECTION_DB, tool.name, args);
+          const value = await callOpsTool(env.OPS_PROJECTION_DB, tool.name, args, env);
           const login = typeof props?.login === "string" && props.login
             ? props.login
             : "unknown";
@@ -106,14 +110,14 @@ export async function buildOpsMcpServer(env, props) {
 
 export class QuantOpsMcpAgent extends McpAgent {
   // These static fields are shipped in the Worker module without becoming DO
-  // RPC methods. Exact-byte live module acceptance therefore binds the active
-  // bundle to the reviewed binding-manifest version and digest.
+  // RPC methods. Exact-byte live module acceptance binds the active bundle to
+  // the reviewed Ops-only binding identity, not the all-Worker manifest digest.
   static bindingManifestSchemaVersion = BINDING_MANIFEST_SCHEMA_VERSION;
-  static bindingManifestDigest = BINDING_MANIFEST_DIGEST;
+  static opsBindingIdentityDigest = OPS_BINDING_IDENTITY_DIGEST;
 
   server = new McpServer({
-    name: "quant-ops-read",
-    version: "0.2.0",
+    name: OPS_MCP_SERVER_NAME,
+    version: OPS_MCP_SERVER_VERSION,
   });
 
   async init() {

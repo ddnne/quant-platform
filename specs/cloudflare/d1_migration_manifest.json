@@ -274,7 +274,7 @@
         {
           "migration_id": "quant-ops-projection:0001_ops_projection",
           "path": "platform/workers/quant-ops-mcp/migrations/projection/0001_ops_projection.sql",
-          "checksum": "sha256:18fe5cbae5d404e9f111b4c841047db8b72c25f9cc70c7fe5d5ffcf8ff4b30f0",
+          "checksum": "sha256:a79bb35d1f49c52f86cd20f79796a1aedc3a010199f17cdf244e587d2b349e1c",
           "order": 1,
           "depends_on": null
         },

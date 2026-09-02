@@ -2,12 +2,12 @@
   "name": "quant-platform-research-mass-eval",
   "private": true,
   "version": "0.1.0",
-  "description": "W90 — multi-logic lite multi-period mass-eval on Cloudflare Workers",
+  "description": "W90 \u2014 multi-logic lite multi-period mass-eval on Cloudflare Workers",
   "dependencies": {
     "@cloudflare/containers": "0.3.7"
   },
   "scripts": {
-    "deploy": "wrangler deploy --config=wrangler.toml --env=production",
+    "deploy": "python3 ../../scripts/cloudflare_binding_manifest.py --deploy-tagged --config wrangler.toml --env production",
     "dev": "wrangler dev --config=wrangler.toml --env=\"\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

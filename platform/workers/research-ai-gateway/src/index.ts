@@ -397,9 +397,9 @@ async function handleGatewayRequest(
   serviceBindingAuthorized = false,
 ): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/health" || url.pathname === "/") {
+    if (url.pathname === "/health" || url.pathname === "/health/ready" || url.pathname === "/") {
       if (request.method !== "GET") return json({ error: "GET required" }, 405);
-      return json({ ok: true, service: "quant-platform-research-ai-gateway" });
+      return json({ ok: true, live: true, service: "quant-platform-research-ai-gateway" });
     }
     if (url.pathname !== "/v1/complete") {
       return json({ error: "not found" }, 404);

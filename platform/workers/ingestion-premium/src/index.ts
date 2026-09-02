@@ -66,6 +66,7 @@ import {
   runStagingReceiptAuditRecoveryCanary,
   type ReceiptOperatorAuditEvidenceV1,
 } from "./receipt_authority_audit_canary";
+import { publishOpsProjectionBestEffort } from "./ops_projection";
 
 /** Generated bindings plus secret/optional var refinements only. */
 export type Env = Omit<
@@ -82,6 +83,11 @@ export type Env = Omit<
   DATA_EXPORT_TOKEN?: string;
   MASTER_SCD2_ONLY?: string;
   ALLOW_D1_STRUCTURED_DATASETS?: string;
+  OPS_PROJECTION_DB: D1Database;
+  OPS_PROJECTION_SIGNING_PKCS8_B64: string;
+  OPS_PROJECTION_VERIFY_SPKI_B64: string;
+  OPS_PROJECTION_SIGNING_KEY_ID: string;
+  OPS_PROJECTION_ENVIRONMENT: "staging" | "production";
 };
 
 // P0-4 parallel ingest knobs — drive near Premium ~500/min ceiling.
@@ -940,9 +946,15 @@ export class PremiumReceiptAuditEvidenceService
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/health") {
+    if (url.pathname === "/health" || url.pathname === "/health/ready") {
       if (request.method !== "GET") return json({ error: "GET required" }, 405);
-      return handleHealth(env);
+      const response = await handleHealth(env);
+      if (url.pathname !== "/health/ready") return response;
+      const payload = await response.json() as { ok?: boolean };
+      return json(
+        { ...payload, live: true },
+        payload.ok === true ? 200 : 503,
+      );
     }
     if (url.pathname === "/v1/admin/rebuild-natural-keys-v2") {
       return handleNaturalKeyRebuild(env, request);
@@ -968,11 +980,16 @@ export default {
   async scheduled(
     _controller: ScheduledController, env: Env, ctx: ExecutionContext,
   ): Promise<void> {
-    ctx.waitUntil(runIngestion(env, {}, "cron", fetch));
-    ctx.waitUntil(recoverPreparedReceipts(env));
-    if (
-      env.RECEIPT_AUTHORITY_OPERATION_MODE === "ACTIVE" &&
-      env.RECEIPT_AUTHORITY_ENVIRONMENT === "staging"
-    ) ctx.waitUntil(runStagingReceiptAuditRecoveryCanary(env));
+    ctx.waitUntil((async () => {
+      await runIngestion(env, {}, "cron", fetch);
+      await recoverPreparedReceipts(env);
+      if (
+        env.RECEIPT_AUTHORITY_OPERATION_MODE === "ACTIVE" &&
+        env.RECEIPT_AUTHORITY_ENVIRONMENT === "staging"
+      ) {
+        await runStagingReceiptAuditRecoveryCanary(env);
+      }
+      await publishOpsProjectionBestEffort(env);
+    })());
   },
 };

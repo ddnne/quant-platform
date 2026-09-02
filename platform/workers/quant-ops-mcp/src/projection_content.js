@@ -136,3 +136,27 @@ export async function verifyProjectedContent(db, envelope, requiredTables) {
   }
   return { ok: true, reason: null };
 }
+
+/** @type {Map<string,{digest:string,result:{ok:boolean,reason:string|null}}>} */
+const CONTENT_VERIFY_CACHE = new Map();
+
+export function resetProjectedContentCache() {
+  CONTENT_VERIFY_CACHE.clear();
+}
+
+/**
+ * Cryptographic full-content verification once per active generation.
+ * Sealed-row triggers plus this cache avoid rehashing every tool call.
+ *
+ * @param {D1Database} db
+ * @param {Record<string, unknown>} envelope
+ */
+export async function verifyProjectedContentOnce(db, envelope) {
+  const generation = String(envelope.generation_id || "");
+  const digest = String(envelope.content_digest || "");
+  const cached = CONTENT_VERIFY_CACHE.get(generation);
+  if (cached && cached.digest === digest) return cached.result;
+  const result = await verifyProjectedContent(db, envelope, PROJECTED_CONTENT_TABLES);
+  if (generation && digest) CONTENT_VERIFY_CACHE.set(generation, { digest, result });
+  return result;
+}

@@ -12,9 +12,11 @@ import {
   overlayInventoryRow,
   syncDatasetState,
 } from "./domain_policy.js";
-import { verifyProjectedContent } from "./projection_content.js";
-import { verifyPinnedProjectionGeneration } from "./projection_signature.js";
+import { verifyProjectedContentOnce } from "./projection_content.js";
+import { verifyActiveOpsProjection } from "./projection_signature.js";
 import { OPS_OUTPUT_SCHEMAS } from "./tool_output_schemas.js";
+
+export const OPS_SYNC_FEED = "jquants_records";
 
 const STRING = { type: "string" };
 const OPTIONAL_DATASET = {
@@ -238,7 +240,7 @@ function cursorIdentityError(observed, envelope, fields) {
  * @param {unknown} rawArguments
  * @param {(generation:Record<string,unknown>)=>Promise<{ok:boolean,reason:string|null,envelope:Record<string,unknown>|null}>} verifyGeneration
  */
-async function dispatchOpsTool(db, name, rawArguments, verifyGeneration) {
+export async function dispatchOpsTool(db, name, rawArguments, verifyGeneration) {
   const args = objectArgs(rawArguments);
   if (!OPS_TOOLS.some((candidate) => candidate.name === name)) {
     throw new RangeError(`unknown Quant Ops Read tool: ${name}`);
@@ -258,10 +260,9 @@ async function dispatchOpsTool(db, name, rawArguments, verifyGeneration) {
     );
   }
   const generation = String(active.generation_id);
-  const content = await verifyProjectedContent(
+  const content = await verifyProjectedContentOnce(
     db,
     /** @type {Record<string, unknown>} */ (verified.envelope),
-    TOOL_CONTENT_TABLES[name] || [],
   );
   if (!content.ok) {
     return {
@@ -697,7 +698,7 @@ async function dispatchOpsTool(db, name, rawArguments, verifyGeneration) {
       SELECT feed,latest_source_change_seq,change_log_row_count,exported_cursor,
              applied_cursor,updated_at
         FROM ops_sync_feed
-       WHERE projection_generation_id=? AND feed='jquants_records' LIMIT 1`, [generation]);
+       WHERE projection_generation_id=? AND feed=? LIMIT 1`, [generation, OPS_SYNC_FEED]);
     if (!feed) return notProjected(active, "sync feed row is absent from the active generation");
     const marks = await all(db, `
       SELECT dataset,last_event_date,last_ingested_at,last_export_cursor
@@ -793,9 +794,18 @@ async function dispatchOpsTool(db, name, rawArguments, verifyGeneration) {
       return notProjected(active, "storage aggregate payload is invalid JSON");
     }
     const allowedPayloadFields = [
-      "schema", "generation", "source_db_digest", "counts", "hot_window",
-      "jsda_coverage", "missing_source_tables", "p0_claims",
+      "schema", "generation", "counts", "hot_window", "plane", "jsda", "reason",
+      "source_db_digest",
     ];
+    if (
+      payload.generation !== generation
+      || payload.source_db_digest !== active.source_db_digest
+    ) {
+      return notProjected(
+        active,
+        "storage aggregate identity does not match the active generation",
+      );
+    }
     const projectedPayload = Object.fromEntries(
       allowedPayloadFields
         .filter((field) => Object.hasOwn(payload, field))
@@ -850,6 +860,14 @@ async function dispatchOpsTool(db, name, rawArguments, verifyGeneration) {
  * @param {string} name
  * @param {unknown} rawArguments
  */
-export async function callOpsTool(db, name, rawArguments) {
-  return dispatchOpsTool(db, name, rawArguments, verifyPinnedProjectionGeneration);
+/**
+ * @param {D1Database} db
+ * @param {string} name
+ * @param {unknown} rawArguments
+ * @param {Record<string, unknown>|undefined} [env]
+ */
+export async function callOpsTool(db, name, rawArguments, env) {
+  /** @param {Record<string, unknown>} generation */
+  const verify = async (generation) => verifyActiveOpsProjection(generation, env);
+  return dispatchOpsTool(db, name, rawArguments, verify);
 }

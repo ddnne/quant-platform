@@ -43,8 +43,9 @@ export type ObserverEnv = Omit<
   Cloudflare.Env,
   "ENVIRONMENT" | "PREMIUM_RECEIPT_OPERATOR"
 > & {
-  ENVIRONMENT: "disabled" | "staging";
+  ENVIRONMENT: "disabled" | "staging" | "production";
   PREMIUM_RECEIPT_OPERATOR?: PremiumReceiptOperatorRpc;
+  JSDA_INGESTION?: Fetcher;
 };
 
 const PREMIUM_EVIDENCE_FIELDS = [
@@ -138,10 +139,10 @@ async function requirePremiumEvidence(value: unknown): Promise<PremiumAuditEvide
       exactBytes.length !== evidence.signed_attestation_json_utf8_length ||
       bytesToBase64(exactBytes) !== evidence.signed_attestation_json_utf8_base64
     ) throw new Error("non-canonical base64");
-    const exactText = new TextDecoder("utf-8", {
-      fatal: true,
-      ignoreBOM: false,
-    }).decode(exactBytes);
+    const exactText = new TextDecoder("utf-8").decode(exactBytes);
+    if (bytesToBase64(new TextEncoder().encode(exactText)) !== bytesToBase64(exactBytes)) {
+      throw new Error("non-canonical utf-8");
+    }
     parsed = JSON.parse(exactText);
     if (!isPlainObject(parsed) || canonicalJson(parsed) !== exactText) {
       throw new Error("non-canonical attestation JSON");
@@ -159,11 +160,57 @@ async function requirePremiumEvidence(value: unknown): Promise<PremiumAuditEvide
   return evidence as PremiumAuditEvidence;
 }
 
+export async function collectPrivateJsdaReadiness(
+  env: ObserverEnv,
+): Promise<{
+  schema_version: "quant-platform-release-observation/v1";
+  collector: "private-jsda-health-ready/v1";
+  transport: "private-service-binding";
+  binding_name: "JSDA_INGESTION";
+  endpoint: "/health/ready";
+  http_status: number;
+  exact_response_b64: string;
+  exact_response_bytes: number;
+  response_digest: string;
+  exact_response_utf8: string;
+}> {
+  if (env.JSDA_INGESTION === undefined) {
+    throw new Error("JSDA private Service Binding is unprovisioned");
+  }
+  const response = await env.JSDA_INGESTION.fetch(
+    new Request("https://jsda-ingestion/health/ready", { method: "GET" }),
+  );
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const exactText = new TextDecoder("utf-8").decode(bytes);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const responseDigest = `sha256:${[...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+  return {
+    schema_version: "quant-platform-release-observation/v1",
+    collector: "private-jsda-health-ready/v1",
+    transport: "private-service-binding",
+    binding_name: "JSDA_INGESTION",
+    endpoint: "/health/ready",
+    http_status: response.status,
+    exact_response_b64: bytesToBase64(bytes),
+    exact_response_bytes: bytes.byteLength,
+    response_digest: responseDigest,
+    exact_response_utf8: exactText,
+  };
+}
+
 export async function handleReceiptActivationObserverRequest(
   request: Request,
   env: ObserverEnv,
   ctx: ExecutionContext,
 ): Promise<Response> {
+  const healthUrl = new URL(request.url);
+  if (healthUrl.pathname === "/health" || healthUrl.pathname === "/health/ready") {
+    if (request.method !== "GET") return closedError(405, "GET_REQUIRED");
+    return Response.json(
+      { ok: true, live: true, worker: "receipt-activation-observer" },
+      { headers: { "cache-control": "no-store" } },
+    );
+  }
   if (ctx.access === undefined || typeof ctx.access.aud !== "string" ||
       ctx.access.aud.length === 0) {
     return closedError(403, "ACCESS_REQUIRED");
