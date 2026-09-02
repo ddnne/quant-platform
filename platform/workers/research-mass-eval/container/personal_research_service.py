@@ -30,6 +30,12 @@ _CONTAINER_MODULE_DIR = str(Path(__file__).resolve().parent)
 if _CONTAINER_MODULE_DIR not in sys.path:
     sys.path.insert(0, _CONTAINER_MODULE_DIR)
 
+from job_process_supervisor import (
+    KILL_GRACE_SECONDS as SUPERVISOR_KILL_GRACE_SECONDS,
+    START_GRACE_SECONDS as SUPERVISOR_START_GRACE_SECONDS,
+    TERM_GRACE_SECONDS as SUPERVISOR_TERM_GRACE_SECONDS,
+    JobProcessSupervisor as _ProcessGroupSupervisor,
+)
 from personal_history_source_client import PersonalHistorySourceClient
 from personal_svi_2023_job import (
     PersonalSvi2023JobSpec,
@@ -146,7 +152,7 @@ PERSONAL_LEGACY_DRAFT_ONLY_COHORT_IDS = frozenset(
     }
 )
 COMPACT_MARKET_COHORT_IDS = frozenset(
-    {"compact-market-diverse-v1", "compact-market-diverse-am-pm-v1"}
+    {"compact-market-diverse-am-pm-v1"}
 )
 PERSONAL_EXECUTABLE_UNIVERSE_IDS = frozenset(
     {
@@ -885,9 +891,6 @@ def _run_controlled_paper(
 
 def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
     """Stream the verified physical snapshot, run the canonical four, then delete temp files."""
-    fence = current_lease_fence()
-    if fence is not None and fence.is_set():
-        raise JobInputError("controlled lease lost")
     if not isinstance(document, dict):
         raise JobInputError("controlled job must be a JSON object")
     if set(document) != CONTROLLED_JOB_SPEC_FIELDS:
@@ -998,8 +1001,6 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
         if resolved_universe.resolved_membership_digest != resolved_universe_digest:
             raise JobInputError("recomputed snapshot universe digest mismatch")
         for ordinal, plan in enumerate(plans, start=1):
-            if fence is not None and fence.is_set():
-                raise JobInputError("controlled lease lost")
             if plan.identity != CONTROLLED_PILOT_IDENTITY:
                 raise JobInputError("plan identity must be controlled_pilot_v1")
             if plan.cost_scenario != PILOT_COST_SCENARIO:
@@ -1525,7 +1526,12 @@ def _put(
     }
     if isinstance(
         spec,
-        (PersonalIndexVolOverlay2023JobSpec, PersonalVolAmPmPanelJobSpec),
+        (
+            PersonalSvi2023JobSpec,
+            PersonalIndexVolOverlay2023JobSpec,
+            PersonalVolAmPmPanelJobSpec,
+            PersonalOptionSidecarJobSpec,
+        ),
     ):
         headers.update(spec.headers())
     if extra_headers:
@@ -2492,13 +2498,6 @@ Runner = Callable[[JobSpecLike], dict[str, Any]]
 TerminalCallback = Callable[[], None]
 
 
-_ACTIVE_LEASE_FENCE = threading.local()
-
-
-def current_lease_fence() -> threading.Event | None:
-    event = getattr(_ACTIVE_LEASE_FENCE, "event", None)
-    return event if isinstance(event, threading.Event) else None
-
 
 class JobManager:
     _RETRY_SCHEDULE = (0.05, 0.2, 0.5, 1.0, 2.0, 5.0)
@@ -2517,6 +2516,10 @@ class JobManager:
         clock: Callable[[], float] | None = None,
         work_root: Path | None = None,
         lease_ttl_seconds: float | None = None,
+        process_start_grace_seconds: float = SUPERVISOR_START_GRACE_SECONDS,
+        process_term_grace_seconds: float = SUPERVISOR_TERM_GRACE_SECONDS,
+        process_kill_grace_seconds: float = SUPERVISOR_KILL_GRACE_SECONDS,
+        process_context: Any | None = None,
     ) -> None:
         if max_job_seconds <= 0:
             raise ValueError("max_job_seconds must be positive")
@@ -2532,7 +2535,6 @@ class JobManager:
         self._lock = threading.Lock()
         self._jobs: dict[str, dict[str, Any]] = {}
         self._specs: dict[str, JobSpecLike] = {}
-        self._deadlines: dict[str, Any] = {}
         self._worker: threading.Thread | None = None
         self._active_job_id: str | None = None
         self._accepting = True
@@ -2547,6 +2549,12 @@ class JobManager:
         self._lease_lost = threading.Event()
         self._lease_etag = ""
         self._lease_ttl_seconds = lease_ttl_seconds
+        self._process_start_grace_seconds = process_start_grace_seconds
+        self._process_term_grace_seconds = process_term_grace_seconds
+        self._process_kill_grace_seconds = process_kill_grace_seconds
+        self._process_context = process_context
+        self._supervisor: _ProcessGroupSupervisor | None = None
+        self._requested_stop: tuple[str, str] | None = None
 
     def submit(self, spec: JobSpecLike) -> dict[str, Any]:
         if isinstance(spec, ControlledPilotJobSpec):
@@ -2739,15 +2747,24 @@ class JobManager:
                     self._schedule_lease_recovery_locked(spec)
 
     def _start_local_executor_locked(self, spec: JobSpecLike) -> None:
-        from pit.cooperative_deadline import CooperativeDeadline
-
         self._active_job_id = spec.job_id
-        self._deadlines[spec.job_id] = CooperativeDeadline(
-            deadline_monotonic=self._clock() + self._max_job_seconds,
-            clock=self._clock,
-        )
+        self._requested_stop = None
         if isinstance(spec, ControlledPilotJobSpec):
             self._lease_lost.clear()
+        work_root = self._work_root or Path(
+            os.environ.get("QP_JOB_ROOT", "/tmp/personal-research")
+        )
+        supervisor = _ProcessGroupSupervisor(
+            self._runner,
+            spec,
+            work_root=work_root,
+            start_grace_seconds=self._process_start_grace_seconds,
+            term_grace_seconds=self._process_term_grace_seconds,
+            kill_grace_seconds=self._process_kill_grace_seconds,
+            process_context=self._process_context,
+        )
+        self._supervisor = supervisor
+        supervisor.start()
         watchdog = threading.Timer(
             self._max_job_seconds,
             self._expire,
@@ -2758,7 +2775,7 @@ class JobManager:
         watchdog.start()
         thread = threading.Thread(
             target=self._execute,
-            args=(spec,),
+            args=(spec, supervisor),
             name=f"personal-research-{spec.job_id}",
             daemon=False,
         )
@@ -2971,8 +2988,17 @@ class JobManager:
         with self._lock:
             heartbeat = self._lease_heartbeat
             self._lease_heartbeat = None
+            supervisor = self._supervisor
+            if self._active_job_id is not None and self._requested_stop is None:
+                self._requested_stop = (
+                    "lease_lost",
+                    "controlled lease lost",
+                )
+                self._accepting = False
         if heartbeat is not None:
             heartbeat.cancel()
+        if supervisor is not None:
+            supervisor.stop()
 
     def _heartbeat_controlled_lease(self, spec: ControlledPilotJobSpec) -> None:
         if self._lease_lost.is_set():
@@ -3348,101 +3374,130 @@ class JobManager:
             self._record_terminal_retry_exhausted(exhausted_spec, attempts)
         self._notify_shutdown()
 
-    def _write_timeout_terminal(self, spec: JobSpecLike) -> None:
-        self._begin_terminal_publication(spec, self._timeout_terminal(spec))
-
     def _expire(self, job_id: str) -> None:
-        spec: JobSpecLike | None = None
-        worker: threading.Thread | None = None
-        deadline: Any | None = None
+        supervisor: _ProcessGroupSupervisor | None = None
         with self._lock:
             if self._active_job_id != job_id or not self._accepting:
                 return
             record = self._jobs[job_id]
-            spec = self._specs.get(job_id)
-            deadline = self._deadlines.get(job_id)
-            worker = self._worker
-            self._accepting = False
-        if deadline is not None:
-            cancel = getattr(deadline, "cancel", None)
-            if callable(cancel):
-                cancel()
-        if worker is not None and worker is not threading.current_thread():
-            worker.join(timeout=min(0.05, float(self._max_job_seconds)))
-        with self._lock:
             self._jobs[job_id] = {
                 **record,
-                "status": "FAILED",
+                "status": "STOPPING",
                 "error": (
                     "absolute Container lifetime exceeded "
                     f"({self._max_job_seconds:g}s)"
                 ),
-                "finished_at": _now(),
                 "go": False,
             }
-            self._active_job_id = None
-        if spec is not None:
-            self._write_timeout_terminal(spec)
+            self._requested_stop = (
+                "timeout",
+                self._jobs[job_id]["error"],
+            )
+            self._accepting = False
+            supervisor = self._supervisor
+        if supervisor is not None:
+            supervisor.stop()
 
-    def _execute(self, spec: JobSpecLike) -> None:
+    def cancel(self, job_id: str) -> bool:
+        """Cancel the active job through the same bounded process-group stop path."""
+
+        supervisor: _ProcessGroupSupervisor | None = None
         with self._lock:
-            if self._active_job_id != spec.job_id or not self._accepting:
-                return
-            if isinstance(spec, ControlledPilotJobSpec) and self._lease_lost.is_set():
+            if self._active_job_id != job_id or self._requested_stop is not None:
+                return False
+            record = self._jobs[job_id]
+            self._jobs[job_id] = {
+                **record,
+                "status": "STOPPING",
+                "error": "job cancelled",
+                "go": False,
+            }
+            self._requested_stop = ("cancel", "job cancelled")
+            self._accepting = False
+            supervisor = self._supervisor
+        if supervisor is not None:
+            supervisor.stop()
+        return True
+
+    def _validated_child_result(
+        self, spec: JobSpecLike, result: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        candidate = dict(result)
+        if isinstance(spec, ControlledPilotJobSpec):
+            headers = self._fencing_headers()
+            if not headers:
+                raise RuntimeError("controlled child result has no active lease fence")
+            candidate_with_fence = {
+                **candidate,
+                "owner_nonce": headers["x-personal-lease-owner"],
+                "fencing_token": int(headers["x-personal-fencing-token"]),
+            }
+            if not _controlled_terminal_matches_spec(spec, candidate_with_fence):
+                raise RuntimeError("controlled child result contract mismatch")
+            return candidate
+        if not _terminal_body_matches_spec(spec, candidate):
+            raise RuntimeError("child result terminal identity mismatch")
+        return candidate
+
+    def _execute(
+        self,
+        spec: JobSpecLike,
+        supervisor: _ProcessGroupSupervisor,
+    ) -> None:
+        with self._lock:
+            if self._active_job_id != spec.job_id or self._supervisor is not supervisor:
+                supervisor.stop()
                 return
             self._jobs[spec.job_id]["status"] = "RUNNING"
             self._jobs[spec.job_id]["started_at"] = _now()
-        _ACTIVE_LEASE_FENCE.event = (
-            self._lease_lost if isinstance(spec, ControlledPilotJobSpec) else None
-        )
-        try:
-            deadline = self._deadlines.get(spec.job_id)
-            from pit.cooperative_deadline import DeadlineExceeded, install_deadline
-
-            with install_deadline(deadline):
-                try:
-                    result = self._runner(spec, deadline=deadline)
-                except TypeError:
-                    result = self._runner(spec)
-        except DeadlineExceeded:
-            with self._lock:
-                if not self._accepting:
-                    return
-            return
-        except Exception as error:  # upload or service failure after job execution
-            if isinstance(spec, ControlledPilotJobSpec) and self._lease_lost.is_set():
-                return
-            result = self._failure_terminal(spec, _safe_detail(error))
-            with self._lock:
-                if not self._accepting:
-                    return
-                if isinstance(spec, ControlledPilotJobSpec) and self._lease_lost.is_set():
-                    return
-                self._jobs[spec.job_id] = dict(result)
-                self._active_job_id = None
-                self._accepting = False
-                watchdog = self._watchdog
-                self._watchdog = None
-                heartbeat = self._lease_heartbeat
-                self._lease_heartbeat = None
-                if watchdog is not None:
-                    watchdog.cancel()
-                if heartbeat is not None:
-                    heartbeat.cancel()
-            self._begin_terminal_publication(spec, result)
-            return
-        finally:
-            _ACTIVE_LEASE_FENCE.event = None
-        if isinstance(spec, ControlledPilotJobSpec) and self._lease_lost.is_set():
-            return
+        outcome = supervisor.wait()
+        terminal: dict[str, Any] | None = None
+        lease_lost = False
+        liveness_unknown = False
         with self._lock:
-            notify = self._accepting and not (
-                isinstance(spec, ControlledPilotJobSpec) and self._lease_lost.is_set()
-            )
-            if notify:
-                self._jobs[spec.job_id] = dict(result)
-            self._active_job_id = None
+            if self._supervisor is not supervisor:
+                return
+            stop = self._requested_stop
+            if not outcome.quiescent:
+                record = self._jobs[spec.job_id]
+                self._jobs[spec.job_id] = {
+                    **record,
+                    "status": "STOPPING",
+                    "error": "job process group liveness is unknown",
+                    "go": False,
+                }
+                liveness_unknown = True
+            elif stop is not None and stop[0] == "lease_lost":
+                record = self._jobs[spec.job_id]
+                self._jobs[spec.job_id] = {
+                    **record,
+                    "status": "FAILED",
+                    "error": stop[1],
+                    "finished_at": _now(),
+                    "go": False,
+                }
+                lease_lost = True
+            elif stop is not None and stop[0] == "timeout":
+                terminal = self._timeout_terminal(spec)
+            elif stop is not None and stop[0] == "cancel":
+                terminal = self._failure_terminal(spec, stop[1])
+            elif outcome.error is not None:
+                terminal = self._failure_terminal(spec, outcome.error)
+            elif outcome.result is None:
+                terminal = self._failure_terminal(
+                    spec, "supervised child returned no result"
+                )
+            else:
+                try:
+                    terminal = self._validated_child_result(spec, outcome.result)
+                except Exception as error:
+                    terminal = self._failure_terminal(spec, _safe_detail(error))
+            if terminal is not None:
+                self._jobs[spec.job_id] = dict(terminal)
             self._accepting = False
+            if not liveness_unknown:
+                self._active_job_id = None
+                self._supervisor = None
             watchdog = self._watchdog
             self._watchdog = None
             heartbeat = self._lease_heartbeat
@@ -3451,8 +3506,13 @@ class JobManager:
                 watchdog.cancel()
             if heartbeat is not None:
                 heartbeat.cancel()
-        if notify:
-            self._begin_terminal_publication(spec, result)
+        if liveness_unknown:
+            return
+        if lease_lost:
+            self._notify_shutdown()
+            return
+        if terminal is not None:
+            self._begin_terminal_publication(spec, terminal)
 
     def status(self, job_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -3468,30 +3528,50 @@ def default_runner(
 ) -> dict[str, Any]:
     from pit.cooperative_deadline import install_deadline
 
-    with install_deadline(deadline):
-        if isinstance(spec, ControlledPilotJobSpec):
-            result = execute_controlled_pilot_container(spec.document)
-            return {
-                **result,
-                "status": "COMPLETED",
-                "job_id": spec.job_id,
-                "request_digest": spec.request_digest,
-                "execution_id": spec.execution_id,
-                "runner_version": spec.runner_version,
-            }
-        if work_root is None:
-            raise RuntimeError("ephemeral work_root is required")
-        if isinstance(spec, SnapshotJobSpec):
-            return execute_snapshot_job(spec, work_root=work_root, deadline=deadline)
-        if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):
-            return execute_overlay_job(spec, deadline=deadline)
-        if isinstance(spec, PersonalSvi2023JobSpec):
-            return execute_svi_job(spec, deadline=deadline)
-        if isinstance(spec, PersonalVolAmPmPanelJobSpec):
-            return execute_vol_am_pm_panel_job(spec, deadline=deadline)
-        if isinstance(spec, PersonalOptionSidecarJobSpec):
-            return execute_option_sidecar_job(spec, deadline=deadline)
-        return execute_job(spec, work_root=work_root, deadline=deadline)
+    owned_work_root = work_root is None
+    if work_root is None:
+        env_root = os.environ.get("QP_JOB_ROOT")
+        work_root = bind_container_work_root(None if not env_root else Path(env_root))
+    try:
+        with install_deadline(deadline):
+            if isinstance(spec, ControlledPilotJobSpec):
+                result = execute_controlled_pilot_container(spec.document)
+                return {
+                    **result,
+                    "status": "COMPLETED",
+                    "job_id": spec.job_id,
+                    "request_digest": spec.request_digest,
+                    "execution_id": spec.execution_id,
+                    "runner_version": spec.runner_version,
+                }
+            if isinstance(spec, SnapshotJobSpec):
+                return execute_snapshot_job(
+                    spec,
+                    work_root=work_root,
+                    uploader=_put_child_artifact,
+                    deadline=deadline,
+                )
+            if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):
+                return execute_overlay_job(spec, uploader=_put_child_json, deadline=deadline)
+            if isinstance(spec, PersonalSvi2023JobSpec):
+                return execute_svi_job(spec, uploader=_put_child_json, deadline=deadline)
+            if isinstance(spec, PersonalVolAmPmPanelJobSpec):
+                return execute_vol_am_pm_panel_job(
+                    spec, uploader=_put_child_json, deadline=deadline
+                )
+            if isinstance(spec, PersonalOptionSidecarJobSpec):
+                return execute_option_sidecar_job(
+                    spec, uploader=_put_child_json, deadline=deadline
+                )
+            return execute_job(
+                spec,
+                work_root=work_root,
+                uploader=_put_child_artifact,
+                deadline=deadline,
+            )
+    finally:
+        if owned_work_root:
+            shutil.rmtree(work_root, ignore_errors=True)
 
 
 def bind_container_work_root(path: Path | None = None) -> Path:
@@ -3505,6 +3585,31 @@ def bind_container_work_root(path: Path | None = None) -> Path:
     requested = require_ephemeral_path(Path(path))
     requested.mkdir(parents=True, exist_ok=True)
     return Path(tempfile.mkdtemp(prefix="job-root-", dir=requested))
+
+
+def _put_child_artifact(
+    key: str,
+    data: bytes | Path,
+    *,
+    spec: JobSpecLike,
+    content_digest: str,
+    extra_headers: Mapping[str, str] | None = None,
+) -> None:
+    if key != spec.manifest_key:
+        _put(
+            key,
+            data,
+            spec=spec,
+            content_digest=content_digest,
+            extra_headers=extra_headers,
+        )
+
+
+def _put_child_json(spec: JobSpecLike, key: str, data: bytes) -> str:
+    digest = "sha256:" + hashlib.sha256(data).hexdigest()
+    if key != spec.manifest_key:
+        _put(key, data, spec=spec, content_digest=digest)
+    return digest
 
 
 class PersonalResearchHandler(BaseHTTPRequestHandler):
@@ -3630,14 +3735,10 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
 def main() -> None:
     env_root = os.environ.get("QP_JOB_ROOT")
     work_root = bind_container_work_root(None if not env_root else Path(env_root))
-
-    def runner(spec: JobSpecLike, deadline: Any | None = None) -> dict[str, Any]:
-        return default_runner(spec, work_root=work_root, deadline=deadline)
-
     server = ThreadingHTTPServer(("0.0.0.0", 8080), PersonalResearchHandler)
     server.daemon_threads = True
     PersonalResearchHandler.manager = JobManager(
-        runner,
+        default_runner,
         on_terminal=server.shutdown,
         work_root=work_root,
     )
@@ -3645,6 +3746,7 @@ def main() -> None:
         server.serve_forever()
     finally:
         server.server_close()
+        shutil.rmtree(work_root, ignore_errors=True)
 
 
 if __name__ == "__main__":

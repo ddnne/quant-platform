@@ -5,7 +5,9 @@ import hashlib
 import importlib.util
 import io
 import json
+import multiprocessing
 import os
+import signal
 import sqlite3
 import sys
 import tarfile
@@ -19,13 +21,20 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from core.result import BacktestResult
 from personal_history_compact_support import (
     insert_compact_bar,
     insert_compact_master,
     install_compact_schema,
     stamp_compact_manifest,
 )
-from research.factor_cohorts import get_research_cohort, is_am_pm_factor_cohort
+from research.factor_cohorts import (
+    AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT,
+    PERSONAL_SHORT_FINANCING_AM_PM_COHORT_ID,
+    get_research_cohort,
+    is_am_pm_factor_cohort,
+    personal_specs_for_cohort,
+)
 from research.personal_base_sleeve import (
     AM_PM_BASE_SLEEVE_ID,
     EXPECTED_BASE_COHORT_DIGEST,
@@ -34,6 +43,7 @@ from research.personal_base_sleeve import (
     PERSONAL_BASE_SLEEVE_RANKING_ROLE,
     PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA,
     PERSONAL_BASE_SLEEVE_ROLE,
+    build_personal_base_sleeve_am_pm_artifact,
 )
 from test_personal_base_sleeve_am_pm import _build as _build_am_sleeve
 from research.personal_universe import (
@@ -41,8 +51,8 @@ from research.personal_universe import (
     personal_research_universe_rule_digest,
     personal_universe_selector,
 )
-from research.personal_index_vol_overlay import canonical_trading_calendar_digest
 from research.universe_contract import EXACT_FOUR_UNIVERSE_RULE_DIGEST
+from strategies.paper import Lifecycle, PaperRunResult
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = (
@@ -61,6 +71,12 @@ service = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = service
 SPEC.loader.exec_module(service)
 
+PROCESS_CONTEXT = multiprocessing.get_context("fork")
+
+
+def _job_manager(runner, **kwargs):
+    return service.JobManager(runner, process_context=PROCESS_CONTEXT, **kwargs)
+
 
 def _digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -76,7 +92,7 @@ def _sqlite(path: Path) -> str:
 
 
 COHORT_DIGEST = (
-    "sha256:d78fb2c6adb3a21acd6b90d37c197c1bd7710e986ea882bbbec28f4d21c53397"
+    "sha256:0c9fc5cba93c68cbfec3951a56f09949674c1a01cb4d4d4cf406082c01033c10"
 )
 LONG_SHORT_COHORT_DIGEST = (
     "sha256:6e4de725046c0b0e55416891d83580b9acb753c00a2beecfd3a26ee0c87a74f9"
@@ -136,6 +152,14 @@ def _job(
     )
 
 
+def _manager_completed_result(spec) -> dict:
+    now = service._now()
+    return {
+        **service._manifest_base(spec, started_at=now, finished_at=now),
+        "status": "COMPLETED",
+    }
+
+
 class _SnapshotResponse(io.BytesIO):
     status = 200
 
@@ -190,7 +214,7 @@ def _runner_summary(
     hold_count: int = 1,
     unexpected_errors: int = 0,
 ) -> dict[str, object]:
-    return {
+    summary: dict[str, object] = {
         "cohort_id": spec.cohort_id,
         "cohort_digest": spec.cohort_digest,
         "universe_id": spec.universe_id,
@@ -213,6 +237,14 @@ def _runner_summary(
         "live_orders_enabled": False,
         "automatic_promotion": False,
     }
+    if is_am_pm_factor_cohort(spec.cohort_id):
+        summary.update(
+            {
+                "execution_mode": "am_signal_pm_close",
+                "execution_contract_digest": AM_EXECUTION_CONTRACT_DIGEST,
+            }
+        )
+    return summary
 
 
 def _artifact(member: str):
@@ -281,80 +313,91 @@ def _direct_run_from_summary(
 
 def _base_sleeve_document(spec) -> dict[str, object]:
     source_dates = (spec.period_start, "2024-01-04", spec.period_end)
-    return {
-        "schema_version": "personal-base-sleeve-source/v1",
-        "role": "INDEX_VOL_OVERLAY_BASE_SOURCE",
-        "ranking_role": "NON_CANDIDATE_NOT_RANKED",
-        "candidate_count_contribution": 0,
-        "strategy": {
-            "strategy_id": "personal_sector_balanced_four_factor_v1_ls",
-            "strategy_spec_version": "1.0.0",
-            "strategy_spec_digest": EXPECTED_BASE_STRATEGY_SPEC_DIGEST,
-            "dependency_closure_digest": "sha256:" + "6" * 64,
-        },
-        "cohort": {
-            "cohort_id": "sector-relative-ls-v1",
-            "cohort_digest": EXPECTED_BASE_COHORT_DIGEST,
-        },
-        "universe": {
-            "universe_id": "topix_all",
-            "universe_rule_digest": spec.universe_rule_digest,
-            "resolved_membership_digest": "sha256:" + "7" * 64,
-        },
-        "snapshot": {
-            "snapshot_id": "sha256:" + "2" * 64,
-            "logical_data_snapshot_id": "sha256:" + "3" * 64,
-        },
-        "source_run": {
-            "experiment_id": "base-source-experiment",
-            "run_id": "base-source-run",
+    quality = {
+        "comparable": True,
+        "selection_eligible": True,
+        "comparison_eligible": True,
+        "incomplete_valuation": False,
+        "skipped_decision_count": 0,
+        "incomplete_valuation_count": 0,
+        "unfilled_order_count": 0,
+        "skipped_decision_dates": [],
+        "incomplete_valuation_dates": [],
+        "missing_fill_dates": [],
+        "non_comparable_session_dates": [],
+        "incomplete_valuation_codes": [],
+        "missing_fill_codes": [],
+        "held_missing_morning_adjustment_close": [],
+        "held_missing_afternoon_adjustment_close": [],
+        "missing_afternoon_adjustment_close_unfilled": [],
+    }
+    strategy = next(
+        candidate
+        for candidate in personal_specs_for_cohort(
+            PERSONAL_SHORT_FINANCING_AM_PM_COHORT_ID,
+            universe_id="topix_all",
+        )
+        if candidate.strategy_id == AM_PM_BASE_SLEEVE_ID
+    )
+    result = PaperRunResult(
+        experiment_id="base-source-experiment",
+        run_id="base-source-run",
+        lifecycle=Lifecycle.DRAFT,
+        backtest=BacktestResult(
+            equity_curve=[
+                {"date": day, "signal_equity": nav, "equity": nav}
+                for day, nav in zip(
+                    source_dates,
+                    (999_000.0, 1_000_000.0, 1_001_000.0),
+                    strict=True,
+                )
+            ],
+            trades=[],
+            metrics={"comparable": True},
+            metadata={
+                "execution_mode": "am_signal_pm_close",
+                "session_view_digest": service._personal_cohort_identity(
+                    spec.cohort_id
+                )["session_view_digest"],
+                "data_quality": quality,
+            },
+        ),
+        reproducibility={
+            "execution_mode": "am_signal_pm_close",
             "period": {"start": spec.period_start, "end": spec.period_end},
-            "execution_mode": "next_close",
             "starting_capital": 1_000_000.0,
-            "stock_one_way_cost_bps": 10.0,
-            "short_financing_annual_rate": 0.03,
-            "short_financing_trace_digest": "sha256:" + "8" * 64,
-            "source_session_count": len(source_dates),
-            "source_session_dates_digest": canonical_trading_calendar_digest(
-                source_dates
-            ),
+            "strategy_id": AM_PM_BASE_SLEEVE_ID,
+            "resolved_universe_digest": "sha256:" + "7" * 64,
+        },
+    )
+    return build_personal_base_sleeve_am_pm_artifact(
+        result=result,
+        evidence={
+            "cost_bps": 10.0,
+            "execution_mode": "am_signal_pm_close",
+            "execution_contract": dict(AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT),
+            "short_financing": {
+                "annual_rate": 0.03,
+                "baseline": True,
+                "modelled_assumption": True,
+                "borrow_evidence": False,
+                "trace_digest": "sha256:" + "8" * 64,
+            },
             "paper_artifact": "paper/base.json",
             "risk_artifact": "risk/base.json",
-            "terminal_positions": "NOT_FORCE_LIQUIDATED_BY_SOURCE_RUN",
+            "performance": {"schema_version": "personal-performance/v1"},
         },
-        "return_semantics": (
-            "NET_AFTER_STOCK_EXECUTION_COSTS_AND_SHORT_FINANCING"
-        ),
-        "base_nav_semantics": "CONTINUOUS_PRE_EXISTING_INVESTABLE_NAV",
-        "source_slice_wrapper_cost_semantics": (
-            "EXCLUDES_NAV_WRAPPER_ENTRY_AND_LIQUIDATION"
-        ),
-        "wrapper_entry_cost_applied_to_source": False,
-        "wrapper_liquidation_cost_applied_to_source": False,
-        "daily_path": [
-            {
-                "date": source_dates[0],
-                "equity": 999_000.0,
-                "base_sleeve_return": -0.001,
-            },
-            {
-                "date": source_dates[1],
-                "equity": 1_000_000.0,
-                "base_sleeve_return": 1_000_000.0 / 999_000.0 - 1.0,
-            },
-            {
-                "date": source_dates[2],
-                "equity": 1_001_000.0,
-                "base_sleeve_return": 1_001_000.0 / 1_000_000.0 - 1.0,
-            },
-        ],
-        "performance": {"schema_version": "personal-performance/v1"},
-        "lifecycle": "DRAFT",
-        "ready_snapshot_declared": False,
-        "go": False,
-        "automatic_promotion": False,
-        "live_orders_enabled": False,
-    }
+        spec=strategy,
+        dependency_closure_digest="sha256:" + "6" * 64,
+        cohort_digest=spec.cohort_digest,
+        universe_id="topix_all",
+        universe_rule_digest=spec.universe_rule_digest,
+        resolved_membership_digest="sha256:" + "7" * 64,
+        snapshot_id="sha256:" + "2" * 64,
+        logical_data_snapshot_id="sha256:" + "3" * 64,
+        source_period=(spec.period_start, spec.period_end),
+        source_session_dates=source_dates,
+    )
 
 
 def _write_base_sleeve_output(output: Path, spec) -> dict[str, object]:
@@ -366,8 +409,9 @@ def _write_base_sleeve_output(output: Path, spec) -> dict[str, object]:
     (output / "reports" / "report.md").write_text("# report")
     (output / "paper" / "base.json").write_text('{"paper":true}')
     (output / "risk" / "base.json").write_text('{"risk":true}')
+    artifact_document = _base_sleeve_document(spec)
     artifact_bytes = json.dumps(
-        _base_sleeve_document(spec),
+        artifact_document,
         ensure_ascii=True,
         sort_keys=True,
         separators=(",", ":"),
@@ -384,12 +428,12 @@ def _write_base_sleeve_output(output: Path, spec) -> dict[str, object]:
             "report_markdown": str(output / "reports" / "report.md"),
             "base_sleeve_artifact": {
                 "schema_version": "personal-base-sleeve-reference/v1",
-                "artifact_schema_version": "personal-base-sleeve-source/v1",
+                "artifact_schema_version": artifact_document["schema_version"],
                 "path": str(artifact_path),
                 "archive_member": archive_member,
                 "sha256": f"sha256:{artifact_sha}",
-                "strategy_id": "personal_sector_balanced_four_factor_v1_ls",
-                "cohort_id": "sector-relative-ls-v1",
+                "strategy_id": artifact_document["strategy"]["strategy_id"],
+                "cohort_id": spec.cohort_id,
                 "universe_id": "topix_all",
                 "role": "INDEX_VOL_OVERLAY_BASE_SOURCE",
                 "ranking_role": "NON_CANDIDATE_NOT_RANKED",
@@ -887,6 +931,37 @@ def test_python_container_defaults_to_am_diverse_and_allows_am_ids() -> None:
         ).validate()
 
 
+def test_production_default_runner_starts_and_quiesces_under_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    container_root = str(MODULE_PATH.parent)
+    if container_root not in sys.path:
+        sys.path.insert(0, container_root)
+    spawn_service = importlib.import_module("personal_research_service")
+    template = _job("a" * 64, job_id="spawn-default-runner")
+    spec = spawn_service.JobSpec(
+        **{
+            name: getattr(template, name)
+            for name in template.__dataclass_fields__
+        }
+    )
+    monkeypatch.setenv("QP_JOB_ROOT", "/etc")
+    supervisor = spawn_service._ProcessGroupSupervisor(
+        spawn_service.default_runner,
+        spec,
+        work_root=tmp_path,
+    )
+
+    assert supervisor._process_context.get_start_method() == "spawn"
+    supervisor.start()
+    outcome = supervisor.wait()
+
+    assert outcome.quiescent is True
+    assert outcome.result is None
+    assert outcome.error is not None
+    assert "ephemeral temporary storage" in outcome.error
+
+
 def test_success_archive_excludes_generated_sqlite_and_manifest_is_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1113,6 +1188,9 @@ def test_am_job_binds_repo_mode_and_rejects_legacy_sleeve_reference(
     assert identity["session_view_digest"].startswith("sha256:")
     output = tmp_path / "output"
     summary = _write_base_sleeve_output(output, spec)
+    summary["base_sleeve_artifact"][
+        "artifact_schema_version"
+    ] = "personal-base-sleeve-source/v1"
     with pytest.raises(RuntimeError, match="base sleeve reference is invalid"):
         service._validated_base_sleeve_reference(
             summary,
@@ -1641,21 +1719,16 @@ def test_result_archive_is_byte_deterministic(tmp_path: Path) -> None:
 
 
 def test_manager_allows_only_one_active_job_and_same_job_is_idempotent() -> None:
-    release = threading.Event()
-    entered = threading.Event()
+    release = PROCESS_CONTEXT.Event()
+    entered = PROCESS_CONTEXT.Event()
     terminal = threading.Event()
 
     def runner(spec):
         entered.set()
         assert release.wait(2)
-        return {
-            "job_id": spec.job_id,
-            "request_digest": spec.request_digest,
-            "status": "COMPLETED",
-            "go": False,
-        }
+        return _manager_completed_result(spec)
 
-    manager = service.JobManager(
+    manager = _job_manager(
         runner,
         on_terminal=terminal.set,
         terminal_uploader=lambda *args, **kwargs: None,
@@ -1718,7 +1791,7 @@ def test_inclusive_research_period_cap_is_7000_calendar_dates() -> None:
 
 
 def test_watchdog_writes_durable_failed_terminal_before_shutdown() -> None:
-    entered = threading.Event()
+    entered = PROCESS_CONTEXT.Event()
     terminal = threading.Event()
     wrote = threading.Event()
     uploads: list[tuple[str, dict]] = []
@@ -1726,12 +1799,7 @@ def test_watchdog_writes_durable_failed_terminal_before_shutdown() -> None:
     def runner(spec):
         entered.set()
         time.sleep(1)
-        return {
-            "job_id": spec.job_id,
-            "request_digest": spec.request_digest,
-            "status": "COMPLETED",
-            "go": False,
-        }
+        return _manager_completed_result(spec)
 
     def uploader(key, data, *, spec, content_digest, extra_headers=None):
         del spec, content_digest, extra_headers
@@ -1742,7 +1810,7 @@ def test_watchdog_writes_durable_failed_terminal_before_shutdown() -> None:
         assert wrote.is_set()
         terminal.set()
 
-    manager = service.JobManager(
+    manager = _job_manager(
         runner,
         on_terminal=on_terminal,
         max_job_seconds=0.05,
@@ -1765,7 +1833,7 @@ def test_watchdog_writes_durable_failed_terminal_before_shutdown() -> None:
     assert all(body.get("status") != "COMPLETED" for _key, body in uploads)
 
 
-def test_timeout_create_only_does_not_overwrite_completed_terminal() -> None:
+def test_timeout_without_confirmed_supervisor_withholds_terminal() -> None:
     stored: dict[str, dict] = {}
 
     def uploader(key, data, *, spec, content_digest, extra_headers=None):
@@ -1781,7 +1849,7 @@ def test_timeout_create_only_does_not_overwrite_completed_terminal() -> None:
         "request_digest": spec.request_digest,
         "status": "COMPLETED",
     }
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: {
             "job_id": item.job_id,
             "request_digest": item.request_digest,
@@ -1803,7 +1871,7 @@ def test_timeout_create_only_does_not_overwrite_completed_terminal() -> None:
     manager._active_job_id = spec.job_id
     manager._expire(spec.job_id)
     assert stored[spec.manifest_key]["status"] == "COMPLETED"
-    assert manager.status(spec.job_id)["status"] == "FAILED"
+    assert manager.status(spec.job_id)["status"] == "STOPPING"
 
 
 def test_terminal_upload_retries_then_shuts_down() -> None:
@@ -1816,7 +1884,7 @@ def test_terminal_upload_retries_then_shuts_down() -> None:
         if attempts["n"] < 3:
             raise RuntimeError("R2 upload returned 503")
 
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         terminal_uploader=uploader,
@@ -1844,7 +1912,7 @@ def test_terminal_publication_retries_below_cap_without_shutdown() -> None:
         attempts["n"] += 1
         raise RuntimeError("R2 upload returned 429")
 
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         terminal_uploader=uploader,
@@ -1877,7 +1945,7 @@ def test_terminal_publication_retry_exhaustion_shuts_down(capsys) -> None:
         attempts["n"] += 1
         raise RuntimeError("R2 upload returned 503")
 
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         terminal_uploader=uploader,
@@ -1921,7 +1989,7 @@ def test_terminal_publication_succeeds_on_later_retry_below_cap() -> None:
         if attempts["n"] < limit:
             raise RuntimeError("R2 upload returned 503")
 
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         terminal_uploader=uploader,
@@ -1966,7 +2034,7 @@ def test_failed_terminal_put_and_get_404_retries_without_shutdown(monkeypatch) -
 
     fake = _MissingTerminalR2()
     monkeypatch.setattr(service.urllib.request, "urlopen", fake.urlopen)
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         retry_schedule=(0.05, 0.05),
@@ -1998,7 +2066,7 @@ def test_unavailable_terminal_upload_does_not_shutdown() -> None:
         del key, data, spec, content_digest, extra_headers
         raise RuntimeError("R2 upload returned 503")
 
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         terminal_uploader=uploader,
@@ -2035,7 +2103,7 @@ def test_matching_existing_terminal_is_accepted() -> None:
         del data, spec, content_digest, extra_headers
         raise RuntimeError("R2 upload returned 409")
 
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         terminal_uploader=uploader,
@@ -2063,7 +2131,7 @@ def test_conflicting_terminal_shuts_down_fail_closed() -> None:
         del data, spec, content_digest, extra_headers
         raise RuntimeError("R2 upload returned 409")
 
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         terminal_uploader=uploader,
@@ -2090,7 +2158,7 @@ def test_watchdog_and_normal_race_keeps_one_terminal() -> None:
         stored[key] = body
 
     spec = _job("a" * 64, "one-terminal")
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: {
             "job_id": item.job_id,
             "request_digest": item.request_digest,
@@ -2109,19 +2177,14 @@ def test_watchdog_and_normal_race_keeps_one_terminal() -> None:
 
 
 def test_absolute_watchdog_is_not_renewed_by_status_polling() -> None:
-    release = threading.Event()
-    entered = threading.Event()
+    release = PROCESS_CONTEXT.Event()
+    entered = PROCESS_CONTEXT.Event()
     terminal = threading.Event()
 
     def runner(spec):
         entered.set()
         release.wait(2)
-        return {
-            "job_id": spec.job_id,
-            "request_digest": spec.request_digest,
-            "status": "COMPLETED",
-            "go": False,
-        }
+        return _manager_completed_result(spec)
 
     uploads: list[str] = []
 
@@ -2129,7 +2192,7 @@ def test_absolute_watchdog_is_not_renewed_by_status_polling() -> None:
         del data, spec, content_digest, extra_headers
         uploads.append(key)
 
-    manager = service.JobManager(
+    manager = _job_manager(
         runner,
         on_terminal=terminal.set,
         max_job_seconds=0.05,
@@ -2148,7 +2211,126 @@ def test_absolute_watchdog_is_not_renewed_by_status_polling() -> None:
     assert "absolute Container lifetime" in manager.status(spec.job_id)["error"]
     with pytest.raises(service.JobBusyError, match="shutting down"):
         manager.submit(_job("b" * 64, "second-job"))
-    release.set()
+
+
+def test_timeout_kills_term_ignoring_group_before_failed_terminal(tmp_path: Path) -> None:
+    entered = PROCESS_CONTEXT.Event()
+    terminal = threading.Event()
+    late_write = tmp_path / "late-authoritative-write"
+    supervised_pid = {"value": 0}
+
+    def runner(spec):
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        entered.set()
+        time.sleep(0.4)
+        late_write.write_text("forbidden", encoding="utf-8")
+        return _manager_completed_result(spec)
+
+    def uploader(*_args, **_kwargs):
+        with pytest.raises(ProcessLookupError):
+            os.kill(supervised_pid["value"], 0)
+
+    manager = _job_manager(
+        runner,
+        on_terminal=terminal.set,
+        max_job_seconds=0.05,
+        terminal_uploader=uploader,
+        process_term_grace_seconds=0.05,
+        process_kill_grace_seconds=0.5,
+    )
+    spec = _job("a" * 64, "term-ignore-timeout")
+    manager.submit(spec)
+    assert manager._supervisor is not None
+    supervised_pid["value"] = manager._supervisor.pid
+    assert entered.wait(1)
+    assert terminal.wait(2)
+    assert manager.status(spec.job_id)["status"] == "FAILED"
+    time.sleep(0.45)
+    assert not late_write.exists()
+
+
+def test_root_exit_with_live_grandchild_is_stopped_before_terminal(tmp_path: Path) -> None:
+    terminal = threading.Event()
+    grandchild_pid = tmp_path / "grandchild.pid"
+    late_write = tmp_path / "grandchild-write"
+
+    def runner(spec):
+        pid = os.fork()
+        if pid == 0:
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            time.sleep(0.8)
+            late_write.write_text("forbidden", encoding="utf-8")
+            os._exit(0)
+        grandchild_pid.write_text(str(pid), encoding="ascii")
+        return _manager_completed_result(spec)
+
+    manager = _job_manager(
+        runner,
+        on_terminal=terminal.set,
+        terminal_uploader=lambda *_args, **_kwargs: None,
+        process_term_grace_seconds=0.2,
+        process_kill_grace_seconds=0.5,
+    )
+    manager.submit(_job("a" * 64, "grandchild-boundary"))
+    deadline = time.monotonic() + 1
+    while not grandchild_pid.exists() and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert grandchild_pid.exists()
+    assert not terminal.wait(0.05)
+    assert terminal.wait(2)
+    pid = int(grandchild_pid.read_text(encoding="ascii"))
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+    time.sleep(0.85)
+    assert not late_write.exists()
+
+
+def test_cancel_uses_the_bounded_group_stop_path() -> None:
+    entered = PROCESS_CONTEXT.Event()
+    terminal = threading.Event()
+
+    def runner(spec):
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        entered.set()
+        time.sleep(5)
+        return _manager_completed_result(spec)
+
+    manager = _job_manager(
+        runner,
+        on_terminal=terminal.set,
+        terminal_uploader=lambda *_args, **_kwargs: None,
+        process_term_grace_seconds=0.05,
+        process_kill_grace_seconds=0.5,
+    )
+    spec = _job("a" * 64, "cancel-boundary")
+    manager.submit(spec)
+    assert entered.wait(1)
+    assert manager.cancel(spec.job_id) is True
+    assert terminal.wait(2)
+    assert manager.status(spec.job_id)["status"] == "FAILED"
+    assert manager.status(spec.job_id)["error"] == "job cancelled"
+
+
+@pytest.mark.parametrize("mode", ["oversized", "crash"])
+def test_supervised_result_payload_and_child_crash_fail_closed(mode: str) -> None:
+    terminal = threading.Event()
+
+    def runner(spec):
+        if mode == "crash":
+            os._exit(23)
+        return {**_manager_completed_result(spec), "padding": "x" * (128 * 1024)}
+
+    manager = _job_manager(
+        runner,
+        on_terminal=terminal.set,
+        terminal_uploader=lambda *_args, **_kwargs: None,
+    )
+    spec = _job("a" * 64, f"child-{mode}")
+    manager.submit(spec)
+    assert terminal.wait(2)
+    result = manager.status(spec.job_id)
+    assert result["status"] == "FAILED"
+    assert "result" in result["error"]
 
 
 class _UrlResponse(io.BytesIO):
@@ -2240,7 +2422,7 @@ def test_production_conflict_reads_matching_terminal_without_injected_reader(
     fake.objects[spec.manifest_key] = service._canonical_bytes(existing)
     monkeypatch.setattr(service.urllib.request, "urlopen", fake.urlopen)
     terminal = threading.Event()
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         retry_schedule=(0.01,),
@@ -2267,7 +2449,7 @@ def test_production_mismatched_terminal_shuts_down_fail_closed(monkeypatch) -> N
     fake.objects[spec.manifest_key] = service._canonical_bytes(existing)
     monkeypatch.setattr(service.urllib.request, "urlopen", fake.urlopen)
     terminal = threading.Event()
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         retry_schedule=(0.05,),
@@ -2317,7 +2499,7 @@ def test_deterministic_put_then_terminal_get_404_shuts_down_fail_closed(
     )
     terminal = threading.Event()
     spec = _job("a" * 64, f"denied-put-{status}")
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         retry_schedule=(0.05, 0.05),
@@ -2338,7 +2520,7 @@ def test_failed_upload_then_terminal_get_404_retries(monkeypatch) -> None:
         ),
     )
     terminal = threading.Event()
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         retry_schedule=(0.05, 0.05),
@@ -2360,7 +2542,7 @@ def test_transport_error_then_terminal_get_404_retries(monkeypatch) -> None:
         put_error=lambda url: urllib.error.URLError("connection reset"),
     )
     terminal = threading.Event()
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         retry_schedule=(0.05, 0.05),
@@ -2958,10 +3140,19 @@ def _controlled_completed_result(item) -> dict:
     }
 
 
+def _shared_execution_counter():
+    return PROCESS_CONTEXT.Value("i", 0)
+
+
+def _increment_execution_counter(counter) -> None:
+    with counter.get_lock():
+        counter.value += 1
+
+
 def test_controlled_job_manager_restart_executes_once() -> None:
     spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
     store: dict[str, bytes] = {}
-    executions = {"n": 0}
+    executions = _shared_execution_counter()
     done = threading.Event()
 
     def upload(key, data, *, spec, content_digest, extra_headers=None):
@@ -2978,10 +3169,10 @@ def test_controlled_job_manager_restart_executes_once() -> None:
         return json.loads(raw.decode("utf-8"))
 
     def runner(item):
-        executions["n"] += 1
+        _increment_execution_counter(executions)
         return _controlled_completed_result(item)
 
-    first = service.JobManager(
+    first = _job_manager(
         runner,
         terminal_uploader=upload,
         terminal_reader=reader,
@@ -2992,7 +3183,7 @@ def test_controlled_job_manager_restart_executes_once() -> None:
     first.submit(spec)
     assert done.wait(2.0)
     second_done = threading.Event()
-    second = service.JobManager(
+    second = _job_manager(
         runner,
         terminal_uploader=upload,
         terminal_reader=reader,
@@ -3001,7 +3192,7 @@ def test_controlled_job_manager_restart_executes_once() -> None:
         retry_schedule=(0.01,),
     )
     recovered = second.submit(spec)
-    assert executions["n"] == 1
+    assert executions.value == 1
     assert recovered["status"] == "COMPLETED"
     assert recovered["execution_id"] == spec.execution_id
     assert second_done.is_set() is False
@@ -3061,7 +3252,7 @@ def test_python_controlled_terminals_match_the_worker_closed_contract(
     assert closed_completed == cross_runtime["completed"]
     assert service._controlled_terminal_matches_spec(spec, closed_completed)
 
-    manager = service.JobManager(lambda _spec: {}, max_job_seconds=5)
+    manager = _job_manager(lambda _spec: {}, max_job_seconds=5)
     timeout = {
         **manager._timeout_terminal(spec),
         "owner_nonce": "owner-nonce-1",
@@ -3130,7 +3321,7 @@ class _ControlledCasStore:
 
 def _controlled_runner(executions, started=None, release=None):
     def runner(item):
-        executions["n"] += 1
+        _increment_execution_counter(executions)
         if started is not None:
             started.set()
         if release is not None:
@@ -3173,9 +3364,9 @@ def test_controlled_crash_before_terminal_takeover_after_lease_expiry() -> None:
         service._canonical_bytes(lease),
         "etag-dead",
     )
-    executions = {"n": 0}
+    executions = _shared_execution_counter()
     done = threading.Event()
-    manager = service.JobManager(
+    manager = _job_manager(
         _controlled_runner(executions),
         terminal_uploader=store.upload,
         terminal_reader=store.reader,
@@ -3187,7 +3378,7 @@ def test_controlled_crash_before_terminal_takeover_after_lease_expiry() -> None:
     accepted = manager.submit(spec)
     assert accepted["status"] in {"QUEUED", "RUNNING", "COMPLETED"}
     assert done.wait(2.0)
-    assert executions["n"] == 1
+    assert executions.value == 1
     claimed, _etag = store.object_reader(spec, spec.lease_key)
     assert claimed["owner_nonce"] != "deadownerdeadowner"
     assert float(claimed["expires_at"]) > 1.0
@@ -3196,12 +3387,12 @@ def test_controlled_crash_before_terminal_takeover_after_lease_expiry() -> None:
 def test_controlled_two_managers_race_has_at_most_one_executor() -> None:
     spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
     store = _ControlledCasStore()
-    executions = {"n": 0}
-    started = threading.Event()
-    release = threading.Event()
+    executions = _shared_execution_counter()
+    started = PROCESS_CONTEXT.Event()
+    release = PROCESS_CONTEXT.Event()
     first_done = threading.Event()
     second_done = threading.Event()
-    first = service.JobManager(
+    first = _job_manager(
         _controlled_runner(executions, started, release),
         terminal_uploader=store.upload,
         terminal_reader=store.reader,
@@ -3210,7 +3401,7 @@ def test_controlled_two_managers_race_has_at_most_one_executor() -> None:
         max_job_seconds=5,
         retry_schedule=(0.01,),
     )
-    second = service.JobManager(
+    second = _job_manager(
         _controlled_runner(executions, started, release),
         terminal_uploader=store.upload,
         terminal_reader=store.reader,
@@ -3240,14 +3431,14 @@ def test_controlled_two_managers_race_has_at_most_one_executor() -> None:
         assert not thread.is_alive()
     assert errors == []
     assert started.wait(2.0)
-    assert executions["n"] == 1
+    assert executions.value == 1
     release.set()
     assert sum(1 for row in results if row.get("status") in {"QUEUED", "RUNNING", "COMPLETED"}) == 2
     winner_done = first_done.wait(2.0)
     if not winner_done:
         winner_done = second_done.wait(2.0)
     assert winner_done
-    assert executions["n"] == 1
+    assert executions.value == 1
     terminals = [row for row in results if row.get("status") == "COMPLETED"]
     lookups = [row for row in results if row.get("status") == "RUNNING" and row.get("job_id") == spec.job_id]
     assert len(terminals) + len(lookups) >= 1
@@ -3277,9 +3468,9 @@ def test_fresh_manager_observes_active_lease_then_claims_after_expiry() -> None:
         service._canonical_bytes(_closed_lease(spec, "oldowneroldowner", now + 0.25)),
         "etag-old",
     )
-    executions = {"n": 0}
+    executions = _shared_execution_counter()
     done = threading.Event()
-    manager = service.JobManager(
+    manager = _job_manager(
         _controlled_runner(executions),
         terminal_uploader=store.upload,
         terminal_reader=store.reader,
@@ -3291,10 +3482,10 @@ def test_fresh_manager_observes_active_lease_then_claims_after_expiry() -> None:
     )
     first = manager.submit(spec)
     assert first["status"] == "RUNNING"
-    assert executions["n"] == 0
+    assert executions.value == 0
     assert manager.status(spec.job_id)["status"] == "RUNNING"
     assert done.wait(3.0)
-    assert executions["n"] == 1
+    assert executions.value == 1
     claimed, _ = store.object_reader(spec, spec.lease_key)
     assert claimed["owner_nonce"] != "oldowneroldowner"
     assert claimed["fencing_token"] == 2
@@ -3308,9 +3499,9 @@ def test_crash_before_executor_fresh_manager_takeover() -> None:
         service._canonical_bytes(_closed_lease(spec, "crashedcrashedcr", now + 0.2, 3)),
         "etag-crash",
     )
-    executions = {"n": 0}
+    executions = _shared_execution_counter()
     done = threading.Event()
-    manager = service.JobManager(
+    manager = _job_manager(
         _controlled_runner(executions),
         terminal_uploader=store.upload,
         terminal_reader=store.reader,
@@ -3322,49 +3513,31 @@ def test_crash_before_executor_fresh_manager_takeover() -> None:
     )
     observed = manager.submit(spec)
     assert observed["status"] == "RUNNING"
-    assert executions["n"] == 0
+    assert executions.value == 0
     later = manager.submit(spec)
     assert later["status"] in {"RUNNING", "QUEUED", "COMPLETED"}
     assert done.wait(3.0)
-    assert executions["n"] == 1
+    assert executions.value == 1
 
 
 def test_heartbeat_cas_loss_fences_old_executor_zero_late_success() -> None:
     spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
     store = _ControlledCasStore()
-    executions = {"n": 0}
-    authorized = {"n": 0}
-    started = threading.Event()
-    release = threading.Event()
+    executions = _shared_execution_counter()
+    authorized = _shared_execution_counter()
+    started = PROCESS_CONTEXT.Event()
 
     def old_runner(item):
-        executions["n"] += 1
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        _increment_execution_counter(executions)
         started.set()
-        deadline = __import__("time").time() + 2.0
-        while __import__("time").time() < deadline:
-            if old.lease_lost():
-                return {
-                    "ok": False,
-                    "identity": service.CONTROLLED_PILOT_IDENTITY,
-                    "status": "FAILED",
-                    "job_id": item.job_id,
-                    "request_digest": item.request_digest,
-                    "execution_id": item.execution_id,
-                    "runner_version": item.runner_version,
-                    "error": "controlled lease lost",
-                    "go": False,
-                    "automatic_promotion": False,
-                    "live_orders_enabled": False,
-                }
-            if release.is_set():
-                break
-            __import__("time").sleep(0.02)
-        authorized["n"] += 1
-        return _controlled_runner(executions)(item)
+        time.sleep(2.0)
+        _increment_execution_counter(authorized)
+        return _controlled_completed_result(item)
 
     old_done = threading.Event()
     new_done = threading.Event()
-    old = service.JobManager(
+    old = _job_manager(
         old_runner,
         terminal_uploader=store.upload,
         terminal_reader=store.reader,
@@ -3373,8 +3546,10 @@ def test_heartbeat_cas_loss_fences_old_executor_zero_late_success() -> None:
         max_job_seconds=5,
         retry_schedule=(0.01,),
         lease_ttl_seconds=0.3,
+        process_term_grace_seconds=0.05,
+        process_kill_grace_seconds=0.5,
     )
-    new = service.JobManager(
+    new = _job_manager(
         _controlled_runner(executions),
         terminal_uploader=store.upload,
         terminal_reader=store.reader,
@@ -3386,6 +3561,9 @@ def test_heartbeat_cas_loss_fences_old_executor_zero_late_success() -> None:
     )
     old.submit(spec)
     assert started.wait(2.0)
+    assert old._supervisor is not None
+    old_pid = old._supervisor.pid
+    assert old_pid is not None
     lease, etag = store.object_reader(spec, spec.lease_key)
     stolen = dict(lease)
     stolen["owner_nonce"] = "newownernewowner"
@@ -3403,15 +3581,17 @@ def test_heartbeat_cas_loss_fences_old_executor_zero_late_success() -> None:
     except Exception:
         pass
     assert old.lease_lost()
+    with pytest.raises(ProcessLookupError):
+        os.kill(old_pid, 0)
+    assert old_done.wait(2.0)
     takeover = new.submit(spec)
     assert takeover["status"] in {"QUEUED", "RUNNING", "COMPLETED"}
-    release.set()
     assert new_done.wait(3.0)
     terminals = [json.loads(raw[0]) for key, raw in store.objects.items() if key.endswith("container-terminal.json")]
     successes = [row for row in terminals if row.get("status") == "COMPLETED" and row.get("ok") is True]
     assert len(successes) == 1
     assert successes[0]["owner_nonce"] != lease["owner_nonce"]
-    assert authorized["n"] == 0
+    assert authorized.value == 0
 
 
 
@@ -3434,8 +3614,8 @@ def test_delayed_heartbeat_expired_does_not_upload() -> None:
             extra_headers=extra_headers,
         )
 
-    manager = service.JobManager(
-        _controlled_runner({"n": 0}),
+    manager = _job_manager(
+        _controlled_runner(_shared_execution_counter()),
         terminal_uploader=recording_upload,
         terminal_reader=store.reader,
         object_reader=store.object_reader,
@@ -3581,7 +3761,7 @@ def test_near_maximum_embedded_terminal_lease_recovery(monkeypatch) -> None:
     assert logical_got == logical
     assert responses[spec.manifest_key].read_sizes == [service.CONTROLLED_TERMINAL_MAX_BYTES + 1]
 
-    executions = {"n": 0}
+    executions = _shared_execution_counter()
     done = threading.Event()
     store = _ControlledCasStore()
     store.objects[spec.lease_key] = (stored, "etag-terminal-lease")
@@ -3590,7 +3770,7 @@ def test_near_maximum_embedded_terminal_lease_recovery(monkeypatch) -> None:
         del item
         return dict(logical)
 
-    manager = service.JobManager(
+    manager = _job_manager(
         _controlled_runner(executions),
         terminal_uploader=store.upload,
         terminal_reader=reader,
@@ -3602,11 +3782,11 @@ def test_near_maximum_embedded_terminal_lease_recovery(monkeypatch) -> None:
     first = manager.submit(spec)
     assert first["status"] == "COMPLETED"
     assert first["execution_id"] == spec.execution_id
-    assert executions["n"] == 0
+    assert executions.value == 0
     assert done.is_set() is False
     replay = manager.submit(spec)
     assert replay["status"] == "COMPLETED"
-    assert executions["n"] == 0
+    assert executions.value == 0
     claimed, _ = store.object_reader(spec, spec.lease_key)
     assert claimed["status"] == "TERMINAL"
     assert claimed["owner_nonce"] == "owner-nonce-1"
@@ -3661,8 +3841,8 @@ def test_terminal_lease_does_not_takeover_when_logical_terminal_missing() -> Non
     del payload
     store = _ControlledCasStore()
     store.objects[spec.lease_key] = (stored, "etag-terminal-lease")
-    executions = {"n": 0}
-    manager = service.JobManager(
+    executions = _shared_execution_counter()
+    manager = _job_manager(
         _controlled_runner(executions),
         terminal_uploader=store.upload,
         terminal_reader=lambda item: None,
@@ -3674,7 +3854,7 @@ def test_terminal_lease_does_not_takeover_when_logical_terminal_missing() -> Non
         observed = manager.submit(spec)
         assert observed["status"] == "RUNNING"
         assert observed.get("lease_observer") is True
-        assert executions["n"] == 0
+        assert executions.value == 0
         claimed, _ = store.object_reader(spec, spec.lease_key)
         assert claimed["status"] == "TERMINAL"
         assert claimed["owner_nonce"] == "owner-nonce-1"
