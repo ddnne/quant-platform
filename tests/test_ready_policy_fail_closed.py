@@ -1033,6 +1033,8 @@ def _mini_exact_scope_binding() -> SimpleNamespace:
 def _seed_exact_pit_scope(
     tmp_path,
     receipt_ed25519_keys,
+    *,
+    include_nonmember_rows: bool = False,
 ) -> tuple[object, object]:
     """Synthetic five-day exact natural-key closure with governed v4 receipts."""
     db_path = tmp_path / "pit-scope.sqlite"
@@ -1095,6 +1097,45 @@ def _seed_exact_pit_scope(
             for day in calendar_dates
         ],
     }
+    if include_nonmember_rows:
+        payloads["equities_master"].append(
+            {
+                "Code": "9999",
+                "Date": "2023-01-02",
+                "CompanyName": "Standard Nonmember",
+                "MarketCode": "0112",
+            }
+        )
+        payloads["fins_summary"].append(
+            {
+                "Code": "9999",
+                "DiscDate": "2023-01-03",
+                "DiscTime": "08:00:00",
+                "DiscNo": "disc-9999",
+            }
+        )
+        payloads["equities_bars_daily"].extend(
+            {
+                "Code": "9999",
+                "Date": day,
+                "Open": 50.0,
+                "High": 51.0,
+                "Low": 49.0,
+                "Close": 50.0,
+                "Volume": 500.0,
+            }
+            for day in calendar_dates
+        )
+        payloads["equities_bars_daily_am"].extend(
+            {
+                "Code": "9999",
+                "Date": day,
+                "MAdjC": 50.0,
+                "trusted_receipt_digest": "sha256:" + ("ef" * 32),
+                "product_snapshot_id": "sha256:" + ("01" * 32),
+            }
+            for day in calendar_dates
+        )
     ingestion_clocks = {
         "markets_calendar": "2022-12-01T00:00:00+09:00",
         "equities_master": "2023-01-02T08:00:00+09:00",
@@ -1414,6 +1455,42 @@ def test_exact_pit_dependency_scope_accepts_complete_receipt_bound_fixture(
     finally:
         listing_conn.close()
     assert listing is None
+
+
+def test_exact_pit_dependency_scope_verifies_full_source_artifact_before_universe_selection(
+    tmp_path,
+    receipt_ed25519_keys,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path, binding = _seed_exact_pit_scope(
+        tmp_path,
+        receipt_ed25519_keys,
+        include_nonmember_rows=True,
+    )
+
+    proof = _verify_scope(db_path, binding, monkeypatch)
+
+    assert proof["status"] == "PASS"
+    assert all(
+        day["member_count"] == 1 for day in proof["universe_daily_summary"]
+    )
+    selected_counts = {
+        entry["dataset_id"]: entry["natural_key_count"]
+        for entry in proof["entries"]
+    }
+    with sqlite3.connect(db_path) as connection:
+        full_artifact_counts = dict(
+            connection.execute(
+                "SELECT dataset,row_count FROM receipt_product_materializations"
+            ).fetchall()
+        )
+    for dataset_id in (
+        "equities_master",
+        "fins_summary",
+        "equities_bars_daily",
+        "equities_bars_daily_am",
+    ):
+        assert full_artifact_counts[dataset_id] > selected_counts[dataset_id]
 
 
 def test_product_jsonl_vector_matches_authority_utf8_order() -> None:

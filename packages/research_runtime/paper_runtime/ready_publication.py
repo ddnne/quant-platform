@@ -842,18 +842,17 @@ def _verify_publication_on_authenticated_mirror(
                         if row.get("dataset") == closure.dataset
                         and row.get("run_id") == closure.run_id
                     ]
-                    segment_codes = (
-                        ()
-                        if dataset_id in {"markets_calendar", "indices_bars_daily_topix"}
-                        else member_codes
-                    )
+                    # A receipt attests the complete governed source segment,
+                    # not the smaller set of natural keys selected by this
+                    # plan's PIT universe.  Reconstruct and verify that full
+                    # artifact here; universe filtering belongs only to the
+                    # dependency-key selection above.
                     observed_count, observed_product_digest, observed_bytes = (
                         product_artifact_digest_ordered(
                             iter_catalog_product_rows(
                                 dataset_id,
                                 closure.segment_start[:10],
                                 closure.segment_end[:10],
-                                segment_codes,
                             )
                         )
                     )
