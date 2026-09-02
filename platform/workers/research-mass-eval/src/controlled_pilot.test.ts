@@ -194,6 +194,8 @@ function mockContainer(options?: {
     | "knowledge_missing_id"
     | "knowledge_wrong_digest"
     | "post_digest_injection"
+    | "missing_semantic_field"
+    | "missing_knowledge_payload_field"
     | "semantic_rebound_risk"
     | "semantic_reordered_selection"
     | "semantic_rebound_knowledge";
@@ -243,6 +245,21 @@ function mockContainer(options?: {
               result.papers[0]!.injected_after_closed_schema = true;
               delete result.papers[0]!.semantic_digest;
               result.papers[0]!.semantic_digest = await sha256Digest(canonicalJson(result.papers[0]!));
+            }
+            if (options?.tamper === "missing_semantic_field") {
+              delete result.papers[0]!.run_id;
+              delete result.papers[0]!.semantic_digest;
+              result.papers[0]!.semantic_digest = await sha256Digest(canonicalJson(result.papers[0]!));
+            }
+            if (options?.tamper === "missing_knowledge_payload_field") {
+              delete (result.knowledge.payload as Record<string, unknown>).risk_audit_ids;
+              delete result.knowledge.artifact_id;
+              delete result.knowledge.digest;
+              delete result.knowledge.semantic_digest;
+              const rebound = await sha256Digest(canonicalJson(result.knowledge));
+              result.knowledge.artifact_id = rebound;
+              result.knowledge.digest = rebound;
+              result.knowledge.semantic_digest = rebound;
             }
             if (options?.tamper === "semantic_rebound_risk") {
               result.risks[0]!.paper_semantic_digest = result.papers[1]!.semantic_digest;
@@ -348,6 +365,8 @@ async function seedEnv(options?: {
     | "knowledge_missing_id"
     | "knowledge_wrong_digest"
     | "post_digest_injection"
+    | "missing_semantic_field"
+    | "missing_knowledge_payload_field"
     | "semantic_rebound_risk"
     | "semantic_reordered_selection"
     | "semantic_rebound_knowledge";
@@ -544,6 +563,27 @@ describe("controlled cloud execution", () => {
     expect(seeded.budget.queried).toBeGreaterThan(0);
   });
 
+  it("does not accept another job's terminal manifest copied into this job path", async () => {
+    const seeded = await seedEnv();
+    const ctx = new WaitCtx();
+    await submitControlledPilot(seeded.env, seeded.request, ctx);
+    await ctx.pending;
+    const sourceJob = seeded.request.idempotency_key;
+    const copiedJob = "controlled-job-copied-manifest";
+    const source = await seeded.env.STRUCTURED_BUCKET.get(
+      `research/controlled_pilot/v1/jobs/${sourceJob}/manifest.json`,
+    );
+    expect(source).not.toBeNull();
+    const sourceBytes = new Uint8Array(await source!.arrayBuffer());
+    await seeded.mem.put(
+      `research/controlled_pilot/v1/jobs/${copiedJob}/manifest.json`,
+      sourceBytes,
+    );
+
+    const status = await controlledPilotStatus(seeded.env, copiedJob);
+    expect(((await status.json()) as { status: string }).status).not.toBe("COMPLETED");
+  });
+
   it("accepts Python-style float zero and persists the exact dependency chain in order", async () => {
     const seeded = await seedEnv();
     const ctx = new WaitCtx();
@@ -706,6 +746,8 @@ describe("controlled cloud execution", () => {
       "knowledge_missing_id",
       "knowledge_wrong_digest",
       "post_digest_injection",
+      "missing_semantic_field",
+      "missing_knowledge_payload_field",
       "semantic_rebound_risk",
       "semantic_reordered_selection",
       "semantic_rebound_knowledge",

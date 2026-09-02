@@ -110,10 +110,18 @@ def canonical_json(value: Any) -> str:
 _JS_SAFE_INTEGER = (1 << 53) - 1
 
 
+def _validate_unicode_scalar_string(value: str, *, path: str) -> None:
+    if any(0xD800 <= ord(char) <= 0xDFFF for char in value):
+        raise ValueError(f"{path} contains an unpaired UTF-16 surrogate")
+
+
 def _validate_finite_safe_json(value: Any, *, path: str) -> None:
     """Validate the closed, non-lossy cross-runtime JSON value profile."""
 
-    if value is None or type(value) is bool or type(value) is str:
+    if value is None or type(value) is bool:
+        return
+    if type(value) is str:
+        _validate_unicode_scalar_string(value, path=path)
         return
     if type(value) is int:
         if abs(value) > _JS_SAFE_INTEGER:
@@ -133,6 +141,7 @@ def _validate_finite_safe_json(value: Any, *, path: str) -> None:
         for key, item in value.items():
             if type(key) is not str:
                 raise TypeError(f"{path} object key is not a string")
+            _validate_unicode_scalar_string(key, path=f"{path} object key")
             _validate_finite_safe_json(item, path=f"{path}.{key}")
         return
     raise TypeError(f"{path} is not an interoperable JSON value: {type(value).__name__}")

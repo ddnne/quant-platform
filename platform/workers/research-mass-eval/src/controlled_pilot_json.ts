@@ -123,9 +123,31 @@ export async function sha256Digest(bytes: Uint8Array | string): Promise<string> 
   return `sha256:${hex}`;
 }
 
+function rejectUnpairedSurrogate(value: string): void {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      if (index + 1 >= value.length) {
+        throw new StrictJsonError("canonical JSON string contains an unpaired surrogate");
+      }
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) {
+        throw new StrictJsonError("canonical JSON string contains an unpaired surrogate");
+      }
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      throw new StrictJsonError("canonical JSON string contains an unpaired surrogate");
+    }
+  }
+}
+
 export function canonicalJson(value: unknown): string {
   if (value === null) return "null";
-  if (typeof value === "boolean" || typeof value === "string") {
+  if (typeof value === "boolean") {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "string") {
+    rejectUnpairedSurrogate(value);
     return JSON.stringify(value);
   }
   if (typeof value === "number") {
@@ -142,8 +164,9 @@ export function canonicalJson(value: unknown): string {
     throw new StrictJsonError("value is not canonical JSON");
   }
   const rec = value as Record<string, unknown>;
-  return `{${Object.keys(rec)
-    .sort()
+  const keys = Object.keys(rec);
+  keys.forEach(rejectUnpairedSurrogate);
+  return `{${keys.sort()
     .map((key) => `${JSON.stringify(key)}:${canonicalJson(rec[key])}`)
     .join(",")}}`;
 }

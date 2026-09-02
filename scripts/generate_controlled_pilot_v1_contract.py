@@ -370,6 +370,7 @@ def render_fixtures() -> dict[str, bytes]:
         "issuer": "ControlledTraderAuthorizationService/v1",
     }
     trader = {**trader_body, "signature": _sign(private_key, trader_body)}
+    authorization_digest = canonical_json_digest(trader)
     keys = {
         "key_id": key_id,
         "algorithm": "Ed25519",
@@ -400,10 +401,13 @@ def render_fixtures() -> dict[str, bytes]:
             "immutable_db_digest": physical,
             "snapshot_key": physical_key,
             "snapshot_size": 32,
+            "authorization_digest": authorization_digest,
+            "ready_attestation_id": attestation_id,
             "fill_contract_digest": contract["fill_contract_digest"],
             "execution_mode": "am_signal_pm_close",
             "price_basis": "RAW",
             "lifecycle": "Paper",
+            "feature_refs": [],
             "metrics": {
                 "total_return_post_cost": 0.0,
                 "max_drawdown": -0.0,
@@ -411,6 +415,7 @@ def render_fixtures() -> dict[str, bytes]:
             "n_equity_points": 10,
             "n_trades": 0,
             "experiment_id": f"fixture-experiment-{ordinal}",
+            "run_id": f"fixture-experiment-{ordinal}",
             "strategy_spec_id": plan["strategy_spec_id"],
             "strategy_spec_version": plan["strategy_spec_version"],
             "strategy_spec_hash": plan["strategy_spec_hash"],
@@ -418,6 +423,17 @@ def render_fixtures() -> dict[str, bytes]:
             "plan_set_digest": contract["plan_set_digest"],
             "dependency_closure_digest": contract["dependency_closure_digest"],
             "exact_four_binding_digest": contract["exact_four_binding_digest"],
+            "resolved_universe_digest": universe.resolved_membership_digest,
+            "max_gross_weight_ppm": plan["max_gross_weight_ppm"],
+            "requested_gross_weight": 0.0,
+            "realized_gross_weight": 0.0,
+            "reproducibility": {
+                "data_snapshot_id": logical,
+                "feature_versions": {},
+                "feature_definition_hashes": {},
+                "strategy_definition_hash": plan["strategy_spec_hash"],
+                "execution_mode": "am_signal_pm_close",
+            },
         }
         paper["semantic_digest"] = canonical_json_digest(paper)
         papers.append(paper)
@@ -437,6 +453,8 @@ def render_fixtures() -> dict[str, bytes]:
             "immutable_db_digest": physical,
             "snapshot_key": physical_key,
             "snapshot_size": 32,
+            "authorization_digest": authorization_digest,
+            "ready_attestation_id": attestation_id,
             "fill_contract_digest": contract["fill_contract_digest"],
             "profile_digest": contract["profile_digest"],
             "plan_set_digest": contract["plan_set_digest"],
@@ -445,6 +463,20 @@ def render_fixtures() -> dict[str, bytes]:
             "paper_semantic_digest": paper["semantic_digest"],
             "status": "pass",
             "audit_id": f"fixture-audit-{ordinal}",
+            "experiment_id": f"fixture-experiment-{ordinal}",
+            "run_id": f"fixture-experiment-{ordinal}",
+            "checks": {
+                "paper_result_has_experiment_id": True,
+                "paper_result_has_snapshot": True,
+                "paper_result_identity_matches": True,
+                "max_drawdown_within_limit": True,
+            },
+            "findings": [],
+            "metrics": {
+                "max_drawdown": 0.0,
+                "max_drawdown_limit": 0.35,
+                "num_trades": 0,
+            },
         }
         risk["semantic_digest"] = canonical_json_digest(risk)
         risks.append(risk)
@@ -469,7 +501,27 @@ def render_fixtures() -> dict[str, bytes]:
         "semantic_child_set_digest": semantic_child_set_digest,
         "snapshot_id": logical,
         "immutable_db_digest": physical,
+        "snapshot_key": physical_key,
         "snapshot_size": 32,
+        "authorization_digest": authorization_digest,
+        "ready_attestation_id": attestation_id,
+        "rule": "deterministic_hold_pending_human_approval",
+        "selected": [row["plan_id"] for row in papers],
+        "rejected": [],
+        "decisions": [
+            {
+                "decision": "HOLD",
+                "reason_codes": ["PENDING_HUMAN_APPROVAL"],
+                "subject_id": row["plan_id"],
+                "evidence": {"automatic_promotion": False},
+            }
+            for row in papers
+        ],
+        "profile_digest": contract["profile_digest"],
+        "plan_set_digest": contract["plan_set_digest"],
+        "dependency_closure_digest": contract["dependency_closure_digest"],
+        "exact_four_binding_digest": contract["exact_four_binding_digest"],
+        "resolved_universe_digest": universe.resolved_membership_digest,
     }
     selection["semantic_digest"] = canonical_json_digest(selection)
     knowledge_body = {
@@ -478,6 +530,8 @@ def render_fixtures() -> dict[str, bytes]:
         "automatic_promotion": False,
         "live_orders_enabled": False,
         "mass": False,
+        "snapshot_id": logical,
+        "immutable_db_digest": physical,
         "selection_decision": "HOLD",
         "fill_contract_digest": contract["fill_contract_digest"],
         "selection_semantic_digest": selection["semantic_digest"],
@@ -485,6 +539,15 @@ def render_fixtures() -> dict[str, bytes]:
         "artifact_type": "controlled_pilot_knowledge",
         "schema_version": "controlled-pilot-knowledge/v1",
         "producer_role": "knowledge",
+        "profile_digest": contract["profile_digest"],
+        "plan_set_digest": contract["plan_set_digest"],
+        "dependency_closure_digest": contract["dependency_closure_digest"],
+        "exact_four_binding_digest": contract["exact_four_binding_digest"],
+        "snapshot_key": physical_key,
+        "snapshot_size": 32,
+        "authorization_digest": authorization_digest,
+        "n_papers": 4,
+        "n_selected": 4,
         "payload": {
             "identity": contract["identity"],
             "snapshot_id": logical,

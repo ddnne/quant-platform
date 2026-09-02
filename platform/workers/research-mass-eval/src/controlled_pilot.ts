@@ -863,8 +863,17 @@ function assertClosedKeys(
   allowed: ReadonlySet<string>,
   label: string,
 ): void {
+  const missing = [...allowed].filter(
+    (key) => !Object.prototype.hasOwnProperty.call(value, key),
+  );
   const extra = Object.keys(value).filter((key) => !allowed.has(key));
-  if (extra.length > 0) lineageError(`${label} has fields outside its closed schema: ${extra.join(",")}`);
+  if (missing.length > 0 || extra.length > 0) {
+    lineageError(
+      `${label} does not match its closed schema` +
+      `${missing.length > 0 ? `; missing=${missing.join(",")}` : ""}` +
+      `${extra.length > 0 ? `; extra=${extra.join(",")}` : ""}`,
+    );
+  }
 }
 
 async function semanticArtifact(
@@ -962,10 +971,13 @@ async function validateContainerArtifacts(
       paper.immutable_db_digest !== ready.immutable_db_digest ||
       paper.snapshot_key !== ready.physical.key ||
       paper.snapshot_size !== ready.physical.size ||
+      paper.ready_attestation_id !== ready.attestation_id ||
+      paper.fill_contract_digest !== ready.fill_contract_digest ||
       paper.profile_digest !== ready.profile_digest ||
       paper.dependency_closure_digest !== ready.dependency_closure_digest ||
       paper.plan_set_digest !== ready.plan_set_digest ||
-      paper.exact_four_binding_digest !== EXACT_FOUR_BINDING_DIGEST
+      paper.exact_four_binding_digest !== EXACT_FOUR_BINDING_DIGEST ||
+      paper.resolved_universe_digest !== ready.resolved_universe_digest
     ) {
       lineageError("paper does not bind snapshot/profile/closure/binding digests");
     }
@@ -974,6 +986,8 @@ async function validateContainerArtifacts(
       risk.immutable_db_digest !== ready.immutable_db_digest ||
       risk.snapshot_key !== ready.physical.key ||
       risk.snapshot_size !== ready.physical.size ||
+      risk.ready_attestation_id !== ready.attestation_id ||
+      risk.fill_contract_digest !== ready.fill_contract_digest ||
       risk.profile_digest !== ready.profile_digest ||
       risk.dependency_closure_digest !== ready.dependency_closure_digest ||
       risk.plan_set_digest !== ready.plan_set_digest ||
@@ -1017,7 +1031,15 @@ async function validateContainerArtifacts(
     selection.body.live_orders_enabled !== false || selection.body.mass !== false ||
     selection.body.snapshot_id !== ready.snapshot_id ||
     selection.body.immutable_db_digest !== ready.immutable_db_digest ||
-    selection.body.snapshot_size !== ready.physical.size
+    selection.body.snapshot_key !== ready.physical.key ||
+    selection.body.snapshot_size !== ready.physical.size ||
+    selection.body.ready_attestation_id !== ready.attestation_id ||
+    selection.body.fill_contract_digest !== ready.fill_contract_digest ||
+    selection.body.profile_digest !== ready.profile_digest ||
+    selection.body.plan_set_digest !== ready.plan_set_digest ||
+    selection.body.dependency_closure_digest !== ready.dependency_closure_digest ||
+    selection.body.exact_four_binding_digest !== EXACT_FOUR_BINDING_DIGEST ||
+    selection.body.resolved_universe_digest !== ready.resolved_universe_digest
   ) {
     lineageError("selection does not bind the controlled HOLD identity");
   }
@@ -1026,7 +1048,16 @@ async function validateContainerArtifacts(
     knowledge.body.selection_decision !== "HOLD" || knowledge.body.automatic_promotion !== false ||
     knowledge.body.live_orders_enabled !== false || knowledge.body.mass !== false ||
     knowledge.body.selection_semantic_digest !== selection.semanticDigest ||
-    knowledge.body.semantic_child_set_digest !== semanticChildSetDigest
+    knowledge.body.semantic_child_set_digest !== semanticChildSetDigest ||
+    knowledge.body.snapshot_id !== ready.snapshot_id ||
+    knowledge.body.immutable_db_digest !== ready.immutable_db_digest ||
+    knowledge.body.snapshot_key !== ready.physical.key ||
+    knowledge.body.snapshot_size !== ready.physical.size ||
+    knowledge.body.fill_contract_digest !== ready.fill_contract_digest ||
+    knowledge.body.profile_digest !== ready.profile_digest ||
+    knowledge.body.plan_set_digest !== ready.plan_set_digest ||
+    knowledge.body.dependency_closure_digest !== ready.dependency_closure_digest ||
+    knowledge.body.exact_four_binding_digest !== EXACT_FOUR_BINDING_DIGEST
   ) {
     lineageError("knowledge does not bind Selection and its semantic child set");
   }
@@ -1039,6 +1070,18 @@ async function validateContainerArtifacts(
     "selection_semantic_digest",
   ]), "knowledge payload");
   if (
+    knowledge.body.payload.identity !== CONTROLLED_PILOT_IDENTITY ||
+    knowledge.body.payload.snapshot_id !== ready.snapshot_id ||
+    knowledge.body.payload.selection_decision !== "HOLD" ||
+    knowledge.body.payload.fill_contract_digest !== ready.fill_contract_digest ||
+    !jsonEqual(
+      knowledge.body.payload.paper_experiment_ids,
+      papers.map((row) => row.body.experiment_id),
+    ) ||
+    !jsonEqual(
+      knowledge.body.payload.risk_audit_ids,
+      risks.map((row) => row.body.audit_id),
+    ) ||
     knowledge.body.payload.selection_semantic_digest !== selection.semanticDigest ||
     knowledge.body.payload.semantic_child_set_digest !== semanticChildSetDigest
   ) {
@@ -1358,21 +1401,22 @@ function readyFromManifest(manifest: Record<string, unknown>): VerifiedControlle
 
 async function reverifyManifest(
   bucket: R2Bucket,
-  manifestKey: string,
+  expectedJobId: string,
   expectedDigest: string,
 ): Promise<boolean> {
   try {
-    const manifest = await loadJsonObject(bucket, manifestKey);
+    const manifest = await loadJsonObject(bucket, manifestKey(expectedJobId));
     if (
       !manifest || manifest.format !== "controlled-pilot-paper-bundle/v2" ||
       manifest.request_digest !== expectedDigest || manifest.identity !== CONTROLLED_PILOT_IDENTITY ||
+      manifest.idempotency_key !== expectedJobId ||
       manifest.fill_contract_digest !== CONTROLLED_FILL_CONTRACT_DIGEST ||
       manifest.generation !== CONTROLLED_PILOT_GENERATION ||
       manifest.max_parallel !== CONTROLLED_PILOT_MAX_PARALLEL ||
       manifest.automatic_promotion !== false || manifest.live_orders_enabled !== false || manifest.mass !== false
     ) return false;
     const refs = manifest.children;
-    const expected = childOrder(controlledJobPrefix(String(manifest.idempotency_key || "")));
+    const expected = childOrder(controlledJobPrefix(expectedJobId));
     if (!Array.isArray(refs) || refs.length !== CONTROLLED_CHILD_COUNT || refs.length !== expected.length) return false;
     const bindings = bindingsFromManifest(manifest);
     const restored: Array<{ payload: Record<string, unknown>; lineage: Record<string, unknown> }> = [];
@@ -1642,7 +1686,7 @@ async function verifiedTerminal(
     return { status: "FAILED", error: "idempotency conflict" };
   }
   const digest = String(manifest.request_digest || expectedDigest || "");
-  if (!digest || !(await reverifyManifest(bucket, manifestKey(jobId), digest))) {
+  if (!digest || !(await reverifyManifest(bucket, jobId, digest))) {
     return { status: "FAILED", error: "terminal manifest failed re-verification", };
   }
   return { status: "COMPLETED", manifest };
@@ -1989,7 +2033,7 @@ export async function runControlledPilotJob(env: Env, jobId: string): Promise<vo
     data: persistedManifest,
   });
   if (!commit.ok) return;
-  const ok = await reverifyManifest(env.STRUCTURED_BUCKET, manifestKey(jobId), digest);
+  const ok = await reverifyManifest(env.STRUCTURED_BUCKET, jobId, digest);
   if (!ok) {
     await putCreateOnly(env.STRUCTURED_BUCKET, `${CONTROLLED_JOB_KEY_PREFIX}${jobId}/failed.json`, {
       identity: CONTROLLED_PILOT_IDENTITY,

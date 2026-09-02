@@ -14,6 +14,7 @@
       "input_json": "{\"\":2,\"𐀀\":1,\"a\":0}",
       "canonical_json": "{\"a\":0,\"𐀀\":1,\"\":2}"
     },
+    { "name": "valid_non_bmp_scalar", "input_json": "\"\\ud800\\udc00\"", "canonical_json": "\"𐀀\"" },
     {
       "name": "nested",
       "input_json": "{\"z\":[-0,1.0,{\"b\":1e-7,\"a\":null}],\"a\":true}",
@@ -25,6 +26,9 @@
     { "name": "large_integer_float", "input_json": "1e20", "reject": "UNSAFE_INTEGER" },
     { "name": "nan", "runtime_number": "NaN", "reject": "NON_FINITE" },
     { "name": "positive_infinity", "runtime_number": "Infinity", "reject": "NON_FINITE" },
-    { "name": "negative_infinity", "runtime_number": "-Infinity", "reject": "NON_FINITE" }
+    { "name": "negative_infinity", "runtime_number": "-Infinity", "reject": "NON_FINITE" },
+    { "name": "lone_high_surrogate_value", "input_json": "\"\\ud800\"", "reject": "UNPAIRED_SURROGATE" },
+    { "name": "lone_low_surrogate_value", "input_json": "\"\\udc00\"", "reject": "UNPAIRED_SURROGATE" },
+    { "name": "lone_surrogate_object_key", "input_json": "{\"\\ud800\":1}", "reject": "UNPAIRED_SURROGATE" }
   ]
 }
