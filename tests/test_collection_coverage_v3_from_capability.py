@@ -51,7 +51,7 @@ def _coverage_json_merged(dataset_id: str) -> dict:
     return {**defaults, "policy_version": document["policy_version"], **row}
 
 
-def test_eleven_source_capability_contracts_load() -> None:
+def test_source_capability_contract_inventory_loads() -> None:
     loaded = all_source_capability_contracts()
     ids = coverage_v3_dataset_ids()
     assert ids == {contract.dataset_id for contract in loaded}
@@ -65,10 +65,12 @@ def test_eleven_source_capability_contracts_load() -> None:
         "fins_dividend",
         "fins_earnings_date",
         "fins_summary",
+        "jsda_corporate_bond_transactions",
+        "jsda_tokyo_repo_rates",
         "markets_calendar",
         _TOPIX,
     }
-    assert len(ids) == 11
+    assert len(ids) == 13
     assert len(ids) != 23
     for dataset_id in sorted(ids):
         contract = source_capability_contract_or_none(dataset_id)

@@ -40,7 +40,7 @@ def _complete_evidence(dataset_id: str) -> dict[str, str]:
     }
 
 
-def test_on_disk_v3_has_core_v1_plus_tip_and_otc_rows() -> None:
+def test_on_disk_v3_has_core_v1_tip_and_governed_jsda_rows() -> None:
     on_disk = sorted(
         path.name
         for path in specs_dir().glob("*.json")
@@ -56,7 +56,9 @@ def test_on_disk_v3_has_core_v1_plus_tip_and_otc_rows() -> None:
         "fins_earnings_date.json",
         "fins_summary.json",
         "indices_bars_daily_topix.json",
+        "jsda_corporate_bond_transactions.json",
         "jsda_otc_bond_reference_prices.json",
+        "jsda_tokyo_repo_rates.json",
         "markets_calendar.json",
     ]
     loaded = {contract.dataset_id for contract in all_source_capability_contracts()}
