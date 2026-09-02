@@ -104,6 +104,40 @@ describe("READY publication physical R2 trust boundary", () => {
     expect(bucket.put).not.toHaveBeenCalled();
   });
 
+  it("rejects a physical object not bound by the signed dependency scope", async () => {
+    const input = candidate();
+    projectionMock.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        document_digest: sha("d"),
+        issuer_key_id: "ops-projection-test",
+        envelope: {},
+        session_scope: {
+          ...readyFixture.controlled_session_scope,
+          physical_db_digest: sha("b"),
+        },
+      },
+    });
+    const bucket = {
+      head: vi.fn(),
+      get: vi.fn(),
+      put: vi.fn(),
+    } as unknown as R2Bucket;
+    const result = await publishPilotReady({
+      STRUCTURED_BUCKET: bucket,
+      READY_ED25519_PRIVATE_KEY: await signingSecret(),
+      READY_ED25519_KEY_ID: "ready-test",
+      READY_DECLARED: "false",
+    } as never, input);
+    expect(result).toMatchObject({
+      ok: false,
+      status: "REJECTED",
+      error: "signed Ops Projection physical snapshot digest mismatch",
+    });
+    expect(bucket.head).not.toHaveBeenCalled();
+    expect(bucket.put).not.toHaveBeenCalled();
+  });
+
   it("publishes the envelope at the consumer key with create-only writes", async () => {
     const input = candidate();
     const objects = new Map<string, Uint8Array>();
@@ -154,6 +188,18 @@ describe("READY publication physical R2 trust boundary", () => {
       key: controlledPhysicalSnapshotKey(sha("b")),
     };
     const publish = async (input: ReadyPublicationCandidate) => {
+      projectionMock.mockResolvedValueOnce({
+        ok: true,
+        value: {
+          document_digest: sha("d"),
+          issuer_key_id: "ops-projection-test",
+          envelope: {},
+          session_scope: {
+            ...readyFixture.controlled_session_scope,
+            physical_db_digest: input.physical.digest,
+          },
+        },
+      });
       const objects = new Map<string, Uint8Array>();
       const bucket = {
         head: vi.fn(async () => ({

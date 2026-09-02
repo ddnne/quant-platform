@@ -285,6 +285,9 @@ export async function publishPilotReady(
       ? pending(projection.error)
       : rejected(projection.error);
   }
+  if (projection.value.session_scope.physical_db_digest !== physical.digest) {
+    return rejected("signed Ops Projection physical snapshot digest mismatch");
+  }
 
   const object = await env.STRUCTURED_BUCKET.head(physical.key);
   if (!object) return rejected("READY snapshot object is missing");

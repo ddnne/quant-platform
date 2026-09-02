@@ -2,12 +2,12 @@
   "ephemeral_cleaned": true,
   "identity": "controlled_pilot_v1",
   "knowledge": {
-    "artifact_id": "sha256:52ef1648f814de7425be0478b511c935ad5b6dcefe75473ed85900f43fcbc00b",
+    "artifact_id": "sha256:cda200dca7e52119d62d729f1e3e5c680a481d1bd8741a15f492d58ee463b512",
     "artifact_type": "controlled_pilot_knowledge",
-    "authorization_digest": "sha256:11d74d64ed8a4c10e8d6fb31336e91f8840b83318969e217a903ae7a726c0eeb",
+    "authorization_digest": "sha256:90cb44392444a508dd1c0e1153385899bb3639eabc12c4c8ff5a834dd65cf901",
     "automatic_promotion": false,
     "dependency_closure_digest": "sha256:dbda1ed2c7c0bf942817f19b3668163710afceedf265f436114e50b80a7e8cb0",
-    "digest": "sha256:52ef1648f814de7425be0478b511c935ad5b6dcefe75473ed85900f43fcbc00b",
+    "digest": "sha256:cda200dca7e52119d62d729f1e3e5c680a481d1bd8741a15f492d58ee463b512",
     "exact_four_binding_digest": "sha256:68725a83bf2f7ab8cc36b394be513c4d42406022f3d19b5590c74b4e550f5640",
     "fill_contract_digest": "sha256:678985a0f7b142eeecd693ebe28bff822916bc815889f0b39e2841830377377d",
     "identity": "controlled_pilot_v1",
@@ -33,8 +33,8 @@
         "fixture-audit-4"
       ],
       "selection_decision": "HOLD",
-      "selection_semantic_digest": "sha256:13a575408c58e9718dc0d74bc447b4560a51728ac8dc92b2638af6278d098828",
-      "semantic_child_set_digest": "sha256:4bbe870172bca0b79569212fa7077abc58aaa40f736247443d890722ef76ea5a",
+      "selection_semantic_digest": "sha256:b14cfef6e7e4c734803e25aa1ed37187c049c478b564e86d52b9c768aed2bff5",
+      "semantic_child_set_digest": "sha256:9e9ea807ca884ea57fc0b656d459c1b12b7bcc5fd8860b38128464b703300df7",
       "snapshot_id": "sha256:29058b15274a0bdf21e1946a7f363843b40b7a3ed338c8548ff1c8a97ab01d1b"
     },
     "plan_set_digest": "sha256:d7c1453b0a0b1d7672bff48af751351a4a88f5baf1438e119d429b9970de91b8",
@@ -42,9 +42,9 @@
     "profile_digest": "sha256:ccad8a7ab0cf9af80cabc68a0b8a5111c064b578d211495423dae56333b8bf63",
     "schema_version": "controlled-pilot-knowledge/v1",
     "selection_decision": "HOLD",
-    "selection_semantic_digest": "sha256:13a575408c58e9718dc0d74bc447b4560a51728ac8dc92b2638af6278d098828",
-    "semantic_child_set_digest": "sha256:4bbe870172bca0b79569212fa7077abc58aaa40f736247443d890722ef76ea5a",
-    "semantic_digest": "sha256:52ef1648f814de7425be0478b511c935ad5b6dcefe75473ed85900f43fcbc00b",
+    "selection_semantic_digest": "sha256:b14cfef6e7e4c734803e25aa1ed37187c049c478b564e86d52b9c768aed2bff5",
+    "semantic_child_set_digest": "sha256:9e9ea807ca884ea57fc0b656d459c1b12b7bcc5fd8860b38128464b703300df7",
+    "semantic_digest": "sha256:cda200dca7e52119d62d729f1e3e5c680a481d1bd8741a15f492d58ee463b512",
     "snapshot_id": "sha256:29058b15274a0bdf21e1946a7f363843b40b7a3ed338c8548ff1c8a97ab01d1b",
     "snapshot_key": "research/controlled_pilot/v1/snapshots/sha256=1d673408ef5efa994659ecfe0082056807538233971523e120a01c5f79c57b5b.sqlite",
     "snapshot_size": 32
@@ -52,7 +52,7 @@
   "ok": true,
   "papers": [
     {
-      "authorization_digest": "sha256:11d74d64ed8a4c10e8d6fb31336e91f8840b83318969e217a903ae7a726c0eeb",
+      "authorization_digest": "sha256:90cb44392444a508dd1c0e1153385899bb3639eabc12c4c8ff5a834dd65cf901",
       "automatic_promotion": false,
       "dependency_closure_digest": "sha256:dbda1ed2c7c0bf942817f19b3668163710afceedf265f436114e50b80a7e8cb0",
       "exact_four_binding_digest": "sha256:68725a83bf2f7ab8cc36b394be513c4d42406022f3d19b5590c74b4e550f5640",
@@ -79,7 +79,7 @@
       "plan_set_digest": "sha256:d7c1453b0a0b1d7672bff48af751351a4a88f5baf1438e119d429b9970de91b8",
       "price_basis": "RAW",
       "profile_digest": "sha256:ccad8a7ab0cf9af80cabc68a0b8a5111c064b578d211495423dae56333b8bf63",
-      "ready_attestation_id": "ready-25fcedb81a0dde0d1a2e0e664437e4b3f7b32c10a0d1d26c89b56b40912fd0a1",
+      "ready_attestation_id": "ready-60236a12831fb1c2998ccf4c3a046a0ee2d3bb7774ff6efa53d4c31be3f4f679",
       "realized_gross_weight": 0.0,
       "reproducibility": {
         "data_snapshot_id": "sha256:29058b15274a0bdf21e1946a7f363843b40b7a3ed338c8548ff1c8a97ab01d1b",
@@ -91,7 +91,7 @@
       "requested_gross_weight": 0.0,
       "resolved_universe_digest": "sha256:d2a896a01bf1b1d203efc9a7f28b29c3e15712fa5e5f89cde4bd16ba459dfa8a",
       "run_id": "fixture-experiment-1",
-      "semantic_digest": "sha256:1ce4539b0c4e40c7971ed4314d16f8139c8dccb1d60d5e6ec8ab25c8b0e82775",
+      "semantic_digest": "sha256:d364e3038084d08bebf50c5b7d8863359c7dd099ca2314503cbd320b363036ce",
       "snapshot_id": "sha256:29058b15274a0bdf21e1946a7f363843b40b7a3ed338c8548ff1c8a97ab01d1b",
       "snapshot_key": "research/controlled_pilot/v1/snapshots/sha256=1d673408ef5efa994659ecfe0082056807538233971523e120a01c5f79c57b5b.sqlite",
       "snapshot_size": 32,
@@ -100,7 +100,7 @@
       "strategy_spec_version": "strategy-spec/v3"
     },
     {
-      "authorization_digest": "sha256:11d74d64ed8a4c10e8d6fb31336e91f8840b83318969e217a903ae7a726c0eeb",
+      "authorization_digest": "sha256:90cb44392444a508dd1c0e1153385899bb3639eabc12c4c8ff5a834dd65cf901",
       "automatic_promotion": false,
       "dependency_closure_digest": "sha256:dbda1ed2c7c0bf942817f19b3668163710afceedf265f436114e50b80a7e8cb0",
       "exact_four_binding_digest": "sha256:68725a83bf2f7ab8cc36b394be513c4d42406022f3d19b5590c74b4e550f5640",
@@ -127,7 +127,7 @@
       "plan_set_digest": "sha256:d7c1453b0a0b1d7672bff48af751351a4a88f5baf1438e119d429b9970de91b8",
       "price_basis": "RAW",
       "profile_digest": "sha256:ccad8a7ab0cf9af80cabc68a0b8a5111c064b578d211495423dae56333b8bf63",
-      "ready_attestation_id": "ready-25fcedb81a0dde0d1a2e0e664437e4b3f7b32c10a0d1d26c89b56b40912fd0a1",
+      "ready_attestation_id": "ready-60236a12831fb1c2998ccf4c3a046a0ee2d3bb7774ff6efa53d4c31be3f4f679",
       "realized_gross_weight": 0.0,
       "reproducibility": {
         "data_snapshot_id": "sha256:29058b15274a0bdf21e1946a7f363843b40b7a3ed338c8548ff1c8a97ab01d1b",
@@ -139,7 +139,7 @@
       "requested_gross_weight": 0.0,
       "resolved_universe_digest": "sha256:d2a896a01bf1b1d203efc9a7f28b29c3e15712fa5e5f89cde4bd16ba459dfa8a",
       "run_id": "fixture-experiment-2",
-      "semantic_digest": "sha256:568b65f79ca96e601317f1f76ad1808e0f923ef4d99d4abdf6ecc305e4e59dd9",
+      "semantic_digest": "sha256:79a53a99044d8582e81eee7730ef3ef1f46338fbf8862a816eee1768fbc3a068",
       "snapshot_id": "sha256:29058b15274a0bdf21e1946a7f363843b40b7a3ed338c8548ff1c8a97ab01d1b",
       "snapshot_key": "research/controlled_pilot/v1/snapshots/sha256=1d673408ef5efa994659ecfe0082056807538233971523e120a01c5f79c57b5b.sqlite",
       "snapshot_size": 32,
@@ -148,7 +148,7 @@
       "strategy_spec_version": "strategy-spec/v3"
     },
     {
-      "authorization_digest": "sha256:11d74d64ed8a4c10e8d6fb31336e91f8840b83318969e217a903ae7a726c0eeb",
+      "authorization_digest": "sha256:90cb44392444a508dd1c0e1153385899bb3639eabc12c4c8ff5a834dd65cf901",
       "automatic_promotion": false,
       "dependency_closure_digest": "sha256:dbda1ed2c7c0bf942817f19b3668163710afceedf265f436114e50b80a7e8cb0",
       "exact_four_binding_digest": "sha256:68725a83bf2f7ab8cc36b394be513c4d42406022f3d19b5590c74b4e550f5640",
@@ -175,7 +175,7 @@
       "plan_set_digest": "sha256:d7c1453b0a0b1d7672bff48af751351a4a88f5baf1438e119d429b9970de91b8",
       "price_basis": "RAW",
       "profile_digest": "sha256:ccad8a7ab0cf9af80cabc68a0b8a5111c064b578d211495423dae56333b8bf63",
-      "ready_attestation_id": "ready-25fcedb81a0dde0d1a2e0e664437e4b3f7b32c10a0d1d26c89b56b40912fd0a1",
+      "ready_attestation_id": "ready-60236a12831fb1c2998ccf4c3a046a0ee2d3bb7774ff6efa53d4c31be3f4f679",
       "realized_gross_weight": 0.0,
       "reproducibility": {
         "data_snapshot_id": "sha256:29058b15274a0bdf21e1946a7f363843b40b7a3ed338c8548ff1c8a97ab01d1b",
@@ -187,7 +187,7 @@
       "requested_gross_weight": 0.0,
       "resolved_universe_digest": "sha256:d2a896a01bf1b1d203efc9a7f28b29c3e15712fa5e5f89cde4bd16ba459dfa8a",
       "run_id": "fixture-experiment-3",
-      "semantic_digest": "sha256:cf8bd2566d18736bfd3f585f2d4c804455d9d691f685ae13768bf6c1d3e8a1c1",
+      "semantic_digest": "sha256:3b01b81fdf97fe95de0be0a39c42884f3a94b19e90945c470a7430c5b4b0ce44",
       "snapshot_id": "sha256:29058b15274a0bdf21e1946a7f363843b40b7a3ed338c8548ff1c8a97ab01d1b",
       "snapshot_key": "research/controlled_pilot/v1/snapshots/sha256=1d673408ef5efa994659ecfe0082056807538233971523e120a01c5f79c57b5b.sqlite",
       "snapshot_size": 32,
@@ -196,7 +196,7 @@
       "strategy_spec_version": "strategy-spec/v3"
     },
     {
-      "authorization_digest": "sha256:11d74d64ed8a4c10e8d6fb31336e91f8840b83318969e217a903ae7a726c0eeb",
+      "authorization_digest": "sha256:90cb44392444a508dd1c0e1153385899bb3639eabc12c4c8ff5a834dd65cf901",
       "automatic_promotion": false,
       "dependency_closure_digest": "sha256:dbda1ed2c7c0bf942817f19b3668163710afceedf265f436114e50b80a7e8cb0",
       "exact_four_binding_digest": "sha256:68725a83bf2f7ab8cc36b394be513c4d42406022f3d19b5590c74b4e550f5640",
@@ -223,7 +223,7 @@
       "plan_set_digest": "sha256:d7c1453b0a0b1d7672bff48af751351a4a88f5baf1438e119d429b9970de91b8",
       "price_basis": "RAW",
       "profile_digest": "sha256:ccad8a7ab0cf9af80cabc68a0b8a5111c064b578d211495423dae56333b8bf63",
-      "ready_attestation_id": "ready-25fcedb81a0dde0d1a2e0e664437e4b3f7b32c10a0d1d26c89b56b40912fd0a1",
+      "ready_attestation_id": "ready-60236a12831fb1c2998ccf4c3a046a0ee2d3bb7774ff6efa53d4c31be3f4f679",
       "realized_gross_weight": 0.0,
       "reproducibility": {
         "data_snapshot_id": "sha256:29058b15274a0bdf21e1946a7f363843b40b7a3ed338c8548ff1c8a97ab01d1b",
@@ -235,7 +235,7 @@
       "requested_gross_weight": 0.0,
       "resolved_universe_digest": "sha256:d2a896a01bf1b1d203efc9a7f28b29c3e15712fa5e5f89cde4bd16ba459dfa8a",
       "run_id": "fixture-experiment-4",
-      "semantic_digest": "sha256:4420099b17560e097438445bf47704d2710b25670e84064215a9b6981c6ed473",
+      "semantic_digest": "sha256:b878fe7211ee403c1b3925caa18242bb903c049bf6fb0e23641397217fc2d11e",
       "snapshot_id": "sha256:29058b15274a0bdf21e1946a7f363843b40b7a3ed338c8548ff1c8a97ab01d1b",
       "snapshot_key": "research/controlled_pilot/v1/snapshots/sha256=1d673408ef5efa994659ecfe0082056807538233971523e120a01c5f79c57b5b.sqlite",
       "snapshot_size": 32,
@@ -247,7 +247,7 @@
   "risks": [
     {
       "audit_id": "fixture-audit-1",
-      "authorization_digest": "sha256:11d74d64ed8a4c10e8d6fb31336e91f8840b83318969e217a903ae7a726c0eeb",
+      "authorization_digest": "sha256:90cb44392444a508dd1c0e1153385899bb3639eabc12c4c8ff5a834dd65cf901",
       "automatic_promotion": false,
       "checks": {
         "max_drawdown_within_limit": true,
@@ -271,14 +271,14 @@
         "num_trades": 0
       },
       "ordinal": 1,
-      "paper_semantic_digest": "sha256:1ce4539b0c4e40c7971ed4314d16f8139c8dccb1d60d5e6ec8ab25c8b0e82775",
+      "paper_semantic_digest": "sha256:d364e3038084d08bebf50c5b7d8863359c7dd099ca2314503cbd320b363036ce",
       "plan_binding_digest": "sha256:1a0831c8ad7d90d7c433ba9080e7bbd0764f274b31c6541453b493c9f0351383",
       "plan_id": "exp-mdh-hold10-momentum",
       "plan_set_digest": "sha256:d7c1453b0a0b1d7672bff48af751351a4a88f5baf1438e119d429b9970de91b8",
       "profile_digest": "sha256:ccad8a7ab0cf9af80cabc68a0b8a5111c064b578d211495423dae56333b8bf63",
-      "ready_attestation_id": "ready-25fcedb81a0dde0d1a2e0e664437e4b3f7b32c10a0d1d26c89b56b40912fd0a1",
+      "ready_attestation_id": "ready-60236a12831fb1c2998ccf4c3a046a0ee2d3bb7774ff6efa53d4c31be3f4f679",
       "run_id": "fixture-experiment-1",
-      "semantic_digest": "sha256:55b7e36850328bffa0f592f4b9aa25735c3ca369e4a4cdb44fc44495660cde3b",
+      "semantic_digest": "sha256:b80100c152768f171efeb76846a51852401821d49e068dbd3576d15c606fe1e2",
       "snapshot_id": "sha256:29058b15274a0bdf21e1946a7f363843b40b7a3ed338c8548ff1c8a97ab01d1b",
       "snapshot_key": "research/controlled_pilot/v1/snapshots/sha256=1d673408ef5efa994659ecfe0082056807538233971523e120a01c5f79c57b5b.sqlite",
       "snapshot_size": 32,
@@ -289,7 +289,7 @@
     },
     {
       "audit_id": "fixture-audit-2",
-      "authorization_digest": "sha256:11d74d64ed8a4c10e8d6fb31336e91f8840b83318969e217a903ae7a726c0eeb",
+      "authorization_digest": "sha256:90cb44392444a508dd1c0e1153385899bb3639eabc12c4c8ff5a834dd65cf901",
       "automatic_promotion": false,
       "checks": {
         "max_drawdown_within_limit": true,
@@ -313,14 +313,14 @@
         "num_trades": 0
       },
       "ordinal": 2,
-      "paper_semantic_digest": "sha256:568b65f79ca96e601317f1f76ad1808e0f923ef4d99d4abdf6ecc305e4e59dd9",
+      "paper_semantic_digest": "sha256:79a53a99044d8582e81eee7730ef3ef1f46338fbf8862a816eee1768fbc3a068",
       "plan_binding_digest": "sha256:c9d8685fc12f4be477a4f1d662f4896660f1aeef9d690c03f8c74b274fac59a9",
       "plan_id": "exp-xs-hold10-mom5",
       "plan_set_digest": "sha256:d7c1453b0a0b1d7672bff48af751351a4a88f5baf1438e119d429b9970de91b8",
       "profile_digest": "sha256:ccad8a7ab0cf9af80cabc68a0b8a5111c064b578d211495423dae56333b8bf63",
-      "ready_attestation_id": "ready-25fcedb81a0dde0d1a2e0e664437e4b3f7b32c10a0d1d26c89b56b40912fd0a1",
+      "ready_attestation_id": "ready-60236a12831fb1c2998ccf4c3a046a0ee2d3bb7774ff6efa53d4c31be3f4f679",
       "run_id": "fixture-experiment-2",
-      "semantic_digest": "sha256:073fcf449750225365d98b20b6bdb88a2abbb5ecb7761265ad72fc7f93de1bb3",
+      "semantic_digest": "sha256:87abb0b5a2d8047e3bb5349c90b373672ba6b682aa1badd5fab7f76c0f4cd75d",
       "snapshot_id": "sha256:29058b15274a0bdf21e1946a7f363843b40b7a3ed338c8548ff1c8a97ab01d1b",
       "snapshot_key": "research/controlled_pilot/v1/snapshots/sha256=1d673408ef5efa994659ecfe0082056807538233971523e120a01c5f79c57b5b.sqlite",
       "snapshot_size": 32,
@@ -331,7 +331,7 @@
     },
     {
       "audit_id": "fixture-audit-3",
-      "authorization_digest": "sha256:11d74d64ed8a4c10e8d6fb31336e91f8840b83318969e217a903ae7a726c0eeb",
+      "authorization_digest": "sha256:90cb44392444a508dd1c0e1153385899bb3639eabc12c4c8ff5a834dd65cf901",
       "automatic_promotion": false,
       "checks": {
         "max_drawdown_within_limit": true,
@@ -355,14 +355,14 @@
         "num_trades": 0
       },
       "ordinal": 3,
-      "paper_semantic_digest": "sha256:cf8bd2566d18736bfd3f585f2d4c804455d9d691f685ae13768bf6c1d3e8a1c1",
+      "paper_semantic_digest": "sha256:3b01b81fdf97fe95de0be0a39c42884f3a94b19e90945c470a7430c5b4b0ce44",
       "plan_binding_digest": "sha256:e36f333e6ec9906d8d90db8cbcdef1ee93ef4022ef82e0ec4402bc5add042f1c",
       "plan_id": "exp-event-post-hold5",
       "plan_set_digest": "sha256:d7c1453b0a0b1d7672bff48af751351a4a88f5baf1438e119d429b9970de91b8",
       "profile_digest": "sha256:ccad8a7ab0cf9af80cabc68a0b8a5111c064b578d211495423dae56333b8bf63",
-      "ready_attestation_id": "ready-25fcedb81a0dde0d1a2e0e664437e4b3f7b32c10a0d1d26c89b56b40912fd0a1",
+      "ready_attestation_id": "ready-60236a12831fb1c2998ccf4c3a046a0ee2d3bb7774ff6efa53d4c31be3f4f679",
       "run_id": "fixture-experiment-3",
-      "semantic_digest": "sha256:db74f92ee5699ff58b61682e9dad2de474333c48ed67f0e78ba56992ddf1d36f",
+      "semantic_digest": "sha256:654c6364dcf006b9fac43f7f6f036d690d01cc2efe8e03227b708c4ab6613456",
       "snapshot_id": "sha256:29058b15274a0bdf21e1946a7f363843b40b7a3ed338c8548ff1c8a97ab01d1b",
       "snapshot_key": "research/controlled_pilot/v1/snapshots/sha256=1d673408ef5efa994659ecfe0082056807538233971523e120a01c5f79c57b5b.sqlite",
       "snapshot_size": 32,
@@ -373,7 +373,7 @@
     },
     {
       "audit_id": "fixture-audit-4",
-      "authorization_digest": "sha256:11d74d64ed8a4c10e8d6fb31336e91f8840b83318969e217a903ae7a726c0eeb",
+      "authorization_digest": "sha256:90cb44392444a508dd1c0e1153385899bb3639eabc12c4c8ff5a834dd65cf901",
       "automatic_promotion": false,
       "checks": {
         "max_drawdown_within_limit": true,
@@ -397,14 +397,14 @@
         "num_trades": 0
       },
       "ordinal": 4,
-      "paper_semantic_digest": "sha256:4420099b17560e097438445bf47704d2710b25670e84064215a9b6981c6ed473",
+      "paper_semantic_digest": "sha256:b878fe7211ee403c1b3925caa18242bb903c049bf6fb0e23641397217fc2d11e",
       "plan_binding_digest": "sha256:df389155b45d522d4666568973c39e22df7bede55dcf8abc2a576aa99014e5f8",
       "plan_id": "exp-fund-hold10-value-mom",
       "plan_set_digest": "sha256:d7c1453b0a0b1d7672bff48af751351a4a88f5baf1438e119d429b9970de91b8",
       "profile_digest": "sha256:ccad8a7ab0cf9af80cabc68a0b8a5111c064b578d211495423dae56333b8bf63",
-      "ready_attestation_id": "ready-25fcedb81a0dde0d1a2e0e664437e4b3f7b32c10a0d1d26c89b56b40912fd0a1",
+      "ready_attestation_id": "ready-60236a12831fb1c2998ccf4c3a046a0ee2d3bb7774ff6efa53d4c31be3f4f679",
       "run_id": "fixture-experiment-4",
-      "semantic_digest": "sha256:0fbef45ac832f875bab9eb44e2105c99fe30b03ef1a8d7527ea46cb558055b15",
+      "semantic_digest": "sha256:b300891a6ac758c843fad9802700c7861a64c550e9ca02cda14411e57213fa31",
       "snapshot_id": "sha256:29058b15274a0bdf21e1946a7f363843b40b7a3ed338c8548ff1c8a97ab01d1b",
       "snapshot_key": "research/controlled_pilot/v1/snapshots/sha256=1d673408ef5efa994659ecfe0082056807538233971523e120a01c5f79c57b5b.sqlite",
       "snapshot_size": 32,
@@ -415,7 +415,7 @@
     }
   ],
   "selection": {
-    "authorization_digest": "sha256:11d74d64ed8a4c10e8d6fb31336e91f8840b83318969e217a903ae7a726c0eeb",
+    "authorization_digest": "sha256:90cb44392444a508dd1c0e1153385899bb3639eabc12c4c8ff5a834dd65cf901",
     "automatic_promotion": false,
     "decision": "HOLD",
     "decisions": [
@@ -469,21 +469,21 @@
     "live_orders_enabled": false,
     "mass": false,
     "paper_semantic_digests": [
-      "sha256:1ce4539b0c4e40c7971ed4314d16f8139c8dccb1d60d5e6ec8ab25c8b0e82775",
-      "sha256:568b65f79ca96e601317f1f76ad1808e0f923ef4d99d4abdf6ecc305e4e59dd9",
-      "sha256:cf8bd2566d18736bfd3f585f2d4c804455d9d691f685ae13768bf6c1d3e8a1c1",
-      "sha256:4420099b17560e097438445bf47704d2710b25670e84064215a9b6981c6ed473"
+      "sha256:d364e3038084d08bebf50c5b7d8863359c7dd099ca2314503cbd320b363036ce",
+      "sha256:79a53a99044d8582e81eee7730ef3ef1f46338fbf8862a816eee1768fbc3a068",
+      "sha256:3b01b81fdf97fe95de0be0a39c42884f3a94b19e90945c470a7430c5b4b0ce44",
+      "sha256:b878fe7211ee403c1b3925caa18242bb903c049bf6fb0e23641397217fc2d11e"
     ],
     "plan_set_digest": "sha256:d7c1453b0a0b1d7672bff48af751351a4a88f5baf1438e119d429b9970de91b8",
     "profile_digest": "sha256:ccad8a7ab0cf9af80cabc68a0b8a5111c064b578d211495423dae56333b8bf63",
-    "ready_attestation_id": "ready-25fcedb81a0dde0d1a2e0e664437e4b3f7b32c10a0d1d26c89b56b40912fd0a1",
+    "ready_attestation_id": "ready-60236a12831fb1c2998ccf4c3a046a0ee2d3bb7774ff6efa53d4c31be3f4f679",
     "rejected": [],
     "resolved_universe_digest": "sha256:d2a896a01bf1b1d203efc9a7f28b29c3e15712fa5e5f89cde4bd16ba459dfa8a",
     "risk_semantic_digests": [
-      "sha256:55b7e36850328bffa0f592f4b9aa25735c3ca369e4a4cdb44fc44495660cde3b",
-      "sha256:073fcf449750225365d98b20b6bdb88a2abbb5ecb7761265ad72fc7f93de1bb3",
-      "sha256:db74f92ee5699ff58b61682e9dad2de474333c48ed67f0e78ba56992ddf1d36f",
-      "sha256:0fbef45ac832f875bab9eb44e2105c99fe30b03ef1a8d7527ea46cb558055b15"
+      "sha256:b80100c152768f171efeb76846a51852401821d49e068dbd3576d15c606fe1e2",
+      "sha256:87abb0b5a2d8047e3bb5349c90b373672ba6b682aa1badd5fab7f76c0f4cd75d",
+      "sha256:654c6364dcf006b9fac43f7f6f036d690d01cc2efe8e03227b708c4ab6613456",
+      "sha256:b300891a6ac758c843fad9802700c7861a64c550e9ca02cda14411e57213fa31"
     ],
     "rule": "deterministic_hold_pending_human_approval",
     "selected": [
@@ -492,8 +492,8 @@
       "exp-event-post-hold5",
       "exp-fund-hold10-value-mom"
     ],
-    "semantic_child_set_digest": "sha256:4bbe870172bca0b79569212fa7077abc58aaa40f736247443d890722ef76ea5a",
-    "semantic_digest": "sha256:13a575408c58e9718dc0d74bc447b4560a51728ac8dc92b2638af6278d098828",
+    "semantic_child_set_digest": "sha256:9e9ea807ca884ea57fc0b656d459c1b12b7bcc5fd8860b38128464b703300df7",
+    "semantic_digest": "sha256:b14cfef6e7e4c734803e25aa1ed37187c049c478b564e86d52b9c768aed2bff5",
     "snapshot_id": "sha256:29058b15274a0bdf21e1946a7f363843b40b7a3ed338c8548ff1c8a97ab01d1b",
     "snapshot_key": "research/controlled_pilot/v1/snapshots/sha256=1d673408ef5efa994659ecfe0082056807538233971523e120a01c5f79c57b5b.sqlite",
     "snapshot_size": 32

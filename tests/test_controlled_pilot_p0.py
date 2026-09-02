@@ -957,7 +957,14 @@ def _verified_session_scope_from_db(path) -> dict:
         conn.execute("SELECT observed_through FROM snapshot_observation_clock").fetchone()[0]
     )
     entries = []
-    for dataset_id in ("equities_bars_daily", "equities_bars_daily_am"):
+    for dataset_id in (
+        "equities_bars_daily",
+        "equities_bars_daily_am",
+        "equities_master",
+        "fins_summary",
+        "indices_bars_daily_topix",
+        "markets_calendar",
+    ):
         products = conn.execute(
             "SELECT artifact_body FROM receipt_product_materializations WHERE dataset=?",
             (dataset_id,),
@@ -984,6 +991,7 @@ def _verified_session_scope_from_db(path) -> dict:
     return {
         "format": "controlled-session-scope/v1",
         "dependency_scope_proof_digest": "sha256:" + ("44" * 32),
+        "physical_db_digest": _file_digest(path),
         "observed_through": observed,
         "entries": entries,
     }
@@ -1042,6 +1050,7 @@ def _verified_worker_scope_from_db(path):
     )
     conn.commit()
     conn.close()
+    session_scope["physical_db_digest"] = _file_digest(path)
     return _session_scope_from_verified_worker_job(
         session_scope=session_scope,
         ready_manifest_digest=ready_digest,
@@ -1367,6 +1376,121 @@ def test_controlled_open_rejects_symlink_and_wal_sidecar(tmp_path) -> None:
         )
 
 
+def test_controlled_open_rejects_fins_tamper_with_manifest_and_prices_unchanged(
+    tmp_path,
+) -> None:
+    import sqlite3
+
+    from _coreseed import seed_governed_am_pm_session_db
+    from ops.receipt_product import (
+        canonical_product_artifact_bytes,
+        product_artifact_digest,
+    )
+    from pit.errors import SnapshotObservationClockError
+    from pit.governed_am_view import (
+        _open_verified_controlled_snapshot,
+        _session_scope_from_verified_worker_job,
+    )
+
+    source = seed_governed_am_pm_session_db(tmp_path)
+    verified_scope = _verified_worker_scope_from_db(source)
+    signed_session_scope = _verified_session_scope_from_db(source)
+    assert [entry["dataset_id"] for entry in signed_session_scope["entries"]] == [
+        "equities_bars_daily",
+        "equities_bars_daily_am",
+        "equities_master",
+        "fins_summary",
+        "indices_bars_daily_topix",
+        "markets_calendar",
+    ]
+
+    conn = sqlite3.connect(source)
+    conn.row_factory = sqlite3.Row
+    manifest_before = str(
+        conn.execute("SELECT manifest_json FROM local_snapshot_manifests").fetchone()[0]
+    )
+    prices_before = conn.execute(
+        "SELECT dataset, artifact_digest, artifact_body "
+        "FROM receipt_product_materializations "
+        "WHERE dataset IN ('equities_bars_daily','equities_bars_daily_am') "
+        "ORDER BY dataset"
+    ).fetchall()
+    materialization = conn.execute(
+        "SELECT artifact_body FROM receipt_product_materializations "
+        "WHERE dataset='fins_summary'"
+    ).fetchone()
+    product_rows = [
+        json.loads(line)
+        for line in str(materialization["artifact_body"]).splitlines()
+        if line
+    ]
+    changed = product_rows[0]
+    payload = json.loads(changed["payload"])
+    payload["NetSales"] = 123_456
+    changed["payload"] = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    artifact_body = canonical_product_artifact_bytes(product_rows).decode("utf-8")
+    artifact_digest = product_artifact_digest(product_rows)
+    conn.execute(
+        "UPDATE jquants_records SET payload=? "
+        "WHERE source=? AND dataset=? AND natural_key=?",
+        (
+            changed["payload"],
+            changed["source"],
+            changed["dataset"],
+            changed["natural_key"],
+        ),
+    )
+    conn.execute(
+        "UPDATE receipt_product_materializations "
+        "SET artifact_digest=?, artifact_body=? WHERE dataset='fins_summary'",
+        (artifact_digest, artifact_body),
+    )
+    conn.commit()
+    assert str(
+        conn.execute("SELECT manifest_json FROM local_snapshot_manifests").fetchone()[0]
+    ) == manifest_before
+    assert conn.execute(
+        "SELECT dataset, artifact_digest, artifact_body "
+        "FROM receipt_product_materializations "
+        "WHERE dataset IN ('equities_bars_daily','equities_bars_daily_am') "
+        "ORDER BY dataset"
+    ).fetchall() == prices_before
+    conn.close()
+
+    changed_physical_digest = _file_digest(source)
+    with pytest.raises(
+        SnapshotObservationClockError,
+        match="physical snapshot digest does not match signed PIT dependency scope",
+    ):
+        _open_verified_controlled_snapshot(
+            pinned_path=source,
+            verified_physical_digest=changed_physical_digest,
+            verified_session_scope=verified_scope,
+        )
+
+    # Exercise the execution-side six-dataset seal independently of the
+    # authority digest check: even a Worker capability for these physical
+    # bytes cannot retain the old signed fins_summary product closure.
+    signed_session_scope["physical_db_digest"] = changed_physical_digest
+    execution_scope = _session_scope_from_verified_worker_job(
+        session_scope=signed_session_scope,
+        ready_manifest_digest=verified_scope.ready_manifest_digest,
+        signed_projection_document_digest=(
+            verified_scope.signed_projection_document_digest
+        ),
+        profile_digest=verified_scope.profile_digest,
+    )
+    with pytest.raises(
+        SnapshotObservationClockError,
+        match="fins_summary product digest set does not match signed PIT dependency scope",
+    ):
+        _open_verified_controlled_snapshot(
+            pinned_path=source,
+            verified_physical_digest=changed_physical_digest,
+            verified_session_scope=execution_scope,
+        )
+
+
 def test_engine_exception_releases_binding_and_handle_is_one_shot(tmp_path) -> None:
     from _coreseed import TRADING_DAYS, seed_governed_am_pm_session_db
     from core import RAW, run_backtest, standard_cost
@@ -1483,7 +1607,7 @@ def test_controlled_batch_uses_one_pinned_connection_for_identity_universe_and_f
             )
         )
     conn.executemany(
-        "INSERT INTO jquants_records "
+        "INSERT OR REPLACE INTO jquants_records "
         "(source,dataset,natural_key,event_time,available_at,ingested_at,payload,raw_payload) "
         "VALUES (?,?,?,?,?,?,?,?)",
         rows,

@@ -107,6 +107,7 @@ const SCOPE_FIELDS = new Set([
   "period_start",
   "period_end",
   "lookback_trading_days",
+  "physical_db_digest",
   "entries",
   "product_materialization_digest",
   "proof_digest",
@@ -125,7 +126,7 @@ const SCOPE_ENTRY_FIELDS = new Set([
 export type ProjectionEnvironment = "production" | "staging";
 
 export type ControlledSessionScopeEntry = {
-  dataset_id: "equities_bars_daily" | "equities_bars_daily_am";
+  dataset_id: string;
   natural_key_count: number;
   natural_key_digest: string;
   product_artifact_digests: string[];
@@ -135,8 +136,9 @@ export type ControlledSessionScopeEntry = {
 export type ControlledSessionScope = {
   format: "controlled-session-scope/v1";
   dependency_scope_proof_digest: string;
+  physical_db_digest: string;
   observed_through: string;
-  entries: [ControlledSessionScopeEntry, ControlledSessionScopeEntry];
+  entries: ControlledSessionScopeEntry[];
 };
 
 export type VerifiedOpsProjectionReady = {
@@ -418,6 +420,7 @@ async function verifyDependencyScope(
       scope.universe_rule_digest !== manifest.universe_rule_digest ||
       scope.resolved_universe_digest !== manifest.resolved_universe_digest ||
       !isSha256(scope.product_materialization_digest) || !isSha256(scope.proof_digest) ||
+      !isSha256(scope.physical_db_digest) ||
       !Array.isArray(scope.universe_daily_summary) || !Array.isArray(scope.entries) ||
       !Number.isSafeInteger(scope.lookback_trading_days) || Number(scope.lookback_trading_days) < 0 ||
       typeof scope.period_start !== "string" || typeof scope.period_end !== "string") {
@@ -446,7 +449,7 @@ async function verifyDependencyScope(
         (await sha256Digest(canonicalJson(receipts))) !== entry.receipt_set_digest ||
         (await sha256Digest(canonicalJson(products))) !== entry.product_artifact_set_digest) return null;
   }
-  const selected = ["equities_bars_daily", "equities_bars_daily_am"].map((datasetId) => {
+  const selected = EXACT_FOUR_DATASET_IDS.map((datasetId) => {
     const entry = entries.find((item) => item.dataset_id === datasetId)!;
     return {
       dataset_id: datasetId,
@@ -455,13 +458,14 @@ async function verifyDependencyScope(
       product_artifact_digests: [...(entry.product_artifact_digests as string[])],
       product_artifact_set_digest: String(entry.product_artifact_set_digest),
     } as ControlledSessionScopeEntry;
-  }) as [ControlledSessionScopeEntry, ControlledSessionScopeEntry];
+  });
   const observedThrough = manifest.observed_through;
   const observedMs = typeof observedThrough === "string" ? Date.parse(observedThrough) : Number.NaN;
   if (!Number.isFinite(observedMs)) return null;
   return {
     format: "controlled-session-scope/v1",
     dependency_scope_proof_digest: String(scope.proof_digest),
+    physical_db_digest: String(scope.physical_db_digest),
     observed_through: String(observedThrough),
     entries: selected,
   };

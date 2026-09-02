@@ -1,9 +1,9 @@
 {
   "attestation": {
     "applied_cursor": "g1",
-    "attestation_id": "ready-25fcedb81a0dde0d1a2e0e664437e4b3f7b32c10a0d1d26c89b56b40912fd0a1",
+    "attestation_id": "ready-60236a12831fb1c2998ccf4c3a046a0ee2d3bb7774ff6efa53d4c31be3f4f679",
     "authority_instance_id": "ready-authority/staging/v1",
-    "authority_resource_digest": "sha256:25fcedb81a0dde0d1a2e0e664437e4b3f7b32c10a0d1d26c89b56b40912fd0a1",
+    "authority_resource_digest": "sha256:60236a12831fb1c2998ccf4c3a046a0ee2d3bb7774ff6efa53d4c31be3f4f679",
     "b0_quality_proof_digest": "sha256:bfe658c95e53b8f8591abe088d5e13c4da2eb00b3ea537ae9c1cf4a683f5cb85",
     "b4_quality_proof_digest": "sha256:bfe658c95e53b8f8591abe088d5e13c4da2eb00b3ea537ae9c1cf4a683f5cb85",
     "coverage_policy_digest": "sha256:9e5d8d7c5d668c2b6eb5bf10650f869d876c7d37f8ddf3c08fa3381595df09aa",
@@ -19,7 +19,7 @@
     ],
     "dependency_closure_digest": "sha256:dbda1ed2c7c0bf942817f19b3668163710afceedf265f436114e50b80a7e8cb0",
     "environment": "staging",
-    "evidence_digest": "sha256:95d77068034462fef5b650571252485b73cf60a3c8dc7324c91d517a406dc349",
+    "evidence_digest": "sha256:669fa5a20ea8be86e6d01f69b928a433a1a95f0603846b3adb0ab147a84e80f6",
     "expires_at": "2026-09-02T13:00:00+00:00",
     "export_cursor": "g1",
     "fill_contract_digest": "sha256:678985a0f7b142eeecd693ebe28bff822916bc815889f0b39e2841830377377d",
@@ -41,11 +41,11 @@
     "profile_version": "research-data-profile-set/v1",
     "raw_proof_digest": "sha256:bfe658c95e53b8f8591abe088d5e13c4da2eb00b3ea537ae9c1cf4a683f5cb85",
     "readiness_scope": "PILOT",
-    "ready_manifest_digest": "sha256:272f7acd0af21968a128485b6a1baf638553456ce3e89e00fc67671d99cd38c4",
+    "ready_manifest_digest": "sha256:be03cfc696085feb0a3518babd52b1ed6437f47cdece76cc8947d200aaf61074",
     "ready_state": "READY",
     "receipt_proof_digest": "sha256:bfe658c95e53b8f8591abe088d5e13c4da2eb00b3ea537ae9c1cf4a683f5cb85",
     "resolved_universe_digest": "sha256:d2a896a01bf1b1d203efc9a7f28b29c3e15712fa5e5f89cde4bd16ba459dfa8a",
-    "signature": "ed25519:RpjsWAezIldZ5twJGB5P0qWp/AyqNO/aG784QLKXQiD2yOgbgUT+hJxvIZX7IYiCz/WhtMcEijNUzysAQsrCDw==",
+    "signature": "ed25519:vwygENIAG3t6USzpJHDaOntuJcnG0qDdvrDkG7bGkQ8e/t6rVyNhCgA7QGfV6q2FlRMFD/x47Izaw7g3zR0PDg==",
     "signed_projection_document_digest": "sha256:de9192fbbc81958e8ce7cabf476a1cc99d58339867c0c3871f446d24b18fff9a",
     "snapshot_id": "sha256:29058b15274a0bdf21e1946a7f363843b40b7a3ed338c8548ff1c8a97ab01d1b",
     "source_generation": "g1",
@@ -54,7 +54,7 @@
     "verified_at": "2026-09-02T12:00:00+00:00"
   },
   "controlled_session_scope": {
-    "dependency_scope_proof_digest": "sha256:7b894cab4e4d3f04f2cd05b69821e099eb892f4073e6da0631f9472a95267082",
+    "dependency_scope_proof_digest": "sha256:5d3a3c31b5849e710b0f25af5d1e3c98a0ff9b405749fe1dbdc8080c02820a76",
     "entries": [
       {
         "dataset_id": "equities_bars_daily",
@@ -73,10 +73,47 @@
           "sha256:bfe658c95e53b8f8591abe088d5e13c4da2eb00b3ea537ae9c1cf4a683f5cb85"
         ],
         "product_artifact_set_digest": "sha256:bc3917a67b240cb4ccd75f649f7bdbd3b1caf574d3f9549a8b3a865703ff7301"
+      },
+      {
+        "dataset_id": "equities_master",
+        "natural_key_count": 1,
+        "natural_key_digest": "sha256:bfe658c95e53b8f8591abe088d5e13c4da2eb00b3ea537ae9c1cf4a683f5cb85",
+        "product_artifact_digests": [
+          "sha256:bfe658c95e53b8f8591abe088d5e13c4da2eb00b3ea537ae9c1cf4a683f5cb85"
+        ],
+        "product_artifact_set_digest": "sha256:bc3917a67b240cb4ccd75f649f7bdbd3b1caf574d3f9549a8b3a865703ff7301"
+      },
+      {
+        "dataset_id": "fins_summary",
+        "natural_key_count": 1,
+        "natural_key_digest": "sha256:bfe658c95e53b8f8591abe088d5e13c4da2eb00b3ea537ae9c1cf4a683f5cb85",
+        "product_artifact_digests": [
+          "sha256:bfe658c95e53b8f8591abe088d5e13c4da2eb00b3ea537ae9c1cf4a683f5cb85"
+        ],
+        "product_artifact_set_digest": "sha256:bc3917a67b240cb4ccd75f649f7bdbd3b1caf574d3f9549a8b3a865703ff7301"
+      },
+      {
+        "dataset_id": "indices_bars_daily_topix",
+        "natural_key_count": 1,
+        "natural_key_digest": "sha256:bfe658c95e53b8f8591abe088d5e13c4da2eb00b3ea537ae9c1cf4a683f5cb85",
+        "product_artifact_digests": [
+          "sha256:bfe658c95e53b8f8591abe088d5e13c4da2eb00b3ea537ae9c1cf4a683f5cb85"
+        ],
+        "product_artifact_set_digest": "sha256:bc3917a67b240cb4ccd75f649f7bdbd3b1caf574d3f9549a8b3a865703ff7301"
+      },
+      {
+        "dataset_id": "markets_calendar",
+        "natural_key_count": 1,
+        "natural_key_digest": "sha256:bfe658c95e53b8f8591abe088d5e13c4da2eb00b3ea537ae9c1cf4a683f5cb85",
+        "product_artifact_digests": [
+          "sha256:bfe658c95e53b8f8591abe088d5e13c4da2eb00b3ea537ae9c1cf4a683f5cb85"
+        ],
+        "product_artifact_set_digest": "sha256:bc3917a67b240cb4ccd75f649f7bdbd3b1caf574d3f9549a8b3a865703ff7301"
       }
     ],
     "format": "controlled-session-scope/v1",
-    "observed_through": "2026-09-02T21:00:00+09:00"
+    "observed_through": "2026-09-02T21:00:00+09:00",
+    "physical_db_digest": "sha256:1d673408ef5efa994659ecfe0082056807538233971523e120a01c5f79c57b5b"
   },
   "dependency_scope_evidence": {
     "dependency_closure_digest": "sha256:dbda1ed2c7c0bf942817f19b3668163710afceedf265f436114e50b80a7e8cb0",
@@ -164,10 +201,11 @@
     "lookback_trading_days": 1,
     "period_end": "2023-10-13",
     "period_start": "2023-01-04",
+    "physical_db_digest": "sha256:1d673408ef5efa994659ecfe0082056807538233971523e120a01c5f79c57b5b",
     "plan_set_digest": "sha256:d7c1453b0a0b1d7672bff48af751351a4a88f5baf1438e119d429b9970de91b8",
     "product_materialization_digest": "sha256:9173d420ed224b3509e5c3383656f4b12169a863f06bf77907edbf99e6a71405",
     "profile_digest": "sha256:ccad8a7ab0cf9af80cabc68a0b8a5111c064b578d211495423dae56333b8bf63",
-    "proof_digest": "sha256:7b894cab4e4d3f04f2cd05b69821e099eb892f4073e6da0631f9472a95267082",
+    "proof_digest": "sha256:5d3a3c31b5849e710b0f25af5d1e3c98a0ff9b405749fe1dbdc8080c02820a76",
     "resolved_universe_digest": "sha256:d2a896a01bf1b1d203efc9a7f28b29c3e15712fa5e5f89cde4bd16ba459dfa8a",
     "status": "PASS",
     "universe_daily_summary": [],
@@ -206,10 +244,10 @@
     "fill_contract_digest": "sha256:678985a0f7b142eeecd693ebe28bff822916bc815889f0b39e2841830377377d",
     "format": "ready-manifest/v1",
     "identity": "controlled_pilot_v1",
-    "manifest_digest": "sha256:272f7acd0af21968a128485b6a1baf638553456ce3e89e00fc67671d99cd38c4",
+    "manifest_digest": "sha256:be03cfc696085feb0a3518babd52b1ed6437f47cdece76cc8947d200aaf61074",
     "observed_through": "2026-09-02T21:00:00+09:00",
     "pit_contract_digests": {
-      "dependency_scope": "sha256:7b894cab4e4d3f04f2cd05b69821e099eb892f4073e6da0631f9472a95267082",
+      "dependency_scope": "sha256:5d3a3c31b5849e710b0f25af5d1e3c98a0ff9b405749fe1dbdc8080c02820a76",
       "pit_api": "sha256:bfe658c95e53b8f8591abe088d5e13c4da2eb00b3ea537ae9c1cf4a683f5cb85"
     },
     "plan_ids": [

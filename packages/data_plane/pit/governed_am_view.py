@@ -34,6 +34,14 @@ from .query import (
 
 GOVERNED_AM_DATASET_ID = "equities_bars_daily_am"
 GOVERNED_DAILY_DATASET_ID = "equities_bars_daily"
+CONTROLLED_SESSION_DATASET_IDS = (
+    GOVERNED_DAILY_DATASET_ID,
+    GOVERNED_AM_DATASET_ID,
+    "equities_master",
+    "fins_summary",
+    "indices_bars_daily_topix",
+    "markets_calendar",
+)
 _MORNING_CLOSE_SUFFIX = "T11:30:00+09:00"
 _OPERATIONAL_USABLE_BY_SUFFIX = "T12:30:00+09:00"
 _GOVERNED_AM_VIEW_TOKEN = object()
@@ -434,7 +442,7 @@ def _verified_session_scope_fields(source: Any) -> dict[str, dict[str, Any]]:
                 "verified session product binding is missing from the Worker job"
             )
         result: dict[str, dict[str, Any]] = {}
-        for dataset_id in (GOVERNED_DAILY_DATASET_ID, GOVERNED_AM_DATASET_ID):
+        for dataset_id in CONTROLLED_SESSION_DATASET_IDS:
             matching = [
                 entry
                 for entry in entries
@@ -470,6 +478,7 @@ class _VerifiedControlledSessionScope:
     signed_projection_document_digest: str
     profile_digest: str
     dependency_scope_proof_digest: str
+    physical_db_digest: str
     observed_through: str
     entries: Mapping[str, Mapping[str, Any]]
 
@@ -495,6 +504,7 @@ def _session_scope_from_verified_worker_job(
     if not isinstance(session_scope, Mapping) or set(session_scope) != {
         "format",
         "dependency_scope_proof_digest",
+        "physical_db_digest",
         "observed_through",
         "entries",
     }:
@@ -506,6 +516,7 @@ def _session_scope_from_verified_worker_job(
         (signed_projection_document_digest, "signed projection"),
         (profile_digest, "profile"),
         (session_scope.get("dependency_scope_proof_digest"), "dependency scope"),
+        (session_scope.get("physical_db_digest"), "physical snapshot"),
     ):
         if type(value) is not str or len(value) != 71 or not value.startswith("sha256:"):
             raise SnapshotObservationClockError(f"{name} digest is invalid")
@@ -515,10 +526,11 @@ def _session_scope_from_verified_worker_job(
     bindings = _verified_session_scope_fields(session_scope)
     raw_entries = session_scope.get("entries")
     assert isinstance(raw_entries, list)
-    if [str(entry.get("dataset_id") or "") for entry in raw_entries if isinstance(entry, Mapping)] != [
-        GOVERNED_DAILY_DATASET_ID,
-        GOVERNED_AM_DATASET_ID,
-    ]:
+    if [
+        str(entry.get("dataset_id") or "")
+        for entry in raw_entries
+        if isinstance(entry, Mapping)
+    ] != list(CONTROLLED_SESSION_DATASET_IDS):
         raise SnapshotObservationClockError("controlled session datasets are reordered")
     for entry in raw_entries:
         if not isinstance(entry, Mapping) or set(entry) != {
@@ -542,6 +554,7 @@ def _session_scope_from_verified_worker_job(
         signed_projection_document_digest=str(signed_projection_document_digest),
         profile_digest=str(profile_digest),
         dependency_scope_proof_digest=str(session_scope["dependency_scope_proof_digest"]),
+        physical_db_digest=str(session_scope["physical_db_digest"]),
         observed_through=observed,
         entries=MappingProxyType(
             {key: MappingProxyType(dict(value)) for key, value in bindings.items()}
@@ -1110,6 +1123,10 @@ def _open_verified_controlled_snapshot(
         "sha256:"
     ):
         raise SnapshotObservationClockError("physical snapshot digest is missing")
+    if verified_session_scope.physical_db_digest != verified_physical_digest:
+        raise SnapshotObservationClockError(
+            "physical snapshot digest does not match signed PIT dependency scope"
+        )
     expected_clock = verified_session_scope.observed_through
     path = resolve_db_path(pinned_path)
     if path.is_symlink() or not path.is_file():
@@ -1135,7 +1152,7 @@ def _open_verified_controlled_snapshot(
             )
         _reconcile_embedded_ready_manifest(conn, verified_session_scope)
         sealed_by_dataset: dict[str, set[tuple[str, ...]]] = {}
-        for dataset_id in (GOVERNED_DAILY_DATASET_ID, GOVERNED_AM_DATASET_ID):
+        for dataset_id in CONTROLLED_SESSION_DATASET_IDS:
             binding = verified_session_scope.entries[dataset_id]
             sealed, product_rows, artifact_digests = _load_sealed_products(
                 conn, dataset_id=dataset_id

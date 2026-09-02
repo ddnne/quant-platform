@@ -18,9 +18,9 @@
   "policy_digest": "sha256:60fc8438f7dd4914c9fec99ae53476b9a514a80d0411b7ab07dc7e9963d5f319",
   "profile_digest": "sha256:ccad8a7ab0cf9af80cabc68a0b8a5111c064b578d211495423dae56333b8bf63",
   "purpose": "controlled_trader_authorization_verification",
-  "ready_attestation_id": "ready-25fcedb81a0dde0d1a2e0e664437e4b3f7b32c10a0d1d26c89b56b40912fd0a1",
-  "ready_manifest_digest": "sha256:272f7acd0af21968a128485b6a1baf638553456ce3e89e00fc67671d99cd38c4",
-  "request_digest": "sha256:145391bb4256789548162dbda97d9d531a9bdab82e5492b3419ae7fe67d15e2e",
+  "ready_attestation_id": "ready-60236a12831fb1c2998ccf4c3a046a0ee2d3bb7774ff6efa53d4c31be3f4f679",
+  "ready_manifest_digest": "sha256:be03cfc696085feb0a3518babd52b1ed6437f47cdece76cc8947d200aaf61074",
+  "request_digest": "sha256:4ab48425c33c02ed7928a491a9f7e5e7a65b910029d35a0926c77ce798ddc4ee",
   "resolved_universe_digest": "sha256:d2a896a01bf1b1d203efc9a7f28b29c3e15712fa5e5f89cde4bd16ba459dfa8a",
   "rows": [
     {
@@ -57,7 +57,7 @@
     }
   ],
   "schema_version": 2,
-  "signature": "ed25519:qfz2Ob1+Ul6j0ttnLG4lb+vRxOvK7FZdL14nDJOavABtRmiin5BwPWGN9Qzd92tfXBy/1qES7D3d3Ia8l/pLAQ==",
+  "signature": "ed25519:SwzaABjqFWHctJi7VjEhVgzTCGrWXO2Z5YI6+NfMgHHyPmELyuIQwdWRtm7fXai8rXgxRYMh1ss4fIA/+QIuAA==",
   "snapshot_id": "sha256:29058b15274a0bdf21e1946a7f363843b40b7a3ed338c8548ff1c8a97ab01d1b",
   "snapshot_key": "research/controlled_pilot/v1/snapshots/sha256=1d673408ef5efa994659ecfe0082056807538233971523e120a01c5f79c57b5b.sqlite",
   "snapshot_size": 32

@@ -360,9 +360,98 @@ def seed_governed_am_pm_session_db(
                 }
             )
     store.upsert("jquants_records", daily_catalog)
+    closure_catalog: list[dict] = []
+    first = days[0]
+    master_event = f"{first}T08:00:00+09:00"
+    for code in codes:
+        master_payload = {
+            "Code": code,
+            "Date": first,
+            "MarketCode": "0111",
+            "ScaleCategory": "TOPIX Core30",
+        }
+        closure_catalog.append(
+            {
+                "source": "jquants",
+                "dataset": "equities_master",
+                "natural_key": natural_key(master_payload, "equities_master"),
+                "event_time": master_event,
+                "available_at": master_event,
+                "ingested_at": master_event,
+                "payload": json.dumps(
+                    master_payload, sort_keys=True, separators=(",", ":")
+                ),
+                "raw_payload": "",
+            }
+        )
+        fins_payload = {
+            "Code": code,
+            "DiscDate": first,
+            "DiscTime": "08:00:00",
+            "DiscNo": f"fixture-{code}",
+        }
+        closure_catalog.append(
+            {
+                "source": "jquants",
+                "dataset": "fins_summary",
+                "natural_key": natural_key(fins_payload, "fins_summary"),
+                "event_time": master_event,
+                "available_at": master_event,
+                "ingested_at": master_event,
+                "payload": json.dumps(
+                    fins_payload, sort_keys=True, separators=(",", ":")
+                ),
+                "raw_payload": "",
+            }
+        )
+    for day in days:
+        topix_payload = {
+            "Date": day,
+            "O": 1000.0,
+            "H": 1000.0,
+            "L": 1000.0,
+            "C": 1000.0,
+        }
+        closure_catalog.append(
+            {
+                "source": "jquants",
+                "dataset": "indices_bars_daily_topix",
+                "natural_key": natural_key(
+                    topix_payload, "indices_bars_daily_topix"
+                ),
+                "event_time": close_iso(day),
+                "available_at": close_iso(day),
+                "ingested_at": close_iso(day),
+                "payload": json.dumps(
+                    topix_payload, sort_keys=True, separators=(",", ":")
+                ),
+                "raw_payload": "",
+            }
+        )
+        calendar_payload = {"Date": day, "HolidayDivision": "1"}
+        calendar_event = f"{day}T00:00:00+09:00"
+        closure_catalog.append(
+            {
+                "source": "jquants",
+                "dataset": "markets_calendar",
+                "natural_key": natural_key(calendar_payload, "markets_calendar"),
+                "event_time": calendar_event,
+                "available_at": calendar_event,
+                "ingested_at": calendar_event,
+                "payload": json.dumps(
+                    calendar_payload, sort_keys=True, separators=(",", ":")
+                ),
+                "raw_payload": "",
+            }
+        )
+    store.upsert("jquants_records", closure_catalog)
     for run_id, dataset_id, suffix in (
         (1, "equities_bars_daily", "daily"),
         (2, "equities_bars_daily_am", "am"),
+        (3, "equities_master", "master"),
+        (4, "fins_summary", "fins"),
+        (5, "indices_bars_daily_topix", "topix"),
+        (6, "markets_calendar", "calendar"),
     ):
         stored = store._conn.execute(
             "SELECT source, dataset, natural_key, event_time, available_at, "

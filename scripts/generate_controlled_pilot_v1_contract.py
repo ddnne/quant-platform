@@ -167,6 +167,7 @@ def render_fixtures() -> dict[str, bytes]:
         "period_start": contract["plans"][0]["period_start"],
         "period_end": contract["plans"][0]["period_end"],
         "lookback_trading_days": 1,
+        "physical_db_digest": physical,
         "entries": scope_entries,
         "product_materialization_digest": _digest(
             [
@@ -295,6 +296,7 @@ def render_fixtures() -> dict[str, bytes]:
         "controlled_session_scope": {
             "format": "controlled-session-scope/v1",
             "dependency_scope_proof_digest": dependency_scope["proof_digest"],
+            "physical_db_digest": physical,
             "observed_through": observed_through,
             "entries": [
                 {
@@ -309,8 +311,6 @@ def render_fixtures() -> dict[str, bytes]:
                     ],
                 }
                 for entry in scope_entries
-                if entry["dataset_id"]
-                in {"equities_bars_daily", "equities_bars_daily_am"}
             ],
         },
         "physical": {"key": physical_key, "digest": physical, "size": 32},

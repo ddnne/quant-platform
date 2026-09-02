@@ -301,11 +301,13 @@ export async function verifyControlledReadyEnvelope(
   if (!isRecord(signedProjection) || !isRecord(document.dependency_scope_evidence) ||
       !isRecord(sessionScope) ||
       !closedShape(sessionScope, new Set([
-        "format", "dependency_scope_proof_digest", "observed_through", "entries",
+        "format", "dependency_scope_proof_digest", "physical_db_digest", "observed_through", "entries",
       ])) || sessionScope.format !== "controlled-session-scope/v1" ||
       !isSha256(sessionScope.dependency_scope_proof_digest) ||
+      sessionScope.physical_db_digest !== physical.digest ||
       sessionScope.observed_through !== manifest.observed_through ||
-      !Array.isArray(sessionScope.entries) || sessionScope.entries.length !== 2) {
+      !Array.isArray(sessionScope.entries) ||
+      sessionScope.entries.length !== EXACT_FOUR_DATASET_IDS.length) {
     return { ok: false, error: "READY signed projection/session scope is invalid" };
   }
   const digest = String(physical.digest || "");
@@ -466,7 +468,7 @@ export async function verifyControlledReadyEnvelope(
     }
     sessionDatasets.push(entry.dataset_id);
   }
-  if (!jsonEqual(sessionDatasets, ["equities_bars_daily", "equities_bars_daily_am"])) {
+  if (!jsonEqual(sessionDatasets, [...EXACT_FOUR_DATASET_IDS])) {
     return { ok: false, error: "READY controlled session dataset scope is invalid" };
   }
   const verifiedAt = parseTime(attestation.verified_at);
@@ -1395,6 +1397,7 @@ function readyFromManifest(manifest: Record<string, unknown>): VerifiedControlle
     session_scope: {
       format: "controlled-session-scope/v1",
       dependency_scope_proof_digest: "sha256:" + "0".repeat(64),
+      physical_db_digest: String(manifest.immutable_db_digest || ""),
       observed_through: "1970-01-01T00:00:00Z",
       entries: [] as unknown as ControlledSessionScope["entries"],
     },
