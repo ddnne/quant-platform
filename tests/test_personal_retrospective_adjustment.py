@@ -179,6 +179,7 @@ def test_split_safe_value_blacks_out_changed_per_share_units(tmp_path) -> None:
     payload = {
         "Code": "1332",
         "DiscDate": "2025-04-01",
+        "DiscNo": "split-safe-value",
         "CurPerEn": "2025-04-01",
         "BPS": 80.0,
     }

@@ -165,6 +165,7 @@ def test_post_1130_non_price_fact_stays_hidden_in_am_engine_context(tmp_path):
     payload = {
         "Code": CODE,
         "DiscDate": D1,
+        "DiscNo": "post-1130",
         "CurPerEn": D1,
         "BPS": 80.0,
     }
@@ -396,6 +397,7 @@ def test_am_per_share_uses_strictly_prior_raw_close(tmp_path):
     payload = {
         "Code": CODE,
         "DiscDate": D1,
+        "DiscNo": "prior-close",
         "CurPerEn": D0,
         "BPS": 80.0,
         "EPS": 5.0,
@@ -436,12 +438,14 @@ def test_am_feature_hides_post_1130_disclosure(tmp_path):
     early = {
         "Code": CODE,
         "DiscDate": D0,
+        "DiscNo": "early",
         "CurPerEn": D0,
         "BPS": 40.0,
     }
     late = {
         "Code": CODE,
         "DiscDate": D3,
+        "DiscNo": "late",
         "CurPerEn": D3,
         "BPS": 999.0,
     }
