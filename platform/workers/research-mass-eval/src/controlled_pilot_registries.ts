@@ -87,11 +87,16 @@ function failClosed(_reason: string): PinnedVerifyKey[] {
 export function keyUsableAt(key: PinnedVerifyKey, signedAtMs: number): boolean {
   if (!Number.isFinite(signedAtMs)) return false;
   if (key.algorithm !== "Ed25519") return false;
-  if (key.status !== "active" || key.revoked_at !== null) return false;
+  if (!new Set(["active", "retired", "revoked"]).has(key.status)) return false;
+  if (key.status !== "revoked" && key.revoked_at !== null) return false;
   const notBefore = parseCanonicalUtc(key.not_before);
   const notAfter = parseCanonicalUtc(key.not_after);
   if (!Number.isFinite(notBefore) || !Number.isFinite(notAfter)) return false;
   if (signedAtMs < notBefore || signedAtMs > notAfter) return false;
+  if (key.status === "revoked") {
+    const revokedAt = parseCanonicalUtc(key.revoked_at);
+    if (!Number.isFinite(revokedAt) || signedAtMs >= revokedAt) return false;
+  }
   return true;
 }
 
@@ -119,7 +124,7 @@ export function parseRegistry(
   ) {
     return failClosed("contract");
   }
-  const active: PinnedVerifyKey[] = [];
+  const verificationKeys: PinnedVerifyKey[] = [];
   const seen = new Set<string>();
   for (const row of document.keys) {
     if (!isRecord(row)) return failClosed("row");
@@ -144,25 +149,27 @@ export function parseRegistry(
       if (typeof row.revoked_at !== "string" || !Number.isFinite(parseCanonicalUtc(row.revoked_at))) {
         return failClosed("revoked_at");
       }
-      continue;
+    } else if (row.revoked_at !== null) {
+      return failClosed("active-revoked");
     }
-    if (row.revoked_at !== null) return failClosed("active-revoked");
-    if (row.status !== "active") continue;
+    if (row.status === "pending") continue;
     const bytes = decodeB64(String(row.public_key_b64 || ""));
     if (!bytes) return failClosed("key");
-    active.push({
+    verificationKeys.push({
       key_id: keyId,
       public_key: bytes,
       algorithm: "Ed25519",
       status: row.status,
       not_before: row.not_before,
       not_after: row.not_after,
-      revoked_at: null,
+      revoked_at: row.revoked_at as string | null,
       environment,
     });
   }
-  if (active.length > 1) return failClosed("multi-active");
-  return active;
+  if (verificationKeys.filter((key) => key.status === "active").length > 1) {
+    return failClosed("multi-active");
+  }
+  return verificationKeys;
 }
 
 export async function parseCommittedRegistryBytes(
@@ -199,8 +206,8 @@ export async function parseCommittedRegistryBytes(
   );
 }
 
-const READY_STATUS = new Set(["active", "revoked"]);
-const TRADER_STATUS = new Set(["active", "revoked", "pending"]);
+const READY_STATUS = new Set(["active", "retired", "revoked"]);
+const TRADER_STATUS = new Set(["active", "retired", "revoked", "pending"]);
 
 const readyCache = new Map<string, PinnedVerifyKey[]>();
 const traderCache = new Map<string, PinnedVerifyKey[]>();

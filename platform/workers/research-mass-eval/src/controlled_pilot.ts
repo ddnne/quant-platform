@@ -89,6 +89,7 @@ const MAX_TTL_MS = 86_400_000;
 const STATE_MAX_BYTES = 16 * 1024;
 const TERMINAL_MAX_BYTES = 64 * 1024;
 const READY_AUTH_MAX_BYTES = 64 * 1024;
+const STATE_UPLOAD_SKEW_MS = 30_000;
 const FIVE_MINUTES_MS = 5 * 60_000;
 const READY_MANIFEST_FORMAT = "ready-manifest/v1";
 const READINESS_ATTESTATION_FORMAT = "verified-readiness-attestation/v1";
@@ -745,6 +746,15 @@ function budgetAccepted(rpc: { http_status: number; body: unknown }): boolean {
   return rpc.http_status < 300 && gatewayBody(rpc).ok === true;
 }
 
+function budgetRetryable(rpc: { http_status: number; body: unknown }): boolean {
+  return rpc.http_status >= 500 || rpc.http_status === 429;
+}
+
+function budgetFailure(rpc: { http_status: number; body: unknown }, operation: string): string {
+  const error = String(gatewayBody(rpc).error || "rejected").slice(0, 256);
+  return `controlled budget ${operation} rejected (${rpc.http_status}): ${error}`;
+}
+
 async function loadJsonObject(
   bucket: R2Bucket,
   key: string,
@@ -755,6 +765,23 @@ async function loadJsonObject(
   try {
     const parsed: unknown = await object.json();
     return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+async function loadJsonObjectWithUploaded(
+  bucket: R2Bucket,
+  key: string,
+  maxBytes: number,
+): Promise<{ value: Record<string, unknown>; uploadedAt: number } | null> {
+  const object = await bucket.get(key);
+  if (!object || object.size > maxBytes) return null;
+  const uploadedAt = object.uploaded instanceof Date ? object.uploaded.getTime() : Number.NaN;
+  if (!Number.isFinite(uploadedAt)) return null;
+  try {
+    const parsed: unknown = await object.json();
+    return isRecord(parsed) ? { value: parsed, uploadedAt } : null;
   } catch {
     return null;
   }
@@ -785,7 +812,7 @@ type BoundContainer = {
     method: string,
     params: unknown,
   ) => Promise<void>;
-  removeOutboundByHost: (hostname: string) => Promise<void>;
+  setOutboundByHosts: (handlers: Record<string, never>) => Promise<void>;
 };
 
 async function bindPhysicalOutbound(
@@ -795,7 +822,7 @@ async function bindPhysicalOutbound(
   writer: { job_id: string; request_digest: string },
 ): Promise<BoundContainer> {
   const target = (await verifiedPersonalResearchContainer(env, containerName)) as BoundContainer;
-  if (typeof target.setOutboundByHost !== "function" || typeof target.removeOutboundByHost !== "function") {
+  if (typeof target.setOutboundByHost !== "function" || typeof target.setOutboundByHosts !== "function") {
     throw new Error("controlled container outbound policy is unavailable");
   }
   await target.setOutboundByHost(CONTROLLED_R2_HOST, CONTROLLED_OUTBOUND_HANDLER, physical);
@@ -806,7 +833,7 @@ async function bindPhysicalOutbound(
       writer,
     );
   } catch (error) {
-    await target.removeOutboundByHost(CONTROLLED_R2_HOST);
+    await target.setOutboundByHosts({});
     throw error;
   }
   return target;
@@ -814,19 +841,16 @@ async function bindPhysicalOutbound(
 
 async function unbindPhysicalOutbound(target: BoundContainer | null): Promise<void> {
   if (!target) return;
-  const removed = await Promise.allSettled([
-    target.removeOutboundByHost(CONTROLLED_R2_HOST),
-    target.removeOutboundByHost(CONTROLLED_WRITER_R2_HOST),
-  ]);
-  const failed = removed.find((result) => result.status === "rejected");
-  if (failed?.status === "rejected") throw failed.reason;
+  await target.setOutboundByHosts({});
 }
 
 async function releaseControlledOutbound(env: Env, jobId: string): Promise<void> {
   if (!env.PERSONAL_RESEARCH_CONTAINER) return;
   const containerName = await controlledPilotContainerName(jobId);
   const target = env.PERSONAL_RESEARCH_CONTAINER.getByName(containerName) as unknown as BoundContainer;
-  if (typeof target.removeOutboundByHost !== "function") return;
+  if (typeof target.setOutboundByHosts !== "function") {
+    throw new Error("controlled container outbound policy is unavailable");
+  }
   await unbindPhysicalOutbound(target);
 }
 
@@ -1593,7 +1617,14 @@ async function callContainer(
   }
   const jobId = spec.job_id;
   const terminal = await waitForContainerJob(env, containerName, jobId, parsed);
-  if (!terminal.ok) return { ...terminal, accepted: true };
+  if (!terminal.ok) {
+    if (options?.skipPost && terminal.missing) {
+      // A Container process restart loses its in-memory JobManager. Re-submit
+      // the same closed spec so the persisted R2 lease can observe or take over.
+      return callContainer(env, spec, containerName);
+    }
+    return { ...terminal, accepted: true };
+  }
   parsed = terminal.value;
   if (!isRecord(parsed) || parsed.ok !== true) {
     return { ok: false, error: String(isRecord(parsed) ? parsed.error : "container_error") };
@@ -1674,7 +1705,7 @@ async function waitForContainerJob(
   submitted: unknown,
 ): Promise<
   | { ok: true; value: unknown }
-  | { ok: false; error: string; timeout?: boolean; pending?: boolean }
+  | { ok: false; error: string; timeout?: boolean; pending?: boolean; missing?: boolean }
 > {
   if (isRecord(submitted) && Array.isArray(submitted.papers)) {
     return { ok: false, error: "controlled container must accept with 202 and publish via GET" };
@@ -1697,6 +1728,9 @@ async function waitForContainerJob(
     return { ok: false, error: "controlled container status is invalid" };
   }
   const job = isRecord(parsed) && isRecord(parsed.job) ? parsed.job : parsed;
+  if (status.status === 404 && isRecord(job) && job.error === "job_not_found") {
+    return { ok: false, error: "controlled container job is missing", pending: true, missing: true };
+  }
   if (isRecord(job) && job.status === "COMPLETED" && job.ok === true) {
     return { ok: true, value: job };
   }
@@ -1926,13 +1960,16 @@ async function parseControlledPilotSubmittedState(
   value: unknown,
   jobId: string,
   environment: string,
+  uploadedAt: number,
 ): Promise<ControlledPilotSubmittedState | null> {
+  const submittedAt = isRecord(value) ? parseCanonicalUtc(value.submitted_at) : Number.NaN;
   if (!isRecord(value) || !closedShape(value, SUBMITTED_STATE_FIELDS) ||
       value.identity !== CONTROLLED_PILOT_IDENTITY || value.status !== "SUBMITTED" ||
       value.job_id !== jobId || value.go !== false ||
       value.automatic_promotion !== false || value.live_orders_enabled !== false ||
       value.mass !== false || typeof value.submitted_at !== "string" ||
-      !Number.isFinite(parseCanonicalUtc(value.submitted_at))) return null;
+      !Number.isFinite(submittedAt) || !Number.isFinite(uploadedAt) ||
+      Math.abs(uploadedAt - submittedAt) > STATE_UPLOAD_SKEW_MS) return null;
   const admission = value.admission;
   if (!isRecord(admission) || !closedShape(admission, ADMISSION_STATE_FIELDS) ||
       admission.verified_at !== value.submitted_at ||
@@ -2001,10 +2038,16 @@ async function reverifyControlledSubmission(
   if (!env.STRUCTURED_BUCKET) return null;
   const environment = registries.controlledEnvironment(env);
   if (!environment) return null;
+  const loadedState = await loadJsonObjectWithUploaded(
+    env.STRUCTURED_BUCKET,
+    stateKey(jobId),
+    STATE_MAX_BYTES,
+  );
   const state = await parseControlledPilotSubmittedState(
-    await loadJsonObject(env.STRUCTURED_BUCKET, stateKey(jobId), STATE_MAX_BYTES),
+    loadedState?.value,
     jobId,
     environment,
+    loadedState?.uploadedAt ?? Number.NaN,
   );
   if (state === null || (expectedDigest && state.request_digest !== expectedDigest)) {
     return null;
@@ -2184,10 +2227,27 @@ export async function submitControlledPilot(
       prior.state,
     );
     if (failed) return terminalResponse(jobId, "FAILED", { error: failed.error });
+    if (!(await scheduleControlledResume(env, request.idempotency_key, jobId))) {
+      return json({ ok: false, error: "controlled resume scheduler unavailable", job_id: jobId, go: false }, 503);
+    }
+    return json({
+      ok: true,
+      accepted: true,
+      idempotent: true,
+      identity: CONTROLLED_PILOT_IDENTITY,
+      job_id: jobId,
+      status: "SUBMITTED",
+      status_url: `/v1/controlled-pilot/${jobId}`,
+      go: false,
+      automatic_promotion: false,
+      live_orders_enabled: false,
+      mass: false,
+    }, 202);
   }
   const readyBytes = await loadBytes(env.STRUCTURED_BUCKET, controlledReadyKey(request.ready_attestation_id));
   if (!readyBytes) return json({ ok: false, error: "READY envelope not found", go: false }, 404);
-  const readyKeys = await registries.loadPinnedReadyKeys(environment);
+  const readyKeys = (await registries.loadPinnedReadyKeys(environment))
+    .filter((key) => key.status === "active");
   const verified = await verifyControlledReadyEnvelopeBytes(
     readyBytes,
     request.snapshot_id,
@@ -2207,7 +2267,8 @@ export async function submitControlledPilot(
     controlledTraderAuthorizationKey(request.idempotency_key, request.ready_attestation_id),
   );
   if (!authBytes) return json({ ok: false, error: "trader authorization not found", go: false }, 404);
-  const traderKeys = await registries.loadPinnedTraderKeys(environment);
+  const traderKeys = (await registries.loadPinnedTraderKeys(environment))
+    .filter((key) => key.status === "active");
   const authorized = await verifyTraderAuthorizationBatchBytes(
     authBytes,
     request,
@@ -2261,11 +2322,16 @@ export async function submitControlledPilot(
   };
   const wrote = await putCreateOnly(env.STRUCTURED_BUCKET, stateKey(jobId), submitted);
   if (wrote.conflict) {
-    const raced = await loadJsonObject(env.STRUCTURED_BUCKET, stateKey(jobId), STATE_MAX_BYTES);
+    const raced = await loadJsonObjectWithUploaded(
+      env.STRUCTURED_BUCKET,
+      stateKey(jobId),
+      STATE_MAX_BYTES,
+    );
     const parsedRaced = await parseControlledPilotSubmittedState(
-      raced,
+      raced?.value,
       jobId,
       environment,
+      raced?.uploadedAt ?? Number.NaN,
     );
     const expectedRaced = parsedRaced === null
       ? null
@@ -2311,8 +2377,17 @@ export async function controlledPilotStatus(
   }
   const environment = registries.controlledEnvironment(env);
   if (!environment) return json({ ok: false, error: "controlled environment is invalid", go: false }, 503);
-  const rawState = await loadJsonObject(env.STRUCTURED_BUCKET, stateKey(jobId), STATE_MAX_BYTES);
-  const state = await parseControlledPilotSubmittedState(rawState, jobId, environment);
+  const rawState = await loadJsonObjectWithUploaded(
+    env.STRUCTURED_BUCKET,
+    stateKey(jobId),
+    STATE_MAX_BYTES,
+  );
+  const state = await parseControlledPilotSubmittedState(
+    rawState?.value,
+    jobId,
+    environment,
+    rawState?.uploadedAt ?? Number.NaN,
+  );
   if (!state) {
     const fragments = await Promise.all([
       env.STRUCTURED_BUCKET.head(stateKey(jobId)),
@@ -2442,10 +2517,16 @@ export async function expireControlledPilotJob(
   if (!env.STRUCTURED_BUCKET) return;
   const environment = registries.controlledEnvironment(env);
   if (!environment) return;
+  const loadedState = await loadJsonObjectWithUploaded(
+    env.STRUCTURED_BUCKET,
+    stateKey(jobId),
+    STATE_MAX_BYTES,
+  );
   const state = await parseControlledPilotSubmittedState(
-    await loadJsonObject(env.STRUCTURED_BUCKET, stateKey(jobId), STATE_MAX_BYTES),
+    loadedState?.value,
     jobId,
     environment,
+    loadedState?.uploadedAt ?? Number.NaN,
   );
   if (!state) return;
   await failControlledPilotState(
@@ -2502,16 +2583,30 @@ export async function runControlledPilotJob(
   }
   let leaseId = "";
   const storedReservation = await loadJsonObject(env.STRUCTURED_BUCKET, reservationKey(jobId), STATE_MAX_BYTES);
-  const queried = await invokeBudget(gateway, "queryControlledPaper", budgetInput);
+  let queried: Awaited<ReturnType<typeof invokeBudget>>;
+  try {
+    queried = await invokeBudget(gateway, "queryControlledPaper", budgetInput);
+  } catch {
+    return;
+  }
   if (budgetAccepted(queried)) {
     leaseId = String(gatewayBody(queried).lease_id || storedReservation?.lease_id || "");
-  } else if (String(gatewayBody(queried).error || "") === "reservation_not_found") {
+  } else if (!budgetRetryable(queried) &&
+      String(gatewayBody(queried).error || "") === "reservation_not_found") {
     if (containerCompleted) {
       leaseId = String(storedReservation?.lease_id || "");
       if (!leaseId) return;
     } else {
-      const reserved = await invokeBudget(gateway, "reserveControlledPaper", budgetInput);
-      if (!budgetAccepted(reserved)) return;
+      let reserved: Awaited<ReturnType<typeof invokeBudget>>;
+      try {
+        reserved = await invokeBudget(gateway, "reserveControlledPaper", budgetInput);
+      } catch {
+        return;
+      }
+      if (!budgetAccepted(reserved)) {
+        if (!budgetRetryable(reserved)) await fail(budgetFailure(reserved, "reserve"));
+        return;
+      }
       leaseId = String(gatewayBody(reserved).lease_id || "");
       await putCreateOnly(env.STRUCTURED_BUCKET, reservationKey(jobId), {
         lease_id: leaseId,
@@ -2520,7 +2615,10 @@ export async function runControlledPilotJob(
         execution_id: spec.execution_id,
       });
     }
+  } else if (budgetRetryable(queried)) {
+    return;
   } else {
+    await fail(budgetFailure(queried, "query"));
     return;
   }
   if (!leaseId && storedReservation) leaseId = String(storedReservation.lease_id || "");
@@ -2535,11 +2633,19 @@ export async function runControlledPilotJob(
     return;
   }
   if (!containerCompleted) {
-    const heartbeat = await invokeBudget(gateway, "heartbeatControlledPaper", {
-      ...budgetInput,
-      lease_id: leaseId,
-    });
-    if (!budgetAccepted(heartbeat)) return;
+    let heartbeat: Awaited<ReturnType<typeof invokeBudget>>;
+    try {
+      heartbeat = await invokeBudget(gateway, "heartbeatControlledPaper", {
+        ...budgetInput,
+        lease_id: leaseId,
+      });
+    } catch {
+      return;
+    }
+    if (!budgetAccepted(heartbeat)) {
+      if (!budgetRetryable(heartbeat)) await fail(budgetFailure(heartbeat, "heartbeat"));
+      return;
+    }
     const containerName = await controlledPilotContainerName(request.idempotency_key);
     try {
       await bindPhysicalOutbound(env, containerName, ready.physical, {
@@ -2602,11 +2708,20 @@ export async function runControlledPilotJob(
     }
   }
   if (!persistedManifest) return;
-  const finalized = await invokeBudget(gateway, "finalizeControlledPaper", {
-    ...budgetInput,
-    lease_id: leaseId,
-  });
+  let finalized: Awaited<ReturnType<typeof invokeBudget>>;
+  try {
+    finalized = await invokeBudget(gateway, "finalizeControlledPaper", {
+      ...budgetInput,
+      lease_id: leaseId,
+    });
+  } catch {
+    return;
+  }
   if (!budgetAccepted(finalized)) {
+    if (!budgetRetryable(finalized)) {
+      await fail(budgetFailure(finalized, "finalize"));
+      return;
+    }
     await putCreateOnly(env.STRUCTURED_BUCKET, pendingKey(jobId), {
       identity: CONTROLLED_PILOT_IDENTITY,
       status: "FINALIZE_RETRY",

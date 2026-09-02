@@ -47,7 +47,7 @@ import { dispatchMassEvalFetch } from "./http_routes";
 import { PERSONAL_RESEARCH_RUNNER_VERSION } from "./personal_research_contract";
 import type { Env } from "./types";
 
-type Stored = { body: Uint8Array; etag: string };
+type Stored = { body: Uint8Array; etag: string; uploaded: Date };
 
 class MemR2 {
   readonly putOrder: string[] = [];
@@ -57,7 +57,7 @@ class MemR2 {
   async head(key: string) {
     const o = this.objects.get(key);
     if (!o) return null;
-    return { key, size: o.body.byteLength, etag: o.etag };
+    return { key, size: o.body.byteLength, etag: o.etag, uploaded: o.uploaded };
   }
 
   async get(key: string) {
@@ -69,6 +69,7 @@ class MemR2 {
       key,
       size: o.body.byteLength,
       etag: o.etag,
+      uploaded: o.uploaded,
       text,
       json: async () => JSON.parse(await text()),
       arrayBuffer: async () => o.body.buffer.slice(o.body.byteOffset, o.body.byteOffset + o.body.byteLength),
@@ -92,9 +93,16 @@ class MemR2 {
     else if (value instanceof Uint8Array) body = value;
     else body = new Uint8Array(value as ArrayBuffer);
     const etag = `etag-${this.objects.size + 1}`;
-    this.objects.set(key, { body, etag });
+    const uploaded = new Date(Date.now());
+    this.objects.set(key, { body, etag, uploaded });
     this.putOrder.push(key);
-    return { key, etag, size: body.byteLength };
+    return { key, etag, size: body.byteLength, uploaded };
+  }
+
+  setUploaded(key: string, uploaded: Date): void {
+    const stored = this.objects.get(key);
+    if (!stored) throw new Error(`missing test object ${key}`);
+    stored.uploaded = uploaded;
   }
 
   asBucket(): R2Bucket {
@@ -202,12 +210,14 @@ function mockContainer(options?: {
     | "semantic_reordered_selection"
     | "semantic_rebound_knowledge";
   delay?: { complete: boolean };
+  forgetFirstStatus?: boolean;
   scheduled?: string[];
   outbound?: Map<string, unknown>;
 }): Env["PERSONAL_RESEARCH_CONTAINER"] {
   const outbound = options?.outbound ?? new Map<string, unknown>();
   const fetches = options?.fetches ?? { n: 0, post: 0 };
   const jobs = new Map<string, Record<string, unknown>>();
+  let forgotFirstStatus = false;
   return {
     getByName() {
       const target: Record<string, unknown> = {
@@ -320,6 +330,11 @@ function mockContainer(options?: {
           }
           const match = url.pathname.match(/^\/v1\/jobs\/([^/]+)$/);
           if (request.method === "GET" && match) {
+            if (options?.forgetFirstStatus && !forgotFirstStatus) {
+              forgotFirstStatus = true;
+              jobs.clear();
+              return Response.json({ error: "job_not_found" }, { status: 404 });
+            }
             const job = jobs.get(match[1]!);
             if (!job) return Response.json({ error: "job_not_found" }, { status: 404 });
             if (options?.delay && !options.delay.complete) {
@@ -333,6 +348,10 @@ function mockContainer(options?: {
       if (!options?.omitOutbound) {
         target.setOutboundByHost = async (host: string, method: string, params: unknown) => {
           outbound.set(host, { method, params });
+        };
+        target.setOutboundByHosts = async (handlers: Record<string, unknown>) => {
+          outbound.clear();
+          for (const [host, handler] of Object.entries(handlers)) outbound.set(host, handler);
         };
         target.removeOutboundByHost = async (host: string) => {
           outbound.delete(host);
@@ -390,6 +409,7 @@ async function seedEnv(options?: {
     | "semantic_reordered_selection"
     | "semantic_rebound_knowledge";
   delay?: { complete: boolean };
+  forgetFirstStatus?: boolean;
 }) {
   const mem = new MemR2();
   const snapshot = new TextEncoder().encode("controlled-pilot-physical-sqlite");
@@ -428,6 +448,7 @@ async function seedEnv(options?: {
       fetches,
       tamper: options?.tamper,
       delay: options?.delay,
+      forgetFirstStatus: options?.forgetFirstStatus,
       scheduled,
       outbound,
     }),
@@ -570,6 +591,45 @@ describe("strict JSON and Python-generated fixtures", () => {
     );
     expect(observed).toEqual(readyProd);
   });
+
+  it("retains retired and revoked public keys for historical verification", async () => {
+    const row = {
+      algorithm: "Ed25519",
+      public_key_b64: fixtureKeys.public_key_b64,
+      not_before: "2026-01-01T00:00:00Z",
+      not_after: "2099-01-01T00:00:00Z",
+      revoked_at: null,
+    };
+    const document = {
+      schema_version: 2,
+      purpose: "readiness_attestation_verification",
+      environment: "staging",
+      authority_instance_id: "ready-authority/staging/v1",
+      keys: [
+        { ...row, key_id: "active-key", status: "active" },
+        { ...row, key_id: "retired-key", status: "retired" },
+        {
+          ...row,
+          key_id: "revoked-key",
+          status: "revoked",
+          revoked_at: "2027-01-01T00:00:00Z",
+        },
+      ],
+    };
+    const digest = await registries.digestOf(document);
+
+    const parsed = registries.parseRegistry(
+      document,
+      "staging",
+      "readiness_attestation_verification",
+      "ready-authority",
+      digest,
+      digest,
+      new Set(["active", "retired", "revoked"]),
+    );
+
+    expect(parsed.map((key) => key.status)).toEqual(["active", "retired", "revoked"]);
+  });
 });
 
 describe("controlled cloud execution", () => {
@@ -588,6 +648,24 @@ describe("controlled cloud execution", () => {
     expect(body.manifest.children).toHaveLength(10);
     expect(seeded.budget.finalized).toBe(1);
     expect(seeded.budget.heartbeats).toBeGreaterThan(0);
+  });
+
+  it("replay of an existing SUBMITTED job only repairs its schedule", async () => {
+    const delay = { complete: false };
+    const seeded = await seedEnv({ delay });
+    const firstCtx = new WaitCtx();
+    await submitControlledPilot(seeded.env, seeded.request, firstCtx);
+    await firstCtx.pending;
+    expect(seeded.fetches.post).toBe(1);
+    const waitUntil = vi.fn();
+
+    const replay = await submitControlledPilot(seeded.env, seeded.request, { waitUntil });
+
+    expect(replay.status).toBe(202);
+    expect(await replay.json()).toMatchObject({ idempotent: true, status: "SUBMITTED" });
+    expect(waitUntil).not.toHaveBeenCalled();
+    expect(seeded.fetches.post).toBe(1);
+    expect(seeded.scheduled).toHaveLength(2);
   });
 
   it("rejects a same-digest state conflict whose canonical initial state was poisoned", async () => {
@@ -629,6 +707,21 @@ describe("controlled cloud execution", () => {
     expect(seeded.fetches.n).toBe(0);
   });
 
+  it("does not trust a submitted_at detached from the R2 server upload time", async () => {
+    const seeded = await seedEnv();
+    expect((await submitControlledPilot(seeded.env, seeded.request)).status).toBe(202);
+    const key =
+      `research/controlled_pilot/v1/jobs/${seeded.request.idempotency_key}/state.json`;
+    seeded.mem.setUploaded(key, new Date(VERIFIER_NOW + 30_001));
+
+    await runControlledPilotJob(seeded.env, seeded.request.idempotency_key);
+
+    expect(seeded.budget.queried).toBe(0);
+    expect(seeded.fetches.post).toBe(0);
+    const status = await controlledPilotStatus(seeded.env, seeded.request.idempotency_key);
+    expect(((await status.json()) as { status: string }).status).toBe("FAILED");
+  });
+
   it("does not run a self-consistent stored state with a forged authorization digest", async () => {
     const seeded = await seedEnv();
     expect((await submitControlledPilot(seeded.env, seeded.request)).status).toBe(202);
@@ -659,6 +752,26 @@ describe("controlled cloud execution", () => {
     await retryCtx.pending;
     expect(seeded.budget.reserved).toBe(reserved);
     expect(seeded.budget.queried).toBeGreaterThan(0);
+  });
+
+  it("closes the job on a permanent budget rejection", async () => {
+    const seeded = await seedEnv();
+    const gateway = seeded.env.AI_GATEWAY as NonNullable<Env["AI_GATEWAY"]>;
+    gateway.queryControlledPaper = async () => ({
+      http_status: 403,
+      body: { ok: false, error: "budget_scope_denied" },
+    });
+    const ctx = new WaitCtx();
+
+    await submitControlledPilot(seeded.env, seeded.request, ctx);
+    await ctx.pending;
+
+    const status = await controlledPilotStatus(seeded.env, seeded.request.idempotency_key);
+    expect(await status.json()).toMatchObject({
+      status: "FAILED",
+      error: expect.stringContaining("budget query rejected (403)"),
+    });
+    expect(seeded.fetches.post).toBe(0);
   });
 
   it("does not accept another job's terminal manifest copied into this job path", async () => {
@@ -828,6 +941,36 @@ describe("controlled cloud execution", () => {
     expect(((await historical.json()) as { status: string }).status).toBe("COMPLETED");
   });
 
+  it("keeps historical verification keys across retirement and post-signing revocation", async () => {
+    const seeded = await seedEnv();
+    const ctx = new WaitCtx();
+    await submitControlledPilot(seeded.env, seeded.request, ctx);
+    await ctx.pending;
+    const base = fixturePublicKey()[0]!;
+    for (const historicalKey of [
+      { ...base, status: "retired" },
+      { ...base, status: "revoked", revoked_at: "2098-01-01T00:00:00Z" },
+    ]) {
+      vi.mocked(registries.loadPinnedReadyKeys).mockReturnValue([historicalKey]);
+      vi.mocked(registries.loadPinnedTraderKeys).mockReturnValue([historicalKey]);
+      const status = await controlledPilotStatus(seeded.env, seeded.request.idempotency_key);
+      expect(((await status.json()) as { status: string }).status).toBe("COMPLETED");
+    }
+  });
+
+  it("does not admit a new job with only a retired verification key", async () => {
+    const seeded = await seedEnv();
+    const retired = { ...fixturePublicKey()[0]!, status: "retired" };
+    vi.mocked(registries.loadPinnedReadyKeys).mockReturnValue([retired]);
+    vi.mocked(registries.loadPinnedTraderKeys).mockReturnValue([retired]);
+
+    const response = await submitControlledPilot(seeded.env, seeded.request);
+
+    expect(response.status).toBe(503);
+    expect(seeded.budget.reserved).toBe(0);
+    expect(seeded.fetches.post).toBe(0);
+  });
+
   it("rejects missing trader authorization and does not reserve", async () => {
     const seeded = await seedEnv({ skipAuth: true });
     const ctx = new WaitCtx();
@@ -861,6 +1004,20 @@ describe("controlled cloud execution", () => {
     const status = await controlledPilotStatus(secondEnv, first.request.idempotency_key);
     const body = (await status.json()) as { status: string };
     expect(body.status).toBe("COMPLETED");
+  });
+
+  it("reposts the same spec when an accepted job is lost with a fresh Container process", async () => {
+    const seeded = await seedEnv({ forgetFirstStatus: true });
+    const ctx = new WaitCtx();
+    await submitControlledPilot(seeded.env, seeded.request, ctx);
+    await ctx.pending;
+    expect(seeded.fetches.post).toBe(1);
+
+    await runControlledPilotJob(seeded.env, seeded.request.idempotency_key);
+
+    expect(seeded.fetches.post).toBe(2);
+    const status = await controlledPilotStatus(seeded.env, seeded.request.idempotency_key);
+    expect(((await status.json()) as { status: string }).status).toBe("COMPLETED");
   });
 
   it("GET is lookup-only and does not start container work", async () => {
@@ -1099,7 +1256,7 @@ describe("canonical JSON and key windows", () => {
     expect(digest.startsWith("sha256:")).toBe(true);
   });
 
-  it("rejects noncanonical timestamps and expired/future/revoked keys", () => {
+  it("rejects invalid windows while retaining pre-revocation historical keys", () => {
     const base: registries.PinnedVerifyKey = {
       key_id: "k",
       public_key: new Uint8Array(32),
@@ -1115,6 +1272,12 @@ describe("canonical JSON and key windows", () => {
     expect(registries.keyUsableAt({ ...base, not_before: "2026-09-01" }, mid)).toBe(false);
     expect(registries.keyUsableAt({ ...base, not_after: "2026-01-02T00:00:00Z" }, mid)).toBe(false);
     expect(registries.keyUsableAt({ ...base, not_before: "2026-09-01T00:00:00Z" }, mid)).toBe(false);
+    expect(registries.keyUsableAt({ ...base, status: "retired" }, mid)).toBe(true);
+    expect(registries.keyUsableAt({
+      ...base,
+      status: "revoked",
+      revoked_at: "2026-07-01T00:00:00Z",
+    }, mid)).toBe(true);
     expect(registries.keyUsableAt({ ...base, status: "revoked", revoked_at: "2026-02-01T00:00:00Z" }, mid)).toBe(false);
     expect(registries.keyUsableAt({ ...base, environment: "production" }, mid)).toBe(true);
   });

@@ -42,9 +42,11 @@ const CONTROLLED_JOB_STORAGE_KEY = "controlled_job_id";
 const CONTROLLED_RESUME_DEADLINE_KEY = "controlled_resume_deadline";
 const CONTROLLED_RESUME_DELAY_KEY = "controlled_resume_delay";
 const CONTROLLED_RESUME_PHASE_KEY = "controlled_resume_phase";
+const CONTROLLED_RESUME_NEXT_DUE_KEY = "controlled_resume_next_due";
 const CONTROLLED_RESUME_CALLBACK = "resumeControlledPilot";
 const CONTROLLED_RESUME_INITIAL_SECONDS = 5;
 const CONTROLLED_RESUME_MAX_SECONDS = 60;
+const CONTROLLED_RESUME_STALE_MS = CONTROLLED_RESUME_MAX_SECONDS * 2 * 1_000;
 const CONTROLLED_OUTER_MS = 180 * 60 * 1_000;
 const CONTROLLED_RESUME_WINDOW_MS =
   CONTROLLED_OUTER_MS + CONTROLLED_LEASE_TTL_SECONDS * 1_000;
@@ -66,11 +68,18 @@ export class PersonalResearchContainer extends Container<Env> {
   enableInternet = false;
 
   private async scheduleControlledCallback(jobId: string, delay: number): Promise<void> {
-    this.deleteSchedules(CONTROLLED_RESUME_CALLBACK);
+    const nextDue = Date.now() + delay * 1_000;
     let lastError: unknown;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        await this.schedule(delay, CONTROLLED_RESUME_CALLBACK, { job_id: jobId });
+        await this.schedule(delay, CONTROLLED_RESUME_CALLBACK, {
+          job_id: jobId,
+          next_due: nextDue,
+        });
+        // Publish the token only after the SDK confirms that its alarm exists.
+        // An ambiguous partial schedule may fire, but cannot consume another
+        // callback's token or execute the job twice.
+        await this.ctx.storage.put(CONTROLLED_RESUME_NEXT_DUE_KEY, nextDue);
         return;
       } catch (error) {
         lastError = error;
@@ -81,7 +90,10 @@ export class PersonalResearchContainer extends Container<Env> {
 
   async scheduleControlledPilot(jobId: string): Promise<void> {
     const existing = await this.ctx.storage.get(CONTROLLED_JOB_STORAGE_KEY);
-    if (existing !== jobId) {
+    if (existing !== undefined && existing !== jobId) {
+      throw new Error("controlled scheduler job identity conflict");
+    }
+    if (existing === undefined) {
       await this.ctx.storage.put(CONTROLLED_JOB_STORAGE_KEY, jobId);
       await this.ctx.storage.put(
         CONTROLLED_RESUME_DEADLINE_KEY,
@@ -89,6 +101,11 @@ export class PersonalResearchContainer extends Container<Env> {
       );
       await this.ctx.storage.put(CONTROLLED_RESUME_DELAY_KEY, CONTROLLED_RESUME_INITIAL_SECONDS);
       await this.ctx.storage.delete(CONTROLLED_RESUME_PHASE_KEY);
+    }
+    const nextDue = await this.ctx.storage.get(CONTROLLED_RESUME_NEXT_DUE_KEY);
+    if (typeof nextDue === "number" && Number.isFinite(nextDue) &&
+        nextDue >= Date.now() - CONTROLLED_RESUME_STALE_MS) {
+      return;
     }
     const storedDelay = await this.ctx.storage.get(CONTROLLED_RESUME_DELAY_KEY);
     const delay = typeof storedDelay === "number" && storedDelay >= CONTROLLED_RESUME_INITIAL_SECONDS
@@ -104,30 +121,41 @@ export class PersonalResearchContainer extends Container<Env> {
       CONTROLLED_RESUME_DEADLINE_KEY,
       CONTROLLED_RESUME_DELAY_KEY,
       CONTROLLED_RESUME_PHASE_KEY,
+      CONTROLLED_RESUME_NEXT_DUE_KEY,
     ]);
   }
 
   private async releaseControlledOutbound(): Promise<void> {
     let lastError: unknown;
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const removed = await Promise.allSettled([
-        this.removeOutboundByHost(CONTROLLED_R2_HOST),
-        this.removeOutboundByHost("research.r2"),
-      ]);
-      const failed = removed.find((result) => result.status === "rejected");
-      if (!failed) return;
-      if (failed.status === "rejected") lastError = failed.reason;
+      try {
+        // The SDK refreshes the complete outbound configuration. Replace it in
+        // one operation so two host removals cannot complete out of order.
+        await this.setOutboundByHosts({});
+        return;
+      } catch (error) {
+        lastError = error;
+      }
     }
     throw lastError;
   }
 
   async resumeControlledPilot(payload: unknown): Promise<void> {
     const payloadJob = typeof payload === "object" && payload !== null &&
-      Object.keys(payload).length === 1 && typeof (payload as { job_id?: unknown }).job_id === "string"
+      Object.keys(payload).length === 2 && typeof (payload as { job_id?: unknown }).job_id === "string"
       ? (payload as { job_id: string }).job_id
       : "";
+    const payloadDue = typeof payload === "object" && payload !== null &&
+      typeof (payload as { next_due?: unknown }).next_due === "number" &&
+      Number.isFinite((payload as { next_due: number }).next_due)
+      ? (payload as { next_due: number }).next_due
+      : Number.NaN;
     const jobId = await this.ctx.storage.get(CONTROLLED_JOB_STORAGE_KEY);
-    if (!payloadJob || payloadJob !== jobId) return;
+    const nextDue = await this.ctx.storage.get(CONTROLLED_RESUME_NEXT_DUE_KEY);
+    if (!payloadJob || payloadJob !== jobId || payloadDue !== nextDue) return;
+    // Consume before any external RPC. Duplicate SDK rows with the same token
+    // become harmless no-ops, and a poll cannot move a live callback backward.
+    await this.ctx.storage.delete(CONTROLLED_RESUME_NEXT_DUE_KEY);
     const deadline = await this.ctx.storage.get(CONTROLLED_RESUME_DEADLINE_KEY);
     const controlled = await import("./controlled_pilot");
     const now = Date.now();
@@ -135,16 +163,31 @@ export class PersonalResearchContainer extends Container<Env> {
       ? deadline - CONTROLLED_LEASE_TTL_SECONDS * 1_000
       : Number.NaN;
     if (!Number.isFinite(cleanupAt) || now >= cleanupAt) {
+      let expired = false;
+      let destroyed = false;
+      let released = false;
       try {
         await controlled.expireControlledPilotJob(this.env, payloadJob, false);
-        await this.releaseControlledOutbound();
-        await this.clearControlledResume();
+        expired = true;
       } catch {
-        if (typeof deadline === "number" && now < deadline) {
-          await this.scheduleControlledCallback(payloadJob, CONTROLLED_RESUME_MAX_SECONDS);
-        } else {
-          await this.clearControlledResume();
-        }
+        // Cleanup is retried below without restarting execution.
+      }
+      try {
+        await this.releaseControlledOutbound();
+        released = true;
+      } catch {
+        // Do not discard the only durable cleanup retry.
+      }
+      try {
+        await this.destroy();
+        destroyed = true;
+      } catch {
+        // Resume state remains until both stop and capability cleanup succeed.
+      }
+      if (expired && destroyed && released) {
+        await this.clearControlledResume();
+      } else {
+        await this.scheduleControlledCallback(payloadJob, CONTROLLED_RESUME_MAX_SECONDS);
       }
       return;
     }
