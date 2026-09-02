@@ -268,7 +268,7 @@ PRODUCTION_SECRET_NAMES: dict[str, tuple[str, ...]] = {
     "receipt-activation-observer": (),
     "receipt-evidence-authority": ("RECEIPT_KEY_WRAP_KEY",),
     "research-ai-gateway": ("GATEWAY_TOKEN",),
-    "research-mass-eval": ("MASS_EVAL_TOKEN",),
+    "research-mass-eval": ("MASS_EVAL_TOKEN", "READY_ED25519_PRIVATE_KEY"),
 }
 
 STAGING_SECRET_NAMES: dict[str, tuple[str, ...]] = {
@@ -279,7 +279,7 @@ STAGING_SECRET_NAMES: dict[str, tuple[str, ...]] = {
         "JQUANTS_RPC_CURSOR_HMAC_KEY",
     ),
     "receipt-evidence-authority": ("RECEIPT_KEY_WRAP_KEY",),
-    "research-mass-eval": ("MASS_EVAL_TOKEN",),
+    "research-mass-eval": ("MASS_EVAL_TOKEN", "READY_ED25519_PRIVATE_KEY"),
 }
 
 
@@ -426,7 +426,20 @@ WORKER_ENTRYPOINT_RPC_POLICY: dict[
         ),
     },
     "research-ai-gateway": {
-        "GatewayService": (False, ("complete",)),
+        "GatewayService": (
+            False,
+            (
+                "cancelControlledPaper",
+                "complete",
+                "finalizeControlledPaper",
+                "heartbeatControlledPaper",
+                "queryControlledPaper",
+                "reserveControlledPaper",
+            ),
+        ),
+    },
+    "research-mass-eval": {
+        "PilotReadyPublicationService": (True, ("publishPilotReady",)),
     },
 }
 
@@ -457,8 +470,10 @@ DURABLE_OBJECT_RPC_POLICY: dict[str, dict[str, tuple[str, ...]]] = {
         "BudgetLedger": (
             "cancelPreProvider",
             "finalizeExact",
+            "finalizeOwnedPaper",
             "heartbeat",
             "markProviderStarted",
+            "queryOwned",
             "release",
             "reserve",
             "reserveOwned",

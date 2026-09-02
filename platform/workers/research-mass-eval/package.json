@@ -11,6 +11,7 @@
     "dev": "wrangler dev --config=wrangler.toml --env=\"\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:runtime": "vitest run --config vitest.runtime.config.mts",
     "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
     "tail": "wrangler tail --config=wrangler.toml --env=production",
     "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"

@@ -4,7 +4,7 @@ import { PERSONAL_RESEARCH_RUNNER_VERSION } from "./personal_research_contract";
 import { verifiedPersonalResearchContainer } from "./personal_research_runner";
 import type { Env } from "./types";
 
-const RUNNER_NAME = "personal-v14-research-exact-four-test";
+const RUNNER_NAME = "personal-v14-research-draft-test";
 
 function readyResponse(service: string): Response {
   const body = JSON.stringify({ ok: true, service });

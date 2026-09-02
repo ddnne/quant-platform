@@ -122,25 +122,25 @@ const PERSONAL_RESEARCH_COHORT_DIGESTS: Record<
   `sha256:${string}`
 > = {
   "price-relative-v1":
-    "sha256:013cf72dec3f9fe93b68132f8861eaa0555f08d418d9b00d80b8eb635e61c439",
+    "sha256:461d3f7db9490b32e2016778e6f675bed29c0721767a95ad585015805ece5c59",
   "fundamental-relative-v1":
-    "sha256:c15acc9bbc44e2e5650f63a30be05351f7658145d393c995f20e102d1eff3001",
+    "sha256:8c736cd12c374427608b591a4243d3fa6f992fdf32e2716e7ab07d022d337191",
   "diverse-core-v1":
-    "sha256:ea37baf3423e5d84e61d4c80c59bdfe8184342dd3dee28646bd339cd45085a84",
+    "sha256:d78fb2c6adb3a21acd6b90d37c197c1bd7710e986ea882bbbec28f4d21c53397",
   "compact-market-diverse-v1":
-    "sha256:e56ab7e48b1e59e583140ab7cf5382c93d40842cf946b6fb3bf06a75fe296682",
+    "sha256:9aa75968550fd18c995597cdd3b3b545cba3c74d5bb1e1ebd0a94a7d141a265e",
   "sector-relative-ls-v1":
-    "sha256:584bbf0052ad1eee6ec31cacdf1298c13c8a59b9eb6928267935fc17e34289be",
+    "sha256:6e4de725046c0b0e55416891d83580b9acb753c00a2beecfd3a26ee0c87a74f9",
   "price-relative-am-pm-v1":
-    "sha256:34e304efb8ff848a268a1e563985d1456316edf1b9ca874eba7262377e17db93",
+    "sha256:f1ed5dda6f4b8afe502a2b71a8ae3e5d3157caa69e5380fc97c9e7447ab181ce",
   "fundamental-relative-am-pm-v1":
-    "sha256:9bc404066d3e705e085380a3c2f15bac41c8a24a931b12518ab92abbddcaf67f",
+    "sha256:127d5558da094e0751a3d6c81d103d65d88e6549fe69bd3a9ef560dd6929248e",
   "diverse-core-am-pm-v1":
-    "sha256:77136481d8a6b20fb8dc8188b8d6adb2837050b8185a8f8abac92ca10811adde",
+    "sha256:0c9fc5cba93c68cbfec3951a56f09949674c1a01cb4d4d4cf406082c01033c10",
   "compact-market-diverse-am-pm-v1":
-    "sha256:b1c96581aa3f24a9f4df65126c4dd8c443ddb965e7105f9bbea392e72e383eb0",
+    "sha256:f8c7e7aa76663f9e9b73d5835ce3e3b45b5dd31935e5d00ec5684c22b3b3ad95",
   "sector-relative-ls-am-pm-v1":
-    "sha256:e12e65393985ab8b7cc2b0b922a362a055404777a49fda7250f735d47f0b073b",
+    "sha256:9d4135b9b78ad16d071f8a0b26a88b29d315c4d53eace3cb7600aaccf450b73c",
 };
 
 const JOB_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;

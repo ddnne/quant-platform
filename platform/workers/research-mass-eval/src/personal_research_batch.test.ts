@@ -17,6 +17,8 @@ vi.mock("@cloudflare/containers", () => ({
     ) {
       containerRegistry.outboundByHost = value;
     }
+
+    static outboundHandlers: Record<string, (...args: never[]) => unknown> | undefined;
   },
   ContainerProxy: class {},
 }));
@@ -107,14 +109,20 @@ describe("personal research bounded batch", () => {
     );
   });
 
-  it("keeps exact-four on one Container per job", async () => {
-    const request = job("exact-four-one");
+  it("keeps a draft factor cohort on one Container per job", async () => {
+    const request = job("draft-factor-one");
     const fetch = vi.fn(async (incoming: Request) =>
       new URL(incoming.url).pathname === "/ready"
         ? ready()
-        : new Response(JSON.stringify({ accepted: true, exact_four: true }), {
-            status: 202,
-          }),
+        : new Response(
+            JSON.stringify({
+              accepted: true,
+              purpose_id: "draft_factor_cohort_v1",
+            }),
+            {
+              status: 202,
+            },
+          ),
     );
     const getByName = vi.fn(() => ({ destroy: vi.fn(), fetch }));
     const env = {
@@ -133,7 +141,7 @@ describe("personal research bounded batch", () => {
     )?.[0] as Request;
     expect(await posted.json()).toMatchObject({
       cohort_id: "diverse-core-v1",
-      job_id: "exact-four-one",
+      job_id: "draft-factor-one",
       runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
     });
   });
@@ -167,7 +175,7 @@ describe("personal research bounded batch", () => {
     expect(await posted.json()).toEqual({
       ...request,
       cohort_digest:
-        "sha256:77136481d8a6b20fb8dc8188b8d6adb2837050b8185a8f8abac92ca10811adde",
+        "sha256:0c9fc5cba93c68cbfec3951a56f09949674c1a01cb4d4d4cf406082c01033c10",
       request_digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       result_key: `research/personal/jobs/job=${request.job_id}/result.tar.gz`,
       manifest_key: `research/personal/jobs/job=${request.job_id}/manifest.json`,

@@ -174,8 +174,10 @@ describe("BudgetLedger in the Workers runtime", () => {
       rpc_methods: [
         "cancelPreProvider",
         "finalizeExact",
+        "finalizeOwnedPaper",
         "heartbeat",
         "markProviderStarted",
+        "queryOwned",
         "release",
         "reserve",
         "reserveOwned",
@@ -202,7 +204,14 @@ describe("BudgetLedger in the Workers runtime", () => {
     expect(inventory).toMatchObject({
       name: "GatewayService",
       fetch_reserved_special: false,
-      rpc_methods: ["complete"],
+      rpc_methods: [
+        "cancelControlledPaper",
+        "complete",
+        "finalizeControlledPaper",
+        "heartbeatControlledPaper",
+        "queryControlledPaper",
+        "reserveControlledPaper",
+      ],
     });
     expect(
       Reflect.ownKeys(GatewayService.prototype)

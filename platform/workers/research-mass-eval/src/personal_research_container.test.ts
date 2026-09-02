@@ -4,6 +4,9 @@ const containerRegistry = vi.hoisted(() => ({
   outboundByHost: undefined as
     | Record<string, (...args: never[]) => unknown>
     | undefined,
+  outboundHandlers: undefined as
+    | Record<string, (...args: never[]) => unknown>
+    | undefined,
 }));
 
 vi.mock("@cloudflare/containers", () => ({
@@ -16,6 +19,16 @@ vi.mock("@cloudflare/containers", () => ({
       value: Record<string, (...args: never[]) => unknown>,
     ) {
       containerRegistry.outboundByHost = value;
+    }
+
+    static get outboundHandlers() {
+      return containerRegistry.outboundHandlers;
+    }
+
+    static set outboundHandlers(
+      value: Record<string, (...args: never[]) => unknown>,
+    ) {
+      containerRegistry.outboundHandlers = value;
     }
   },
   ContainerProxy: class {},
@@ -145,6 +158,8 @@ describe("personal research Container admission", () => {
     expect(containerRegistry.outboundByHost?.["history.source"]).toBe(
       personalHistorySourceOutbound,
     );
+    expect(containerRegistry.outboundByHost?.["controlled.r2"]).toBeDefined();
+    expect(containerRegistry.outboundHandlers?.controlledPilotSnapshot).toBeDefined();
     expect(new PersonalResearchContainer().enableInternet).toBe(false);
     expect(
       Object.prototype.hasOwnProperty.call(
@@ -206,7 +221,7 @@ describe("personal research Container admission", () => {
     const body = await (forwarded as Request).json();
     expect(body).toMatchObject({
       cohort_digest:
-        "sha256:ea37baf3423e5d84e61d4c80c59bdfe8184342dd3dee28646bd339cd45085a84",
+        "sha256:d78fb2c6adb3a21acd6b90d37c197c1bd7710e986ea882bbbec28f4d21c53397",
       cohort_id: "diverse-core-v1",
       runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
       snapshot_key: REQUEST.snapshot_key,
@@ -230,7 +245,7 @@ describe("personal research Container admission", () => {
     expect(new URL(forwarded.url).pathname).toBe("/v1/run");
     expect(await forwarded.json()).toMatchObject({
       cohort_digest:
-        "sha256:77136481d8a6b20fb8dc8188b8d6adb2837050b8185a8f8abac92ca10811adde",
+        "sha256:0c9fc5cba93c68cbfec3951a56f09949674c1a01cb4d4d4cf406082c01033c10",
       cohort_id: "diverse-core-am-pm-v1",
       runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
       universe_id: "topix500",

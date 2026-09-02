@@ -88,7 +88,7 @@ export const PERSONAL_VOL_AM_PM_CONTRACT = {
   ...PERSONAL_VOL_AM_PM_TEMPORAL_CONTRACT,
   hold_sessions: PERSONAL_VOL_HOLD_SESSIONS,
   one_way_cost: PERSONAL_VOL_ONE_WAY_COST,
-  exact_four: true,
+  purpose_id: "draft_am_pm_smile_cohort_v1",
   individual_stock_option_volatility_used: false,
   volatility_signal_scope: "nikkei_225_index_options",
   cash_index_executable_fill: false,
@@ -1222,9 +1222,9 @@ export async function runPersonalVolAmPmResearch(
     am_pm_contract: PERSONAL_VOL_AM_PM_CONTRACT,
     am_pm_contract_digest: digest,
     execution_contract: {
-      exact_four: true,
-      exact_four_evaluation_complete: exactFourEvaluationComplete,
-      exact_four_common_window_comparable: allRequiredWindowsComparable,
+      purpose_id: "draft_am_pm_smile_cohort_v1",
+      cohort_evaluation_complete: exactFourEvaluationComplete,
+      cohort_common_window_comparable: allRequiredWindowsComparable,
       common_successful_windows: allRequiredWindowsComparable
         ? commonSuccessfulWindows
         : [],

@@ -15,8 +15,9 @@ import type {
   PeriodSpec,
 } from "./types";
 
-/** Legacy D-close to D+1-close exact-four replay. AM/PM is a separate identity. */
+/** Legacy D-close to D+1-close draft vol overlay. AM/PM is a separate identity. */
 export const PERSONAL_VOL_COHORT_ID = "personal-vol-ratio-v2" as const;
+export const PERSONAL_VOL_PURPOSE_ID = "draft_vol_overlay_cohort_v1" as const;
 export const PERSONAL_VOL_PANELS_PREFIX =
   "research/mass_eval/panels_cache/527c1065afe14601/panels" as const;
 export const PERSONAL_VOL_ONE_WAY_COST = 0.001;
@@ -860,9 +861,9 @@ export async function runPersonalVolResearch(
     cohort_id: request.cohort_id,
     research_mode: "personal_draft_screening",
     execution_contract: {
-      exact_four: true,
-      exact_four_evaluation_complete: exactFourEvaluationComplete,
-      exact_four_common_window_comparable: allRequiredWindowsComparable,
+      purpose_id: PERSONAL_VOL_PURPOSE_ID,
+      cohort_evaluation_complete: exactFourEvaluationComplete,
+      cohort_common_window_comparable: allRequiredWindowsComparable,
       common_successful_windows: commonSuccessfulWindows,
       strategy_count: PERSONAL_VOL_STRATEGIES.length,
       hold_sessions: PERSONAL_VOL_HOLD_SESSIONS,

@@ -23,6 +23,11 @@ import {
   writeSubmittedState,
 } from "./personal_job_state";
 import { personalResearchR2Outbound } from "./personal_research_r2";
+import {
+  CONTROLLED_R2_HOST,
+  controlledPilotR2Outbound,
+  denyControlledPilotR2Outbound,
+} from "./controlled_pilot_r2";
 import { verifiedPersonalResearchContainer } from "./personal_research_runner";
 import type { Env } from "./types";
 
@@ -43,14 +48,34 @@ export class PersonalResearchContainer extends Container<Env> {
   // manifest, so ordinary runs do not remain billable for this full window.
   sleepAfter = "180m";
   enableInternet = false;
+
+  async scheduleControlledPilot(jobId: string): Promise<void> {
+    await this.ctx.storage.put("controlled_job_id", jobId);
+    await this.ctx.storage.setAlarm(Date.now() + 250);
+  }
+
+  async alarm(): Promise<void> {
+    const jobId = await this.ctx.storage.get("controlled_job_id");
+    if (typeof jobId !== "string" || !jobId) return;
+    const { runControlledPilotJob, controlledPilotStatus } = await import("./controlled_pilot");
+    await runControlledPilotJob(this.env, jobId);
+    const status = await controlledPilotStatus(this.env, jobId);
+    if (status.status === 202) {
+      await this.ctx.storage.setAlarm(Date.now() + 5_000);
+    }
+  }
 }
 
 // Assignment must go through Container's inherited static setter. A native
 // `static outboundByHost = ...` class field shadows that setter and leaves the
 // ContainerProxy registry empty, so every otherwise-allowed request returns
 // the proxy's fail-closed 520 response.
+PersonalResearchContainer.outboundHandlers = {
+  controlledPilotSnapshot: controlledPilotR2Outbound,
+};
 PersonalResearchContainer.outboundByHost = {
   "research.r2": personalResearchR2Outbound,
+  [CONTROLLED_R2_HOST]: denyControlledPilotR2Outbound,
   "history.source": personalHistorySourceOutbound,
 };
 

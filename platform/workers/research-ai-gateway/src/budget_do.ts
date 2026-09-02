@@ -1621,6 +1621,67 @@ export async function reserveOwnedBudget(
   return reserveBudget(storage, input, now);
 }
 
+/** Lookup only. Never creates occupancy or a lease. */
+export async function queryOwnedBudget(
+  storage: BudgetStorage,
+  input: {
+    idempotency_key: string;
+    request_digest: string;
+    reserve_owner_capability: string;
+  },
+  now = Date.now(),
+): Promise<
+  BudgetResult<{
+    reservation: PublicReservation;
+    lease: Lease | null;
+    existing: true;
+    owner_recovered: boolean;
+    budget_run_id: string;
+  }>
+> {
+  const key = requireIdempotencyKey(input.idempotency_key);
+  if (!key.ok) return key;
+  const boundDigest = requireNonemptyRequestDigest(input.request_digest);
+  if (!boundDigest.ok) return boundDigest;
+  const owner = requireReserveOwnerCapability(input.reserve_owner_capability);
+  if (!owner.ok) return owner;
+  const ownerHash = await hashReserveOwnerCapability(
+    owner.reserve_owner_capability,
+    key.idempotency_key,
+    boundDigest.request_digest,
+  );
+  return storage.runAtomic(async (transaction) => {
+    const state = await loadState(transaction, now);
+    recoverExpired(state, now);
+    const existing = state.reservations[key.idempotency_key];
+    if (!existing) {
+      await saveState(transaction, state);
+      return { ok: false, error: "reservation_not_found" };
+    }
+    if (existing.request_digest !== boundDigest.request_digest) {
+      await saveState(transaction, state);
+      return { ok: false, error: "request_digest_mismatch" };
+    }
+    if (
+      existing.reserve_owner_capability_hash !== null &&
+      !reserveOwnerMatches(existing, ownerHash)
+    ) {
+      await saveState(transaction, state);
+      return { ok: false, error: "reservation_owned_by_other_invocation" };
+    }
+    const lease = existing.lease_id ? state.leases[existing.lease_id] ?? null : null;
+    await saveState(transaction, state);
+    return {
+      ok: true,
+      reservation: publicReservation(existing),
+      lease,
+      existing: true,
+      owner_recovered: reserveOwnerMatches(existing, ownerHash),
+      budget_run_id: existing.reservation_id,
+    };
+  });
+}
+
 const FORBIDDEN_CAPABILITY_KEYS = new Set<SensitiveCapabilityField>([
   "owner_capability_hash",
   "reserve_owner_capability",
@@ -2550,6 +2611,121 @@ export async function heartbeatLease(
  * response was lost; a duplicate client invocation has a different capability
  * and cannot release another invocation's occupancy.
  */
+
+export async function finalizeOwnedPaperReservation(
+  storage: BudgetStorage,
+  input: {
+    idempotency_key: string;
+    request_digest: string;
+    reserve_owner_capability: string;
+    lease_id: string;
+  },
+  now = Date.now(),
+): Promise<
+  BudgetResult<{
+    reservation: PublicReservation;
+    used: Counters;
+    frozen: boolean;
+    budget_run_id: string;
+  }>
+> {
+  const key = requireIdempotencyKey(input.idempotency_key);
+  if (!key.ok) return key;
+  const boundDigest = requireNonemptyRequestDigest(input.request_digest);
+  if (!boundDigest.ok) return boundDigest;
+  const owner = requireReserveOwnerCapability(input.reserve_owner_capability);
+  if (!owner.ok) return owner;
+  const ownerHash = await hashReserveOwnerCapability(
+    owner.reserve_owner_capability,
+    key.idempotency_key,
+    boundDigest.request_digest,
+  );
+  const leaseId = typeof input.lease_id === "string" ? input.lease_id.trim() : "";
+  if (!leaseId) return { ok: false, error: "lease_id required" };
+
+  return storage.runAtomic(async (transaction) => {
+    const state = await loadState(transaction, now);
+    recoverExpired(state, now);
+    const reservation = state.reservations[key.idempotency_key];
+    if (!reservation) {
+      await saveState(transaction, state);
+      return { ok: false, error: "reservation_not_found" };
+    }
+    if (!reserveOwnerMatches(reservation, ownerHash)) {
+      await saveState(transaction, state);
+      return { ok: false, error: "reserve_owner_capability_invalid" };
+    }
+    const bound = requireExactLeaseAndDigest(
+      { request_digest: boundDigest.request_digest, lease_id: leaseId },
+      reservation,
+    );
+    if (bound) {
+      await saveState(transaction, state);
+      return bound;
+    }
+    if (reservation.provider_started_at !== null) {
+      await saveState(transaction, state);
+      return { ok: false, error: "reservation_not_cancellable" };
+    }
+    if (reservation.status === "reconciled") {
+      await saveState(transaction, state);
+      return {
+        ok: true,
+        reservation: publicReservation(reservation),
+        used: amountsFromCounters(state.used),
+        frozen: state.frozen,
+        budget_run_id: reservation.reservation_id,
+      };
+    }
+    if (reservation.status === "released") {
+      await saveState(transaction, state);
+      return { ok: false, error: "reservation_released" };
+    }
+    if (
+      reservation.amounts.model_calls !== 0 ||
+      reservation.amounts.input_tokens !== 0 ||
+      reservation.amounts.output_tokens !== 0 ||
+      reservation.amounts.cached_tokens !== 0 ||
+      reservation.amounts.cost_usd !== 0
+    ) {
+      await saveState(transaction, state);
+      return { ok: false, error: "caller_settlement_rejected" };
+    }
+    const actual = zeroCounters();
+    actual.paper_runs = reservation.amounts.paper_runs;
+    actual.experiment_plans = reservation.amounts.experiment_plans;
+    actual.generations = reservation.amounts.generations;
+    state.reserved = applyDelta(state.reserved, reservation.amounts, -1);
+    state.used = applyDelta(state.used, actual, 1);
+    reservation.status = "reconciled";
+    reservation.actual = amountsFromCounters(actual);
+    reservation.settlement = {
+      outcome: "success",
+      usage_source: "legacy_unattributed",
+      estimated_cost_usd: 0,
+      actual_cost_usd: 0,
+      billed_cost_usd: 0,
+      actual_input_tokens: 0,
+      actual_output_tokens: 0,
+      actual_cached_tokens: 0,
+      provider_model: null,
+      pricing_policy_id: null,
+      pricing_policy_digest: null,
+    };
+    reservation.reconciled_at = now;
+    reservation.finalize_error = null;
+    closeReservationLease(state, reservation, now);
+    await saveState(transaction, state);
+    return {
+      ok: true,
+      reservation: publicReservation(reservation),
+      used: amountsFromCounters(state.used),
+      frozen: false,
+      budget_run_id: reservation.reservation_id,
+    };
+  });
+}
+
 export async function cancelPreProviderReservation(
   storage: BudgetStorage,
   input: {
@@ -2757,6 +2933,12 @@ export function createBudgetCoordinator(storage: BudgetStorage) {
     ): ReturnType<typeof reserveOwnedBudget> {
       return reserveOwnedBudget(storage, input, now);
     },
+    queryOwned(
+      input: Parameters<typeof queryOwnedBudget>[1],
+      now?: number,
+    ): ReturnType<typeof queryOwnedBudget> {
+      return queryOwnedBudget(storage, input, now);
+    },
     cancelPreProvider(
       input: Parameters<typeof cancelPreProviderReservation>[1],
       now?: number,
@@ -2774,6 +2956,12 @@ export function createBudgetCoordinator(storage: BudgetStorage) {
       now?: number,
     ): ReturnType<typeof finalizeBudget> {
       return finalizeBudget(storage, input, now);
+    },
+    finalizeOwnedPaper(
+      input: Parameters<typeof finalizeOwnedPaperReservation>[1],
+      now?: number,
+    ): ReturnType<typeof finalizeOwnedPaperReservation> {
+      return finalizeOwnedPaperReservation(storage, input, now);
     },
     settleUncertain(
       input: Parameters<typeof settleUncertainBudget>[1],

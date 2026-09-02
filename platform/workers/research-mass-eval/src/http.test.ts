@@ -8,15 +8,138 @@ import {
   putImmutableJson,
   putJsonCreateOnly,
   readBoundedJson,
+  readBoundedRequestBytes,
   sha256Hex,
   verifyManifestChildDigest,
 } from "./http";
-import { dispatchMassEvalFetch } from "./http_routes";
+import { CONTROLLED_PILOT_MAX_REQUEST_BYTES, dispatchMassEvalFetch } from "./http_routes";
 import type { Env } from "./types";
 
 function req(headers: Record<string, string>): Request {
   return new Request("https://example.test/v1/daily-path", { method: "POST", headers });
 }
+
+function countingStream(total: number, chunkSize: number, stats: { pulled: number; cancelled: boolean }) {
+  let sent = 0;
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (stats.cancelled || sent >= total) {
+        controller.close();
+        return;
+      }
+      const n = Math.min(chunkSize, total - sent);
+      sent += n;
+      stats.pulled += n;
+      controller.enqueue(new Uint8Array(n).fill(0x78));
+    },
+    cancel() {
+      stats.cancelled = true;
+    },
+  });
+}
+
+describe("readBoundedRequestBytes", () => {
+  it("rejects missing-header, chunked, false-small, and 8MiB bodies without pulling the full stream", async () => {
+    const maximum = CONTROLLED_PILOT_MAX_REQUEST_BYTES;
+    const huge = 8 * 1024 * 1024;
+    const chunk = 64 * 1024;
+
+    const noHeaderStats = { pulled: 0, cancelled: false };
+    const noHeader = await readBoundedRequestBytes(
+      new Request("https://example.test/v1/controlled-pilot", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: countingStream(huge, chunk, noHeaderStats),
+        duplex: "half",
+      } as RequestInit),
+      maximum,
+    );
+    expect(noHeader.ok).toBe(false);
+    if (!noHeader.ok) {
+      expect(noHeader.status).toBe(413);
+    }
+    expect(noHeaderStats.cancelled).toBe(true);
+    expect(noHeaderStats.pulled).toBeLessThanOrEqual(maximum + chunk);
+    expect(noHeaderStats.pulled).toBeLessThan(huge);
+
+    const chunkedStats = { pulled: 0, cancelled: false };
+    const chunked = await readBoundedRequestBytes(
+      new Request("https://example.test/v1/controlled-pilot", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "transfer-encoding": "chunked",
+        },
+        body: countingStream(huge, chunk, chunkedStats),
+        duplex: "half",
+      } as RequestInit),
+      maximum,
+    );
+    expect(chunked.ok).toBe(false);
+    if (!chunked.ok) {
+      expect(chunked.status).toBe(413);
+    }
+    expect(chunkedStats.cancelled).toBe(true);
+    expect(chunkedStats.pulled).toBeLessThan(huge);
+
+    const falseSmallStats = { pulled: 0, cancelled: false };
+    const falseSmall = await readBoundedRequestBytes(
+      new Request("https://example.test/v1/controlled-pilot", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": "4",
+        },
+        body: countingStream(huge, chunk, falseSmallStats),
+        duplex: "half",
+      } as RequestInit),
+      maximum,
+    );
+    expect(falseSmall.ok).toBe(false);
+    if (!falseSmall.ok) {
+      expect([400, 413]).toContain(falseSmall.status);
+    }
+    expect(falseSmallStats.cancelled).toBe(true);
+    expect(falseSmallStats.pulled).toBeLessThan(huge);
+
+    const declaredHugeStats = { pulled: 0, cancelled: false };
+    const declaredHuge = await readBoundedRequestBytes(
+      new Request("https://example.test/v1/controlled-pilot", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(huge),
+        },
+        body: countingStream(huge, chunk, declaredHugeStats),
+        duplex: "half",
+      } as RequestInit),
+      maximum,
+    );
+    expect(declaredHuge.ok).toBe(false);
+    if (!declaredHuge.ok) {
+      expect(declaredHuge.status).toBe(413);
+    }
+    expect(declaredHugeStats.pulled).toBe(0);
+
+    const atLimit = new Uint8Array(maximum).fill(0x20);
+    atLimit.set(new TextEncoder().encode('{"ok":true}'));
+    const exact = await readBoundedRequestBytes(
+      new Request("https://example.test/v1/controlled-pilot", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(maximum),
+        },
+        body: atLimit,
+      }),
+      maximum,
+    );
+    expect(exact.ok).toBe(true);
+    if (exact.ok) {
+      expect(exact.bytes.byteLength).toBe(maximum);
+    }
+  });
+});
 
 describe("readBoundedJson", () => {
   it("rejects missing content-length before buffering the body", async () => {
@@ -653,5 +776,189 @@ describe("POST /v1/children-then-manifest", () => {
     expect(payload.go).toBe(false);
     expect(payload.manifest.created).toBe(true);
     expect(mem.putOrder).toEqual(["job/child.json", "job/manifest.json"]);
+  });
+});
+
+describe("POST /v1/controlled-pilot request byte cap", () => {
+  function controlledEnv(): Env {
+    return {
+      MASS_EVAL_TOKEN: "secret",
+      STRUCTURED_BUCKET: {} as R2Bucket,
+      AI_GATEWAY: {} as Env["AI_GATEWAY"],
+    } as Env;
+  }
+
+  const validJson = JSON.stringify({
+    idempotency_key: "controlled-job-1",
+    ready_attestation_id: "attestation-cloud-1",
+    snapshot_id: `sha256:${"ab".repeat(32)}`,
+  });
+
+  it("keeps unauthorized requests at 401 before the handler", async () => {
+    const submit = async () => new Response("should-not-run", { status: 200 });
+    const res = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/controlled-pilot", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: validJson,
+      }),
+      controlledEnv(),
+      { ...noopHandlers, submitControlledPilot: submit },
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it("rejects no-header, chunked, false-small, and 8MiB bodies without forwarding full bytes", async () => {
+    const seen: number[] = [];
+    const submit = async (
+      _env: Env,
+      _body: unknown,
+      _ctx?: ExecutionContext,
+      rawBytes?: Uint8Array,
+    ) => {
+      seen.push(rawBytes?.byteLength ?? -1);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    };
+    const handlers = { ...noopHandlers, submitControlledPilot: submit };
+    const env = controlledEnv();
+    const huge = 8 * 1024 * 1024;
+    const chunk = 64 * 1024;
+
+    const noHeaderStats = { pulled: 0, cancelled: false };
+    const noHeader = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/controlled-pilot", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-Mass-Eval-Token": "secret",
+        },
+        body: countingStream(huge, chunk, noHeaderStats),
+        duplex: "half",
+      } as RequestInit),
+      env,
+      handlers,
+    );
+    expect(noHeader.status).toBe(413);
+    expect(noHeaderStats.cancelled).toBe(true);
+    expect(noHeaderStats.pulled).toBeLessThan(huge);
+
+    const chunkedStats = { pulled: 0, cancelled: false };
+    const chunked = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/controlled-pilot", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "transfer-encoding": "chunked",
+          "X-Mass-Eval-Token": "secret",
+        },
+        body: countingStream(huge, chunk, chunkedStats),
+        duplex: "half",
+      } as RequestInit),
+      env,
+      handlers,
+    );
+    expect(chunked.status).toBe(413);
+    expect(chunkedStats.cancelled).toBe(true);
+    expect(chunkedStats.pulled).toBeLessThan(huge);
+
+    const falseSmallStats = { pulled: 0, cancelled: false };
+    const falseSmall = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/controlled-pilot", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": "4",
+          "X-Mass-Eval-Token": "secret",
+        },
+        body: countingStream(huge, chunk, falseSmallStats),
+        duplex: "half",
+      } as RequestInit),
+      env,
+      handlers,
+    );
+    expect([400, 413]).toContain(falseSmall.status);
+    expect(falseSmallStats.cancelled).toBe(true);
+    expect(falseSmallStats.pulled).toBeLessThan(huge);
+
+    const eightMibStats = { pulled: 0, cancelled: false };
+    const eightMib = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/controlled-pilot", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(huge),
+          "X-Mass-Eval-Token": "secret",
+        },
+        body: countingStream(huge, chunk, eightMibStats),
+        duplex: "half",
+      } as RequestInit),
+      env,
+      handlers,
+    );
+    expect(eightMib.status).toBe(413);
+    expect(eightMibStats.pulled).toBeLessThan(huge);
+    expect(seen).toEqual([]);
+
+    let mockPulled = 0;
+    let mockCancelled = false;
+    const declaredMock = {
+      method: "POST",
+      url: "https://example.test/v1/controlled-pilot",
+      headers: {
+        get(name: string) {
+          const key = name.toLowerCase();
+          if (key === "content-length") return String(huge);
+          if (key === "x-mass-eval-token") return "secret";
+          if (key === "content-type") return "application/json";
+          return null;
+        },
+      },
+      body: {
+        cancel: async () => {
+          mockCancelled = true;
+        },
+        getReader() {
+          mockPulled += 1;
+          throw new Error("must not read a declared oversized controlled body");
+        },
+      },
+    } as unknown as Request;
+    const declared = await dispatchMassEvalFetch(declaredMock, env, handlers);
+    expect(declared.status).toBe(413);
+    expect(mockCancelled).toBe(true);
+    expect(mockPulled).toBe(0);
+    expect(seen).toEqual([]);
+  });
+
+  it("forwards an at-limit valid body", async () => {
+    const pad = CONTROLLED_PILOT_MAX_REQUEST_BYTES - validJson.length;
+    expect(pad).toBeGreaterThan(0);
+    const body = validJson + " ".repeat(pad);
+    const seen: Uint8Array[] = [];
+    const submit = async (
+      _env: Env,
+      _body: unknown,
+      _ctx?: ExecutionContext,
+      rawBytes?: Uint8Array,
+    ) => {
+      if (rawBytes) seen.push(rawBytes);
+      return new Response(JSON.stringify({ ok: true, accepted: true }), { status: 200 });
+    };
+    const res = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/controlled-pilot", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(body.length),
+          "X-Mass-Eval-Token": "secret",
+        },
+        body,
+      }),
+      controlledEnv(),
+      { ...noopHandlers, submitControlledPilot: submit },
+    );
+    expect(res.status).toBe(200);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.byteLength).toBe(CONTROLLED_PILOT_MAX_REQUEST_BYTES);
   });
 });

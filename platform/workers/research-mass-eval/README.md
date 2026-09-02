@@ -29,15 +29,15 @@ research/mass_eval/job={id}/panels_meta.json
 research/mass_eval/job={id}/logic={logic_id}/result.json   # when n_logics ≤ 50
 ```
 
-The separate personal route is the normal operator path for DRAFT exact-four
-research. R2 is authoritative. D1 is small job state. The Container expands
+The separate personal route is the normal operator path for DRAFT
+four-candidate research. R2 is authoritative. D1 is small job state. The Container expands
 one immutable snapshot onto ephemeral disk, runs the repository `qp-research`
 engine, then discards the SQLite copy. Persistent local market/price/fundamental
 history is not a normal path. It does not change or arm the Mass capability.
 Do not start from a local SQLite file and gzip/upload it. `qp-research` on a
 laptop is developer/recovery compatibility only (`QP_ALLOW_LOCAL_MARKET_DATA=1`).
 
-## Personal cloud exact-four
+## Personal cloud Draft research
 
 The normal operator path is `POST /v1/personal-snapshot-build` (then GET
 status) followed by `POST /v1/personal-research-batch`. R2 is the snapshot
@@ -50,7 +50,7 @@ are `price-relative-v1`, `fundamental-relative-v1`, and `diverse-core-v1`.
 `compact-market-diverse-v1` is the separate market-relative cohort for
 `topix_core30`, `topix_large70`, and `topix100`; the sector-relative cohorts
 reject those compact universes because they cannot sustain 33 industry buckets.
-`sector-relative-ls-v1` is a broad-universe-only exact-four DRAFT cohort. It
+`sector-relative-ls-v1` is a broad-universe-only four-candidate DRAFT cohort. It
 executes Paper and Risk only once per period at the fixed 3% annual baseline.
 The 0% and 10% sensitivity rows deterministically reprice the same observed
 post-fill short-notional trace; they do not rerun the market, rank calculation,
@@ -74,7 +74,7 @@ The input is closed:
 {
   "cohort_id": "diverse-core-v1",
   "universe_id": "topix_all",
-  "job_id": "exact-four-20260829",
+  "job_id": "draft-factor-20260829",
   "snapshot_key": "research/personal/snapshots/sha256=<64-lowercase-hex>.sqlite.gz",
   "snapshot_sha256": "<64-lowercase-hex>",
   "period_start": "2022-04-19",
@@ -116,10 +116,10 @@ dispatch on the batch route. Snapshot builds use one singleton Container
 because J-Quants acquisition is globally rate-limited. Every Container exits
 after terminal evidence. The base sleeve, when required, is
 computed before candidate fan-out. Candidate results are restored to registry
-order before the exact-four aggregate is written. Compressed R2/HTTP snapshots
+order before the four-candidate aggregate is written. Compressed R2/HTTP snapshots
 are capped at 4 GiB; expanded SQLite/builder size is capped at 5 GiB. The
 route retains its 165-minute process-group timeout and 180-minute outer
-Container activity window. Exact-four is also capped at 24
+Container activity window. Draft research is also capped at 24
 actual backtests (four validation folds, one stress, and one holdout per
 candidate); financing sensitivity does not multiply that execution count. A
 single request is limited to 7,000 inclusive calendar days as one continuous
@@ -261,7 +261,7 @@ curl -sS -X POST \
     ]
   }" | jq '{ok, job_id, n_logics, n_survivors, r2_keys, ranking}'
 
-# personal exact-four: build an R2 snapshot, then batch research jobs.
+# personal Draft research: build an R2 snapshot, then batch research jobs.
 # R2 is authoritative; Container SQLite is ephemeral. Do not gzip a local
 # SQLite and wrangler-put it.
 WORKER="https://quant-platform-research-mass-eval.<subdomain>.workers.dev"
@@ -285,7 +285,7 @@ echo "$SNAPSHOT_STATUS" | jq .
 SNAPSHOT_KEY=$(echo "$SNAPSHOT_STATUS" | jq -r '.job.snapshot_key')
 SNAPSHOT_SHA256=$(echo "$SNAPSHOT_STATUS" | jq -r '.job.raw_sha256 | ltrimstr("sha256:")')
 
-PERSONAL_JOB_ID="exact-four-$(date -u +%Y%m%dT%H%M%SZ)"
+PERSONAL_JOB_ID="draft-factor-$(date -u +%Y%m%dT%H%M%SZ)"
 curl -sS -X POST \
   "${WORKER}/v1/personal-research-batch" \
   -H 'content-type: application/json' \
@@ -325,7 +325,7 @@ cat /tmp/mass_eval_summary.json | jq .
 |------|------|
 | **this worker** | CF minimal multi-logic batch + R2 artifacts |
 | legacy `research.unique_logic` modules | explicit audit/replay compatibility only |
-| exact-four `POST /v1/daily-path` | bounded daily-path evaluator; no auto-promotion |
+| controlled-pilot `POST /v1/daily-path` | bounded daily-path evaluator (`eval_path=controlled_pilot_v1`); no auto-promotion |
 
 Python helper: `research.offline.factory.try_cf_minimal_mass_batch()` reports this worker.
 
