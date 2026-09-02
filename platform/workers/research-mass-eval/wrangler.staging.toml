@@ -13,9 +13,6 @@ compatibility_date = "2026-08-01"
 workers_dev = true
 preview_urls = false
 
-[secrets]
-required = ["MASS_EVAL_TOKEN", "READY_ED25519_PRIVATE_KEY"]
-
 [[containers]]
 class_name = "PersonalResearchContainer"
 image = "./Dockerfile"
@@ -31,6 +28,9 @@ class_name = "PersonalResearchContainer"
 [[migrations]]
 tag = "personal-research-container-v1"
 new_sqlite_classes = ["PersonalResearchContainer"]
+
+[secrets]
+required = ["MASS_EVAL_TOKEN", "READY_ED25519_PRIVATE_KEY"]
 
 [vars]
 ENVIRONMENT = "staging"
