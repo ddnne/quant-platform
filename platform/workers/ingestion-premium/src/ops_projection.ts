@@ -58,8 +58,14 @@ const SOURCE_WHITELIST = [
 const FORBIDDEN_SQL =
   /\b(jquants_records|jquants_daily_bars|jquants_listed_info|jquants_market_calendar|jsda_otc_bond|jsda_corporate_bond|jsda_repo_rates|fins_summary|fins_details|options)\b/i;
 
-const ROW_CAP = 10_000;
 const RUN_CAP = 100;
+const SOURCE_PAGE_SIZE = 500;
+const SOURCE_PAGE_QUERY_LIMIT = 256;
+const SOURCE_METADATA_BYTE_LIMIT = 24 * 1024 * 1024;
+const SOURCE_ROW_OVERHEAD_BYTES = 64;
+const EVIDENCE_VERIFY_CONCURRENCY = 4;
+const TARGET_INSERT_CHUNK_ROWS = 200;
+const TARGET_INSERT_CHUNK_BYTES = 512 * 1024;
 const ENVELOPE_SCHEMA = "ops-projection-envelope/v1";
 const SIGNED_DOCUMENT_SCHEMA = "ops-projection-signed-envelope/v1";
 const SOURCE_DB = {
@@ -187,6 +193,58 @@ async function sourceFirst<T>(
   return (await db.prepare(sql).bind(...binds).first<T>()) ?? null;
 }
 
+type SourceReadBudget = { pageQueries: number; estimatedBytes: number };
+
+async function sourceAllPaged<T>(
+  db: SourceDb,
+  sql: string,
+  binds: unknown[],
+  budget: SourceReadBudget,
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (let offset = 0; ; offset += SOURCE_PAGE_SIZE) {
+    budget.pageQueries += 1;
+    if (budget.pageQueries > SOURCE_PAGE_QUERY_LIMIT) {
+      throw new OpsProjectionPublishError("source metadata page query budget exceeded");
+    }
+    const page = await sourceAll<T>(
+      db,
+      `${sql}\nLIMIT ? OFFSET ?`,
+      [...binds, SOURCE_PAGE_SIZE, offset],
+    );
+    budget.estimatedBytes +=
+      new TextEncoder().encode(JSON.stringify(page)).byteLength +
+      page.length * SOURCE_ROW_OVERHEAD_BYTES;
+    if (budget.estimatedBytes > SOURCE_METADATA_BYTE_LIMIT) {
+      throw new OpsProjectionPublishError("source metadata memory budget exceeded");
+    }
+    rows.push(...page);
+    if (page.length < SOURCE_PAGE_SIZE) return rows;
+  }
+}
+
+async function mapWithConcurrency<T, R>(
+  values: T[],
+  concurrency: number,
+  project: (value: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.min(concurrency, values.length) },
+    async () => {
+      for (;;) {
+        const index = next;
+        next += 1;
+        if (index >= values.length) return;
+        results[index] = await project(values[index]!, index);
+      }
+    },
+  );
+  await Promise.all(workers);
+  return results;
+}
+
 async function tableExists(db: SourceDb, name: string): Promise<boolean> {
   const rows = await sourceAll<{ name: string }>(
     db,
@@ -246,17 +304,6 @@ export function pinnedReceiptRegistryForEnvironment(
 function loadReceiptRegistry(env: OpsProjectionEnv): ReceiptVerifyRegistry | null {
   return env.RECEIPT_VERIFY_REGISTRY ??
     pinnedReceiptRegistryForEnvironment(env.OPS_PROJECTION_ENVIRONMENT);
-}
-
-async function requireCap(db: SourceDb, table: string): Promise<void> {
-  const rows = await sourceAll<{ n: number }>(
-    db,
-    `SELECT COUNT(*) AS n FROM (SELECT 1 FROM ${table} LIMIT ?)`,
-    [ROW_CAP + 1],
-  );
-  if (requireInt(rows[0]?.n ?? 0, `${table} count`) > ROW_CAP) {
-    throw new OpsProjectionPublishError(`${table} exceeds metadata cap`);
-  }
 }
 
 function latestByKey<T extends Record<string, unknown>>(
@@ -588,6 +635,49 @@ function stamp(
   return rows.map((row) => ({ ...row, projection_generation_id: generationId }));
 }
 
+function projectedInsertStatements(
+  db: D1Database,
+  table: string,
+  rows: Record<string, unknown>[],
+): D1PreparedStatement[] {
+  if (rows.length === 0) return [];
+  const keys = Object.keys(rows[0]!);
+  if (!keys.length || keys.some((key) => !/^[a-z][a-z0-9_]*$/.test(key))) {
+    throw new OpsProjectionPublishError("projected row has unsafe columns", { table });
+  }
+  const signature = keys.join("\0");
+  if (rows.some((row) => Object.keys(row).join("\0") !== signature)) {
+    throw new OpsProjectionPublishError("projected row columns drifted", { table });
+  }
+  const select = keys.map((key) => `json_extract(value, '$.${key}')`).join(",");
+  const statements: D1PreparedStatement[] = [];
+  let page: Record<string, unknown>[] = [];
+  let pageBytes = 2;
+  const flush = () => {
+    if (!page.length) return;
+    statements.push(
+      db.prepare(
+        `INSERT INTO ${table} (${keys.join(",")}) SELECT ${select} FROM json_each(?)`,
+      ).bind(JSON.stringify(page)),
+    );
+    page = [];
+    pageBytes = 2;
+  };
+  for (const row of rows) {
+    const rowBytes = new TextEncoder().encode(JSON.stringify(row)).byteLength + 1;
+    if (rowBytes + 2 > TARGET_INSERT_CHUNK_BYTES) {
+      throw new OpsProjectionPublishError("projected row exceeds D1 bind byte budget", { table });
+    }
+    if (page.length >= TARGET_INSERT_CHUNK_ROWS || pageBytes + rowBytes > TARGET_INSERT_CHUNK_BYTES) {
+      flush();
+    }
+    page.push(row);
+    pageBytes += rowBytes;
+  }
+  flush();
+  return statements;
+}
+
 function compareBytes(left: Uint8Array, right: Uint8Array): number {
   const length = Math.min(left.length, right.length);
   for (let index = 0; index < length; index += 1) {
@@ -700,6 +790,7 @@ export async function publishOpsProjection(
     deployProvenance(env);
   const receiptRegistry = loadReceiptRegistry(env);
   const source = sourceSession(env.DB);
+  const sourceReadBudget: SourceReadBudget = { pageQueries: 0, estimatedBytes: 0 };
 
   const present = new Set<string>();
   for (const name of SOURCE_WHITELIST) {
@@ -715,7 +806,6 @@ export async function publishOpsProjection(
     sourceCursor = row?.change_seq == null ? null : requireInt(row.change_seq, "change_seq");
   }
 
-  if (present.has("ingestion_run_log")) await requireCap(source, "ingestion_run_log");
   const runs = present.has("ingestion_run_log")
     ? await sourceAll<Record<string, unknown>>(
         source,
@@ -726,86 +816,88 @@ export async function publishOpsProjection(
 
   const runIds = runs.map((row) => requireInt(row.id, "run id"));
   const validation = present.has("ingestion_validation") && runIds.length
-    ? await sourceAll<Record<string, unknown>>(
+    ? await sourceAllPaged<Record<string, unknown>>(
         source,
         `SELECT run_id, dataset, status, rows_seen, rows_inserted, rows_revisions, detail
            FROM ingestion_validation
-          WHERE run_id IN (${runIds.map(() => "?").join(",")})
-          ORDER BY run_id DESC, dataset
-          LIMIT ?`,
-        [...runIds, ROW_CAP + 1],
+          WHERE run_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))
+          ORDER BY run_id DESC, dataset`,
+        [JSON.stringify(runIds)],
+        sourceReadBudget,
       )
     : [];
-  if (validation.length > ROW_CAP) {
-    throw new OpsProjectionPublishError("ingestion_validation exceeds metadata cap");
-  }
 
   const watermarks = present.has("ingestion_watermarks")
-    ? await sourceAll<Record<string, unknown>>(
+    ? await sourceAllPaged<Record<string, unknown>>(
         source,
-        "SELECT dataset, last_event_date, last_ingested_at, last_export_cursor FROM ingestion_watermarks ORDER BY dataset LIMIT ?",
-        [ROW_CAP + 1],
+        "SELECT dataset, last_event_date, last_ingested_at, last_export_cursor FROM ingestion_watermarks ORDER BY dataset",
+        [],
+        sourceReadBudget,
       )
     : [];
-  if (watermarks.length > ROW_CAP) {
-    throw new OpsProjectionPublishError("ingestion_watermarks exceeds metadata cap");
-  }
 
-  if (present.has("coverage_segments")) await requireCap(source, "coverage_segments");
   const coverageRaw = present.has("coverage_segments")
-    ? await sourceAll<Record<string, unknown>>(
+    ? await sourceAllPaged<Record<string, unknown>>(
         source,
         `SELECT source, dataset, segment_id, policy_version, segment_start, segment_end,
                 expected_scope, expected_items, status, receipt_run_id, evaluated_at, detail_json
            FROM coverage_segments
-          ORDER BY source, dataset, segment_id, policy_version, evaluated_at DESC, segment_id
-          LIMIT ?`,
-        [ROW_CAP + 1],
+          ORDER BY source, dataset, segment_id, policy_version, evaluated_at DESC, segment_id`,
+        [],
+        sourceReadBudget,
       )
     : [];
-  if (coverageRaw.length > ROW_CAP) {
-    throw new OpsProjectionPublishError("coverage_segments exceeds metadata cap");
-  }
   const coverage = latestByKey(
     coverageRaw,
     (row) => `${row.source}\0${row.dataset}\0${row.segment_id}\0${row.policy_version}`,
   );
 
-  if (present.has("collection_receipts")) await requireCap(source, "collection_receipts");
-  const receiptsRaw = present.has("collection_receipts")
-    ? await sourceAll<Record<string, unknown>>(
+  const receiptsRaw = present.has("collection_receipts") && present.has("coverage_segments")
+    ? await sourceAllPaged<Record<string, unknown>>(
         source,
-        `SELECT source, dataset, segment_id, segment_start, segment_end, expected_scope,
-                expected_items, observed_items, raw_page_count, raw_row_count,
-                structured_row_count, pagination_exhausted, digests_json, run_id,
-                status, error, checked_at
-           FROM collection_receipts
-          ORDER BY source, dataset, segment_id, checked_at DESC, run_id DESC
-          LIMIT ?`,
-        [ROW_CAP + 1],
+        `SELECT receipt.source, receipt.dataset, receipt.segment_id, receipt.segment_start,
+                receipt.segment_end, receipt.expected_scope, receipt.expected_items,
+                receipt.observed_items, receipt.raw_page_count, receipt.raw_row_count,
+                receipt.structured_row_count, receipt.pagination_exhausted,
+                receipt.digests_json, receipt.run_id, receipt.status, receipt.error,
+                receipt.checked_at
+           FROM collection_receipts AS receipt
+           JOIN coverage_segments AS segment
+             ON segment.source=receipt.source
+            AND segment.dataset=receipt.dataset
+            AND segment.segment_id=receipt.segment_id
+            AND segment.receipt_run_id=receipt.run_id
+          WHERE segment.policy_version=?
+            AND segment.status='COMPLETE'
+            AND receipt.status='SUCCESS'
+          ORDER BY receipt.source, receipt.dataset, receipt.segment_id,
+                   receipt.checked_at DESC, receipt.run_id DESC`,
+        [COVERAGE_POLICY_VERSION],
+        sourceReadBudget,
       )
     : [];
-  if (receiptsRaw.length > ROW_CAP) {
-    throw new OpsProjectionPublishError("collection_receipts exceeds metadata cap");
-  }
   const receipts = receiptsRaw;
 
-  if (present.has("raw_retention_manifests")) await requireCap(source, "raw_retention_manifests");
   const rawRows = present.has("raw_retention_manifests")
-    ? await sourceAll<Record<string, unknown>>(
+    ? await sourceAllPaged<Record<string, unknown>>(
         source,
         `SELECT dataset, run_id, manifest_key, page_count, row_count,
                 raw_bytes, data_digest, completeness, created_at
-           FROM raw_retention_manifests
-          ORDER BY dataset, created_at DESC, run_id DESC
-          LIMIT ?`,
-        [ROW_CAP + 1],
+           FROM (
+             SELECT dataset, run_id, manifest_key, page_count, row_count,
+                    raw_bytes, data_digest, completeness, created_at,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY dataset ORDER BY created_at DESC, run_id DESC
+                    ) AS row_rank
+               FROM raw_retention_manifests
+           )
+          WHERE row_rank=1
+          ORDER BY dataset`,
+        [],
+        sourceReadBudget,
       )
     : [];
-  if (rawRows.length > ROW_CAP) {
-    throw new OpsProjectionPublishError("raw_retention_manifests exceeds metadata cap");
-  }
-  const rawLatest = latestByKey(rawRows, (row) => String(row.dataset)).map((row) => ({
+  const rawLatest = rawRows.map((row) => ({
     source: "UNKNOWN",
     dataset: row.dataset,
     segment_id: "dataset",
@@ -820,24 +912,19 @@ export async function publishOpsProjection(
     reason: null,
   }));
 
-  if (present.has("receipt_product_materializations")) {
-    await requireCap(source, "receipt_product_materializations");
-  }
   const productsRaw = present.has("receipt_product_materializations")
-    ? await sourceAll<Record<string, unknown>>(
+    ? await sourceAllPaged<Record<string, unknown>>(
         source,
-        `SELECT operation_id, run_id, source, dataset, segment_id, artifact_key, artifact_digest,
-                row_count, byte_count, manifest_key, manifest_digest, raw_manifest_key,
-                raw_manifest_digest, raw_page_count, raw_row_count, raw_bytes, committed_at
+        `SELECT operation_id, run_id, source, dataset, segment_id, artifact_key,
+                artifact_digest, row_count, byte_count, manifest_key, manifest_digest,
+                raw_manifest_key, raw_manifest_digest, raw_page_count, raw_row_count,
+                raw_bytes, committed_at
            FROM receipt_product_materializations
-          ORDER BY dataset, segment_id, committed_at DESC, operation_id
-          LIMIT ?`,
-        [ROW_CAP + 1],
+          ORDER BY dataset, segment_id, committed_at DESC, operation_id`,
+        [],
+        sourceReadBudget,
       )
     : [];
-  if (productsRaw.length > ROW_CAP) {
-    throw new OpsProjectionPublishError("receipt_product_materializations exceeds metadata cap");
-  }
   const products = latestByKey(
     productsRaw,
     (row) => `${row.source}\0${row.run_id}\0${row.dataset}\0${row.segment_id}`,
@@ -862,62 +949,93 @@ export async function publishOpsProjection(
       !/UNKNOWN/i.test(String(row.raw_manifest_digest || "")),
   );
 
-  if (present.has("receipt_authority_operations")) {
-    await requireCap(source, "receipt_authority_operations");
-  }
-  const operations = present.has("receipt_authority_operations")
-    ? await sourceAll<Record<string, unknown>>(
+  const operations = present.has("receipt_authority_operations") &&
+      present.has("coverage_segments")
+    ? await sourceAllPaged<Record<string, unknown>>(
         source,
-        `SELECT operation_id, run_id, environment, source, contract_id, dataset, segment_id,
-                segment_start, segment_end, state, receipt_digest, request_digest,
-                structured_manifest_key, structured_digest, raw_manifest_key,
-                raw_manifest_digest, raw_page_count, raw_row_count, raw_bytes
-           FROM receipt_authority_operations
-          ORDER BY dataset, segment_id, updated_at DESC, operation_id
-          LIMIT ?`,
-        [ROW_CAP + 1],
+        `SELECT operation.operation_id, operation.run_id, operation.environment,
+                operation.source, operation.contract_id, operation.dataset,
+                operation.segment_id, operation.segment_start, operation.segment_end,
+                operation.state, operation.receipt_digest, operation.request_digest,
+                operation.structured_manifest_key, operation.structured_digest,
+                operation.raw_manifest_key, operation.raw_manifest_digest,
+                operation.raw_page_count, operation.raw_row_count, operation.raw_bytes
+           FROM receipt_authority_operations AS operation
+           JOIN coverage_segments AS segment
+             ON segment.source=operation.source
+            AND segment.dataset=operation.dataset
+            AND segment.segment_id=operation.segment_id
+            AND segment.receipt_run_id=operation.run_id
+          WHERE segment.policy_version=?
+            AND segment.status='COMPLETE'
+            AND operation.environment=?
+            AND operation.state='RECEIPT_COMMITTED'
+          ORDER BY operation.dataset, operation.segment_id,
+                   operation.updated_at DESC, operation.operation_id`,
+        [COVERAGE_POLICY_VERSION, environment],
+        sourceReadBudget,
       )
     : [];
-  if (operations.length > ROW_CAP) {
-    throw new OpsProjectionPublishError("receipt_authority_operations exceeds metadata cap");
-  }
 
-  if (present.has("receipt_authority_requests")) {
-    await requireCap(source, "receipt_authority_requests");
-  }
-  const requests = present.has("receipt_authority_requests")
-    ? await sourceAll<Record<string, unknown>>(
+  const requests = present.has("receipt_authority_requests") &&
+      present.has("receipt_authority_operations") && present.has("coverage_segments")
+    ? await sourceAllPaged<Record<string, unknown>>(
         source,
-        `SELECT operation_id, environment, source, contract_id, dataset, segment_id,
-                state, receipt_digest
-           FROM receipt_authority_requests
-          ORDER BY dataset, segment_id, updated_at DESC, operation_id
-          LIMIT ?`,
-        [ROW_CAP + 1],
+        `SELECT request.operation_id, request.environment, request.source,
+                request.contract_id, request.dataset, request.segment_id,
+                request.state, request.receipt_digest
+           FROM receipt_authority_requests AS request
+           JOIN receipt_authority_operations AS operation
+             ON operation.operation_id=request.operation_id
+           JOIN coverage_segments AS segment
+             ON segment.source=operation.source
+            AND segment.dataset=operation.dataset
+            AND segment.segment_id=operation.segment_id
+            AND segment.receipt_run_id=operation.run_id
+          WHERE segment.policy_version=?
+            AND segment.status='COMPLETE'
+            AND operation.environment=?
+            AND operation.state='RECEIPT_COMMITTED'
+            AND request.environment=?
+            AND request.state='FINALIZED'
+          ORDER BY request.dataset, request.segment_id,
+                   request.updated_at DESC, request.operation_id`,
+        [COVERAGE_POLICY_VERSION, environment, environment],
+        sourceReadBudget,
       )
     : [];
-  if (requests.length > ROW_CAP) {
-    throw new OpsProjectionPublishError("receipt_authority_requests exceeds metadata cap");
-  }
 
   const naturalByOp = new Map<string, number>();
-  if (present.has("receipt_authority_structured_rows")) {
-    await requireCap(source, "receipt_authority_structured_rows");
-    for (const operation of operations) {
-      const operationId = String(operation.operation_id ?? "");
-      if (!operationId) continue;
-      const row = await sourceFirst<{ n: number }>(
+  if (present.has("receipt_authority_structured_rows") &&
+      present.has("receipt_authority_operations") && present.has("coverage_segments")) {
+    const naturalCounts = await sourceAllPaged<{ operation_id: string; n: number }>(
         source,
-        "SELECT COUNT(*) AS n FROM receipt_authority_structured_rows WHERE operation_id=?",
-        [operationId],
+        `SELECT structured.operation_id, COUNT(*) AS n
+           FROM receipt_authority_structured_rows AS structured
+           JOIN receipt_authority_operations AS operation
+             ON operation.operation_id=structured.operation_id
+           JOIN coverage_segments AS segment
+             ON segment.source=operation.source
+            AND segment.dataset=operation.dataset
+            AND segment.segment_id=operation.segment_id
+            AND segment.receipt_run_id=operation.run_id
+          WHERE segment.policy_version=?
+            AND segment.status='COMPLETE'
+            AND operation.environment=?
+            AND operation.state='RECEIPT_COMMITTED'
+          GROUP BY structured.operation_id
+          ORDER BY structured.operation_id`,
+        [COVERAGE_POLICY_VERSION, environment],
+        sourceReadBudget,
       );
-      naturalByOp.set(operationId, requireInt(row?.n ?? 0, "natural key count"));
+    for (const row of naturalCounts) {
+      const operationId = String(row.operation_id ?? "");
+      if (operationId) naturalByOp.set(operationId, requireInt(row.n, "natural key count"));
     }
   }
 
   async function jobCount(table: string, where: string): Promise<number | null> {
     if (!present.has(table)) return null;
-    await requireCap(source, table);
     const row = await sourceFirst<{ n: number }>(
       source,
       `SELECT COUNT(*) AS n FROM ${table} ${where}`,
@@ -1108,6 +1226,23 @@ export async function publishOpsProjection(
     generatedAt = existing.generated_at;
   }
 
+  const projectedCoverageStatuses = await mapWithConcurrency(
+    coverage,
+    EVIDENCE_VERIFY_CONCURRENCY,
+    (row) => projectedSegmentStatus(
+      row, receipts, products, operations, requests, naturalByOp, environment,
+      receiptRegistry,
+      {
+        structured: env.STRUCTURED_BUCKET,
+        authority: env.AUTHORITY_EVIDENCE_BUCKET,
+        raw: env.RAW_BUCKET,
+      },
+    ),
+  );
+  const statusByCoverageRow = new Map(
+    coverage.map((row, index) => [row, projectedCoverageStatuses[index] ?? "UNKNOWN"]),
+  );
+
   const catalogRowsForPolicy = catalogProjectionRows();
   const coverageByDataset: Record<string, Record<string, unknown>> = {};
   const coverageGrouped = new Map<string, Record<string, unknown>[]>();
@@ -1129,19 +1264,7 @@ export async function publishOpsProjection(
       String(row.policy_version) === currentPolicy &&
       (currentSource == null || String(row.source) === currentSource),
     );
-    const statuses = await Promise.all(
-      eligible.map((row) =>
-        projectedSegmentStatus(
-          row, receipts, products, operations, requests, naturalByOp, environment,
-          receiptRegistry,
-          {
-            structured: env.STRUCTURED_BUCKET,
-            authority: env.AUTHORITY_EVIDENCE_BUCKET,
-            raw: env.RAW_BUCKET,
-          },
-        ),
-      ),
-    );
+    const statuses = eligible.map((row) => statusByCoverageRow.get(row) ?? "UNKNOWN");
     coverageByDataset[dataset] = {
       policy_id: dataset,
       policy_version: currentPolicy ?? "UNKNOWN",
@@ -1202,7 +1325,7 @@ export async function publishOpsProjection(
         null,
       last_checked_at: generatedAt,
     })),
-    coverage_segments: await Promise.all(coverage.map(async (row) => ({
+    coverage_segments: coverage.map((row) => ({
       source: row.source,
       dataset: row.dataset,
       segment_id: row.segment_id,
@@ -1211,19 +1334,11 @@ export async function publishOpsProjection(
       segment_end: row.segment_end,
       expected_scope: row.expected_scope,
       expected_items: row.expected_items ?? null,
-      status: await projectedSegmentStatus(
-        row, receipts, products, operations, requests, naturalByOp, environment,
-        receiptRegistry,
-        {
-          structured: env.STRUCTURED_BUCKET,
-          authority: env.AUTHORITY_EVIDENCE_BUCKET,
-          raw: env.RAW_BUCKET,
-        },
-      ),
+      status: statusByCoverageRow.get(row) ?? "UNKNOWN",
       receipt_run_id: row.receipt_run_id ?? null,
       evaluated_at: row.evaluated_at,
       detail_json: row.detail_json,
-    }))),
+    })),
     dataset_coverage: Object.entries(coverageByDataset).map(([dataset, row]) => {
       const spec = datasetById(dataset);
       const catalog = catalogRows.find((item) => item.dataset_id === dataset);
@@ -1624,14 +1739,11 @@ export async function publishOpsProjection(
   try {
     const inserts: D1PreparedStatement[] = [];
     for (const table of PROJECTED_CONTENT_TABLES) {
-      for (const row of appliedRows[table] ?? []) {
-        const keys = Object.keys(row);
-        inserts.push(
-          env.OPS_PROJECTION_DB.prepare(
-            `INSERT INTO ${table} (${keys.join(",")}) VALUES (${keys.map(() => "?").join(",")})`,
-          ).bind(...keys.map((key) => row[key] as string | number | null)),
-        );
-      }
+      inserts.push(...projectedInsertStatements(
+        env.OPS_PROJECTION_DB,
+        table,
+        appliedRows[table] ?? [],
+      ));
     }
     for (let index = 0; index < inserts.length; index += 20) {
       await env.OPS_PROJECTION_DB.batch(inserts.slice(index, index + 20));

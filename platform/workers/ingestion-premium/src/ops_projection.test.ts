@@ -331,13 +331,13 @@ async function exactJqTrustedComplete(
   return await exactJqProjectedStatus(objects, envelope, registry, stores) === "COMPLETE";
 }
 
-async function seedGovernedObjects() {
+async function seedGovernedObjects(onGet?: (store: string, key: string) => void) {
   const artifact = new TextEncoder().encode('{"nk":"k1"}\n{"nk":"k2"}\n');
   const manifest = new TextEncoder().encode('{"format":"product-manifest/v1"}');
   const rawManifest = new TextEncoder().encode('{"format":"jquants-raw-manifest/v1"}');
-  const structuredBucket = wrapR2();
-  const authorityBucket = wrapR2();
-  const rawBucket = wrapR2();
+  const structuredBucket = wrapR2({ onGet: (key) => onGet?.("structured", key) });
+  const authorityBucket = wrapR2({ onGet: (key) => onGet?.("authority", key) });
+  const rawBucket = wrapR2({ onGet: (key) => onGet?.("raw", key) });
   await structuredBucket.put("artifact.jsonl", artifact, { onlyIf: { etagDoesNotMatch: "*" } });
   await authorityBucket.put("manifest.json", manifest, { onlyIf: { etagDoesNotMatch: "*" } });
   await rawBucket.put("raw.json", rawManifest, { onlyIf: { etagDoesNotMatch: "*" } });
@@ -382,7 +382,7 @@ function coerce(value: unknown): unknown {
 
 function wrapSqlite(
   db: DatabaseSync,
-  hooks: { beforeRun?: (sql: string) => void } = {},
+  hooks: { beforeRun?: (sql: string) => void; beforeQuery?: (sql: string) => void } = {},
 ): D1Database {
   const prepare = (sql: string) => {
     const bound: unknown[] = [];
@@ -392,6 +392,7 @@ function wrapSqlite(
         return stmt;
       },
       async all() {
+        hooks.beforeQuery?.(sql);
         const rows = db.prepare(sql).all(...bound) as Record<string, unknown>[];
         return {
           results: rows.map((row) =>
@@ -404,6 +405,7 @@ function wrapSqlite(
         };
       },
       async first() {
+        hooks.beforeQuery?.(sql);
         const row = db.prepare(sql).get(...bound) as Record<string, unknown> | undefined;
         if (!row) return null;
         return Object.fromEntries(
@@ -501,7 +503,10 @@ function insertReceipt(
   );
 }
 
-function wrapR2(hooks: { onPut?: (key: string) => void } = {}): R2Bucket {
+function wrapR2(hooks: {
+  onPut?: (key: string) => void;
+  onGet?: (key: string) => void;
+} = {}): R2Bucket {
   const store = new Map<string, Uint8Array>();
   const toBytes = (value: unknown): Uint8Array => {
     if (value instanceof Uint8Array) return value;
@@ -513,6 +518,7 @@ function wrapR2(hooks: { onPut?: (key: string) => void } = {}): R2Bucket {
       return store.has(key) ? { key } : null;
     },
     async get(key: string) {
+      hooks.onGet?.(key);
       const body = store.get(key);
       if (body === undefined) return null;
       return {
@@ -546,10 +552,11 @@ async function envFor(
     r2OnPut?: (key: string) => void;
     bucket?: R2Bucket;
     receiptRegistry?: OpsProjectionEnv["RECEIPT_VERIFY_REGISTRY"];
+    sourceBeforeQuery?: (sql: string) => void;
   },
 ): Promise<OpsProjectionEnv> {
   return {
-    DB: wrapSqlite(source),
+    DB: wrapSqlite(source, { beforeQuery: hooks?.sourceBeforeQuery }),
     OPS_PROJECTION_DB: wrapSqlite(target, hooks),
     STRUCTURED_BUCKET:
       hooks?.r2 === false ? undefined : hooks?.bucket ?? wrapR2({ onPut: hooks?.r2OnPut }),
@@ -853,23 +860,63 @@ describe("ops projection cloud publisher", () => {
     ).toBe(open.generated_at);
   });
 
-  it("fails closed on cap overflow and placeholder verify keys", async () => {
+  it("publishes more than the live 12,940 segments with bounded D1 reads and writes", async () => {
     const source = new DatabaseSync(":memory:");
-    applySqlDir(source, ingestionMigrations, "0010_raw_acquisition_status.sql");
-    for (let index = 0; index < 10_002; index += 1) {
-      source
-        .prepare(
-          `INSERT INTO ingestion_run_log(ran_at,source,runtime,status,detail)
-           VALUES ('2026-08-01T00:00:00Z','jquants','cloud','ok',NULL)`,
-        )
-        .run();
+    applySqlDir(source, ingestionMigrations);
+    seedBase(source);
+    const insert = source.prepare(
+      `INSERT INTO coverage_segments(
+         source,dataset,segment_id,policy_version,segment_start,segment_end,expected_scope,
+         expected_items,status,receipt_run_id,evaluated_at,detail_json
+       ) VALUES ('jquants','equities_bars_daily',?,'collection-coverage/v3',
+                 '2026-08-01','2026-08-01','day',1,'PARTIAL',NULL,
+                 '2026-08-01T00:00:00Z','{}')`,
+    );
+    source.exec("BEGIN");
+    for (let index = 0; index < 12_941; index += 1) {
+      insert.run(`segment-${String(index).padStart(5, "0")}`);
     }
+    const unrelatedOperation = source.prepare(
+      `INSERT INTO receipt_authority_operations(
+         operation_id,request_digest,run_id,environment,source,contract_id,dataset,
+         segment_id,segment_start,segment_end,state,checked_at,updated_at
+       ) VALUES (?, ?, ?, 'production','jquants','jquants_premium_core',
+                 'equities_bars_daily','2000-01','2000-01-01','2000-01-31','COLLECTING',
+                 '2026-08-01T00:00:00Z','2026-08-01T00:00:00Z')`,
+    );
+    for (let index = 0; index < 100; index += 1) {
+      unrelatedOperation.run(`unrelated-${index}`, `request-${index}`, 10_000 + index);
+    }
+    source.exec("COMMIT");
     const target = new DatabaseSync(":memory:");
     applySqlDir(target, projectionMigrations);
     const keys = await keyPair();
-    await expect(publishOpsProjection(await envFor(source, target, keys))).rejects.toThrow(
-      /exceeds metadata cap/,
+    const sourceQueries: string[] = [];
+    const targetWrites: string[] = [];
+    const result = await publishOpsProjection(await envFor(source, target, keys, {
+      sourceBeforeQuery: (sql) => sourceQueries.push(sql),
+      beforeRun: (sql) => targetWrites.push(sql),
+    }));
+    expect(result.status).toBe("published");
+    expect(
+      (target.prepare(
+        "SELECT COUNT(*) AS n FROM coverage_segments WHERE projection_generation_id=?",
+      ).get(result.generation_id) as { n: number }).n,
+    ).toBe(12_941);
+    const coveragePages = sourceQueries.filter(
+      (sql) => /FROM coverage_segments\s+ORDER BY/.test(sql) && /LIMIT \? OFFSET \?/.test(sql),
     );
+    expect(coveragePages.length).toBeGreaterThan(1);
+    expect(coveragePages.length).toBeLessThan(30);
+    expect(sourceQueries.length).toBeLessThan(100);
+    expect(sourceQueries.filter(
+      (sql) => /receipt_authority_structured_rows WHERE operation_id=\?/.test(sql),
+    )).toHaveLength(0);
+    expect(targetWrites.length).toBeLessThan(100);
+  });
+
+  it("fails closed on placeholder verify keys", async () => {
+    const keys = await keyPair();
     const emptySource = new DatabaseSync(":memory:");
     applySqlDir(emptySource, ingestionMigrations, "0010_raw_acquisition_status.sql");
     const emptyTarget = new DatabaseSync(":memory:");
@@ -1367,7 +1414,8 @@ describe("ops projection cloud publisher", () => {
         },
       ],
     };
-    const objects = await seedGovernedObjects();
+    const objectReads: string[] = [];
+    const objects = await seedGovernedObjects((store, key) => objectReads.push(`${store}:${key}`));
     const claims = await canonicalV3Claims(objects);
     const envelope = await signV3Claims(pair, claims);
     const receiptDigest = await canonicalJqReceiptDigest(envelope);
@@ -1450,8 +1498,12 @@ describe("ops projection cloud publisher", () => {
       authority: env.AUTHORITY_EVIDENCE_BUCKET,
       raw: env.RAW_BUCKET,
     })).toBe(true);
+    objectReads.length = 0;
     const result = await publishOpsProjection(env);
     expect(result.status).toBe("published");
+    expect(objectReads.filter((item) => item === "structured:artifact.jsonl")).toHaveLength(1);
+    expect(objectReads.filter((item) => item === "authority:manifest.json")).toHaveLength(1);
+    expect(objectReads.filter((item) => item === "raw:raw.json")).toHaveLength(1);
     const rows = target
       .prepare("SELECT dataset, status FROM coverage_segments ORDER BY dataset")
       .all() as { dataset: string; status: string }[];
