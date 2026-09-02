@@ -1786,70 +1786,9 @@ class D1FreezeAndRenderOpsProjection:
         handle = sync_d1_to_sqlite.open_authenticated_applied_mirror(
             self.governed_db_path
         )
-
-        def consume(
-            _conn: sqlite3.Connection, identity: Mapping[str, object]
-        ) -> Mapping[str, Any]:
-            fd = _open_d1_owned_readonly_fd(self.governed_db_path)
-            try:
-                evidence = _owned_mirror_evidence(
-                    fd,
-                    environment=self.environment,
-                    purpose="ops_projection",
-                    governed_db_path=self.governed_db_path,
-                    sync_identity=identity,
-                )
-                request = {
-                    "format": REQUEST_FORMAT,
-                    "request_id": sha256_digest(
-                        {"operation": self.operation, "evidence": evidence}
-                    ),
-                    "operation": OpsProjectionRenderAndSign.operation,
-                    "purpose": "render_owned_mirror_projection",
-                    "payload": {"owned_mirror_evidence": evidence, "selector": {}},
-                }
-                result = call_unix_authority(
-                    self.ops_socket_path,
-                    request,
-                    expected_server_uid=self.ops_uid,
-                    read_only_fd=fd,
-                )
-                expected_fields = {
-                    "status",
-                    "signed_artifact",
-                    "signed_store_digest",
-                    "signed_document_base64",
-                    "signed_document_digest",
-                    "issuer_key_id",
-                }
-                if type(result) not in {dict, MappingProxyType} or set(result) != expected_fields:
-                    raise LocalAuthorityError(
-                        "Ops authority response is not one closed signed document"
-                    )
-                signed_bytes = _decode_standard_base64(
-                    result["signed_document_base64"],
-                    field="signed_document_base64",
-                )
-                if (
-                    result["status"] != "SIGNED"
-                    or result["signed_document_digest"]
-                    != "sha256:" + hashlib.sha256(signed_bytes).hexdigest()
-                ):
-                    raise LocalAuthorityError(
-                        "Ops authority response is not signed evidence"
-                    )
-                verified = projection_signing._verify_pinned_document(
-                    signed_bytes, expected_environment=self.environment
-                )
-                if verified.issuer_key_id != result["issuer_key_id"]:
-                    raise LocalAuthorityError(
-                        "Ops authority response issuer identity differs"
-                    )
-                return result
-            finally:
-                os.close(fd)
-
-        return sync_d1_to_sqlite._consume_authenticated_applied_mirror(handle, consume)
+        return sync_d1_to_sqlite._consume_authenticated_applied_mirror_for_ops_projection(
+            handle
+        )
 
 
 class _SealedD1SyncAudit:
@@ -2496,70 +2435,14 @@ class D1FreezeAuthorizeApplyCoverage:
         payload: Mapping[str, Any],
         fds: Sequence[int],
     ) -> Mapping[str, Any]:
-        selector = _require_payload_fields(
+        _require_payload_fields(
             payload, fields={"build_id", "datasets"}, operation=self.operation
         )
         if fds:
             raise LocalAuthorityError("d1 Coverage freeze accepts no caller descriptor")
-        handle = sync_d1_to_sqlite.open_authenticated_applied_mirror(
-            self.governed_db_path
+        raise LocalAuthorityError(
+            "coverage transition cannot consume a generic applied-mirror callback"
         )
-
-        def consume(
-            _conn: sqlite3.Connection, identity: Mapping[str, object]
-        ) -> Mapping[str, Any]:
-            fd = _open_d1_owned_readonly_fd(self.governed_db_path)
-            try:
-                evidence = _owned_mirror_evidence(
-                    fd,
-                    environment=self.environment,
-                    purpose="coverage_transition",
-                    governed_db_path=self.governed_db_path,
-                    sync_identity=identity,
-                )
-                request = {
-                    "format": REQUEST_FORMAT,
-                    "request_id": sha256_digest(
-                        {
-                            "operation": self.operation,
-                            "evidence": evidence,
-                            "selector": selector,
-                        }
-                    ),
-                    "operation": CoverageTransitionAuthorize.operation,
-                    "purpose": "coverage_v3_transition",
-                    "payload": {
-                        "owned_mirror_evidence": evidence,
-                        "selector": selector,
-                    },
-                }
-                return call_unix_authority(
-                    self.coverage_socket_path,
-                    request,
-                    expected_server_uid=self.coverage_uid,
-                    read_only_fd=fd,
-                )
-            finally:
-                os.close(fd)
-
-        signed = sync_d1_to_sqlite._consume_authenticated_applied_mirror(
-            handle, consume
-        )
-        document = signed.get("signed_transition")
-        if type(document) is not dict or signed.get("status") != "SIGNED":
-            raise LocalAuthorityError(
-                "Coverage authority did not return one signed transition"
-            )
-        applied = coverage_transition.apply_signed_coverage_transition(
-            str(self.governed_db_path),
-            document,
-            expected_environment=self.environment,
-        )
-        return {
-            **dict(applied),
-            "signed_transition_digest": signed["signed_transition_digest"],
-            "issuer_key_id": signed["issuer_key_id"],
-        }
 
 
 def _hash_open_file(
@@ -2846,8 +2729,11 @@ def _recompute_exact_four_ready_authority_proof(
                 f"READY projection does not span governed period for {dataset_id}"
             )
 
+    ready_handle = sync_d1_to_sqlite.open_authenticated_applied_mirror(
+        snapshot_path
+    )
     dependency_scope = _verify_exact_four_pit_dependency_scope(
-        snapshot_path,
+        ready_handle,
         binding,
     )
     request_context.require_within_processing_deadline()

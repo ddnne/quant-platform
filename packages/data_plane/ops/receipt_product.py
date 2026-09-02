@@ -77,6 +77,58 @@ def product_artifact_digest(rows: Iterable[Mapping[str, Any]]) -> str:
     return "sha256:" + hashlib.sha256(body).hexdigest()
 
 
+def product_artifact_digest_ordered(
+    rows: Iterable[Mapping[str, Any]],
+) -> tuple[int, str, int]:
+    """Hash already-ordered product rows without retaining them.
+
+    ``rows`` must already be unique and ordered by
+    ``(source, dataset, natural_key)``. Returns
+    ``(row_count, sha256 digest, utf-8 byte count)``.
+    """
+
+    hasher = hashlib.sha256()
+    count = 0
+    nbytes = 0
+    previous: tuple[str, str, str] | None = None
+    for raw in rows:
+        if not isinstance(raw, Mapping):
+            raise ValueError("product materialization row must be a mapping")
+        missing = set(PRODUCT_ARTIFACT_FIELDS) - set(raw)
+        if missing:
+            raise ValueError(
+                "product materialization row is missing fields: "
+                + ",".join(sorted(missing))
+            )
+        row = {field: raw[field] for field in PRODUCT_ARTIFACT_FIELDS}
+        if any(type(value) is not str for value in row.values()):
+            raise ValueError("product materialization fields must be exact text")
+        if row["source"] != "jquants" or not row["dataset"]:
+            raise ValueError("product materialization source/dataset is invalid")
+        identity = (row["source"], row["dataset"], row["natural_key"])
+        if previous is not None and identity <= previous:
+            raise ValueError(
+                "product materialization rows must be unique and ordered"
+            )
+        previous = identity
+        encoded = (
+            json.dumps(
+                row,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+            + b"\n"
+        )
+        hasher.update(encoded)
+        count += 1
+        nbytes += len(encoded)
+    if count == 0:
+        raise ValueError("empty product materialization is not signable")
+    return count, "sha256:" + hasher.hexdigest(), nbytes
+
+
 def product_artifact_body_digest(body: Any) -> str:
     """Rehash the exported UTF-8 copy of the authority's R2 readback bytes."""
 
@@ -91,4 +143,5 @@ __all__ = [
     "canonical_product_artifact_bytes",
     "product_artifact_body_digest",
     "product_artifact_digest",
+    "product_artifact_digest_ordered",
 ]

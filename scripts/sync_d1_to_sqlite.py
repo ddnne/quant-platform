@@ -27,7 +27,8 @@ import sqlite3
 import stat
 import sys
 import tempfile
-from datetime import datetime, timezone
+import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import BinaryIO, Callable, Mapping, TypeVar
@@ -2190,6 +2191,7 @@ def _authenticated_applied_mirror_identity_from_conn(
         "source_schema_digest": envelope["source_schema_digest"],
         "schema_digest": envelope["schema_digest"],
         "table_counts": owned_counts,
+        "exported_at": envelope["exported_at"],
     }
 
 
@@ -2207,8 +2209,42 @@ _APPLIED_MIRROR_IDENTITY_FIELDS = frozenset(
         "source_schema_digest",
         "schema_digest",
         "table_counts",
+        "exported_at",
     }
 )
+
+
+def _require_canonical_applied_mirror_exported_at(value: object) -> str:
+    """Require the signed acquisition timestamp, never a caller or local override."""
+    if type(value) is not str:
+        raise ValueError("authenticated applied mirror exported_at is invalid")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(
+            "authenticated applied mirror exported_at is invalid"
+        ) from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(
+            "authenticated applied mirror exported_at is not canonical"
+        )
+    exported_utc = parsed.astimezone(timezone.utc)
+    if exported_utc.isoformat() != value:
+        raise ValueError(
+            "authenticated applied mirror exported_at is not canonical"
+        )
+    from ops.d1_sync_signing import (
+        D1_SYNC_AUDIT_MAX_FUTURE_SKEW_SECONDS,
+        _utc_now,
+    )
+
+    if exported_utc > _utc_now() + timedelta(
+        seconds=D1_SYNC_AUDIT_MAX_FUTURE_SKEW_SECONDS
+    ):
+        raise ValueError(
+            "authenticated applied mirror exported_at is in the future"
+        )
+    return value
 
 
 def _canonical_applied_mirror_identity_json(
@@ -2266,6 +2302,7 @@ def _canonical_applied_mirror_identity_json(
         raise ValueError("authenticated applied mirror issuer is invalid")
     if identity["source_content_digest"] != identity["local_content_digest"]:
         raise ValueError("authenticated applied mirror source/local content differs")
+    _require_canonical_applied_mirror_exported_at(identity.get("exported_at"))
     counts = identity.get("table_counts")
     if type(counts) is not dict or set(counts) != set(DEFAULT_TABLES):
         raise ValueError("authenticated applied mirror inventory is incomplete")
@@ -2307,12 +2344,7 @@ def _authenticated_export_cursor_chain(
     """
     try:
         handle = open_authenticated_applied_mirror(db_path)
-        return _consume_authenticated_applied_mirror(
-            handle,
-            lambda conn, _identity: _authenticated_export_cursor_chain_from_conn(
-                conn
-            ),
-        )
+        return _consume_authenticated_applied_mirror_for_export_cursors(handle)
     except (ValueError, TypeError, RuntimeError, json.JSONDecodeError, sqlite3.Error):
         return None, None
 
@@ -2413,6 +2445,7 @@ def _build_applied_mirror_authority():
             sqlite3.Connection,
             sqlite3.Connection,
             str,
+            int,
         ],
     ] = WeakKeyDictionary()
 
@@ -2424,127 +2457,16 @@ def _build_applied_mirror_authority():
                 "authenticated applied mirror has no public constructor"
             )
 
-        def _consume_for_projection(
-            self,
-            consumer: Callable[
-                [sqlite3.Connection, Mapping[str, object]], _MirrorResult
-            ],
-        ) -> _MirrorResult:
-            if self not in live_mirrors or self not in mirror_states:
-                raise RuntimeError("authenticated applied mirror was already consumed")
-            live_mirrors.discard(self)
-            (
-                db_path,
-                initial_file_identity,
-                descriptor_owner,
-                descriptor_path,
-                lock_conn,
-                read_conn,
-                identity_json,
-            ) = mirror_states.pop(self)
-            try:
-                _require_frozen_applied_mirror_path(
-                    db_path, initial_file_identity
-                )
-                _private_export._require_open_file_identity(  # noqa: SLF001
-                    descriptor_owner, initial_file_identity
-                )
-                if not lock_conn.in_transaction or not read_conn.in_transaction:
-                    raise RuntimeError(
-                        "authenticated applied mirror lock was released"
-                    )
-                _require_descriptor_sqlite_connection(
-                    lock_conn,
-                    descriptor_path=descriptor_path,
-                    expected=initial_file_identity,
-                )
-                _require_descriptor_sqlite_connection(
-                    read_conn,
-                    descriptor_path=descriptor_path,
-                    expected=initial_file_identity,
-                )
-                locked_identity = _canonical_applied_mirror_identity_json(
-                    _authenticated_applied_mirror_identity_from_conn(lock_conn)
-                )
-                read_identity = _canonical_applied_mirror_identity_json(
-                    _authenticated_applied_mirror_identity_from_conn(read_conn)
-                )
-                if locked_identity != identity_json or read_identity != identity_json:
-                    raise RuntimeError(
-                        "authenticated applied mirror identity changed"
-                    )
-                _require_frozen_applied_mirror_path(
-                    db_path, initial_file_identity
-                )
-                restored = json.loads(identity_json)
-                immutable_identity = _deep_immutable_json(restored)
-                assert isinstance(immutable_identity, Mapping)
-                connection_key = id(read_conn)
-                if connection_key in trusted_projection_connections:
-                    raise RuntimeError(
-                        "authenticated applied mirror connection is already active"
-                    )
-                trusted_projection_connections[connection_key] = (
-                    read_conn,
-                    initial_file_identity,
-                )
-                try:
-                    result = consumer(read_conn, immutable_identity)
-                finally:
-                    registered = trusted_projection_connections.pop(
-                        connection_key, None
-                    )
-                    if registered is None or registered[0] is not read_conn:
-                        raise RuntimeError(
-                            "authenticated applied mirror connection registry changed"
-                        )
-                if not lock_conn.in_transaction or not read_conn.in_transaction:
-                    raise RuntimeError(
-                        "authenticated applied mirror lock was released"
-                    )
-                _require_frozen_applied_mirror_path(
-                    db_path, initial_file_identity
-                )
-                _private_export._require_open_file_identity(  # noqa: SLF001
-                    descriptor_owner, initial_file_identity
-                )
-                _require_descriptor_sqlite_connection(
-                    lock_conn,
-                    descriptor_path=descriptor_path,
-                    expected=initial_file_identity,
-                )
-                _require_descriptor_sqlite_connection(
-                    read_conn,
-                    descriptor_path=descriptor_path,
-                    expected=initial_file_identity,
-                )
-                if _canonical_applied_mirror_identity_json(
-                    _authenticated_applied_mirror_identity_from_conn(lock_conn)
-                ) != identity_json or _canonical_applied_mirror_identity_json(
-                    _authenticated_applied_mirror_identity_from_conn(read_conn)
-                ) != identity_json:
-                    raise RuntimeError(
-                        "authenticated applied mirror final identity changed"
-                    )
-                return result
-            finally:
-                try:
-                    read_conn.rollback()
-                except sqlite3.Error:
-                    pass
-                try:
-                    read_conn.close()
-                finally:
-                    try:
-                        lock_conn.rollback()
-                    except sqlite3.Error:
-                        pass
-                    try:
-                        lock_conn.close()
-                    finally:
-                        descriptor_owner.close()
+        def __copy__(self) -> object:
+            raise RuntimeError("authenticated applied mirror cannot be copied")
 
-    def _consume_authenticated_applied_mirror(
+        def __deepcopy__(self, _memo: object) -> object:
+            raise RuntimeError("authenticated applied mirror cannot be copied")
+
+        def __reduce__(self) -> object:
+            raise RuntimeError("authenticated applied mirror cannot be copied")
+
+    def _consume_owned(
         handle: object,
         consumer: Callable[
             [sqlite3.Connection, Mapping[str, object]], _MirrorResult
@@ -2552,9 +2474,199 @@ def _build_applied_mirror_authority():
     ) -> _MirrorResult:
         if type(handle) is not _AuthenticatedAppliedMirror:
             raise RuntimeError(
+                "authenticated applied mirror handle is not authentic"
+            )
+        if handle not in live_mirrors or handle not in mirror_states:
+            raise RuntimeError(
+                "authenticated applied mirror handle is not authentic "
+                "or was already consumed"
+            )
+        live_mirrors.discard(handle)
+        (
+            db_path,
+            initial_file_identity,
+            descriptor_owner,
+            descriptor_path,
+            lock_conn,
+            read_conn,
+            identity_json,
+            owner_thread_id,
+        ) = mirror_states.pop(handle)
+        try:
+            if owner_thread_id != threading.get_ident():
+                raise RuntimeError(
+                    "authenticated applied mirror was used from the wrong thread"
+                )
+            _require_frozen_applied_mirror_path(
+                db_path, initial_file_identity
+            )
+            _private_export._require_open_file_identity(  # noqa: SLF001
+                descriptor_owner, initial_file_identity
+            )
+            if not lock_conn.in_transaction or not read_conn.in_transaction:
+                raise RuntimeError(
+                    "authenticated applied mirror lock was released"
+                )
+            _require_descriptor_sqlite_connection(
+                lock_conn,
+                descriptor_path=descriptor_path,
+                expected=initial_file_identity,
+            )
+            _require_descriptor_sqlite_connection(
+                read_conn,
+                descriptor_path=descriptor_path,
+                expected=initial_file_identity,
+            )
+            locked_identity = _canonical_applied_mirror_identity_json(
+                _authenticated_applied_mirror_identity_from_conn(lock_conn)
+            )
+            read_identity = _canonical_applied_mirror_identity_json(
+                _authenticated_applied_mirror_identity_from_conn(read_conn)
+            )
+            if locked_identity != identity_json or read_identity != identity_json:
+                raise RuntimeError(
+                    "authenticated applied mirror identity changed"
+                )
+            _require_frozen_applied_mirror_path(
+                db_path, initial_file_identity
+            )
+            restored = json.loads(identity_json)
+            immutable_identity = _deep_immutable_json(restored)
+            assert isinstance(immutable_identity, Mapping)
+            connection_key = id(read_conn)
+            if connection_key in trusted_projection_connections:
+                raise RuntimeError(
+                    "authenticated applied mirror connection is already active"
+                )
+            trusted_projection_connections[connection_key] = (
+                read_conn,
+                initial_file_identity,
+            )
+            try:
+                result = consumer(read_conn, immutable_identity)
+            finally:
+                registered = trusted_projection_connections.pop(
+                    connection_key, None
+                )
+                if registered is None or registered[0] is not read_conn:
+                    raise RuntimeError(
+                        "authenticated applied mirror connection registry changed"
+                    )
+            if not lock_conn.in_transaction or not read_conn.in_transaction:
+                raise RuntimeError(
+                    "authenticated applied mirror lock was released"
+                )
+            _require_frozen_applied_mirror_path(
+                db_path, initial_file_identity
+            )
+            _private_export._require_open_file_identity(  # noqa: SLF001
+                descriptor_owner, initial_file_identity
+            )
+            _require_descriptor_sqlite_connection(
+                lock_conn,
+                descriptor_path=descriptor_path,
+                expected=initial_file_identity,
+            )
+            _require_descriptor_sqlite_connection(
+                read_conn,
+                descriptor_path=descriptor_path,
+                expected=initial_file_identity,
+            )
+            if _canonical_applied_mirror_identity_json(
+                _authenticated_applied_mirror_identity_from_conn(lock_conn)
+            ) != identity_json or _canonical_applied_mirror_identity_json(
+                _authenticated_applied_mirror_identity_from_conn(read_conn)
+            ) != identity_json:
+                raise RuntimeError(
+                    "authenticated applied mirror final identity changed"
+                )
+            return result
+        finally:
+            try:
+                read_conn.rollback()
+            except sqlite3.Error:
+                pass
+            try:
+                read_conn.close()
+            finally:
+                try:
+                    lock_conn.rollback()
+                except sqlite3.Error:
+                    pass
+                try:
+                    lock_conn.close()
+                finally:
+                    descriptor_owner.close()
+
+    def _consume_authenticated_applied_mirror_for_ops_projection(
+        handle: object,
+    ) -> _MirrorResult:
+        from scripts.export_ops_projection import (
+            _render_projection_candidate_from_connection,
+        )
+
+        if type(handle) is not _AuthenticatedAppliedMirror:
+            raise RuntimeError(
                 "Ops projection requires an authenticated applied mirror handle"
             )
-        return handle._consume_for_projection(consumer)
+        return _consume_owned(
+            handle, _render_projection_candidate_from_connection
+        )
+
+    def _consume_authenticated_applied_mirror_for_ops_projection_bundle(
+        handle: object,
+    ) -> _MirrorResult:
+        if type(handle) is not _AuthenticatedAppliedMirror:
+            raise RuntimeError(
+                "Ops projection requires an authenticated applied mirror handle"
+            )
+
+        def pending_authority(
+            _conn: sqlite3.Connection,
+            _sync_identity: Mapping[str, object],
+        ) -> _MirrorResult:
+            raise RuntimeError(
+                "Ops Projection signing is PENDING full-source authority integration"
+            )
+
+        return _consume_owned(handle, pending_authority)
+
+    def _consume_authenticated_applied_mirror_for_ready_publication(
+        handle: object,
+        binding: object,
+    ) -> _MirrorResult:
+        from paper_runtime.ready_publication import (
+            _verify_publication_on_authenticated_mirror,
+        )
+
+        if type(handle) is not _AuthenticatedAppliedMirror:
+            raise RuntimeError(
+                "READY publication requires an authenticated applied mirror handle"
+            )
+
+        def consume(
+            conn: sqlite3.Connection,
+            identity: Mapping[str, object],
+        ) -> _MirrorResult:
+            return _verify_publication_on_authenticated_mirror(
+                conn, identity, binding
+            )
+
+        return _consume_owned(handle, consume)
+
+    def _consume_authenticated_applied_mirror_for_export_cursors(
+        handle: object,
+    ) -> _MirrorResult:
+        if type(handle) is not _AuthenticatedAppliedMirror:
+            raise RuntimeError(
+                "Ops projection requires an authenticated applied mirror handle"
+            )
+        return _consume_owned(
+            handle,
+            lambda conn, _identity: _authenticated_export_cursor_chain_from_conn(
+                conn
+            ),
+        )
 
     def _authenticated_applied_mirror_connection_identity(
         conn: sqlite3.Connection,
@@ -2623,13 +2735,17 @@ def _build_applied_mirror_authority():
                 raise ValueError("SQLite descriptor handoff is unavailable")
             lock_uri = f"file:{quote(descriptor_path, safe='/')}?mode=rw"
             read_uri = f"file:{quote(descriptor_path, safe='/')}?mode=ro"
-            lock_conn = sqlite3.connect(lock_uri, uri=True, timeout=5.0)
+            lock_conn = sqlite3.connect(
+                lock_uri, uri=True, timeout=5.0, check_same_thread=False
+            )
             _require_descriptor_sqlite_connection(
                 lock_conn,
                 descriptor_path=descriptor_path,
                 expected=initial_file_identity,
             )
-            read_conn = sqlite3.connect(read_uri, uri=True, timeout=5.0)
+            read_conn = sqlite3.connect(
+                read_uri, uri=True, timeout=5.0, check_same_thread=False
+            )
             read_conn.execute("PRAGMA query_only=ON")
             _require_descriptor_sqlite_connection(
                 read_conn,
@@ -2715,6 +2831,7 @@ def _build_applied_mirror_authority():
             lock_conn,
             read_conn,
             identity_json,
+            threading.get_ident(),
         )
         live_mirrors.add(handle)
         return handle
@@ -2722,7 +2839,10 @@ def _build_applied_mirror_authority():
     return (
         _AuthenticatedAppliedMirror,
         open_authenticated_applied_mirror,
-        _consume_authenticated_applied_mirror,
+        _consume_authenticated_applied_mirror_for_ops_projection,
+        _consume_authenticated_applied_mirror_for_ops_projection_bundle,
+        _consume_authenticated_applied_mirror_for_ready_publication,
+        _consume_authenticated_applied_mirror_for_export_cursors,
         _authenticated_applied_mirror_connection_identity,
     )
 
@@ -2730,7 +2850,10 @@ def _build_applied_mirror_authority():
 (
     _AuthenticatedAppliedMirror,
     open_authenticated_applied_mirror,
-    _consume_authenticated_applied_mirror,
+    _consume_authenticated_applied_mirror_for_ops_projection,
+    _consume_authenticated_applied_mirror_for_ops_projection_bundle,
+    _consume_authenticated_applied_mirror_for_ready_publication,
+    _consume_authenticated_applied_mirror_for_export_cursors,
     _authenticated_applied_mirror_connection_identity,
 ) = _build_applied_mirror_authority()
 del _build_applied_mirror_authority

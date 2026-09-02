@@ -514,6 +514,9 @@ def _remeasure_applied_mirror_identity(
         or set(counts) != set(_sync.DEFAULT_TABLES)
     ):
         raise ValueError("applied mirror identity is incomplete")
+    exported_at = _sync._require_canonical_applied_mirror_exported_at(  # noqa: SLF001
+        envelope["exported_at"]
+    )
     return {
         "environment": envelope["environment"],
         "resource_identity": dict(envelope["resource_identity"]),
@@ -527,6 +530,7 @@ def _remeasure_applied_mirror_identity(
         "source_schema_digest": envelope["source_schema_digest"],
         "schema_digest": envelope["schema_digest"],
         "table_counts": dict(counts),
+        "exported_at": exported_at,
     }
 
 
