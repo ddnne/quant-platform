@@ -33,3 +33,4 @@ binding = "CF_VERSION_METADATA"
 [[env.production.services]]
 binding = "JSDA_INGESTION"
 service = "quant-platform-ingestion-jsda"
+entrypoint = "JsdaReadinessService"

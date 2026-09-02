@@ -15,6 +15,7 @@ entrypoint = "PremiumReceiptAuditEvidenceService"
 [[services]]
 binding = "JSDA_INGESTION"
 service = "quant-platform-ingestion-jsda-staging"
+entrypoint = "JsdaReadinessService"
 
 [observability]
 enabled = true

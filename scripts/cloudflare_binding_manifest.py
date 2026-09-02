@@ -447,7 +447,9 @@ WORKER_ENTRYPOINT_RPC_POLICY: dict[
             ("staging_recovery_audit_evidence",),
         ),
     },
-    "ingestion-jsda": {},
+    "ingestion-jsda": {
+        "JsdaReadinessService": (True, ()),
+    },
     "research-ai-gateway": {
         "GatewayService": (
             False,
@@ -1524,6 +1526,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     if observer_production["workers_dev"] is not False or observer_production["services"] != [
         {
             "binding": "JSDA_INGESTION",
+            "entrypoint": "JsdaReadinessService",
             "service": "quant-platform-ingestion-jsda",
         },
     ]:
@@ -1534,6 +1537,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     if observer_staging["workers_dev"] is not True or observer_staging["services"] != [
         {
             "binding": "JSDA_INGESTION",
+            "entrypoint": "JsdaReadinessService",
             "service": "quant-platform-ingestion-jsda-staging",
         },
         {

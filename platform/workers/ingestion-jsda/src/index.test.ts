@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { PRODUCTION_V3_CUTOVER_PIN } from "./cutover";
-import worker from "./index";
+import worker, { JsdaReadinessService } from "./index";
 
 const RUN_TOKEN = "jsda-test-run-token-do-not-leak";
 
@@ -58,6 +58,29 @@ describe("ingestion-jsda HTTP boundary", () => {
     expect(typeof worker.fetch).toBe("function");
     expect(typeof worker.scheduled).toBe("function");
     expect(typeof worker.queue).toBe("function");
+  });
+
+  it("limits the named Service Binding to readiness only", async () => {
+    const { env, sql } = touchingEnv();
+    const service = new JsdaReadinessService(
+      { waitUntil() {}, passThroughOnException() {} } as ExecutionContext,
+      env,
+    );
+    for (const request of [
+      new Request("https://ingestion-jsda.test/health"),
+      new Request("https://ingestion-jsda.test/v1/run", { method: "POST" }),
+      new Request("https://ingestion-jsda.test/health/ready", { method: "POST" }),
+    ]) {
+      const response = await service.fetch(request);
+      expect(response.status).toBe(404);
+    }
+    expect(sql).toEqual([]);
+
+    const ready = await service.fetch(
+      new Request("https://ingestion-jsda.test/health/ready"),
+    );
+    expect(ready.status).toBe(503);
+    expect(sql).toEqual([expect.stringContaining("jsda_v3_cutover_control")]);
   });
 
   it("health reports liveness without misclaiming product readiness", async () => {

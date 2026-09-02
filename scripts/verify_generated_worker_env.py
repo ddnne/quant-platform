@@ -26,6 +26,7 @@ _GENERIC_ERASURE = (
     "any",
     "unknown",
     "object",
+    "Fetcher",
     "Record<string, unknown>",
     "DurableObjectNamespace<any>",
     "DurableObjectNamespace",

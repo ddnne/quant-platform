@@ -167,7 +167,11 @@ describe("Receipt activation observer runtime boundary", () => {
     const production = worker.production;
     expect(production.workers_dev).toBe(false);
     expect(production.services).toEqual([
-      { binding: "JSDA_INGESTION", service: "quant-platform-ingestion-jsda" },
+      {
+        binding: "JSDA_INGESTION",
+        service: "quant-platform-ingestion-jsda",
+        entrypoint: "JsdaReadinessService",
+      },
     ]);
     for (const surface of [base, production]) {
       expect(surface.workers_dev).toBe(false);
@@ -187,7 +191,11 @@ describe("Receipt activation observer runtime boundary", () => {
       workers_dev: true,
       preview_urls: false,
       services: [
-        { binding: "JSDA_INGESTION", service: "quant-platform-ingestion-jsda-staging" },
+        {
+          binding: "JSDA_INGESTION",
+          service: "quant-platform-ingestion-jsda-staging",
+          entrypoint: "JsdaReadinessService",
+        },
         {
           binding: "PREMIUM_RECEIPT_OPERATOR",
           service: "quant-platform-ingestion-premium-staging",

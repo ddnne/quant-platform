@@ -8,6 +8,7 @@ import {
   isPlainObject,
   isSha256,
 } from "../../receipt-evidence-authority/src/canonical";
+import type { JsdaReadinessService } from "../../ingestion-jsda/src/readiness_service";
 
 const AUDIT_PATH = "/v1/receipt-authority/audit-evidence";
 const MAX_RESPONSE_BYTES = 64 * 1024;
@@ -45,7 +46,7 @@ export type ObserverEnv = Omit<
 > & {
   ENVIRONMENT: "disabled" | "staging" | "production";
   PREMIUM_RECEIPT_OPERATOR?: PremiumReceiptOperatorRpc;
-  JSDA_INGESTION?: Fetcher;
+  JSDA_INGESTION?: Service<JsdaReadinessService>;
 };
 
 const PREMIUM_EVIDENCE_FIELDS = [

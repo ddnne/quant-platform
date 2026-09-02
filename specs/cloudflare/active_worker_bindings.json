@@ -60,7 +60,7 @@
     ],
     "unclassified": "REJECT"
   },
-  "manifest_digest": "sha256:44f5f10dad7d09b2513820c3d4098c6c64bdf8be5febc15ffff4ccb3a964238a",
+  "manifest_digest": "sha256:688b6a2d0ba3790847a900f3d52ab2fdc4ef79f3a3ad8f53936f0c6dd11c0afb",
   "ops_binding_identity_digest": "sha256:881176391253aed791eeca79c264384838fe9f6edfc8f33e48c2353e450cb6e3",
   "schema_version": "cloudflare-active-worker-bindings/v10",
   "test_harness_surfaces": {
@@ -143,7 +143,16 @@
         "USER_AGENT": "quant-platform-jsda-runtime-test/0.1"
       },
       "version_metadata": {},
-      "worker_entrypoints": [],
+      "worker_entrypoints": [
+        {
+          "fetch_reserved_special": true,
+          "handlers": [
+            "class"
+          ],
+          "name": "JsdaReadinessService",
+          "rpc_methods": []
+        }
+      ],
       "workers_dev": false
     },
     "ingestion-premium": {
@@ -969,7 +978,16 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
-        "worker_entrypoints": [],
+        "worker_entrypoints": [
+          {
+            "fetch_reserved_special": true,
+            "handlers": [
+              "class"
+            ],
+            "name": "JsdaReadinessService",
+            "rpc_methods": []
+          }
+        ],
         "workers_dev": false
       },
       "production": {
@@ -1066,7 +1084,16 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
-        "worker_entrypoints": [],
+        "worker_entrypoints": [
+          {
+            "fetch_reserved_special": true,
+            "handlers": [
+              "class"
+            ],
+            "name": "JsdaReadinessService",
+            "rpc_methods": []
+          }
+        ],
         "workers_dev": false
       },
       "staging": {
@@ -1159,7 +1186,16 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
-        "worker_entrypoints": [],
+        "worker_entrypoints": [
+          {
+            "fetch_reserved_special": true,
+            "handlers": [
+              "class"
+            ],
+            "name": "JsdaReadinessService",
+            "rpc_methods": []
+          }
+        ],
         "workers_dev": false
       }
     },
@@ -2297,6 +2333,7 @@
         "services": [
           {
             "binding": "JSDA_INGESTION",
+            "entrypoint": "JsdaReadinessService",
             "service": "quant-platform-ingestion-jsda"
           }
         ],
@@ -2351,6 +2388,7 @@
         "services": [
           {
             "binding": "JSDA_INGESTION",
+            "entrypoint": "JsdaReadinessService",
             "service": "quant-platform-ingestion-jsda-staging"
           },
           {

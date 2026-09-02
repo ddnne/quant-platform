@@ -123,7 +123,12 @@ def test_all_named_entrypoints_and_governed_dos_have_exact_rpc_inventories() -> 
                 "rpc_methods": ["staging_recovery_audit_evidence"],
             },
         ],
-        "ingestion-jsda": [],
+        "ingestion-jsda": [{
+            "name": "JsdaReadinessService",
+            "handlers": ["class"],
+            "fetch_reserved_special": True,
+            "rpc_methods": [],
+        }],
         "research-ai-gateway": [{
             "name": "GatewayService",
             "handlers": ["class"],
@@ -393,6 +398,7 @@ def test_receipt_activation_observer_is_staging_only_and_capability_minimal() ->
     assert production["services"] == [
         {
             "binding": "JSDA_INGESTION",
+            "entrypoint": "JsdaReadinessService",
             "service": "quant-platform-ingestion-jsda",
         },
     ]
@@ -406,6 +412,7 @@ def test_receipt_activation_observer_is_staging_only_and_capability_minimal() ->
     assert staging["services"] == [
         {
             "binding": "JSDA_INGESTION",
+            "entrypoint": "JsdaReadinessService",
             "service": "quant-platform-ingestion-jsda-staging",
         },
         {

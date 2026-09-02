@@ -1,5 +1,3 @@
-import type { JsdaWorkerEnv } from "./env";
-
 export type V3CutoverStatus = {
   productReady: boolean;
   cutover:
@@ -66,7 +64,7 @@ function observedSourceSha(row: V3ActivationRecord | null | undefined): string |
 }
 
 export async function loadV3CutoverStatus(
-  db: JsdaWorkerEnv["DB"],
+  db: D1Database,
   pin: V3CutoverPin = PRODUCTION_V3_CUTOVER_PIN,
 ): Promise<V3CutoverStatus> {
   const row = await db
@@ -108,7 +106,7 @@ export async function loadV3CutoverStatus(
 }
 
 export async function requireV3CutoverActive(
-  db: JsdaWorkerEnv["DB"],
+  db: D1Database,
   pin: V3CutoverPin = PRODUCTION_V3_CUTOVER_PIN,
 ): Promise<void> {
   try {
