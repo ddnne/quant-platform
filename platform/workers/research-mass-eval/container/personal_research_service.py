@@ -99,6 +99,7 @@ from research.personal_base_sleeve import (
     validate_personal_base_sleeve_am_pm_artifact,
     validate_personal_base_sleeve_artifact,
 )
+from paper_runtime.canonical_json import canonical_json_digest
 
 RUNNER_VERSION = "personal-cloud-runner/v15"
 # Expanded sqlite / snapshot-builder physical cap.
@@ -1091,9 +1092,7 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
                     if key in paper_result.reproducibility
                 },
             }
-            paper["paper_digest"] = "sha256:" + hashlib.sha256(
-                json.dumps(paper, sort_keys=True, separators=(",", ":")).encode("utf-8")
-            ).hexdigest()
+            paper["semantic_digest"] = canonical_json_digest(paper)
             if paper["lifecycle"] != "Paper" or not paper["metrics"]:
                 raise JobInputError("controlled paper artifact is not evidence")
             audit = risk_agent.audit(paper_result)
@@ -1121,7 +1120,7 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
                 "plan_set_digest": CONTROLLED_PLAN_SET_DIGEST,
                 "dependency_closure_digest": CONTROLLED_CLOSURE_DIGEST,
                 "exact_four_binding_digest": CONTROLLED_BINDING_DIGEST,
-                "paper_digest": paper["paper_digest"],
+                "paper_semantic_digest": paper["semantic_digest"],
                 **audit.to_dict(),
             }
             risk["profile_digest"] = CONTROLLED_PROFILE_DIGEST
@@ -1130,9 +1129,7 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
             risk["exact_four_binding_digest"] = CONTROLLED_BINDING_DIGEST
             risk["snapshot_id"] = snapshot_id
             risk["kind"] = "risk"
-            risk["risk_digest"] = "sha256:" + hashlib.sha256(
-                json.dumps(risk, sort_keys=True, separators=(",", ":")).encode("utf-8")
-            ).hexdigest()
+            risk["semantic_digest"] = canonical_json_digest(risk)
             decision = SelectionDecision(
                 decision="HOLD",
                 reason_codes=("PENDING_HUMAN_APPROVAL",),
@@ -1146,15 +1143,14 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
             decisions.append(decision.to_dict())
         if len(papers) != 4 or len(audits) != 4 or len(decisions) != 4:
             raise JobInputError("controlled execution requires exactly four papers")
-        paper_digests = [row["paper_digest"] for row in papers]
-        risk_digests = [row["risk_digest"] for row in audits]
-        child_digest_set = "sha256:" + hashlib.sha256(
-            json.dumps(
-                {"papers": paper_digests, "risks": risk_digests},
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
+        paper_semantic_digests = [row["semantic_digest"] for row in papers]
+        risk_semantic_digests = [row["semantic_digest"] for row in audits]
+        semantic_child_set_digest = canonical_json_digest(
+            {
+                "paper_semantic_digests": paper_semantic_digests,
+                "risk_semantic_digests": risk_semantic_digests,
+            }
+        )
         selection = {
             "identity": CONTROLLED_PILOT_IDENTITY,
             "kind": "selection",
@@ -1170,11 +1166,9 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
             "selected": [row["plan_id"] for row in papers],
             "rejected": [],
             "decisions": decisions,
-            "paper_digests": paper_digests,
-            "risk_digests": risk_digests,
-            "paper_document_digests": paper_digests,
-            "risk_document_digests": risk_digests,
-            "child_digest_set": child_digest_set,
+            "paper_semantic_digests": paper_semantic_digests,
+            "risk_semantic_digests": risk_semantic_digests,
+            "semantic_child_set_digest": semantic_child_set_digest,
             "profile_digest": CONTROLLED_PROFILE_DIGEST,
             "plan_set_digest": CONTROLLED_PLAN_SET_DIGEST,
             "dependency_closure_digest": CONTROLLED_CLOSURE_DIGEST,
@@ -1185,13 +1179,7 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
             "ready_attestation_id": document.get("ready_attestation_id"),
             "resolved_universe_digest": resolved_universe_digest,
         }
-        selection_body = dict(selection)
-        selection["result_digest"] = "sha256:" + hashlib.sha256(
-            json.dumps(selection_body, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
-        selection_digest = "sha256:" + hashlib.sha256(
-            json.dumps(selection, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
+        selection["semantic_digest"] = canonical_json_digest(selection)
         knowledge_payload = {
             "identity": CONTROLLED_PILOT_IDENTITY,
             "snapshot_id": snapshot_id,
@@ -1199,15 +1187,10 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
             "paper_experiment_ids": [row["experiment_id"] for row in papers],
             "risk_audit_ids": [row["audit_id"] for row in audits],
             "fill_contract_digest": CONTROLLED_FILL_CONTRACT_DIGEST,
-            "child_digest_set": child_digest_set,
-            "selection_digest": selection_digest,
+            "semantic_child_set_digest": semantic_child_set_digest,
+            "selection_semantic_digest": selection["semantic_digest"],
         }
-        knowledge_digest = "sha256:" + hashlib.sha256(
-            json.dumps(
-                knowledge_payload, sort_keys=True, separators=(",", ":")
-            ).encode("utf-8")
-        ).hexdigest()
-        knowledge = {
+        knowledge_body = {
             "identity": CONTROLLED_PILOT_IDENTITY,
             "kind": "knowledge",
             "automatic_promotion": False,
@@ -1217,13 +1200,11 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
             "immutable_db_digest": physical_digest,
             "fill_contract_digest": CONTROLLED_FILL_CONTRACT_DIGEST,
             "selection_decision": "HOLD",
-            "artifact_id": knowledge_digest,
             "artifact_type": "controlled_pilot_knowledge",
             "schema_version": "controlled-pilot-knowledge/v1",
             "producer_role": "knowledge",
-            "digest": knowledge_digest,
-            "selection_digest": selection_digest,
-            "child_digest_set": child_digest_set,
+            "selection_semantic_digest": selection["semantic_digest"],
+            "semantic_child_set_digest": semantic_child_set_digest,
             "profile_digest": CONTROLLED_PROFILE_DIGEST,
             "plan_set_digest": CONTROLLED_PLAN_SET_DIGEST,
             "dependency_closure_digest": CONTROLLED_CLOSURE_DIGEST,
@@ -1234,6 +1215,13 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
             "n_papers": len(papers),
             "n_selected": 4,
             "payload": knowledge_payload,
+        }
+        knowledge_digest = canonical_json_digest(knowledge_body)
+        knowledge = {
+            **knowledge_body,
+            "artifact_id": knowledge_digest,
+            "digest": knowledge_digest,
+            "semantic_digest": knowledge_digest,
         }
         result = {
             "ok": True,

@@ -47,6 +47,7 @@ from paper_runtime.readiness_attestation import (
     derive_ready_authority_resource_digest,
     ready_authority_instance_id,
 )
+from paper_runtime.canonical_json import canonical_json_digest
 from research.universe_contract import ResolvedUniverseMembership
 
 CONTRACT_REL = Path("specs") / "ready" / "controlled_pilot_v1.generated.json"
@@ -70,6 +71,9 @@ FIXTURE_DIR = Path("specs") / "ready"
 READY_FIXTURE_REL = FIXTURE_DIR / "controlled_pilot_ready.generated.json"
 TRADER_FIXTURE_REL = FIXTURE_DIR / "controlled_pilot_trader_batch.generated.json"
 KEYS_FIXTURE_REL = FIXTURE_DIR / "controlled_pilot_verify_keys.generated.json"
+ARTIFACTS_FIXTURE_REL = (
+    FIXTURE_DIR / "controlled_pilot_container_artifacts.generated.json"
+)
 
 # Deterministic fixture-only key. Not an ACTIVE production registry row.
 _FIXTURE_SEED = b"controlled-pilot-v1-fixture-ed25519-seed-v1"
@@ -379,6 +383,134 @@ def render_fixtures() -> dict[str, bytes]:
         "request_digest": request_digest,
         "resolved_universe_digest": universe.resolved_membership_digest,
     }
+    papers: list[dict[str, Any]] = []
+    risks: list[dict[str, Any]] = []
+    for plan in contract["plans"]:
+        ordinal = int(plan["ordinal"])
+        paper = {
+            "ordinal": ordinal,
+            "plan_id": plan["plan_id"],
+            "plan_binding_digest": plan["plan_binding_digest"],
+            "identity": contract["identity"],
+            "kind": "paper",
+            "automatic_promotion": False,
+            "live_orders_enabled": False,
+            "mass": False,
+            "snapshot_id": logical,
+            "immutable_db_digest": physical,
+            "snapshot_key": physical_key,
+            "snapshot_size": 32,
+            "fill_contract_digest": contract["fill_contract_digest"],
+            "execution_mode": "am_signal_pm_close",
+            "price_basis": "RAW",
+            "lifecycle": "Paper",
+            "metrics": {
+                "total_return_post_cost": 0.0,
+                "max_drawdown": -0.0,
+            },
+            "n_equity_points": 10,
+            "n_trades": 0,
+            "experiment_id": f"fixture-experiment-{ordinal}",
+            "strategy_spec_id": plan["strategy_spec_id"],
+            "strategy_spec_version": plan["strategy_spec_version"],
+            "strategy_spec_hash": plan["strategy_spec_hash"],
+            "profile_digest": contract["profile_digest"],
+            "plan_set_digest": contract["plan_set_digest"],
+            "dependency_closure_digest": contract["dependency_closure_digest"],
+            "exact_four_binding_digest": contract["exact_four_binding_digest"],
+        }
+        paper["semantic_digest"] = canonical_json_digest(paper)
+        papers.append(paper)
+        risk = {
+            "ordinal": ordinal,
+            "plan_id": plan["plan_id"],
+            "plan_binding_digest": plan["plan_binding_digest"],
+            "strategy_spec_id": plan["strategy_spec_id"],
+            "strategy_spec_version": plan["strategy_spec_version"],
+            "strategy_spec_hash": plan["strategy_spec_hash"],
+            "identity": contract["identity"],
+            "kind": "risk",
+            "automatic_promotion": False,
+            "live_orders_enabled": False,
+            "mass": False,
+            "snapshot_id": logical,
+            "immutable_db_digest": physical,
+            "snapshot_key": physical_key,
+            "snapshot_size": 32,
+            "fill_contract_digest": contract["fill_contract_digest"],
+            "profile_digest": contract["profile_digest"],
+            "plan_set_digest": contract["plan_set_digest"],
+            "dependency_closure_digest": contract["dependency_closure_digest"],
+            "exact_four_binding_digest": contract["exact_four_binding_digest"],
+            "paper_semantic_digest": paper["semantic_digest"],
+            "status": "pass",
+            "audit_id": f"fixture-audit-{ordinal}",
+        }
+        risk["semantic_digest"] = canonical_json_digest(risk)
+        risks.append(risk)
+    paper_semantic_digests = [row["semantic_digest"] for row in papers]
+    risk_semantic_digests = [row["semantic_digest"] for row in risks]
+    semantic_child_set_digest = canonical_json_digest(
+        {
+            "paper_semantic_digests": paper_semantic_digests,
+            "risk_semantic_digests": risk_semantic_digests,
+        }
+    )
+    selection = {
+        "identity": contract["identity"],
+        "kind": "selection",
+        "decision": "HOLD",
+        "automatic_promotion": False,
+        "live_orders_enabled": False,
+        "mass": False,
+        "fill_contract_digest": contract["fill_contract_digest"],
+        "paper_semantic_digests": paper_semantic_digests,
+        "risk_semantic_digests": risk_semantic_digests,
+        "semantic_child_set_digest": semantic_child_set_digest,
+        "snapshot_id": logical,
+        "immutable_db_digest": physical,
+        "snapshot_size": 32,
+    }
+    selection["semantic_digest"] = canonical_json_digest(selection)
+    knowledge_body = {
+        "identity": contract["identity"],
+        "kind": "knowledge",
+        "automatic_promotion": False,
+        "live_orders_enabled": False,
+        "mass": False,
+        "selection_decision": "HOLD",
+        "fill_contract_digest": contract["fill_contract_digest"],
+        "selection_semantic_digest": selection["semantic_digest"],
+        "semantic_child_set_digest": semantic_child_set_digest,
+        "artifact_type": "controlled_pilot_knowledge",
+        "schema_version": "controlled-pilot-knowledge/v1",
+        "producer_role": "knowledge",
+        "payload": {
+            "identity": contract["identity"],
+            "snapshot_id": logical,
+            "selection_decision": "HOLD",
+            "paper_experiment_ids": [row["experiment_id"] for row in papers],
+            "risk_audit_ids": [row["audit_id"] for row in risks],
+            "fill_contract_digest": contract["fill_contract_digest"],
+            "semantic_child_set_digest": semantic_child_set_digest,
+            "selection_semantic_digest": selection["semantic_digest"],
+        },
+    }
+    knowledge_digest = canonical_json_digest(knowledge_body)
+    artifacts = {
+        "ok": True,
+        "identity": contract["identity"],
+        "ephemeral_cleaned": True,
+        "papers": papers,
+        "risks": risks,
+        "selection": selection,
+        "knowledge": {
+            **knowledge_body,
+            "artifact_id": knowledge_digest,
+            "digest": knowledge_digest,
+            "semantic_digest": knowledge_digest,
+        },
+    }
     def encode(value: Any) -> bytes:
         return json.dumps(
             value, indent=2, sort_keys=True, ensure_ascii=True
@@ -388,6 +520,7 @@ def render_fixtures() -> dict[str, bytes]:
         str(READY_FIXTURE_REL): encode(envelope),
         str(TRADER_FIXTURE_REL): encode(trader),
         str(KEYS_FIXTURE_REL): encode(keys),
+        str(ARTIFACTS_FIXTURE_REL): encode(artifacts),
     }
 
 

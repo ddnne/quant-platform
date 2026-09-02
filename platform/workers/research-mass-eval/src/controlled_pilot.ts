@@ -568,6 +568,9 @@ export async function verifyTraderAuthorizationBatch(
   if (keys.length !== 1) return { ok: false, error: "trader authorization permits exactly one ACTIVE key" };
   const issuedAt = parseCanonicalUtc(document.issued_at);
   const traderKey = keys[0]!;
+  if (traderKey.environment && traderKey.environment !== ready.environment) {
+    return { ok: false, error: "trader key environment denied" };
+  }
   if (traderKey.not_before && !registries.keyUsableAt(traderKey, issuedAt)) {
     return { ok: false, error: "trader key window denied" };
   }
@@ -797,139 +800,101 @@ function childOrder(prefix: string): Array<{ key: string; kind: string; plan_id?
   return rows;
 }
 
-async function reverifyManifest(
-  bucket: R2Bucket,
-  manifestKey: string,
-  expectedDigest: string,
-): Promise<boolean> {
-  const manifest = await loadJsonObject(bucket, manifestKey);
-  if (!manifest || manifest.request_digest !== expectedDigest) return false;
-  if (manifest.identity !== CONTROLLED_PILOT_IDENTITY) return false;
-  if (manifest.fill_contract_digest !== CONTROLLED_FILL_CONTRACT_DIGEST) return false;
-  if (manifest.generation !== CONTROLLED_PILOT_GENERATION) return false;
-  if (manifest.max_parallel !== CONTROLLED_PILOT_MAX_PARALLEL) return false;
-  if (manifest.automatic_promotion !== false || manifest.live_orders_enabled !== false) return false;
-  const children = manifest.children;
-  const expected = childOrder(controlledJobPrefix(String(manifest.idempotency_key || "")));
-  if (!Array.isArray(children) || children.length !== CONTROLLED_CHILD_COUNT) return false;
-  if (children.length !== expected.length) return false;
-  for (let index = 0; index < expected.length; index += 1) {
-    const child = children[index];
-    const want = expected[index]!;
-    if (!isRecord(child)) return false;
-    if (child.key !== want.key || child.kind !== want.kind) return false;
-    if (want.plan_id && child.plan_id !== want.plan_id) return false;
-    const digest = String(child.digest || "");
-    const size = child.size;
-    if (!SHA256_RE.test(digest) || typeof size !== "number") return false;
-    const head = await bucket.head(want.key);
-    if (!head || head.size !== size) return false;
-    const actual = await digestObject(bucket, want.key);
-    if (actual !== digest) return false;
-    const body = await loadJsonObject(bucket, want.key);
-    if (!body || body.identity !== CONTROLLED_PILOT_IDENTITY) return false;
-    if (body.fill_contract_digest !== CONTROLLED_FILL_CONTRACT_DIGEST) return false;
-    if (body.kind !== want.kind) return false;
-    if (want.plan_id && body.plan_id !== want.plan_id) return false;
-    if (want.kind === "paper" || want.kind === "risk") {
-      const ordinal = want.kind === "paper" ? index + 1 : index - 3;
-      if (body.ordinal !== ordinal) return false;
-      if (!want.plan_id) return false;
-      if (body.plan_binding_digest !== EXACT_FOUR_PLAN_BINDING_DIGESTS[want.plan_id]) return false;
-      if (body.strategy_spec_id !== EXACT_FOUR_STRATEGY_BY_PLAN[want.plan_id]) return false;
-      if (body.strategy_spec_version !== EXACT_FOUR_STRATEGY_SPEC_VERSIONS[want.plan_id]) return false;
-      const strategyId = EXACT_FOUR_STRATEGY_BY_PLAN[want.plan_id];
-      if (body.strategy_spec_hash !== EXACT_FOUR_STRATEGY_SPEC_HASHES[strategyId]) return false;
-    }
-    if (body.kind === "selection" && body.decision !== "HOLD") return false;
-    const storedResultDigest = String(body.result_digest || "");
-    const withoutResult = { ...body };
-    delete withoutResult.result_digest;
-    if (storedResultDigest !== (await sha256Digest(canonicalJson(withoutResult)))) return false;
-  }
-  const papers = [];
-  const risks = [];
-  let selection: Record<string, unknown> | null = null;
-  let knowledge: Record<string, unknown> | null = null;
-  for (let index = 0; index < expected.length; index += 1) {
-    const want = expected[index]!;
-    const body = await loadJsonObject(bucket, want.key);
-    if (!body) return false;
-    if (want.kind === "paper") papers.push(body);
-    if (want.kind === "risk") risks.push(body);
-    if (want.kind === "selection") selection = body;
-    if (want.kind === "knowledge") knowledge = body;
-  }
-  if (!selection || !knowledge || papers.length !== 4 || risks.length !== 4) return false;
-  try {
-    await validateContainerArtifacts(
-      { papers, risks, selection, knowledge },
-      {
-        attestation_id: String(manifest.ready_attestation_id || ""),
-        snapshot_id: String(manifest.snapshot_id || ""),
-        immutable_db_digest: String(manifest.immutable_db_digest || ""),
-        physical: {
-          key: String(manifest.snapshot_key || ""),
-          digest: String(manifest.immutable_db_digest || ""),
-          size: Number(manifest.snapshot_size || 0),
-        },
-        identity: CONTROLLED_PILOT_IDENTITY,
-        profile_digest: String(manifest.profile_digest || ""),
-        plan_set_digest: String(manifest.plan_set_digest || ""),
-        dependency_closure_digest: String(manifest.dependency_closure_digest || ""),
-        ready_manifest_digest: String(manifest.ready_manifest_digest || ""),
-        fill_contract_digest: CONTROLLED_FILL_CONTRACT_DIGEST,
-        receipt_proof_digest: "",
-        coverage_proof_digest: "",
-        b0_quality_proof_digest: "",
-        b4_quality_proof_digest: "",
-        resolved_universe_digest: String(manifest.resolved_universe_digest || ""),
-        environment: "",
-        signed_projection_document_digest: String(manifest.signed_projection_document_digest || ""),
-        session_scope: {
-          format: "controlled-session-scope/v1",
-          dependency_scope_proof_digest: "sha256:" + "0".repeat(64),
-          observed_through: "1970-01-01T00:00:00Z",
-          entries: [] as unknown as ControlledSessionScope["entries"],
-        },
-      },
-    );
-  } catch {
-    return false;
-  }
-  return true;
+type ControlledArtifactKind = "paper" | "risk" | "selection" | "knowledge";
+
+type VerifiedSemanticArtifact = {
+  kind: ControlledArtifactKind;
+  body: Record<string, unknown>;
+  semanticDigest: string;
+  artifactId?: string;
+};
+
+type VerifiedContainerSemantics = {
+  papers: VerifiedSemanticArtifact[];
+  risks: VerifiedSemanticArtifact[];
+  selection: VerifiedSemanticArtifact;
+  knowledge: VerifiedSemanticArtifact;
+};
+
+const PAPER_SEMANTIC_FIELDS = new Set([
+  "ordinal", "plan_id", "plan_binding_digest", "identity", "kind",
+  "automatic_promotion", "live_orders_enabled", "mass", "snapshot_id",
+  "immutable_db_digest", "snapshot_key", "snapshot_size", "authorization_digest",
+  "ready_attestation_id", "fill_contract_digest", "execution_mode",
+  "strategy_spec_id", "strategy_spec_hash", "strategy_spec_version", "profile_digest",
+  "plan_set_digest", "dependency_closure_digest", "exact_four_binding_digest",
+  "feature_refs", "lifecycle", "experiment_id", "run_id", "metrics",
+  "n_equity_points", "n_trades", "resolved_universe_digest", "max_gross_weight_ppm",
+  "requested_gross_weight", "realized_gross_weight", "reproducibility", "price_basis",
+]);
+const RISK_SEMANTIC_FIELDS = new Set([
+  "ordinal", "plan_id", "plan_binding_digest", "strategy_spec_id",
+  "strategy_spec_version", "strategy_spec_hash", "identity", "kind",
+  "automatic_promotion", "live_orders_enabled", "mass", "snapshot_id",
+  "immutable_db_digest", "snapshot_key", "snapshot_size", "authorization_digest",
+  "ready_attestation_id", "fill_contract_digest", "profile_digest", "plan_set_digest",
+  "dependency_closure_digest", "exact_four_binding_digest", "paper_semantic_digest",
+  "audit_id", "experiment_id", "run_id", "status", "checks", "findings", "metrics",
+]);
+const SELECTION_SEMANTIC_FIELDS = new Set([
+  "identity", "kind", "automatic_promotion", "live_orders_enabled", "mass",
+  "snapshot_id", "immutable_db_digest", "fill_contract_digest", "decision", "rule",
+  "selected", "rejected", "decisions", "paper_semantic_digests",
+  "risk_semantic_digests", "semantic_child_set_digest", "profile_digest",
+  "plan_set_digest", "dependency_closure_digest", "exact_four_binding_digest",
+  "snapshot_key", "snapshot_size", "authorization_digest", "ready_attestation_id",
+  "resolved_universe_digest",
+]);
+const KNOWLEDGE_SEMANTIC_FIELDS = new Set([
+  "identity", "kind", "automatic_promotion", "live_orders_enabled", "mass",
+  "snapshot_id", "immutable_db_digest", "fill_contract_digest", "selection_decision",
+  "artifact_type", "schema_version", "producer_role", "selection_semantic_digest",
+  "semantic_child_set_digest", "profile_digest", "plan_set_digest",
+  "dependency_closure_digest", "exact_four_binding_digest", "snapshot_key",
+  "snapshot_size", "authorization_digest", "n_papers", "n_selected", "payload",
+]);
+const PERSISTED_CHILD_FIELDS = new Set([
+  "format", "identity", "kind", "semantic_body", "semantic_digest", "result_id",
+  "bindings", "lineage",
+]);
+
+function assertClosedKeys(
+  value: Record<string, unknown>,
+  allowed: ReadonlySet<string>,
+  label: string,
+): void {
+  const extra = Object.keys(value).filter((key) => !allowed.has(key));
+  if (extra.length > 0) lineageError(`${label} has fields outside its closed schema: ${extra.join(",")}`);
 }
 
-async function childDocument(
-  kind: "paper" | "risk" | "selection" | "knowledge",
+async function semanticArtifact(
+  kind: ControlledArtifactKind,
   payload: Record<string, unknown>,
-  bindings: Record<string, unknown>,
-): Promise<Record<string, unknown>> {
-  for (const [key, value] of Object.entries(bindings)) {
-    if (payload[key] !== undefined && JSON.stringify(payload[key]) !== JSON.stringify(value)) {
-      lineageError(`container ${kind} rewrote ${key}`);
+): Promise<VerifiedSemanticArtifact> {
+  const document = structuredClone(payload);
+  const semanticDigest = String(document.semantic_digest || "");
+  delete document.semantic_digest;
+  let artifactId: string | undefined;
+  if (kind === "knowledge") {
+    artifactId = String(document.artifact_id || "");
+    const digest = String(document.digest || "");
+    delete document.artifact_id;
+    delete document.digest;
+    if (!isSha256(artifactId) || digest !== artifactId || semanticDigest !== artifactId) {
+      lineageError("knowledge artifact_id/digest/semantic_digest are missing or inconsistent");
     }
+  } else if (!isSha256(semanticDigest)) {
+    lineageError(`${kind} semantic_digest is missing`);
   }
-  const closed: Record<string, unknown> = {
-    ...payload,
-    identity: CONTROLLED_PILOT_IDENTITY,
-    kind,
-    fill_contract_digest: CONTROLLED_FILL_CONTRACT_DIGEST,
-    automatic_promotion: false,
-    live_orders_enabled: false,
-    mass: false,
-  };
-  if (closed.result_digest) {
-    const without = { ...closed };
-    delete without.result_digest;
-    const expected = await sha256Digest(canonicalJson(without));
-    if (closed.result_digest !== expected) {
-      lineageError(`${kind} result_digest is not canonical`);
-    }
-    return closed;
+  const allowed = kind === "paper" ? PAPER_SEMANTIC_FIELDS
+    : kind === "risk" ? RISK_SEMANTIC_FIELDS
+      : kind === "selection" ? SELECTION_SEMANTIC_FIELDS
+        : KNOWLEDGE_SEMANTIC_FIELDS;
+  assertClosedKeys(document, allowed, `container ${kind}`);
+  if ((await sha256Digest(canonicalJson(document))) !== semanticDigest) {
+    lineageError(`${kind} semantic_digest is not canonical`);
   }
-  const digest = await sha256Digest(canonicalJson(closed));
-  return { ...closed, result_digest: digest };
+  return { kind, body: document, semanticDigest, ...(artifactId ? { artifactId } : {}) };
 }
 
 function lineageError(detail: string): never {
@@ -965,23 +930,31 @@ async function validateContainerArtifacts(
     knowledge: Record<string, unknown>;
   },
   ready: VerifiedControlledReady,
-): Promise<void> {
+): Promise<VerifiedContainerSemantics> {
   if (artifacts.papers.length !== 4 || artifacts.risks.length !== 4) {
     lineageError("controlled container did not return exactly four papers and risks");
   }
-  const paperIds = artifacts.papers.map((row) => String(row.plan_id || ""));
-  const riskIds = artifacts.risks.map((row) => String(row.plan_id || ""));
+  const papers: VerifiedSemanticArtifact[] = [];
+  const risks: VerifiedSemanticArtifact[] = [];
+  for (let index = 0; index < 4; index += 1) {
+    papers.push(await semanticArtifact("paper", artifacts.papers[index]!));
+    risks.push(await semanticArtifact("risk", artifacts.risks[index]!));
+  }
+  const selection = await semanticArtifact("selection", artifacts.selection);
+  const knowledge = await semanticArtifact("knowledge", artifacts.knowledge);
+  const paperIds = papers.map((row) => String(row.body.plan_id || ""));
+  const riskIds = risks.map((row) => String(row.body.plan_id || ""));
   if (new Set(paperIds).size !== 4 || new Set(riskIds).size !== 4) {
     lineageError("controlled container children are duplicated");
   }
   if (paperIds.join(",") !== EXACT_FOUR_PLAN_IDS.join(",") || riskIds.join(",") !== EXACT_FOUR_PLAN_IDS.join(",")) {
     lineageError("controlled container children are reordered or substituted");
   }
-  const paperDigests: string[] = [];
-  const riskDigests: string[] = [];
+  const paperSemanticDigests: string[] = [];
+  const riskSemanticDigests: string[] = [];
   for (let index = 0; index < 4; index += 1) {
-    const paper = artifacts.papers[index]!;
-    const risk = artifacts.risks[index]!;
+    const paper = papers[index]!.body;
+    const risk = risks[index]!.body;
     requirePlanLineage(paper, index, "paper");
     requirePlanLineage(risk, index, "risk");
     if (
@@ -1008,64 +981,133 @@ async function validateContainerArtifacts(
     ) {
       lineageError("risk does not bind snapshot/profile/closure/binding digests");
     }
-    const paperDigest = String(paper.paper_digest || "");
-    const paperBody = { ...paper };
-    delete paperBody.paper_digest;
-    delete paperBody.result_digest;
-    if (!isSha256(paperDigest) || paperDigest !== (await sha256Digest(canonicalJson(paperBody)))) {
-      lineageError("paper digest is not canonical");
+    if (
+      paper.identity !== CONTROLLED_PILOT_IDENTITY || paper.kind !== "paper" ||
+      paper.lifecycle !== "Paper" || !isRecord(paper.metrics) ||
+      paper.automatic_promotion !== false || paper.live_orders_enabled !== false || paper.mass !== false
+    ) {
+      lineageError("paper semantic body violates the controlled Paper policy");
     }
-    paperDigests.push(paperDigest);
-    if (risk.paper_digest !== paperDigest) {
-      lineageError("risk does not bind its paper digest");
+    paperSemanticDigests.push(papers[index]!.semanticDigest);
+    if (risk.paper_semantic_digest !== papers[index]!.semanticDigest) {
+      lineageError("risk does not bind its paper semantic digest");
     }
-    const riskDigest = String(risk.risk_digest || "");
-    const riskBody = { ...risk };
-    delete riskBody.risk_digest;
-    delete riskBody.result_digest;
-    if (!isSha256(riskDigest) || riskDigest !== (await sha256Digest(canonicalJson(riskBody)))) {
-      lineageError("risk digest is not canonical");
+    if (
+      risk.identity !== CONTROLLED_PILOT_IDENTITY || risk.kind !== "risk" ||
+      risk.automatic_promotion !== false || risk.live_orders_enabled !== false || risk.mass !== false
+    ) {
+      lineageError("risk semantic body violates the controlled Paper policy");
     }
-    riskDigests.push(riskDigest);
+    riskSemanticDigests.push(risks[index]!.semanticDigest);
   }
-  const childSet = await sha256Digest(canonicalJson({ papers: paperDigests, risks: riskDigests }));
+  const semanticChildSetDigest = await sha256Digest(canonicalJson({
+    paper_semantic_digests: paperSemanticDigests,
+    risk_semantic_digests: riskSemanticDigests,
+  }));
   if (
-    !jsonEqual(artifacts.selection.paper_digests, paperDigests) ||
-    !jsonEqual(artifacts.selection.risk_digests, riskDigests) ||
-    artifacts.selection.child_digest_set !== childSet
+    !jsonEqual(selection.body.paper_semantic_digests, paperSemanticDigests) ||
+    !jsonEqual(selection.body.risk_semantic_digests, riskSemanticDigests) ||
+    selection.body.semantic_child_set_digest !== semanticChildSetDigest
   ) {
-    lineageError("selection does not bind the paper/risk digest set");
-  }
-  const selectionBody = { ...artifacts.selection };
-  delete selectionBody.result_digest;
-  const expectedSelectionResult = await sha256Digest(canonicalJson(selectionBody));
-  if (
-    artifacts.selection.result_digest !== undefined &&
-    artifacts.selection.result_digest !== expectedSelectionResult
-  ) {
-    lineageError("selection result_digest is not canonical");
-  }
-  const storedSelection = { ...selectionBody, result_digest: expectedSelectionResult };
-  const storedSelectionDigest = await sha256Digest(canonicalJson(storedSelection));
-  if (
-    artifacts.selection.snapshot_id !== ready.snapshot_id ||
-    artifacts.selection.immutable_db_digest !== ready.immutable_db_digest ||
-    artifacts.selection.snapshot_size !== ready.physical.size
-  ) {
-    lineageError("selection does not bind the physical snapshot identity");
+    lineageError("selection does not bind the ordered semantic child set");
   }
   if (
-    !jsonEqual(artifacts.selection.paper_document_digests, paperDigests) ||
-    !jsonEqual(artifacts.selection.risk_document_digests, riskDigests)
+    selection.body.identity !== CONTROLLED_PILOT_IDENTITY || selection.body.kind !== "selection" ||
+    selection.body.decision !== "HOLD" || selection.body.automatic_promotion !== false ||
+    selection.body.live_orders_enabled !== false || selection.body.mass !== false ||
+    selection.body.snapshot_id !== ready.snapshot_id ||
+    selection.body.immutable_db_digest !== ready.immutable_db_digest ||
+    selection.body.snapshot_size !== ready.physical.size
   ) {
-    lineageError("selection does not bind stored paper/risk document digests");
+    lineageError("selection does not bind the controlled HOLD identity");
   }
-  if (artifacts.knowledge.selection_digest !== storedSelectionDigest) {
-    lineageError("knowledge does not bind the stored selection digest");
+  if (
+    knowledge.body.identity !== CONTROLLED_PILOT_IDENTITY || knowledge.body.kind !== "knowledge" ||
+    knowledge.body.selection_decision !== "HOLD" || knowledge.body.automatic_promotion !== false ||
+    knowledge.body.live_orders_enabled !== false || knowledge.body.mass !== false ||
+    knowledge.body.selection_semantic_digest !== selection.semanticDigest ||
+    knowledge.body.semantic_child_set_digest !== semanticChildSetDigest
+  ) {
+    lineageError("knowledge does not bind Selection and its semantic child set");
   }
-  if (artifacts.knowledge.child_digest_set !== childSet) {
-    lineageError("knowledge does not bind the child digest set");
+  if (!isRecord(knowledge.body.payload)) {
+    lineageError("knowledge payload is missing");
   }
+  assertClosedKeys(knowledge.body.payload, new Set([
+    "identity", "snapshot_id", "selection_decision", "paper_experiment_ids",
+    "risk_audit_ids", "fill_contract_digest", "semantic_child_set_digest",
+    "selection_semantic_digest",
+  ]), "knowledge payload");
+  if (
+    knowledge.body.payload.selection_semantic_digest !== selection.semanticDigest ||
+    knowledge.body.payload.semantic_child_set_digest !== semanticChildSetDigest
+  ) {
+    lineageError("knowledge payload does not bind the semantic chain");
+  }
+  return { papers, risks, selection, knowledge };
+}
+
+function persistedDocument(
+  artifact: VerifiedSemanticArtifact,
+  bindings: Record<string, unknown>,
+  lineage: Record<string, unknown>,
+): Record<string, unknown> {
+  for (const [key, value] of Object.entries(bindings)) {
+    if (artifact.body[key] !== undefined && !jsonEqual(artifact.body[key], value)) {
+      lineageError(`container ${artifact.kind} rewrote ${key}`);
+    }
+  }
+  return {
+    format: "controlled-pilot-persisted-child/v2",
+    identity: CONTROLLED_PILOT_IDENTITY,
+    kind: artifact.kind,
+    semantic_body: artifact.body,
+    semantic_digest: artifact.semanticDigest,
+    result_id: artifact.semanticDigest,
+    bindings,
+    lineage,
+    ...(artifact.kind === "knowledge"
+      ? { artifact_id: artifact.artifactId, digest: artifact.artifactId }
+      : {}),
+  };
+}
+
+type PersistedChildRef = {
+  kind: ControlledArtifactKind;
+  plan_id?: string;
+  key: string;
+  persisted_byte_digest: string;
+  size: number;
+};
+
+class PersistedChildConflict extends Error {}
+
+async function persistChild(
+  bucket: R2Bucket,
+  key: string,
+  artifact: VerifiedSemanticArtifact,
+  bindings: Record<string, unknown>,
+  lineage: Record<string, unknown>,
+  planId?: string,
+): Promise<PersistedChildRef> {
+  const document = persistedDocument(artifact, bindings, lineage);
+  const bytes = serializedJsonBytes(document);
+  const persistedByteDigest = await sha256Digest(bytes);
+  const put = await putJsonCreateOnly(bucket, key, document);
+  if (put.conflict || put.digest !== persistedByteDigest) {
+    throw new PersistedChildConflict(`immutable ${artifact.kind} child conflicts`);
+  }
+  const readback = await digestObject(bucket, key);
+  if (readback !== persistedByteDigest) {
+    throw new PersistedChildConflict(`immutable ${artifact.kind} child readback failed`);
+  }
+  return {
+    kind: artifact.kind,
+    ...(planId ? { plan_id: planId } : {}),
+    key,
+    persisted_byte_digest: persistedByteDigest,
+    size: bytes.byteLength,
+  };
 }
 
 async function persistBoundChildren(
@@ -1082,8 +1124,9 @@ async function persistBoundChildren(
   requestHash: string,
 ): Promise<{ ok: true; manifest: Record<string, unknown> } | { ok: false; conflict: boolean; error?: string }> {
   const prefix = controlledJobPrefix(request.idempotency_key);
+  let verified: VerifiedContainerSemantics;
   try {
-    await validateContainerArtifacts(artifacts, ready);
+    verified = await validateContainerArtifacts(artifacts, ready);
   } catch (error) {
     return { ok: false, conflict: false, error: error instanceof Error ? error.message : "lineage" };
   }
@@ -1110,69 +1153,280 @@ async function persistBoundChildren(
     live_orders_enabled: false,
     mass: false,
   };
-  const childrenSpec: Array<{ key: string; data: Record<string, unknown>; kind: string; plan_id?: string }> = [];
-  for (let index = 0; index < 4; index += 1) {
-    const paper = artifacts.papers[index]!;
-    const planId = String(paper.plan_id);
-    childrenSpec.push({
-      key: `${prefix}/paper/${index + 1}.json`,
-      kind: "paper",
-      plan_id: planId,
-      data: await childDocument("paper", paper, bindings),
-    });
-  }
-  for (let index = 0; index < 4; index += 1) {
-    const risk = artifacts.risks[index]!;
-    const planId = String(risk.plan_id);
-    childrenSpec.push({
-      key: `${prefix}/risk/${index + 1}.json`,
-      kind: "risk",
-      plan_id: planId,
-      data: await childDocument("risk", risk, bindings),
-    });
-  }
-  childrenSpec.push({
-    key: `${prefix}/selection.json`,
-    kind: "selection",
-    data: await childDocument("selection", artifacts.selection, bindings),
-  });
-  childrenSpec.push({
-    key: `${prefix}/knowledge.json`,
-    kind: "knowledge",
-    data: await childDocument("knowledge", artifacts.knowledge, bindings),
-  });
-  const childRefs = await Promise.all(
-    childrenSpec.map(async (child) => {
-      const bytes = serializedJsonBytes(child.data);
-      return {
-        kind: child.kind,
-        ...(child.plan_id ? { plan_id: child.plan_id } : {}),
-        key: child.key,
-        digest: await sha256Digest(bytes),
-        size: bytes.byteLength,
-      };
-    }),
-  );
-  const childPuts = await Promise.all(
-    childrenSpec.map((child) => putJsonCreateOnly(bucket, child.key, child.data)),
-  );
-  if (childPuts.some((child) => child.conflict && !child.created)) {
-    for (const child of childRefs) {
-      const actual = await digestObject(bucket, child.key);
-      if (actual !== child.digest) return { ok: false, conflict: true };
+  // Close every semantic/body binding before the first immutable child write.
+  // Lineage is added only after the referenced persisted bytes exist.
+  try {
+    for (const artifact of [
+      ...verified.papers,
+      ...verified.risks,
+      verified.selection,
+      verified.knowledge,
+    ]) {
+      persistedDocument(artifact, bindings, {});
     }
+  } catch (error) {
+    return {
+      ok: false,
+      conflict: false,
+      error: error instanceof Error ? error.message : "container binding failure",
+    };
+  }
+  const childRefs: PersistedChildRef[] = [];
+  try {
+    const paperRefs: PersistedChildRef[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      const planId = EXACT_FOUR_PLAN_IDS[index]!;
+      const ref = await persistChild(
+        bucket, `${prefix}/paper/${index + 1}.json`, verified.papers[index]!, bindings, {}, planId,
+      );
+      paperRefs.push(ref);
+      childRefs.push(ref);
+    }
+    const riskRefs: PersistedChildRef[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      const planId = EXACT_FOUR_PLAN_IDS[index]!;
+      const ref = await persistChild(
+        bucket,
+        `${prefix}/risk/${index + 1}.json`,
+        verified.risks[index]!,
+        bindings,
+        {
+          paper_semantic_digest: verified.papers[index]!.semanticDigest,
+          paper_persisted_byte_digest: paperRefs[index]!.persisted_byte_digest,
+        },
+        planId,
+      );
+      riskRefs.push(ref);
+      childRefs.push(ref);
+    }
+    const paperPersistedByteDigests = paperRefs.map((row) => row.persisted_byte_digest);
+    const riskPersistedByteDigests = riskRefs.map((row) => row.persisted_byte_digest);
+    const orderedChildSetDigest = await sha256Digest(canonicalJson({
+      paper_persisted_byte_digests: paperPersistedByteDigests,
+      risk_persisted_byte_digests: riskPersistedByteDigests,
+    }));
+    const selectionRef = await persistChild(
+      bucket,
+      `${prefix}/selection.json`,
+      verified.selection,
+      bindings,
+      {
+        paper_semantic_digests: verified.papers.map((row) => row.semanticDigest),
+        risk_semantic_digests: verified.risks.map((row) => row.semanticDigest),
+        paper_persisted_byte_digests: paperPersistedByteDigests,
+        risk_persisted_byte_digests: riskPersistedByteDigests,
+        ordered_child_set_digest: orderedChildSetDigest,
+      },
+    );
+    childRefs.push(selectionRef);
+    childRefs.push(await persistChild(
+      bucket,
+      `${prefix}/knowledge.json`,
+      verified.knowledge,
+      bindings,
+      {
+        selection_semantic_digest: verified.selection.semanticDigest,
+        selection_persisted_byte_digest: selectionRef.persisted_byte_digest,
+        ordered_child_set_digest: orderedChildSetDigest,
+      },
+    ));
+  } catch (error) {
+    return {
+      ok: false,
+      conflict: error instanceof PersistedChildConflict,
+      error: error instanceof Error ? error.message : "persisted child failure",
+    };
   }
   return {
     ok: true,
     manifest: {
       identity: CONTROLLED_PILOT_IDENTITY,
-      format: "controlled-pilot-paper-bundle/v1",
+      format: "controlled-pilot-paper-bundle/v2",
       request_digest: requestHash,
       ...bindings,
       plan_ids: [...EXACT_FOUR_PLAN_IDS],
       children: childRefs,
     },
   };
+}
+
+function bindingsFromManifest(manifest: Record<string, unknown>): Record<string, unknown> {
+  return {
+    authorization_digest: manifest.authorization_digest,
+    ready_attestation_id: manifest.ready_attestation_id,
+    snapshot_id: manifest.snapshot_id,
+    immutable_db_digest: manifest.immutable_db_digest,
+    snapshot_key: manifest.snapshot_key,
+    snapshot_size: manifest.snapshot_size,
+    profile_digest: manifest.profile_digest,
+    plan_set_digest: manifest.plan_set_digest,
+    dependency_closure_digest: manifest.dependency_closure_digest,
+    ready_manifest_digest: manifest.ready_manifest_digest,
+    resolved_universe_digest: manifest.resolved_universe_digest,
+    universe_rule_digest: manifest.universe_rule_digest,
+    fill_contract_digest: manifest.fill_contract_digest,
+    exact_four_binding_digest: manifest.exact_four_binding_digest,
+    idempotency_key: manifest.idempotency_key,
+    generation: manifest.generation,
+    max_parallel: manifest.max_parallel,
+    max_gross_weight_ppm: manifest.max_gross_weight_ppm,
+    automatic_promotion: manifest.automatic_promotion,
+    live_orders_enabled: manifest.live_orders_enabled,
+    mass: manifest.mass,
+  };
+}
+
+function restoredContainerArtifact(
+  document: Record<string, unknown>,
+  kind: ControlledArtifactKind,
+  expectedBindings: Record<string, unknown>,
+): { payload: Record<string, unknown>; lineage: Record<string, unknown> } {
+  const allowed = new Set(PERSISTED_CHILD_FIELDS);
+  if (kind === "knowledge") {
+    allowed.add("artifact_id");
+    allowed.add("digest");
+  }
+  if (
+    Object.keys(document).length !== allowed.size ||
+    [...allowed].some((field) => !(field in document))
+  ) {
+    lineageError(`persisted ${kind} child does not match its closed schema`);
+  }
+  assertClosedKeys(document, allowed, `persisted ${kind}`);
+  if (
+    document.format !== "controlled-pilot-persisted-child/v2" ||
+    document.identity !== CONTROLLED_PILOT_IDENTITY ||
+    document.kind !== kind ||
+    !isRecord(document.semantic_body) ||
+    !isRecord(document.bindings) ||
+    !isRecord(document.lineage) ||
+    !jsonEqual(document.bindings, expectedBindings)
+  ) {
+    lineageError(`persisted ${kind} identity or bindings are invalid`);
+  }
+  const semanticDigest = String(document.semantic_digest || "");
+  if (
+    !isSha256(semanticDigest) ||
+    document.result_id !== semanticDigest ||
+    (kind === "knowledge" &&
+      (document.artifact_id !== semanticDigest || document.digest !== semanticDigest))
+  ) {
+    lineageError(`persisted ${kind} result identity is invalid`);
+  }
+  const payload: Record<string, unknown> = {
+    ...document.semantic_body,
+    semantic_digest: semanticDigest,
+  };
+  if (kind === "knowledge") {
+    payload.artifact_id = document.artifact_id;
+    payload.digest = document.digest;
+  }
+  return { payload, lineage: document.lineage };
+}
+
+function readyFromManifest(manifest: Record<string, unknown>): VerifiedControlledReady {
+  return {
+    attestation_id: String(manifest.ready_attestation_id || ""),
+    snapshot_id: String(manifest.snapshot_id || ""),
+    immutable_db_digest: String(manifest.immutable_db_digest || ""),
+    physical: {
+      key: String(manifest.snapshot_key || ""),
+      digest: String(manifest.immutable_db_digest || ""),
+      size: Number(manifest.snapshot_size || 0),
+    },
+    identity: CONTROLLED_PILOT_IDENTITY,
+    profile_digest: String(manifest.profile_digest || ""),
+    plan_set_digest: String(manifest.plan_set_digest || ""),
+    dependency_closure_digest: String(manifest.dependency_closure_digest || ""),
+    ready_manifest_digest: String(manifest.ready_manifest_digest || ""),
+    fill_contract_digest: CONTROLLED_FILL_CONTRACT_DIGEST,
+    receipt_proof_digest: "",
+    coverage_proof_digest: "",
+    b0_quality_proof_digest: "",
+    b4_quality_proof_digest: "",
+    resolved_universe_digest: String(manifest.resolved_universe_digest || ""),
+    environment: "",
+    signed_projection_document_digest: String(manifest.signed_projection_document_digest || ""),
+    session_scope: {
+      format: "controlled-session-scope/v1",
+      dependency_scope_proof_digest: "sha256:" + "0".repeat(64),
+      observed_through: "1970-01-01T00:00:00Z",
+      entries: [] as unknown as ControlledSessionScope["entries"],
+    },
+  };
+}
+
+async function reverifyManifest(
+  bucket: R2Bucket,
+  manifestKey: string,
+  expectedDigest: string,
+): Promise<boolean> {
+  try {
+    const manifest = await loadJsonObject(bucket, manifestKey);
+    if (
+      !manifest || manifest.format !== "controlled-pilot-paper-bundle/v2" ||
+      manifest.request_digest !== expectedDigest || manifest.identity !== CONTROLLED_PILOT_IDENTITY ||
+      manifest.fill_contract_digest !== CONTROLLED_FILL_CONTRACT_DIGEST ||
+      manifest.generation !== CONTROLLED_PILOT_GENERATION ||
+      manifest.max_parallel !== CONTROLLED_PILOT_MAX_PARALLEL ||
+      manifest.automatic_promotion !== false || manifest.live_orders_enabled !== false || manifest.mass !== false
+    ) return false;
+    const refs = manifest.children;
+    const expected = childOrder(controlledJobPrefix(String(manifest.idempotency_key || "")));
+    if (!Array.isArray(refs) || refs.length !== CONTROLLED_CHILD_COUNT || refs.length !== expected.length) return false;
+    const bindings = bindingsFromManifest(manifest);
+    const restored: Array<{ payload: Record<string, unknown>; lineage: Record<string, unknown> }> = [];
+    const persistedDigests: string[] = [];
+    for (let index = 0; index < expected.length; index += 1) {
+      const ref = refs[index];
+      const want = expected[index]!;
+      if (!isRecord(ref) || ref.key !== want.key || ref.kind !== want.kind) return false;
+      if ((want.plan_id && ref.plan_id !== want.plan_id) || (!want.plan_id && ref.plan_id !== undefined)) return false;
+      const persistedByteDigest = String(ref.persisted_byte_digest || "");
+      if (!isSha256(persistedByteDigest) || !Number.isSafeInteger(ref.size) || Number(ref.size) < 1) return false;
+      const head = await bucket.head(want.key);
+      if (!head || head.size !== ref.size || await digestObject(bucket, want.key) !== persistedByteDigest) return false;
+      const document = await loadJsonObject(bucket, want.key);
+      if (!document) return false;
+      restored.push(restoredContainerArtifact(document, want.kind as ControlledArtifactKind, bindings));
+      persistedDigests.push(persistedByteDigest);
+    }
+    const container = {
+      papers: restored.slice(0, 4).map((row) => row.payload),
+      risks: restored.slice(4, 8).map((row) => row.payload),
+      selection: restored[8]!.payload,
+      knowledge: restored[9]!.payload,
+    };
+    const semantic = await validateContainerArtifacts(container, readyFromManifest(manifest));
+    for (let index = 0; index < 4; index += 1) {
+      if (Object.keys(restored[index]!.lineage).length !== 0) return false;
+      if (!jsonEqual(restored[index + 4]!.lineage, {
+        paper_semantic_digest: semantic.papers[index]!.semanticDigest,
+        paper_persisted_byte_digest: persistedDigests[index],
+      })) return false;
+    }
+    const paperPersistedByteDigests = persistedDigests.slice(0, 4);
+    const riskPersistedByteDigests = persistedDigests.slice(4, 8);
+    const orderedChildSetDigest = await sha256Digest(canonicalJson({
+      paper_persisted_byte_digests: paperPersistedByteDigests,
+      risk_persisted_byte_digests: riskPersistedByteDigests,
+    }));
+    if (!jsonEqual(restored[8]!.lineage, {
+      paper_semantic_digests: semantic.papers.map((row) => row.semanticDigest),
+      risk_semantic_digests: semantic.risks.map((row) => row.semanticDigest),
+      paper_persisted_byte_digests: paperPersistedByteDigests,
+      risk_persisted_byte_digests: riskPersistedByteDigests,
+      ordered_child_set_digest: orderedChildSetDigest,
+    })) return false;
+    if (!jsonEqual(restored[9]!.lineage, {
+      selection_semantic_digest: semantic.selection.semanticDigest,
+      selection_persisted_byte_digest: persistedDigests[8],
+      ordered_child_set_digest: orderedChildSetDigest,
+    })) return false;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 type ContainerArtifacts = {

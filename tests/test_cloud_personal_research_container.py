@@ -2838,8 +2838,8 @@ def test_controlled_container_runs_canonical_four_with_independent_artifacts(
                 equity_curve=[{"date": "2023-01-04", "equity": 1.0}],
                 trades=[{"code": "7203"}],
                 metrics={
-                    "total_return_post_cost": 0.01,
-                    "max_drawdown": 0.01,
+                    "total_return_post_cost": 0.0,
+                    "max_drawdown": -0.0,
                     "num_trades": 1,
                 },
                 metadata={
@@ -2918,12 +2918,23 @@ def test_controlled_container_runs_canonical_four_with_independent_artifacts(
     assert "Threshold" not in " ".join(name for name, _ in calls)
     assert papers[0]["ordinal"] == 1
     assert papers[0]["plan_id"] == "exp-mdh-hold10-momentum"
-    assert "paper_digest" in papers[0]
-    assert result["knowledge"]["child_digest_set"] == result["selection"]["child_digest_set"]
-    assert result["knowledge"]["selection_digest"] != result["selection"]["result_digest"]
-    assert result["knowledge"]["selection_digest"].startswith("sha256:")
-    assert result["knowledge"]["selection_digest"] != result["selection"]["result_digest"]
-    assert result["knowledge"]["selection_digest"].startswith("sha256:")
+    assert papers[0]["semantic_digest"].startswith("sha256:")
+    from paper_runtime.canonical_json import canonical_json_digest
+
+    paper_body = dict(papers[0])
+    paper_digest = paper_body.pop("semantic_digest")
+    assert paper_digest == canonical_json_digest(paper_body)
+    assert paper_body["metrics"]["total_return_post_cost"] == 0.0
+    assert (
+        result["knowledge"]["semantic_child_set_digest"]
+        == result["selection"]["semantic_child_set_digest"]
+    )
+    assert (
+        result["knowledge"]["selection_semantic_digest"]
+        == result["selection"]["semantic_digest"]
+    )
+    assert result["knowledge"]["artifact_id"] == result["knowledge"]["digest"]
+    assert result["knowledge"]["digest"] == result["knowledge"]["semantic_digest"]
 
 
 def _controlled_completed_result(item) -> dict:

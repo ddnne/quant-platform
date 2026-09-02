@@ -12,6 +12,7 @@ vi.stubGlobal(
 import readyFixture from "../../../../specs/ready/controlled_pilot_ready.generated.json";
 import traderFixture from "../../../../specs/ready/controlled_pilot_trader_batch.generated.json";
 import fixtureKeys from "../../../../specs/ready/controlled_pilot_verify_keys.generated.json";
+import pythonContainerArtifacts from "../../../../specs/ready/controlled_pilot_container_artifacts.generated.json";
 import {
   CONTROLLED_FILL_CONTRACT_DIGEST,
   CONTROLLED_PILOT_IDENTITY,
@@ -165,114 +166,17 @@ function mockGateway(state: BudgetState): Env["AI_GATEWAY"] {
 }
 
 async function artifacts(logicalId: string) {
-  const physicalId = fixtureKeys.physical_snapshot_id;
-  const snapshotKey = controlledPhysicalSnapshotKey(physicalId);
-  const snapshotSize = 32;
-  const papers = [];
-  const risks = [];
-  for (let index = 0; index < EXACT_FOUR_PLAN_IDS.length; index += 1) {
-    const planId = EXACT_FOUR_PLAN_IDS[index]!;
-    const strategyId = EXACT_FOUR_STRATEGY_BY_PLAN[planId]!;
-    const paper: Record<string, unknown> = {
-      ordinal: index + 1,
-      plan_id: planId,
-      plan_binding_digest: EXACT_FOUR_PLAN_BINDING_DIGESTS[planId],
-      identity: CONTROLLED_PILOT_IDENTITY,
-      kind: "paper",
-      automatic_promotion: false,
-      live_orders_enabled: false,
-      mass: false,
-      snapshot_id: logicalId,
-      immutable_db_digest: physicalId,
-      snapshot_key: snapshotKey,
-      snapshot_size: snapshotSize,
-      fill_contract_digest: CONTROLLED_FILL_CONTRACT_DIGEST,
-      execution_mode: "am_signal_pm_close",
-      lifecycle: "Paper",
-      price_basis: "RAW",
-      metrics: { total_return_post_cost: 0.01 },
-      n_equity_points: 10,
-      n_trades: 1,
-      experiment_id: `e${index}`,
-      strategy_spec_id: strategyId,
-      strategy_spec_version: EXACT_FOUR_STRATEGY_SPEC_VERSIONS[planId],
-      strategy_spec_hash: EXACT_FOUR_STRATEGY_SPEC_HASHES[strategyId],
-      profile_digest: EXACT_FOUR_PROFILE_DIGEST,
-      plan_set_digest: EXACT_FOUR_PLAN_SET_DIGEST,
-      dependency_closure_digest: EXACT_FOUR_CLOSURE_DIGEST,
-      exact_four_binding_digest: EXACT_FOUR_BINDING_DIGEST,
-    };
-    paper.paper_digest = await sha256Digest(canonicalJson(paper));
-    papers.push(paper);
-    const risk: Record<string, unknown> = {
-      ordinal: index + 1,
-      plan_id: planId,
-      plan_binding_digest: EXACT_FOUR_PLAN_BINDING_DIGESTS[planId],
-      strategy_spec_id: strategyId,
-      strategy_spec_version: EXACT_FOUR_STRATEGY_SPEC_VERSIONS[planId],
-      strategy_spec_hash: EXACT_FOUR_STRATEGY_SPEC_HASHES[strategyId],
-      identity: CONTROLLED_PILOT_IDENTITY,
-      kind: "risk",
-      automatic_promotion: false,
-      live_orders_enabled: false,
-      mass: false,
-      snapshot_id: logicalId,
-      immutable_db_digest: physicalId,
-      snapshot_key: snapshotKey,
-      snapshot_size: snapshotSize,
-      fill_contract_digest: CONTROLLED_FILL_CONTRACT_DIGEST,
-      profile_digest: EXACT_FOUR_PROFILE_DIGEST,
-      plan_set_digest: EXACT_FOUR_PLAN_SET_DIGEST,
-      dependency_closure_digest: EXACT_FOUR_CLOSURE_DIGEST,
-      exact_four_binding_digest: EXACT_FOUR_BINDING_DIGEST,
-      paper_digest: paper.paper_digest,
-      status: "pass",
-      audit_id: `a-${planId}`,
-    };
-    risk.risk_digest = await sha256Digest(canonicalJson(risk));
-    risks.push(risk);
+  if (logicalId !== fixtureKeys.logical_snapshot_id) {
+    throw new Error("Python Container fixture logical snapshot mismatch");
   }
-  const paperDigests = papers.map((row) => row.paper_digest);
-  const riskDigests = risks.map((row) => row.risk_digest);
-  const childSet = await sha256Digest(canonicalJson({ papers: paperDigests, risks: riskDigests }));
-  const selection: Record<string, unknown> = {
-    identity: CONTROLLED_PILOT_IDENTITY,
-    kind: "selection",
-    decision: "HOLD",
-    automatic_promotion: false,
-    live_orders_enabled: false,
-    mass: false,
-    fill_contract_digest: CONTROLLED_FILL_CONTRACT_DIGEST,
-    paper_digests: paperDigests,
-    risk_digests: riskDigests,
-    paper_document_digests: paperDigests,
-    risk_document_digests: riskDigests,
-    child_digest_set: childSet,
-    snapshot_id: logicalId,
-    immutable_db_digest: physicalId,
-    snapshot_size: snapshotSize,
-  };
-  selection.result_digest = await sha256Digest(canonicalJson(selection));
-  const knowledge: Record<string, unknown> = {
-    identity: CONTROLLED_PILOT_IDENTITY,
-    kind: "knowledge",
-    automatic_promotion: false,
-    live_orders_enabled: false,
-    mass: false,
-    digest: "sha256:" + "ab".repeat(32),
-    selection_decision: "HOLD",
-    fill_contract_digest: CONTROLLED_FILL_CONTRACT_DIGEST,
-    selection_digest: await sha256Digest(canonicalJson(selection)),
-    child_digest_set: childSet,
-  };
-  return {
-    ok: true,
-    identity: CONTROLLED_PILOT_IDENTITY,
-    ephemeral_cleaned: true,
-    papers,
-    risks,
-    selection,
-    knowledge,
+  return structuredClone(pythonContainerArtifacts) as unknown as {
+    ok: true;
+    identity: string;
+    ephemeral_cleaned: true;
+    papers: Record<string, unknown>[];
+    risks: Record<string, unknown>[];
+    selection: Record<string, unknown>;
+    knowledge: Record<string, unknown>;
   };
 }
 
@@ -280,7 +184,19 @@ function mockContainer(options?: {
   fail?: "error" | "timeout";
   omitOutbound?: boolean;
   fetches?: { n: number; post: number };
-  tamper?: "reorder" | "duplicate" | "snapshot" | "risk" | "selection" | "knowledge";
+  tamper?:
+    | "reorder"
+    | "duplicate"
+    | "snapshot"
+    | "risk"
+    | "selection"
+    | "knowledge"
+    | "knowledge_missing_id"
+    | "knowledge_wrong_digest"
+    | "post_digest_injection"
+    | "semantic_rebound_risk"
+    | "semantic_reordered_selection"
+    | "semantic_rebound_knowledge";
   delay?: { complete: boolean };
 }): Env["PERSONAL_RESEARCH_CONTAINER"] {
   const outbound = new Map<string, unknown>();
@@ -309,13 +225,53 @@ function mockContainer(options?: {
               result.papers[0]!.snapshot_id = "sha256:" + "00".repeat(32);
             }
             if (options?.tamper === "risk") {
-              result.risks[0]!.paper_digest = "sha256:" + "11".repeat(32);
+              result.risks[0]!.paper_semantic_digest = "sha256:" + "11".repeat(32);
             }
             if (options?.tamper === "selection") {
-              result.selection.child_digest_set = "sha256:" + "22".repeat(32);
+              result.selection.semantic_child_set_digest = "sha256:" + "22".repeat(32);
             }
             if (options?.tamper === "knowledge") {
-              result.knowledge.selection_digest = "sha256:" + "33".repeat(32);
+              result.knowledge.selection_semantic_digest = "sha256:" + "33".repeat(32);
+            }
+            if (options?.tamper === "knowledge_missing_id") {
+              delete result.knowledge.artifact_id;
+            }
+            if (options?.tamper === "knowledge_wrong_digest") {
+              result.knowledge.digest = "sha256:" + "44".repeat(32);
+            }
+            if (options?.tamper === "post_digest_injection") {
+              result.papers[0]!.injected_after_closed_schema = true;
+              delete result.papers[0]!.semantic_digest;
+              result.papers[0]!.semantic_digest = await sha256Digest(canonicalJson(result.papers[0]!));
+            }
+            if (options?.tamper === "semantic_rebound_risk") {
+              result.risks[0]!.paper_semantic_digest = result.papers[1]!.semantic_digest;
+              delete result.risks[0]!.semantic_digest;
+              result.risks[0]!.semantic_digest = await sha256Digest(canonicalJson(result.risks[0]!));
+            }
+            if (options?.tamper === "semantic_reordered_selection") {
+              const paperSemantic = result.selection.paper_semantic_digests as unknown[];
+              result.selection.paper_semantic_digests = [
+                paperSemantic[1], paperSemantic[0], paperSemantic[2], paperSemantic[3],
+              ];
+              result.selection.semantic_child_set_digest = await sha256Digest(canonicalJson({
+                paper_semantic_digests: result.selection.paper_semantic_digests,
+                risk_semantic_digests: result.selection.risk_semantic_digests,
+              }));
+              delete result.selection.semantic_digest;
+              result.selection.semantic_digest = await sha256Digest(canonicalJson(result.selection));
+            }
+            if (options?.tamper === "semantic_rebound_knowledge") {
+              result.knowledge.selection_semantic_digest = result.papers[0]!.semantic_digest;
+              (result.knowledge.payload as Record<string, unknown>).selection_semantic_digest =
+                result.papers[0]!.semantic_digest;
+              delete result.knowledge.artifact_id;
+              delete result.knowledge.digest;
+              delete result.knowledge.semantic_digest;
+              const rebound = await sha256Digest(canonicalJson(result.knowledge));
+              result.knowledge.artifact_id = rebound;
+              result.knowledge.digest = rebound;
+              result.knowledge.semantic_digest = rebound;
             }
             const complete = !options?.delay || options.delay.complete;
             jobs.set(body.job_id, { ...result, status: complete ? "COMPLETED" : "QUEUED", job_id: body.job_id, ok: complete });
@@ -382,7 +338,19 @@ async function seedEnv(options?: {
   loseFinalize?: boolean;
   omitOutbound?: boolean;
   fetches?: { n: number; post: number };
-  tamper?: "reorder" | "duplicate" | "snapshot" | "risk" | "selection" | "knowledge";
+  tamper?:
+    | "reorder"
+    | "duplicate"
+    | "snapshot"
+    | "risk"
+    | "selection"
+    | "knowledge"
+    | "knowledge_missing_id"
+    | "knowledge_wrong_digest"
+    | "post_digest_injection"
+    | "semantic_rebound_risk"
+    | "semantic_reordered_selection"
+    | "semantic_rebound_knowledge";
   delay?: { complete: boolean };
 }) {
   const mem = new MemR2();
@@ -489,6 +457,15 @@ describe("strict JSON and Python-generated fixtures", () => {
       keys,
     );
     expect(authorized.ok).toBe(true);
+    const productionKey = keys.map((key) => ({ ...key, environment: "production" }));
+    const crossEnvironment = await verifyTraderAuthorizationBatch(
+      traderFixture,
+      fixtureKeys.request,
+      verified.value,
+      fixtureKeys.request_digest,
+      productionKey,
+    );
+    expect(crossEnvironment).toEqual({ ok: false, error: "trader key environment denied" });
   });
 
   it("rejects Coverage v1, long TTL, and tampered READY", async () => {
@@ -565,6 +542,65 @@ describe("controlled cloud execution", () => {
     await retryCtx.pending;
     expect(seeded.budget.reserved).toBe(reserved);
     expect(seeded.budget.queried).toBeGreaterThan(0);
+  });
+
+  it("accepts Python-style float zero and persists the exact dependency chain in order", async () => {
+    const seeded = await seedEnv();
+    const ctx = new WaitCtx();
+    await submitControlledPilot(seeded.env, seeded.request, ctx);
+    await ctx.pending;
+    const status = await controlledPilotStatus(seeded.env, seeded.request.idempotency_key);
+    const terminal = (await status.json()) as {
+      status: string;
+      manifest: { children: Array<Record<string, unknown>> };
+    };
+    expect(terminal.status).toBe("COMPLETED");
+    const refs = terminal.manifest.children;
+    const read = async (key: string): Promise<Record<string, unknown>> => {
+      const object = await seeded.env.STRUCTURED_BUCKET.get(key);
+      expect(object).not.toBeNull();
+      return JSON.parse(new TextDecoder().decode(new Uint8Array(await object!.arrayBuffer()))) as Record<string, unknown>;
+    };
+    const papers = await Promise.all(refs.slice(0, 4).map((ref) => read(String(ref.key))));
+    const risks = await Promise.all(refs.slice(4, 8).map((ref) => read(String(ref.key))));
+    const selection = await read(String(refs[8]!.key));
+    const knowledge = await read(String(refs[9]!.key));
+
+    const firstPaperBody = papers[0]!.semantic_body as Record<string, unknown>;
+    expect(firstPaperBody.metrics).toEqual({ total_return_post_cost: 0, max_drawdown: 0 });
+    expect(papers[0]!.semantic_digest).toBe(await sha256Digest(canonicalJson(firstPaperBody)));
+    for (let index = 0; index < 4; index += 1) {
+      expect((risks[index]!.lineage as Record<string, unknown>).paper_persisted_byte_digest)
+        .toBe(refs[index]!.persisted_byte_digest);
+      expect((risks[index]!.lineage as Record<string, unknown>).paper_semantic_digest)
+        .toBe(papers[index]!.semantic_digest);
+    }
+    const selectionLineage = selection.lineage as Record<string, unknown>;
+    expect(selectionLineage.paper_persisted_byte_digests)
+      .toEqual(refs.slice(0, 4).map((ref) => ref.persisted_byte_digest));
+    expect(selectionLineage.risk_persisted_byte_digests)
+      .toEqual(refs.slice(4, 8).map((ref) => ref.persisted_byte_digest));
+    const expectedChildSet = await sha256Digest(canonicalJson({
+      paper_persisted_byte_digests: selectionLineage.paper_persisted_byte_digests,
+      risk_persisted_byte_digests: selectionLineage.risk_persisted_byte_digests,
+    }));
+    expect(selectionLineage.ordered_child_set_digest).toBe(expectedChildSet);
+    const knowledgeLineage = knowledge.lineage as Record<string, unknown>;
+    expect(knowledgeLineage.selection_persisted_byte_digest).toBe(refs[8]!.persisted_byte_digest);
+    expect(knowledgeLineage.ordered_child_set_digest).toBe(expectedChildSet);
+    expect(knowledge.artifact_id).toBe(knowledge.semantic_digest);
+    expect(knowledge.digest).toBe(knowledge.semantic_digest);
+
+    const persistedOrder = seeded.mem.putOrder.filter((key) =>
+      key.includes(`/jobs/${seeded.request.idempotency_key}/`) &&
+      (key.includes("/paper/") || key.includes("/risk/") || key.endsWith("/selection.json") || key.endsWith("/knowledge.json")),
+    );
+    expect(persistedOrder.map((key) => key.split("/").slice(-2).join("/"))).toEqual([
+      "paper/1.json", "paper/2.json", "paper/3.json", "paper/4.json",
+      "risk/1.json", "risk/2.json", "risk/3.json", "risk/4.json",
+      `${seeded.request.idempotency_key}/selection.json`,
+      `${seeded.request.idempotency_key}/knowledge.json`,
+    ]);
   });
 
   it("finalize failure leaves nonterminal state and no terminal artifact", async () => {
@@ -665,7 +701,26 @@ describe("controlled cloud execution", () => {
     }
   });
 
-  it("rejects persisted tampered Risk snapshot Selection and Knowledge on reverify", async () => {
+  it("rejects missing or wrong Knowledge identity and post-digest field injection", async () => {
+    for (const tamper of [
+      "knowledge_missing_id",
+      "knowledge_wrong_digest",
+      "post_digest_injection",
+      "semantic_rebound_risk",
+      "semantic_reordered_selection",
+      "semantic_rebound_knowledge",
+    ] as const) {
+      const seeded = await seedEnv({ tamper });
+      const ctx = new WaitCtx();
+      await submitControlledPilot(seeded.env, seeded.request, ctx);
+      await ctx.pending;
+      const status = await controlledPilotStatus(seeded.env, seeded.request.idempotency_key);
+      expect(((await status.json()) as { status: string }).status).not.toBe("COMPLETED");
+      expect(seeded.mem.putOrder.some((key) => key.includes("/paper/"))).toBe(false);
+    }
+  });
+
+  it("rejects a persisted Risk whose semantic body and manifest byte ref are rebound", async () => {
     const seeded = await seedEnv();
     const ctx = new WaitCtx();
     await submitControlledPilot(seeded.env, seeded.request, ctx);
@@ -677,10 +732,21 @@ describe("controlled cloud execution", () => {
     const raw = await seeded.env.STRUCTURED_BUCKET.get(riskKey);
     expect(raw).not.toBeNull();
     const body = JSON.parse(new TextDecoder().decode(new Uint8Array(await raw!.arrayBuffer()))) as Record<string, unknown>;
-    body.snapshot_id = "sha256:" + "00".repeat(32);
-    delete body.result_digest;
-    body.result_digest = await sha256Digest(canonicalJson(body));
-    await seeded.mem.put(riskKey, JSON.stringify(body));
+    const semanticBody = body.semantic_body as Record<string, unknown>;
+    semanticBody.snapshot_id = "sha256:" + "00".repeat(32);
+    body.semantic_digest = await sha256Digest(canonicalJson(semanticBody));
+    body.result_id = body.semantic_digest;
+    const tamperedBytes = new TextEncoder().encode(JSON.stringify(body, null, 2));
+    const tamperedDigest = await sha256Digest(tamperedBytes);
+    await seeded.mem.put(riskKey, tamperedBytes);
+    const manifestKey = `${prefix}/manifest.json`;
+    const manifestObject = await seeded.env.STRUCTURED_BUCKET.get(manifestKey);
+    const manifest = JSON.parse(
+      new TextDecoder().decode(new Uint8Array(await manifestObject!.arrayBuffer())),
+    ) as { children: Array<Record<string, unknown>> };
+    manifest.children[4]!.persisted_byte_digest = tamperedDigest;
+    manifest.children[4]!.size = tamperedBytes.byteLength;
+    await seeded.mem.put(manifestKey, JSON.stringify(manifest, null, 2));
     const status = await controlledPilotStatus(seeded.env, seeded.request.idempotency_key);
     const parsed = (await status.json()) as { status: string };
     expect(parsed.status).not.toBe("COMPLETED");
