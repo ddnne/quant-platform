@@ -510,11 +510,12 @@ def _validate_v3_dataset_digest_inventory(claims: Mapping[str, Any]) -> None:
     if type(extras) is not dict:
         raise ReceiptVerificationError("signed extra_digests must be an exact object")
     present = frozenset(extras) & _JQUANTS_AUTHORITY_EXTRA_DIGEST_FIELDS
-    expected = frozenset()
-    if claims.get("source") == "jquants":
-        expected = _JQUANTS_ACQUISITION_EXTRA_DIGEST_FIELDS
-        if claims.get("dataset") == "equities_master":
-            expected |= _JQUANTS_MASTER_CALENDAR_EXTRA_DIGEST_FIELDS
+    expected = _JQUANTS_ACQUISITION_EXTRA_DIGEST_FIELDS
+    if (
+        claims.get("source") == "jquants"
+        and claims.get("dataset") == "equities_master"
+    ):
+        expected |= _JQUANTS_MASTER_CALENDAR_EXTRA_DIGEST_FIELDS
     if present != expected:
         raise ReceiptVerificationError(
             "signed J-Quants authority digest inventory does not match source/dataset"
@@ -550,26 +551,35 @@ def _normalize_legacy_claims_for_schema(
     normalized.setdefault(
         "authority_instance_digest", expected_authority_instance_digest
     )
+    normalized.setdefault("contract_id", "schema-only-legacy-contract")
+    normalized.setdefault("receipt_issue_digest", _SCHEMA_ONLY_DIGEST)
+    normalized.setdefault("artifact_key", "schema-only/legacy/artifact")
+    normalized.setdefault("artifact_byte_count", 1)
+    normalized.setdefault("manifest_key", "schema-only/legacy/manifest")
+    normalized.setdefault("manifest_byte_count", 1)
+    normalized.setdefault("raw_manifest_key", "schema-only/legacy/raw-manifest")
+    normalized.setdefault("raw_manifest_byte_count", 1)
+    normalized.setdefault("raw_byte_count", 1)
+    normalized.setdefault("natural_key_digest", _SCHEMA_ONLY_DIGEST)
     extras = dict(normalized.get("extra_digests", {}))
-    if normalized.get("source") == "jquants":
+    extras.update(
+        {
+            name: _SCHEMA_ONLY_DIGEST
+            for name in _JQUANTS_ACQUISITION_EXTRA_DIGEST_FIELDS
+        }
+    )
+    if (
+        normalized.get("source") == "jquants"
+        and normalized.get("dataset") == "equities_master"
+    ):
         extras.update(
             {
                 name: _SCHEMA_ONLY_DIGEST
-                for name in _JQUANTS_ACQUISITION_EXTRA_DIGEST_FIELDS
+                for name in _JQUANTS_MASTER_CALENDAR_EXTRA_DIGEST_FIELDS
             }
         )
-        if normalized.get("dataset") == "equities_master":
-            extras.update(
-                {
-                    name: _SCHEMA_ONLY_DIGEST
-                    for name in _JQUANTS_MASTER_CALENDAR_EXTRA_DIGEST_FIELDS
-                }
-            )
-        else:
-            for name in _JQUANTS_MASTER_CALENDAR_EXTRA_DIGEST_FIELDS:
-                extras.pop(name, None)
     else:
-        for name in _JQUANTS_AUTHORITY_EXTRA_DIGEST_FIELDS:
+        for name in _JQUANTS_MASTER_CALENDAR_EXTRA_DIGEST_FIELDS:
             extras.pop(name, None)
     normalized["extra_digests"] = extras
     return normalized
@@ -608,14 +618,22 @@ def _validate_digest_chain(
         scope = {
             "environment": claims["environment"],
             "authority_instance_digest": claims["authority_instance_digest"],
-            **scope,
+            "coverage_policy_version": claims["coverage_policy_version"],
+            "source": claims["source"],
+            "contract_id": claims["contract_id"],
+            "dataset": claims["dataset"],
+            "segment_id": claims["segment_id"],
+            "segment_start": claims["segment_start"],
+            "segment_end": claims["segment_end"],
+            "expected_scope": claims["expected_scope"],
+            "expected_items": claims["expected_items"],
         }
     _require_same(
         "scope_digest chain",
         claims["scope_digest"],
         canonical_evidence_digest(scope),
     )
-    observation = {
+    observation: dict[str, Any] = {
         **scope,
         "observed_items": claims["observed_items"],
         "raw_page_count": claims["raw_page_count"],
@@ -625,6 +643,22 @@ def _validate_digest_chain(
         "error": claims["error"],
         "pagination_exhausted": claims["pagination_exhausted"],
         "discovery_exhausted": claims["discovery_exhausted"],
+    }
+    if environment_scoped:
+        observation.update(
+            {
+                "receipt_issue_digest": claims["receipt_issue_digest"],
+                "artifact_key": claims["artifact_key"],
+                "artifact_byte_count": claims["artifact_byte_count"],
+                "manifest_key": claims["manifest_key"],
+                "manifest_byte_count": claims["manifest_byte_count"],
+                "raw_manifest_key": claims["raw_manifest_key"],
+                "raw_manifest_byte_count": claims["raw_manifest_byte_count"],
+                "raw_byte_count": claims["raw_byte_count"],
+                "natural_key_digest": claims["natural_key_digest"],
+            }
+        )
+    observation.update({
         "source_request_digest": claims["source_request_digest"],
         "raw_manifest_digest": claims["raw_manifest_digest"],
         "raw_digest": claims["raw_digest"],
@@ -634,7 +668,7 @@ def _validate_digest_chain(
         "run_id": claims["run_id"],
         "checked_at": claims["checked_at"],
         "extra_digests": claims["extra_digests"],
-    }
+    })
     _require_same(
         "observation_digest chain",
         claims["observation_digest"],

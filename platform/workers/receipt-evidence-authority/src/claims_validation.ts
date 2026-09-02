@@ -77,6 +77,7 @@ const REQUIRED_MASTER_CALENDAR_DIGESTS = [
 function requireDerivedClaims(
   value: unknown,
   persistedRequest: ReceiptIssueRequestV1,
+  persistedRequestDigest: string,
 ): UnsignedReceiptClaimsV3 {
   if (!isPlainObject(value) || !exactKeys(value, UNSIGNED_CLAIM_KEYS)) {
     throw new TypeError("receipt authority claims are not closed");
@@ -111,6 +112,7 @@ function requireDerivedClaims(
     value.segment_id === persistedRequest.segment_id &&
     value.segment_start === persistedRequest.expected_key_start &&
     value.segment_end === persistedRequest.expected_key_end &&
+    value.receipt_issue_digest === persistedRequestDigest &&
     governedExpected !== null &&
     isPlainObject(value.expected_scope) &&
     canonicalJson(value.expected_scope) === canonicalJson(governedExpected.scope) &&
@@ -181,5 +183,5 @@ export async function requirePersistedDerivedClaims(
   ) {
     throw new Error("receipt authority request preimage differs from persisted digest");
   }
-  return requireDerivedClaims(value, persistedRequest);
+  return requireDerivedClaims(value, persistedRequest, persistedRequestDigest);
 }

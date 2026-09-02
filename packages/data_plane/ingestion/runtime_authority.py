@@ -1062,7 +1062,6 @@ def _verify_issued_receipt_matches_measurement(
         "segment_id": claims["segment_id"],
         "segment_start": claims["segment_start"],
         "segment_end": claims["segment_end"],
-        "scope_digest": claims["scope_digest"],
         "expected_items": claims["expected_items"],
         "observed_items": claims["observed_items"],
         "raw_page_count": claims["raw_page_count"],
@@ -1074,14 +1073,17 @@ def _verify_issued_receipt_matches_measurement(
         "raw_digest": claims["raw_digest"],
         "structured_digest": claims["structured_digest"],
         "structured_generation": claims["structured_generation"],
-        "observation_digest": claims["observation_digest"],
         "run_id": claims["run_id"],
         "checked_at": claims["checked_at"],
     }
     if {name: proof.get(name) for name in expected} != expected:
         raise ValueError("receipt authority response differs from local measurement")
-    if dict(closure.extra_digests) != dict(claims["extra_digests"]):
-        raise ValueError("receipt authority extra digests differ from local measurement")
+    signed_extras = dict(closure.extra_digests)
+    measured_extras = dict(claims["extra_digests"])
+    if any(signed_extras.get(key) != value for key, value in measured_extras.items()):
+        raise ValueError(
+            "receipt authority extra digests differ from local measurement"
+        )
     if receipt.digests.get("source_request_digest") != claims["source_request_digest"]:
         raise ValueError("receipt authority source request differs from local measurement")
 

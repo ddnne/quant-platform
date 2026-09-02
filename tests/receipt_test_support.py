@@ -69,7 +69,7 @@ def canonical_test_authority_extra_digests(
     adversarial verifier tests that intentionally mint a signed regression.
     """
     extras = partition_extra_digests(extra_digests)
-    if source == "jquants" and include_jquants_acquisition_digests:
+    if include_jquants_acquisition_digests:
         for name in _JQUANTS_ACQUISITION_EXTRA_DIGESTS:
             extras.setdefault(
                 name,
@@ -509,11 +509,71 @@ def reconcile_test_evidence(
         else canonical_evidence_digest({"pages": manifest})
     )
     policy = coverage_contract_for(required.dataset)
+    contract_id = policy.collection_scope
+    structured_digest_value = (
+        structured_digest
+        if structured_digest is not None
+        else canonical_evidence_digest(list(structured_rows))
+    )
+    artifact_key = (
+        f"test/receipt-products/{required.source}/{required.dataset}/"
+        f"{required.segment_id}/artifact.json"
+    )
+    manifest_key = (
+        f"test/receipt-products/{required.source}/{required.dataset}/"
+        f"{required.segment_id}/manifest.json"
+    )
+    raw_manifest_key = (
+        f"test/receipt-raw/{required.source}/{required.dataset}/"
+        f"{required.segment_id}/manifest.json"
+    )
+    artifact_body = json.dumps(
+        list(structured_rows),
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+        allow_nan=False,
+    ).encode("utf-8")
+    manifest_body = canonical_receipt_body(
+        {"artifact_key": artifact_key, "structured_digest": structured_digest_value}
+    )
+    raw_manifest_body = canonical_receipt_body({"pages": manifest})
+    source_request_value = dict(source_request or {
+        "source": required.source,
+        "contract_id": contract_id,
+        "dataset": required.dataset,
+        "segment_id": required.segment_id,
+        "segment_start": required.segment_start,
+        "segment_end": required.segment_end,
+    })
+    receipt_issue_digest = canonical_evidence_digest(
+        {
+            "schema_version": "test-receipt-issue/v1",
+            "source": required.source,
+            "contract_id": contract_id,
+            "dataset_id": required.dataset,
+            "segment_id": required.segment_id,
+            "segment_start": required.segment_start,
+            "segment_end": required.segment_end,
+            "run_id": int(run_id),
+        }
+    )
+    natural_key_digest = canonical_evidence_digest(
+        {"schema_version": "test-natural-keys/v1", "rows": list(structured_rows)}
+    )
+    extras.setdefault("product_artifact_digest", structured_digest_value)
+    extras.setdefault(
+        "product_manifest_digest",
+        canonical_evidence_digest(
+            {"artifact_key": artifact_key, "artifact_digest": structured_digest_value}
+        ),
+    )
     scope = {
         "environment": environment,
         "authority_instance_digest": authority_instance_digest,
         "coverage_policy_version": policy.policy_version,
         "source": required.source,
+        "contract_id": contract_id,
         "dataset": required.dataset,
         "segment_id": required.segment_id,
         "segment_start": required.segment_start,
@@ -539,16 +599,19 @@ def reconcile_test_evidence(
         "error": None,
         "pagination_exhausted": True,
         "discovery_exhausted": True,
-        "source_request_digest": canonical_evidence_digest(
-            dict(source_request or scope)
-        ),
+        "receipt_issue_digest": receipt_issue_digest,
+        "artifact_key": artifact_key,
+        "artifact_byte_count": len(artifact_body),
+        "manifest_key": manifest_key,
+        "manifest_byte_count": len(manifest_body),
+        "raw_manifest_key": raw_manifest_key,
+        "raw_manifest_byte_count": len(raw_manifest_body),
+        "raw_byte_count": sum(len(page) for page in pages),
+        "natural_key_digest": natural_key_digest,
+        "source_request_digest": canonical_evidence_digest(source_request_value),
         "raw_manifest_digest": canonical_evidence_digest({"pages": manifest}),
         "raw_digest": raw_digest,
-        "structured_digest": (
-            structured_digest
-            if structured_digest is not None
-            else canonical_evidence_digest(list(structured_rows))
-        ),
+        "structured_digest": structured_digest_value,
         "structured_generation": int(run_id),
         "scope_digest": canonical_evidence_digest(scope),
         "run_id": int(run_id),
@@ -583,6 +646,139 @@ build_signed_digest_fields = build_test_signed_digest_fields
 from ingestion import runtime_authority as _runtime
 
 
+def _upgrade_runtime_test_claims(claims: Mapping[str, Any]) -> dict[str, Any]:
+    """Add Worker-owned physical evidence only inside the test signer."""
+    upgraded = _thaw(claims)
+    source = str(upgraded["source"])
+    dataset = str(upgraded["dataset"])
+    segment_id = str(upgraded["segment_id"])
+    run_id = int(upgraded["run_id"])
+    contract_id = coverage_contract_for(dataset).collection_scope
+    artifact_key = f"test/runtime-receipt/{source}/{dataset}/{segment_id}/artifact"
+    manifest_key = f"test/runtime-receipt/{source}/{dataset}/{segment_id}/manifest"
+    raw_manifest_key = (
+        f"test/runtime-receipt/{source}/{dataset}/{segment_id}/raw-manifest"
+    )
+    artifact_body = canonical_receipt_body(
+        {
+            "structured_count": upgraded["structured_count"],
+            "structured_digest": upgraded["structured_digest"],
+        }
+    )
+    manifest_body = canonical_receipt_body(
+        {
+            "artifact_key": artifact_key,
+            "artifact_digest": upgraded["structured_digest"],
+        }
+    )
+    raw_manifest_body = canonical_receipt_body(
+        {
+            "raw_count": upgraded["raw_count"],
+            "raw_digest": upgraded["raw_digest"],
+            "raw_manifest_digest": upgraded["raw_manifest_digest"],
+        }
+    )
+    extras = canonical_test_authority_extra_digests(
+        source=source,
+        dataset=dataset,
+        segment_id=segment_id,
+        run_id=run_id,
+        extra_digests=upgraded["extra_digests"],
+    )
+    extras.setdefault("product_artifact_digest", upgraded["structured_digest"])
+    extras.setdefault(
+        "product_manifest_digest",
+        canonical_evidence_digest(
+            {
+                "artifact_key": artifact_key,
+                "artifact_digest": upgraded["structured_digest"],
+            }
+        ),
+    )
+    upgraded.update(
+        {
+            "contract_id": contract_id,
+            "receipt_issue_digest": canonical_evidence_digest(
+                {
+                    "schema_version": "test-runtime-receipt-issue/v1",
+                    "source": source,
+                    "contract_id": contract_id,
+                    "dataset_id": dataset,
+                    "segment_id": segment_id,
+                    "run_id": run_id,
+                }
+            ),
+            "artifact_key": artifact_key,
+            "artifact_byte_count": len(artifact_body),
+            "manifest_key": manifest_key,
+            "manifest_byte_count": len(manifest_body),
+            "raw_manifest_key": raw_manifest_key,
+            "raw_manifest_byte_count": len(raw_manifest_body),
+            "raw_byte_count": len(raw_manifest_body),
+            "natural_key_digest": canonical_evidence_digest(
+                {
+                    "schema_version": "test-runtime-natural-keys/v1",
+                    "dataset": dataset,
+                    "segment_id": segment_id,
+                    "structured_digest": upgraded["structured_digest"],
+                }
+            ),
+            "extra_digests": extras,
+        }
+    )
+    scope = {
+        name: upgraded[name]
+        for name in (
+            "environment",
+            "authority_instance_digest",
+            "coverage_policy_version",
+            "source",
+            "contract_id",
+            "dataset",
+            "segment_id",
+            "segment_start",
+            "segment_end",
+            "expected_scope",
+            "expected_items",
+        )
+    }
+    upgraded["scope_digest"] = canonical_evidence_digest(scope)
+    observation = {
+        name: upgraded[name]
+        for name in (
+            *scope,
+            "observed_items",
+            "raw_page_count",
+            "raw_count",
+            "structured_count",
+            "status",
+            "error",
+            "pagination_exhausted",
+            "discovery_exhausted",
+            "receipt_issue_digest",
+            "artifact_key",
+            "artifact_byte_count",
+            "manifest_key",
+            "manifest_byte_count",
+            "raw_manifest_key",
+            "raw_manifest_byte_count",
+            "raw_byte_count",
+            "natural_key_digest",
+            "source_request_digest",
+            "raw_manifest_digest",
+            "raw_digest",
+            "structured_digest",
+            "structured_generation",
+            "scope_digest",
+            "run_id",
+            "checked_at",
+            "extra_digests",
+        )
+    }
+    upgraded["observation_digest"] = canonical_evidence_digest(observation)
+    return upgraded
+
+
 @dataclass(frozen=True, eq=False)
 class _RuntimeTestGovernedReceiptService(_runtime._GovernedReceiptService):
     """Tests-only in-process issuer used to exercise production reconciliation."""
@@ -596,8 +792,10 @@ class _RuntimeTestGovernedReceiptService(_runtime._GovernedReceiptService):
 
     def _issue_reconciled_evidence(self, evidence: Any) -> Mapping[str, Any]:
         self._issued_evidence.append(evidence)
-        claims = self._consume_reconciled_evidence(evidence)
+        claims = _upgrade_runtime_test_claims(
+            self._consume_reconciled_evidence(evidence)
+        )
         return build_test_signed_digest_fields(
             signing_key=self._test_signing_key,
-            closure_claims=dict(claims),
+            closure_claims=claims,
         )

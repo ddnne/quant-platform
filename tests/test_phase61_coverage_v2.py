@@ -124,13 +124,29 @@ def _signed_digests(
     """Sign with the tmp Ed25519 registry from receipt_ed25519_keys."""
     assert _SIGNED_KEY is not None
     sha_empty = "sha256:" + "0" * 64
+    policy = coverage_contract_for(dataset)
+    contract_id = policy.collection_scope
+    receipt_issue_digest = canonical_evidence_digest(
+        {
+            "schema_version": "test-receipt-issue/v1",
+            "source": source,
+            "contract_id": contract_id,
+            "dataset_id": dataset,
+            "segment_id": segment_id,
+            "run_id": run_id,
+        }
+    )
+    artifact_key = f"test/receipt-products/{source}/{dataset}/{segment_id}/artifact"
+    manifest_key = f"test/receipt-products/{source}/{dataset}/{segment_id}/manifest"
+    raw_manifest_key = f"test/receipt-raw/{source}/{dataset}/{segment_id}/manifest"
     scope = {
         "environment": PRODUCTION_RECEIPT_ENVIRONMENT,
         "authority_instance_digest": PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
-        "coverage_policy_version": coverage_contract_for(dataset).policy_version,
+        "coverage_policy_version": policy.policy_version,
+        "source": source,
+        "contract_id": contract_id,
         "dataset": dataset,
         "segment_id": segment_id,
-        "source": source,
         "segment_start": segment_start,
         "segment_end": segment_end,
         "expected_scope": dict(expected_scope or {}),
@@ -150,6 +166,22 @@ def _signed_digests(
         "error": None,
         "source_request_digest": source_request_digest or sha_empty,
         "raw_manifest_digest": raw_manifest_digest or raw_digest,
+        "receipt_issue_digest": receipt_issue_digest,
+        "artifact_key": artifact_key,
+        "artifact_byte_count": max(1, structured_count),
+        "manifest_key": manifest_key,
+        "manifest_byte_count": 1,
+        "raw_manifest_key": raw_manifest_key,
+        "raw_manifest_byte_count": 1,
+        "raw_byte_count": max(1, raw_count),
+        "natural_key_digest": canonical_evidence_digest(
+            {
+                "schema_version": "test-natural-keys/v1",
+                "dataset": dataset,
+                "segment_id": segment_id,
+                "structured_count": structured_count,
+            }
+        ),
         "structured_generation": (
             structured_generation if structured_generation is not None else run_id
         ),

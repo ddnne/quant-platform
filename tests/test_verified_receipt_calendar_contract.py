@@ -46,6 +46,18 @@ _MASTER_CALENDAR_DIGESTS = (
 _JQUANTS_AUTHORITY_DIGESTS = frozenset(
     (*_ACQUISITION_DIGESTS, *_MASTER_CALENDAR_DIGESTS)
 )
+_V3_ONLY_RECEIPT_FIELDS = (
+    "contract_id",
+    "receipt_issue_digest",
+    "artifact_key",
+    "artifact_byte_count",
+    "manifest_key",
+    "manifest_byte_count",
+    "raw_manifest_key",
+    "raw_manifest_byte_count",
+    "raw_byte_count",
+    "natural_key_digest",
+)
 
 
 def _digest(label: str) -> str:
@@ -133,6 +145,8 @@ def _downgrade_for_audit(receipt, signing_key, version: str):
     claims["version"] = version
     claims.pop("environment")
     claims.pop("authority_instance_digest")
+    for field in _V3_ONLY_RECEIPT_FIELDS:
+        claims.pop(field)
     scope = {
         key: claims[key]
         for key in (
@@ -208,6 +222,7 @@ def test_v3_master_requires_exact_calendar_digest_inventory(
     [
         ("markets_calendar", frozenset(_ACQUISITION_DIGESTS)),
         ("equities_master", _JQUANTS_AUTHORITY_DIGESTS),
+        ("jsda_otc_bond_reference_prices", frozenset(_ACQUISITION_DIGESTS)),
     ],
 )
 def test_canonical_test_producer_emits_dataset_authority_inventory(
@@ -288,13 +303,32 @@ def test_v3_jquants_rejects_each_missing_common_acquisition_digest(
         _verify(receipt, required)
 
 
-def test_v3_non_jquants_forbids_jquants_authority_digests(
+def test_v3_jsda_forbids_master_calendar_digest_inventory(
     receipt_ed25519_keys,
 ) -> None:
     required, receipt = _issue(
         receipt_ed25519_keys,
         dataset="jsda_otc_bond_reference_prices",
         extras=_extras(calendar=True),
+    )
+    with pytest.raises(
+        ReceiptVerificationError,
+        match="J-Quants authority digest inventory",
+    ):
+        _verify(receipt, required)
+
+
+@pytest.mark.parametrize("missing", _ACQUISITION_DIGESTS)
+def test_v3_jsda_rejects_each_missing_acquisition_digest(
+    receipt_ed25519_keys, missing: str
+) -> None:
+    extras = _extras(calendar=False)
+    extras.pop(missing)
+    required, receipt = _issue(
+        receipt_ed25519_keys,
+        dataset="jsda_otc_bond_reference_prices",
+        extras=extras,
+        include_common=False,
     )
     with pytest.raises(
         ReceiptVerificationError,

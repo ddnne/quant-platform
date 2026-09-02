@@ -6,6 +6,7 @@ import {
   runInDurableObject,
 } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, inject, it } from "vitest";
+import receiptClaimsSchema from "../../../../packages/data_plane/storage/authorities/receipts/signed_receipt_claims.schema.json";
 import {
   fetchGovernedPage,
   type AcquisitionEnv,
@@ -657,6 +658,7 @@ describe("Receipt Evidence Authority in workerd", () => {
     });
     const canonicalDailyClaims: UnsignedReceiptClaimsV3 = {
       ...dailyClaims,
+      receipt_issue_digest: persistedRequestDigest,
       expected_scope: canonicalDailyScope.scope,
       expected_items: canonicalDailyScope.expectedItems,
     };
@@ -665,6 +667,11 @@ describe("Receipt Evidence Authority in workerd", () => {
       amRequest,
       persistedRequestDigest,
     )).resolves.toEqual(canonicalDailyClaims);
+    await expect(requirePersistedDerivedClaims(
+      { ...canonicalDailyClaims, receipt_issue_digest: monthlyClaims.receipt_issue_digest },
+      amRequest,
+      persistedRequestDigest,
+    )).rejects.toThrow("claims failed invariant validation");
 
     const registryGrainSubstitution = {
       ...amRequest,
@@ -699,6 +706,18 @@ describe("Receipt Evidence Authority in workerd", () => {
       request,
       persistedRequestDigest,
     )).rejects.toThrow("request preimage differs from persisted digest");
+  });
+
+  it("emits exactly the package-owned signed claims schema key set", async () => {
+    installAuthorityAcquisition();
+    const { stub } = await activateRegisteredTestKey();
+    const issued = await stub.issue_for_segment(request);
+    const claims = JSON.parse(
+      new TextDecoder().decode(decodeBase64(issued.receipt.digests.signed_body_b64)),
+    ) as Record<string, unknown>;
+    const emitted = Object.keys(claims).sort();
+    expect(emitted).toEqual([...receiptClaimsSchema.required].sort());
+    expect(emitted).toEqual(Object.keys(receiptClaimsSchema.properties).sort());
   });
 
   it.each([

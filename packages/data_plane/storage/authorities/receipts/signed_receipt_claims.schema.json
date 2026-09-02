@@ -11,10 +11,20 @@
     "authority_instance_digest",
     "coverage_policy_version",
     "source",
+    "contract_id",
     "dataset",
     "segment_id",
     "segment_start",
     "segment_end",
+    "receipt_issue_digest",
+    "artifact_key",
+    "artifact_byte_count",
+    "manifest_key",
+    "manifest_byte_count",
+    "raw_manifest_key",
+    "raw_manifest_byte_count",
+    "raw_byte_count",
+    "natural_key_digest",
     "expected_scope",
     "expected_items",
     "observed_items",
@@ -51,6 +61,10 @@
     "nonnegative_integer": {
       "type": "integer",
       "minimum": 0
+    },
+    "positive_integer": {
+      "type": "integer",
+      "minimum": 1
     }
   },
   "properties": {
@@ -59,10 +73,20 @@
     "authority_instance_digest": { "$ref": "#/$defs/digest" },
     "coverage_policy_version": { "$ref": "#/$defs/nonempty" },
     "source": { "$ref": "#/$defs/nonempty" },
+    "contract_id": { "$ref": "#/$defs/nonempty" },
     "dataset": { "$ref": "#/$defs/nonempty" },
     "segment_id": { "$ref": "#/$defs/nonempty" },
     "segment_start": { "$ref": "#/$defs/nonempty" },
     "segment_end": { "$ref": "#/$defs/nonempty" },
+    "receipt_issue_digest": { "$ref": "#/$defs/digest" },
+    "artifact_key": { "$ref": "#/$defs/nonempty" },
+    "artifact_byte_count": { "$ref": "#/$defs/positive_integer" },
+    "manifest_key": { "$ref": "#/$defs/nonempty" },
+    "manifest_byte_count": { "$ref": "#/$defs/positive_integer" },
+    "raw_manifest_key": { "$ref": "#/$defs/nonempty" },
+    "raw_manifest_byte_count": { "$ref": "#/$defs/positive_integer" },
+    "raw_byte_count": { "$ref": "#/$defs/positive_integer" },
+    "natural_key_digest": { "$ref": "#/$defs/digest" },
     "expected_scope": { "type": "object" },
     "expected_items": {
       "oneOf": [
@@ -93,6 +117,11 @@
     "extra_digests": {
       "type": "object",
       "additionalProperties": true,
+      "required": [
+        "acquisition_collection_manifest_file_digest",
+        "acquisition_collection_digest",
+        "acquisition_terminal_chain_digest"
+      ],
       "properties": {
         "acquisition_collection_manifest_file_digest": { "$ref": "#/$defs/digest" },
         "acquisition_collection_digest": { "$ref": "#/$defs/digest" },
@@ -109,7 +138,10 @@
             "body_digest",
             "environment",
             "authority_instance_digest",
+            "artifact_byte_count",
+            "artifact_key",
             "checked_at",
+            "contract_id",
             "coverage_policy_version",
             "dataset",
             "discovery_exhausted",
@@ -122,15 +154,22 @@
             "issuer_class",
             "issuer_id",
             "issuer_key_id",
+            "manifest_byte_count",
+            "manifest_key",
+            "natural_key_digest",
             "observation_digest",
             "observed_items",
             "pagination_exhausted",
             "parser_normalizer_version",
             "raw",
+            "raw_byte_count",
             "raw_count",
             "raw_digest",
+            "raw_manifest_byte_count",
             "raw_manifest_digest",
+            "raw_manifest_key",
             "raw_page_count",
+            "receipt_issue_digest",
             "run_id",
             "scope_digest",
             "segment_end",
@@ -151,43 +190,6 @@
     }
   },
   "allOf": [
-    {
-      "if": {
-        "properties": {
-          "source": { "const": "jquants" }
-        },
-        "required": ["source"]
-      },
-      "then": {
-        "properties": {
-          "extra_digests": {
-            "required": [
-              "acquisition_collection_manifest_file_digest",
-              "acquisition_collection_digest",
-              "acquisition_terminal_chain_digest"
-            ]
-          }
-        }
-      },
-      "else": {
-        "properties": {
-          "extra_digests": {
-            "not": {
-              "anyOf": [
-                { "required": ["acquisition_collection_manifest_file_digest"] },
-                { "required": ["acquisition_collection_digest"] },
-                { "required": ["acquisition_terminal_chain_digest"] },
-                { "required": ["official_calendar_evidence_digest"] },
-                { "required": ["official_calendar_raw_body_digest"] },
-                { "required": ["official_calendar_query_digest"] },
-                { "required": ["official_business_dates_digest"] },
-                { "required": ["official_calendar_binding_digest"] }
-              ]
-            }
-          }
-        }
-      }
-    },
     {
       "if": {
         "properties": {
