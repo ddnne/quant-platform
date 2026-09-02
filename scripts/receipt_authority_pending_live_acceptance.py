@@ -725,9 +725,6 @@ def validate_live_pending_receipt_chain(
         "source_sha": reviewed_sha,
         "source_provenance": "VERIFIED_EXACT_MODULE_BYTES",
         "authority_instance_digest": pending["authority_instance_digest"],
-        "authority_principal_manifest_digest": pending[
-            "authority_principal_manifest_digest"
-        ],
         "binding_manifest_raw_digest": pending["binding_manifest_raw_digest"],
         "scoped_registry_raw_digest": pending["scoped_registry_raw_digest"],
         "scoped_registry_digest": pending["scoped_registry_digest"],

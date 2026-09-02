@@ -1,4 +1,8 @@
-"""Environment-scoped READY public registry used by the local mint authority."""
+"""Environment-scoped READY public-key registry.
+
+Reads the pinned Cloudflare/READY verify-public-keys documents. This is not a
+local six-principal mint path.
+"""
 
 from __future__ import annotations
 
@@ -15,10 +19,6 @@ from paper_runtime.readiness_attestation import (
 )
 
 from ops.trust_domain import require_environment
-from scripts.local_authority_files import (
-    ProtectedAuthorityFileError,
-    read_protected_authority_file,
-)
 
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -74,14 +74,9 @@ def load_scoped_ready_public_keys(
     selected = require_environment(expected_environment)
     path, expected_digest = _REGISTRIES[selected]
     try:
-        raw = read_protected_authority_file(
-            path,
-            expected_owner_uids={Path(__file__).lstat().st_uid},
-            allowed_modes={0o444, 0o644},
-            max_bytes=1024 * 1024,
-        ).raw
+        raw = path.read_bytes()
         document = json.loads(raw)
-    except (ProtectedAuthorityFileError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError) as exc:
         raise LocalReadyRegistryError("READY registry is unavailable") from exc
     observed_digest = "sha256:" + hashlib.sha256(_canonical(document)).hexdigest()
     instance = ready_authority_instance_id(selected)
