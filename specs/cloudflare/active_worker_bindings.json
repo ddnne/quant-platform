@@ -60,7 +60,7 @@
     ],
     "unclassified": "REJECT"
   },
-  "manifest_digest": "sha256:e78537c150499aece3fe0c2627ad22d3bdfe95b15fd5022241b3ee933bbe7c7e",
+  "manifest_digest": "sha256:44f5f10dad7d09b2513820c3d4098c6c64bdf8be5febc15ffff4ccb3a964238a",
   "ops_binding_identity_digest": "sha256:881176391253aed791eeca79c264384838fe9f6edfc8f33e48c2353e450cb6e3",
   "schema_version": "cloudflare-active-worker-bindings/v10",
   "test_harness_surfaces": {
@@ -652,8 +652,10 @@
           "rpc_methods": [
             "cancelPreProvider",
             "finalizeExact",
+            "finalizeOwnedPaper",
             "heartbeat",
             "markProviderStarted",
+            "queryOwned",
             "release",
             "reserve",
             "reserveOwned",
@@ -708,7 +710,12 @@
           ],
           "name": "GatewayService",
           "rpc_methods": [
-            "complete"
+            "cancelControlledPaper",
+            "complete",
+            "finalizeControlledPaper",
+            "heartbeatControlledPaper",
+            "queryControlledPaper",
+            "reserveControlledPaper"
           ]
         }
       ],
@@ -779,7 +786,18 @@
         "READY_DECLARED": "false"
       },
       "version_metadata": {},
-      "worker_entrypoints": [],
+      "worker_entrypoints": [
+        {
+          "fetch_reserved_special": true,
+          "handlers": [
+            "class"
+          ],
+          "name": "PilotReadyPublicationService",
+          "rpc_methods": [
+            "publishPilotReady"
+          ]
+        }
+      ],
       "workers_dev": false
     }
   },
@@ -850,6 +868,7 @@
       "dev": "wrangler dev --config=wrangler.toml --env=\"\"",
       "tail": "wrangler tail --config=wrangler.toml --env=production",
       "test": "vitest run",
+      "test:runtime": "vitest run --config vitest.runtime.config.mts",
       "typecheck": "tsc --noEmit",
       "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"
     }
@@ -2749,8 +2768,10 @@
             "rpc_methods": [
               "cancelPreProvider",
               "finalizeExact",
+              "finalizeOwnedPaper",
               "heartbeat",
               "markProviderStarted",
+              "queryOwned",
               "release",
               "reserve",
               "reserveOwned",
@@ -2812,7 +2833,12 @@
             ],
             "name": "GatewayService",
             "rpc_methods": [
-              "complete"
+              "cancelControlledPaper",
+              "complete",
+              "finalizeControlledPaper",
+              "heartbeatControlledPaper",
+              "queryControlledPaper",
+              "reserveControlledPaper"
             ]
           }
         ],
@@ -2843,8 +2869,10 @@
             "rpc_methods": [
               "cancelPreProvider",
               "finalizeExact",
+              "finalizeOwnedPaper",
               "heartbeat",
               "markProviderStarted",
+              "queryOwned",
               "release",
               "reserve",
               "reserveOwned",
@@ -2906,7 +2934,12 @@
             ],
             "name": "GatewayService",
             "rpc_methods": [
-              "complete"
+              "cancelControlledPaper",
+              "complete",
+              "finalizeControlledPaper",
+              "heartbeatControlledPaper",
+              "queryControlledPaper",
+              "reserveControlledPaper"
             ]
           }
         ],
@@ -2937,8 +2970,10 @@
             "rpc_methods": [
               "cancelPreProvider",
               "finalizeExact",
+              "finalizeOwnedPaper",
               "heartbeat",
               "markProviderStarted",
+              "queryOwned",
               "release",
               "reserve",
               "reserveOwned",
@@ -2998,7 +3033,12 @@
             ],
             "name": "GatewayService",
             "rpc_methods": [
-              "complete"
+              "cancelControlledPaper",
+              "complete",
+              "finalizeControlledPaper",
+              "heartbeatControlledPaper",
+              "queryControlledPaper",
+              "reserveControlledPaper"
             ]
           }
         ],
@@ -3073,7 +3113,8 @@
         "route": null,
         "routes": [],
         "secret_names": [
-          "MASS_EVAL_TOKEN"
+          "MASS_EVAL_TOKEN",
+          "READY_ED25519_PRIVATE_KEY"
         ],
         "services": [
           {
@@ -3098,7 +3139,7 @@
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
           "ENVIRONMENT": "production",
-          "MASS_EVAL_VERSION": "research-mass-eval/v154-compact-v7-cloud-history",
+          "MASS_EVAL_VERSION": "research-mass-eval/v155-compact-v8-cloud-history",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -3109,7 +3150,18 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
-        "worker_entrypoints": [],
+        "worker_entrypoints": [
+          {
+            "fetch_reserved_special": true,
+            "handlers": [
+              "class"
+            ],
+            "name": "PilotReadyPublicationService",
+            "rpc_methods": [
+              "publishPilotReady"
+            ]
+          }
+        ],
         "workers_dev": true
       },
       "production": {
@@ -3179,7 +3231,8 @@
         "route": null,
         "routes": [],
         "secret_names": [
-          "MASS_EVAL_TOKEN"
+          "MASS_EVAL_TOKEN",
+          "READY_ED25519_PRIVATE_KEY"
         ],
         "services": [
           {
@@ -3204,7 +3257,7 @@
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
           "ENVIRONMENT": "production",
-          "MASS_EVAL_VERSION": "research-mass-eval/v154-compact-v7-cloud-history",
+          "MASS_EVAL_VERSION": "research-mass-eval/v155-compact-v8-cloud-history",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -3215,7 +3268,18 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
-        "worker_entrypoints": [],
+        "worker_entrypoints": [
+          {
+            "fetch_reserved_special": true,
+            "handlers": [
+              "class"
+            ],
+            "name": "PilotReadyPublicationService",
+            "rpc_methods": [
+              "publishPilotReady"
+            ]
+          }
+        ],
         "workers_dev": true
       },
       "staging": {
@@ -3285,7 +3349,8 @@
         "route": null,
         "routes": [],
         "secret_names": [
-          "MASS_EVAL_TOKEN"
+          "MASS_EVAL_TOKEN",
+          "READY_ED25519_PRIVATE_KEY"
         ],
         "services": [
           {
@@ -3310,7 +3375,7 @@
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
           "ENVIRONMENT": "staging",
-          "MASS_EVAL_VERSION": "research-mass-eval/v154-compact-v7-cloud-history",
+          "MASS_EVAL_VERSION": "research-mass-eval/v155-compact-v8-cloud-history",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -3321,7 +3386,18 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
-        "worker_entrypoints": [],
+        "worker_entrypoints": [
+          {
+            "fetch_reserved_special": true,
+            "handlers": [
+              "class"
+            ],
+            "name": "PilotReadyPublicationService",
+            "rpc_methods": [
+              "publishPilotReady"
+            ]
+          }
+        ],
         "workers_dev": true
       }
     }

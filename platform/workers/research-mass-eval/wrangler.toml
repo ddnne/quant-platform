@@ -50,7 +50,7 @@ tag = "personal-research-container-v1"
 new_sqlite_classes = ["PersonalResearchContainer"]
 
 [secrets]
-required = ["MASS_EVAL_TOKEN"]
+required = ["MASS_EVAL_TOKEN", "READY_ED25519_PRIVATE_KEY"]
 
 # R2 — research mass-eval artifacts (and optional staged panels).
 [[r2_buckets]]
@@ -106,7 +106,7 @@ name = "PERSONAL_RESEARCH_CONTAINER"
 class_name = "PersonalResearchContainer"
 
 [env.production.secrets]
-required = ["MASS_EVAL_TOKEN"]
+required = ["MASS_EVAL_TOKEN", "READY_ED25519_PRIVATE_KEY"]
 
 [[env.production.r2_buckets]]
 binding = "STRUCTURED_BUCKET"

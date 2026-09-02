@@ -1085,7 +1085,10 @@ def test_research_mass_eval_staging_workers_dev_secret_and_production_unchanged(
     assert production["name"] == "quant-platform-research-mass-eval"
     assert production["workers_dev"] is True
     assert production["preview_urls"] is False
-    assert production["secret_names"] == ["MASS_EVAL_TOKEN"]
+    assert production["secret_names"] == [
+        "MASS_EVAL_TOKEN",
+        "READY_ED25519_PRIVATE_KEY",
+    ]
     assert production["route"] is None
     assert production["routes"] == []
     assert production["r2_buckets"] == [
@@ -1095,7 +1098,10 @@ def test_research_mass_eval_staging_workers_dev_secret_and_production_unchanged(
     assert staging["name"] == "quant-platform-research-mass-eval-staging"
     assert staging["workers_dev"] is True
     assert staging["preview_urls"] is False
-    assert staging["secret_names"] == ["MASS_EVAL_TOKEN"]
+    assert staging["secret_names"] == [
+        "MASS_EVAL_TOKEN",
+        "READY_ED25519_PRIVATE_KEY",
+    ]
     assert staging["route"] is None
     assert staging["routes"] == []
     assert staging["r2_buckets"] == [

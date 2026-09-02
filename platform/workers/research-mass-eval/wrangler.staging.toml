@@ -14,7 +14,7 @@ workers_dev = true
 preview_urls = false
 
 [secrets]
-required = ["MASS_EVAL_TOKEN"]
+required = ["MASS_EVAL_TOKEN", "READY_ED25519_PRIVATE_KEY"]
 
 [[containers]]
 class_name = "PersonalResearchContainer"
