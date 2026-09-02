@@ -242,7 +242,7 @@ Test tiers: `tests/README.md` (G0/G1/G2; ADR §12 / B1-d).
 | Sync / D1 | `sync_d1_to_sqlite.py`, `report_d1_local_sync_lag.py`, `restore_local_complete_from_receipt.py` | ops |
 | Projection | `export_ops_projection.py`, `publish_ops_projection.py`, `ops_status.py` | ops (**dedicated append-only generation; pointer-last activation**) |
 | Paper / agents | CLIs deleted; `paper_runtime` APIs + `agents/` | research / product |
-| Validation | `run_phase35_validation.py`, `run_phase4_accept.py` | edge / features |
+| Validation | `run_phase35_validation.py` | edge |
 | Codegen | `generate_governed_js.py`, `verify_governed_js_drift.py` | contracts → Workers |
 
 Shared ROOT bootstrap: `scripts/_bootstrap.py` (`ensure_repo_root`) — **B1-e partial**  

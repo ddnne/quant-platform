@@ -450,8 +450,7 @@
         "tests/test_paper_snapshot.py",
         "tests/test_paper_store.py",
         "tests/test_ready_policy.py",
-        "tests/test_paper_code_fingerprints.py",
-        "tests/test_phase4_accept_script.py"
+        "tests/test_paper_code_fingerprints.py"
       ]
     },
     {

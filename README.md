@@ -273,13 +273,11 @@ Phase 3.5 の **運用完了** には以下の両方が必要:
   --db data/structured/ingestion.sqlite --tier daily` が exit 0 となること
   （LIVE_GATES: master ≳ 3,000 / bars issuers ≳ 3,000 / latest-day rows ≳ 3,000）。
 
-**Phase 3.5/4 ops complete** は検証と accept の両レポートが緑であることを追加要件とします:
+**Phase 3.5 ops complete** は検証レポートが緑であることを追加要件とします:
 
 - **Validation report (weekly 緑)** — `python3 scripts/run_phase35_validation.py
   --db <DB> --tier weekly` が exit 0 (default `--require-implemented` for weekly).
   レポートは `data/reports/validation_*.json` に恒久化されるので事後監査が可能。
-- **Phase 4 accept report** — `python3 scripts/run_phase4_accept.py` (offline) が
-  exit 0。`QP_LIVE=1` では B0 strict + 50 銘柄サンプル + 50 日以上の BT を通すこと。
 
 **フレームワーク完了 ≠ データ品質完了**。検証マトリクスのコード・カタログ・docs が揃っていても、
 本番 cron が `failed=0` で回り、かつ live B0 strict が通って初めて運用完了と呼べる。
