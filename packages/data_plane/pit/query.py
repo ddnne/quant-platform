@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 from urllib.parse import quote
 
+from data_contracts.loader import contract_for
 from data_contracts.personal_history_compact import PERSONAL_HISTORY_COMPACT_NATURAL_KEYS
 from ingestion.common.timeutil import ensure_jst, parse_dt, to_iso
 from storage.schema import NATURAL_KEYS, REVISION_TABLES
@@ -536,6 +537,7 @@ def run_query(
     *,
     as_of: str,
     table: str,
+    dataset_id: str | None = None,
     extra_where: Optional[str] = None,
     params: Optional[list[Any]] = None,
     order_by: Optional[str] = None,
@@ -548,13 +550,13 @@ def run_query(
     applied with ``as_of`` as the first bound parameter; ``extra_where`` /
     ``params`` (optional, additive) extend it — they can never replace it.
 
-    ``table``, ``order_by``, and the optional keyset column names are internal
-    trusted identifiers (hard-coded in :mod:`pit.api`), never user input, so
-    they are interpolated directly. All user-controlled values (``as_of``,
-    codes, dates, dataset, and cursor keys) are bound as parameters. When
-    supplied, ``limit`` is applied in SQL; callers can request one extra row
-    to determine whether another keyset page exists without materializing the
-    complete result set.
+    ``table``, ``dataset_id``, ``order_by``, and the optional keyset column
+    names are internal trusted identifiers (hard-coded in :mod:`pit.api`),
+    never user input, so they are interpolated directly. All user-controlled
+    values (``as_of``, codes, dates, dataset, and cursor keys) are bound as
+    parameters. When supplied, ``limit`` is applied in SQL; callers can
+    request one extra row to determine whether another keyset page exists
+    without materializing the complete result set.
 
     The connection is opened read-only and closed in a ``finally`` so a query
     error never leaks a writer-capable handle.
@@ -593,18 +595,37 @@ def run_query(
         check_deadline()
         where = ["available_at IS NOT NULL", "available_at <= ?"]
         bound: list[Any] = [as_of]
-        timed_tables = compact_keys is not None or table in REVISION_TABLES or table in NATURAL_KEYS
+        timed_tables = (
+            compact_keys is not None
+            or table in REVISION_TABLES
+            or table in NATURAL_KEYS
+        )
         if timed_tables:
             clock = resolve_read_clock(as_of, conn=conn)
-            where.extend(
-                [
-                    "event_time IS NOT NULL",
-                    "event_time <= ?",
-                    "ingested_at IS NOT NULL",
-                    "ingested_at <= ?",
-                ]
-            )
-            bound.extend((clock.decision_at, clock.observed_through))
+            calendar_prepublished = False
+            if dataset_id is not None and (
+                table == "jquants_records"
+                or (
+                    table == "jquants_market_calendar"
+                    and dataset_id == "markets_calendar"
+                )
+            ):
+                try:
+                    calendar_prepublished = (
+                        contract_for(dataset_id).available_at_policy
+                        == "calendar_prepublished"
+                    )
+                except KeyError:
+                    # Unknown catalog partitions retain the strict event-time
+                    # wall; only the governed contract can opt into a
+                    # prepublished calendar.
+                    calendar_prepublished = False
+            where.append("event_time IS NOT NULL")
+            if not calendar_prepublished:
+                where.append("event_time <= ?")
+                bound.append(clock.decision_at)
+            where.extend(["ingested_at IS NOT NULL", "ingested_at <= ?"])
+            bound.append(clock.observed_through)
         if extra_where:
             where.append(f"({extra_where})")
         if params:

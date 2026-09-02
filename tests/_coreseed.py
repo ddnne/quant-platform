@@ -8,9 +8,10 @@ them back exclusively through ``pit``.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Iterator
 
 from data_contracts.identity import natural_key
 from ops.receipt_product import (
@@ -175,6 +176,29 @@ def write_snapshot_observation_clock(store: SqliteStore, observed_through: str) 
         (canonical,),
     )
     store._conn.commit()
+
+
+@contextmanager
+def draft_pit_observation_clock(observed_through: str) -> Iterator[None]:
+    """Bind a deterministic, non-promotable observation wall for unit fixtures."""
+
+    from pit.query import normalize_as_of
+    from pit.read_clock import (
+        DRAFT_OBSERVATION_LABEL,
+        PitReadClock,
+        install_read_clock,
+    )
+
+    cutoff = normalize_as_of(observed_through)
+    clock = PitReadClock(
+        decision_at=cutoff,
+        observed_through=cutoff,
+        observation_label=DRAFT_OBSERVATION_LABEL,
+        promotable=False,
+    )
+    with install_read_clock(clock):
+        yield
+
 
 def seed_db(
     tmp_path: Path,

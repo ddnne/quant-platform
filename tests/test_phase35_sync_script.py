@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import pytest
 import pit
+from _coreseed import draft_pit_observation_clock
 from storage.sqlite_store import SqliteStore
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -251,11 +252,12 @@ def test_cf_export_sync_reaches_nonempty_pit_path(synced_cf_d1_db):
     assert all(query["limit"] == ["2"] for query in queries)
     assert any("cursor" in query for query in queries[1:])
 
-    bars = pit.get_equity_bars_daily(
-        as_of="2025-04-04T15:30:00+09:00",
-        code="8697",
-        db_path=synced_cf_d1_db.db,
-    )
+    with draft_pit_observation_clock("2025-04-04T15:30:00+09:00"):
+        bars = pit.get_equity_bars_daily(
+            as_of="2025-04-04T15:30:00+09:00",
+            code="8697",
+            db_path=synced_cf_d1_db.db,
+        )
     assert len(bars.rows) == 4
     assert [row["close"] for row in bars.rows] == [100.0, 102.0, 101.0, 104.0]
 

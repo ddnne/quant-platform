@@ -32,7 +32,12 @@ from core.strategies.buy_hold import BuyHold
 from core.universe import membership_at
 from strategies.paper import PaperRunConfig, run_paper
 
-from _coreseed import CODES, TRADING_DAYS, seed_db
+from _coreseed import (
+    CODES,
+    TRADING_DAYS,
+    seed_db,
+    write_snapshot_observation_clock,
+)
 from storage.sqlite_store import SqliteStore
 
 
@@ -203,7 +208,7 @@ def test_load_repo_tip_vs_period_end_visibility(tmp_path):
     db = seed_db(tmp_path)
     store = SqliteStore(db)
     # available_at after the paper period end → period_end load is empty
-    late = "2099-01-01T00:00:00+09:00"
+    late = "2025-04-05T00:00:00+09:00"
     store.upsert(
         "jsda_repo_rates",
         [
@@ -219,6 +224,8 @@ def test_load_repo_tip_vs_period_end_visibility(tmp_path):
             }
         ],
     )
+    write_snapshot_observation_clock(store, late)
+    store.close()
     tip = load_repo_rates_by_date_for_paper(
         db_path=db,
         start=TRADING_DAYS[0],

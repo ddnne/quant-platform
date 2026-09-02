@@ -6,7 +6,7 @@ import json
 
 import features
 import pytest
-from _coreseed import TRADING_DAYS, seed_db
+from _coreseed import TRADING_DAYS, draft_pit_observation_clock, seed_db
 from core import PERSONAL_RETROSPECTIVE_ADJUSTED, run_backtest, standard_cost
 from core.execution import close_as_of
 from core.strategies.buy_hold import BuyHold
@@ -200,15 +200,16 @@ def test_split_safe_value_blacks_out_changed_per_share_units(tmp_path) -> None:
     )
     store.close()
 
-    output = features.compute(
-        features.get(
-            "retrospective_split_safe_fundamental_value_score",
-            version="1.0.0",
-        ),
-        as_of=close_as_of(days[-1]),
-        code="1332",
-        db_path=db,
-    )
+    with draft_pit_observation_clock(close_as_of(days[-1])):
+        output = features.compute(
+            features.get(
+                "retrospective_split_safe_fundamental_value_score",
+                version="1.0.0",
+            ),
+            as_of=close_as_of(days[-1]),
+            code="1332",
+            db_path=db,
+        )
 
     assert output.value is None
     assert output.metadata["reason"] == "per_share_split_blackout"
