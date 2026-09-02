@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   PERSONAL_RESEARCH_AM_PM_COHORT_IDS,
+  PERSONAL_RESEARCH_LEGACY_COHORT_IDS,
   PERSONAL_RESEARCH_LEGACY_CONTAINER_NAME,
   PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES,
   PERSONAL_RESEARCH_RUNNER_SLOT,
@@ -22,7 +23,7 @@ import {
 
 const SHA = "a".repeat(64);
 const VALID = {
-  cohort_id: "diverse-core-v1" as const,
+  cohort_id: "diverse-core-am-pm-v1" as const,
   job_id: "exact-four-20260829",
   snapshot_key: `research/personal/snapshots/sha256=${SHA}.sqlite`,
   snapshot_sha256: SHA,
@@ -95,7 +96,7 @@ describe("personal research request contract", () => {
 
   it("accepts one content-addressed bounded draft four-candidate request", async () => {
     const parsed = parsePersonalResearchRequest(VALID);
-    expect(parsed).toEqual({ ok: true, value: VALID });
+    expect(parsed).toMatchObject({ ok: true, value: VALID });
     if (!parsed.ok) throw new Error(parsed.error);
     const digest = await personalResearchRequestDigest(parsed.value);
     const canonical = JSON.stringify({
@@ -123,7 +124,7 @@ describe("personal research request contract", () => {
   });
 
   it("accepts gzip transport while keeping raw SQLite digest identity", () => {
-    expect(parsePersonalResearchRequest(VALID_GZIP)).toEqual({
+    expect(parsePersonalResearchRequest(VALID_GZIP)).toMatchObject({
       ok: true,
       value: VALID_GZIP,
     });
@@ -155,9 +156,17 @@ describe("personal research request contract", () => {
         universe_id: "prime" as never,
       }).ok,
     ).toBe(false);
-    expect(personalResearchCohortDigest("sector-relative-ls-v1")).toBe(
-      "sha256:6e4de725046c0b0e55416891d83580b9acb753c00a2beecfd3a26ee0c87a74f9",
-    );
+  });
+
+  it("rejects every historical legacy cohort as executable", () => {
+    for (const cohortId of PERSONAL_RESEARCH_LEGACY_COHORT_IDS) {
+      expect(
+        parsePersonalResearchRequest({ ...VALID, cohort_id: cohortId }).ok,
+      ).toBe(false);
+      expect(personalResearchCohortDigest(cohortId)).toMatch(
+        /^sha256:[0-9a-f]{64}$/,
+      );
+    }
   });
 
   it("interprets the 7000-day cap as inclusive calendar dates", () => {
@@ -188,33 +197,26 @@ describe("personal research request contract", () => {
     expect(
       parsePersonalResearchRequest({
         ...VALID,
-        cohort_id: "sector-relative-ls-v1",
+        cohort_id: "sector-relative-ls-am-pm-v1",
       }).ok,
     ).toBe(true);
     expect(
       parsePersonalResearchRequest({
         ...VALID,
-        cohort_id: "sector-relative-ls-v1",
+        cohort_id: "sector-relative-ls-am-pm-v1",
         universe_id: "topix_core30",
       }).ok,
     ).toBe(false);
     expect(
       parsePersonalResearchRequest({
         ...VALID,
-        cohort_id: "sector-relative-ls-v1",
+        cohort_id: "sector-relative-ls-am-pm-v1",
         short_financing_rates: [0, 0.03, 0.1],
       }).ok,
     ).toBe(false);
   });
 
   it("pairs compact universes only with the compact market cohort", () => {
-    expect(
-      parsePersonalResearchRequest({
-        ...VALID,
-        cohort_id: "compact-market-diverse-v1",
-        universe_id: "topix_core30",
-      }).ok,
-    ).toBe(true);
     expect(
       parsePersonalResearchRequest({
         ...VALID,
@@ -230,6 +232,7 @@ describe("personal research request contract", () => {
       parsePersonalResearchRequest({
         ...VALID,
         cohort_id: "compact-market-diverse-v1",
+        universe_id: "topix_core30",
       }).ok,
     ).toBe(false);
     expect(

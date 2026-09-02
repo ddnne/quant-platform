@@ -38,10 +38,11 @@ export const PERSONAL_RESEARCH_AM_PM_COHORT_IDS = [
   "compact-market-diverse-am-pm-v1",
   "sector-relative-ls-am-pm-v1",
 ] as const;
-export const PERSONAL_RESEARCH_COHORT_IDS = [
+export const PERSONAL_RESEARCH_HISTORICAL_COHORT_IDS = [
   ...PERSONAL_RESEARCH_LEGACY_COHORT_IDS,
   ...PERSONAL_RESEARCH_AM_PM_COHORT_IDS,
 ] as const;
+export const PERSONAL_RESEARCH_COHORT_IDS = PERSONAL_RESEARCH_AM_PM_COHORT_IDS;
 export const PERSONAL_RESEARCH_UNIVERSE_IDS = [
   "topix_all",
   "topix_core30",
@@ -59,7 +60,6 @@ const COMPACT_MARKET_UNIVERSE_IDS = new Set([
   "topix100",
 ]);
 const COMPACT_MARKET_COHORT_IDS = new Set([
-  "compact-market-diverse-v1",
   "compact-market-diverse-am-pm-v1",
 ]);
 export type PersonalResearchUniverseDecisionCutoff =
@@ -112,13 +112,15 @@ const PERSONAL_RESEARCH_UNIVERSE_RULE_DIGESTS: Record<
   },
 };
 
+export type PersonalResearchHistoricalCohortId =
+  (typeof PERSONAL_RESEARCH_HISTORICAL_COHORT_IDS)[number];
 export type PersonalResearchCohortId =
-  (typeof PERSONAL_RESEARCH_COHORT_IDS)[number];
+  (typeof PERSONAL_RESEARCH_AM_PM_COHORT_IDS)[number];
 export type PersonalResearchUniverseId =
   (typeof PERSONAL_RESEARCH_UNIVERSE_IDS)[number];
 
 const PERSONAL_RESEARCH_COHORT_DIGESTS: Record<
-  PersonalResearchCohortId,
+  PersonalResearchHistoricalCohortId,
   `sha256:${string}`
 > = {
   "price-relative-v1":
@@ -148,6 +150,10 @@ const SHA256_RE = /^[0-9a-f]{64}$/;
 const SNAPSHOT_KEY_RE =
   /^research\/personal\/snapshots\/sha256=([0-9a-f]{64})\.sqlite(?:\.gz)?$/;
 
+const PERSONAL_RESEARCH_REQUEST_BRAND: unique symbol = Symbol(
+  "parsed-personal-research-request",
+);
+
 export type PersonalResearchRequest = {
   cohort_id: PersonalResearchCohortId;
   universe_id: PersonalResearchUniverseId;
@@ -156,6 +162,7 @@ export type PersonalResearchRequest = {
   snapshot_sha256: string;
   period_start: string;
   period_end: string;
+  readonly [PERSONAL_RESEARCH_REQUEST_BRAND]: true;
 };
 
 export type PersonalResearchParseResult =
@@ -238,7 +245,7 @@ export function parsePersonalResearchRequest(
     return {
       ok: false,
       error: compactUniverse
-        ? "compact TOPIX universes require compact-market-diverse-v1 or compact-market-diverse-am-pm-v1"
+        ? "compact TOPIX universes require compact-market-diverse-am-pm-v1"
         : "compact-market-diverse cohorts require Core30, Large70, or TOPIX100",
     };
   }
@@ -278,6 +285,7 @@ export function parsePersonalResearchRequest(
       snapshot_sha256: sha,
       period_start: start,
       period_end: end,
+      [PERSONAL_RESEARCH_REQUEST_BRAND]: true,
     },
   };
 }
@@ -314,7 +322,7 @@ export async function personalResearchRequestDigest(
 }
 
 export function personalResearchUniverseDecisionCutoff(
-  cohortId: PersonalResearchCohortId,
+  cohortId: PersonalResearchHistoricalCohortId,
 ): PersonalResearchUniverseDecisionCutoff {
   return PERSONAL_RESEARCH_AM_PM_COHORT_IDS.some((value) => value === cohortId)
     ? "morning_close"
@@ -323,7 +331,7 @@ export function personalResearchUniverseDecisionCutoff(
 
 export function personalResearchUniverseRuleDigest(
   universeId: PersonalResearchUniverseId,
-  cohortId: PersonalResearchCohortId,
+  cohortId: PersonalResearchHistoricalCohortId,
 ): `sha256:${string}` {
   return PERSONAL_RESEARCH_UNIVERSE_RULE_DIGESTS[
     personalResearchUniverseDecisionCutoff(cohortId)
@@ -331,7 +339,7 @@ export function personalResearchUniverseRuleDigest(
 }
 
 export function personalResearchCohortDigest(
-  cohortId: PersonalResearchCohortId,
+  cohortId: PersonalResearchHistoricalCohortId,
 ): `sha256:${string}` {
   return PERSONAL_RESEARCH_COHORT_DIGESTS[cohortId];
 }

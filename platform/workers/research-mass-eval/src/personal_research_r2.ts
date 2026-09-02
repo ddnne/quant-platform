@@ -157,6 +157,20 @@ function snapshotObjectMatches(
   );
 }
 
+async function exactTerminalExists(
+  env: R2Env,
+  key: string,
+  identity: { jobId: string; requestDigest: string },
+): Promise<boolean> {
+  const terminal = await env.STRUCTURED_BUCKET.head(key);
+  return (
+    terminal?.customMetadata?.job_id === identity.jobId &&
+    terminal.customMetadata.request_digest === identity.requestDigest &&
+    (terminal.customMetadata.status === "COMPLETED" ||
+      terminal.customMetadata.status === "FAILED")
+  );
+}
+
 async function putResult(
   request: Request,
   env: R2Env,
@@ -175,6 +189,15 @@ async function putResult(
     return existingMatches(existing, identity)
       ? responseJson({ ok: true, created: false, key })
       : responseJson({ error: "immutable result conflict" }, 409);
+  }
+  if (
+    await exactTerminalExists(
+      env,
+      personalResearchManifestKey(identity.jobId),
+      identity,
+    )
+  ) {
+    return responseJson({ error: "terminal already exists" }, 409);
   }
   let put: R2Object | null;
   try {
@@ -356,6 +379,15 @@ async function putSnapshotGzip(
     return snapshotObjectMatches(existing, identity)
       ? responseJson({ ok: true, created: false, key })
       : responseJson({ error: "immutable snapshot conflict" }, 409);
+  }
+  if (
+    await exactTerminalExists(
+      env,
+      personalSnapshotManifestKey(identity.jobId),
+      identity,
+    )
+  ) {
+    return responseJson({ error: "terminal already exists" }, 409);
   }
   let put: R2Object | null;
   try {

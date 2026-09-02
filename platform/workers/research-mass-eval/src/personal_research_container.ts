@@ -4,6 +4,7 @@ import {
   PERSONAL_RESEARCH_MAX_CONCURRENT_JOBS,
   PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES,
   PERSONAL_RESEARCH_RUNNER_VERSION,
+  parsePersonalResearchRequest,
   type PersonalResearchRequest,
   personalJobContainerName,
   personalResearchCohortDigest,
@@ -105,6 +106,11 @@ export async function submitPersonalResearch(
   env: Env,
   request: PersonalResearchRequest,
 ): Promise<Response> {
+  const parsed = parsePersonalResearchRequest(request);
+  if (!parsed.ok) {
+    return responseJson({ ok: false, error: parsed.error, go: false }, 400);
+  }
+  request = parsed.value;
   const requestDigest = await personalResearchRequestDigest(request);
   const existing = await storedManifest(env, request.job_id);
   if (existing) {

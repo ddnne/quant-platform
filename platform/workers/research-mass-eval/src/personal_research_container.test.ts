@@ -51,7 +51,7 @@ import type { Env } from "./types";
 
 const SHA = "a".repeat(64);
 const REQUEST: PersonalResearchRequest = {
-  cohort_id: "diverse-core-v1",
+  cohort_id: "diverse-core-am-pm-v1",
   job_id: "exact-four-container",
   snapshot_key: `research/personal/snapshots/sha256=${SHA}.sqlite.gz`,
   snapshot_sha256: SHA,
@@ -221,14 +221,14 @@ describe("personal research Container admission", () => {
     const body = await (forwarded as Request).json();
     expect(body).toMatchObject({
       cohort_digest:
-        "sha256:d78fb2c6adb3a21acd6b90d37c197c1bd7710e986ea882bbbec28f4d21c53397",
-      cohort_id: "diverse-core-v1",
+        "sha256:0c9fc5cba93c68cbfec3951a56f09949674c1a01cb4d4d4cf406082c01033c10",
+      cohort_id: "diverse-core-am-pm-v1",
       runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
       snapshot_key: REQUEST.snapshot_key,
       snapshot_sha256: SHA,
       universe_id: "topix500",
       universe_rule_digest:
-        "sha256:5034530267f4a358a80d9426fcfedfb1162b9f71c1024b54b4b39fe3547d53c6",
+        "sha256:8ca72cf8c134ad082605fd948cf005b73124643b106a68521174b009442046fb",
     });
   });
 

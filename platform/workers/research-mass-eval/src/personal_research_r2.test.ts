@@ -11,6 +11,7 @@ import { CONTROLLED_JSON_TYPE,
   CONTROLLED_LEASE_TTL_SECONDS } from "./controlled_pilot_container_r2";
 
 import { PERSONAL_SNAPSHOT_FORMAT } from "./personal_snapshot_contract";
+import { sha256Hex } from "./sha256";
 
 vi.stubGlobal(
   "FixedLengthStream",
@@ -215,6 +216,102 @@ describe("personal Container R2 capability", () => {
       { STRUCTURED_BUCKET: bucket },
     );
     expect(denied.status).toBe(400);
+  });
+
+  it("rejects late result, snapshot, and conflicting manifest creation after FAILED", async () => {
+    const jobId = "late-after-failed";
+    const requestDigest = `sha256:${"b".repeat(64)}`;
+    const resultKey = `research/personal/jobs/job=${jobId}/result.tar.gz`;
+    const researchTerminalKey =
+      `research/personal/jobs/job=${jobId}/manifest.json`;
+    const rawHex = "d".repeat(64);
+    const snapshotKey =
+      `research/personal/snapshots/sha256=${rawHex}.sqlite.gz`;
+    const snapshotTerminalKey =
+      `research/personal/snapshot-builds/job=${jobId}/manifest.json`;
+    const terminalMetadata = {
+      job_id: jobId,
+      request_digest: requestDigest,
+      status: "FAILED",
+    };
+    const terminals = new Map([
+      [
+        researchTerminalKey,
+        r2Object(
+          researchTerminalKey,
+          new TextEncoder().encode("failed research"),
+          terminalMetadata,
+        ),
+      ],
+      [
+        snapshotTerminalKey,
+        r2Object(
+          snapshotTerminalKey,
+          new TextEncoder().encode("failed snapshot"),
+          terminalMetadata,
+        ),
+      ],
+    ]);
+    const bucket = {
+      head: vi.fn(async (key: string) => terminals.get(key) ?? null),
+      put: vi.fn(),
+    } as unknown as R2Bucket;
+    const commonHeaders = {
+      "content-length": "3",
+      "x-personal-job-id": jobId,
+      "x-personal-request-digest": requestDigest,
+      "x-content-sha256": `sha256:${THREE_BYTE_SHA256}`,
+    };
+
+    const lateResult = await personalResearchR2Outbound(
+      new Request(`http://research.r2/${resultKey}`, {
+        method: "PUT",
+        headers: commonHeaders,
+        body: new Uint8Array([1, 2, 3]),
+      }),
+      { STRUCTURED_BUCKET: bucket },
+    );
+    const lateSnapshot = await personalResearchR2Outbound(
+      new Request(`http://research.r2/${snapshotKey}`, {
+        method: "PUT",
+        headers: {
+          ...commonHeaders,
+          "x-personal-raw-sha256": `sha256:${rawHex}`,
+        },
+        body: new Uint8Array([1, 2, 3]),
+      }),
+      { STRUCTURED_BUCKET: bucket },
+    );
+    const lateManifestDocument = {
+      job_id: jobId,
+      request_digest: requestDigest,
+      status: "FAILED",
+      error: "late child terminal",
+    };
+    const lateManifestBytes = new TextEncoder().encode(
+      JSON.stringify(lateManifestDocument),
+    );
+    const lateManifest = await personalResearchR2Outbound(
+      new Request(`http://research.r2/${researchTerminalKey}`, {
+        method: "PUT",
+        headers: {
+          "content-length": String(lateManifestBytes.byteLength),
+          "x-personal-job-id": jobId,
+          "x-personal-request-digest": requestDigest,
+          "x-content-sha256": `sha256:${await sha256Hex(lateManifestBytes)}`,
+        },
+        body: lateManifestBytes,
+      }),
+      { STRUCTURED_BUCKET: bucket },
+    );
+
+    expect([lateResult.status, lateSnapshot.status, lateManifest.status]).toEqual([
+      409,
+      409,
+      409,
+    ]);
+    expect(bucket.put).not.toHaveBeenCalled();
+    expect(terminals.size).toBe(2);
   });
 
   it("requires R2 to verify the declared result digest against the stream", async () => {

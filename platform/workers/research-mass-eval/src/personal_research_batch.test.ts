@@ -40,7 +40,7 @@ const SHA = "a".repeat(64);
 
 function job(jobId: string): PersonalResearchRequest {
   return {
-    cohort_id: "diverse-core-v1",
+    cohort_id: "diverse-core-am-pm-v1",
     job_id: jobId,
     snapshot_key: `research/personal/snapshots/sha256=${SHA}.sqlite.gz`,
     snapshot_sha256: SHA,
@@ -140,7 +140,7 @@ describe("personal research bounded batch", () => {
       (call) => new URL((call[0] as Request).url).pathname === "/v1/run",
     )?.[0] as Request;
     expect(await posted.json()).toMatchObject({
-      cohort_id: "diverse-core-v1",
+      cohort_id: "diverse-core-am-pm-v1",
       job_id: "draft-factor-one",
       runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
     });
