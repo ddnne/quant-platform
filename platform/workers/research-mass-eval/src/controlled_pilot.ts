@@ -2200,9 +2200,6 @@ export async function submitControlledPilot(
   if (!env.AI_GATEWAY) return json({ ok: false, error: "AI_GATEWAY not bound", go: false }, 503);
   const environment = registries.controlledEnvironment(env);
   if (!environment) return json({ ok: false, error: "controlled environment is invalid", go: false }, 503);
-  const admissionTime = Date.now();
-  const admittedAt = new Date(admissionTime).toISOString();
-  const admissionClock: VerifierClock = { now: () => admissionTime };
   const digest = await requestDigest(request);
   const jobId = request.idempotency_key;
   const existing = await verifiedTerminal(env, jobId, digest);
@@ -2248,6 +2245,39 @@ export async function submitControlledPilot(
   if (!readyBytes) return json({ ok: false, error: "READY envelope not found", go: false }, 404);
   const readyKeys = (await registries.loadPinnedReadyKeys(environment))
     .filter((key) => key.status === "active");
+  // Preflight READY before using its content-addressed physical key. The
+  // authoritative admission clock is captured only after all remote reads so
+  // a slow first submission cannot persist an already-invalid timestamp.
+  const preflight = await verifyControlledReadyEnvelopeBytes(
+    readyBytes,
+    request.snapshot_id,
+    environment,
+    readyKeys,
+    SYSTEM_CLOCK,
+  );
+  if (!preflight.ok) {
+    const status = preflight.error === "CONTROLLED_AUTHORITY_UNPROVISIONED" ? 503 : 400;
+    return json({ ok: false, error: preflight.error, go: false }, status);
+  }
+  if (preflight.value.attestation_id !== request.ready_attestation_id) {
+    return json({ ok: false, error: "READY attestation id mismatch", go: false }, 400);
+  }
+  const authBytes = await loadBytes(
+    env.STRUCTURED_BUCKET,
+    controlledTraderAuthorizationKey(request.idempotency_key, request.ready_attestation_id),
+  );
+  if (!authBytes) return json({ ok: false, error: "trader authorization not found", go: false }, 404);
+  const traderKeys = (await registries.loadPinnedTraderKeys(environment))
+    .filter((key) => key.status === "active");
+  const snapshotHead = await env.STRUCTURED_BUCKET.head(preflight.value.physical.key);
+  if (!snapshotHead) return json({ ok: false, error: "controlled snapshot not found", go: false }, 404);
+  if (snapshotHead.size !== preflight.value.physical.size) {
+    return json({ ok: false, error: "controlled snapshot size mismatch", go: false }, 409);
+  }
+  const executionId = await controlledPilotExecutionId(jobId, digest);
+  const admissionTime = Date.now();
+  const admittedAt = new Date(admissionTime).toISOString();
+  const admissionClock: VerifierClock = { now: () => admissionTime };
   const verified = await verifyControlledReadyEnvelopeBytes(
     readyBytes,
     request.snapshot_id,
@@ -2262,13 +2292,6 @@ export async function submitControlledPilot(
   if (verified.value.attestation_id !== request.ready_attestation_id) {
     return json({ ok: false, error: "READY attestation id mismatch", go: false }, 400);
   }
-  const authBytes = await loadBytes(
-    env.STRUCTURED_BUCKET,
-    controlledTraderAuthorizationKey(request.idempotency_key, request.ready_attestation_id),
-  );
-  if (!authBytes) return json({ ok: false, error: "trader authorization not found", go: false }, 404);
-  const traderKeys = (await registries.loadPinnedTraderKeys(environment))
-    .filter((key) => key.status === "active");
   const authorized = await verifyTraderAuthorizationBatchBytes(
     authBytes,
     request,
@@ -2278,12 +2301,6 @@ export async function submitControlledPilot(
     admissionClock,
   );
   if (!authorized.ok) return json({ ok: false, error: authorized.error, go: false }, 401);
-  const snapshotHead = await env.STRUCTURED_BUCKET.head(verified.value.physical.key);
-  if (!snapshotHead) return json({ ok: false, error: "controlled snapshot not found", go: false }, 404);
-  if (snapshotHead.size !== verified.value.physical.size) {
-    return json({ ok: false, error: "controlled snapshot size mismatch", go: false }, 409);
-  }
-  const executionId = await controlledPilotExecutionId(jobId, digest);
   const spec = closedControlledPilotJobSpec({
     job_id: jobId,
     idempotency_key: request.idempotency_key,

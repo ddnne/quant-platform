@@ -209,6 +209,24 @@ function controlledStorage() {
   };
 }
 
+type ControlledSchedule = {
+  when: number;
+  callback: string;
+  payload: { job_id: string; next_due: number };
+};
+
+function takeActiveControlledSchedule(
+  container: PersonalResearchContainer & { schedules: ControlledSchedule[] },
+  values: Map<string, unknown>,
+): ControlledSchedule {
+  const activeDue = values.get("controlled_resume_next_due");
+  const index = container.schedules.findIndex(
+    (item) => item.payload.next_due === activeDue,
+  );
+  if (index < 0) throw new Error("missing active controlled schedule");
+  return container.schedules.splice(index, 1)[0]!;
+}
+
 describe("personal research Container admission", () => {
   it("registers the private R2 handler through the Container base setter", () => {
     expect(containerRegistry.outboundByHost?.["research.r2"]).toBe(
@@ -241,15 +259,22 @@ describe("personal research Container admission", () => {
     await container.scheduleControlledPilot("controlled-job-schedule");
 
     const scheduled = (container as unknown as {
-      schedules: Array<{ when: number; callback: string; payload: unknown }>;
+      schedules: ControlledSchedule[];
     }).schedules;
     expect(Object.prototype.hasOwnProperty.call(PersonalResearchContainer.prototype, "alarm")).toBe(false);
     expect(firstDeadline).toBe(values.get("controlled_resume_deadline"));
-    expect(scheduled).toEqual([{
-      when: 5,
-      callback: "resumeControlledPilot",
-      payload: { job_id: "controlled-job-schedule", next_due: 1_005_000 },
-    }]);
+    expect(scheduled).toEqual([
+      {
+        when: 5,
+        callback: "resumeControlledPilot",
+        payload: { job_id: "controlled-job-schedule", next_due: 1_005_000 },
+      },
+      {
+        when: 65,
+        callback: "resumeControlledPilot",
+        payload: { job_id: "controlled-job-schedule", next_due: 1_005_000 },
+      },
+    ]);
     const run = vi.spyOn(controlledPilot, "runControlledPilotJob").mockResolvedValue();
     let polls = 0;
     const status = vi.spyOn(controlledPilot, "controlledPilotStatus").mockImplementation(async () => {
@@ -258,12 +283,12 @@ describe("personal research Container admission", () => {
       return Response.json({ status: phase }, { status: phase === "COMPLETED" ? 200 : 202 });
     });
     for (let index = 0; index < 15; index += 1) {
-      const scheduled = (container as unknown as {
-        schedules: Array<{ payload: { job_id: string; next_due: number } }>;
-      }).schedules.shift();
-      expect(scheduled).toBeDefined();
-      clock.mockReturnValue(scheduled!.payload.next_due);
-      await container.resumeControlledPilot(scheduled!.payload);
+      const active = takeActiveControlledSchedule(
+        container as PersonalResearchContainer & { schedules: ControlledSchedule[] },
+        values,
+      );
+      clock.mockReturnValue(active.payload.next_due);
+      await container.resumeControlledPilot(active.payload);
     }
     expect(run).toHaveBeenCalledTimes(15);
     expect(status).toHaveBeenCalledTimes(15);
@@ -282,21 +307,53 @@ describe("personal research Container admission", () => {
     };
     Object.assign(container as object, { ctx: { storage }, env: {} });
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
-    container.scheduleFailures = 2;
+    container.scheduleFailures = 4;
 
     await expect(container.scheduleControlledPilot("controlled-job-recover")).rejects.toThrow(
-      "schedule unavailable",
+      "controlled resume scheduler unavailable",
     );
     expect(values.has("controlled_resume_next_due")).toBe(false);
     container.scheduleFailures = 0;
     await container.scheduleControlledPilot("controlled-job-recover");
     const due = values.get("controlled_resume_next_due");
-    expect(container.schedules).toHaveLength(1);
+    expect(container.schedules).toHaveLength(2);
 
     clock.mockReturnValue(Number(due) + 30_000);
     await container.scheduleControlledPilot("controlled-job-recover");
-    expect(container.schedules).toHaveLength(1);
+    expect(container.schedules).toHaveLength(2);
     expect(values.get("controlled_resume_next_due")).toBe(due);
+    clock.mockRestore();
+  });
+
+  it("prearms a same-generation watchdog before awaiting controlled work", async () => {
+    const { values, storage } = controlledStorage();
+    const container = new PersonalResearchContainer() as PersonalResearchContainer & {
+      schedules: ControlledSchedule[];
+    };
+    Object.assign(container as object, { ctx: { storage }, env: {} });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    await container.scheduleControlledPilot("controlled-job-watchdog");
+    const first = takeActiveControlledSchedule(container, values);
+    const generation = first.payload.next_due;
+    let releaseRun: (() => void) | undefined;
+    const blockedRun = new Promise<void>((resolve) => { releaseRun = resolve; });
+    vi.spyOn(controlledPilot, "runControlledPilotJob").mockReturnValue(blockedRun);
+    vi.spyOn(controlledPilot, "controlledPilotStatus").mockResolvedValue(
+      Response.json({ status: "SUBMITTED" }, { status: 202 }),
+    );
+    clock.mockReturnValue(generation);
+
+    const resumed = container.resumeControlledPilot(first.payload);
+    await vi.waitFor(() => {
+      expect(
+        container.schedules.filter((item) => item.payload.next_due === generation),
+      ).toHaveLength(2);
+    });
+    expect(values.get("controlled_resume_next_due")).toBe(generation);
+
+    releaseRun?.();
+    await resumed;
+    expect(values.get("controlled_resume_next_due")).not.toBe(generation);
     clock.mockRestore();
   });
 
@@ -311,16 +368,20 @@ describe("personal research Container admission", () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
     const expire = vi.spyOn(controlledPilot, "expireControlledPilotJob").mockResolvedValue();
     await container.scheduleControlledPilot("controlled-job-cleanup");
-    const first = container.schedules.shift()!;
+    const first = takeActiveControlledSchedule(container, values);
     clock.mockReturnValue(1_000_000 + 180 * 60 * 1_000);
     container.outboundClearFailures = 2;
 
     await container.resumeControlledPilot(first.payload);
     expect(values.get("controlled_job_id")).toBe("controlled-job-cleanup");
     expect(container.destroyCount).toBe(1);
-    expect(container.schedules).toHaveLength(1);
+    expect(
+      container.schedules.some(
+        (item) => item.payload.next_due === values.get("controlled_resume_next_due"),
+      ),
+    ).toBe(true);
 
-    const retry = container.schedules.shift()!;
+    const retry = takeActiveControlledSchedule(container, values);
     clock.mockReturnValue(retry.payload.next_due);
     await container.resumeControlledPilot(retry.payload);
     expect(values.has("controlled_job_id")).toBe(false);

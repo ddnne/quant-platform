@@ -52,9 +52,11 @@ type Stored = { body: Uint8Array; etag: string; uploaded: Date };
 class MemR2 {
   readonly putOrder: string[] = [];
   readonly got: string[] = [];
+  beforeHead?: (key: string) => void;
   private readonly objects = new Map<string, Stored>();
 
   async head(key: string) {
+    this.beforeHead?.(key);
     const o = this.objects.get(key);
     if (!o) return null;
     return { key, size: o.body.byteLength, etag: o.etag, uploaded: o.uploaded };
@@ -720,6 +722,36 @@ describe("controlled cloud execution", () => {
     expect(seeded.fetches.post).toBe(0);
     const status = await controlledPilotStatus(seeded.env, seeded.request.idempotency_key);
     expect(((await status.json()) as { status: string }).status).toBe("FAILED");
+  });
+
+  it("captures admission after slow first-submission reads before immutable state", async () => {
+    const seeded = await seedEnv();
+    let now = VERIFIER_NOW;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let delayed = false;
+    seeded.mem.beforeHead = (key) => {
+      if (!delayed && key === controlledPhysicalSnapshotKey(seeded.physicalId)) {
+        delayed = true;
+        now += 90_000;
+      }
+    };
+
+    const response = await submitControlledPilot(seeded.env, seeded.request);
+
+    expect(response.status).toBe(202);
+    const key =
+      `research/controlled_pilot/v1/jobs/${seeded.request.idempotency_key}/state.json`;
+    const state = await (await seeded.env.STRUCTURED_BUCKET.get(key))!.json<{
+      submitted_at: string;
+      admission: { verified_at: string };
+    }>();
+    const admittedAt = new Date(VERIFIER_NOW + 90_000).toISOString();
+    expect(state.submitted_at).toBe(admittedAt);
+    expect(state.admission.verified_at).toBe(admittedAt);
+
+    await runControlledPilotJob(seeded.env, seeded.request.idempotency_key);
+    expect(seeded.budget.reserved).toBe(1);
+    expect(seeded.fetches.post).toBe(1);
   });
 
   it("does not run a self-consistent stored state with a forged authorization digest", async () => {

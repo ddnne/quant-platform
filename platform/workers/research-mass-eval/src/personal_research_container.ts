@@ -67,25 +67,39 @@ export class PersonalResearchContainer extends Container<Env> {
   sleepAfter = "180m";
   enableInternet = false;
 
-  private async scheduleControlledCallback(jobId: string, delay: number): Promise<void> {
-    const nextDue = Date.now() + delay * 1_000;
-    let lastError: unknown;
+  private async scheduleControlledRow(
+    jobId: string,
+    delay: number,
+    nextDue: number,
+  ): Promise<boolean> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         await this.schedule(delay, CONTROLLED_RESUME_CALLBACK, {
           job_id: jobId,
           next_due: nextDue,
         });
-        // Publish the token only after the SDK confirms that its alarm exists.
-        // An ambiguous partial schedule may fire, but cannot consume another
-        // callback's token or execute the job twice.
-        await this.ctx.storage.put(CONTROLLED_RESUME_NEXT_DUE_KEY, nextDue);
-        return;
-      } catch (error) {
-        lastError = error;
-      }
+        return true;
+      } catch {}
     }
-    throw lastError;
+    return false;
+  }
+
+  private async scheduleControlledCallback(jobId: string, delay: number): Promise<void> {
+    const nextDue = Date.now() + delay * 1_000;
+    // Keep a second, same-generation watchdog behind the ordinary poll. The
+    // first callback replaces the generation after it finishes; if its isolate
+    // disappears mid-callback, the watchdog instead resumes the same job.
+    const primary = await this.scheduleControlledRow(jobId, delay, nextDue);
+    const watchdog = await this.scheduleControlledRow(
+      jobId,
+      delay + CONTROLLED_RESUME_MAX_SECONDS,
+      nextDue,
+    );
+    if (!primary && !watchdog) throw new Error("controlled resume scheduler unavailable");
+    // Publish only a generation for which the SDK confirmed at least one row.
+    // Any ambiguous row from an earlier attempt is inert unless it has this
+    // exact durable token.
+    await this.ctx.storage.put(CONTROLLED_RESUME_NEXT_DUE_KEY, nextDue);
   }
 
   async scheduleControlledPilot(jobId: string): Promise<void> {
@@ -153,9 +167,16 @@ export class PersonalResearchContainer extends Container<Env> {
     const jobId = await this.ctx.storage.get(CONTROLLED_JOB_STORAGE_KEY);
     const nextDue = await this.ctx.storage.get(CONTROLLED_RESUME_NEXT_DUE_KEY);
     if (!payloadJob || payloadJob !== jobId || payloadDue !== nextDue) return;
-    // Consume before any external RPC. Duplicate SDK rows with the same token
-    // become harmless no-ops, and a poll cannot move a live callback backward.
-    await this.ctx.storage.delete(CONTROLLED_RESUME_NEXT_DUE_KEY);
+    // Rearm the same durable generation before any external RPC. Normal
+    // completion replaces it below; an isolate crash leaves this watchdog to
+    // continue autonomous recovery without an external status poll.
+    if (!(await this.scheduleControlledRow(
+      payloadJob,
+      CONTROLLED_RESUME_MAX_SECONDS,
+      payloadDue,
+    ))) {
+      throw new Error("controlled resume watchdog unavailable");
+    }
     const deadline = await this.ctx.storage.get(CONTROLLED_RESUME_DEADLINE_KEY);
     const controlled = await import("./controlled_pilot");
     const now = Date.now();
