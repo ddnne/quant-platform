@@ -422,8 +422,8 @@ def write_reconstitution_evidence_pack(
     path.write_text(body, encoding="utf-8")
     put: dict[str, Any] | None = None
     if dry_run:
+        raise RuntimeError("closed artifact put port is required")
         from research.cf_mass_eval_stage import RESEARCH_ARTIFACT_BUCKET
-        from research.r2_io import put_research_artifact
 
         put = put_research_artifact(
             RESEARCH_ARTIFACT_BUCKET,

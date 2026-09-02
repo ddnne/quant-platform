@@ -47,3 +47,7 @@ class DatabaseNotFound(PitError):
 
 class SnapshotNotReady(PitError):
     """Raised when a managed database is not a committed READY generation."""
+
+
+class HistoryReadError(PitError):
+    """Raised when an unmanaged DRAFT history file is present but unreadable."""

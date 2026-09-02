@@ -1,10 +1,12 @@
-"""Closed compact-v7 SQLite surface for personal DRAFT history.
+"""Closed compact-v8 SQLite surface for personal DRAFT history.
 
 Readers classify a connection as ``legacy``, ``compact``, ``invalid``, or
 ``mixed``.  Extra columns and column order are tolerated; required columns
 must still match production-declared type, NOT NULL, and PK ordinal by
 name, and both compact objects must be real WITHOUT ROWID tables.  The
-trusted builder still stamps v7 only after its DDL shape matches exactly.
+trusted builder stamps v8 only after its DDL shape matches exactly.
+Vintage identity lives in the primary key; v7 overwrite-key files fail
+closed and must be rebuilt.
 
 Daily bar-breadth tolerance lives here so ingestion compacting and
 research coverage share one missing-code budget: each session may fall
@@ -20,7 +22,12 @@ from typing import Literal
 
 CompactHistoryState = Literal["legacy", "compact", "invalid", "mixed"]
 
-PERSONAL_HISTORY_COMPACT_FORMAT = "personal-draft-history/v7"
+PERSONAL_HISTORY_COMPACT_FORMAT = "personal-draft-history/v8"
+PERSONAL_HISTORY_COMPACT_PREVIOUS_FORMAT = "personal-draft-history/v7"
+PERSONAL_HISTORY_COMPACT_REBUILD_REASON = (
+    "personal-draft-history/v7 is wire-incompatible with vintage primary keys; "
+    "rebuild as personal-draft-history/v8"
+)
 PERSONAL_HISTORY_COMPACT_COMPLETE_STATUS = "COMPLETE_DRAFT"
 PERSONAL_HISTORY_MANIFEST_TABLE = "personal_history_manifest"
 PERSONAL_HISTORY_COMPACT_MASTER_TABLE = "personal_history_compact_master"
@@ -41,7 +48,7 @@ CREATE TABLE IF NOT EXISTS personal_history_compact_master (
     sector_33_code TEXT,
     scale_category TEXT,
     source_scale_category TEXT,
-    PRIMARY KEY (snapshot_date, code)
+    PRIMARY KEY (snapshot_date, code, available_at, ingested_at)
 ) WITHOUT ROWID
 """
 PERSONAL_HISTORY_COMPACT_BARS_CREATE_SQL = """
@@ -63,7 +70,7 @@ CREATE TABLE IF NOT EXISTS personal_history_compact_bars (
     morning_adjustment_volume REAL,
     afternoon_adjustment_volume REAL,
     market_cap REAL,
-    PRIMARY KEY (code, date)
+    PRIMARY KEY (code, date, available_at, ingested_at)
 ) WITHOUT ROWID
 """
 PERSONAL_HISTORY_COMPACT_CREATE_SQL: tuple[tuple[str, str], ...] = (
@@ -112,6 +119,14 @@ PERSONAL_HISTORY_COMPACT_MASTER_COLUMNS: tuple[str, ...] = tuple(
 PERSONAL_HISTORY_COMPACT_BARS_COLUMNS: tuple[str, ...] = tuple(
     name for name, _typ, _notnull, _pk in PERSONAL_HISTORY_COMPACT_BARS_COLUMN_CONTRACT
 )
+PERSONAL_HISTORY_COMPACT_NATURAL_KEYS: dict[str, tuple[str, ...]] = {
+    PERSONAL_HISTORY_COMPACT_MASTER_TABLE: ("snapshot_date", "code"),
+    PERSONAL_HISTORY_COMPACT_BARS_TABLE: ("code", "date"),
+}
+PERSONAL_HISTORY_COMPACT_VERSION_KEYS: dict[str, tuple[str, ...]] = {
+    table: (*natural, "available_at", "ingested_at")
+    for table, natural in PERSONAL_HISTORY_COMPACT_NATURAL_KEYS.items()
+}
 
 _TYPED_EQUITY_TABLES: tuple[str, ...] = (
     "jquants_listed_info",
@@ -163,8 +178,29 @@ def allowed_missing_observed_bars(expected: int, minimum_ratio: float) -> int:
     return max(DEFAULT_TINY_MISSING_OBSERVED_BARS, proportional)
 
 
+def compact_rebuild_reason(connection: sqlite3.Connection) -> str | None:
+    """Actionable rebuild text for a file that cannot be read as compact v8."""
+
+    try:
+        marker, _status = _singleton_manifest(connection)
+    except sqlite3.Error:
+        return (
+            "compact schema is invalid; rebuild as personal-draft-history/v8"
+        )
+    if marker == PERSONAL_HISTORY_COMPACT_PREVIOUS_FORMAT:
+        return PERSONAL_HISTORY_COMPACT_REBUILD_REASON
+    state = compact_history_state(connection)
+    if state in {"invalid", "mixed"}:
+        return (
+            "compact schema is invalid; rebuild as personal-draft-history/v8"
+            if state == "invalid"
+            else "cannot mix compact with typed or generic equity master or bars"
+        )
+    return None
+
+
 def compact_history_state(connection: sqlite3.Connection) -> CompactHistoryState:
-    """Classify one SQLite connection's compact-v7 representation."""
+    """Classify one SQLite connection's compact-v8 representation."""
 
     try:
         return _compact_history_state(connection)
@@ -175,6 +211,8 @@ def compact_history_state(connection: sqlite3.Connection) -> CompactHistoryState
 def _compact_history_state(connection: sqlite3.Connection) -> CompactHistoryState:
     objects = _compact_named_objects(connection)
     marker, status = _singleton_manifest(connection)
+    if marker == PERSONAL_HISTORY_COMPACT_PREVIOUS_FORMAT:
+        return "invalid"
     if marker != PERSONAL_HISTORY_COMPACT_FORMAT and not objects:
         return "legacy"
     if not _is_readable_compact_schema(

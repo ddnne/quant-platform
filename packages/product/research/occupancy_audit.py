@@ -127,8 +127,8 @@ def _put_eval_bytes(
 ) -> dict[str, Any] | None:
     if not put_r2:
         return None
+    raise RuntimeError("closed artifact put port is required")
     from research.cf_mass_eval_stage import RESEARCH_ARTIFACT_BUCKET
-    from research.r2_io import put_research_artifact
 
     put = put_research_artifact(
         RESEARCH_ARTIFACT_BUCKET,

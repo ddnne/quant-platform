@@ -633,6 +633,10 @@ def run_mass_factory(
     progress: bool = False,
 ) -> dict[str, Any]:
     """End-to-end: generate logics → near-dup → batch eval → screen."""
+    if not synthetic:
+        from research.mass_disabled import refuse_mass_host_entrypoint
+
+        refuse_mass_host_entrypoint("run_mass_factory")
     cfg = config or MassFactoryConfig(seed=seed, n=n)
 
     t0 = time.perf_counter()

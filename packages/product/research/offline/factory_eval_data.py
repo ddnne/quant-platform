@@ -27,164 +27,19 @@ def load_batch_data_context(
     *,
     periods: Sequence[Mapping[str, Any]] | None = None,
     codes: Sequence[str] | None = None,
+    view: Any | None = None,
+    synthetic: bool = False,
     mirror_dir: str | Path | None = None,
     sqlite_path: str | Path | None = None,
-    synthetic: bool = False,
 ) -> BatchDataContext:
-    """Load period panels once for the batch (lite multi-year by default)."""
-    from research.eval_loaders import (
-        DEFAULT_BARS_MIRROR_DIR,
-        bars_rich_to_close_panel,
-        build_repo_curve_series,
-        load_bars_ndjson_rich,
-        load_fins_events_from_sqlite,
-        load_margin_ndjson,
-        load_nky_vol_series_from_sqlite,
-        load_opt225_regime_bundle_for_eval,
-        load_repo_rows_all_tenors_from_sqlite,
-        load_repo_rows_from_sqlite,
-        load_short_ratio_series_from_sqlite,
-        resolve_bars_path,
-        resolve_margin_path,
-    )
-    from research.eval_universe import DEFAULT_SQLITE, select_eval_universe
-    from research.eval_windows import (
-        DEFAULT_PERIODS,
-        DEFAULT_PERIODS_Q4,
-    )
-    from research.cost_models import load_repo_rate_series_from_rows
-
+    """Synthetic panels only. Non-synthetic Mass factory is disabled."""
+    del periods, codes, view, mirror_dir, sqlite_path
     if synthetic:
         return _synthetic_batch_context(config)
+    from research.mass_disabled import refuse_mass_host_entrypoint
 
-    period_list = [
-        dict(p)
-        for p in (
-            periods
-            or (
-                DEFAULT_PERIODS_Q4
-                if config.use_q4_periods
-                else DEFAULT_PERIODS
-            )
-        )
-    ]
-    selected = (
-        [str(c).strip() for c in codes if str(c).strip()]
-        if codes is not None
-        else select_eval_universe(max_codes=int(config.max_codes))
-    )
-    mdir = Path(mirror_dir) if mirror_dir else DEFAULT_BARS_MIRROR_DIR
-    db = Path(sqlite_path) if sqlite_path else DEFAULT_SQLITE
-
-    as_of_s = max(
-        (
-            str(p.get("period_end") or p.get("end") or "")[:10]
-            for p in period_list
-        ),
-        default="",
-    )
-    if db.exists() and not as_of_s:
-        raise ValueError("as_of is required (PIT has no latest default)")
-    repo_rows = (
-        load_repo_rows_from_sqlite(db, as_of=as_of_s) if db.exists() else []
-    )
-    repo_series = (
-        load_repo_rate_series_from_rows(repo_rows) if repo_rows else None
-    )
-    repo_all = (
-        load_repo_rows_all_tenors_from_sqlite(db, as_of=as_of_s)
-        if db.exists()
-        else []
-    )
-    curve_series = build_repo_curve_series(repo_all) if repo_all else None
-    nky_vol_series = (
-        load_nky_vol_series_from_sqlite(
-            db, start="2014-01-01", end="2026-12-31"
-        )
-        if db.exists()
-        else None
-    )
-    opt225_regime = load_opt225_regime_bundle_for_eval()
-    fins_events = (
-        load_fins_events_from_sqlite(
-            db, codes=selected, start="2014-01-01", end="2026-12-31"
-        )
-        if db.exists()
-        else {}
-    )
-    short_series = (
-        load_short_ratio_series_from_sqlite(
-            db, section="0050", start="2014-01-01", end="2026-12-31"
-        )
-        if db.exists()
-        else []
-    )
-    sidecars = {
-        "repo_series": repo_series,
-        "curve_series": curve_series,
-        "nky_vol_series": nky_vol_series,
-        "opt225_regime": opt225_regime,
-        "fins_events": fins_events,
-        "short_series": short_series,
-    }
-
-    panels: list[dict[str, Any]] = []
-    for raw in period_list:
-        p = dict(raw)
-        pid = str(p.get("period_id") or p.get("year") or "period")
-        p_start = str(p.get("period_start") or "")[:10] or None
-        p_end = str(p.get("period_end") or "")[:10] or None
-        head = {
-            "period_id": pid,
-            "year": p.get("year"),
-            "period_start": p_start,
-            "period_end": p_end,
-            **sidecars,
-        }
-        bars_path = p.get("bars_path") or resolve_bars_path(pid, mirror_dir=mdir)
-        if bars_path is None or not Path(bars_path).exists():
-            panels.append({**head, "status": "missing_bars", "bars": {}, "margin": {}})
-            continue
-        rich = load_bars_ndjson_rich(
-            bars_path,
-            codes=selected,
-            max_days=int(config.max_days_per_period),
-            period_start=p_start,
-            period_end=p_end,
-        )
-        bars = bars_rich_to_close_panel(rich)
-        margin_path = resolve_margin_path(pid, mirror_dir=mdir)
-        margin: dict[str, list[tuple[str, float]]] = {}
-        if margin_path is not None and Path(margin_path).exists():
-            try:
-                margin = load_margin_ndjson(margin_path, codes=selected)
-            except Exception:
-                margin = {}
-        panels.append(
-            {
-                **head,
-                "status": "ok" if bars else "empty_bars",
-                "bars": bars,
-                "margin": margin,
-                "bars_path": str(bars_path),
-            }
-        )
-
-    return BatchDataContext(
-        periods=period_list,
-        panels=panels,
-        one_way_cost=float(config.one_way_cost),
-        load_notes={
-            "n_periods": len(panels),
-            "n_codes": len(selected),
-            "codes": selected,
-            "mirror_dir": str(mdir),
-            "sqlite": str(db),
-            "sqlite_exists": db.exists(),
-            "use_q4_periods": bool(config.use_q4_periods),
-            "max_days_per_period": int(config.max_days_per_period),
-        },
-    )
+    refuse_mass_host_entrypoint("load_batch_data_context")
+    raise AssertionError("mass factory data path remains disabled")
 
 
 def _synthetic_batch_context(config: MassFactoryConfig) -> BatchDataContext:

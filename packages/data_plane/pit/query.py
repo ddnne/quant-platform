@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote
 
+from data_contracts.personal_history_compact import PERSONAL_HISTORY_COMPACT_NATURAL_KEYS
 from ingestion.common.timeutil import ensure_jst, parse_dt, to_iso
 from storage.schema import NATURAL_KEYS, REVISION_TABLES
 
@@ -40,8 +41,52 @@ _JSON_PAYLOAD_COLS = ("raw_payload", "payload")
 
 # Explicitly scoped personal-paper reads may reuse one read-only SQLite handle
 # within the calling thread.  The default API never populates this state and
-# therefore continues to open and close one connection per query.
+# therefore continues to open and close one connection per query. Ordinary
+# callers never receive this box; it is not a writable connection map.
 _READ_SCOPE_STATE = threading.local()
+
+
+class _ReadScopeBox:
+    """Opaque READY-gated leases. Not a caller-writable sqlite3 registry."""
+
+    __slots__ = ("_leases", "_shapes")
+
+    def __init__(self) -> None:
+        self._leases: dict[str, tuple[Any, int]] = {}
+        self._shapes: dict[str, bool] = {}
+
+    def empty(self) -> bool:
+        return not self._leases
+
+    def lease(self, key: str) -> tuple[Any, int] | None:
+        item = self._leases.get(key)
+        if not isinstance(item, tuple) or len(item) != 2:
+            self._leases.pop(key, None)
+            return None
+        conn, depth = item
+        if conn is None or not isinstance(depth, int) or depth < 1:
+            self._leases.pop(key, None)
+            return None
+        return conn, depth
+
+    def store(self, key: str, conn: Any, depth: int) -> None:
+        if conn is None or not isinstance(depth, int) or depth < 1:
+            raise TypeError("read scope lease is invalid")
+        self._leases[key] = (conn, depth)
+
+    def drop(self, key: str) -> None:
+        self._leases.pop(key, None)
+        self._shapes.pop(key, None)
+
+    def shape_get(self, key: str) -> bool | None:
+        value = self._shapes.get(key)
+        return value if isinstance(value, bool) else None
+
+    def shape_set(self, key: str, exact: bool) -> None:
+        self._shapes[key] = bool(exact)
+
+    def shape_clear(self, key: str) -> None:
+        self._shapes.pop(key, None)
 
 
 def normalize_as_of(as_of: Any = _NOT_GIVEN) -> str:
@@ -88,18 +133,75 @@ def resolve_db_path(db_path: Any) -> Path:
     return Path(db_path) if db_path is not None else DEFAULT_DB_PATH
 
 
-def connect_readonly(db_path: Any = None) -> sqlite3.Connection:
-    """Open the structured DB **read-only** via a ``mode=ro`` file URI.
+def _local_snapshot_policy(conn: sqlite3.Connection) -> sqlite3.Row | None:
+    """Return the singleton snapshot policy row, if the table exists."""
 
-    Read-only is enforced structurally: any ``INSERT``/``UPDATE``/``DDL`` from
-    this connection raises ``sqlite3.OperationalError`` ("attempt to write a
-    readonly database") rather than silently mutating data. A missing DB file
-    raises :class:`DatabaseNotFound` (a missing DB is a setup error, not an
-    empty result).
+    policy_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' "
+        "AND name='local_snapshot_policy'"
+    ).fetchone()
+    if policy_table is None:
+        return None
+    columns = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(local_snapshot_policy)")
+    }
+    projection = "require_manifest, snapshot_ready"
+    if "publication_state" in columns:
+        projection += ", publication_state"
+    return conn.execute(
+        f"SELECT {projection} FROM local_snapshot_policy WHERE singleton=1"
+    ).fetchone()
 
-    Uses a ``file:…?mode=ro`` URI so the path may contain spaces / non-ASCII
-    safely; ``row_factory`` is set to :class:`sqlite3.Row` for dict-friendly
-    decoding.
+
+def _policy_publication_state(policy: sqlite3.Row, *, missing: str | None) -> str | None:
+    if "publication_state" in policy.keys():
+        return str(policy["publication_state"])
+    return missing
+
+
+def _deny_managed_preready(conn: sqlite3.Connection) -> None:
+    """Refuse a governed pre-READY database. Clocks are not authority."""
+
+    policy = _local_snapshot_policy(conn)
+    if policy is None:
+        return
+    state = _policy_publication_state(policy, missing="READY")
+    require_manifest = bool(policy["require_manifest"])
+    if state == "BUILDING" or (
+        require_manifest
+        and (not bool(policy["snapshot_ready"]) or state != "READY")
+    ):
+        raise SnapshotNotReady(
+            "managed research snapshot is not READY; PIT access is denied. "
+            "Historical JSDA repo eval uses "
+            "research.eval_loaders.load_repo_rows_all_tenors_from_sqlite "
+            "(local sqlite / R2 history). D1 jsda_repo_rates is hot tip only. "
+            "Do not declare READY from this path."
+        )
+
+
+def _require_unmanaged_draft(conn: sqlite3.Connection) -> None:
+    """Unmanaged DRAFT APIs may not query a managed snapshot."""
+
+    policy = _local_snapshot_policy(conn)
+    if policy is None:
+        return
+    state = _policy_publication_state(policy, missing=None)
+    if bool(policy["require_manifest"]) or state == "BUILDING":
+        raise SnapshotNotReady(
+            "unmanaged DRAFT reads cannot use a managed snapshot"
+        )
+
+
+def _open_readonly_sqlite(db_path: Any = None) -> sqlite3.Connection:
+    """Open SQLite ``mode=ro``. Missing file → :class:`DatabaseNotFound`.
+
+    Ordinary callers cannot use this as a READY-policy bypass. A managed
+    pre-READY database (``require_manifest=1`` or lifecycle ``BUILDING``)
+    raises :class:`SnapshotNotReady` and does not return a connection.
+    Unmanaged DRAFT files remain readable. Public PIT still goes through
+    :func:`connect_readonly`.
     """
     path = resolve_db_path(db_path)
     if not path.exists():
@@ -121,39 +223,30 @@ def connect_readonly(db_path: Any = None) -> sqlite3.Connection:
     uri = "file:" + quote(str(resolved)) + query
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
-    # Managed production databases fail closed unless their generation is a
-    # committed READY snapshot. Legacy/test fixtures explicitly retain
-    # require_manifest=0 and remain readable for offline unit construction.
-    policy_table = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' "
-        "AND name='local_snapshot_policy'"
-    ).fetchone()
-    if policy_table is not None:
-        columns = {
-            str(row[1])
-            for row in conn.execute("PRAGMA table_info(local_snapshot_policy)")
-        }
-        projection = "require_manifest, snapshot_ready"
-        if "publication_state" in columns:
-            projection += ", publication_state"
-        policy = conn.execute(
-            f"SELECT {projection} FROM local_snapshot_policy WHERE singleton=1"
-        ).fetchone()
-        if policy is not None and bool(policy["require_manifest"]):
-            state = (
-                str(policy["publication_state"])
-                if "publication_state" in policy.keys() else "READY"
-            )
-            if not bool(policy["snapshot_ready"]) or state != "READY":
-                conn.close()
-                raise SnapshotNotReady(
-                    "managed research snapshot is not READY; PIT access is denied. "
-                    "Historical JSDA repo eval uses "
-                    "research.eval_loaders.load_repo_rows_all_tenors_from_sqlite "
-                    "(local sqlite / R2 history). D1 jsda_repo_rates is hot tip only. "
-                    "Do not declare READY from this path."
-                )
+    try:
+        _deny_managed_preready(conn)
+    except SnapshotNotReady:
+        conn.close()
+        raise
     return conn
+
+
+def connect_readonly(db_path: Any = None) -> sqlite3.Connection:
+    """Open the structured DB **read-only** via a ``mode=ro`` file URI.
+
+    Read-only is enforced structurally: any ``INSERT``/``UPDATE``/``DDL`` from
+    this connection raises ``sqlite3.OperationalError`` ("attempt to write a
+    readonly database") rather than silently mutating data. A missing DB file
+    raises :class:`DatabaseNotFound` (a missing DB is a setup error, not an
+    empty result).
+
+    Uses a ``file:…?mode=ro`` URI so the path may contain spaces / non-ASCII
+    safely; ``row_factory`` is set to :class:`sqlite3.Row` for dict-friendly
+    decoding. Managed production databases fail closed unless their generation
+    is a committed READY snapshot. Legacy/test fixtures explicitly retain
+    ``require_manifest=0`` and remain readable for offline unit construction.
+    """
+    return _open_readonly_sqlite(db_path)
 
 
 def _read_scope_key(db_path: Any) -> str:
@@ -168,84 +261,70 @@ def _read_scope_key(db_path: Any) -> str:
     return str(path if descriptor_backed else path.resolve())
 
 
-def _thread_read_scopes() -> dict[str, tuple[sqlite3.Connection, int]]:
-    scopes = getattr(_READ_SCOPE_STATE, "connections", None)
-    if scopes is None:
-        scopes = {}
-        _READ_SCOPE_STATE.connections = scopes
-    return scopes
-
-
-def _thread_adjustment_probe_shapes() -> dict[str, bool]:
-    """Per-read-scope cache for the immutable personal DB shape probe."""
-
-    shapes = getattr(_READ_SCOPE_STATE, "adjustment_probe_shapes", None)
-    if shapes is None:
-        shapes = {}
-        _READ_SCOPE_STATE.adjustment_probe_shapes = shapes
-    return shapes
+def _scope_box() -> _ReadScopeBox:
+    box = getattr(_READ_SCOPE_STATE, "_box", None)
+    if not isinstance(box, _ReadScopeBox):
+        box = _ReadScopeBox()
+        _READ_SCOPE_STATE._box = box
+    return box
 
 
 @contextmanager
-def _readonly_connection_scope(db_path: Any) -> Iterator[None]:
-    """Reuse one read-only connection for one explicit synchronous scope.
-
-    The scope is private infrastructure for an immutable personal-paper run.
-    It is keyed by the exact resolved DB path and stored in thread-local state,
-    so another database or thread can never inherit the handle.  Nesting the
-    same path reuses the outer handle and only the outermost exit closes it.
-
-    No transaction spans the scope: :func:`run_query` retains its per-query
-    ``BEGIN``/rollback boundary.  The yielded value is deliberately ``None``
-    rather than a raw SQL capability.
-    """
+def _install_readonly_scope(db_path: Any) -> Iterator[None]:
+    """Install a READY-gated read-only scope. Callers cannot supply an opener."""
 
     key = _read_scope_key(db_path)
-    scopes = _thread_read_scopes()
-    active = scopes.get(key)
+    box = _scope_box()
+    active = box.lease(key)
     if active is None:
-        connection = connect_readonly(Path(key))
-        scopes[key] = (connection, 1)
-        # A prior scope for the same pathname must never lend shape authority
-        # to a newly opened SQLite generation.
-        _thread_adjustment_probe_shapes().pop(key, None)
+        conn = connect_readonly(db_path)
+        try:
+            box.store(key, conn, 1)
+            box.shape_clear(key)
+        except Exception:
+            conn.close()
+            raise
     else:
-        connection, depth = active
-        scopes[key] = (connection, depth + 1)
+        box.store(key, active[0], active[1] + 1)
     try:
         yield
     finally:
-        current = scopes.get(key)
+        current = box.lease(key)
         if current is not None and current[1] > 1:
-            scopes[key] = (current[0], current[1] - 1)
+            box.store(key, current[0], current[1] - 1)
         elif current is not None:
-            scopes.pop(key, None)
-            shapes = getattr(_READ_SCOPE_STATE, "adjustment_probe_shapes", None)
-            if shapes is not None:
-                shapes.pop(key, None)
+            box.drop(key)
             try:
                 current[0].rollback()
             finally:
                 try:
                     current[0].close()
                 finally:
-                    if not scopes:
+                    if box.empty():
                         try:
-                            del _READ_SCOPE_STATE.connections
+                            del _READ_SCOPE_STATE._box
                         except AttributeError:
                             pass
-                        try:
-                            del _READ_SCOPE_STATE.adjustment_probe_shapes
-                        except AttributeError:
-                            pass
+
+
+@contextmanager
+def _readonly_connection_scope(db_path: Any) -> Iterator[None]:
+    """Reuse one READY-gated read-only connection for one explicit scope."""
+
+    with _install_readonly_scope(db_path):
+        yield
 
 
 def _scoped_read_connection(db_path: Any) -> sqlite3.Connection | None:
-    scopes = getattr(_READ_SCOPE_STATE, "connections", None)
-    if not scopes:
+    box = getattr(_READ_SCOPE_STATE, "_box", None)
+    if not isinstance(box, _ReadScopeBox):
         return None
-    active = scopes.get(_read_scope_key(db_path))
-    return None if active is None else active[0]
+    active = box.lease(_read_scope_key(db_path))
+    if active is None:
+        return None
+    conn = active[0]
+    _deny_managed_preready(conn)
+    return conn
 
 
 def _decode_row(row: sqlite3.Row) -> dict[str, Any]:
@@ -297,12 +376,7 @@ def run_query(
     The connection is opened read-only and closed in a ``finally`` so a query
     error never leaks a writer-capable handle.
     """
-    where = ["available_at IS NOT NULL", "available_at <= ?"]
-    bound: list[Any] = [as_of]
-    if extra_where:
-        where.append(f"({extra_where})")
-    if params:
-        bound.extend(params)
+    compact_keys = PERSONAL_HISTORY_COMPACT_NATURAL_KEYS.get(table)
     keyset_sql: str | None = None
     keyset_bound: list[Any] = []
     if keyset_after is not None:
@@ -328,6 +402,28 @@ def run_query(
         # archive the visible primary row after the empty-revision check and
         # before the SELECT, producing a mixed-generation result.
         conn.execute("BEGIN")
+        from .cooperative_deadline import check_deadline
+        from .read_clock import resolve_read_clock
+
+        check_deadline()
+        where = ["available_at IS NOT NULL", "available_at <= ?"]
+        bound: list[Any] = [as_of]
+        timed_tables = compact_keys is not None or table in REVISION_TABLES or table in NATURAL_KEYS
+        if timed_tables:
+            clock = resolve_read_clock(as_of, conn=conn)
+            where.extend(
+                [
+                    "event_time IS NOT NULL",
+                    "event_time <= ?",
+                    "ingested_at IS NOT NULL",
+                    "ingested_at <= ?",
+                ]
+            )
+            bound.extend((clock.decision_at, clock.observed_through))
+        if extra_where:
+            where.append(f"({extra_where})")
+        if params:
+            bound.extend(params)
         revision_table = REVISION_TABLES.get(table)
         has_revision_rows = False
         if revision_table is not None:
@@ -343,7 +439,18 @@ def run_query(
                     f"SELECT 1 FROM {revision_table} LIMIT 1"
                 ).fetchone() is not None
 
-        if has_revision_rows:
+        if compact_keys:
+            partition_by = ",".join(compact_keys)
+            sql = (
+                "WITH pit_visible AS (SELECT * FROM "
+                f"{table} WHERE " + " AND ".join(where) + "), pit_ranked AS ("
+                "SELECT *, ROW_NUMBER() OVER ("
+                f"PARTITION BY {partition_by} "
+                "ORDER BY available_at DESC, ingested_at DESC"
+                ") AS _pit_rank FROM pit_visible) "
+                "SELECT * FROM pit_ranked WHERE _pit_rank = 1"
+            )
+        elif has_revision_rows:
             key_cols = NATURAL_KEYS[table]
             partition_by = ",".join(key_cols)
             sql = (
@@ -416,8 +523,9 @@ def _probe_standalone_typed_adjustment_candidates(
         conn = connect_readonly(db_path)
     try:
         cached_shape = None
-        if scoped_connection:
-            cached_shape = _thread_adjustment_probe_shapes().get(key)
+        box = getattr(_READ_SCOPE_STATE, "_box", None)
+        if scoped_connection and isinstance(box, _ReadScopeBox):
+            cached_shape = box.shape_get(key)
             if cached_shape is False:
                 return False, []
         conn.execute("BEGIN")
@@ -476,17 +584,17 @@ def _probe_standalone_typed_adjustment_candidates(
                 ):
                     shape_exact = False
 
-            if scoped_connection:
-                _thread_adjustment_probe_shapes()[key] = shape_exact
+            if scoped_connection and isinstance(box, _ReadScopeBox):
+                box.shape_set(key, shape_exact)
             if not shape_exact:
                 return False, []
 
-        where = [
-            "available_at IS NOT NULL",
-            "available_at <= ?",
-            "source = 'jquants'",
-        ]
-        bound: list[Any] = [as_of]
+        from .read_clock import resolve_read_clock, visibility_predicates
+
+        clock = resolve_read_clock(as_of, conn=conn)
+        vis_sql, vis_bound = visibility_predicates(clock)
+        where = [*vis_sql, "source = 'jquants'"]
+        bound: list[Any] = list(vis_bound)
         if codes:
             placeholders = ",".join("?" for _ in codes)
             where.append(f"code IN ({placeholders})")
