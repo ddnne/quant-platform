@@ -17,10 +17,15 @@ import {
   type OpsProjectionEnv,
 } from "./ops_projection";
 import {
+  projectedSegmentStatus,
   trustedComplete,
   verifySignedReceiptEnvelope,
   type ClosedObjectStores,
 } from "./ops_projection_policy";
+import {
+  canonicalDigest,
+  canonicalJson,
+} from "../../receipt-evidence-authority/src/canonical";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ingestionMigrations = join(here, "../migrations");
@@ -45,13 +50,188 @@ async function sha256Prefixed(bytes: Uint8Array): Promise<string> {
   return "sha256:" + Array.from(new Uint8Array(raw), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-async function exactJqTrustedComplete(
+function jqExpectedScope(start = "2026-08-01", end = "2026-08-31") {
+  return {
+    coverage_mode: "trading_calendar",
+    expected_frequency: "trading_day",
+    expected_item_unit: "source_query",
+    segment_end: end,
+    segment_start: start,
+    universe_rule: "all_listed_equities_at_event_date",
+    segment_granularity: "calendar_month",
+  };
+}
+
+async function canonicalV3Claims(
+  objects: Awaited<ReturnType<typeof seedGovernedObjects>>,
+  overrides: Record<string, unknown> = {},
+): Promise<Record<string, unknown>> {
+  const base = {
+    environment: "production",
+    authority_instance_digest: "sha256:" + "11".repeat(32),
+    coverage_policy_version: "collection-coverage/v3",
+    source: "jquants",
+    contract_id: "jquants_premium_core",
+    dataset: "equities_bars_daily",
+    segment_id: "2026-08",
+    segment_start: "2026-08-01",
+    segment_end: "2026-08-31",
+    receipt_issue_digest: "sha256:" + "cc".repeat(32),
+    artifact_key: "artifact.jsonl",
+    artifact_byte_count: objects.artifactBytes,
+    manifest_key: "manifest.json",
+    manifest_byte_count: objects.manifestBytes,
+    raw_manifest_key: "raw.json",
+    raw_manifest_byte_count: objects.rawBytes,
+    raw_byte_count: 2,
+    natural_key_digest: objects.naturalKeyDigest,
+    expected_items: 1,
+    observed_items: 1,
+    raw_page_count: 1,
+    raw_count: 2,
+    structured_count: 2,
+    status: "SUCCESS",
+    error: null,
+    pagination_exhausted: true,
+    discovery_exhausted: true,
+    source_request_digest: "sha256:" + "ff".repeat(32),
+    raw_manifest_digest: objects.rawDigest,
+    raw_digest: "sha256:" + "bb".repeat(32),
+    structured_digest: objects.structured,
+    structured_generation: 1,
+    run_id: 1,
+    checked_at: "2026-08-01T00:00:00Z",
+    extra_digests: {
+      acquisition_collection_manifest_file_digest: objects.rawFileDigest,
+      acquisition_collection_digest: "sha256:" + "12".repeat(32),
+      acquisition_terminal_chain_digest: "sha256:" + "13".repeat(32),
+      product_artifact_digest: objects.structured,
+      product_manifest_digest: objects.manifestDigest,
+    },
+    ...overrides,
+  };
+  const expectedScope = overrides.expected_scope ?? jqExpectedScope(
+    String(base.segment_start),
+    String(base.segment_end),
+  );
+  const scope = {
+    environment: base.environment,
+    authority_instance_digest: base.authority_instance_digest,
+    coverage_policy_version: base.coverage_policy_version,
+    source: base.source,
+    contract_id: base.contract_id,
+    dataset: base.dataset,
+    segment_id: base.segment_id,
+    segment_start: base.segment_start,
+    segment_end: base.segment_end,
+    expected_scope: expectedScope,
+    expected_items: base.expected_items,
+  };
+  const scopeDigest = await canonicalDigest(scope);
+  const observation = {
+    ...scope,
+    observed_items: base.observed_items,
+    raw_page_count: base.raw_page_count,
+    raw_count: base.raw_count,
+    structured_count: base.structured_count,
+    status: base.status,
+    error: base.error,
+    pagination_exhausted: base.pagination_exhausted,
+    discovery_exhausted: base.discovery_exhausted,
+    receipt_issue_digest: base.receipt_issue_digest,
+    artifact_key: base.artifact_key,
+    artifact_byte_count: base.artifact_byte_count,
+    manifest_key: base.manifest_key,
+    manifest_byte_count: base.manifest_byte_count,
+    raw_manifest_key: base.raw_manifest_key,
+    raw_manifest_byte_count: base.raw_manifest_byte_count,
+    raw_byte_count: base.raw_byte_count,
+    natural_key_digest: base.natural_key_digest,
+    source_request_digest: base.source_request_digest,
+    raw_manifest_digest: base.raw_manifest_digest,
+    raw_digest: base.raw_digest,
+    structured_digest: base.structured_digest,
+    structured_generation: base.structured_generation,
+    scope_digest: scopeDigest,
+    run_id: base.run_id,
+    checked_at: base.checked_at,
+    extra_digests: base.extra_digests,
+  };
+  return {
+    ...observation,
+    observation_digest: await canonicalDigest(observation),
+    version: "signed-receipt-claims/v3",
+    parser_normalizer_version: "coverage-receipt/v4-ed25519-closure",
+    issuer_id: "receipt-test-v1",
+    issued_at: "2026-08-01T00:00:00Z",
+  };
+}
+
+async function signV3Claims(
+  pair: CryptoKeyPair,
+  claims: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const body = canonicalJson(claims);
+  const bodyBytes = new TextEncoder().encode(body);
+  const signature = new Uint8Array(
+    await crypto.subtle.sign("Ed25519", pair.privateKey, bodyBytes),
+  );
+  const extras = claims.extra_digests as Record<string, string>;
+  return {
+    eligibility: "TRUSTED_COLLECTION",
+    issuer_class: "SignedReceiptAuthority",
+    issuer_key_id: claims.issuer_id,
+    issuer_id: claims.issuer_id,
+    environment: claims.environment,
+    authority_instance_digest: claims.authority_instance_digest,
+    parser_normalizer_version: claims.parser_normalizer_version,
+    signed_body_b64: b64(bodyBytes),
+    signature: `ed25519:${b64(signature)}`,
+    body_digest: await sha256Prefixed(bodyBytes),
+    issued_at: claims.issued_at,
+    checked_at: claims.checked_at,
+    source_request_digest: claims.source_request_digest,
+    raw_manifest_digest: claims.raw_manifest_digest,
+    raw: claims.raw_digest,
+    structured_generation: claims.structured_generation,
+    structured_digest: claims.structured_digest,
+    scope_digest: claims.scope_digest,
+    observation_digest: claims.observation_digest,
+    extra_digests: extras,
+    ...extras,
+  };
+}
+
+async function canonicalJqReceiptDigest(envelope: Record<string, unknown>): Promise<string> {
+  return canonicalDigest({
+    source: "jquants",
+    dataset: "equities_bars_daily",
+    segment_id: "2026-08",
+    segment_start: "2026-08-01",
+    segment_end: "2026-08-31",
+    expected_scope: jqExpectedScope(),
+    expected_items: 1,
+    observed_items: 1,
+    raw_page_count: 1,
+    raw_row_count: 2,
+    structured_row_count: 2,
+    pagination_exhausted: true,
+    digests: envelope,
+    run_id: 1,
+    status: "SUCCESS",
+    error: null,
+    checked_at: "2026-08-01T00:00:00Z",
+  });
+}
+
+async function exactJqProjectedStatus(
   objects: Awaited<ReturnType<typeof seedGovernedObjects>>,
   envelope: Record<string, unknown>,
   registry: Parameters<typeof trustedComplete>[7],
   stores: ClosedObjectStores | null | undefined,
-): Promise<boolean> {
-  return trustedComplete(
+): Promise<string> {
+  const receiptDigest = await canonicalJqReceiptDigest(envelope);
+  return projectedSegmentStatus(
     {
       status: "COMPLETE",
       source: "jquants",
@@ -59,6 +239,8 @@ async function exactJqTrustedComplete(
       segment_id: "2026-08",
       segment_start: "2026-08-01",
       segment_end: "2026-08-31",
+      expected_scope: JSON.stringify(jqExpectedScope()),
+      expected_items: 1,
       policy_version: "collection-coverage/v3",
       receipt_run_id: 1,
     },
@@ -68,12 +250,17 @@ async function exactJqTrustedComplete(
       segment_id: "2026-08",
       segment_start: "2026-08-01",
       segment_end: "2026-08-31",
+      expected_scope: JSON.stringify(jqExpectedScope()),
+      expected_items: 1,
+      observed_items: 1,
       status: "SUCCESS",
+      error: null,
       run_id: 1,
       pagination_exhausted: 1,
       structured_row_count: 2,
       raw_row_count: 2,
       raw_page_count: 1,
+      checked_at: "2026-08-01T00:00:00Z",
       digests_json: JSON.stringify(envelope),
     }],
     [{
@@ -84,6 +271,8 @@ async function exactJqTrustedComplete(
       operation_id: "op-1",
       row_count: 2,
       raw_row_count: 2,
+      raw_page_count: 1,
+      raw_bytes: 2,
       artifact_key: "artifact.jsonl",
       manifest_key: "manifest.json",
       raw_manifest_key: "raw.json",
@@ -91,6 +280,7 @@ async function exactJqTrustedComplete(
       manifest_digest: objects.manifestDigest,
       raw_manifest_digest: objects.rawDigest,
       byte_count: objects.artifactBytes,
+      committed_at: "2026-08-01T00:00:00Z",
     }],
     [{
       run_id: 1,
@@ -100,10 +290,18 @@ async function exactJqTrustedComplete(
       state: "RECEIPT_COMMITTED",
       operation_id: "op-1",
       source: "jquants",
-      receipt_digest: "sha256:" + "ee".repeat(32),
+      contract_id: "jquants_premium_core",
+      segment_start: "2026-08-01",
+      segment_end: "2026-08-31",
+      receipt_digest: receiptDigest,
       request_digest: "sha256:" + "cc".repeat(32),
+      structured_manifest_key: "manifest.json",
       structured_digest: objects.structured,
+      raw_manifest_key: "raw.json",
       raw_manifest_digest: objects.rawDigest,
+      raw_page_count: 1,
+      raw_row_count: 2,
+      raw_bytes: 2,
     }],
     [{
       operation_id: "op-1",
@@ -112,13 +310,23 @@ async function exactJqTrustedComplete(
       dataset: "equities_bars_daily",
       segment_id: "2026-08",
       source: "jquants",
-      receipt_digest: "sha256:" + "ee".repeat(32),
+      contract_id: "jquants_premium_core",
+      receipt_digest: receiptDigest,
     }],
     new Map([["op-1", 2]]),
     "production",
     registry,
     stores,
   );
+}
+
+async function exactJqTrustedComplete(
+  objects: Awaited<ReturnType<typeof seedGovernedObjects>>,
+  envelope: Record<string, unknown>,
+  registry: Parameters<typeof trustedComplete>[7],
+  stores: ClosedObjectStores | null | undefined,
+): Promise<boolean> {
+  return await exactJqProjectedStatus(objects, envelope, registry, stores) === "COMPLETE";
 }
 
 async function seedGovernedObjects() {
@@ -144,6 +352,10 @@ async function seedGovernedObjects() {
     manifestDigest: await sha256Prefixed(manifest),
     rawDigest: "sha256:" + "aa".repeat(32),
     rawFileDigest: await sha256Prefixed(rawManifest),
+    naturalKeyDigest: await canonicalDigest({
+      operation_id: "op-1",
+      natural_keys: ["k1", "k2"],
+    }),
     artifactBytes: artifact.byteLength,
     manifestBytes: manifest.byteLength,
     rawBytes: rawManifest.byteLength,
@@ -928,154 +1140,32 @@ describe("ops projection cloud publisher", () => {
         },
       ],
     };
-    const signClaims = async (claims: Record<string, unknown>) => {
-      const body = JSON.stringify(claims);
-      const signature = new Uint8Array(
-        await crypto.subtle.sign("Ed25519", pair.privateKey, new TextEncoder().encode(body)),
-      );
-      const digest = "sha256:" + Array.from(
-        new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body))),
-        (byte) => byte.toString(16).padStart(2, "0"),
-      ).join("");
-      return {
-        issuer_key_id: "receipt-test-v1",
-        environment: "production",
-        authority_instance_digest: registry.authority_instance_digest,
-        signed_body_b64: b64(new TextEncoder().encode(body)),
-        signature: `ed25519:${b64(signature)}`,
-        body_digest: digest,
-        structured_digest: claims.structured_digest,
-        raw_manifest_digest: claims.raw_manifest_digest,
-        extra_digests: claims.extra_digests,
-      };
-    };
     const objects = await seedGovernedObjects();
-    const jqClaims = {
-      source: "jquants",
-      contract_id: "jquants_premium_core",
-      dataset: "equities_bars_daily",
-      segment_id: "2026-08",
-      segment_start: "2026-08-01",
-      segment_end: "2026-08-31",
-      environment: "production",
-      coverage_policy_version: "collection-coverage/v3",
-      run_id: 1,
-      raw_page_count: 1,
-      raw_count: 2,
-      checked_at: "2026-08-01T00:00:00Z",
-      structured_digest: objects.structured,
-      raw_manifest_digest: objects.rawDigest,
-      artifact_byte_count: objects.artifactBytes,
-      manifest_byte_count: objects.manifestBytes,
-      raw_manifest_byte_count: objects.rawBytes,
-      pagination_exhausted: true,
-      discovery_exhausted: true,
-      structured_count: 2,
-      receipt_issue_digest: "sha256:" + "cc".repeat(32),
-      source_request_digest: "sha256:" + "ff".repeat(32),
-      artifact_key: "artifact.jsonl",
-      manifest_key: "manifest.json",
-      raw_manifest_key: "raw.json",
-      extra_digests: {
-        product_artifact_digest: objects.structured,
-        product_manifest_digest: objects.manifestDigest,
-        acquisition_collection_manifest_file_digest: objects.rawFileDigest,
-      },
-    };
-    const jsdaClaims = {
-      ...jqClaims,
+    const jqClaims = await canonicalV3Claims(objects);
+    const jsdaClaims = await canonicalV3Claims(objects, {
       source: "jsda",
+      contract_id: "jsda_governed_otc_reference_archive",
       dataset: "jsda_otc_bond_reference_prices",
       segment_id: "2026-08-01",
-    };
-    const jqEnvelope = await signClaims(jqClaims);
-    const jsdaEnvelope = await signClaims(jsdaClaims);
+      segment_start: "2026-08-01",
+      segment_end: "2026-08-01",
+      expected_scope: {
+        coverage_mode: "official_archive_index_reconciled",
+        expected_frequency: "trading_day",
+        expected_item_unit: "official_archive_file",
+        segment_end: "2026-08-01",
+        segment_start: "2026-08-01",
+        universe_rule: "all_bonds_in_official_publication_file",
+        segment_granularity: "official_archive_index_day",
+      },
+    });
+    const jqEnvelope = await signV3Claims(pair, jqClaims);
+    const jsdaEnvelope = await signV3Claims(pair, jsdaClaims);
     expect(await verifySignedReceiptEnvelope(jqEnvelope, registry, "production")).not.toBeNull();
     expect(await verifySignedReceiptEnvelope(jsdaEnvelope, registry, "production")).not.toBeNull();
     const tampered = { ...jqEnvelope, body_digest: "sha256:" + "ff".repeat(32) };
     expect(await verifySignedReceiptEnvelope(tampered, registry, "production")).toBeNull();
-    const complete = await trustedComplete(
-      {
-        status: "COMPLETE",
-        source: "jquants",
-        dataset: "equities_bars_daily",
-        segment_id: "2026-08",
-        segment_start: "2026-08-01",
-        segment_end: "2026-08-31",
-        expected_scope: "day",
-        expected_items: 1,
-        policy_version: "collection-coverage/v3",
-        receipt_run_id: 1,
-      },
-      [
-        {
-          source: "jquants",
-          dataset: "equities_bars_daily",
-          segment_id: "2026-08",
-          segment_start: "2026-08-01",
-          segment_end: "2026-08-31",
-          expected_scope: "day",
-          expected_items: 1,
-          status: "SUCCESS",
-          run_id: 1,
-          pagination_exhausted: 1,
-          structured_row_count: 2,
-          raw_row_count: 2,
-          raw_page_count: 1,
-          checked_at: "2026-08-01T00:00:00Z",
-          digests_json: JSON.stringify(jqEnvelope),
-        },
-      ],
-      [
-        {
-          source: "jquants",
-          run_id: 1,
-          dataset: "equities_bars_daily",
-          segment_id: "2026-08",
-          operation_id: "op-1",
-          row_count: 2,
-          raw_row_count: 2,
-          artifact_key: "artifact.jsonl",
-          manifest_key: "manifest.json",
-          raw_manifest_key: "raw.json",
-          artifact_digest: objects.structured,
-          manifest_digest: objects.manifestDigest,
-          raw_manifest_digest: objects.rawDigest,
-          byte_count: objects.artifactBytes,
-        },
-      ],
-      [
-        {
-          run_id: 1,
-          dataset: "equities_bars_daily",
-          segment_id: "2026-08",
-          environment: "production",
-          state: "RECEIPT_COMMITTED",
-          operation_id: "op-1",
-          source: "jquants",
-          receipt_digest: "sha256:" + "ee".repeat(32),
-          request_digest: "sha256:" + "cc".repeat(32),
-          structured_digest: objects.structured,
-          raw_manifest_digest: objects.rawDigest,
-        },
-      ],
-      [
-        {
-          operation_id: "op-1",
-          state: "FINALIZED",
-          environment: "production",
-          dataset: "equities_bars_daily",
-          segment_id: "2026-08",
-          source: "jquants",
-          receipt_digest: "sha256:" + "ee".repeat(32),
-        },
-      ],
-      new Map([["op-1", 2]]),
-      "production",
-      registry,
-      objects.stores,
-    );
-    expect(complete).toBe(true);
+    expect(await exactJqTrustedComplete(objects, jqEnvelope, registry, objects.stores)).toBe(true);
     expect(await trustedComplete(
       {
         status: "COMPLETE",
@@ -1114,12 +1204,6 @@ describe("ops projection cloud publisher", () => {
       registry,
     );
     expect(v2).toBe(false);
-    expect(await exactJqTrustedComplete(
-      objects,
-      jqEnvelope,
-      registry,
-      objects.stores,
-    )).toBe(true);
     expect(await exactJqTrustedComplete(
       objects,
       jqEnvelope,
@@ -1179,19 +1263,46 @@ describe("ops projection cloud publisher", () => {
       { ...objects.stores, raw: wrongRaw },
     )).toBe(false);
     expect(objects.rawDigest).not.toBe(objects.rawFileDigest);
-    const swapped = await signClaims({
-      ...jqClaims,
+    const swappedClaims = await canonicalV3Claims(objects, {
       extra_digests: {
-        ...jqClaims.extra_digests,
+        ...(jqClaims.extra_digests as Record<string, string>),
         acquisition_collection_manifest_file_digest: objects.rawDigest,
       },
     });
+    const swapped = await signV3Claims(pair, swappedClaims);
     expect(await exactJqTrustedComplete(
       objects,
       swapped,
       registry,
       objects.stores,
     )).toBe(false);
+
+    const missingClaims = { ...jqClaims };
+    delete missingClaims.natural_key_digest;
+    const missing = await signV3Claims(pair, missingClaims);
+    expect(await exactJqProjectedStatus(objects, missing, registry, objects.stores)).toBe("UNKNOWN");
+    const unknown = await signV3Claims(pair, { ...jqClaims, unexpected: "field" });
+    expect(await exactJqProjectedStatus(objects, unknown, registry, objects.stores)).toBe("UNKNOWN");
+    const naturalKeyChainTamper = await signV3Claims(pair, {
+      ...jqClaims,
+      natural_key_digest: "sha256:" + "97".repeat(32),
+    });
+    expect(await exactJqProjectedStatus(
+      objects,
+      naturalKeyChainTamper,
+      registry,
+      objects.stores,
+    )).toBe("UNKNOWN");
+    const brokenScope = await signV3Claims(pair, {
+      ...jqClaims,
+      scope_digest: "sha256:" + "99".repeat(32),
+    });
+    expect(await exactJqProjectedStatus(objects, brokenScope, registry, objects.stores)).toBe("UNKNOWN");
+    const brokenObservation = await signV3Claims(pair, {
+      ...jqClaims,
+      observation_digest: "sha256:" + "98".repeat(32),
+    });
+    expect(await exactJqProjectedStatus(objects, brokenObservation, registry, objects.stores)).toBe("UNKNOWN");
   });
 
   it("projects authentic ACTIVE-pinned signed JQ COMPLETE and keeps JSDA UNKNOWN without evidence", async () => {
@@ -1220,73 +1331,27 @@ describe("ops projection cloud publisher", () => {
       ],
     };
     const objects = await seedGovernedObjects();
-    const claims = {
-      source: "jquants",
-      contract_id: "jquants_premium_core",
-      dataset: "equities_bars_daily",
-      segment_id: "2026-08",
-      segment_start: "2026-08-01",
-      segment_end: "2026-08-31",
-      environment: "production",
-      coverage_policy_version: "collection-coverage/v3",
-      run_id: 1,
-      raw_page_count: 1,
-      raw_count: 2,
-      checked_at: "2026-08-01T00:00:00Z",
-      structured_digest: objects.structured,
-      raw_manifest_digest: objects.rawDigest,
-      artifact_byte_count: objects.artifactBytes,
-      manifest_byte_count: objects.manifestBytes,
-      raw_manifest_byte_count: objects.rawBytes,
-      pagination_exhausted: true,
-      discovery_exhausted: true,
-      structured_count: 2,
-      receipt_issue_digest: "sha256:" + "cc".repeat(32),
-      source_request_digest: "sha256:" + "ff".repeat(32),
-      artifact_key: "artifact.jsonl",
-      manifest_key: "manifest.json",
-      raw_manifest_key: "raw.json",
-      extra_digests: {
-        product_artifact_digest: objects.structured,
-        product_manifest_digest: objects.manifestDigest,
-        acquisition_collection_manifest_file_digest: objects.rawFileDigest,
-      },
-    };
-    const body = JSON.stringify(claims);
-    const signature = new Uint8Array(
-      await crypto.subtle.sign("Ed25519", pair.privateKey, new TextEncoder().encode(body)),
-    );
-    const bodyDigest = "sha256:" + Array.from(
-      new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body))),
-      (byte) => byte.toString(16).padStart(2, "0"),
-    ).join("");
-    const envelope = {
-      issuer_key_id: "receipt-test-v1",
-      environment: "production",
-      authority_instance_digest: registry.authority_instance_digest,
-      signed_body_b64: b64(new TextEncoder().encode(body)),
-      signature: `ed25519:${b64(signature)}`,
-      body_digest: bodyDigest,
-      structured_digest: claims.structured_digest,
-      raw_manifest_digest: claims.raw_manifest_digest,
-      extra_digests: claims.extra_digests,
-    };
+    const claims = await canonicalV3Claims(objects);
+    const envelope = await signV3Claims(pair, claims);
+    const receiptDigest = await canonicalJqReceiptDigest(envelope);
+    const expectedScopeJson = JSON.stringify(jqExpectedScope());
     source.prepare(
       `INSERT INTO coverage_segments(
          source,dataset,segment_id,policy_version,segment_start,segment_end,expected_scope,
          expected_items,status,receipt_run_id,evaluated_at,detail_json
        ) VALUES
-         ('jquants','equities_bars_daily','2026-08','collection-coverage/v3','2026-08-01','2026-08-31','day',1,'COMPLETE',1,'2026-08-01T00:00:00Z','{}'),
+         ('jquants','equities_bars_daily','2026-08','collection-coverage/v3','2026-08-01','2026-08-31',?,1,'COMPLETE',1,'2026-08-01T00:00:00Z','{}'),
          ('jsda','jsda_otc_bond_reference_prices','2026-08-01','collection-coverage/v3','2026-08-01','2026-08-01','official_archive_index_day',1,'COMPLETE',1,'2026-08-01T00:00:00Z','{}')`,
-    ).run();
+    ).run(expectedScopeJson);
     source.prepare(
       `INSERT INTO receipt_authority_operations(
          operation_id,request_digest,run_id,environment,source,contract_id,dataset,segment_id,
-         segment_start,segment_end,state,checked_at,updated_at,raw_manifest_digest
+         segment_start,segment_end,state,checked_at,updated_at,raw_manifest_key,
+         raw_manifest_digest,raw_page_count,raw_row_count,raw_bytes
        ) VALUES (
          'op-1','sha256:' || ?,1,'production','jquants','jquants_premium_core','equities_bars_daily','2026-08',
          '2026-08-01','2026-08-31','COLLECTING','2026-08-01T00:00:00Z','2026-08-01T00:00:00Z',
-         ?
+         'raw.json',?,1,2,2
        )`,
     ).run("cc".repeat(32), objects.rawDigest);
     source.prepare(
@@ -1320,70 +1385,34 @@ describe("ops projection cloud publisher", () => {
          observed_items,raw_page_count,raw_row_count,structured_row_count,pagination_exhausted,
          digests_json,run_id,status,error,checked_at
        ) VALUES (
-         'jquants','equities_bars_daily','2026-08','2026-08-01','2026-08-31','day',1,
-         2,1,2,2,1,?,1,'SUCCESS',NULL,'2026-08-01T00:00:00Z'
+         'jquants','equities_bars_daily','2026-08','2026-08-01','2026-08-31',?,1,
+         1,1,2,2,1,?,1,'SUCCESS',NULL,'2026-08-01T00:00:00Z'
        )`,
-    ).run(JSON.stringify(envelope));
+    ).run(expectedScopeJson, JSON.stringify(envelope));
     source.prepare(
       `UPDATE receipt_authority_operations
-          SET state='RECEIPT_COMMITTED', receipt_digest='sha256:' || ?
+          SET state='RECEIPT_COMMITTED', receipt_digest=?
         WHERE operation_id='op-1'`,
-    ).run("ee".repeat(32));
+    ).run(receiptDigest);
     source.prepare(
       `INSERT INTO receipt_authority_requests(
          operation_id,request_nonce,environment,source,contract_id,dataset,segment_id,state,
          receipt_digest,created_at,updated_at
        ) VALUES (
          'op-1',?,'production','jquants','jquants_premium_core','equities_bars_daily','2026-08','FINALIZED',
-         'sha256:' || ?,'2026-08-01T00:00:00Z','2026-08-01T00:00:00Z'
+         ?,'2026-08-01T00:00:00Z','2026-08-01T00:00:00Z'
        )`,
-    ).run("ab".repeat(32), "ee".repeat(32));
+    ).run("ab".repeat(32), receiptDigest);
     const keys = await keyPair();
     const env = await envFor(source, target, keys, { receiptRegistry: registry, bucket: objects.stores.structured, stores: objects.stores } as never);
     expect(await env.STRUCTURED_BUCKET!.get("artifact.jsonl")).toBeTruthy();
     expect(await env.AUTHORITY_EVIDENCE_BUCKET!.get("manifest.json")).toBeTruthy();
     expect(await env.RAW_BUCKET!.get("raw.json")).toBeTruthy();
-    expect(await trustedComplete(
-      {
-        status: "COMPLETE",
-        source: "jquants",
-        dataset: "equities_bars_daily",
-        segment_id: "2026-08",
-        segment_start: "2026-08-01",
-        segment_end: "2026-08-31",
-        policy_version: "collection-coverage/v3",
-        receipt_run_id: 1,
-      },
-      [{
-        source: "jquants", dataset: "equities_bars_daily", segment_id: "2026-08",
-        segment_start: "2026-08-01", segment_end: "2026-08-31",
-        status: "SUCCESS", run_id: 1, pagination_exhausted: 1,
-        structured_row_count: 2, raw_row_count: 2, raw_page_count: 1,
-        digests_json: JSON.stringify(envelope),
-      }],
-      [{
-        source: "jquants", run_id: 1, dataset: "equities_bars_daily", segment_id: "2026-08",
-        operation_id: "op-1", row_count: 2, raw_row_count: 2,
-        artifact_key: "artifact.jsonl", manifest_key: "manifest.json", raw_manifest_key: "raw.json",
-        artifact_digest: objects.structured, manifest_digest: objects.manifestDigest,
-        raw_manifest_digest: objects.rawDigest, byte_count: objects.artifactBytes,
-      }],
-      [{
-        run_id: 1, dataset: "equities_bars_daily", segment_id: "2026-08", environment: "production",
-        state: "RECEIPT_COMMITTED", operation_id: "op-1", source: "jquants",
-        receipt_digest: "sha256:" + "ee".repeat(32), request_digest: "sha256:" + "cc".repeat(32),
-        structured_digest: objects.structured, raw_manifest_digest: objects.rawDigest,
-      }],
-      [{
-        operation_id: "op-1", state: "FINALIZED", environment: "production",
-        dataset: "equities_bars_daily", segment_id: "2026-08", source: "jquants",
-        receipt_digest: "sha256:" + "ee".repeat(32),
-      }],
-      new Map([["op-1", 2]]),
-      "production",
-      registry,
-      { structured: env.STRUCTURED_BUCKET, authority: env.AUTHORITY_EVIDENCE_BUCKET, raw: env.RAW_BUCKET },
-    )).toBe(true);
+    expect(await exactJqTrustedComplete(objects, envelope, registry, {
+      structured: env.STRUCTURED_BUCKET,
+      authority: env.AUTHORITY_EVIDENCE_BUCKET,
+      raw: env.RAW_BUCKET,
+    })).toBe(true);
     const result = await publishOpsProjection(env);
     expect(result.status).toBe("published");
     const rows = target
@@ -1420,50 +1449,14 @@ describe("ops projection cloud publisher", () => {
         environment: "production",
       }],
     };
-    const claims = {
-      source: "jquants",
-      contract_id: "jquants_premium_core",
-      dataset: "equities_bars_daily",
-      segment_id: "2026-08",
+    const objects = await seedGovernedObjects();
+    const claims = await canonicalV3Claims(objects, {
       segment_start: "2026-08-07",
       segment_end: "2026-08-07",
-      environment: "production",
-      coverage_policy_version: "collection-coverage/v3",
       run_id: 7,
-      raw_page_count: 1,
-      raw_count: 2,
-      checked_at: "2026-08-01T00:00:00Z",
-      structured_digest: "sha256:" + "aa".repeat(32),
-      raw_manifest_digest: "sha256:" + "bb".repeat(32),
-      pagination_exhausted: true,
-      discovery_exhausted: true,
-      structured_count: 2,
-      receipt_issue_digest: "sha256:" + "cc".repeat(32),
-      source_request_digest: "sha256:" + "ff".repeat(32),
-      extra_digests: {
-        product_artifact_digest: "sha256:" + "aa".repeat(32),
-        product_manifest_digest: "sha256:" + "dd".repeat(32),
-      },
-    };
-    const body = JSON.stringify(claims);
-    const signature = new Uint8Array(
-      await crypto.subtle.sign("Ed25519", pair.privateKey, new TextEncoder().encode(body)),
-    );
-    const bodyDigest = "sha256:" + Array.from(
-      new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body))),
-      (byte) => byte.toString(16).padStart(2, "0"),
-    ).join("");
-    const envelope = {
-      issuer_key_id: "receipt-test-v1",
-      environment: "production",
-      authority_instance_digest: registry.authority_instance_digest,
-      signed_body_b64: b64(new TextEncoder().encode(body)),
-      signature: `ed25519:${b64(signature)}`,
-      body_digest: bodyDigest,
-      structured_digest: claims.structured_digest,
-      raw_manifest_digest: claims.raw_manifest_digest,
-      extra_digests: claims.extra_digests,
-    };
+      structured_generation: 7,
+    });
+    const envelope = await signV3Claims(pair, claims);
     const complete = await trustedComplete(
       {
         status: "COMPLETE",
@@ -1472,7 +1465,7 @@ describe("ops projection cloud publisher", () => {
         segment_id: "2026-08",
         segment_start: "2026-08-01",
         segment_end: "2026-08-31",
-        expected_scope: "day",
+        expected_scope: JSON.stringify(jqExpectedScope()),
         expected_items: 1,
         policy_version: "collection-coverage/v3",
         receipt_run_id: 99,
@@ -1483,9 +1476,11 @@ describe("ops projection cloud publisher", () => {
         segment_id: "2026-08",
         segment_start: "2026-08-01",
         segment_end: "2026-08-31",
-        expected_scope: "day",
+        expected_scope: JSON.stringify(jqExpectedScope()),
         expected_items: 1,
+        observed_items: 1,
         status: "SUCCESS",
+        error: null,
         run_id: 99,
         pagination_exhausted: 1,
         structured_row_count: 2,
@@ -1502,9 +1497,9 @@ describe("ops projection cloud publisher", () => {
         operation_id: "op-1",
         row_count: 2,
         raw_row_count: 2,
-        artifact_digest: "sha256:" + "aa".repeat(32),
-        manifest_digest: "sha256:" + "dd".repeat(32),
-        raw_manifest_digest: "sha256:" + "bb".repeat(32),
+        artifact_digest: objects.structured,
+        manifest_digest: objects.manifestDigest,
+        raw_manifest_digest: objects.rawDigest,
       }],
       [{
         run_id: 99,
@@ -1516,8 +1511,8 @@ describe("ops projection cloud publisher", () => {
         source: "jquants",
         receipt_digest: "sha256:" + "ee".repeat(32),
         request_digest: "sha256:" + "cc".repeat(32),
-        structured_digest: "sha256:" + "aa".repeat(32),
-        raw_manifest_digest: "sha256:" + "bb".repeat(32),
+        structured_digest: objects.structured,
+        raw_manifest_digest: objects.rawDigest,
       }],
       [{
         operation_id: "op-1",

@@ -825,17 +825,13 @@ export async function publishOpsProjection(
   if (present.has("receipt_authority_operations")) {
     await requireCap(source, "receipt_authority_operations");
   }
-  const operationColumns = present.has("receipt_authority_operations")
-    ? await tableColumns(source, "receipt_authority_operations")
-    : new Set<string>();
-  const operationSourceSql = operationColumns.has("source")
-    ? "source, contract_id, "
-    : "";
   const operations = present.has("receipt_authority_operations")
     ? await sourceAll<Record<string, unknown>>(
         source,
-        `SELECT operation_id, run_id, environment, ${operationSourceSql}dataset, segment_id, state,
-                receipt_digest, request_digest, structured_digest, raw_manifest_digest
+        `SELECT operation_id, run_id, environment, source, contract_id, dataset, segment_id,
+                segment_start, segment_end, state, receipt_digest, request_digest,
+                structured_manifest_key, structured_digest, raw_manifest_key,
+                raw_manifest_digest, raw_page_count, raw_row_count, raw_bytes
            FROM receipt_authority_operations
           ORDER BY dataset, segment_id, updated_at DESC, operation_id
           LIMIT ?`,
@@ -849,16 +845,11 @@ export async function publishOpsProjection(
   if (present.has("receipt_authority_requests")) {
     await requireCap(source, "receipt_authority_requests");
   }
-  const requestColumns = present.has("receipt_authority_requests")
-    ? await tableColumns(source, "receipt_authority_requests")
-    : new Set<string>();
-  const requestSourceSql = requestColumns.has("source")
-    ? "source, contract_id, "
-    : "";
   const requests = present.has("receipt_authority_requests")
     ? await sourceAll<Record<string, unknown>>(
         source,
-        `SELECT operation_id, environment, ${requestSourceSql}dataset, segment_id, state, receipt_digest
+        `SELECT operation_id, environment, source, contract_id, dataset, segment_id,
+                state, receipt_digest
            FROM receipt_authority_requests
           ORDER BY dataset, segment_id, updated_at DESC, operation_id
           LIMIT ?`,
