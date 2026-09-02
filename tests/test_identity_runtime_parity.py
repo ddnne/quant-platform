@@ -13,6 +13,8 @@ from pathlib import Path
 import sqlite3
 import subprocess
 
+import pytest
+
 from data_contracts.identity import available_at_for, canonical_json, natural_key
 
 
@@ -93,10 +95,18 @@ def test_python_and_worker_share_canonical_identity_and_availability_semantics()
       const items = JSON.parse(fs.readFileSync(0, 'utf8'));
       const out = [];
       for (const item of items) {{
-        out.push({{
-          key: await naturalKey(item.row, item.spec),
-          available_at: pickAvailableAt(item.row, item.spec, item.ingested),
-        }});
+        try {{
+          out.push({{
+            status: 'accepted',
+            key: await naturalKey(item.row, item.spec),
+            available_at: pickAvailableAt(item.row, item.spec, item.ingested),
+          }});
+        }} catch (error) {{
+          out.push({{
+            status: 'rejected',
+            error: error instanceof Error ? error.message : String(error),
+          }});
+        }}
       }}
       process.stdout.write(JSON.stringify(out));
     """
@@ -115,15 +125,30 @@ def test_python_and_worker_share_canonical_identity_and_availability_semantics()
         check=True,
     )
     worker_results = json.loads(completed.stdout)
-    python_results = [
-        {
-            "key": natural_key(row, dataset),
-            "available_at": available_at_for(row, dataset, ingested_at),
-        }
-        for dataset, row in vectors
-    ]
+    python_results = []
+    for dataset, row in vectors:
+        try:
+            python_results.append(
+                {
+                    "status": "accepted",
+                    "key": natural_key(row, dataset),
+                    "available_at": available_at_for(row, dataset, ingested_at),
+                }
+            )
+        except ValueError as error:
+            python_results.append(
+                {"status": "rejected", "error": str(error)}
+            )
     assert worker_results == python_results
-    assert python_results[-1]["key"].startswith("hash:sha256:")
+    assert python_results[-1] == {
+        "status": "rejected",
+        "error": (
+            "governed natural-key field S33 is absent; "
+            "structured product is rejected"
+        ),
+    }
+    with pytest.raises(ValueError, match="governed natural-key field S33"):
+        natural_key(vectors[-1][1], vectors[-1][0])
 
 
 def test_d1_0005_defers_identity_to_application_rebuild_without_mutating_live_rows():

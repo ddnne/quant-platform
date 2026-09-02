@@ -1,8 +1,7 @@
 """Contract-driven, cross-runtime row identity and PIT timestamps.
 
 The TypeScript mirror imports the same JSON contract.  ``canonical_json`` is
-defined to match JavaScript JSON number rendering and UTF-16 object-key order,
-which makes the SHA-256 fallback byte-identical in Python and Workers.
+defined to match JavaScript JSON number rendering and UTF-16 object-key order.
 
 Finite numbers follow ECMAScript ``JSON.stringify`` (ordinary fractions,
 negatives, ``-0``, the ``1e-6`` / ``1e21`` exponent thresholds, and integers
@@ -177,17 +176,22 @@ def _pick(
 
 
 def natural_key(row: Mapping[str, Any], dataset_id: str) -> str:
-    """Return the contract-selected natural key or SHA-256 row fallback.
+    """Return the complete contract-selected natural key.
 
-    Composite keys are all-or-nothing.  A missing discriminator uses the row
-    hash instead of a partial key that could collapse distinct observations.
+    Composite keys are all-or-nothing. A missing governed discriminator is a
+    malformed structured product and is rejected, matching the Worker ingest
+    authority. Hash fallback remains available only to ungoverned add-on
+    normalizers through :func:`sha256_fallback`.
     """
     contract = contract_for(dataset_id)
     picked: dict[str, Any] = {}
     for field in contract.natural_key_fields:
         value = _pick(row, contract, field)
         if value is None or value == "":
-            return sha256_fallback(row)
+            raise ValueError(
+                f"governed natural-key field {field} is absent; "
+                "structured product is rejected"
+            )
         picked[field] = value
     return canonical_json(picked)
 
