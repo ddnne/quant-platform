@@ -82,13 +82,13 @@ The input is closed:
 }
 ```
 
-`POST /v1/personal-snapshot-build` builds one bounded `personal-draft-history/v7`
+`POST /v1/personal-snapshot-build` builds one bounded `personal-draft-history/v8`
 SQLite on the Container's ephemeral disk, gzips it, and stores it immutably in
 R2 at `research/personal/snapshots/sha256=<raw-64-hex>.sqlite.gz`. The request is
 closed: `job_id`, `period_start`, `period_end`, and optional `lookback_sessions`
 (0-252). End dates must not be in the future and must fall inside a closed
 J-Quants calendar month (the governed acquisition RPC cannot serve the current
-month). Snapshot build is compact v7, one continuous object, with a maximum
+month). Snapshot build is compact v8, one continuous object, with a maximum
 span of 7,000 inclusive calendar days. Warmup `data_start` stays distinct from
 the evaluation period in the terminal manifest.
 `POST /v1/personal-research-batch` accepts 1..8 unique closed personal-research
@@ -123,7 +123,7 @@ Container activity window. Exact-four is also capped at 24
 actual backtests (four validation folds, one stress, and one holdout per
 candidate); financing sensitivity does not multiply that execution count. A
 single request is limited to 7,000 inclusive calendar days as one continuous
-compact v7 object. The cohort registry records the 2008/2016 data floors. The
+compact v8 object. The cohort registry records the 2008/2016 data floors. The
 subprocess limit
 leaves fifteen minutes for verified R2 input/output and the durable terminal
 manifest. The process exits immediately

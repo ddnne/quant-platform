@@ -19,7 +19,7 @@ gzip して手で upload する手順は使いません。curl 例は
 `topix_small2` / `topix_small` / `topix100` / `topix500` も執行判定カットオフで
 PIT 解決し、財務と交差します。既定 AM cohort は 11:30 の情報と当日 PM close を使います。
 
-スナップショットは compact v7、1 つの連続オブジェクト、最大 7,000 inclusive calendar days です。
+スナップショットは compact v8、1 つの連続オブジェクト、最大 7,000 inclusive calendar days です。
 圧縮 R2/HTTP は 4GiB 以下、展開 SQLite / builder は 5GiB 以下です。1 つの `standard-4`
 Container は snapshot/quality 準備を 1 回共有し、最大 4 つの strategy 子プロセスを走らせます。
 batch は最大 8 つの cohort/universe ジョブです。1 Container = 1 strategy ではありません。

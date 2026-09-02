@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 import gc
 import json
 from pathlib import Path
@@ -15,6 +16,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from jsonschema import Draft202012Validator
 
 from data_contracts.coverage import all_coverage_contracts, coverage_policy_binding
+from ops import d1_sync_signing as signing
 from ops import projection_signing
 from ops.projection_meta import build_projection_metadata
 from ops.projection_content import (
@@ -169,6 +171,7 @@ def _test_mirror_identity(
     source_cursor: object = 7,
     applied_cursor: object = 7,
     distinct_source_schema: bool = False,
+    exported_at: object = "2026-08-25T12:00:00+00:00",
 ):
     def identity(conn: sqlite3.Connection) -> dict[str, object]:
         marker = conn.execute(
@@ -201,6 +204,7 @@ def _test_mirror_identity(
             "table_counts": {
                 table: 0 for table in sync_script.DEFAULT_TABLES
             },
+            "exported_at": exported_at,
         }
 
     return identity
@@ -1564,24 +1568,16 @@ def test_authenticated_mirror_pins_one_snapshot_and_is_single_use(
     finally:
         writer.close()
 
-    observed = sync_script._consume_authenticated_applied_mirror(
-        handle,
-        lambda conn, identity: (
-            conn.execute("SELECT value FROM opaque_source_marker").fetchone()[0],
-            identity["source_content_digest"],
-        ),
+    identity = _identity_from_opaque_source(source)
+    assert identity["source_content_digest"] == sha256_digest(
+        {"opaque_source_marker": "original"}
     )
-    assert observed == (
-        "original",
-        sha256_digest({"opaque_source_marker": "original"}),
-    )
+    with pytest.raises(RuntimeError, match="PENDING full-source authority"):
+        _render_trusted_projection_bundle(handle)
     with sqlite3.connect(source, timeout=0) as writer:
         writer.execute("UPDATE opaque_source_marker SET value='after-consume'")
     with pytest.raises(RuntimeError, match="already consumed"):
-        sync_script._consume_authenticated_applied_mirror(
-            handle,
-            lambda _conn, _identity: pytest.fail("replayed source was consumed"),
-        )
+        _render_trusted_projection_bundle(handle)
 
 
 def test_authenticated_mirror_releases_writer_lock_after_consumer_error(
@@ -1597,13 +1593,8 @@ def test_authenticated_mirror_releases_writer_lock_after_consumer_error(
     )
     handle = sync_script.open_authenticated_applied_mirror(source)
 
-    def fail_consumer(_conn, _identity):
-        raise LookupError("consumer failed")
-
-    with pytest.raises(LookupError, match="consumer failed"):
-        sync_script._consume_authenticated_applied_mirror(
-            handle, fail_consumer
-        )
+    with pytest.raises(RuntimeError, match="PENDING full-source authority"):
+        _render_trusted_projection_bundle(handle)
     with sqlite3.connect(source, timeout=0) as writer:
         writer.execute("UPDATE opaque_source_marker SET value='unlocked'")
 
@@ -1687,15 +1678,11 @@ def test_authenticated_mirror_preserves_distinct_source_schema_identity(
         "_authenticated_applied_mirror_identity_from_conn",
         _test_mirror_identity(distinct_source_schema=True),
     )
+    identity = _identity_from_opaque_source(source, distinct_source_schema=True)
+    assert identity["source_schema_digest"] != identity["schema_digest"]
     handle = sync_script.open_authenticated_applied_mirror(source)
-    observed = sync_script._consume_authenticated_applied_mirror(
-        handle,
-        lambda _conn, identity: (
-            identity["source_schema_digest"],
-            identity["schema_digest"],
-        ),
-    )
-    assert observed[0] != observed[1]
+    with pytest.raises(RuntimeError, match="PENDING full-source authority"):
+        _render_trusted_projection_bundle(handle)
 
 
 def test_authenticated_mirror_rejects_path_replacement_before_consumer(
@@ -1716,16 +1703,10 @@ def test_authenticated_mirror_rejects_path_replacement_before_consumer(
     consumed: list[bool] = []
 
     with pytest.raises(RuntimeError, match="path was replaced"):
-        sync_script._consume_authenticated_applied_mirror(
-            handle,
-            lambda _conn, _identity: consumed.append(True),
-        )
+        _render_trusted_projection_bundle(handle)
     assert consumed == []
     with pytest.raises(RuntimeError, match="already consumed"):
-        sync_script._consume_authenticated_applied_mirror(
-            handle,
-            lambda _conn, _identity: None,
-        )
+        _render_trusted_projection_bundle(handle)
 
 
 @pytest.mark.parametrize(
@@ -1752,6 +1733,199 @@ def test_authenticated_mirror_rejects_null_or_mismatched_cursor_at_open(
         _test_mirror_identity(
             source_cursor=source_cursor,
             applied_cursor=applied_cursor,
+        ),
+    )
+    with pytest.raises(ValueError, match="authenticated current D1 export"):
+        sync_script.open_authenticated_applied_mirror(source)
+
+
+def _identity_from_opaque_source(path: Path, **identity_kwargs) -> dict[str, object]:
+    with sqlite3.connect(path) as conn:
+        return _test_mirror_identity(**identity_kwargs)(conn)
+
+
+def test_authenticated_mirror_identity_binds_canonical_exported_at(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    exported_at = "2026-08-25T12:00:00+00:00"
+    monkeypatch.setattr(
+        sync_script,
+        "_authenticated_applied_mirror_identity_from_conn",
+        _test_mirror_identity(exported_at=exported_at),
+    )
+    identity = _identity_from_opaque_source(source, exported_at=exported_at)
+    canonical = json.loads(
+        sync_script._canonical_applied_mirror_identity_json(identity)
+    )
+    assert canonical["exported_at"] == exported_at
+    assert set(canonical) == sync_script._APPLIED_MIRROR_IDENTITY_FIELDS
+    handle = sync_script.open_authenticated_applied_mirror(source)
+    with pytest.raises(RuntimeError, match="PENDING full-source authority"):
+        _render_trusted_projection_bundle(handle)
+    assert identity["exported_at"] == exported_at
+    assert identity["source_change_seq"] == identity["applied_change_seq"] == 7
+    assert identity["export_digest"] == canonical["export_digest"]
+    assert identity["audit_digest"] == canonical["audit_digest"]
+    assert identity["schema_digest"] == canonical["schema_digest"]
+    assert identity["table_counts"] == canonical["table_counts"]
+
+
+def test_canonical_applied_mirror_identity_rejects_missing_exported_at(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    identity = _identity_from_opaque_source(source)
+    del identity["exported_at"]
+    with pytest.raises(ValueError, match="identity is not closed"):
+        sync_script._canonical_applied_mirror_identity_json(identity)
+
+
+@pytest.mark.parametrize(
+    ("exported_at", "match"),
+    [
+        ("2026-08-25T12:00:00+00:00X", "exported_at is invalid"),
+        ("2026-08-25T12:00:00+00:00 ", "exported_at is invalid"),
+        ("not-an-export-time", "exported_at is invalid"),
+        ("2026-08-25T12:00:00Z", "exported_at is not canonical"),
+        ("2026-08-25T12:00:00", "exported_at is not canonical"),
+        ("2026-08-25T21:00:00+09:00", "exported_at is not canonical"),
+        ("2026-08-25T12:00:00.000000+00:00", "exported_at is not canonical"),
+    ],
+)
+def test_canonical_applied_mirror_identity_rejects_tampered_or_noncanonical_exported_at(
+    tmp_path: Path,
+    exported_at: object,
+    match: str,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    identity = _identity_from_opaque_source(source, exported_at=exported_at)
+    with pytest.raises(ValueError, match=match):
+        sync_script._canonical_applied_mirror_identity_json(identity)
+
+
+def test_canonical_applied_mirror_identity_rejects_future_exported_at(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    exported_at = (
+        now
+        + timedelta(seconds=signing.D1_SYNC_AUDIT_MAX_FUTURE_SKEW_SECONDS + 1)
+    ).isoformat()
+    identity = _identity_from_opaque_source(source, exported_at=exported_at)
+    with pytest.raises(ValueError, match="exported_at is in the future"):
+        sync_script._canonical_applied_mirror_identity_json(identity)
+
+
+@pytest.mark.parametrize(
+    "exported_at",
+    [
+        None,
+        "2026-08-25T12:00:00+00:00X",
+        "2026-08-25T12:00:00Z",
+        "2026-08-25T12:00:00",
+        "2026-08-25T21:00:00+09:00",
+    ],
+)
+def test_authenticated_mirror_rejects_missing_tampered_or_noncanonical_exported_at_at_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    exported_at: object,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    if exported_at is None:
+        def identity(conn: sqlite3.Connection) -> dict[str, object]:
+            value = _test_mirror_identity()(conn)
+            del value["exported_at"]
+            return value
+    else:
+        identity = _test_mirror_identity(exported_at=exported_at)
+    monkeypatch.setattr(
+        sync_script,
+        "_authenticated_applied_mirror_identity_from_conn",
+        identity,
+    )
+    with pytest.raises(ValueError, match="authenticated current D1 export"):
+        sync_script.open_authenticated_applied_mirror(source)
+
+
+def test_authenticated_mirror_rejects_future_exported_at_at_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    exported_at = (
+        now
+        + timedelta(seconds=signing.D1_SYNC_AUDIT_MAX_FUTURE_SKEW_SECONDS + 1)
+    ).isoformat()
+    monkeypatch.setattr(
+        sync_script,
+        "_authenticated_applied_mirror_identity_from_conn",
+        _test_mirror_identity(exported_at=exported_at),
+    )
+    with pytest.raises(ValueError, match="authenticated current D1 export"):
+        sync_script.open_authenticated_applied_mirror(source)
+
+
+def test_freeze_authenticated_sync_identity_binds_canonical_exported_at(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    identity = _identity_from_opaque_source(source)
+    frozen = MappingProxyType(
+        {
+            **identity,
+            "table_counts": MappingProxyType(identity["table_counts"]),
+        }
+    )
+    copied = exporter._freeze_authenticated_sync_identity(frozen)
+    assert copied["exported_at"] == identity["exported_at"]
+    assert set(copied) == exporter._SYNC_IDENTITY_FIELDS
+
+
+def test_freeze_authenticated_sync_identity_rejects_missing_exported_at(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    identity = _identity_from_opaque_source(source)
+    del identity["exported_at"]
+    frozen = MappingProxyType(
+        {
+            **identity,
+            "table_counts": MappingProxyType(identity["table_counts"]),
+        }
+    )
+    with pytest.raises(RuntimeError, match="not authority-frozen"):
+        exporter._freeze_authenticated_sync_identity(frozen)
+
+
+def test_authenticated_mirror_exported_at_does_not_relax_cursor_equality(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    monkeypatch.setattr(
+        sync_script,
+        "_authenticated_applied_mirror_identity_from_conn",
+        _test_mirror_identity(
+            source_cursor=7,
+            applied_cursor=6,
+            exported_at="2026-08-25T12:00:00+00:00",
         ),
     )
     with pytest.raises(ValueError, match="authenticated current D1 export"):
@@ -1838,7 +2012,7 @@ def test_publisher_has_no_public_evidence_or_signer_override(
 
 
 def test_remote_probe_uses_pinned_ops_wrangler_and_withholds_output(
-    monkeypatch: pytest.MonkeyPatch, capsys
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
     secret = "provider-secret-must-not-appear"
     calls = []
@@ -1847,13 +2021,21 @@ def test_remote_probe_uses_pinned_ops_wrangler_and_withholds_output(
         calls.append((argv, kwargs))
         return SimpleNamespace(returncode=1, stdout=secret, stderr=secret)
 
+    wr = tmp_path / "wrangler"
+    wr.write_text("")
+    wr.chmod(0o755)
+    monkeypatch.setattr(
+        publisher,
+        "_validated_ops_wrangler",
+        lambda: (str(wr), publisher.OPS_WRANGLER_CONFIG),
+    )
     monkeypatch.setattr(publisher.subprocess, "run", fail)
     assert publisher.count_remote_complete() is None
     captured = capsys.readouterr()
     assert secret not in captured.out
     assert secret not in captured.err
     argv, kwargs = calls[0]
-    assert argv[0] == str(publisher.OPS_WRANGLER_BIN.resolve())
+    assert argv[0] == str(wr)
     assert "npx" not in argv
     assert argv[1:4] == ["d1", "execute", "quant-ops-projection"]
     assert argv[argv.index("--env") + 1] == "production"
@@ -1895,8 +2077,19 @@ def test_remote_probe_uses_pinned_ops_wrangler_and_withholds_output(
     ],
 )
 def test_remote_active_cursor_requires_exact_chain(
-    monkeypatch: pytest.MonkeyPatch, row: dict[str, object], expected: int | None
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    row: dict[str, object],
+    expected: int | None,
 ) -> None:
+    wr = tmp_path / "wrangler"
+    wr.write_text("")
+    wr.chmod(0o755)
+    monkeypatch.setattr(
+        publisher,
+        "_validated_ops_wrangler",
+        lambda: (str(wr), publisher.OPS_WRANGLER_CONFIG),
+    )
     monkeypatch.setattr(
         publisher.subprocess,
         "run",

@@ -27,9 +27,15 @@ from personal_history_compact_support import (
 )
 from research.factor_cohorts import get_research_cohort, is_am_pm_factor_cohort
 from research.personal_base_sleeve import (
+    AM_PM_BASE_SLEEVE_ID,
     EXPECTED_BASE_COHORT_DIGEST,
     EXPECTED_BASE_STRATEGY_SPEC_DIGEST,
+    PERSONAL_BASE_SLEEVE_AM_PM_ARTIFACT_SCHEMA,
+    PERSONAL_BASE_SLEEVE_RANKING_ROLE,
+    PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA,
+    PERSONAL_BASE_SLEEVE_ROLE,
 )
+from test_personal_base_sleeve_am_pm import _build as _build_am_sleeve
 from research.personal_universe import (
     personal_research_universe_decision_cutoff,
     personal_research_universe_rule_digest,
@@ -87,7 +93,7 @@ def _job(
     job_id: str = "exact-four-test",
     *,
     compressed: bool = False,
-    cohort_id: str = "diverse-core-v1",
+    cohort_id: str = "diverse-core-am-pm-v1",
     universe_id: str = "topix_all",
     cohort_digest: str | None = None,
     universe_rule_digest: str | None = None,
@@ -206,6 +212,70 @@ def _runner_summary(
         "live_orders_enabled": False,
         "automatic_promotion": False,
     }
+
+
+def _artifact(member: str):
+    return SimpleNamespace(archive_member=member)
+
+
+def _direct_run_from_summary(
+    summary: dict[str, object],
+    output: Path,
+    *,
+    exit_code: int = 0,
+):
+    reports = output / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    if not (reports / "report.json").exists():
+        (reports / "report.json").write_text('{"ok":true}', encoding="utf-8")
+    if not (reports / "report.md").exists():
+        (reports / "report.md").write_text("# report", encoding="utf-8")
+    snapshots = output / "snapshots"
+    snapshots.mkdir(parents=True, exist_ok=True)
+    (snapshots / "generated.sqlite").write_bytes(b"large-copy")
+    (snapshots / "generated.manifest.json").write_text(
+        '{"snapshot":true}', encoding="utf-8"
+    )
+    return SimpleNamespace(
+        report_id=summary["report_id"],
+        report_json=_artifact("reports/report.json"),
+        report_markdown=_artifact("reports/report.md"),
+        snapshot=SimpleNamespace(
+            snapshot_id=summary["snapshot_id"],
+            logical_data_snapshot_id=summary["logical_data_snapshot_id"],
+        ),
+        candidate_count=summary["candidate_count"],
+        evaluated_count=summary["evaluated_count"],
+        hold_count=summary["hold_count"],
+        unexpected_errors=summary["unexpected_errors"],
+        cohort_id=summary["cohort_id"],
+        cohort_digest=summary["cohort_digest"],
+        universe_id=summary["universe_id"],
+        universe_rule_digest=summary["universe_rule_digest"],
+        execution_mode=summary.get(
+            "execution_mode",
+            service._personal_cohort_identity(str(summary["cohort_id"]))[
+                "execution_mode"
+            ],
+        ),
+        execution_contract_digest=summary.get(
+            "execution_contract_digest",
+            service._personal_cohort_identity(str(summary["cohort_id"])).get(
+                "execution_contract_digest"
+            ),
+        ),
+        base_sleeve_artifact=summary.get("base_sleeve_artifact"),
+        non_candidate_source_backtest_count=summary.get(
+            "non_candidate_source_backtest_count", 0
+        ),
+        go=summary.get("go", False),
+        ready_snapshot_declared=summary.get("ready_snapshot_declared", False),
+        live_orders_enabled=summary.get("live_orders_enabled", False),
+        automatic_promotion=summary.get("automatic_promotion", False),
+        model_calls=summary.get("model_calls", 0),
+        estimated_ai_cost_usd=summary.get("estimated_ai_cost_usd", 0.0),
+        exit_code=exit_code,
+    )
 
 
 def _base_sleeve_document(spec) -> dict[str, object]:
@@ -330,6 +400,58 @@ def _write_base_sleeve_output(output: Path, spec) -> dict[str, object]:
     return summary
 
 
+def _write_am_pm_base_sleeve_output(output: Path, spec) -> dict[str, object]:
+    (output / "reports").mkdir(parents=True, exist_ok=True)
+    (output / "paper").mkdir(exist_ok=True)
+    (output / "risk").mkdir(exist_ok=True)
+    (output / "base-sleeve").mkdir(exist_ok=True)
+    (output / "reports" / "report.json").write_text('{"ok":true}')
+    (output / "reports" / "report.md").write_text("# report")
+    (output / "paper" / "base.json").write_text('{"paper":true}')
+    (output / "risk" / "base.json").write_text('{"risk":true}')
+    summary = _runner_summary(spec)
+    document = _build_am_sleeve()
+    document["universe"]["universe_rule_digest"] = spec.universe_rule_digest
+    document["snapshot"]["snapshot_id"] = summary["snapshot_id"]
+    document["snapshot"]["logical_data_snapshot_id"] = summary[
+        "logical_data_snapshot_id"
+    ]
+    artifact_bytes = json.dumps(
+        document,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    artifact_sha = hashlib.sha256(artifact_bytes).hexdigest()
+    archive_member = f"base-sleeve/{artifact_sha}.json"
+    artifact_path = output / archive_member
+    artifact_path.write_bytes(artifact_bytes)
+    summary.update(
+        {
+            "report_json": str(output / "reports" / "report.json"),
+            "report_markdown": str(output / "reports" / "report.md"),
+            "base_sleeve_artifact": {
+                "schema_version": PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA,
+                "artifact_schema_version": PERSONAL_BASE_SLEEVE_AM_PM_ARTIFACT_SCHEMA,
+                "path": str(artifact_path),
+                "archive_member": archive_member,
+                "sha256": f"sha256:{artifact_sha}",
+                "strategy_id": AM_PM_BASE_SLEEVE_ID,
+                "cohort_id": spec.cohort_id,
+                "universe_id": "topix_all",
+                "role": PERSONAL_BASE_SLEEVE_ROLE,
+                "ranking_role": PERSONAL_BASE_SLEEVE_RANKING_ROLE,
+                "candidate_count_contribution": 0,
+            },
+            "non_candidate_source_backtest_count": 1,
+            "execution_mode": "am_signal_pm_close",
+            "execution_contract_digest": AM_EXECUTION_CONTRACT_DIGEST,
+        }
+    )
+    return summary
+
+
 def test_snapshot_digest_mismatch_is_a_durable_failure(tmp_path: Path) -> None:
     expected = "a" * 64
     spec = _job(expected)
@@ -343,7 +465,6 @@ def test_snapshot_digest_mismatch_is_a_durable_failure(tmp_path: Path) -> None:
     manifest = service.execute_job(
         spec,
         work_root=work,
-        command=(sys.executable, "unused.py"),
         downloader=wrong_snapshot,
         uploader=_uploader(uploads),
     )
@@ -592,27 +713,56 @@ def test_runner_timeout_is_failed_and_workspace_is_removed(
     source = tmp_path / "fixture.sqlite"
     sha = _sqlite(source)
     spec = _job(sha)
-    script = tmp_path / "slow.py"
-    script.write_text("import time; time.sleep(5)\n", encoding="utf-8")
     work = tmp_path / "work"
     work.mkdir()
-    uploads: list[tuple[str, bytes, str]] = []
+    writes: list[str] = []
+    ticks = {"t": 0.0}
+
+    def clock() -> float:
+        return ticks["t"]
 
     def copy_snapshot(_spec, destination):
         destination.write_bytes(source.read_bytes())
 
+    def stepped_run(self, request):
+        from pit.cooperative_deadline import DeadlineExceeded, install_deadline
+
+        del self
+        with install_deadline(request.deadline):
+            request.data_view.write_artifact(
+                category="reports", suffix="txt", payload=b"before"
+            )
+            writes.append("before")
+            ticks["t"] = 10.0
+            try:
+                request.data_view.write_artifact(
+                    category="reports", suffix="txt", payload=b"after"
+                )
+                writes.append("after")
+            except DeadlineExceeded:
+                pass
+            raise DeadlineExceeded("personal research deadline cancelled")
+
+    monkeypatch.setattr(
+        "research.personal_service.PersonalResearchService.run", stepped_run
+    )
     monkeypatch.setenv("QP_REPO_ROOT", str(tmp_path))
+    from pit.cooperative_deadline import CooperativeDeadline
+
+    deadline = CooperativeDeadline(deadline_monotonic=5.0, clock=clock)
     manifest = service.execute_job(
         spec,
         work_root=work,
-        command=(sys.executable, str(script)),
-        timeout_seconds=0.05,
+        timeout_seconds=0.01,
         downloader=copy_snapshot,
-        uploader=_uploader(uploads),
+        uploader=_uploader([]),
+        deadline=deadline,
+        clock=clock,
     )
 
     assert manifest["status"] == "FAILED"
-    assert "0.05-second limit" in manifest["error"]
+    assert "limit" in manifest["error"]
+    assert writes == ["before"]
     assert not tuple(work.iterdir())
 
 
@@ -622,84 +772,32 @@ def test_default_timeout_keeps_room_for_durable_terminal_evidence() -> None:
     assert service.DEFAULT_TIMEOUT_SECONDS < service.MAX_JOB_LIFETIME_SECONDS
 
 
-def test_research_process_timeout_kills_the_entire_new_process_group(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[object] = []
-
-    class FakeProcess:
-        pid = 4321
-        returncode = -9
-
-        def communicate(self, timeout=None):
-            calls.append(("communicate", timeout))
-            if timeout is not None:
-                raise service.subprocess.TimeoutExpired(["qp-research"], timeout)
-            return "bounded stdout", "bounded stderr"
-
-    def fake_popen(args, **kwargs):
-        calls.append(("popen", tuple(args), kwargs))
-        return FakeProcess()
-
-    monkeypatch.setattr(service.subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(
-        service.os,
-        "killpg",
-        lambda process_group, used_signal: calls.append(
-            ("killpg", process_group, used_signal)
-        ),
-    )
-
-    with pytest.raises(service.subprocess.TimeoutExpired) as raised:
-        service._run_research_process(
-            ("qp-research",),
-            cwd="/app",
-            env={"PYTHONUNBUFFERED": "1"},
-            timeout=0.25,
+def test_direct_research_timeout_is_enforced_without_a_child_command() -> None:
+    assert not hasattr(service, "_run_research_process")
+    with pytest.raises(TypeError, match="command"):
+        service.execute_job(  # type: ignore[call-arg]
+            _job("a" * 64),
+            work_root=Path("/tmp"),
+            command=("qp-research",),
         )
 
-    popen = next(call for call in calls if call[0] == "popen")
-    assert popen[2]["start_new_session"] is True
-    assert ("killpg", 4321, service.signal.SIGKILL) in calls
-    assert ("communicate", None) in calls
-    assert raised.value.output == "bounded stdout"
-    assert raised.value.stderr == "bounded stderr"
 
-
-def test_execute_job_passes_local_market_data_opt_in_to_child_only(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_default_runner_does_not_read_qp_research_command(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = tmp_path / "fixture.sqlite"
-    sha = _sqlite(source)
-    spec = _job(sha)
-    seen_env: list[dict[str, str]] = []
+    monkeypatch.setenv("QP_RESEARCH_COMMAND", "/tmp/should-not-run")
+    seen: list[object] = []
 
-    def capture_env(args, **kwargs):
-        del args
-        seen_env.append(kwargs["env"])
-        raise RuntimeError("stop after capturing child env")
+    def fake_execute(spec, **kwargs):
+        seen.append((spec, kwargs))
+        return {"status": "COMPLETED"}
 
-    monkeypatch.delenv("QP_ALLOW_LOCAL_MARKET_DATA", raising=False)
-    monkeypatch.setattr(service, "_run_research_process", capture_env)
-    work = tmp_path / "work"
-    work.mkdir()
-    uploads: list[tuple[str, bytes, str]] = []
-
-    def copy_snapshot(_spec, destination):
-        destination.write_bytes(source.read_bytes())
-
-    manifest = service.execute_job(
-        spec,
-        work_root=work,
-        command=(sys.executable, "unused.py"),
-        downloader=copy_snapshot,
-        uploader=_uploader(uploads),
-    )
-
-    assert seen_env
-    assert seen_env[0]["QP_ALLOW_LOCAL_MARKET_DATA"] == "1"
-    assert os.environ.get("QP_ALLOW_LOCAL_MARKET_DATA") is None
-    assert manifest["status"] == "FAILED"
+    monkeypatch.setattr(service, "execute_job", fake_execute)
+    result = service.default_runner(_job("a" * 64), work_root=Path("/tmp"))
+    assert result["status"] == "COMPLETED"
+    assert seen
+    assert "command" not in seen[0][1]
+    assert os.environ.get("QP_RESEARCH_COMMAND") == "/tmp/should-not-run"
 
 
 def _redigest(spec):
@@ -710,8 +808,8 @@ def test_job_spec_accepts_long_short_on_a_broad_universe() -> None:
     spec = _redigest(
         replace(
             _job("a" * 64),
-            cohort_id="sector-relative-ls-v1",
-            cohort_digest=LONG_SHORT_COHORT_DIGEST,
+            cohort_id="sector-relative-ls-am-pm-v1",
+            cohort_digest=AM_LONG_SHORT_COHORT_DIGEST,
         )
     )
 
@@ -743,8 +841,8 @@ def test_job_spec_rejects_long_short_on_a_compact_universe() -> None:
     spec = _redigest(
         replace(
             _job("a" * 64),
-            cohort_id="sector-relative-ls-v1",
-            cohort_digest=LONG_SHORT_COHORT_DIGEST,
+            cohort_id="sector-relative-ls-am-pm-v1",
+            cohort_digest=AM_LONG_SHORT_COHORT_DIGEST,
             universe_id="topix_core30",
         )
     )
@@ -761,11 +859,16 @@ def test_python_container_defaults_to_am_diverse_and_allows_am_ids() -> None:
         "diverse-core-am-pm-v1",
         "compact-market-diverse-am-pm-v1",
         "sector-relative-ls-am-pm-v1",
+    ):
+        assert cohort_id in service.PERSONAL_EXECUTABLE_COHORT_IDS
+    for cohort_id in (
         "diverse-core-v1",
         "sector-relative-ls-v1",
         "compact-market-diverse-v1",
     ):
-        assert cohort_id in service.PERSONAL_EXECUTABLE_COHORT_IDS
+        assert cohort_id not in service.PERSONAL_EXECUTABLE_COHORT_IDS
+        with pytest.raises(service.JobInputError, match="OfflineFixture DRAFT-only"):
+            replace(_job("a" * 64), cohort_id=cohort_id).validate()
     am = _job("a" * 64, cohort_id="diverse-core-am-pm-v1")
     am.validate()
     compact = _job(
@@ -789,46 +892,16 @@ def test_success_archive_excludes_generated_sqlite_and_manifest_is_closed(
     source = tmp_path / "fixture.sqlite"
     sha = _sqlite(source)
     spec = _job(sha)
-    script = tmp_path / "fake_research.py"
-    script.write_text(
-        """
-import json
-import pathlib
-import sys
-out = pathlib.Path(sys.argv[sys.argv.index('--output') + 1])
-(out / 'reports').mkdir(parents=True)
-(out / 'snapshots').mkdir(parents=True)
-(out / 'reports' / 'report.json').write_text('{\"ok\":true}')
-(out / 'reports' / 'report.md').write_text('# report')
-(out / 'snapshots' / 'generated.sqlite').write_bytes(b'large-copy')
-(out / 'snapshots' / 'generated.manifest.json').write_text('{\"snapshot\":true}')
-print(json.dumps({
-  'cohort_id': sys.argv[sys.argv.index('--cohort') + 1],
-  'cohort_digest': 'sha256:ea37baf3423e5d84e61d4c80c59bdfe8184342dd3dee28646bd339cd45085a84',
-  'universe_id': sys.argv[sys.argv.index('--universe') + 1],
-  'universe_rule_digest': 'sha256:7b88c89520a7cf751e7b63f160c16130183dba3c7c7e9c3a56660f3149c2c048',
-  'report_id': 'sha256:' + '1' * 64,
-  'report_json': str(out / 'reports' / 'report.json'),
-  'report_markdown': str(out / 'reports' / 'report.md'),
-  'snapshot_id': 'sha256:' + '2' * 64,
-  'logical_data_snapshot_id': 'sha256:' + '3' * 64,
-  'candidate_count': 4,
-  'evaluated_count': 4,
-  'hold_count': 0,
-  'unexpected_errors': 0,
-  'base_sleeve_artifact': None,
-  'non_candidate_source_backtest_count': 0,
-  'model_calls': 0,
-  'estimated_ai_cost_usd': 0.0,
-  'go': False,
-  'ready_snapshot_declared': False,
-  'live_orders_enabled': False,
-  'automatic_promotion': False,
-}))
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
+
+    def fake_success(_spec, *, database, output, timeout_seconds):
+        del _spec, database, timeout_seconds
+        summary = _runner_summary(spec, evaluated_count=4, hold_count=0)
+        identity = service._personal_cohort_identity(spec.cohort_id)
+        summary["execution_mode"] = identity["execution_mode"]
+        summary["execution_contract_digest"] = identity["execution_contract_digest"]
+        return _direct_run_from_summary(summary, output)
+
+    monkeypatch.setattr(service, "_run_direct_research", fake_success)
     work = tmp_path / "work"
     work.mkdir()
     uploads: list[tuple[str, bytes, str]] = []
@@ -840,7 +913,6 @@ print(json.dumps({
     manifest = service.execute_job(
         spec,
         work_root=work,
-        command=(sys.executable, str(script)),
         downloader=copy_snapshot,
         uploader=_uploader(uploads),
     )
@@ -849,12 +921,10 @@ print(json.dumps({
     assert manifest["candidate_count"] == 4
     assert manifest["evaluated_count"] == 4
     assert manifest["hold_count"] == 0
-    assert manifest["cohort_id"] == "diverse-core-v1"
-    assert manifest["cohort_digest"] == COHORT_DIGEST
+    assert manifest["cohort_id"] == spec.cohort_id
+    assert manifest["cohort_digest"] == spec.cohort_digest
     assert manifest["universe_id"] == "topix_all"
-    assert manifest["universe_rule_digest"] == (
-        "sha256:7b88c89520a7cf751e7b63f160c16130183dba3c7c7e9c3a56660f3149c2c048"
-    )
+    assert manifest["universe_rule_digest"] == spec.universe_rule_digest
     assert manifest["model_calls"] == 0
     assert manifest["go"] is False
     assert manifest["ready_snapshot_declared"] is False
@@ -883,12 +953,12 @@ def test_base_sleeve_reference_is_independent_of_candidate_evaluation_count(
     spec = _redigest(
         replace(
             _job(sha, job_id="base-sleeve-independent"),
-            cohort_id="sector-relative-ls-v1",
-            cohort_digest=LONG_SHORT_COHORT_DIGEST,
+            cohort_id="sector-relative-ls-am-pm-v1",
+            cohort_digest=AM_LONG_SHORT_COHORT_DIGEST,
         )
     )
     output = tmp_path / "output"
-    summary = _write_base_sleeve_output(output, spec)
+    summary = _write_am_pm_base_sleeve_output(output, spec)
     summary["evaluated_count"] = 1
 
     reference = service._validated_base_sleeve_reference(
@@ -909,8 +979,8 @@ def test_evaluated_long_short_result_requires_base_sleeve_source(
     spec = _redigest(
         replace(
             _job(sha, job_id="base-sleeve-required"),
-            cohort_id="sector-relative-ls-v1",
-            cohort_digest=LONG_SHORT_COHORT_DIGEST,
+            cohort_id="sector-relative-ls-am-pm-v1",
+            cohort_digest=AM_LONG_SHORT_COHORT_DIGEST,
         )
     )
     output = tmp_path / "output"
@@ -943,24 +1013,17 @@ def test_long_short_archive_validates_and_preserves_non_candidate_base_source(
     spec = _redigest(
         replace(
             _job(sha, job_id="base-sleeve-source"),
-            cohort_id="sector-relative-ls-v1",
-            cohort_digest=LONG_SHORT_COHORT_DIGEST,
+            cohort_id="sector-relative-ls-am-pm-v1",
+            cohort_digest=AM_LONG_SHORT_COHORT_DIGEST,
         )
     )
 
-    def completed_source_run(args, **kwargs):
-        assert {
-            key: kwargs["env"][key] for key in service._SINGLE_THREAD_NUMERIC_ENV
-        } == service._SINGLE_THREAD_NUMERIC_ENV
-        output = Path(args[args.index("--output") + 1])
-        summary = _write_base_sleeve_output(output, spec)
-        return SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps(summary, sort_keys=True) + "\n",
-            stderr="",
-        )
+    def completed_source_run(_spec, *, database, output, timeout_seconds):
+        del _spec, database, timeout_seconds
+        summary = _write_am_pm_base_sleeve_output(output, spec)
+        return _direct_run_from_summary(summary, output)
 
-    monkeypatch.setattr(service, "_run_research_process", completed_source_run)
+    monkeypatch.setattr(service, "_run_direct_research", completed_source_run)
     work = tmp_path / "work"
     work.mkdir()
     uploads: list[tuple[str, bytes, str]] = []
@@ -971,7 +1034,6 @@ def test_long_short_archive_validates_and_preserves_non_candidate_base_source(
     manifest = service.execute_job(
         spec,
         work_root=work,
-        command=(sys.executable, "unused.py"),
         downloader=copy_snapshot,
         uploader=_uploader(uploads),
     )
@@ -1069,18 +1131,14 @@ def test_am_execute_job_rejects_tampered_child_execution_mode(
         cohort_id="sector-relative-ls-am-pm-v1",
     )
 
-    def completed_source_run(args, **kwargs):
-        output = Path(args[args.index("--output") + 1])
+    def completed_source_run(_spec, *, database, output, timeout_seconds):
+        del _spec, database, timeout_seconds
         summary = _write_base_sleeve_output(output, spec)
         summary["execution_mode"] = "next_close"
         summary["execution_contract_digest"] = "sha256:" + "c" * 64
-        return SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps(summary, sort_keys=True) + "\n",
-            stderr="",
-        )
+        return _direct_run_from_summary(summary, output)
 
-    monkeypatch.setattr(service, "_run_research_process", completed_source_run)
+    monkeypatch.setattr(service, "_run_direct_research", completed_source_run)
     work = tmp_path / "work"
     work.mkdir()
 
@@ -1090,7 +1148,6 @@ def test_am_execute_job_rejects_tampered_child_execution_mode(
     manifest = service.execute_job(
         spec,
         work_root=work,
-        command=(sys.executable, "unused.py"),
         downloader=copy_snapshot,
         uploader=_uploader([]),
     )
@@ -1116,7 +1173,7 @@ def _am_cli_summary(spec, output: Path, *, universe_rule_digest: str) -> dict[st
 def test_am_topix_all_cli_report_digest_uses_morning_cutoff(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
-    from research import personal_cli
+    from cf_platform import personal_offline_cli as personal_cli
 
     morning = personal_research_universe_rule_digest("topix_all", am_pm=True)
     session = personal_research_universe_rule_digest("topix_all", am_pm=False)
@@ -1220,54 +1277,43 @@ def test_am_topix_all_cli_report_digest_uses_morning_cutoff(
     def copy_snapshot(_spec, destination):
         destination.write_bytes(source.read_bytes())
 
-    def run_matching(args, **kwargs):
-        del kwargs
-        output = Path(args[args.index("--output") + 1])
+    def run_matching(_spec, *, database, output, timeout_seconds):
+        del _spec, database, timeout_seconds
         summary = _am_cli_summary(spec, output, universe_rule_digest=morning)
-        return SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps(summary, sort_keys=True) + "\n",
-            stderr="",
-        )
+        return _direct_run_from_summary(summary, output)
 
-    monkeypatch.setattr(service, "_run_research_process", run_matching)
+    monkeypatch.setattr(service, "_run_direct_research", run_matching)
     work = tmp_path / "work-ok"
     work.mkdir()
     completed = service.execute_job(
         spec,
         work_root=work,
-        command=(sys.executable, "unused.py"),
         downloader=copy_snapshot,
         uploader=_uploader([]),
     )
     assert completed["status"] == "COMPLETED"
     assert completed["universe_rule_digest"] == morning
 
-    def run_mismatch(args, **kwargs):
-        del kwargs
-        output = Path(args[args.index("--output") + 1])
+    def run_mismatch(_spec, *, database, output, timeout_seconds):
+        del _spec, database, timeout_seconds
         summary = _am_cli_summary(spec, output, universe_rule_digest=session)
-        return SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps(summary, sort_keys=True) + "\n",
-            stderr="",
-        )
+        return _direct_run_from_summary(summary, output)
 
-    monkeypatch.setattr(service, "_run_research_process", run_mismatch)
+    monkeypatch.setattr(service, "_run_direct_research", run_mismatch)
     work_bad = tmp_path / "work-mismatch"
     work_bad.mkdir()
     failed = service.execute_job(
         spec,
         work_root=work_bad,
-        command=(sys.executable, "unused.py"),
         downloader=copy_snapshot,
         uploader=_uploader([]),
     )
     assert failed["status"] == "FAILED"
     assert "qp-research violated the fixed personal policy" in failed["error"]
 
-    legacy = _job("a" * 64, job_id="legacy-session", cohort_id="diverse-core-v1")
-    assert legacy.universe_rule_digest == session
+    with pytest.raises(service.JobInputError, match="OfflineFixture DRAFT-only"):
+        _job("a" * 64, job_id="legacy-session", cohort_id="diverse-core-v1")
+    assert session == personal_research_universe_rule_digest("topix_all", am_pm=False)
 
 
 def test_exit_two_with_no_evaluated_candidates_archives_completed_result(
@@ -1276,28 +1322,24 @@ def test_exit_two_with_no_evaluated_candidates_archives_completed_result(
     source = tmp_path / "fixture.sqlite"
     sha = _sqlite(source)
     spec = _job(sha)
-    script = tmp_path / "no_analysis.py"
-    summary = _runner_summary(spec, evaluated_count=0, hold_count=0)
-    script.write_text(
-        "\n".join(
-            (
-                "import json",
-                "import pathlib",
-                "import sys",
-                "out = pathlib.Path(sys.argv[sys.argv.index('--output') + 1])",
-                "(out / 'reports').mkdir(parents=True)",
-                "(out / 'reports' / 'no-analysis.json').write_text('{\"status\":\"NO_ANALYSIS\"}')",
-                "(out / 'reports' / 'no-analysis.md').write_text('# no analysis')",
-                f"summary = {summary!r}",
-                "summary['report_json'] = str(out / 'reports' / 'no-analysis.json')",
-                "summary['report_markdown'] = str(out / 'reports' / 'no-analysis.md')",
-                "print(json.dumps(summary, sort_keys=True))",
-                "raise SystemExit(2)",
-            )
+
+    def no_analysis(_spec, *, database, output, timeout_seconds):
+        del _spec, database, timeout_seconds
+        reports = output / "reports"
+        reports.mkdir(parents=True, exist_ok=True)
+        (reports / "no-analysis.json").write_text(
+            '{"status":"NO_ANALYSIS"}', encoding="utf-8"
         )
-        + "\n",
-        encoding="utf-8",
-    )
+        (reports / "no-analysis.md").write_text("# no analysis", encoding="utf-8")
+        summary = _runner_summary(spec, evaluated_count=0, hold_count=0)
+        summary["report_json"] = str(reports / "no-analysis.json")
+        summary["report_markdown"] = str(reports / "no-analysis.md")
+        run = _direct_run_from_summary(summary, output, exit_code=2)
+        run.report_json = _artifact("reports/no-analysis.json")
+        run.report_markdown = _artifact("reports/no-analysis.md")
+        return run
+
+    monkeypatch.setattr(service, "_run_direct_research", no_analysis)
     work = tmp_path / "work"
     work.mkdir()
     uploads: list[tuple[str, bytes, str]] = []
@@ -1305,11 +1347,9 @@ def test_exit_two_with_no_evaluated_candidates_archives_completed_result(
     def copy_snapshot(_spec, destination):
         destination.write_bytes(source.read_bytes())
 
-    monkeypatch.setenv("QP_REPO_ROOT", str(tmp_path))
     manifest = service.execute_job(
         spec,
         work_root=work,
-        command=(sys.executable, str(script)),
         downloader=copy_snapshot,
         uploader=_uploader(uploads),
     )
@@ -1362,15 +1402,18 @@ def test_runner_exit_and_summary_contract_fail_closed(
     sha = _sqlite(source)
     spec = _job(sha)
     summary = {**_runner_summary(spec), **summary_changes}
-    monkeypatch.setattr(
-        service,
-        "_run_research_process",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            returncode=returncode,
-            stdout=(json.dumps(summary) + "\n" if stdout is None else stdout),
-            stderr="bounded diagnostic",
-        ),
-    )
+    def fake_direct(_spec, *, database, output, timeout_seconds):
+        del _spec, database, timeout_seconds
+        if returncode not in {0, 2}:
+            raise RuntimeError(f"qp-research exited {returncode}: bounded diagnostic")
+        if stdout == "":
+            raise RuntimeError("qp-research emitted no result document")
+        if stdout == "{\n":
+            raise RuntimeError("qp-research result document is invalid")
+        run = _direct_run_from_summary(summary, output, exit_code=returncode)
+        return run
+
+    monkeypatch.setattr(service, "_run_direct_research", fake_direct)
     work = tmp_path / "work"
     work.mkdir()
     uploads: list[tuple[str, bytes, str]] = []
@@ -1381,7 +1424,6 @@ def test_runner_exit_and_summary_contract_fail_closed(
     manifest = service.execute_job(
         spec,
         work_root=work,
-        command=(sys.executable, "unused.py"),
         downloader=copy_snapshot,
         uploader=_uploader(uploads),
     )
@@ -1400,8 +1442,8 @@ def test_exit1_empty_stderr_preserves_candidate_diagnostic_from_report(
     spec = _job(sha)
     detail = "candidate process exited nonzero (1)"
 
-    def failing_candidates(args, **_kwargs):
-        output = Path(args[args.index("--output") + 1])
+    def failing_candidates(_spec, *, database, output, timeout_seconds):
+        del _spec, database, timeout_seconds
         reports = output / "reports"
         reports.mkdir()
         report = {
@@ -1453,13 +1495,12 @@ def test_exit1_empty_stderr_preserves_candidate_diagnostic_from_report(
         )
         summary["report_json"] = str(report_json)
         summary["report_markdown"] = str(report_md)
-        return SimpleNamespace(
-            returncode=1,
-            stdout=json.dumps(summary) + "\n",
-            stderr="",
-        )
+        run = _direct_run_from_summary(summary, output, exit_code=1)
+        run.report_json = _artifact("reports/report.json")
+        run.report_markdown = _artifact("reports/report.md")
+        return run
 
-    monkeypatch.setattr(service, "_run_research_process", failing_candidates)
+    monkeypatch.setattr(service, "_run_direct_research", failing_candidates)
     work = tmp_path / "work"
     work.mkdir()
     uploads: list[tuple[str, bytes, str]] = []
@@ -1470,7 +1511,6 @@ def test_exit1_empty_stderr_preserves_candidate_diagnostic_from_report(
     manifest = service.execute_job(
         spec,
         work_root=work,
-        command=(sys.executable, "unused.py"),
         downloader=copy_snapshot,
         uploader=_uploader(uploads),
     )
@@ -1499,22 +1539,19 @@ def test_completed_summary_requires_report_artifacts_inside_output(
     sha = _sqlite(source)
     spec = _job(sha)
 
-    def missing_report_artifacts(args, **_kwargs):
-        output = Path(args[args.index("--output") + 1])
+    def missing_report_artifacts(_spec, *, database, output, timeout_seconds):
+        del _spec, database, timeout_seconds
         summary = _runner_summary(
             spec,
             evaluated_count=0,
             hold_count=0,
         )
-        summary["report_json"] = str(output / "reports" / "missing.json")
-        summary["report_markdown"] = str(output / "reports" / "missing.md")
-        return SimpleNamespace(
-            returncode=2,
-            stdout=json.dumps(summary) + "\n",
-            stderr="",
-        )
+        run = _direct_run_from_summary(summary, output, exit_code=2)
+        run.report_json = _artifact("reports/missing.json")
+        run.report_markdown = _artifact("reports/missing.md")
+        return run
 
-    monkeypatch.setattr(service, "_run_research_process", missing_report_artifacts)
+    monkeypatch.setattr(service, "_run_direct_research", missing_report_artifacts)
     work = tmp_path / "work"
     work.mkdir()
     uploads: list[tuple[str, bytes, str]] = []
@@ -1525,7 +1562,6 @@ def test_completed_summary_requires_report_artifacts_inside_output(
     manifest = service.execute_job(
         spec,
         work_root=work,
-        command=(sys.executable, "unused.py"),
         downloader=copy_snapshot,
         uploader=_uploader(uploads),
     )
@@ -1562,11 +1598,9 @@ def test_runner_summary_must_remain_within_fixed_policy(
     summary[field] = invalid_value
     monkeypatch.setattr(
         service,
-        "_run_research_process",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps(summary) + "\n",
-            stderr="",
+        "_run_direct_research",
+        lambda _spec, *, database, output, timeout_seconds: _direct_run_from_summary(
+            summary, output
         ),
     )
     work = tmp_path / "work"
@@ -1579,7 +1613,6 @@ def test_runner_summary_must_remain_within_fixed_policy(
     manifest = service.execute_job(
         spec,
         work_root=work,
-        command=(sys.executable, "unused.py"),
         downloader=copy_snapshot,
         uploader=_uploader(uploads),
     )
@@ -1715,14 +1748,20 @@ def test_watchdog_writes_durable_failed_terminal_before_shutdown() -> None:
         terminal_uploader=uploader,
     )
     spec = _job("a" * 64, "watchdog-r2")
+    started = time.monotonic()
     manager.submit(spec)
     assert entered.wait(1)
-    assert terminal.wait(1)
+    assert terminal.wait(3)
+    elapsed = time.monotonic() - started
+    assert elapsed < 0.5
     assert uploads
     assert uploads[0][0] == spec.manifest_key
     assert uploads[0][1]["status"] == "FAILED"
     assert "absolute Container lifetime" in uploads[0][1]["error"]
     assert manager.status(spec.job_id)["status"] == "FAILED"
+    time.sleep(1.1)
+    assert manager.status(spec.job_id)["status"] == "FAILED"
+    assert all(body.get("status") != "COMPLETED" for _key, body in uploads)
 
 
 def test_timeout_create_only_does_not_overwrite_completed_terminal() -> None:
@@ -2098,7 +2137,7 @@ def test_absolute_watchdog_is_not_renewed_by_status_polling() -> None:
     spec = _job("a" * 64, "watchdog-job")
     manager.submit(spec)
     assert entered.wait(1)
-    deadline = time.monotonic() + 1
+    deadline = time.monotonic() + 3
     while not terminal.is_set() and time.monotonic() < deadline:
         assert manager.status(spec.job_id) is not None
         time.sleep(0.005)
@@ -2540,7 +2579,7 @@ def test_session_coverage_fail_closed_state_mapping() -> None:
     try:
         stamp_compact_manifest(invalid)
         _install_typed_bars(invalid)
-        with pytest.raises(RuntimeError, match="compact v7 marker or schema"):
+        with pytest.raises(RuntimeError, match="rebuild as personal-draft-history/v8"):
             service._session_coverage(invalid)
     finally:
         invalid.close()
@@ -2697,6 +2736,6 @@ def test_snapshot_build_fails_closed_on_invalid_compact_marker(
         spec, work_root=tmp_path, uploader=upload, client_factory=lambda _spec: object()
     )
     assert manifest["status"] == "FAILED"
-    assert "compact v7 marker or schema" in manifest["error"]
+    assert "rebuild as personal-draft-history/v8" in manifest["error"]
     assert manifest.get("snapshot_key") is None
     assert [key for key, _ in uploads] == [spec.manifest_key]

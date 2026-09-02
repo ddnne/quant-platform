@@ -14,6 +14,22 @@ from scripts import receipt_authority_pending_live_acceptance as live
 SHA = "1" * 40
 ACCOUNT = "2" * 32
 
+def _install_fake_pinned_wrangler(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    worker: str = "ingestion-secrets",
+) -> Path:
+    root = tmp_path / "repo"
+    executable = (
+        root / "platform" / "workers" / worker / "node_modules" / ".bin" / "wrangler"
+    )
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o755)
+    monkeypatch.setattr(live, "ROOT", root)
+    return executable
+
+
 
 def _documents(environment: str) -> tuple[
     dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]
@@ -532,13 +548,12 @@ def test_public_surface_inventory_is_get_only_and_includes_cron_and_tail() -> No
 
 @pytest.mark.parametrize("live_matches", [True, False])
 def test_source_provenance_compares_secretless_local_build_to_live_main(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     live_matches: bool,
 ) -> None:
     worker = "ingestion-secrets"
-    executable = (
-        live.ROOT / "platform" / "workers" / worker / "node_modules" / ".bin" / "wrangler"
-    )
+    executable = _install_fake_pinned_wrangler(tmp_path, monkeypatch, worker)
     assert executable.is_file()
     monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "must-not-enter-local-build")
     monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", ACCOUNT)
@@ -607,8 +622,10 @@ def test_source_provenance_compares_secretless_local_build_to_live_main(
 
 
 def test_wrangler_inventory_receives_only_explicit_cloudflare_credentials(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _install_fake_pinned_wrangler(tmp_path, monkeypatch)
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "must-not-enter-inventory")
     monkeypatch.setenv("CLOUDFLARE_API_KEY", "legacy-key-must-not-enter-inventory")
     calls: list[dict[str, Any]] = []

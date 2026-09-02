@@ -457,7 +457,7 @@ def test_sidecar_extract_accepts_thicken_canonical_shape(
     monkeypatch.setattr(
         thicken,
         "load_opt225_regime_bundle_for_eval",
-        lambda: {
+        lambda _view: {
             "dataset": DATASET_ID,
             "version": OPTIONS_225_VOL_SERIES_VERSION,
             "basevol": dict(series),
@@ -470,7 +470,8 @@ def test_sidecar_extract_accepts_thicken_canonical_shape(
             "basevol_delta": dict(series),
         },
     )
-    attached = thicken.attach_opt225_regime()
+    monkeypatch.setattr(thicken, "_require_view", lambda value: value)
+    attached = thicken.attach_opt225_regime(object())
     assert "spread" in attached["opt225_regime"]
     assert "rv_ratio_by_date" in attached["opt225_regime"]["basevol"]
     extracted = job._extract_opt225_regime(attached)

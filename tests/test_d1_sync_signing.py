@@ -711,6 +711,17 @@ def test_real_sqlite_signed_chain_retains_deep_immutable_projection_identity(
     )
     store._conn.commit()  # noqa: SLF001
     sync._freeze_authenticated_current_applied_mirror(store)
+    from scripts import authority_protocol_runtime as protocol
+
+    remeasured = protocol._remeasure_applied_mirror_identity(store._conn)  # noqa: SLF001
+    assert remeasured["exported_at"] == envelope["exported_at"]
+    assert remeasured["exported_at"] == now.isoformat()
+    frozen = json.loads(
+        sync._canonical_applied_mirror_identity_json(dict(remeasured))
+    )
+    assert frozen["table_counts"] == counts
+    assert frozen["exported_at"] == now.isoformat()
+    assert frozen["source_change_seq"] == frozen["applied_change_seq"] == 7
     store.close()
 
     handle = sync.open_authenticated_applied_mirror(path)
@@ -725,16 +736,10 @@ def test_real_sqlite_signed_chain_retains_deep_immutable_projection_identity(
     finally:
         writer.close()
 
-    def consume(_conn, identity):
-        assert isinstance(identity, MappingProxyType)
-        immutable_counts = identity["table_counts"]
-        assert isinstance(immutable_counts, MappingProxyType)
-        assert immutable_counts == counts
-        with pytest.raises(TypeError):
-            immutable_counts["jquants_records"] = 999
-        return identity["source_change_seq"], identity["applied_change_seq"]
+    from scripts.export_ops_projection import _render_trusted_projection_bundle
 
-    assert sync._consume_authenticated_applied_mirror(handle, consume) == (7, 7)
+    with pytest.raises(RuntimeError, match="PENDING full-source authority"):
+        _render_trusted_projection_bundle(handle)
 
     with sqlite3.connect(path) as conn:
         conn.execute(
@@ -856,13 +861,10 @@ def test_applied_mirror_binds_path_connections_to_initial_file_bytes(
         writer.rollback()
     finally:
         writer.close()
-    assert sync._consume_authenticated_applied_mirror(
-        handle,
-        lambda conn, _identity: conn.execute(
-            "SELECT require_manifest FROM main.local_snapshot_policy "
-            "WHERE singleton=1"
-        ).fetchone()[0],
-    ) == 1
+    from scripts.export_ops_projection import _render_trusted_projection_bundle
+
+    with pytest.raises(RuntimeError, match="PENDING full-source authority"):
+        _render_trusted_projection_bundle(handle)
     assert hits == [os.fspath(path_a), os.fspath(path_a)]
 
 

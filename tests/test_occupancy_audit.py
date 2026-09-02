@@ -169,7 +169,7 @@ def test_put_r2_uses_worker_artifact_put(tmp_path, monkeypatch) -> None:
         seen.append((key, body))
         return {"status": "put_ok", "bytes": len(body)}
 
-    monkeypatch.setattr("research.r2_io.put_research_artifact", _fake_put)
+    monkeypatch.setattr("ops.r2_io.put_research_artifact", _fake_put)
     put = _put_eval_bytes(
         job="eval-occupancy-maps-test24ep",
         r2name="occupancy_maps.json",

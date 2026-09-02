@@ -232,7 +232,7 @@ def test_write_evidence_pack_dry_run_does_not_call_worker(
         raise AssertionError("dry_run must not Worker-put")
 
     monkeypatch.setattr(
-        "research.r2_io.put_children_then_manifest_via_worker",
+        "ops.r2_io.put_children_then_manifest_via_worker",
         _boom,
     )
     from research.reconstitution_evidence import write_reconstitution_evidence_pack

@@ -810,6 +810,13 @@ def test_wrangler_export_uses_argv_and_withholds_provider_output(
             stderr=f"provider error {secret}".encode(),
         )
 
+    config = tmp_path / "wrangler.toml"
+    config.write_text("# reviewed test config\n", encoding="utf-8")
+    monkeypatch.setattr(
+        sync_module._private_export,
+        "_validated_governed_wrangler",
+        lambda: (str(tmp_path / "wrangler"), config),
+    )
     monkeypatch.setattr(sync_module._private_export.subprocess, "run", failed_runner)
     with pytest.raises(RuntimeError, match="provider output withheld") as caught:
         sync_module._private_export.run_wrangler_d1_export(
@@ -924,6 +931,18 @@ database_name = "quant-ingest"
 database_id = "00000000-0000-0000-0000-000000000000"
 """,
         encoding="utf-8",
+    )
+    wr_root = tmp_path / "ingestion-premium"
+    wr_bin = wr_root / "node_modules" / ".bin"
+    wr_bin.mkdir(parents=True)
+    wr = wr_bin / "wrangler"
+    wr.write_text("")
+    wr.chmod(0o755)
+    (wr.parents[1] / "package.json").write_text(
+        '{"version": "4.125.0"}', encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        sync_module._private_export, "DEFAULT_WRANGLER_BIN", wr
     )
     monkeypatch.setattr(
         sync_module._private_export, "DEFAULT_WRANGLER_CONFIG", fake_config

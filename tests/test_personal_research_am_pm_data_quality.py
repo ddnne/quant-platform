@@ -8,12 +8,21 @@ from types import SimpleNamespace
 import pytest
 from core.result import BacktestResult
 from research.paper_candidate_specs import build_multi_day_hold_strategy_spec
+from pit.personal_research_view import ArtifactRef
 from research.personal_service import (
     PersonalResearchPolicy,
     _candidate_evaluation,
     _paper_evidence,
 )
 from strategies.paper import Lifecycle, PaperRunConfig, PaperRunResult
+
+
+class _Sink:
+    def write_artifact(self, *, category: str, suffix: str, payload: bytes) -> ArtifactRef:
+        return ArtifactRef(
+            archive_member=f"{category}/x.{suffix}",
+            sha256="sha256:" + "0" * 64,
+        )
 
 _FLAGS = ("comparable", "selection_eligible", "comparison_eligible")
 _FOLD = ("2024-01-04", "2024-06-30")
@@ -60,7 +69,7 @@ def test_paper_evidence_quality_flags(
     evidence, _, _ = _paper_evidence(
         _paper_result(metrics),
         config=PaperRunConfig(start="2024-01-04", end="2024-01-05"),
-        output_root=tmp_path,
+        view=_Sink(),
         max_drawdown=1.0,
     )
     for name in _FLAGS:
@@ -119,13 +128,10 @@ def evaluate(monkeypatch):
                 required_lookback_trading_days=1,
                 closure_digest="sha256:" + "a" * 64,
             ),
-            snapshot=SimpleNamespace(
-                db_path=Path("unused.sqlite"), logical_data_snapshot_id="snap"
-            ),
+            view=_Sink(),
             universe=SimpleNamespace(),
             fold_periods=(_FOLD,),
             holdout_period=_HOLDOUT,
-            output_root=Path("unused"),
             policy=_POLICY,
         )
         candidate["_roles"] = roles

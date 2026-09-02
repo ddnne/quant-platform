@@ -292,6 +292,9 @@ describe("personal Container R2 capability", () => {
       raw_sha256: `sha256:${raw}`,
       gzip_sha256: gzipDigest,
       snapshot_key: key,
+      observed_through: "2024-12-31T16:00:00+09:00",
+      revision_window_calendar_days: 40,
+      revision_coverage: "BOUNDED_WINDOW",
     };
     const bytes = new TextEncoder().encode(JSON.stringify(manifest));
     const digest = `sha256:${await (await import("./sha256")).sha256Hex(bytes)}`;

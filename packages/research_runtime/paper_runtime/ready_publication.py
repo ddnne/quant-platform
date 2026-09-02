@@ -990,4 +990,3 @@ __all__ = [
     "canonical_digest",
     "verify_controlled_publication_evidence",
 ]
-

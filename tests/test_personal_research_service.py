@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import multiprocessing
-import multiprocessing.synchronize
 import sqlite3
 from dataclasses import replace
 from datetime import date, timedelta
@@ -49,6 +47,8 @@ from research.factor_cohorts import (
     LEGACY_NEXT_CLOSE_EXECUTION_MODE,
     LEGACY_NEXT_CLOSE_LABEL,
 )
+from pit import observed_market_bar_coverage, universe_corporate_action_check
+from pit.personal_research_view import OfflineFixture, OfflineFixtureDataView, SnapshotIdentity
 from research.personal_service import (
     PERSONAL_BAR_COVERAGE_EVIDENCE,
     PERSONAL_DECISION_POLICY,
@@ -61,21 +61,16 @@ from research.personal_service import (
     PersonalResearchPolicy,
     PersonalResearchRequest,
     PersonalResearchService,
-    _CandidateProcessTask,
-    _candidate_process_domain,
     _canonical_bytes,
     _calendar_lookback_days,
     _closures,
     _comparison_document,
-    _evaluate_candidates_concurrently,
     _fixed_position_short_financing_evidence,
     _md_short_financing,
-    _observed_market_bar_coverage,
     _periods,
     _resolved_execution_contract,
     _run_one,
     _short_financing_sensitivity_document,
-    _universe_corporate_action_check,
     _validated_specs,
     _write_continuous_base_sleeve_artifact,
     default_personal_specs,
@@ -103,21 +98,29 @@ from strategies.spec import (
     strategy_spec_digest,
 )
 
+_observed_market_bar_coverage = observed_market_bar_coverage
+_universe_corporate_action_check = universe_corporate_action_check
 
-def _spawn_candidate_document(
-    task: _CandidateProcessTask,
-) -> tuple[int, dict[str, object]]:
-    spec, closure = _candidate_process_domain(task)
-    return (
-        task.ordinal,
-        {
-            "strategy_id": spec.strategy_id,
-            "strategy_spec_version": spec.version,
-            "strategy_spec_digest": strategy_spec_digest(spec),
-            "dependency_closure_digest": closure.closure_digest,
-            "decision": "REJECT",
-        },
+
+def _bound_view(source: Path, output_root: Path, *, cutoff: str = "session_close"):
+    view = OfflineFixtureDataView.bind(
+        source, artifact_root=output_root, decision_cutoff=cutoff
     )
+    snapshot_id = data_snapshot_id(source)
+    view.bind_snapshot_identity(
+        SnapshotIdentity(
+            snapshot_id=snapshot_id,
+            logical_data_snapshot_id=snapshot_id,
+            database_sha256=snapshot_id,
+            required_datasets=("equities_bars_daily",),
+            period_start="2000-01-01",
+            period_end="2100-01-01",
+            closure_digests=("sha256:" + "0" * 64,),
+            manifest={},
+        )
+    )
+    return view
+
 
 
 def _dates(start: date, end: date) -> list[str]:
@@ -262,9 +265,34 @@ def personal_db(tmp_path: Path) -> tuple[Path, str, str]:
                     "volume": 1000.0,
                 }
             )
+            generic.append(
+                _generic(
+                    "equities_bars_daily_am",
+                    {"Code": code, "Date": day, "C": close, "Close": close},
+                    event=f"{day}T11:30:00+09:00",
+                    available=available,
+                )
+            )
     store.upsert("jquants_daily_bars", bars)
-    store.upsert("jquants_records", generic)
+    am_generic = []
+    for row in generic:
+        if row.get("dataset") == "equities_bars_daily":
+            am = dict(row)
+            am["dataset"] = "equities_bars_daily_am"
+            event = str(am.get("event_time") or "")
+            if "T15:" in event:
+                am["event_time"] = event.replace("T15:", "T11:", 1)
+            am_generic.append(am)
+    store.upsert("jquants_records", generic + am_generic)
     store.close()
+    connection = sqlite3.connect(source)
+    stamp_compact_manifest(
+        connection,
+        format_name="unmanaged-catalog",
+        observed_through="2024-12-31T00:00:00+09:00",
+    )
+    connection.commit()
+    connection.close()
     return source, start.isoformat(), end.isoformat()
 
 
@@ -287,48 +315,16 @@ def _policy(**changes) -> PersonalResearchPolicy:
     return PersonalResearchPolicy(**values)
 
 
-def _candidate_test_wave(
-    output_root: Path,
-) -> tuple[
-    tuple[_CandidateProcessTask, ...],
-    tuple[object, ...],
-    tuple[object, ...],
-]:
-    policy = _policy(max_parallel=4)
-    specs = personal_specs_for_cohort("diverse-core-v1")
-    closures = _closures(
-        specs,
-        start="2022-01-01",
-        end="2026-01-01",
-        policy=policy,
-        universe_selector=personal_universe_selector("topix_all"),
-    )
-    tasks = tuple(
-        _CandidateProcessTask(
-            ordinal=ordinal,
-            strategy_spec_document=_canonical_bytes(spec.to_dict()),
-            dependency_closure_document=_canonical_bytes(closure.to_dict()),
-            snapshot=SimpleNamespace(),
-            universe=SimpleNamespace(),
-            fold_periods=(("2022-01-01", "2022-12-31"),),
-            holdout_period=("2025-01-01", "2026-01-01"),
-            output_root=output_root,
-            policy=policy,
-            short_financing_required=False,
-        )
-        for ordinal, (spec, closure) in enumerate(zip(specs, closures, strict=True))
-    )
-    return tasks, specs, closures
-
 
 def _request(
     source: Path, start: str, end: str, output: Path
 ) -> PersonalResearchRequest:
     return PersonalResearchRequest(
-        source_db=source,
+        data_view=OfflineFixture(artifact_root=output).bind(
+            source, decision_cutoff="session_close"
+        ),
         period_start=start,
         period_end=end,
-        output_root=output,
         specs=(
             build_multi_day_hold_strategy_spec(
                 hold_days=3,
@@ -543,8 +539,6 @@ def test_personal_prepared_frame_matches_uncached_price_fundamental_and_ls(
     spec = _prepared_frame_spec(case)
     snapshot_id = data_snapshot_id(source)
     common = {
-        "db_path": source,
-        "snapshot_id": snapshot_id,
         "universe": universe,
         "period": period,
         "cost_bps": 10.0,
@@ -559,7 +553,7 @@ def test_personal_prepared_frame_matches_uncached_price_fundamental_and_ls(
     baseline = _run_one(
         PersonalPaperExecutionService(),
         spec,
-        output_root=tmp_path / f"{case}-uncached",
+        view=_bound_view(source, tmp_path / f"{case}-uncached"),
         **common,
     )[3]
 
@@ -571,13 +565,13 @@ def test_personal_prepared_frame_matches_uncached_price_fundamental_and_ls(
         first = _run_one(
             PersonalPaperExecutionService(),
             spec,
-            output_root=tmp_path / f"{case}-cached",
+            view=_bound_view(source, tmp_path / f"{case}-cached"),
             **common,
         )[3]
         replay = _run_one(
             PersonalPaperExecutionService(),
             spec,
-            output_root=tmp_path / f"{case}-replay",
+            view=_bound_view(source, tmp_path / f"{case}-replay"),
             **common,
         )[3]
         stats = frame.stats()
@@ -616,8 +610,6 @@ def test_prepared_first_pass_stores_only_exact_session_bar_rows(
 
     monkeypatch.setattr(pit, "get_equity_bars_daily", tracked_get_bars)
     common = {
-        "db_path": source,
-        "snapshot_id": snapshot_id,
         "universe": universe,
         "period": period,
         "cost_bps": 10.0,
@@ -627,7 +619,7 @@ def test_prepared_first_pass_stores_only_exact_session_bar_rows(
     uncached = _run_one(
         PersonalPaperExecutionService(),
         spec,
-        output_root=tmp_path / "bar-shape-uncached",
+        view=_bound_view(source, tmp_path / "bar-shape-uncached"),
         **common,
     )[3]
     uncached_reads = tuple(engine_reads)
@@ -640,7 +632,7 @@ def test_prepared_first_pass_stores_only_exact_session_bar_rows(
         prepared = _run_one(
             PersonalPaperExecutionService(),
             spec,
-            output_root=tmp_path / "bar-shape-prepared",
+            view=_bound_view(source, tmp_path / "bar-shape-prepared"),
             **common,
         )[3]
         prepared_reads = tuple(engine_reads)
@@ -712,13 +704,11 @@ def test_prepared_frame_preserves_missing_reason_and_halves_pit_queries(
         _run_one(
             PersonalPaperExecutionService(),
             spec,
-            db_path=source,
-            snapshot_id=snapshot_id,
             universe=universe,
             period=period,
             cost_bps=10.0,
             lookback_days=3,
-            output_root=tmp_path / "query-count-first",
+            view=_bound_view(source, tmp_path / "query-count-first"),
             max_drawdown=1.0,
         )
         first_queries = query_count - before_first
@@ -726,13 +716,11 @@ def test_prepared_frame_preserves_missing_reason_and_halves_pit_queries(
         _run_one(
             PersonalPaperExecutionService(),
             spec,
-            db_path=source,
-            snapshot_id=snapshot_id,
             universe=universe,
             period=period,
             cost_bps=10.0,
             lookback_days=3,
-            output_root=tmp_path / "query-count-replay",
+            view=_bound_view(source, tmp_path / "query-count-replay"),
             max_drawdown=1.0,
         )
         replay_queries = query_count - before_replay
@@ -815,8 +803,6 @@ def test_prepared_frame_preserves_late_revision_fallback_and_departed_holding(
         sticky=False,
     )
     common = {
-        "db_path": source,
-        "snapshot_id": snapshot_id,
         "universe": departed_universe,
         "period": period,
         "cost_bps": 10.0,
@@ -827,7 +813,7 @@ def test_prepared_frame_preserves_late_revision_fallback_and_departed_holding(
     baseline = _run_one(
         PersonalPaperExecutionService(),
         spec,
-        output_root=tmp_path / "adversarial-uncached",
+        view=_bound_view(source, tmp_path / "adversarial-uncached"),
         **common,
     )[3]
     with _personal_prepared_frame_scope(
@@ -837,13 +823,13 @@ def test_prepared_frame_preserves_late_revision_fallback_and_departed_holding(
         prepared = _run_one(
             PersonalPaperExecutionService(),
             spec,
-            output_root=tmp_path / "adversarial-cached",
+            view=_bound_view(source, tmp_path / "adversarial-cached"),
             **common,
         )[3]
         replay = _run_one(
             PersonalPaperExecutionService(),
             spec,
-            output_root=tmp_path / "adversarial-replay",
+            view=_bound_view(source, tmp_path / "adversarial-replay"),
             **common,
         )[3]
         stats = frame.stats()
@@ -895,8 +881,6 @@ def test_compact_path_matches_historical_adjustment_failure(
     )
     snapshot_id = data_snapshot_id(source)
     common = {
-        "db_path": source,
-        "snapshot_id": snapshot_id,
         "universe": bounded_universe,
         "period": (run_days[0], run_days[-1]),
         "cost_bps": 10.0,
@@ -908,7 +892,7 @@ def test_compact_path_matches_historical_adjustment_failure(
         _run_one(
             PersonalPaperExecutionService(),
             spec,
-            output_root=tmp_path / "invalid-adjustment-uncached",
+            view=_bound_view(source, tmp_path / "invalid-adjustment-uncached"),
             **common,
         )
     with _personal_prepared_frame_scope(
@@ -919,7 +903,7 @@ def test_compact_path_matches_historical_adjustment_failure(
             _run_one(
                 PersonalPaperExecutionService(),
                 spec,
-                output_root=tmp_path / "invalid-adjustment-prepared",
+                view=_bound_view(source, tmp_path / "invalid-adjustment-prepared"),
                 **common,
             )
 
@@ -1070,6 +1054,7 @@ def test_personal_research_runs_real_paper_and_is_idempotent(
         "model": "serial",
         "worker_processes": 1,
         "max_parallel": 1,
+        "max_parallel_bound": 1,
         "shared_snapshot_and_quality_preparation": True,
         "base_sleeve_before_fanout": False,
     }
@@ -1122,6 +1107,17 @@ def test_personal_research_runs_real_paper_and_is_idempotent(
     assert "Fails when" in markdown
     assert "Evidence" in markdown
     assert report["data_quality"]["market_bar_coverage"]["status"] == "PASS"
+    source_sync = report["data_quality"]["source_sync"]
+    assert source_sync["status"] == "UNKNOWN"
+    assert source_sync["basis"] == "unmanaged_draft"
+    assert source_sync["execution_allowed"] is True
+    assert source_sync["quality_verified"] is False
+    assert source_sync["source_complete_claim"] is False
+    assert source_sync["completeness_scope"] is None
+    assert report["go"] is False
+    assert report["ready_snapshot_declared"] is False
+    assert report["automatic_promotion"] is False
+    assert report["live_orders_enabled"] is False
     assert report["price_basis"] == {
         "id": "PERSONAL_RETROSPECTIVE_ADJUSTED",
         "source": "vendor_adjusted_ohlcv",
@@ -1256,13 +1252,11 @@ def test_fixed_short_financing_monotonically_lowers_return(
     evidence, _daily, _dates_used, paper_result = _run_one(
         PersonalPaperExecutionService(),
         spec,
-        db_path=source,
-        snapshot_id=data_snapshot_id(source),
         universe=universe,
         period=(start, end),
         cost_bps=10.0,
         lookback_days=3,
-        output_root=output_root,
+        view=_bound_view(source, output_root),
         max_drawdown=1.0,
         short_financing_annual_rate=(
             PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE
@@ -1386,7 +1380,6 @@ def test_continuous_base_sleeve_is_content_addressed_and_not_a_candidate(
         for candidate, dependency in zip(specs, closures, strict=True)
         if candidate.strategy_id == BASE_SLEEVE_ID
     )
-    snapshot_digest = data_snapshot_id(source)
     output_root = tmp_path / "continuous-base-sleeve"
     output_root.mkdir()
     source_period = (universe.decision_memberships[5][0], period[1])
@@ -1403,34 +1396,26 @@ def test_continuous_base_sleeve_is_content_addressed_and_not_a_candidate(
         rule_digest=universe.rule_digest,
     )
 
-    reference, artifact_path, artifact_digest = (
+    view = _bound_view(source, output_root)
+    reference, artifact_ref, artifact_digest = (
         _write_continuous_base_sleeve_artifact(
             PersonalPaperExecutionService(),
             spec,
             closure,
-            snapshot=SimpleNamespace(
-                db_path=source,
-                snapshot_id=snapshot_digest,
-                logical_data_snapshot_id=snapshot_digest,
-            ),
+            view=view,
             universe=universe,
             source_period=source_period,
-            output_root=output_root,
             cohort_digest=str(cohort_document["cohort_digest"]),
         )
     )
 
-    assert artifact_path.is_file()
-    assert artifact_digest == "sha256:" + hashlib.sha256(
-        artifact_path.read_bytes()
-    ).hexdigest()
-    assert artifact_path.name == f"{artifact_digest[7:]}.json"
-    assert reference["archive_member"] == artifact_path.relative_to(
-        output_root
-    ).as_posix()
+    payload = view.read_artifact(artifact_ref.archive_member)
+    assert artifact_digest == "sha256:" + hashlib.sha256(payload).hexdigest()
+    assert artifact_ref.archive_member.endswith(f"{artifact_digest[7:]}.json")
+    assert reference["archive_member"] == artifact_ref.archive_member
     assert reference["candidate_count_contribution"] == 0
     assert reference["ranking_role"] == "NON_CANDIDATE_NOT_RANKED"
-    document = json.loads(artifact_path.read_text(encoding="utf-8"))
+    document = json.loads(payload.decode("utf-8"))
     validate_personal_base_sleeve_artifact(document)
     assert document["schema_version"] == PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA
     assert document["source_run"]["execution_mode"] == "next_close"
@@ -1490,510 +1475,19 @@ def test_exact_four_backtest_budget_adds_only_one_base_source_run(
 ) -> None:
     source, start, end = personal_db
     assert PersonalResearchPolicy().validation_folds == 4
-    assert PersonalResearchPolicy().max_parallel == 4
+    assert PersonalResearchPolicy().max_parallel == 1
     assert 4 * (PersonalResearchPolicy().validation_folds + 2) == 24
     assert PERSONAL_EXACT_FOUR_MAX_BACKTESTS == 25
     request = PersonalResearchRequest(
-        source_db=source,
+        data_view=OfflineFixture(artifact_root=tmp_path / "out").bind(source, decision_cutoff="session_close"),
         period_start=start,
         period_end=end,
-        output_root=tmp_path / "too-many-backtests",
         cohort_id="diverse-core-v1",
     )
 
     with pytest.raises(PersonalResearchInputError, match="25-backtest budget"):
         PersonalResearchService(policy=_policy(validation_folds=5)).run(request)
 
-
-def test_candidate_process_fanout_uses_four_workers_restores_order_and_bounds_failure(
-    tmp_path: Path,
-) -> None:
-    policy = _policy(max_parallel=4)
-    specs = personal_specs_for_cohort("diverse-core-v1")
-    closures = _closures(
-        specs,
-        start="2022-01-01",
-        end="2026-01-01",
-        policy=policy,
-        universe_selector=personal_universe_selector("topix_all"),
-    )
-    tasks = tuple(
-        _CandidateProcessTask(
-            ordinal=ordinal,
-            strategy_spec_document=_canonical_bytes(spec.to_dict()),
-            dependency_closure_document=_canonical_bytes(closure.to_dict()),
-            snapshot=SimpleNamespace(),
-            universe=SimpleNamespace(),
-            fold_periods=(("2022-01-01", "2022-12-31"),),
-            holdout_period=("2025-01-01", "2026-01-01"),
-            output_root=tmp_path,
-            policy=policy,
-            short_financing_required=False,
-        )
-        for ordinal, (spec, closure) in enumerate(zip(specs, closures, strict=True))
-    )
-    started: list[int] = []
-    joined: list[int] = []
-    closed: list[int] = []
-
-    def bounded_worker(task: _CandidateProcessTask):
-        if task.ordinal == 2:
-            raise RuntimeError("bounded child failure")
-        return _spawn_candidate_document(task)
-
-    class FakeProcess:
-        def __init__(self, *, target, args, name, daemon):
-            assert name == f"qp-candidate-{args[0].ordinal}"
-            assert daemon is False
-            self.target = target
-            self.args = args
-            self.ordinal = args[0].ordinal
-            self.exitcode = None
-            self.alive = False
-
-        def start(self):
-            self.alive = True
-            started.append(self.ordinal)
-
-        def join(self, _timeout=None):
-            assert started == [0, 1, 2, 3]
-            if self.exitcode is None:
-                self.target(*self.args)
-                self.exitcode = 0
-                self.alive = False
-                joined.append(self.ordinal)
-
-        def is_alive(self):
-            return self.alive
-
-        def terminate(self):
-            self.alive = False
-            self.exitcode = -15
-
-        def kill(self):
-            self.alive = False
-            self.exitcode = -9
-
-        def close(self):
-            assert not self.alive
-            closed.append(self.ordinal)
-
-    class FakeContext:
-        def Process(self, **kwargs):
-            return FakeProcess(**kwargs)
-
-    candidates, unexpected_errors = _evaluate_candidates_concurrently(
-        tasks,
-        max_workers=4,
-        process_context=FakeContext(),
-        candidate_worker=bounded_worker,
-    )
-
-    assert started == [0, 1, 2, 3]
-    assert joined == [0, 1, 2, 3]
-    assert closed == [0, 1, 2, 3]
-    assert [candidate["strategy_id"] for candidate in candidates] == [
-        spec.strategy_id for spec in specs
-    ]
-    assert unexpected_errors == 1
-    assert candidates[2]["error"] == {
-        "type": "RuntimeError",
-        "detail": "bounded child failure",
-    }
-
-
-@pytest.mark.parametrize(("task_multiplier", "max_workers"), ((1, 2), (2, 4)))
-def test_candidate_process_fanout_runs_bounded_waves_without_reordering(
-    tmp_path: Path,
-    task_multiplier: int,
-    max_workers: int,
-) -> None:
-    base_tasks, base_specs, _closures = _candidate_test_wave(tmp_path)
-    tasks = tuple(
-        replace(task, ordinal=ordinal)
-        for ordinal, task in enumerate(base_tasks * task_multiplier)
-    )
-    active: set[int] = set()
-    peak_active = 0
-    started: list[int] = []
-    joined: list[int] = []
-    closed: list[int] = []
-
-    class FakeProcess:
-        def __init__(self, *, target, args, name, daemon):
-            self.target = target
-            self.args = args
-            self.ordinal = args[0].ordinal
-            self.exitcode = None
-            self.alive = False
-
-        def start(self):
-            nonlocal peak_active
-            self.alive = True
-            active.add(self.ordinal)
-            started.append(self.ordinal)
-            peak_active = max(peak_active, len(active))
-            assert len(active) <= max_workers
-
-        def join(self, _timeout=None):
-            if self.exitcode is None:
-                self.target(*self.args)
-                self.exitcode = 0
-                self.alive = False
-                active.remove(self.ordinal)
-                joined.append(self.ordinal)
-
-        def is_alive(self):
-            return self.alive
-
-        def terminate(self):
-            active.discard(self.ordinal)
-            self.alive = False
-            self.exitcode = -15
-
-        def kill(self):
-            active.discard(self.ordinal)
-            self.alive = False
-            self.exitcode = -9
-
-        def close(self):
-            assert not self.alive
-            closed.append(self.ordinal)
-
-    class FakeContext:
-        def Process(self, **kwargs):
-            return FakeProcess(**kwargs)
-
-    candidates, unexpected_errors = _evaluate_candidates_concurrently(
-        tasks,
-        max_workers=max_workers,
-        process_context=FakeContext(),
-        candidate_worker=_spawn_candidate_document,
-    )
-
-    assert unexpected_errors == 0
-    assert peak_active == max_workers
-    assert started == list(range(len(tasks)))
-    assert joined == list(range(len(tasks)))
-    assert closed == list(range(len(tasks)))
-    expected_strategy_ids = [
-        spec.strategy_id
-        for _wave in range(task_multiplier)
-        for spec in base_specs
-    ]
-    assert [candidate["strategy_id"] for candidate in candidates] == (
-        expected_strategy_ids
-    )
-
-
-def test_candidate_process_start_failure_reaps_every_started_child(
-    tmp_path: Path,
-) -> None:
-    tasks, _specs, _closures = _candidate_test_wave(tmp_path)
-    processes: list[object] = []
-    started: list[int] = []
-    terminated: list[int] = []
-    joined: list[tuple[int, float | None]] = []
-    closed: list[int] = []
-
-    class FakeProcess:
-        def __init__(self, *, target, args, name, daemon):
-            self.ordinal = args[0].ordinal
-            self.exitcode = None
-            self.alive = False
-            processes.append(self)
-
-        def start(self):
-            if self.ordinal == 2:
-                self.alive = True
-                started.append(self.ordinal)
-                raise FileNotFoundError(2, "spawn unavailable")
-            self.alive = True
-            started.append(self.ordinal)
-
-        def join(self, timeout=None):
-            joined.append((self.ordinal, timeout))
-            if self.exitcode is None and not self.alive:
-                self.exitcode = -15
-
-        def is_alive(self):
-            return self.alive
-
-        def terminate(self):
-            terminated.append(self.ordinal)
-            self.alive = False
-            self.exitcode = -15
-
-        def kill(self):
-            raise AssertionError("terminated fake child must not require kill")
-
-        def close(self):
-            assert not self.alive
-            closed.append(self.ordinal)
-
-    class FakeContext:
-        def Process(self, **kwargs):
-            return FakeProcess(**kwargs)
-
-    with pytest.raises(FileNotFoundError, match="spawn unavailable"):
-        _evaluate_candidates_concurrently(
-            tasks,
-            max_workers=4,
-            process_context=FakeContext(),
-            candidate_worker=_spawn_candidate_document,
-        )
-
-    assert started == [0, 1, 2]
-    assert terminated == [0, 1, 2]
-    assert joined == [
-        (0, 5.0),
-        (1, 5.0),
-        (2, 5.0),
-        (0, None),
-        (1, None),
-        (2, None),
-    ]
-    assert closed == [0, 1, 2, 3]
-    assert not list(tmp_path.glob(".candidate-process-results-*"))
-
-
-def test_candidate_process_fan_in_fails_closed_for_nonzero_missing_and_malformed(
-    tmp_path: Path,
-) -> None:
-    tasks, specs, _closures = _candidate_test_wave(tmp_path)
-    started: list[int] = []
-    closed: list[int] = []
-
-    class FakeProcess:
-        def __init__(self, *, target, args, name, daemon):
-            self.target = target
-            self.args = args
-            self.ordinal = args[0].ordinal
-            self.exitcode = None
-            self.alive = False
-
-        def start(self):
-            self.alive = True
-            started.append(self.ordinal)
-
-        def join(self, _timeout=None):
-            assert started == [0, 1, 2, 3]
-            if self.exitcode is not None:
-                return
-            if self.ordinal == 0:
-                self.target(*self.args)
-                self.exitcode = 0
-            elif self.ordinal == 1:
-                self.exitcode = 0
-            elif self.ordinal == 2:
-                self.args[1].write_bytes(b"{malformed")
-                self.exitcode = 0
-            else:
-                self.exitcode = 17
-            self.alive = False
-
-        def is_alive(self):
-            return self.alive
-
-        def terminate(self):
-            self.alive = False
-            self.exitcode = -15
-
-        def kill(self):
-            self.alive = False
-            self.exitcode = -9
-
-        def close(self):
-            assert not self.alive
-            closed.append(self.ordinal)
-
-    class FakeContext:
-        def Process(self, **kwargs):
-            return FakeProcess(**kwargs)
-
-    candidates, unexpected_errors = _evaluate_candidates_concurrently(
-        tasks,
-        max_workers=4,
-        process_context=FakeContext(),
-        candidate_worker=_spawn_candidate_document,
-    )
-
-    assert unexpected_errors == 3
-    assert closed == [0, 1, 2, 3]
-    assert [candidate["strategy_id"] for candidate in candidates] == [
-        spec.strategy_id for spec in specs
-    ]
-    assert candidates[0].get("error") is None
-    assert [candidate["error"]["detail"] for candidate in candidates[1:]] == [
-        "candidate process result file is missing",
-        "candidate process result file is malformed",
-        "candidate process exited nonzero (17)",
-    ]
-    assert not list(tmp_path.glob(".candidate-process-results-*"))
-
-
-def test_candidate_process_fan_in_rejects_candidate_identity_mismatch(
-    tmp_path: Path,
-) -> None:
-    tasks, specs, _closures = _candidate_test_wave(tmp_path)
-
-    def mismatched_worker(task: _CandidateProcessTask):
-        ordinal, candidate = _spawn_candidate_document(task)
-        if ordinal == 1:
-            candidate["strategy_spec_digest"] = "sha256:" + "0" * 64
-        return ordinal, candidate
-
-    class InlineProcess:
-        def __init__(self, *, target, args, name, daemon):
-            self.target = target
-            self.args = args
-            self.ordinal = args[0].ordinal
-            self.exitcode = None
-            self.alive = False
-
-        def start(self):
-            self.alive = True
-
-        def join(self, _timeout=None):
-            if self.exitcode is None:
-                self.target(*self.args)
-                if self.ordinal == 2:
-                    result_path = self.args[1]
-                    envelope = json.loads(result_path.read_bytes())
-                    envelope["ordinal"] = 99
-                    result_path.write_bytes(_canonical_bytes(envelope))
-                self.exitcode = 0
-                self.alive = False
-
-        def is_alive(self):
-            return self.alive
-
-        def terminate(self):
-            self.alive = False
-            self.exitcode = -15
-
-        def kill(self):
-            self.alive = False
-            self.exitcode = -9
-
-        def close(self):
-            assert not self.alive
-
-    class InlineContext:
-        def Process(self, **kwargs):
-            return InlineProcess(**kwargs)
-
-    candidates, unexpected_errors = _evaluate_candidates_concurrently(
-        tasks,
-        max_workers=4,
-        process_context=InlineContext(),
-        candidate_worker=mismatched_worker,
-    )
-
-    assert unexpected_errors == 2
-    assert [candidate["strategy_id"] for candidate in candidates] == [
-        spec.strategy_id for spec in specs
-    ]
-    assert candidates[1]["error"] == {
-        "type": "RuntimeError",
-        "detail": "candidate process result identity mismatch",
-    }
-    assert candidates[2]["error"] == {
-        "type": "RuntimeError",
-        "detail": "candidate process result envelope identity mismatch",
-    }
-
-
-def test_diverse_core_candidate_documents_cross_a_real_spawn_boundary(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    policy = _policy(max_parallel=4)
-    selector = personal_universe_selector("topix_all")
-    specs = personal_specs_for_cohort("diverse-core-v1")
-    closures = _closures(
-        specs,
-        start="2022-01-01",
-        end="2026-01-01",
-        policy=policy,
-        universe_selector=selector,
-    )
-    closure_digests = tuple(sorted(closure.closure_digest for closure in closures))
-    snapshot = PersonalSnapshot(
-        snapshot_id="sha256:" + "1" * 64,
-        db_path=tmp_path / "snapshot.sqlite",
-        manifest_path=tmp_path / "snapshot.json",
-        database_sha256="sha256:" + "2" * 64,
-        logical_data_snapshot_id="sha256:" + "3" * 64,
-        required_datasets=tuple(
-            sorted(
-                {
-                    dataset
-                    for closure in closures
-                    for dataset in closure.required_datasets
-                }
-            )
-        ),
-        period_start="2022-01-01",
-        period_end="2026-01-01",
-        closure_digests=closure_digests,
-    )
-    universe = PersonalResolvedUniverseMembership(
-        period_start="2022-01-01",
-        period_end="2026-01-01",
-        decision_memberships=(("2022-01-03", ("1301",)),),
-        rule_id=selector.rule_id,
-        rule_version=selector.rule_version,
-        rule_digest=selector.rule_digest,
-    )
-    tasks = tuple(
-        _CandidateProcessTask(
-            ordinal=ordinal,
-            strategy_spec_document=_canonical_bytes(spec.to_dict()),
-            dependency_closure_document=_canonical_bytes(closure.to_dict()),
-            snapshot=snapshot,
-            universe=universe,
-            fold_periods=(("2022-01-01", "2022-12-31"),),
-            holdout_period=("2025-01-01", "2026-01-01"),
-            output_root=tmp_path,
-            policy=policy,
-            short_financing_required=False,
-        )
-        for ordinal, (spec, closure) in enumerate(zip(specs, closures, strict=True))
-    )
-
-    def semlock_unavailable(*_args, **_kwargs):
-        raise FileNotFoundError(2, "No such file or directory")
-
-    monkeypatch.setattr(
-        multiprocessing.synchronize.SemLock,
-        "__init__",
-        semlock_unavailable,
-    )
-    candidates, unexpected_errors = _evaluate_candidates_concurrently(
-        tasks,
-        max_workers=4,
-        candidate_worker=_spawn_candidate_document,
-    )
-
-    assert unexpected_errors == 0
-    assert [
-        (
-            candidate["strategy_id"],
-            candidate["strategy_spec_digest"],
-            candidate["dependency_closure_digest"],
-        )
-        for candidate in candidates
-    ] == [
-        (spec.strategy_id, strategy_spec_digest(spec), closure.closure_digest)
-        for spec, closure in zip(specs, closures, strict=True)
-    ]
-
-
-@pytest.mark.parametrize("max_parallel", (0, 5))
-def test_personal_research_parallelism_is_capped_at_four(max_parallel: int) -> None:
-    with pytest.raises(ValueError, match="parallelism"):
-        PersonalResearchPolicy(max_parallel=max_parallel)
 
 
 def test_short_financing_markdown_exposes_monotonicity_failure() -> None:
@@ -2013,10 +1507,9 @@ def test_selected_cohort_id_and_digest_are_bound_to_report(
     source, start, end = personal_db
     result = PersonalResearchService(policy=_policy()).run(
         PersonalResearchRequest(
-            source_db=source,
+            data_view=OfflineFixture(artifact_root=tmp_path / "cohort-report").bind(source, decision_cutoff="session_close"),
             period_start=start,
             period_end=end,
-            output_root=tmp_path / "cohort-report",
             cohort_id="diverse-core-v1",
         )
     )
@@ -2057,14 +1550,13 @@ def test_cohort_history_floor_is_enforced_before_materialization(
     with pytest.raises(PersonalResearchInputError, match="history floor 2008-07-07"):
         PersonalResearchService(policy=_policy()).run(
             PersonalResearchRequest(
-                source_db=source,
+                data_view=OfflineFixture(artifact_root=tmp_path / "must-not-materialize").bind(source, decision_cutoff="session_close"),
                 period_start="2008-07-06",
                 period_end=end,
-                output_root=tmp_path / "must-not-materialize",
                 cohort_id="price-relative-v1",
             )
         )
-    assert not (tmp_path / "must-not-materialize").exists()
+    assert not (tmp_path / "must-not-materialize" / "snapshots").exists()
 
 
 def test_cohort_warmup_sessions_are_excluded_from_analysis_periods() -> None:
@@ -2294,7 +1786,7 @@ def test_constant_back_adjustment_factor_is_not_a_false_split_boundary(
 
     assert result.exit_code == 0
     report = json.loads(result.report_json_path.read_text(encoding="utf-8"))
-    assert report["data_quality"]["corporate_actions"]["status"] == "PASS"
+    assert report["data_quality"]["corporate_actions"]["status"] == "OBSERVED"
     assert report["data_quality"]["corporate_actions"]["affected_codes"] == []
 
 
@@ -2349,10 +1841,22 @@ def test_rejected_ready_state_does_not_block_valid_personal_sync_evidence(
 
     assert result.exit_code == 0
     report = json.loads(result.report_json_path.read_text(encoding="utf-8"))
-    assert report["data_quality"]["source_sync"]["status"] == "PASS"
-    assert report["data_quality"]["source_sync"][
-        "source_publication_state"
-    ] == "REJECTED"
+    source_sync = report["data_quality"]["source_sync"]
+    assert source_sync["status"] == "UNKNOWN"
+    assert source_sync["execution_allowed"] is True
+    assert source_sync["quality_verified"] is False
+    assert source_sync["source_complete_claim"] is not True
+    assert source_sync["source_publication_state"] == "REJECTED"
+    assert result.snapshot.observation_promotable is False
+    connection = sqlite3.connect(source)
+    source_policy = connection.execute(
+        "SELECT require_manifest,snapshot_ready,publication_state "
+        "FROM local_snapshot_policy WHERE singleton=1"
+    ).fetchone()
+    connection.close()
+    assert source_policy == (1, 0, "REJECTED")
+    assert report["go"] is False
+    assert report["ready_snapshot_declared"] is False
 
 
 def test_failed_latest_dataset_validation_is_no_analysis(
@@ -2368,10 +1872,16 @@ def test_failed_latest_dataset_validation_is_no_analysis(
     assert result.exit_code == 2
     report = json.loads(result.report_json_path.read_text(encoding="utf-8"))
     assert report["summary"]["analysis_status"] == "NO_ANALYSIS"
-    assert report["data_quality"]["source_sync"]["status"] == "FAIL"
+    source_sync = report["data_quality"]["source_sync"]
+    assert source_sync["status"] == "FAIL"
+    assert source_sync["execution_allowed"] is False
+    assert source_sync["quality_verified"] is False
+    assert source_sync["source_complete_claim"] is False
     assert report["candidates"][0]["reasons"] == [
         "source_sync_evidence_unusable"
     ]
+    assert report["go"] is False
+    assert report["ready_snapshot_declared"] is False
 
 
 def test_unexpected_candidate_error_keeps_bounded_diagnostic(
@@ -2450,7 +1960,9 @@ def test_am_pm_closures_bind_contract_and_keep_full_daily_bars() -> None:
     am_selector = personal_universe_selector(
         "topix_all", decision_cutoff="morning_close"
     )
-    legacy_selector = personal_universe_selector("topix_all")
+    legacy_selector = personal_universe_selector(
+        "topix_all", decision_cutoff="session_close"
+    )
     am = _closures(
         specs,
         start="2022-01-01",
@@ -2470,7 +1982,7 @@ def test_am_pm_closures_bind_contract_and_keep_full_daily_bars() -> None:
     assert legacy_selector.to_dict()["decision_clock"] == "tse_session_close_jst"
     assert am[0].plan_digest != legacy[0].plan_digest
     assert "equities_bars_daily" in am[0].required_datasets
-    assert "equities_bars_daily_am" not in am[0].required_datasets
+    assert "equities_bars_daily_am" in am[0].required_datasets
 
 
 def test_comparison_carries_contract_identity_and_refuses_cross_contract_rank() -> None:
@@ -2552,10 +2064,9 @@ def test_am_pm_cohort_report_binds_execution_contract_without_core_mode(
     source, start, end = personal_db
     result = PersonalResearchService(policy=_policy()).run(
         PersonalResearchRequest(
-            source_db=source,
+            data_view=OfflineFixture(artifact_root=tmp_path / "am-pm-report").bind(source, decision_cutoff="morning_close"),
             period_start=start,
             period_end=end,
-            output_root=tmp_path / "am-pm-report",
             cohort_id="diverse-core-am-pm-v1",
         )
     )
@@ -2590,7 +2101,10 @@ def test_am_pm_cohort_report_binds_execution_contract_without_core_mode(
     assert "Cohort: `diverse-core-am-pm-v1`" in markdown
     assert "am_signal_pm_close" in markdown
     assert "Execution contract" in markdown
-    assert "equities_bars_daily_am" not in json.dumps(report["dependency_closures"])
+    assert any(
+        "equities_bars_daily_am" in closure["required_datasets"]
+        for closure in report["dependency_closures"]
+    )
     assert any(
         "equities_bars_daily" in closure["required_datasets"]
         for closure in report["dependency_closures"]
@@ -2977,7 +2491,7 @@ def test_compact_v7_timestamp_wall_excludes_unobservable_rows(
     assert coverage["status"] == "FAIL"
     assert coverage["observed_rows"] == 1
     assert coverage["missing_sample"] == [{"date": days[1], "code": "1301"}]
-    assert corporate["status"] == "PASS"
+    assert corporate["status"] == "OBSERVED"
     assert corporate["affected_codes"] == []
     assert corporate["supported_factor_events"] == []
 
@@ -3014,7 +2528,7 @@ def test_compact_v7_corporate_action_uses_stored_split_fields(
         path, universe=universe, lookback_days=0
     )
 
-    assert corporate["status"] == "PASS"
+    assert corporate["status"] == "OBSERVED"
     assert corporate["affected_codes"] == ["1301"]
     assert corporate["supported_factor_events"]
     assert corporate["supported_factor_events"][0]["price_ratio_changed"] is True
@@ -3111,7 +2625,7 @@ def test_v6_manifest_without_compact_bars_keeps_legacy_typed_bars(
 
     assert coverage["status"] == "PASS"
     assert coverage["observed_rows"] == 2
-    assert corporate["status"] == "PASS"
+    assert corporate["status"] == "OBSERVED"
     assert corporate["affected_codes"] == ["1301"]
     assert corporate["supported_factor_events"]
 
@@ -3122,10 +2636,9 @@ def test_legacy_cohort_report_labels_next_close_without_am_timing_text(
     source, start, end = personal_db
     result = PersonalResearchService(policy=_policy()).run(
         PersonalResearchRequest(
-            source_db=source,
+            data_view=OfflineFixture(artifact_root=tmp_path / "legacy-report").bind(source, decision_cutoff="session_close"),
             period_start=start,
             period_end=end,
-            output_root=tmp_path / "legacy-report",
             cohort_id="diverse-core-v1",
         )
     )

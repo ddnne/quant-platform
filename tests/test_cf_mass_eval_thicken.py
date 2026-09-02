@@ -30,10 +30,11 @@ def test_attach_opt225_regime_preserves_canonical_source_identity(monkeypatch) -
     monkeypatch.setattr(
         thicken,
         "load_opt225_regime_bundle_for_eval",
-        lambda: _bundle(),
+        lambda _view: _bundle(),
     )
+    monkeypatch.setattr(thicken, "_require_view", lambda value: value)
 
-    attached = thicken.attach_opt225_regime()
+    attached = thicken.attach_opt225_regime(object())
 
     assert attached["opt225_regime"]["source"] == {
         "dataset": DATASET_ID,
@@ -45,10 +46,11 @@ def test_attach_opt225_regime_rejects_noncanonical_source(monkeypatch) -> None:
     monkeypatch.setattr(
         thicken,
         "load_opt225_regime_bundle_for_eval",
-        lambda: _bundle(dataset="derivatives_bars_daily_single_stock_options"),
+        lambda _view: _bundle(dataset="derivatives_bars_daily_single_stock_options"),
     )
+    monkeypatch.setattr(thicken, "_require_view", lambda value: value)
 
-    attached = thicken.attach_opt225_regime()
+    attached = thicken.attach_opt225_regime(object())
 
     assert "opt225_regime" not in attached
     assert attached == {"opt225_error": "options_225 source identity mismatch"}
@@ -58,7 +60,7 @@ def test_attach_nky_proxy_binds_topix_identity(monkeypatch) -> None:
     monkeypatch.setattr(
         thicken,
         "load_nky_vol_series_from_sqlite",
-        lambda **_kwargs: {
+        lambda *_args, **_kwargs: {
             "closes_by_date": {
                 "2022-12-30": 1_890.0,
                 "2023-01-04": 1_900.0,
@@ -71,9 +73,12 @@ def test_attach_nky_proxy_binds_topix_identity(monkeypatch) -> None:
     )
     bars: dict[str, list[list[Any]]] = {}
 
+    view = object()
+    monkeypatch.setattr(thicken, "_require_view", lambda value: value)
     attached = thicken.attach_nky_proxy(
         bars,
         {"period_start": "2023-01-04", "period_end": "2023-01-31"},
+        view,
     )
 
     assert bars["__NKY_PROXY__"] == [

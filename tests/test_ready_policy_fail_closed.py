@@ -1251,14 +1251,117 @@ def _seed_exact_pit_scope(
     return db_path, _mini_exact_scope_binding()
 
 
+AUTHENTICATED_EXPORT_AT = "2026-08-25T12:00:00+00:00"
+
+
+def authenticate_applied_mirror(
+    path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    exported_at: str = AUTHENTICATED_EXPORT_AT,
+) -> str:
+    """Seal one existing SQLite file as the current authenticated applied mirror."""
+    from ops import d1_sync_signing as signing
+    from scripts import sync_d1_to_sqlite as sync
+    from storage.sqlite_store import SqliteStore
+    from tests.test_d1_sync_signing import (
+        _install_external_key_registry,
+        _install_test_sealed_audit,
+        _resign,
+        _signed_document,
+    )
+
+    now = datetime.fromisoformat(exported_at)
+    private, _registry_path, registry = _install_external_key_registry(
+        path.parent, monkeypatch
+    )
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    store = SqliteStore(path)
+    store._conn.execute("DROP TABLE IF EXISTS personal_history_manifest")  # noqa: SLF001
+    sync._ensure_control_tables(store._conn)  # noqa: SLF001
+    sync._ensure_export_sync_audit(store)
+    existing = {
+        row[0]
+        for row in store._conn.execute(  # noqa: SLF001
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+    }
+    for table in sync.DEFAULT_TABLES:
+        if table not in existing:
+            store._conn.execute(  # noqa: SLF001
+                f'CREATE TABLE "{table}" (placeholder TEXT)'
+            )
+    applied = sync._last_change_seq(store)
+    if applied <= 0:
+        sync._record_change_seq(store, 7)
+        applied = 7
+    store._conn.commit()  # noqa: SLF001
+    content, schema, counts = sync._private_export.governed_content_identity(
+        store._conn, sync.DEFAULT_TABLES  # noqa: SLF001
+    )
+    document = _signed_document(private, registry, issued_at=now)
+    document["envelope"].update(
+        {
+            "source_content_digest": content,
+            "local_content_digest": content,
+            "source_schema_digest": schema,
+            "schema_digest": schema,
+            "table_counts": counts,
+            "source_change_seq": applied,
+            "applied_change_seq": applied,
+            "exported_at": exported_at,
+            "issued_at": exported_at,
+        }
+    )
+    _resign(private, document)
+    _install_test_sealed_audit(monkeypatch, document)
+    sync._mark_authenticated_export_complete(store, object())
+    sync._freeze_authenticated_current_applied_mirror(store)
+    store.close()
+    return exported_at
+
+
+def _open_ready_handle(
+    path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    exported_at: str = AUTHENTICATED_EXPORT_AT,
+):
+    from scripts import sync_d1_to_sqlite as sync
+
+    authenticate_applied_mirror(path, monkeypatch, exported_at=exported_at)
+    return sync.open_authenticated_applied_mirror(path)
+
+
+def _verify_scope(
+    path: Path,
+    binding,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    exported_at: str = AUTHENTICATED_EXPORT_AT,
+):
+    handle = _open_ready_handle(path, monkeypatch, exported_at=exported_at)
+    return _verify_exact_four_pit_dependency_scope(handle, binding)
+
+
+def _mutate_sqlite(path: Path, sql: str, params: tuple[object, ...] = ()) -> None:
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(sql, params)
+        connection.commit()
+    finally:
+        connection.close()
+
+
 def test_exact_pit_dependency_scope_accepts_complete_receipt_bound_fixture(
     tmp_path,
     receipt_ed25519_keys,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db_path, binding = _seed_exact_pit_scope(
         tmp_path, receipt_ed25519_keys
     )
-    proof = _verify_exact_four_pit_dependency_scope(db_path, binding)
+    proof = _verify_scope(db_path, binding, monkeypatch)
     assert proof["status"] == "PASS"
     assert proof["period_start"] == "2023-01-04"
     assert proof["period_end"] == "2023-01-06"
@@ -1267,6 +1370,17 @@ def test_exact_pit_dependency_scope_accepts_complete_receipt_bound_fixture(
         _SCOPE_DATASETS
     )
     assert all(row["receipt_digests"] for row in proof["entries"])
+    assert proof["exported_at"] == AUTHENTICATED_EXPORT_AT
+    assert proof["observed_through"] == AUTHENTICATED_EXPORT_AT
+    listing_conn = sqlite3.connect(db_path)
+    try:
+        listing = listing_conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='personal_history_manifest'"
+        ).fetchone()
+    finally:
+        listing_conn.close()
+    assert listing is None
 
 
 def test_product_jsonl_vector_matches_authority_utf8_order() -> None:
@@ -1294,6 +1408,7 @@ def test_product_jsonl_vector_matches_authority_utf8_order() -> None:
 def test_signed_product_digest_survives_sync_projection_and_ready(
     tmp_path,
     receipt_ed25519_keys,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source_path, binding = _seed_exact_pit_scope(
         tmp_path, receipt_ed25519_keys
@@ -1363,9 +1478,7 @@ def test_signed_product_digest_survives_sync_projection_and_ready(
         )
         mirror._conn.commit()  # noqa: SLF001
 
-    dependency_proof = _verify_exact_four_pit_dependency_scope(
-        mirror_path, binding
-    )
+    dependency_proof = _verify_scope(mirror_path, binding, monkeypatch)
     product_digests = {
         digest
         for entry in dependency_proof["entries"]
@@ -1500,100 +1613,107 @@ def test_signed_product_digest_survives_sync_projection_and_ready(
 def test_exact_pit_dependency_scope_rejects_each_missing_or_late_dependency(
     tmp_path,
     receipt_ed25519_keys,
+    monkeypatch: pytest.MonkeyPatch,
     victim: str,
     event_date: str,
 ) -> None:
     db_path, binding = _seed_exact_pit_scope(
         tmp_path, receipt_ed25519_keys
     )
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            "UPDATE jquants_records "
-            "SET available_at='2026-08-25T00:00:00+09:00' "
-            "WHERE dataset=? AND substr(event_time,1,10)=?",
-            (victim, event_date),
-        )
+    _mutate_sqlite(
+        db_path,
+        "UPDATE jquants_records "
+        "SET available_at='2026-08-25T00:00:00+09:00' "
+        "WHERE dataset=? AND substr(event_time,1,10)=?",
+        (victim, event_date),
+    )
     with pytest.raises(MassResearchDisabledError):
-        _verify_exact_four_pit_dependency_scope(db_path, binding)
+        _verify_scope(db_path, binding, monkeypatch)
 
 
 def test_exact_pit_dependency_scope_rejects_one_visible_row_and_late_rest(
     tmp_path,
     receipt_ed25519_keys,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db_path, binding = _seed_exact_pit_scope(
         tmp_path, receipt_ed25519_keys
     )
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            "UPDATE jquants_records "
-            "SET available_at='2026-08-25T00:00:00+09:00' "
-            "WHERE dataset='equities_bars_daily' "
-            "AND substr(event_time,1,10) <> '2023-01-02'"
-        )
+    _mutate_sqlite(
+        db_path,
+        "UPDATE jquants_records "
+        "SET available_at='2026-08-25T00:00:00+09:00' "
+        "WHERE dataset='equities_bars_daily' "
+        "AND substr(event_time,1,10) <> '2023-01-02'",
+    )
     with pytest.raises(MassResearchDisabledError, match="closure missing/late"):
-        _verify_exact_four_pit_dependency_scope(db_path, binding)
+        _verify_scope(db_path, binding, monkeypatch)
 
 
 def test_exact_pit_dependency_scope_rejects_unreceipted_natural_keys(
     tmp_path,
     receipt_ed25519_keys,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db_path, binding = _seed_exact_pit_scope(
         tmp_path, receipt_ed25519_keys
     )
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            "DELETE FROM collection_receipts "
-            "WHERE dataset='indices_bars_daily_topix'"
-        )
+    _mutate_sqlite(
+        db_path,
+        "DELETE FROM collection_receipts "
+        "WHERE dataset='indices_bars_daily_topix'",
+    )
     with pytest.raises(MassResearchDisabledError, match="signed receipt"):
-        _verify_exact_four_pit_dependency_scope(db_path, binding)
+        _verify_scope(db_path, binding, monkeypatch)
 
 
 @pytest.mark.parametrize("attack", ("missing", "r2_readback_body", "product_row"))
 def test_exact_pit_dependency_scope_rejects_missing_or_tampered_product(
     tmp_path,
     receipt_ed25519_keys,
+    monkeypatch: pytest.MonkeyPatch,
     attack: str,
 ) -> None:
     db_path, binding = _seed_exact_pit_scope(tmp_path, receipt_ed25519_keys)
-    with sqlite3.connect(db_path) as conn:
-        if attack == "missing":
-            conn.execute(
-                "DELETE FROM receipt_product_materializations "
-                "WHERE dataset='indices_bars_daily_topix'"
-            )
-        elif attack == "r2_readback_body":
-            conn.execute(
-                "UPDATE receipt_product_materializations "
-                "SET artifact_body=artifact_body || ' ' "
-                "WHERE dataset='indices_bars_daily_topix'"
-            )
-        else:
-            conn.execute(
-                "UPDATE jquants_records SET raw_payload='{}' "
-                "WHERE dataset='indices_bars_daily_topix'"
-            )
+    if attack == "missing":
+        _mutate_sqlite(
+            db_path,
+            "DELETE FROM receipt_product_materializations "
+            "WHERE dataset='indices_bars_daily_topix'",
+        )
+    elif attack == "r2_readback_body":
+        _mutate_sqlite(
+            db_path,
+            "UPDATE receipt_product_materializations "
+            "SET artifact_body=artifact_body || ' ' "
+            "WHERE dataset='indices_bars_daily_topix'",
+        )
+    else:
+        _mutate_sqlite(
+            db_path,
+            "UPDATE jquants_records SET raw_payload='{}' "
+            "WHERE dataset='indices_bars_daily_topix'",
+        )
     with pytest.raises(MassResearchDisabledError, match="signed receipt"):
-        _verify_exact_four_pit_dependency_scope(db_path, binding)
+        _verify_scope(db_path, binding, monkeypatch)
 
 
 def test_exact_pit_dependency_scope_rejects_noncanonical_natural_key(
     tmp_path,
     receipt_ed25519_keys,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db_path, binding = _seed_exact_pit_scope(
         tmp_path, receipt_ed25519_keys
     )
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            "UPDATE jquants_records SET natural_key='caller-supplied' "
-            "WHERE dataset='equities_bars_daily' "
-            "AND substr(event_time,1,10)='2023-01-05'"
-        )
+    _mutate_sqlite(
+        db_path,
+        "UPDATE jquants_records SET natural_key='caller-supplied' "
+        "WHERE dataset='equities_bars_daily' "
+        "AND substr(event_time,1,10)='2023-01-05'",
+    )
     with pytest.raises(MassResearchDisabledError, match="natural key"):
-        _verify_exact_four_pit_dependency_scope(db_path, binding)
+        _verify_scope(db_path, binding, monkeypatch)
 
 
 def test_caller_controlled_pytest_environment_cannot_enable_fixture_ready(

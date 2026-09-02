@@ -177,7 +177,11 @@ def _fake_mirror_authority(
             conn.rollback()
             conn.close()
 
-    monkeypatch.setattr(sync_runtime, "_consume_authenticated_applied_mirror", consume)
+    monkeypatch.setattr(
+        sync_runtime,
+        "_consume_authenticated_applied_mirror_for_ops_projection",
+        lambda handle: consume(handle, lambda conn, identity: identity),
+    )
     monkeypatch.setattr(
         protocol, "_remeasure_applied_mirror_identity", lambda _conn: identity
     )
