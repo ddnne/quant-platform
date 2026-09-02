@@ -163,7 +163,8 @@ function requireDerivedClaims(
     !exactKeys(extraDigests, requiredExtraDigests) ||
     requiredExtraDigests.some(
       (field) => !isSha256(extraDigests[field]),
-    )
+    ) ||
+    extraDigests.product_artifact_digest !== value.structured_digest
   ) {
     throw new TypeError("receipt authority claims failed invariant validation");
   }

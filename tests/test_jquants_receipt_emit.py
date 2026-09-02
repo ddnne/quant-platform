@@ -1789,7 +1789,10 @@ def test_unverified_or_mismatched_signer_response_never_marks_receipt_verified(
     tmp_path: Path, receipt_ed25519_keys, mode: str
 ) -> None:
     from storage.receipt_crypto import canonical_evidence_digest
-    from tests.receipt_test_support import build_test_signed_digest_fields
+    from tests.receipt_test_support import (
+        _upgrade_runtime_test_claims,
+        build_test_signed_digest_fields,
+    )
 
     service = _tmp_service(receipt_ed25519_keys)
     store = SqliteStore(tmp_path / f"wrong-signer-{mode}.sqlite")
@@ -1812,7 +1815,9 @@ def test_unverified_or_mismatched_signer_response_never_marks_receipt_verified(
     def wrong_response(bound_service, evidence):
         if mode == "garbage":
             return {"garbage": "not-a-closed-signed-envelope"}
-        claims = dict(bound_service._consume_reconciled_evidence(evidence))
+        claims = _upgrade_runtime_test_claims(
+            bound_service._consume_reconciled_evidence(evidence)
+        )
         claims["raw_count"] = int(claims["raw_count"]) + 1
         observation = {
             key: value for key, value in claims.items() if key != "observation_digest"

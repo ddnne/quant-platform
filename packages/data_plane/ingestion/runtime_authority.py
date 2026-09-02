@@ -86,11 +86,23 @@ _JQUANTS_ACQUISITION_EXTRA_DIGESTS = frozenset(
         "acquisition_terminal_chain_digest",
     }
 )
-_JQUANTS_MASTER_CALENDAR_EXTRA_DIGESTS = frozenset(
+_JQUANTS_MASTER_LOCAL_CALENDAR_EXTRA_DIGESTS = frozenset(
     {
         "acquisition_official_calendar_raw_digest",
         "acquisition_official_business_dates_digest",
     }
+)
+_JQUANTS_MASTER_SIGNED_CALENDAR_EXTRA_DIGESTS = frozenset(
+    {
+        "official_calendar_evidence_digest",
+        "official_calendar_raw_body_digest",
+        "official_calendar_query_digest",
+        "official_business_dates_digest",
+        "official_calendar_binding_digest",
+    }
+)
+_PRODUCT_EXTRA_DIGESTS = frozenset(
+    {"product_artifact_digest", "product_manifest_digest"}
 )
 
 
@@ -1032,13 +1044,17 @@ def _verify_issued_receipt_matches_measurement(
     required: RequiredCoverageSegment,
     claims: Mapping[str, Any],
 ) -> None:
-    """Reject a stale, malformed, or differently bound signer response.
+    """Bind a signed authority response to every locally measurable field.
 
     The receipt principal is a separate trust boundary.  Its returned envelope
     is therefore verified with the public registry before the local receipt is
-    inserted or the run is labelled ``RECEIPT_VERIFIED``.  Signature validity
-    alone is insufficient: every exposed closure field must equal the fresh
-    local raw/parser/natural-key measurement.
+    inserted or the run is labelled ``RECEIPT_VERIFIED``.  Locally measured
+    identity, counts, raw/parser digests, scope, and acquisition evidence must
+    match exactly.  Authority-owned R2 keys, their object byte counts, receipt
+    request identity, and product-manifest evidence have no caller-owned
+    expected value; they are instead retained in the verified proof and bound
+    by the signed v3 observation chain.  The product artifact digest must still
+    equal the signed structured digest measured on both sides.
     """
     from storage.verified_receipt import require_verified_collection_closure
 
@@ -1053,39 +1069,120 @@ def _verify_issued_receipt_matches_measurement(
         structured_digest=str(claims["structured_digest"]),
     )
     proof = closure.to_proof_dict()
+    expected_local_fields = {
+        "environment",
+        "authority_instance_digest",
+        "coverage_policy_version",
+        "source",
+        "contract_id",
+        "dataset",
+        "segment_id",
+        "segment_start",
+        "segment_end",
+        "expected_scope",
+        "expected_items",
+        "observed_items",
+        "raw_page_count",
+        "raw_count",
+        "structured_count",
+        "status",
+        "error",
+        "pagination_exhausted",
+        "discovery_exhausted",
+        "source_request_digest",
+        "raw_manifest_digest",
+        "raw_digest",
+        "raw_byte_count",
+        "structured_digest",
+        "structured_generation",
+        "scope_digest",
+        "run_id",
+        "checked_at",
+        "extra_digests",
+        "observation_digest",
+    }
+    if set(claims) != expected_local_fields:
+        raise ValueError("local receipt measurement fields are not closed")
+    local_observation = {
+        name: value for name, value in claims.items() if name != "observation_digest"
+    }
+    if claims["observation_digest"] != _digest(local_observation):
+        raise ValueError("local receipt observation digest is inconsistent")
     expected = {
         "environment": claims["environment"],
         "authority_instance_digest": claims["authority_instance_digest"],
         "coverage_policy_version": claims["coverage_policy_version"],
         "source": claims["source"],
+        "contract_id": claims["contract_id"],
         "dataset": claims["dataset"],
         "segment_id": claims["segment_id"],
         "segment_start": claims["segment_start"],
         "segment_end": claims["segment_end"],
+        "expected_scope": claims["expected_scope"],
+        "scope_digest": claims["scope_digest"],
         "expected_items": claims["expected_items"],
         "observed_items": claims["observed_items"],
         "raw_page_count": claims["raw_page_count"],
         "raw_row_count": claims["raw_count"],
         "structured_row_count": claims["structured_count"],
+        "status": claims["status"],
+        "error": claims["error"],
         "pagination_exhausted": claims["pagination_exhausted"],
         "discovery_exhausted": claims["discovery_exhausted"],
+        "source_request_digest": claims["source_request_digest"],
         "raw_manifest_digest": claims["raw_manifest_digest"],
         "raw_digest": claims["raw_digest"],
+        "raw_byte_count": claims["raw_byte_count"],
         "structured_digest": claims["structured_digest"],
         "structured_generation": claims["structured_generation"],
         "run_id": claims["run_id"],
         "checked_at": claims["checked_at"],
     }
-    if {name: proof.get(name) for name in expected} != expected:
+    observed = {
+        **{name: proof.get(name) for name in expected},
+        "status": closure.status,
+        "error": closure.error,
+    }
+    if observed != expected:
         raise ValueError("receipt authority response differs from local measurement")
     signed_extras = dict(closure.extra_digests)
     measured_extras = dict(claims["extra_digests"])
-    if any(signed_extras.get(key) != value for key, value in measured_extras.items()):
+    master = (
+        claims["source"] == "jquants"
+        and claims["dataset"] == "equities_master"
+    )
+    expected_measured_extras = _JQUANTS_ACQUISITION_EXTRA_DIGESTS | (
+        _JQUANTS_MASTER_LOCAL_CALENDAR_EXTRA_DIGESTS
+        if master
+        else frozenset()
+    )
+    expected_signed_extras = _JQUANTS_ACQUISITION_EXTRA_DIGESTS | (
+        _JQUANTS_MASTER_SIGNED_CALENDAR_EXTRA_DIGESTS
+        if master
+        else frozenset()
+    ) | _PRODUCT_EXTRA_DIGESTS
+    if (
+        set(measured_extras) != expected_measured_extras
+        or set(signed_extras) != expected_signed_extras
+        or any(
+            signed_extras[name] != measured_extras[name]
+            for name in _JQUANTS_ACQUISITION_EXTRA_DIGESTS
+        )
+    ):
         raise ValueError(
             "receipt authority extra digests differ from local measurement"
         )
-    if receipt.digests.get("source_request_digest") != claims["source_request_digest"]:
-        raise ValueError("receipt authority source request differs from local measurement")
+    if master and (
+        signed_extras["official_calendar_raw_body_digest"]
+        != measured_extras["acquisition_official_calendar_raw_digest"]
+        or signed_extras["official_business_dates_digest"]
+        != measured_extras["acquisition_official_business_dates_digest"]
+    ):
+        raise ValueError(
+            "receipt authority calendar digests differ from local measurement"
+        )
+    if signed_extras["product_artifact_digest"] != closure.structured_digest:
+        raise ValueError("receipt authority product artifact lineage is inconsistent")
 
 
 def _trusted_extra_evidence(
@@ -1713,7 +1810,7 @@ def _measure_collection_claims(
     authority_extras = dict(trusted_extra_evidence or {})
     if required.source == "jquants":
         expected_authority_extras = _JQUANTS_ACQUISITION_EXTRA_DIGESTS | (
-            _JQUANTS_MASTER_CALENDAR_EXTRA_DIGESTS
+            _JQUANTS_MASTER_LOCAL_CALENDAR_EXTRA_DIGESTS
             if required.dataset == "equities_master"
             else frozenset()
         )
@@ -1762,6 +1859,7 @@ def _measure_collection_claims(
         "authority_instance_digest": PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
         "coverage_policy_version": policy.policy_version,
         "source": required.source,
+        "contract_id": policy.collection_scope,
         "dataset": required.dataset,
         "segment_id": required.segment_id,
         "segment_start": required.segment_start,
@@ -1805,6 +1903,7 @@ def _measure_collection_claims(
         "source_request_digest": source_request_digest,
         "raw_manifest_digest": raw_manifest_digest,
         "raw_digest": raw_digest,
+        "raw_byte_count": sum(len(page) for page in pages),
         "structured_digest": structured_digest,
         "structured_generation": int(run_id),
         "scope_digest": scope_digest,

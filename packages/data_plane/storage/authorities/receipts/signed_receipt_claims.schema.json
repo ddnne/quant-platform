@@ -116,16 +116,20 @@
     "checked_at": { "$ref": "#/$defs/nonempty" },
     "extra_digests": {
       "type": "object",
-      "additionalProperties": true,
+      "additionalProperties": false,
       "required": [
         "acquisition_collection_manifest_file_digest",
         "acquisition_collection_digest",
-        "acquisition_terminal_chain_digest"
+        "acquisition_terminal_chain_digest",
+        "product_artifact_digest",
+        "product_manifest_digest"
       ],
       "properties": {
         "acquisition_collection_manifest_file_digest": { "$ref": "#/$defs/digest" },
         "acquisition_collection_digest": { "$ref": "#/$defs/digest" },
         "acquisition_terminal_chain_digest": { "$ref": "#/$defs/digest" },
+        "product_artifact_digest": { "$ref": "#/$defs/digest" },
+        "product_manifest_digest": { "$ref": "#/$defs/digest" },
         "official_calendar_evidence_digest": { "$ref": "#/$defs/digest" },
         "official_calendar_raw_body_digest": { "$ref": "#/$defs/digest" },
         "official_calendar_query_digest": { "$ref": "#/$defs/digest" },

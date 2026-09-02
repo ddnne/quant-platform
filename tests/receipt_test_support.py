@@ -678,13 +678,25 @@ def _upgrade_runtime_test_claims(claims: Mapping[str, Any]) -> dict[str, Any]:
             "raw_manifest_digest": upgraded["raw_manifest_digest"],
         }
     )
+    local_extras = dict(upgraded["extra_digests"])
+    calendar_raw_digest = local_extras.pop(
+        "acquisition_official_calendar_raw_digest", None
+    )
+    calendar_business_dates_digest = local_extras.pop(
+        "acquisition_official_business_dates_digest", None
+    )
     extras = canonical_test_authority_extra_digests(
         source=source,
         dataset=dataset,
         segment_id=segment_id,
         run_id=run_id,
-        extra_digests=upgraded["extra_digests"],
+        extra_digests=local_extras,
     )
+    if dataset == "equities_master":
+        if calendar_raw_digest is None or calendar_business_dates_digest is None:
+            raise ValueError("runtime master receipt lacks local calendar evidence")
+        extras["official_calendar_raw_body_digest"] = calendar_raw_digest
+        extras["official_business_dates_digest"] = calendar_business_dates_digest
     extras.setdefault("product_artifact_digest", upgraded["structured_digest"])
     extras.setdefault(
         "product_manifest_digest",
@@ -714,7 +726,7 @@ def _upgrade_runtime_test_claims(claims: Mapping[str, Any]) -> dict[str, Any]:
             "manifest_byte_count": len(manifest_body),
             "raw_manifest_key": raw_manifest_key,
             "raw_manifest_byte_count": len(raw_manifest_body),
-            "raw_byte_count": len(raw_manifest_body),
+            "raw_byte_count": upgraded["raw_byte_count"],
             "natural_key_digest": canonical_evidence_digest(
                 {
                     "schema_version": "test-runtime-natural-keys/v1",

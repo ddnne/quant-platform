@@ -667,6 +667,35 @@ describe("Receipt Evidence Authority in workerd", () => {
       amRequest,
       persistedRequestDigest,
     )).resolves.toEqual(canonicalDailyClaims);
+    const missingProductDigest = { ...canonicalDailyClaims.extra_digests };
+    delete missingProductDigest.product_manifest_digest;
+    await expect(requirePersistedDerivedClaims(
+      { ...canonicalDailyClaims, extra_digests: missingProductDigest },
+      amRequest,
+      persistedRequestDigest,
+    )).rejects.toThrow("claims failed invariant validation");
+    await expect(requirePersistedDerivedClaims(
+      {
+        ...canonicalDailyClaims,
+        extra_digests: {
+          ...canonicalDailyClaims.extra_digests,
+          EXPECTED_EMPTY_WITH_EVIDENCE: "sha256:" + "e".repeat(64),
+        },
+      },
+      amRequest,
+      persistedRequestDigest,
+    )).rejects.toThrow("claims failed invariant validation");
+    await expect(requirePersistedDerivedClaims(
+      {
+        ...canonicalDailyClaims,
+        extra_digests: {
+          ...canonicalDailyClaims.extra_digests,
+          product_artifact_digest: "sha256:" + "f".repeat(64),
+        },
+      },
+      amRequest,
+      persistedRequestDigest,
+    )).rejects.toThrow("claims failed invariant validation");
     await expect(requirePersistedDerivedClaims(
       { ...canonicalDailyClaims, receipt_issue_digest: monthlyClaims.receipt_issue_digest },
       amRequest,
