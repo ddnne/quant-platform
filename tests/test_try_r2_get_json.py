@@ -1,8 +1,7 @@
 """CLI r2 object get --remote for panel cache is not artifact authority."""
 from __future__ import annotations
 
-from research.cf_mass_eval_job import try_r2_get_json
-from ops.r2_io import R2IOError
+from ops.r2_io import R2IOError, try_r2_get_json
 
 
 def test_try_r2_get_json_cli_miss_and_garbage_return_none_not_complete(
@@ -17,7 +16,9 @@ def test_try_r2_get_json_cli_miss_and_garbage_return_none_not_complete(
     monkeypatch.setattr(
         "ops.r2_io.default_r2_get_object", _miss
     )
-    miss = try_r2_get_json("research/mass_eval/panels_cache/x/meta.json")
+    miss = try_r2_get_json(
+        "quant-structured", "research/mass_eval/panels_cache/x/meta.json"
+    )
     assert miss is None
     assert seen
     assert miss != "COMPLETE"
@@ -28,6 +29,8 @@ def test_try_r2_get_json_cli_miss_and_garbage_return_none_not_complete(
     monkeypatch.setattr(
         "ops.r2_io.default_r2_get_object", _garbage
     )
-    garbage = try_r2_get_json("research/mass_eval/panels_cache/x/meta.json")
+    garbage = try_r2_get_json(
+        "quant-structured", "research/mass_eval/panels_cache/x/meta.json"
+    )
     assert garbage is None
     assert garbage != "COMPLETE"

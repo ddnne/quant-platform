@@ -711,9 +711,10 @@ def test_real_sqlite_signed_chain_retains_deep_immutable_projection_identity(
     )
     store._conn.commit()  # noqa: SLF001
     sync._freeze_authenticated_current_applied_mirror(store)
-    from scripts import authority_protocol_runtime as protocol
 
-    remeasured = protocol._remeasure_applied_mirror_identity(store._conn)  # noqa: SLF001
+    remeasured = sync._authenticated_applied_mirror_identity_from_conn(  # noqa: SLF001
+        store._conn
+    )
     assert remeasured["exported_at"] == envelope["exported_at"]
     assert remeasured["exported_at"] == now.isoformat()
     frozen = json.loads(

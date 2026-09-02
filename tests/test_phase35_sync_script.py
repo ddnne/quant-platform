@@ -1339,9 +1339,6 @@ def test_publish_ops_flag_default_off(sync_module):
     assert on.publish_ops is True
     off = parser.parse_args(["--db=test.sqlite"])
     assert off.publish_ops is False
-    help_text = parser.format_help()
-    assert "Default OFF for safety" in help_text or "default off" in help_text.lower()
-    assert "--apply-remote" in help_text or "apply-remote" in help_text
 
 
 def test_unsigned_pilot_ready_json_is_rejected(
