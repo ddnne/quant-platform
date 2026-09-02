@@ -4,12 +4,14 @@ import { catalogProjectionRows, datasetById } from "./catalog";
 import {
   COVERAGE_POLICY_VERSION,
   aggregateDatasetStatus,
+  PINNED_RECEIPT_REGISTRY_RAW,
   projectedSegmentStatus,
   type ReceiptVerifyRegistry,
 } from "./ops_projection_policy";
 import { produceImmutableB0B4 } from "./snapshot_quality_evidence";
 import { sha256HexFromBytes, sha256HexFromString } from "./sha256";
-import pinnedReceiptRegistry from "../../../../packages/data_plane/data_contracts/receipt_verify_public_keys.json";
+import pinnedProductionReceiptRegistry from "../../../../packages/data_plane/data_contracts/receipt_verify_public_keys.production.json";
+import pinnedStagingReceiptRegistry from "../../../../packages/data_plane/data_contracts/receipt_verify_public_keys.staging.json";
 
 export const OPS_SYNC_FEED = "jquants_records";
 
@@ -202,10 +204,48 @@ async function tableColumns(db: SourceDb, name: string): Promise<Set<string>> {
   return new Set(rows.map((row) => String(row.name)));
 }
 
+const PINNED_RECEIPT_REGISTRY_DOCUMENT = {
+  production: {
+    authority_instance_digest:
+      "sha256:e6d7df1b9000481d15b8987f5ffda7f3a0b0c051a43cf0051d04a38e58e372a6",
+    generation: 2,
+    registry_digest:
+      "sha256:8c2d84c644e149e33ac073cab8573856da2b1c2c78e7b4c8a4854071a6eb83df",
+  },
+  staging: {
+    authority_instance_digest:
+      "sha256:5104b2d3b85ddbbd44fb9e4ddc2689898232c2e6e175727c71c1ce2cb6ec9bff",
+    generation: 2,
+    registry_digest:
+      "sha256:9cb40c06bd2f869a2eedc81082f85db85cf5600a992288cdfa75ce5f1c79cdee",
+  },
+} as const;
+
+export function pinnedReceiptRegistryForEnvironment(
+  environment: "staging" | "production",
+): ReceiptVerifyRegistry | null {
+  const document = environment === "production"
+    ? pinnedProductionReceiptRegistry
+    : pinnedStagingReceiptRegistry;
+  const expected = PINNED_RECEIPT_REGISTRY_DOCUMENT[environment];
+  if (
+    document.schema_version !== 3 ||
+    document.purpose !== "receipt_verification" ||
+    document.environment !== environment ||
+    document.authority_instance_digest !== expected.authority_instance_digest ||
+    document.generation !== expected.generation ||
+    document.registry_digest !== expected.registry_digest ||
+    !Array.isArray(document.keys)
+  ) return null;
+  return {
+    ...(document as ReceiptVerifyRegistry),
+    ...PINNED_RECEIPT_REGISTRY_RAW[environment],
+  };
+}
+
 function loadReceiptRegistry(env: OpsProjectionEnv): ReceiptVerifyRegistry | null {
-  const registry = (env.RECEIPT_VERIFY_REGISTRY ?? pinnedReceiptRegistry) as ReceiptVerifyRegistry;
-  if (!registry || registry.authority_status !== "ACTIVE") return null;
-  return registry;
+  return env.RECEIPT_VERIFY_REGISTRY ??
+    pinnedReceiptRegistryForEnvironment(env.OPS_PROJECTION_ENVIRONMENT);
 }
 
 async function requireCap(db: SourceDb, table: string): Promise<void> {
@@ -1486,8 +1526,8 @@ export async function publishOpsProjection(
       }),
       receipt_registry_identity_digest: await digest({
         digest: receiptRegistry?.registry_digest ?? null,
-        raw_sha: "sha256:dc6095db1d09bf775f972cb428944a1ba5bc47fefa0af19e77c3f3a157ae47f5",
-        raw_size: 1370,
+        raw_sha: PINNED_RECEIPT_REGISTRY_RAW[environment].registry_raw_sha,
+        raw_size: PINNED_RECEIPT_REGISTRY_RAW[environment].registry_raw_size,
         generation: receiptRegistry?.generation ?? 2,
         authority_status: receiptRegistry?.authority_status ?? "PENDING",
       }),

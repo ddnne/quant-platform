@@ -219,11 +219,22 @@ export function requireCanonicalUtc(value: unknown): string | null {
   return canonical === value ? value : null;
 }
 
-export const PINNED_RECEIPT_REGISTRY_RAW_SHA =
-  "sha256:dc6095db1d09bf775f972cb428944a1ba5bc47fefa0af19e77c3f3a157ae47f5";
-export const PINNED_RECEIPT_REGISTRY_RAW_SIZE = 1370;
+export const PINNED_RECEIPT_REGISTRY_RAW = {
+  production: {
+    registry_raw_sha:
+      "sha256:c258de1ff4a1d8c917aefe6656f0892a602f8d0de635ca21a4c8d7160d84ab33",
+    registry_raw_size: 464,
+  },
+  staging: {
+    registry_raw_sha:
+      "sha256:2e5f91fd38d25ab971c674b4d979e4258748cf3db46e52eb445d5352f5dd4d19",
+    registry_raw_size: 461,
+  },
+} as const;
 
 export type ReceiptVerifyRegistry = {
+  schema_version?: number;
+  purpose?: string;
   authority_status: string;
   environment: string;
   authority_instance_digest?: string;
@@ -231,6 +242,7 @@ export type ReceiptVerifyRegistry = {
   registry_raw_sha?: string;
   registry_raw_size?: number;
   generation?: number;
+  prior_registry_digest?: string | null;
   keys: Array<{
     key_id: string;
     algorithm: string;
@@ -264,18 +276,9 @@ export async function verifySignedReceiptEnvelope(
   if (registry.authority_status !== "ACTIVE") return null;
   if (registry.environment !== environment) return null;
   if (!isSha256(registry.authority_instance_digest)) return null;
-  if (
-    registry.registry_raw_sha &&
-    registry.registry_raw_sha !== PINNED_RECEIPT_REGISTRY_RAW_SHA
-  ) {
-    return null;
-  }
-  if (
-    registry.registry_raw_size != null &&
-    registry.registry_raw_size !== PINNED_RECEIPT_REGISTRY_RAW_SIZE
-  ) {
-    return null;
-  }
+  const rawPin = PINNED_RECEIPT_REGISTRY_RAW[environment as "production" | "staging"];
+  if (!rawPin || registry.registry_raw_sha !== rawPin.registry_raw_sha ||
+      registry.registry_raw_size !== rawPin.registry_raw_size) return null;
   const keyId = envelope.issuer_key_id;
   if (typeof keyId !== "string" || keyId.length === 0) return null;
   const key = registry.keys.find(

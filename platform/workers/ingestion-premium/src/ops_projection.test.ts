@@ -13,10 +13,12 @@ import {
   PROJECTED_CONTENT_TABLES,
   digest,
   manifestFromRows,
+  pinnedReceiptRegistryForEnvironment,
   publishOpsProjection,
   type OpsProjectionEnv,
 } from "./ops_projection";
 import {
+  PINNED_RECEIPT_REGISTRY_RAW,
   projectedSegmentStatus,
   trustedComplete,
   verifySignedReceiptEnvelope,
@@ -566,6 +568,29 @@ async function envFor(
 }
 
 describe("ops projection cloud publisher", () => {
+  it("selects the exact raw-pinned scoped receipt registry for each environment", async () => {
+    for (const environment of ["production", "staging"] as const) {
+      const raw = new Uint8Array(readFileSync(join(
+        here,
+        `../../../../packages/data_plane/data_contracts/receipt_verify_public_keys.${environment}.json`,
+      )));
+      const pin = PINNED_RECEIPT_REGISTRY_RAW[environment];
+      const registry = pinnedReceiptRegistryForEnvironment(environment);
+
+      expect(raw.byteLength).toBe(pin.registry_raw_size);
+      expect(await sha256Prefixed(raw)).toBe(pin.registry_raw_sha);
+      expect(registry).toMatchObject({
+        schema_version: 3,
+        purpose: "receipt_verification",
+        environment,
+        registry_raw_sha: pin.registry_raw_sha,
+        registry_raw_size: pin.registry_raw_size,
+      });
+    }
+    expect(pinnedReceiptRegistryForEnvironment("production")?.authority_instance_digest)
+      .not.toBe(pinnedReceiptRegistryForEnvironment("staging")?.authority_instance_digest);
+  });
+
   it("publishes from real 0001-0010 source schema onto the dedicated projection migration", async () => {
     const source = new DatabaseSync(":memory:");
     const target = new DatabaseSync(":memory:");
@@ -1127,6 +1152,12 @@ describe("ops projection cloud publisher", () => {
     const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
     const raw = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
     const registry = {
+      ...PINNED_RECEIPT_REGISTRY_RAW.production,
+      schema_version: 3,
+      purpose: "receipt_verification",
+      generation: 2,
+      prior_registry_digest: "sha256:" + "10".repeat(32),
+      registry_digest: "sha256:" + "20".repeat(32),
       authority_status: "ACTIVE",
       environment: "production",
       authority_instance_digest: "sha256:" + "11".repeat(32),
@@ -1314,6 +1345,12 @@ describe("ops projection cloud publisher", () => {
     const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
     const raw = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
     const registry = {
+      ...PINNED_RECEIPT_REGISTRY_RAW.production,
+      schema_version: 3,
+      purpose: "receipt_verification",
+      generation: 2,
+      prior_registry_digest: "sha256:" + "10".repeat(32),
+      registry_digest: "sha256:" + "20".repeat(32),
       authority_status: "ACTIVE" as const,
       environment: "production",
       authority_instance_digest: "sha256:" + "11".repeat(32),
@@ -1438,6 +1475,12 @@ describe("ops projection cloud publisher", () => {
     const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
     const raw = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
     const registry = {
+      ...PINNED_RECEIPT_REGISTRY_RAW.production,
+      schema_version: 3,
+      purpose: "receipt_verification",
+      generation: 2,
+      prior_registry_digest: "sha256:" + "10".repeat(32),
+      registry_digest: "sha256:" + "20".repeat(32),
       authority_status: "ACTIVE" as const,
       environment: "production",
       authority_instance_digest: "sha256:" + "11".repeat(32),
