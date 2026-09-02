@@ -64,6 +64,7 @@ export type InternalReceiptAuthority = {
   appendDerived(
     operationId: string,
     requestDigest: string,
+    request: ReceiptIssueRequestV1,
     claims: UnsignedReceiptClaimsV3,
   ): Promise<ReceiptAuthorityIssuedRecord>;
   finalizeCommitted(
@@ -272,6 +273,7 @@ export async function executeReceiptRequest(
   const issued = await authority.appendDerived(
     operationId,
     requestDigest,
+    identity,
     claims,
   );
   if (faults.crashAfterIssueBeforeFinalize) {

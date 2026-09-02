@@ -1,5 +1,18 @@
-import { exactKeys, isPlainObject, isSha256 } from "./canonical";
-import type { UnsignedReceiptClaimsV3 } from "./types";
+import {
+  canonicalDigest,
+  exactKeys,
+  isPlainObject,
+  isSha256,
+} from "./canonical";
+import {
+  issueIdentity,
+  requireReceiptRequest,
+  segmentMatchesGrain,
+} from "./receipt_request_identity";
+import type {
+  ReceiptIssueRequestV1,
+  UnsignedReceiptClaimsV3,
+} from "./types";
 
 const UNSIGNED_CLAIM_KEYS = [
   "environment",
@@ -58,7 +71,10 @@ const REQUIRED_MASTER_CALENDAR_DIGESTS = [
 ] as const;
 
 /** Validate only DO-derived claims immediately before signing. */
-export function requireDerivedClaims(value: unknown): UnsignedReceiptClaimsV3 {
+function requireDerivedClaims(
+  value: unknown,
+  persistedRequest: ReceiptIssueRequestV1,
+): UnsignedReceiptClaimsV3 {
   if (!isPlainObject(value) || !exactKeys(value, UNSIGNED_CLAIM_KEYS)) {
     throw new TypeError("receipt authority claims are not closed");
   }
@@ -76,6 +92,21 @@ export function requireDerivedClaims(value: unknown): UnsignedReceiptClaimsV3 {
   const requiredExtraDigests = value.dataset === "equities_master"
     ? [...REQUIRED_ACQUISITION_DIGESTS, ...REQUIRED_MASTER_CALENDAR_DIGESTS]
     : [...REQUIRED_ACQUISITION_DIGESTS];
+  const requestIdentityMatches =
+    value.environment === persistedRequest.environment &&
+    value.source === persistedRequest.source &&
+    value.contract_id === persistedRequest.contract_id &&
+    value.dataset === persistedRequest.dataset_id &&
+    value.segment_id === persistedRequest.segment_id &&
+    value.segment_start === persistedRequest.expected_key_start &&
+    value.segment_end === persistedRequest.expected_key_end &&
+    segmentMatchesGrain(
+      persistedRequest.source,
+      persistedRequest.segment_grain,
+      persistedRequest.segment_id,
+      persistedRequest.expected_key_start,
+      persistedRequest.expected_key_end,
+    );
   if (
     (value.environment !== "production" && value.environment !== "staging") ||
     !isSha256(value.authority_instance_digest) ||
@@ -84,15 +115,7 @@ export function requireDerivedClaims(value: unknown): UnsignedReceiptClaimsV3 {
     typeof value.contract_id !== "string" || value.contract_id.length === 0 ||
     typeof value.dataset !== "string" || value.dataset.length === 0 ||
     typeof value.segment_id !== "string" ||
-    (value.source === "jquants"
-      ? !/^\d{4}-\d{2}$/.test(value.segment_id)
-      : !(
-        /^\d{4}-\d{2}-\d{2}$/.test(value.segment_id) ||
-        /^archive-\d{4}-\d{2}-\d{2}$/.test(value.segment_id) ||
-        /^index_root_\d{4}-\d{2}-\d{2}$/.test(value.segment_id) ||
-        /^archive_year_\d{4}_[A-Za-z0-9._-]{1,64}$/.test(value.segment_id) ||
-        /^file_[A-Za-z0-9._-]{1,160}$/.test(value.segment_id)
-      )) ||
+    !requestIdentityMatches ||
     typeof value.segment_start !== "string" ||
     typeof value.segment_end !== "string" ||
     !isPlainObject(value.expected_scope) ||
@@ -128,4 +151,20 @@ export function requireDerivedClaims(value: unknown): UnsignedReceiptClaimsV3 {
     throw new TypeError("receipt authority claims failed invariant validation");
   }
   return value as UnsignedReceiptClaimsV3;
+}
+
+/** Recover the canonical request preimage and bind it to the DO-persisted digest. */
+export async function requirePersistedDerivedClaims(
+  value: unknown,
+  rawRequest: ReceiptIssueRequestV1,
+  persistedRequestDigest: string,
+): Promise<UnsignedReceiptClaimsV3> {
+  const persistedRequest = issueIdentity(requireReceiptRequest(rawRequest));
+  if (
+    !isSha256(persistedRequestDigest) ||
+    await canonicalDigest(persistedRequest) !== persistedRequestDigest
+  ) {
+    throw new Error("receipt authority request preimage differs from persisted digest");
+  }
+  return requireDerivedClaims(value, persistedRequest);
 }

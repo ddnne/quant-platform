@@ -16,6 +16,7 @@ import type {
 import { canonicalDigest, canonicalJson, sha256Digest } from "../src/canonical";
 import { ReceiptEvidenceAuthority } from "../src/authority_do";
 import { authorityInstanceDigest } from "../src/authority_instance";
+import { requirePersistedDerivedClaims } from "../src/claims_validation";
 import {
   capturedOfficialCalendarDescriptor,
   loadCaptureState,
@@ -35,6 +36,7 @@ import type {
   ReceiptAuthorityEnv,
   ReceiptEvidenceAuthorityRpc,
   ReceiptIssueRequestV1,
+  UnsignedReceiptClaimsV3,
 } from "../src/types";
 
 const runtimeEnv = env as ReceiptAuthorityEnv;
@@ -55,6 +57,16 @@ const request: ReceiptIssueRequestV1 = {
   expected_key_start: "2024-02-01",
   expected_key_end: "2024-02-29",
   request_nonce: "a".repeat(64),
+};
+
+const amRequest: ReceiptIssueRequestV1 = {
+  ...request,
+  dataset_id: "equities_bars_daily_am",
+  segment_grain: "same_trading_day_am_snapshot",
+  segment_id: "2026-09-02",
+  expected_key_start: "2026-09-02",
+  expected_key_end: "2026-09-02",
+  request_nonce: "f".repeat(64),
 };
 
 const acquisitionEnv: AcquisitionEnv = {
@@ -592,6 +604,81 @@ describe("Receipt Evidence Authority in workerd", () => {
     }
     expect(rejected).toBe(true);
     expect(await snapshot()).toEqual(before);
+  });
+
+  it("accepts canonical AM daily claims only against the real DO-persisted request grain", async () => {
+    installAuthorityAcquisition();
+    const { stub } = await activateRegisteredTestKey();
+    const monthlyIssued = await stub.issue_for_segment(request);
+    const unsigned = JSON.parse(
+      new TextDecoder().decode(decodeBase64(monthlyIssued.receipt.digests.signed_body_b64)),
+    ) as Record<string, unknown>;
+    for (const field of ["version", "parser_normalizer_version", "issuer_id", "issued_at"]) {
+      delete unsigned[field];
+    }
+    const monthlyClaims = unsigned as unknown as UnsignedReceiptClaimsV3;
+    // AM acquisition remains independently PENDING, but begin() durably records
+    // the canonical request digest before that closed acquisition gate runs.
+    await expect(runInDurableObject(
+      stub,
+      (instance) => instance.issue_for_segment(amRequest),
+    )).rejects.toThrow("J-Quants acquisition request rejected");
+    const operationId = await canonicalDigest(amRequest);
+    const persistedRequestDigest = await runInDurableObject(
+      stub,
+      async (_instance, state) => state.storage.sql.exec<{ request_digest: string }>(
+        "SELECT request_digest FROM authority_operations WHERE operation_id=?",
+        operationId,
+      ).one().request_digest,
+    );
+    expect(persistedRequestDigest).toBe(operationId);
+
+    const dailyClaims: UnsignedReceiptClaimsV3 = {
+      ...monthlyClaims,
+      dataset: amRequest.dataset_id,
+      segment_id: amRequest.segment_id,
+      segment_start: amRequest.expected_key_start,
+      segment_end: amRequest.expected_key_end,
+    };
+    await expect(requirePersistedDerivedClaims(
+      dailyClaims,
+      amRequest,
+      persistedRequestDigest,
+    )).resolves.toEqual(dailyClaims);
+
+    const registryGrainSubstitution = {
+      ...amRequest,
+      segment_grain: "calendar_month" as const,
+      segment_id: "2026-09",
+      expected_key_start: "2026-09-01",
+      expected_key_end: "2026-09-30",
+    };
+    await expect(requirePersistedDerivedClaims(
+      {
+        ...dailyClaims,
+        segment_id: registryGrainSubstitution.segment_id,
+        segment_start: registryGrainSubstitution.expected_key_start,
+        segment_end: registryGrainSubstitution.expected_key_end,
+      },
+      registryGrainSubstitution,
+      persistedRequestDigest,
+    )).rejects.toThrow("governed inventory");
+    const monthlyRequestDigest = await canonicalDigest(request);
+    await expect(requirePersistedDerivedClaims(
+      dailyClaims,
+      request,
+      monthlyRequestDigest,
+    )).rejects.toThrow("claims failed invariant validation");
+    await expect(requirePersistedDerivedClaims(
+      monthlyClaims,
+      amRequest,
+      persistedRequestDigest,
+    )).rejects.toThrow("claims failed invariant validation");
+    await expect(requirePersistedDerivedClaims(
+      monthlyClaims,
+      request,
+      persistedRequestDigest,
+    )).rejects.toThrow("request preimage differs from persisted digest");
   });
 
   it.each([
