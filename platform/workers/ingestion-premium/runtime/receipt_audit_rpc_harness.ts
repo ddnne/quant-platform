@@ -1,6 +1,5 @@
 import type {
   PremiumReceiptAuditEvidenceRpc,
-  PremiumReceiptOperatorRpc,
 } from "../src/index";
 
 export {
@@ -17,15 +16,12 @@ export default {
     if (new URL(request.url).pathname !== "/attempt-registration") {
       return new Response(null, { status: 404 });
     }
-    try {
-      await (env.AUDIT_ONLY as unknown as PremiumReceiptOperatorRpc)
-        .pending_public_key_registration();
-      return new Response("unexpected registration capability", { status: 500 });
-    } catch (error) {
-      return new Response(error instanceof Error ? error.message : "RPC rejected", {
-        status: 409,
-        headers: { "content-type": "text/plain; charset=utf-8" },
-      });
+    if (env.AUDIT_ONLY === undefined) {
+      return new Response("audit evidence capability is missing", { status: 500 });
     }
+    return new Response(
+      "AUDIT_ONLY does not implement pending_public_key_registration",
+      { status: 409, headers: { "content-type": "text/plain; charset=utf-8" } },
+    );
   },
 };

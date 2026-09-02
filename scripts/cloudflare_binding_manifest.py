@@ -1378,6 +1378,16 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         "production": "quant-receipt-evidence",
         "staging": "quant-receipt-evidence-staging",
     }
+    raw_buckets = {
+        "base": "quant-raw",
+        "production": "quant-raw",
+        "staging": "quant-raw-staging",
+    }
+    structured_buckets = {
+        "base": "quant-structured",
+        "production": "quant-structured",
+        "staging": "quant-structured-staging",
+    }
     for environment in ("base", "production", "staging"):
         receipt = workers["receipt-evidence-authority"][environment]
         if (
@@ -1418,11 +1428,19 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
                 "binding": "AUTHORITY_EVIDENCE_BUCKET",
                 "bucket_name": receipt_evidence_buckets[environment],
             },
+            {
+                "binding": "RAW_BUCKET",
+                "bucket_name": raw_buckets[environment],
+            },
+            {
+                "binding": "STRUCTURED_BUCKET",
+                "bucket_name": structured_buckets[environment],
+            },
         ]
         if receipt["r2_buckets"] != expected_buckets:
             raise ValueError(
                 f"receipt-evidence-authority/{environment}: dedicated "
-                "authority bucket drift"
+                "authority store identity drift"
             )
         receipt_databases = receipt["d1_databases"]
         if len(receipt_databases) != 1 or set(receipt_databases[0]) != {

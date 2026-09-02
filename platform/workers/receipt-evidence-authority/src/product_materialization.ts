@@ -8,7 +8,7 @@ import type { ReceiptAuthorityEnv } from "./types";
 
 export type CanonicalStructuredRow = {
   natural_key: string;
-  source: "jquants";
+  source: "jquants" | "jsda";
   dataset: string;
   event_time: string;
   available_at: string;
@@ -19,6 +19,10 @@ export type CanonicalStructuredRow = {
 };
 
 type GovernedProductRow = Omit<CanonicalStructuredRow, "row_digest">;
+
+function productSource(dataset: string): "jquants" | "jsda" {
+  return dataset.startsWith("jsda_") ? "jsda" : "jquants";
+}
 
 type ProductMaterializationRow = {
   operation_id: string;
@@ -134,10 +138,11 @@ async function persistGovernedProduct(
       `SELECT source,dataset,natural_key,event_time,available_at,ingested_at,
               payload,raw_payload
          FROM jquants_records
-        WHERE source='jquants' AND dataset=?
+        WHERE source=? AND dataset=?
           AND natural_key IN (${placeholders})
         ORDER BY natural_key`,
     ).bind(
+      expected[0]!.source,
       expected[0]!.dataset,
       ...expected.map((row) => row.natural_key),
     ).all<GovernedProductRow>();
@@ -157,7 +162,7 @@ async function persistGovernedProduct(
     const actual = byNaturalKey.get(expected.natural_key);
     const expectedFields = governedProductFields(expected);
     if (
-      actual === undefined || actual.source !== "jquants" ||
+      actual === undefined || actual.source !== expected.source ||
       canonicalJson(governedBusinessFields(actual)) !==
         canonicalJson(governedBusinessFields(expectedFields)) ||
       !Number.isFinite(Date.parse(actual.ingested_at)) ||
@@ -268,7 +273,10 @@ export async function materializeProduct(
   count: number;
   digest: string;
   artifactKey: string;
+  artifactByteCount: number;
   manifestKey: string;
+  manifestByteCount: number;
+  manifestDigest: string;
 }> {
   if (input.rows.length === 0) {
     throw new Error("empty product materialization cannot be signed");
@@ -283,7 +291,7 @@ export async function materializeProduct(
     `product/receipt-authority/${env.ENVIRONMENT}/${dataset}/${segmentId}/run-${input.runId}`;
   const artifactKey = `${prefix}-${input.operationId.slice(7, 23)}.jsonl`;
   await putCreateOnly(
-    env.AUTHORITY_EVIDENCE_BUCKET,
+    env.STRUCTURED_BUCKET,
     artifactKey,
     bytes,
     {
@@ -297,7 +305,7 @@ export async function materializeProduct(
     },
   );
   await requireExactObject(
-    env.AUTHORITY_EVIDENCE_BUCKET,
+    env.STRUCTURED_BUCKET,
     artifactKey,
     bytes,
     artifactDigest,
@@ -317,7 +325,7 @@ export async function materializeProduct(
     product_schema: "jquants_records/v1",
     operation_id: input.operationId,
     run_id: input.runId,
-    source: "jquants" as const,
+    source: productSource(dataset),
     dataset,
     segment_id: segmentId,
     artifact_key: artifactKey,
@@ -361,7 +369,7 @@ export async function materializeProduct(
   const expected: ProductMaterializationRow = {
     operation_id: input.operationId,
     run_id: input.runId,
-    source: "jquants",
+    source: productSource(dataset),
     dataset,
     segment_id: segmentId,
     artifact_key: artifactKey,
@@ -400,6 +408,9 @@ export async function materializeProduct(
     count: productRows.length,
     digest: artifactDigest,
     artifactKey,
+    artifactByteCount: bytes.byteLength,
     manifestKey,
+    manifestByteCount: manifestBytes.byteLength,
+    manifestDigest,
   };
 }

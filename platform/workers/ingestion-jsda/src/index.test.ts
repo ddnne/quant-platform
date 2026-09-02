@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { PRODUCTION_V3_CUTOVER_PIN } from "./cutover";
 import worker from "./index";
 
 const RUN_TOKEN = "jsda-test-run-token-do-not-leak";
@@ -74,50 +75,78 @@ describe("ingestion-jsda HTTP boundary", () => {
       liveness: true,
       product_ready: false,
       cutover: "UNKNOWN",
+      activated_source_sha: null,
+      cutover_config_digest: null,
+      drain_evidence_digest: null,
       worker: "ingestion-jsda",
       queue_contract: "jsda-acquisition-job/v2",
       hierarchy: ["discover_root", "discover_year", "fetch_file"],
     });
   });
 
-  it("rejects a formally valid hand-written v3_active self-claim", async () => {
-    const r2Ops: string[] = [];
-    const env = {
-      RAW_BUCKET: {
-        put: async () => {
-          r2Ops.push("put");
-        },
-      } as never,
-      DB: {
-        prepare: () => ({
-          first: async () => ({
-            phase: "v3_active",
-            activated_at: "2026-08-27T00:00:00Z",
-            activated_source_sha: "a".repeat(40),
-            drain_evidence_digest: `sha256:${"b".repeat(64)}`,
-          }),
-        }),
-      } as never,
-      INGESTION_RUN_TOKEN: RUN_TOKEN,
+  it("fails Cron and Queue closed before a valid cutover fact", async () => {
+    const { env, sql, r2Ops } = touchingEnv();
+    await expect(
+      worker.scheduled(
+        {
+          scheduledTime: Date.parse("2026-09-02T01:30:00.000Z"),
+          cron: "30 1 * * *",
+          noRetry() {},
+        } as ScheduledController,
+        env as never,
+        { waitUntil() {}, passThroughOnException() {} } as ExecutionContext,
+      ),
+    ).rejects.toThrow("JSDA_V3_CUTOVER_PENDING");
+    await expect(
+      worker.queue(
+        { queue: "quant-jsda-ingestion", messages: [] } as never,
+        env as never,
+        { waitUntil() {}, passThroughOnException() {} } as ExecutionContext,
+      ),
+    ).rejects.toThrow("JSDA_V3_CUTOVER_PENDING");
+    expect(sql).toEqual([
+      expect.stringContaining("jsda_v3_cutover_control"),
+      expect.stringContaining("jsda_v3_cutover_control"),
+    ]);
+    expect(r2Ops).toEqual([]);
+  });
+
+  it("ignores a caller-supplied cutover proof in the request", async () => {
+    const { env, sql, r2Ops } = touchingEnv();
+    const proof = {
+      phase: "v3_active",
+      activated_source_sha: "c".repeat(40),
+      cutover_config_digest: PRODUCTION_V3_CUTOVER_PIN.configDigest,
+      drain_evidence_digest: `sha256:${"d".repeat(64)}`,
     };
     const ready = await worker.fetch(
-      new Request("https://ingestion-jsda.test/health/ready"),
-      env,
-    );
-    expect(ready.status).toBe(503);
-    await expect(ready.json()).resolves.toMatchObject({
-      ok: false,
-      product_ready: false,
-      cutover: "AUTHORITY_DISABLED",
-    });
-    const run = await worker.fetch(
-      new Request("https://ingestion-jsda.test/v1/run", {
+      new Request("https://ingestion-jsda.test/health/ready", {
         method: "POST",
-        headers: { "X-Ingestion-Token": RUN_TOKEN },
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(proof),
       }),
       env,
     );
+    expect(ready.status).toBe(405);
+    const run = await worker.fetch(
+      new Request(
+        `https://ingestion-jsda.test/v1/run?cutover=V3_ACTIVE&activated_source_sha=${proof.activated_source_sha}`,
+        {
+          method: "POST",
+          headers: {
+            "X-Ingestion-Token": RUN_TOKEN,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(proof),
+        },
+      ),
+      env,
+    );
     expect(run.status).toBe(503);
+    await expect(run.json()).resolves.toEqual({
+      error: "jsda_v3_cutover_pending",
+    });
+    expect(sql).toEqual([expect.stringContaining("jsda_v3_cutover_control")]);
     expect(r2Ops).toEqual([]);
   });
 

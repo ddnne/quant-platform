@@ -51,6 +51,7 @@ import {
   isYearArchive,
   selectDatasetDataUrls,
 } from "./source_http";
+import { requireTrustedJsdaReceipt } from "./receipt_issue";
 
 const USER_AGENT =
   "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)";
@@ -472,6 +473,7 @@ async function processFile(
     throw new Error(`JSDA completion lost job: ${row.work_key}`);
   }
   await repairTerminalClosure(env, completed);
+  await requireTrustedJsdaReceipt(env, completed);
 }
 
 async function handleFailure(
@@ -601,6 +603,9 @@ async function advanceAncestorClosures(
       if (!closed && after?.state !== "completed") {
         throw new Error(`JSDA ancestor close did not converge: ${latest.work_key}`);
       }
+      if (after?.state === "completed") {
+        await requireTrustedJsdaReceipt(env, after);
+      }
     }
   }
   await recomputeClosureAggregates(env.DB, origin, now);
@@ -682,6 +687,7 @@ export async function consumeDlqMessage(
 
     if (row.state === "completed" || row.state === "rejected") {
       await repairTerminalClosure(env, row);
+      await requireTrustedJsdaReceipt(env, row);
       message.ack();
       return;
     }
@@ -816,6 +822,7 @@ export async function consumeQueueMessage(
   ) {
     try {
       await repairTerminalClosure(env, row);
+      await requireTrustedJsdaReceipt(env, row);
       message.ack();
     } catch (error) {
       logError(env, "jsda_queue_terminal_closure_repair_failed", {
@@ -857,6 +864,7 @@ export async function consumeQueueMessage(
           current.state === "waiting_children")
       ) {
         await repairTerminalClosure(env, current);
+        await requireTrustedJsdaReceipt(env, current);
         message.ack();
         return;
       }

@@ -26,6 +26,11 @@ binding = "DB"
 database_name = "quant-ingest"
 database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 
+[[services]]
+binding = "RECEIPT_EVIDENCE_AUTHORITY"
+service = "quant-platform-receipt-evidence-authority"
+entrypoint = "ReceiptAuthorityService"
+
 [[queues.producers]]
 binding = "JSDA_QUEUE"
 queue = "quant-jsda-ingestion"
@@ -54,6 +59,8 @@ max_concurrency = 1
 [vars]
 USER_AGENT = "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
 JSDA_DLQ_QUEUE = "quant-jsda-ingestion-dlq"
+RECEIPT_AUTHORITY_ENVIRONMENT = "production"
+RECEIPT_AUTHORITY_OPERATION_MODE = "PENDING"
 
 [triggers]
 # Daily 01:30 UTC == 10:30 JST — after typical JSDA morning publication window.
@@ -83,6 +90,11 @@ binding = "DB"
 database_name = "quant-ingest"
 database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 
+[[env.production.services]]
+binding = "RECEIPT_EVIDENCE_AUTHORITY"
+service = "quant-platform-receipt-evidence-authority"
+entrypoint = "ReceiptAuthorityService"
+
 # Queue bindings are non-inheritable and must be repeated for named environments.
 [[env.production.queues.producers]]
 binding = "JSDA_QUEUE"
@@ -109,6 +121,8 @@ max_concurrency = 1
 [env.production.vars]
 USER_AGENT = "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
 JSDA_DLQ_QUEUE = "quant-jsda-ingestion-dlq"
+RECEIPT_AUTHORITY_ENVIRONMENT = "production"
+RECEIPT_AUTHORITY_OPERATION_MODE = "PENDING"
 
 [env.production.triggers]
 # Named environments do not inherit top-level triggers.

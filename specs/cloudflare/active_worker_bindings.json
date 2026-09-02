@@ -60,7 +60,7 @@
     ],
     "unclassified": "REJECT"
   },
-  "manifest_digest": "sha256:9674f9d6a362d116cf8c9b545cbf2a5e9d0a2ad5e496cc820b6ca07aef3ef1c3",
+  "manifest_digest": "sha256:16935d628bd982e72e874df43ca44b3d2d2527cbfedba0ce30c968953fccaf0b",
   "schema_version": "cloudflare-active-worker-bindings/v9",
   "test_harness_surfaces": {
     "ingestion-jsda": {
@@ -498,7 +498,9 @@
       "account_id": null,
       "ai": {},
       "compatibility_date": "2026-08-01",
-      "compatibility_flags": [],
+      "compatibility_flags": [
+        "nodejs_compat"
+      ],
       "config": "platform/workers/receipt-evidence-authority/wrangler.test.toml",
       "containers": [],
       "crons": [],
@@ -553,6 +555,14 @@
         {
           "binding": "AUTHORITY_EVIDENCE_BUCKET",
           "bucket_name": "quant-receipt-evidence-test"
+        },
+        {
+          "binding": "RAW_BUCKET",
+          "bucket_name": "quant-raw-test"
+        },
+        {
+          "binding": "STRUCTURED_BUCKET",
+          "bucket_name": "quant-structured-test"
         }
       ],
       "ratelimits": [],
@@ -890,7 +900,13 @@
         "secret_names": [
           "INGESTION_RUN_TOKEN"
         ],
-        "services": [],
+        "services": [
+          {
+            "binding": "RECEIPT_EVIDENCE_AUTHORITY",
+            "entrypoint": "ReceiptAuthorityService",
+            "service": "quant-platform-receipt-evidence-authority"
+          }
+        ],
         "tail_consumers": [],
         "toolchain": {
           "@cloudflare/vitest-plugin": "1.0.0",
@@ -901,6 +917,8 @@
         },
         "vars": {
           "JSDA_DLQ_QUEUE": "quant-jsda-ingestion-dlq",
+          "RECEIPT_AUTHORITY_ENVIRONMENT": "production",
+          "RECEIPT_AUTHORITY_OPERATION_MODE": "PENDING",
           "USER_AGENT": "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
         },
         "version_metadata": {
@@ -979,7 +997,13 @@
         "secret_names": [
           "INGESTION_RUN_TOKEN"
         ],
-        "services": [],
+        "services": [
+          {
+            "binding": "RECEIPT_EVIDENCE_AUTHORITY",
+            "entrypoint": "ReceiptAuthorityService",
+            "service": "quant-platform-receipt-evidence-authority"
+          }
+        ],
         "tail_consumers": [],
         "toolchain": {
           "@cloudflare/vitest-plugin": "1.0.0",
@@ -990,6 +1014,8 @@
         },
         "vars": {
           "JSDA_DLQ_QUEUE": "quant-jsda-ingestion-dlq",
+          "RECEIPT_AUTHORITY_ENVIRONMENT": "production",
+          "RECEIPT_AUTHORITY_OPERATION_MODE": "PENDING",
           "USER_AGENT": "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
         },
         "version_metadata": {
@@ -1064,7 +1090,13 @@
         "route": null,
         "routes": [],
         "secret_names": [],
-        "services": [],
+        "services": [
+          {
+            "binding": "RECEIPT_EVIDENCE_AUTHORITY",
+            "entrypoint": "ReceiptAuthorityService",
+            "service": "quant-platform-receipt-evidence-authority-staging"
+          }
+        ],
         "tail_consumers": [],
         "toolchain": {
           "@cloudflare/vitest-plugin": "1.0.0",
@@ -1075,6 +1107,8 @@
         },
         "vars": {
           "JSDA_DLQ_QUEUE": "quant-jsda-ingestion-dlq-staging",
+          "RECEIPT_AUTHORITY_ENVIRONMENT": "staging",
+          "RECEIPT_AUTHORITY_OPERATION_MODE": "PENDING",
           "USER_AGENT": "quant-platform-staging-ingest/0.1"
         },
         "version_metadata": {
@@ -2244,7 +2278,9 @@
         "account_id": null,
         "ai": {},
         "compatibility_date": "2026-08-01",
-        "compatibility_flags": [],
+        "compatibility_flags": [
+          "nodejs_compat"
+        ],
         "config": "platform/workers/receipt-evidence-authority/wrangler.toml",
         "containers": [],
         "crons": [],
@@ -2302,6 +2338,14 @@
           {
             "binding": "AUTHORITY_EVIDENCE_BUCKET",
             "bucket_name": "quant-receipt-evidence"
+          },
+          {
+            "binding": "RAW_BUCKET",
+            "bucket_name": "quant-raw"
+          },
+          {
+            "binding": "STRUCTURED_BUCKET",
+            "bucket_name": "quant-structured"
           }
         ],
         "ratelimits": [],
@@ -2355,7 +2399,9 @@
         "account_id": null,
         "ai": {},
         "compatibility_date": "2026-08-01",
-        "compatibility_flags": [],
+        "compatibility_flags": [
+          "nodejs_compat"
+        ],
         "config": "platform/workers/receipt-evidence-authority/wrangler.toml",
         "containers": [],
         "crons": [],
@@ -2413,6 +2459,14 @@
           {
             "binding": "AUTHORITY_EVIDENCE_BUCKET",
             "bucket_name": "quant-receipt-evidence"
+          },
+          {
+            "binding": "RAW_BUCKET",
+            "bucket_name": "quant-raw"
+          },
+          {
+            "binding": "STRUCTURED_BUCKET",
+            "bucket_name": "quant-structured"
           }
         ],
         "ratelimits": [],
@@ -2466,7 +2520,9 @@
         "account_id": null,
         "ai": {},
         "compatibility_date": "2026-08-01",
-        "compatibility_flags": [],
+        "compatibility_flags": [
+          "nodejs_compat"
+        ],
         "config": "platform/workers/receipt-evidence-authority/wrangler.staging.toml",
         "containers": [],
         "crons": [],
@@ -2524,6 +2580,14 @@
           {
             "binding": "AUTHORITY_EVIDENCE_BUCKET",
             "bucket_name": "quant-receipt-evidence-staging"
+          },
+          {
+            "binding": "RAW_BUCKET",
+            "bucket_name": "quant-raw-staging"
+          },
+          {
+            "binding": "STRUCTURED_BUCKET",
+            "bucket_name": "quant-structured-staging"
           }
         ],
         "ratelimits": [],

@@ -3,19 +3,67 @@ import type IngestionSecretsWorker from "../../ingestion-secrets/src/index";
 export type AuthorityEnvironment = "staging" | "production";
 export type AuthorityMode = "PENDING" | "ACTIVE";
 
-export type ReceiptIssueRequestV1 = {
+export type GovernedSource = "jquants" | "jsda";
+
+export type SegmentGrain =
+  | "calendar_month"
+  | "same_trading_day_am_snapshot"
+  | "collection_cutoff_snapshot"
+  | "official_archive_index_day"
+  | "official_archive_year"
+  | "source_time_series_file";
+
+type ReceiptIssueRequestBaseV1 = {
   schema_version: "receipt-evidence-issue-request/v1";
   operation: "issue_for_segment";
   environment: AuthorityEnvironment;
+  contract_id: string;
   dataset_id: string;
+  segment_grain: SegmentGrain;
   segment_id: string;
+  expected_key_start: string;
+  expected_key_end: string;
   request_nonce: string;
 };
 
-export type ReceiptRecoveryRequestV1 = Omit<
-  ReceiptIssueRequestV1,
-  "operation"
-> & { operation: "recover_issue" };
+export type JquantsReceiptIssueRequestV1 = ReceiptIssueRequestBaseV1 & {
+  source: "jquants";
+};
+
+export type JsdaReceiptIssueRequestV1 = ReceiptIssueRequestBaseV1 & {
+  source: "jsda";
+  work_key: string;
+  expected_contract_digest: string;
+  raw_object_key: string;
+};
+
+export type ReceiptIssueRequestV1 =
+  | JquantsReceiptIssueRequestV1
+  | JsdaReceiptIssueRequestV1;
+
+export type JsdaPersistedRequestV1 = {
+  schema_version: "jsda-persisted-raw-identity/v1";
+  environment: AuthorityEnvironment;
+  work_key: string;
+  run_key: string;
+  job_type: "discover_root" | "discover_year" | "fetch_file";
+  dataset_id: string;
+  segment_id: string;
+  segment_start: string;
+  segment_end: string;
+  target_url: string;
+  contract_digest: string;
+  raw_object_key: string;
+  frontier_json: string | null;
+};
+
+export type ReceiptRecoveryRequestV1 =
+  | (Omit<JquantsReceiptIssueRequestV1, "operation"> & {
+    operation: "recover_issue";
+  })
+  | (Omit<JsdaReceiptIssueRequestV1, "operation"> & {
+    operation: "recover_issue";
+  });
 
 export type ReceiptRequestV1 =
   | ReceiptIssueRequestV1
@@ -34,11 +82,21 @@ export type SignedReceiptClaimsV3 = {
   environment: AuthorityEnvironment;
   authority_instance_digest: string;
   coverage_policy_version: "collection-coverage/v3";
-  source: "jquants";
+  source: GovernedSource;
+  contract_id: string;
   dataset: string;
   segment_id: string;
   segment_start: string;
   segment_end: string;
+  receipt_issue_digest: string;
+  artifact_key: string;
+  artifact_byte_count: number;
+  manifest_key: string;
+  manifest_byte_count: number;
+  raw_manifest_key: string;
+  raw_manifest_byte_count: number;
+  raw_byte_count: number;
+  natural_key_digest: string;
   expected_scope: Record<string, JsonValue>;
   expected_items: number | null;
   observed_items: number;
@@ -94,7 +152,7 @@ export type SignedReceiptEnvelopeV3 = {
 };
 
 export type CollectionReceiptV3 = {
-  source: "jquants";
+  source: GovernedSource;
   dataset: string;
   segment_id: string;
   segment_start: string;
@@ -327,6 +385,8 @@ export type ReceiptAuthorityEnv = Omit<
   | "AUTHORITY_MODE"
   | "JQUANTS_ACQUISITION"
   | "AUTHORITY_EVIDENCE_BUCKET"
+  | "RAW_BUCKET"
+  | "STRUCTURED_BUCKET"
   | "RECEIPT_EVIDENCE_AUTHORITY_DO"
 > & {
   ENVIRONMENT: AuthorityEnvironment;
@@ -335,6 +395,8 @@ export type ReceiptAuthorityEnv = Omit<
   RECEIPT_KEY_WRAP_KEY: string;
   RECEIPT_KEY_GENERATION: string;
   AUTHORITY_EVIDENCE_BUCKET: R2Bucket;
+  RAW_BUCKET: R2Bucket;
+  STRUCTURED_BUCKET: R2Bucket;
   // Keep the generated binding surface while narrowing the recursive class
   // stub to the only RPC methods this entrypoint is allowed to invoke.
   RECEIPT_EVIDENCE_AUTHORITY_DO: {

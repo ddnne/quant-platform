@@ -165,7 +165,7 @@
         {
           "migration_id": "quant-ingest:0012_jsda_observation_identity",
           "path": "platform/workers/ingestion-premium/migrations/0012_jsda_observation_identity.sql",
-          "checksum": "sha256:ca5fd557d39e467aa3d96fd4c63c92bf0c6a4289b22c72da2aed6f9d90a1667f",
+          "checksum": "sha256:2d04b72ce5cf05c57aaf805d15939b7b0cbfbbbf65b003fec46eea270c330097",
           "order": 12,
           "depends_on": "quant-ingest:0011_jsda_queue_v2"
         },
@@ -217,6 +217,27 @@
           "checksum": "sha256:34b05bcfcf9e5f33d631d8876a51ee325fd15d0303e56c396d8c5aa87c9f12ce",
           "order": 19,
           "depends_on": "quant-ingest:0018_receipt_product_materialization"
+        },
+        {
+          "migration_id": "quant-ingest:0020_receipt_authority_governed_sources",
+          "path": "platform/workers/ingestion-premium/migrations/0020_receipt_authority_governed_sources.sql",
+          "checksum": "sha256:1c332ceae7fd92621633a70c359533c1ab4da8605727445ac5ffa76c7f7c7f01",
+          "order": 20,
+          "depends_on": "quant-ingest:0019_receipt_authority_recovery_smoke"
+        },
+        {
+          "migration_id": "quant-ingest:0021_snapshot_quality_evidence",
+          "path": "platform/workers/ingestion-premium/migrations/0021_snapshot_quality_evidence.sql",
+          "checksum": "sha256:e7e808acd174ea692c395c1bd2927657ec4645a394c72e2ebb38bcf2922bb333",
+          "order": 21,
+          "depends_on": "quant-ingest:0020_receipt_authority_governed_sources"
+        },
+        {
+          "migration_id": "quant-ingest:0022_receipt_authority_jsda_locator",
+          "path": "platform/workers/ingestion-premium/migrations/0022_receipt_authority_jsda_locator.sql",
+          "checksum": "sha256:c3c17dccf33fc0b62ac3231cba2c7ea2ae7d6b29fbeeb830772371335f365521",
+          "order": 22,
+          "depends_on": "quant-ingest:0021_snapshot_quality_evidence"
         }
       ]
     },

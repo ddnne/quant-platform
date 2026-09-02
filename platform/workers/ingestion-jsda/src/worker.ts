@@ -3,10 +3,10 @@
 
 import { authorized } from "./authorized";
 import {
-  DISABLED_V3_CUTOVER_AUTHORITY,
   loadV3CutoverStatus,
+  PRODUCTION_V3_CUTOVER_PIN,
   requireV3CutoverActive,
-  type V3CutoverAuthority,
+  type V3CutoverPin,
   type V3CutoverStatus,
 } from "./cutover";
 import type { JsdaWorkerEnv } from "./env";
@@ -24,7 +24,7 @@ import { allowedHosts } from "./source_http";
 export type { JsdaQueueJob } from "./queue_contract";
 
 export function createJsdaWorker(
-  cutoverAuthority: V3CutoverAuthority = DISABLED_V3_CUTOVER_AUTHORITY,
+  cutoverPin: V3CutoverPin = PRODUCTION_V3_CUTOVER_PIN,
 ): ExportedHandler<JsdaWorkerEnv, JsdaQueueJob> {
   return {
   async fetch(request: Request, env: JsdaWorkerEnv): Promise<Response> {
@@ -34,9 +34,12 @@ export function createJsdaWorker(
       let status: V3CutoverStatus = {
         productReady: false,
         cutover: "UNKNOWN",
+        activatedSourceSha: null,
+        cutoverConfigDigest: null,
+        drainEvidenceDigest: null,
       };
       try {
-        status = await loadV3CutoverStatus(env.DB, cutoverAuthority);
+        status = await loadV3CutoverStatus(env.DB, cutoverPin);
       } catch {
         // Liveness stays observable while readiness fails closed.
       }
@@ -45,6 +48,9 @@ export function createJsdaWorker(
         liveness: true,
         product_ready: status.productReady,
         cutover: status.cutover,
+        activated_source_sha: status.activatedSourceSha,
+        cutover_config_digest: status.cutoverConfigDigest,
+        drain_evidence_digest: status.drainEvidenceDigest,
         worker: "ingestion-jsda",
         queue_contract: "jsda-acquisition-job/v2",
         hierarchy: ["discover_root", "discover_year", "fetch_file"],
@@ -75,7 +81,7 @@ export function createJsdaWorker(
         dataset = requestedDataset;
       }
       try {
-        await requireV3CutoverActive(env.DB, cutoverAuthority);
+        await requireV3CutoverActive(env.DB, cutoverPin);
       } catch {
         return json({ error: "jsda_v3_cutover_pending" }, 503);
       }
@@ -99,7 +105,7 @@ export function createJsdaWorker(
     env: JsdaWorkerEnv,
     ctx: ExecutionContext,
   ): Promise<void> {
-    await requireV3CutoverActive(env.DB, cutoverAuthority);
+    await requireV3CutoverActive(env.DB, cutoverPin);
     ctx.waitUntil(
       enqueueRoots(
         env,
@@ -115,7 +121,7 @@ export function createJsdaWorker(
     env: JsdaWorkerEnv,
     _ctx: ExecutionContext,
   ): Promise<void> {
-    await requireV3CutoverActive(env.DB, cutoverAuthority);
+    await requireV3CutoverActive(env.DB, cutoverPin);
     const dlq = isJsdaDlqQueue(batch.queue, env.JSDA_DLQ_QUEUE);
     for (const message of batch.messages) {
       if (dlq) await consumeDlqMessage(message, env, batch.queue);

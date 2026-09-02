@@ -14,6 +14,11 @@ import {
   loadCaptureState,
   persistCaptureState,
 } from "./raw_capture";
+import {
+  captureJsdaPersistedCollection,
+  loadJsdaCaptureState,
+  persistJsdaCaptureState,
+} from "./jsda_capture";
 import type { Capture } from "./raw_capture";
 import {
   initializeD1Operation,
@@ -29,16 +34,16 @@ import type {
   ReceiptRequestV1,
   UnsignedReceiptClaimsV3,
 } from "./types";
+import {
+  issueIdentity,
+  requireReceiptRequest,
+} from "./receipt_request_identity";
 
-const REQUEST_KEYS = [
-  "schema_version",
-  "operation",
-  "environment",
-  "dataset_id",
-  "segment_id",
-  "request_nonce",
-] as const;
 const MAX_CONTEXT_AGE_MS = 15 * 60 * 1000;
+
+function requireRequest(value: unknown): ReceiptRequestV1 {
+  return requireReceiptRequest(value);
+}
 
 export type InternalReceiptAuthority = {
   begin(
@@ -72,37 +77,6 @@ export type InternalReceiptAuthority = {
 export type FaultInjection = {
   crashAfterIssueBeforeFinalize?: boolean;
 };
-
-function requireRequest(value: unknown): ReceiptRequestV1 {
-  if (!isPlainObject(value) || !exactKeys(value, REQUEST_KEYS)) {
-    throw new TypeError("receipt request is not closed");
-  }
-  if (
-    value.schema_version !== "receipt-evidence-issue-request/v1" ||
-    (value.operation !== "issue_for_segment" && value.operation !== "recover_issue") ||
-    (value.environment !== "staging" && value.environment !== "production") ||
-    typeof value.dataset_id !== "string" ||
-    !/^[a-z][a-z0-9_]{2,127}$/.test(value.dataset_id) ||
-    typeof value.segment_id !== "string" ||
-    !/^\d{4}-\d{2}$/.test(value.segment_id) ||
-    typeof value.request_nonce !== "string" ||
-    !/^[0-9a-f]{64}$/.test(value.request_nonce)
-  ) {
-    throw new TypeError("receipt request fields are invalid");
-  }
-  return value as ReceiptRequestV1;
-}
-
-function issueIdentity(request: ReceiptRequestV1): ReceiptIssueRequestV1 {
-  return {
-    schema_version: "receipt-evidence-issue-request/v1",
-    operation: "issue_for_segment",
-    environment: request.environment,
-    dataset_id: request.dataset_id,
-    segment_id: request.segment_id,
-    request_nonce: request.request_nonce,
-  };
-}
 
 async function finalizeIssued(
   env: ReceiptAuthorityEnv,
@@ -192,26 +166,34 @@ export async function executeReceiptRequest(
     if (snapshot.capture_digest !== null) {
       throw new Error("receipt authority durable capture reference is incomplete");
     }
-    const captured = await captureCollection(
-      env,
-      identity,
-      operationId,
-      snapshot.capture_attempt_id,
-      snapshot.acquisition_nonce,
-      snapshot.collection_started_at,
-    );
-    const captureState = await persistCaptureState(
-      env,
-      {
+    const captured = identity.source === "jsda"
+      ? await captureJsdaPersistedCollection(
+        env,
+        identity,
         operationId,
-        requestDigest,
-        captureAttemptId: snapshot.capture_attempt_id,
-        acquisitionNonce: snapshot.acquisition_nonce,
-        collectionStartedAt: snapshot.collection_started_at,
-        request: identity,
-      },
-      captured,
-    );
+        snapshot.capture_attempt_id,
+        snapshot.acquisition_nonce,
+        snapshot.collection_started_at,
+      )
+      : await captureCollection(
+        env,
+        identity,
+        operationId,
+        snapshot.capture_attempt_id,
+        snapshot.acquisition_nonce,
+        snapshot.collection_started_at,
+      );
+    const captureContext = {
+      operationId,
+      requestDigest,
+      captureAttemptId: snapshot.capture_attempt_id,
+      acquisitionNonce: snapshot.acquisition_nonce,
+      collectionStartedAt: snapshot.collection_started_at,
+      request: identity,
+    };
+    const captureState = identity.source === "jsda"
+      ? await persistJsdaCaptureState(env, captureContext, captured)
+      : await persistCaptureState(env, captureContext, captured);
     snapshot = await authority.appendCapture(
       operationId,
       requestDigest,
@@ -223,7 +205,7 @@ export async function executeReceiptRequest(
   if (snapshot.capture_key === null || snapshot.capture_digest === null) {
     throw new Error("receipt authority durable capture reference is incomplete");
   }
-  capture = await loadCaptureState(env, {
+  const recoveryContext = {
     key: snapshot.capture_key,
     expectedDigest: snapshot.capture_digest,
     operationId,
@@ -232,13 +214,20 @@ export async function executeReceiptRequest(
     acquisitionNonce: snapshot.acquisition_nonce,
     collectionStartedAt: snapshot.collection_started_at,
     request: identity,
-  });
+  };
+  capture = identity.source === "jsda"
+    ? await loadJsdaCaptureState(env, recoveryContext)
+    : await loadCaptureState(env, recoveryContext);
   const observedAt = new Date().toISOString();
   if (Date.parse(observedAt) >= Date.parse(capture.acquisitionExpiresAt)) {
     throw new Error("acquisition collection expired before reconciliation");
   }
   const spec = datasetById(request.dataset_id);
-  if (spec === undefined || spec.coverage.policy_version !== "collection-coverage/v3") {
+  if (
+    spec === undefined ||
+    spec.coverage.policy_version !== "collection-coverage/v3" ||
+    (request.source === "jsda") !== spec.id.startsWith("jsda_")
+  ) {
     throw new Error("dataset is outside the Receipt V3 authority inventory");
   }
   const operation = await initializeD1Operation(env, {
@@ -271,6 +260,13 @@ export async function executeReceiptRequest(
     capture,
     structuredCount: structured.count,
     structuredDigest: structured.digest,
+    productManifestDigest: structured.manifestDigest,
+    artifactKey: structured.artifactKey,
+    artifactByteCount: structured.artifactByteCount,
+    manifestKey: structured.manifestKey,
+    manifestByteCount: structured.manifestByteCount,
+    naturalKeyDigest: structured.naturalKeyDigest,
+    contractId: identity.contract_id,
     checkedAt,
   });
   const issued = await authority.appendDerived(

@@ -6,10 +6,20 @@ const UNSIGNED_CLAIM_KEYS = [
   "authority_instance_digest",
   "coverage_policy_version",
   "source",
+  "contract_id",
   "dataset",
   "segment_id",
   "segment_start",
   "segment_end",
+  "receipt_issue_digest",
+  "artifact_key",
+  "artifact_byte_count",
+  "manifest_key",
+  "manifest_byte_count",
+  "raw_manifest_key",
+  "raw_manifest_byte_count",
+  "raw_byte_count",
+  "natural_key_digest",
   "expected_scope",
   "expected_items",
   "observed_items",
@@ -36,6 +46,8 @@ const REQUIRED_ACQUISITION_DIGESTS = [
   "acquisition_collection_manifest_file_digest",
   "acquisition_collection_digest",
   "acquisition_terminal_chain_digest",
+  "product_artifact_digest",
+  "product_manifest_digest",
 ] as const;
 const REQUIRED_MASTER_CALENDAR_DIGESTS = [
   "official_calendar_evidence_digest",
@@ -68,10 +80,19 @@ export function requireDerivedClaims(value: unknown): UnsignedReceiptClaimsV3 {
     (value.environment !== "production" && value.environment !== "staging") ||
     !isSha256(value.authority_instance_digest) ||
     value.coverage_policy_version !== "collection-coverage/v3" ||
-    value.source !== "jquants" ||
+    (value.source !== "jquants" && value.source !== "jsda") ||
+    typeof value.contract_id !== "string" || value.contract_id.length === 0 ||
     typeof value.dataset !== "string" || value.dataset.length === 0 ||
     typeof value.segment_id !== "string" ||
-    !/^\d{4}-\d{2}$/.test(value.segment_id) ||
+    (value.source === "jquants"
+      ? !/^\d{4}-\d{2}$/.test(value.segment_id)
+      : !(
+        /^\d{4}-\d{2}-\d{2}$/.test(value.segment_id) ||
+        /^archive-\d{4}-\d{2}-\d{2}$/.test(value.segment_id) ||
+        /^index_root_\d{4}-\d{2}-\d{2}$/.test(value.segment_id) ||
+        /^archive_year_\d{4}_[A-Za-z0-9._-]{1,64}$/.test(value.segment_id) ||
+        /^file_[A-Za-z0-9._-]{1,160}$/.test(value.segment_id)
+      )) ||
     typeof value.segment_start !== "string" ||
     typeof value.segment_end !== "string" ||
     !isPlainObject(value.expected_scope) ||
@@ -83,7 +104,16 @@ export function requireDerivedClaims(value: unknown): UnsignedReceiptClaimsV3 {
     ) ||
     value.status !== "SUCCESS" || value.error !== null ||
     value.pagination_exhausted !== true || value.discovery_exhausted !== true ||
+    !isSha256(value.receipt_issue_digest) ||
     !isSha256(value.source_request_digest) ||
+    !isSha256(value.natural_key_digest) ||
+    typeof value.artifact_key !== "string" || value.artifact_key.length === 0 ||
+    typeof value.manifest_key !== "string" || value.manifest_key.length === 0 ||
+    typeof value.raw_manifest_key !== "string" || value.raw_manifest_key.length === 0 ||
+    !Number.isSafeInteger(value.artifact_byte_count) || Number(value.artifact_byte_count) <= 0 ||
+    !Number.isSafeInteger(value.manifest_byte_count) || Number(value.manifest_byte_count) <= 0 ||
+    !Number.isSafeInteger(value.raw_manifest_byte_count) || Number(value.raw_manifest_byte_count) <= 0 ||
+    !Number.isSafeInteger(value.raw_byte_count) || Number(value.raw_byte_count) <= 0 ||
     !isSha256(value.raw_manifest_digest) || !isSha256(value.raw_digest) ||
     !isSha256(value.structured_digest) || !isSha256(value.scope_digest) ||
     !isSha256(value.observation_digest) ||

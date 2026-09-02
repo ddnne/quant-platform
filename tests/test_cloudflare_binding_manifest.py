@@ -66,6 +66,22 @@ def test_receipt_authority_uses_dedicated_evidence_and_premium_owned_migrations(
                 "binding": "AUTHORITY_EVIDENCE_BUCKET",
                 "bucket_name": evidence_bucket,
             },
+            {
+                "binding": "RAW_BUCKET",
+                "bucket_name": {
+                    "base": "quant-raw",
+                    "production": "quant-raw",
+                    "staging": "quant-raw-staging",
+                }[environment],
+            },
+            {
+                "binding": "STRUCTURED_BUCKET",
+                "bucket_name": {
+                    "base": "quant-structured",
+                    "production": "quant-structured",
+                    "staging": "quant-structured-staging",
+                }[environment],
+            },
         ]
         assert len(surface["d1_databases"]) == 1
         assert "migrations_dir" not in surface["d1_databases"][0]

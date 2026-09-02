@@ -8,6 +8,9 @@ interface __BaseEnv_Env {
 	USER_AGENT: "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)";
 	JSDA_DLQ_QUEUE: "quant-jsda-ingestion-dlq";
 	INGESTION_RUN_TOKEN: string;
+	RECEIPT_EVIDENCE_AUTHORITY: Service /* entrypoint ReceiptAuthorityService from quant-platform-receipt-evidence-authority */;
+	RECEIPT_AUTHORITY_ENVIRONMENT: "production";
+	RECEIPT_AUTHORITY_OPERATION_MODE: "PENDING";
 }
 declare namespace Cloudflare {
 	interface GlobalProps {
@@ -21,6 +24,9 @@ declare namespace Cloudflare {
 		USER_AGENT: "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)";
 		JSDA_DLQ_QUEUE: "quant-jsda-ingestion-dlq";
 		INGESTION_RUN_TOKEN: string;
+		RECEIPT_EVIDENCE_AUTHORITY: Service /* entrypoint ReceiptAuthorityService from quant-platform-receipt-evidence-authority */;
+		RECEIPT_AUTHORITY_ENVIRONMENT: "production";
+		RECEIPT_AUTHORITY_OPERATION_MODE: "PENDING";
 	}
 	interface Env extends __BaseEnv_Env {}
 }

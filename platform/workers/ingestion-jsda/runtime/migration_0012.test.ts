@@ -711,4 +711,98 @@ describe("0012 populated JSDA migration semantics and FK preservation", () => {
       failure_reason_code: null,
     });
   });
+
+  it("rejects late v1 writes, NULL activation, and INSERT OR REPLACE reverse", async () => {
+    await applyD1Migrations(runtimeEnv.DB, migrations);
+    await expect(
+      runtimeEnv.DB.prepare(
+        `UPDATE jsda_v3_cutover_control
+            SET phase='v3_active', activated_at='not-a-time',
+                activated_source_sha=?, cutover_config_digest=NULL,
+                drain_evidence_digest=NULL
+          WHERE singleton=1`,
+      )
+        .bind("a".repeat(40))
+        .run(),
+    ).rejects.toThrow(/activation is incomplete/);
+    const pending = await runtimeEnv.DB.prepare(
+      "SELECT phase FROM jsda_v3_cutover_control WHERE singleton=1",
+    ).first<{ phase: string }>();
+    expect(pending?.phase).toBe("bridge");
+
+    await runtimeEnv.DB.prepare(
+      `INSERT INTO jsda_v3_drain_evidence
+         (drain_evidence_digest, observed_at, document_json)
+       VALUES (?, ?, '{"schema_version":"jsda-v3-drain-evidence/v1"}')`,
+    )
+      .bind(`sha256:${"d".repeat(64)}`, "2026-08-26T00:01:00.000Z")
+      .run();
+    await runtimeEnv.DB.prepare(
+      `UPDATE jsda_v3_cutover_control
+          SET phase='v3_active', activated_at=?, activated_source_sha=?,
+              cutover_config_digest=?, drain_evidence_digest=?
+        WHERE singleton=1 AND phase='bridge'`,
+    )
+      .bind(
+        "2026-08-26T00:01:00.000Z",
+        "a".repeat(40),
+        `sha256:${"b".repeat(64)}`,
+        `sha256:${"d".repeat(64)}`,
+      )
+      .run();
+    await expect(
+      runtimeEnv.DB.prepare(
+        `INSERT INTO jsda_acquisition_jobs (
+           job_id, dataset, job_type, target_url, state, attempt, priority,
+           created_at, updated_at
+         ) VALUES ('late-v1', 'jsda_otc_bond_reference_prices', 'discover_root',
+                   'https://market.jsda.or.jp/', 'pending', 0, 100, ?, ?)`,
+      )
+        .bind("2026-08-26T00:02:00.000Z", "2026-08-26T00:02:00.000Z")
+        .run(),
+    ).rejects.toThrow(/v1 acquisition graph is retired/);
+    await expect(
+      runtimeEnv.DB.prepare(
+        "INSERT OR REPLACE INTO jsda_v3_cutover_control(singleton,phase) VALUES (1,'bridge')",
+      ).run(),
+    ).rejects.toThrow(/cannot be replaced/);
+    await expect(
+      runtimeEnv.DB.prepare(
+        `UPDATE jsda_v3_cutover_control SET phase='bridge' WHERE singleton=1`,
+      ).run(),
+    ).rejects.toThrow(/immutable after activation/);
+    await expect(
+      runtimeEnv.DB.prepare(
+        "DELETE FROM jsda_v3_cutover_control WHERE singleton=1",
+      ).run(),
+    ).rejects.toThrow(/cannot be deleted/);
+    const active = await runtimeEnv.DB.prepare(
+      "SELECT phase FROM jsda_v3_cutover_control WHERE singleton=1",
+    ).first<{ phase: string }>();
+    expect(active?.phase).toBe("v3_active");
+  });
+
+  it("fences a late v1 write during bridge so it is not lost", async () => {
+    await applyD1Migrations(runtimeEnv.DB, before0012);
+    await applyD1Migrations(runtimeEnv.DB, only0012);
+    const phase = await runtimeEnv.DB.prepare(
+      "SELECT phase FROM jsda_v3_cutover_control WHERE singleton=1",
+    ).first<{ phase: string }>();
+    expect(phase?.phase).toBe("bridge");
+    await runtimeEnv.DB.prepare(
+      `INSERT INTO jsda_acquisition_jobs (
+         job_id, dataset, job_type, target_url, state, attempt, priority,
+         created_at, updated_at
+       ) VALUES ('late-v1-bridge', 'jsda_otc_bond_reference_prices', 'discover_root',
+                 'https://market.jsda.or.jp/', 'pending', 0, 100, ?, ?)`,
+    )
+      .bind("2026-08-26T00:02:00.000Z", "2026-08-26T00:02:00.000Z")
+      .run();
+    const bridged = await runtimeEnv.DB.prepare(
+      "SELECT job_id, state FROM jsda_v1_bridge_writes WHERE job_id=?",
+    )
+      .bind("late-v1-bridge")
+      .first<{ job_id: string; state: string }>();
+    expect(bridged).toEqual({ job_id: "late-v1-bridge", state: "pending" });
+  });
 });

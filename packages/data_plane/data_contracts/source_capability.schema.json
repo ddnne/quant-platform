@@ -111,7 +111,8 @@
             "issued_same_trading_day_snapshot",
             "issued_collection_cutoff_snapshot",
             "official_archive_publication_days",
-            "official_archive_periods"
+            "official_archive_periods",
+            "official_time_series_file"
           ]
         },
         "empty_success_policy": {
