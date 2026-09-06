@@ -6,14 +6,15 @@
   "hypothesis": "Fundamentals value\u00d7momentum agree with hold=10 and momentum_n=10 (frozen KEEP pin, not retuned) is a 2-condition fund sleeve on TSE Prime with fins.",
   "strategy_spec_id": "fundamentals_hold_10",
   "strategy_spec_version": "strategy-spec/v3",
-  "strategy_spec_hash": "sha256:59c0128401097901c029340f49e92acfef3abcb4d9eb6a3bbd01f6930fbb7d3b",
+  "strategy_spec_hash": "sha256:355df8a97da76bcb988ca33c6a7dfcd4be0c1f598aa8f962b55c8c5872f84007",
   "feature_refs": [
     {
-      "id": "fundamental_value_score",
-      "version": "1.0.0"
+      "id": "retrospective_split_safe_fundamental_value_score",
+      "version": "1.0.0",
+      "params": {}
     },
     {
-      "id": "momentum_n",
+      "id": "retrospective_split_adjusted_momentum_n",
       "version": "1.0.0",
       "params": {
         "n": 10
@@ -36,18 +37,19 @@
   "fill_contract": {
     "format": "controlled-pilot-fill-contract/v1",
     "id": "controlled-pilot-am-signal-pm-close",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "identity": "controlled_pilot_v1",
     "execution_mode": "am_signal_pm_close",
     "signal_session": "morning_close",
     "signal_price_field": "MAdjC",
-    "signal_price_dataset": "equities_bars_daily_am",
+    "signal_price_dataset": "equities_bars_daily",
     "fill_session": "afternoon_close",
     "fill_valuation_field": "AAdjC",
     "fill_valuation_session": "same_trading_date",
     "information_cutoff": "11:30:00+09:00",
     "lifecycle": "Paper",
-    "retrospective_only": false,
+    "price_evidence_mode": "historical_daily_reconstruction",
+    "retrospective_only": true,
     "draft": false,
     "live_trading_evidence": false,
     "ready_snapshot_declared": true,
@@ -55,6 +57,6 @@
     "automatic_promotion": false,
     "fallback": false,
     "forward_fill": false,
-    "contract_digest": "sha256:678985a0f7b142eeecd693ebe28bff822916bc815889f0b39e2841830377377d"
+    "contract_digest": "sha256:3691b4c93bbafc1d5a0e8fec25eb14ec26fae9683aaffa07fd44bb80c4f486b8"
   }
 }

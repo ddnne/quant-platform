@@ -32,7 +32,9 @@ def test_plans_bind_morning_to_afternoon_fill_contract() -> None:
         assert contract["fill_session"] == "afternoon_close"
         assert contract["contract_digest"] == CONTROLLED_FILL_CONTRACT_DIGEST
         assert contract["lifecycle"] == "Paper"
-        assert contract["retrospective_only"] is False
+        assert contract["retrospective_only"] is True
+        assert contract["price_evidence_mode"] == "historical_daily_reconstruction"
+        assert contract["signal_price_dataset"] == "equities_bars_daily"
 
 
 def test_draft_retrospective_contract_cannot_authorize_controlled() -> None:
@@ -67,17 +69,26 @@ def test_run_paper_rejects_controlled_paper_lifecycle(tmp_path) -> None:
         run_paper(object(), config)
 
 
-def test_controlled_paper_config_rejects_retrospective_fill(tmp_path) -> None:
-    from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED
+def test_controlled_paper_config_uses_historical_adjusted_reconstruction(tmp_path) -> None:
+    from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED, RAW
 
-    with pytest.raises(ValueError, match="DRAFT"):
+    config = PaperRunConfig(
+        start="2023-01-04",
+        end="2023-01-05",
+        db_path=tmp_path / "missing.sqlite",
+        lifecycle=Lifecycle.PAPER,
+        execution_mode="am_signal_pm_close",
+        price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+    )
+    assert config.price_basis == PERSONAL_RETROSPECTIVE_ADJUSTED
+    with pytest.raises(ValueError, match="historical daily"):
         PaperRunConfig(
             start="2023-01-04",
             end="2023-01-05",
             db_path=tmp_path / "missing.sqlite",
             lifecycle=Lifecycle.PAPER,
             execution_mode="am_signal_pm_close",
-            price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+            price_basis=RAW,
         )
 
 
@@ -101,7 +112,9 @@ def test_generated_controlled_pilot_contract_matches_compiler() -> None:
         "exp-fund-hold10-value-mom",
     ]
     assert generated["max_gross_weight_ppm"] == 500_000
-    assert generated["fill_contract"]["retrospective_only"] is False
+    assert generated["fill_contract"]["retrospective_only"] is True
+    assert generated["fill_contract"]["price_evidence_mode"] == "historical_daily_reconstruction"
+    assert generated["fill_contract"]["signal_price_dataset"] == "equities_bars_daily"
 
 
 def test_trader_batch_compares_ready_universe_and_rejects_duplicates() -> None:
@@ -353,17 +366,19 @@ def test_authentic_am_session_and_realized_gross_cap(tmp_path) -> None:
     assert res.trades == []
 
 
-def test_exact_closure_includes_am_dataset() -> None:
+def test_exact_closure_uses_daily_not_tip_am() -> None:
     from execution.exact_four_binding import controlled_pilot_v1_contract
     from paper_runtime.readiness_attestation import EXACT_FOUR_DATASET_IDS
     from research.experiment_plans import load_experiment_plan_closures
 
     contract = controlled_pilot_v1_contract()
-    assert "equities_bars_daily_am" in contract["dataset_ids"]
-    assert "equities_bars_daily_am" in EXACT_FOUR_DATASET_IDS
+    assert "equities_bars_daily" in contract["dataset_ids"]
+    assert "equities_bars_daily_am" not in contract["dataset_ids"]
+    assert "equities_bars_daily_am" not in EXACT_FOUR_DATASET_IDS
     closures = load_experiment_plan_closures()
     for closure in closures:
-        assert "equities_bars_daily_am" in closure.required_datasets
+        assert "equities_bars_daily" in closure.required_datasets
+        assert "equities_bars_daily_am" not in closure.required_datasets
 
 
 def test_synthetic_am_timestamps_on_daily_bars_are_rejected(tmp_path) -> None:
@@ -779,12 +794,13 @@ def test_canonical_json_unicode_matches_utf8_profile() -> None:
     assert canonical_json_digest(payload).startswith("sha256:")
 
 
-def test_exact_four_ready_datasets_include_am() -> None:
+def test_exact_four_ready_datasets_are_daily_historical() -> None:
     from paper_runtime.readiness_attestation import EXACT_FOUR_DATASET_IDS
     from research.ready_manifest import load_exact_four_pilot_ready_binding
 
     binding = load_exact_four_pilot_ready_binding()
-    assert "equities_bars_daily_am" in binding.required_datasets
+    assert "equities_bars_daily" in binding.required_datasets
+    assert "equities_bars_daily_am" not in binding.required_datasets
     assert tuple(sorted(binding.required_datasets)) == tuple(sorted(EXACT_FOUR_DATASET_IDS))
 
 
@@ -957,14 +973,9 @@ def _verified_session_scope_from_db(path) -> dict:
         conn.execute("SELECT observed_through FROM snapshot_observation_clock").fetchone()[0]
     )
     entries = []
-    for dataset_id in (
-        "equities_bars_daily",
-        "equities_bars_daily_am",
-        "equities_master",
-        "fins_summary",
-        "indices_bars_daily_topix",
-        "markets_calendar",
-    ):
+    from pit.governed_am_view import CONTROLLED_SESSION_DATASET_IDS
+
+    for dataset_id in CONTROLLED_SESSION_DATASET_IDS:
         products = conn.execute(
             "SELECT artifact_body FROM receipt_product_materializations WHERE dataset=?",
             (dataset_id,),
@@ -1285,7 +1296,7 @@ def test_fixture_view_cannot_enter_controlled(tmp_path) -> None:
 
 def test_controlled_pins_same_artifact_and_rejects_replace_mutate_swap(tmp_path) -> None:
     from _coreseed import TRADING_DAYS, seed_governed_am_pm_session_db
-    from core import RAW, run_backtest, standard_cost
+    from core import PERSONAL_RETROSPECTIVE_ADJUSTED, run_backtest, standard_cost
     from core.execution import morning_close_as_of
     from core.universe import membership_at
     from core.strategy_protocol import OrderIntent
@@ -1318,14 +1329,17 @@ def test_controlled_pins_same_artifact_and_rejects_replace_mutate_swap(tmp_path)
         db_path=db,
         universe=universe,
         execution_mode="am_signal_pm_close",
-        price_basis=RAW,
+        price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
         cost_model=standard_cost(bps=0.0),
         max_gross_weight=0.5,
         am_session_data_view=view,
     )
-    assert res.metadata["authentic_am_session_evidence"] is True
+    assert res.metadata["authentic_am_session_evidence"] is False
+    assert res.metadata["price_evidence_mode"] == "historical_daily_reconstruction"
+    assert res.metadata["contemporaneous_observation_unproven"] is True
     assert res.metrics["selection_eligible"] is True
     assert res.metrics["comparison_eligible"] is True
+    assert res.metadata["data_quality"]["production_eligible"] is False
     assert res.trades
     for trade in res.trades:
         assert trade["price"] == 150.0
@@ -1344,6 +1358,58 @@ def test_controlled_pins_same_artifact_and_rejects_replace_mutate_swap(tmp_path)
     )
     with pytest.raises(SnapshotObservationClockError, match="swapped"):
         view.assert_pinned_artifact(other)
+
+
+def test_controlled_ctx_feature_sees_d_morning_reconstruction(tmp_path) -> None:
+    from _coreseed import TRADING_DAYS, seed_governed_am_pm_session_db
+    from core import PERSONAL_RETROSPECTIVE_ADJUSTED, run_backtest, standard_cost
+    from core.execution import morning_close_as_of
+    from core.universe import membership_at
+    from core.strategy_protocol import OrderIntent
+
+    code = "1332"
+    days = TRADING_DAYS
+    db = seed_governed_am_pm_session_db(
+        tmp_path,
+        codes=[code],
+        days=days,
+        morning_prices={code: {day: 100.0 for day in days}},
+        afternoon_prices={code: {day: 150.0 for day in days}},
+    )
+    universe = membership_at(morning_close_as_of(days[0]), db_path=db, codes=(code,))
+    view = _verified_snapshot_view_from_db(db)
+    seen: dict[str, float] = {}
+
+    class FeatureProbe:
+        strategy_id = "feature_probe"
+        params: dict = {}
+
+        def on_bar(self, ctx):
+            if ctx.date == days[1]:
+                out = ctx.feature(
+                    "retrospective_split_adjusted_momentum_n",
+                    code=code,
+                    n=1,
+                )
+                seen["last_close"] = float(out.metadata["last_adjustment_close"])
+                seen["value"] = float(out.value)
+            return []
+
+    res = run_backtest(
+        FeatureProbe(),
+        days[0],
+        days[-1],
+        db_path=db,
+        universe=universe,
+        execution_mode="am_signal_pm_close",
+        price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+        cost_model=standard_cost(bps=0.0),
+        am_session_data_view=view,
+    )
+    assert seen["last_close"] == 100.0
+    assert seen["value"] == pytest.approx((100.0 - 150.0) / 150.0)
+    assert res.metadata["authentic_am_session_evidence"] is False
+    assert res.metadata["price_evidence_mode"] == "historical_daily_reconstruction"
 
 
 def test_controlled_open_rejects_symlink_and_wal_sidecar(tmp_path) -> None:
@@ -1395,14 +1461,11 @@ def test_controlled_open_rejects_fins_tamper_with_manifest_and_prices_unchanged(
     source = seed_governed_am_pm_session_db(tmp_path)
     verified_scope = _verified_worker_scope_from_db(source)
     signed_session_scope = _verified_session_scope_from_db(source)
-    assert [entry["dataset_id"] for entry in signed_session_scope["entries"]] == [
-        "equities_bars_daily",
-        "equities_bars_daily_am",
-        "equities_master",
-        "fins_summary",
-        "indices_bars_daily_topix",
-        "markets_calendar",
-    ]
+    from pit.governed_am_view import CONTROLLED_SESSION_DATASET_IDS
+
+    assert [entry["dataset_id"] for entry in signed_session_scope["entries"]] == list(
+        CONTROLLED_SESSION_DATASET_IDS
+    )
 
     conn = sqlite3.connect(source)
     conn.row_factory = sqlite3.Row
@@ -1412,7 +1475,7 @@ def test_controlled_open_rejects_fins_tamper_with_manifest_and_prices_unchanged(
     prices_before = conn.execute(
         "SELECT dataset, artifact_digest, artifact_body "
         "FROM receipt_product_materializations "
-        "WHERE dataset IN ('equities_bars_daily','equities_bars_daily_am') "
+        "WHERE dataset='equities_bars_daily' "
         "ORDER BY dataset"
     ).fetchall()
     materialization = conn.execute(
@@ -1452,7 +1515,7 @@ def test_controlled_open_rejects_fins_tamper_with_manifest_and_prices_unchanged(
     assert conn.execute(
         "SELECT dataset, artifact_digest, artifact_body "
         "FROM receipt_product_materializations "
-        "WHERE dataset IN ('equities_bars_daily','equities_bars_daily_am') "
+        "WHERE dataset='equities_bars_daily' "
         "ORDER BY dataset"
     ).fetchall() == prices_before
     conn.close()
@@ -1493,7 +1556,7 @@ def test_controlled_open_rejects_fins_tamper_with_manifest_and_prices_unchanged(
 
 def test_engine_exception_releases_binding_and_handle_is_one_shot(tmp_path) -> None:
     from _coreseed import TRADING_DAYS, seed_governed_am_pm_session_db
-    from core import RAW, run_backtest, standard_cost
+    from core import PERSONAL_RETROSPECTIVE_ADJUSTED, run_backtest, standard_cost
     from core.execution import morning_close_as_of
     from core.universe import membership_at
     from pit.errors import SnapshotObservationClockError
@@ -1523,7 +1586,7 @@ def test_engine_exception_releases_binding_and_handle_is_one_shot(tmp_path) -> N
             db_path=db,
             universe=universe,
             execution_mode="am_signal_pm_close",
-            price_basis=RAW,
+            price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
             cost_model=standard_cost(bps=0.0),
             max_gross_weight=0.5,
             am_session_data_view=view,
@@ -1542,7 +1605,7 @@ def test_controlled_batch_uses_one_pinned_connection_for_identity_universe_and_f
     import sqlite3
 
     from _coreseed import TRADING_DAYS, seed_governed_am_pm_session_db
-    from core import RAW, run_backtest, standard_cost
+    from core import PERSONAL_RETROSPECTIVE_ADJUSTED, run_backtest, standard_cost
     from core.strategy_protocol import OrderIntent
     from data_contracts.identity import natural_key
     import pit.governed_am_view as governed
@@ -1655,55 +1718,47 @@ def test_controlled_batch_uses_one_pinned_connection_for_identity_universe_and_f
                 db_path=db,
                 universe=universe,
                 execution_mode="am_signal_pm_close",
-                price_basis=RAW,
+                price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
                 cost_model=standard_cost(bps=0.0),
                 max_gross_weight=0.5,
                 am_session_data_view=handle.am_session_data_view(),
             )
-            assert result.metadata["authentic_am_session_evidence"] is True
+            assert result.metadata["authentic_am_session_evidence"] is False
+            assert result.metadata["price_evidence_mode"] == "historical_daily_reconstruction"
     finally:
         handle._end_controlled_batch_reads()
         handle.close()
     assert len(connect_calls) == 1
 
 
-def test_noon_ingested_row_absent_from_1130_signal(tmp_path) -> None:
-    from _coreseed import TRADING_DAYS, seed_governed_am_pm_session_db
+def test_later_ingested_daily_session_is_historical_not_backdated(tmp_path) -> None:
+    from _coreseed import TRADING_DAYS, seed_governed_am_pm_session_db, write_snapshot_observation_clock
     from core.execution import morning_close_as_of
-    from pit.governed_am_view import (
-        am_decision_row_is_visible,
-        assemble_governed_am_session_data_view,
-    )
+    from storage.sqlite_store import SqliteStore
     import sqlite3
 
     code = "1332"
-    other = "8697"
     days = TRADING_DAYS
     db = seed_governed_am_pm_session_db(
         tmp_path,
-        codes=[code, other],
+        codes=[code],
         days=days,
-        morning_prices={
-            code: {day: 100.0 for day in days},
-            other: {day: 110.0 for day in days},
-        },
-        afternoon_prices={
-            code: {day: 150.0 for day in days},
-            other: {day: 160.0 for day in days},
-        },
+        morning_prices={code: {day: 100.0 for day in days}},
+        afternoon_prices={code: {day: 150.0 for day in days}},
     )
-    noon = f"{days[-1]}T12:00:00+09:00"
+    later = "2026-01-15T09:00:00+09:00"
+    original_available = f"{days[-1]}T16:30:00+09:00"
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
     conn.execute(
-        "UPDATE jquants_records SET ingested_at=? WHERE dataset='equities_bars_daily_am' "
-        "AND payload LIKE ?",
-        (noon, f"%{other}%"),
+        "UPDATE jquants_records SET available_at=?, ingested_at=? "
+        "WHERE dataset='equities_bars_daily' AND payload LIKE ?",
+        (original_available, later, f"%{days[-1]}%"),
     )
     stored = conn.execute(
         "SELECT source, dataset, natural_key, event_time, available_at, "
         "ingested_at, payload, COALESCE(raw_payload, '') AS raw_payload "
-        "FROM jquants_records WHERE dataset='equities_bars_daily_am' "
+        "FROM jquants_records WHERE dataset='equities_bars_daily' "
         "ORDER BY natural_key"
     ).fetchall()
     from ops.receipt_product import (
@@ -1733,31 +1788,545 @@ def test_noon_ingested_row_absent_from_1130_signal(tmp_path) -> None:
     artifact_digest = product_artifact_digest(product_rows)
     conn.execute(
         "UPDATE receipt_product_materializations SET artifact_digest=?, artifact_body=? "
-        "WHERE dataset='equities_bars_daily_am'",
+        "WHERE dataset='equities_bars_daily'",
         (artifact_digest, artifact_body),
     )
     conn.commit()
     conn.close()
-    assert am_decision_row_is_visible(
-        available_at=f"{days[-1]}T11:30:00+09:00",
-        ingested_at=f"{days[-1]}T11:30:00+09:00",
-        as_of=morning_close_as_of(days[-1]),
-    )
-    assert not am_decision_row_is_visible(
-        available_at=f"{days[-1]}T11:30:00+09:00",
-        ingested_at=noon,
-        as_of=morning_close_as_of(days[-1]),
-    )
+    store = SqliteStore(db)
+    write_snapshot_observation_clock(store, later)
+    store.close()
     view = _verified_snapshot_view_from_db(db)
     visible = view.authorized_rows(
         as_of=morning_close_as_of(days[-1]),
-        codes={code, other},
+        codes={code},
         from_date=days[-1],
         to_date=days[-1],
     )
-    codes = {str(row["code"]) for row in visible}
-    assert code in codes
-    assert other not in codes
+    assert len(visible) == 1
+    row = visible[0]
+    assert row["close"] == 100.0
+    assert "afternoon_close" not in row
+    assert "afternoon_adjustment_close" not in row
+    assert row["available_at"] == original_available
+    assert row["ingested_at"] == later
+    assert row["authentic_am_session_evidence"] is False
+    assert row["contemporaneous_observation_unproven"] is True
+
+
+def _reseal_daily_catalog(conn) -> None:
+    from ops.receipt_product import (
+        canonical_product_artifact_bytes,
+        product_artifact_digest,
+    )
+
+    stored = conn.execute(
+        "SELECT source, dataset, natural_key, event_time, available_at, "
+        "ingested_at, payload, COALESCE(raw_payload, '') AS raw_payload "
+        "FROM jquants_records WHERE dataset='equities_bars_daily' "
+        "ORDER BY natural_key"
+    ).fetchall()
+    product_rows = []
+    for row in stored:
+        payload_raw = row["payload"]
+        payload_obj = json.loads(payload_raw) if isinstance(payload_raw, str) else {}
+        payload_text = json.dumps(
+            payload_obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        )
+        product_rows.append(
+            {
+                "source": str(row["source"]),
+                "dataset": str(row["dataset"]),
+                "natural_key": str(row["natural_key"]),
+                "event_time": str(row["event_time"]),
+                "available_at": str(row["available_at"]),
+                "ingested_at": str(row["ingested_at"]),
+                "payload": payload_text,
+                "raw_payload": str(row["raw_payload"] or ""),
+            }
+        )
+    artifact_body = canonical_product_artifact_bytes(product_rows).decode("utf-8")
+    artifact_digest = product_artifact_digest(product_rows)
+    conn.execute(
+        "UPDATE receipt_product_materializations SET artifact_digest=?, artifact_body=? "
+        "WHERE dataset='equities_bars_daily'",
+        (artifact_digest, artifact_body),
+    )
+
+
+def test_sealed_clocks_compare_as_aware_instants_not_lexically(tmp_path) -> None:
+    import sqlite3
+
+    from _coreseed import TRADING_DAYS, seed_governed_am_pm_session_db
+    from core.execution import morning_close_as_of
+    from pit.errors import SnapshotObservationClockError
+
+    code = "1332"
+    days = TRADING_DAYS
+    last = days[-1]
+    db = seed_governed_am_pm_session_db(
+        tmp_path,
+        codes=[code],
+        days=days,
+        morning_prices={code: {day: 100.0 for day in days}},
+        afternoon_prices={code: {day: 150.0 for day in days}},
+    )
+    equal_utc = f"{last}T06:30:00.000Z"
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "UPDATE jquants_records SET ingested_at=? "
+        "WHERE dataset='equities_bars_daily' AND payload LIKE ?",
+        (equal_utc, f"%{last}%"),
+    )
+    _reseal_daily_catalog(conn)
+    conn.commit()
+    conn.close()
+    view = _verified_snapshot_view_from_db(db)
+    visible = view.authorized_rows(
+        as_of=morning_close_as_of(last),
+        codes={code},
+        from_date=last,
+        to_date=last,
+    )
+    assert len(visible) == 1
+    assert visible[0]["ingested_at"] == equal_utc
+    assert visible[0]["ingested_at"] != view.observed_through
+    view._handle.close()
+
+    equal_ms = f"{last}T15:30:00.000+09:00"
+    db_ms = seed_governed_am_pm_session_db(
+        tmp_path / "ms-equal",
+        codes=[code],
+        days=days,
+        morning_prices={code: {day: 100.0 for day in days}},
+        afternoon_prices={code: {day: 150.0 for day in days}},
+    )
+    conn = sqlite3.connect(db_ms)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "UPDATE jquants_records SET available_at=? "
+        "WHERE dataset='equities_bars_daily' AND payload LIKE ?",
+        (equal_ms, f"%{last}%"),
+    )
+    _reseal_daily_catalog(conn)
+    conn.commit()
+    conn.close()
+    view_ms = _verified_snapshot_view_from_db(db_ms)
+    visible_ms = view_ms.authorized_rows(
+        as_of=morning_close_as_of(last),
+        codes={code},
+        from_date=last,
+        to_date=last,
+    )
+    assert len(visible_ms) == 1
+    assert visible_ms[0]["available_at"] == equal_ms
+    view_ms._handle.close()
+
+    future_utc = f"{last}T07:00:00.000Z"
+    db_future = seed_governed_am_pm_session_db(
+        tmp_path / "utc-future",
+        codes=[code],
+        days=days,
+        morning_prices={code: {day: 100.0 for day in days}},
+        afternoon_prices={code: {day: 150.0 for day in days}},
+    )
+    conn = sqlite3.connect(db_future)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "UPDATE jquants_records SET ingested_at=? "
+        "WHERE dataset='equities_bars_daily' AND payload LIKE ?",
+        (future_utc, f"%{last}%"),
+    )
+    _reseal_daily_catalog(conn)
+    conn.commit()
+    conn.close()
+    view_future = _verified_snapshot_view_from_db(db_future)
+    assert (
+        view_future.authorized_rows(
+            as_of=morning_close_as_of(last),
+            codes={code},
+            from_date=last,
+            to_date=last,
+        )
+        == ()
+    )
+    fills = view_future.pm_fill_closes(session_date=last, codes={code})
+    assert fills == {}
+    view_future._handle.close()
+
+    fractional = f"{last}T15:30:00.001+09:00"
+    db_frac = seed_governed_am_pm_session_db(
+        tmp_path / "frac",
+        codes=[code],
+        days=days,
+        morning_prices={code: {day: 100.0 for day in days}},
+        afternoon_prices={code: {day: 150.0 for day in days}},
+    )
+    conn = sqlite3.connect(db_frac)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "UPDATE jquants_records SET ingested_at=? "
+        "WHERE dataset='equities_bars_daily' AND payload LIKE ?",
+        (fractional, f"%{last}%"),
+    )
+    _reseal_daily_catalog(conn)
+    conn.commit()
+    conn.close()
+    view_frac = _verified_snapshot_view_from_db(db_frac)
+    assert (
+        view_frac.authorized_rows(
+            as_of=morning_close_as_of(last),
+            codes={code},
+            from_date=last,
+            to_date=last,
+        )
+        == ()
+    )
+    view_frac._handle.close()
+
+    db_naive = seed_governed_am_pm_session_db(
+        tmp_path / "naive",
+        codes=[code],
+        days=days,
+        morning_prices={code: {day: 100.0 for day in days}},
+        afternoon_prices={code: {day: 150.0 for day in days}},
+    )
+    conn = sqlite3.connect(db_naive)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "UPDATE jquants_records SET ingested_at=? "
+        "WHERE dataset='equities_bars_daily' AND payload LIKE ?",
+        (f"{last}T15:30:00", f"%{last}%"),
+    )
+    _reseal_daily_catalog(conn)
+    conn.commit()
+    conn.close()
+    with pytest.raises(SnapshotObservationClockError, match="timezone|malformed"):
+        _verified_snapshot_view_from_db(db_naive)
+
+
+def test_controlled_prices_features_fills_use_sealed_not_typed(tmp_path) -> None:
+    import sqlite3
+
+    from _coreseed import TRADING_DAYS, seed_governed_am_pm_session_db
+    from core import PERSONAL_RETROSPECTIVE_ADJUSTED, run_backtest, standard_cost
+    from core.execution import morning_close_as_of
+    from core.universe import membership_at
+    from core.strategy_protocol import OrderIntent
+
+    code = "1332"
+    days = TRADING_DAYS
+    db = seed_governed_am_pm_session_db(
+        tmp_path,
+        codes=[code],
+        days=days,
+        morning_prices={code: {day: 100.0 for day in days}},
+        afternoon_prices={code: {day: 150.0 for day in days}},
+    )
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "UPDATE jquants_daily_bars SET close=999.0, adjustment_close=999.0, "
+        "morning_adjustment_close=888.0, afternoon_adjustment_close=777.0"
+    )
+    conn.commit()
+    conn.close()
+    universe = membership_at(morning_close_as_of(days[0]), db_path=db, codes=(code,))
+    view = _verified_snapshot_view_from_db(db)
+    seen: dict[str, float] = {}
+
+    class Probe:
+        strategy_id = "sealed_probe"
+        params: dict = {}
+
+        def on_bar(self, ctx):
+            if ctx.date == days[1]:
+                seen["price"] = float(ctx.prices[code])
+                out = ctx.feature(
+                    "retrospective_split_adjusted_momentum_n",
+                    code=code,
+                    n=1,
+                )
+                seen["last_close"] = float(out.metadata["last_adjustment_close"])
+                seen["value"] = float(out.value)
+            return [OrderIntent(code=code, target_weight=0.5)]
+
+    res = run_backtest(
+        Probe(),
+        days[0],
+        days[-1],
+        db_path=db,
+        universe=universe,
+        execution_mode="am_signal_pm_close",
+        price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+        cost_model=standard_cost(bps=0.0),
+        max_gross_weight=0.5,
+        am_session_data_view=view,
+    )
+    assert seen["price"] == 100.0
+    assert seen["last_close"] == 100.0
+    assert seen["value"] == pytest.approx((100.0 - 150.0) / 150.0)
+    assert res.trades
+    assert all(trade["price"] == 150.0 for trade in res.trades)
+    assert all(trade["price"] != 999.0 for trade in res.trades)
+    assert 888.0 not in seen.values()
+    assert 777.0 not in seen.values()
+
+
+def test_sealed_daily_reader_does_not_decode_unrelated_history(
+    tmp_path, monkeypatch
+) -> None:
+    import sqlite3
+
+    import pit.governed_am_view as governed
+    from _coreseed import TRADING_DAYS, close_iso, seed_governed_am_pm_session_db
+    from data_contracts.identity import natural_key
+
+    code = "1332"
+    other = "8697"
+    days = TRADING_DAYS
+    db = seed_governed_am_pm_session_db(
+        tmp_path,
+        codes=[code],
+        days=days,
+        morning_prices={code: {day: 100.0 for day in days}},
+        afternoon_prices={code: {day: 150.0 for day in days}},
+    )
+    conn = sqlite3.connect(db)
+    for day in ("2008-01-04", "2008-01-07", "2008-01-08"):
+        for item in (code, other):
+            payload = {
+                "Code": item,
+                "Date": day,
+                "C": 1.0,
+                "AdjC": 1.0,
+                "MC": 1.0,
+                "MAdjC": 1.0,
+                "AAdjC": 1.0,
+            }
+            payload_text = json.dumps(
+                payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+            )
+            stamp = close_iso(day) if day >= "2024-11-05" else f"{day}T15:00:00+09:00"
+            conn.execute(
+                "INSERT INTO jquants_records ("
+                "source, dataset, natural_key, event_time, available_at, "
+                "ingested_at, payload, raw_payload) VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    "jquants",
+                    "equities_bars_daily",
+                    natural_key(payload, "equities_bars_daily"),
+                    stamp,
+                    stamp,
+                    stamp,
+                    payload_text,
+                    "",
+                ),
+            )
+    conn.commit()
+    conn.close()
+    view = _verified_snapshot_view_from_db(db)
+    decoded_dates: list[str] = []
+    real = governed._decode_payload
+
+    def spy(raw):
+        payload = real(raw)
+        decoded_dates.append(str(payload.get("Date") or "")[:10])
+        return payload
+
+    monkeypatch.setattr(governed, "_decode_payload", spy)
+    decoded_dates.clear()
+    rows = view.sealed_daily_source_bars(
+        codes={code}, from_date=days[0], to_date=days[0]
+    )
+    assert [row["date"] for row in rows] == [days[0]]
+    assert [row["code"] for row in rows] == [code]
+    assert "2008-01-04" not in decoded_dates
+    assert "2008-01-07" not in decoded_dates
+    decoded_dates.clear()
+    latest = view.sealed_daily_source_bars(
+        codes={code},
+        from_date=None,
+        to_date=days[-1],
+        latest_n=2,
+        as_of=f"{days[-1]}T11:30:00+09:00",
+    )
+    assert [row["date"] for row in latest] == days[-2:]
+    assert all(row["code"] == code for row in latest)
+    assert "2008-01-04" not in decoded_dates
+    view._handle.close()
+
+
+def test_latest_n_counts_only_decision_visible_sealed_rows(
+    tmp_path, monkeypatch
+) -> None:
+    import sqlite3
+
+    import pit.governed_am_view as governed
+    from _coreseed import (
+        seed_governed_am_pm_session_db,
+        write_snapshot_observation_clock,
+    )
+    from data_contracts.identity import natural_key
+    from pit.personal_retrospective_session import (
+        personal_retrospective_am_signal_from_source_rows,
+    )
+    from storage.sqlite_store import SqliteStore
+
+    code = "1332"
+    d_minus_2, d_minus_1, decision = (
+        "2023-01-04",
+        "2023-01-05",
+        "2023-01-06",
+    )
+    days = [d_minus_2, d_minus_1, decision]
+    as_of = f"{decision}T11:30:00+09:00"
+    observed = "2023-01-07T15:30:00+09:00"
+    db = seed_governed_am_pm_session_db(
+        tmp_path,
+        codes=[code],
+        days=days,
+        morning_prices={code: {day: 100.0 for day in days}},
+        afternoon_prices={code: {day: 150.0 for day in days}},
+    )
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "UPDATE jquants_records SET available_at=? "
+        "WHERE dataset='equities_bars_daily' AND payload LIKE ?",
+        (f"{decision}T13:00:00+09:00", f"%{d_minus_1}%"),
+    )
+    for day in ("2008-01-04", "2008-01-07"):
+        payload = {
+            "Code": code,
+            "Date": day,
+            "C": 1.0,
+            "AdjC": 1.0,
+            "MC": 1.0,
+            "MAdjC": 1.0,
+            "AAdjC": 1.0,
+        }
+        payload_text = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        )
+        stamp = f"{day}T15:00:00+09:00"
+        conn.execute(
+            "INSERT INTO jquants_records ("
+            "source, dataset, natural_key, event_time, available_at, "
+            "ingested_at, payload, raw_payload) VALUES (?,?,?,?,?,?,?,?)",
+            (
+                "jquants",
+                "equities_bars_daily",
+                natural_key(payload, "equities_bars_daily"),
+                stamp,
+                stamp,
+                stamp,
+                payload_text,
+                "",
+            ),
+        )
+    _reseal_daily_catalog(conn)
+    conn.commit()
+    conn.close()
+    store = SqliteStore(db)
+    write_snapshot_observation_clock(store, observed)
+    store.close()
+    view = _verified_snapshot_view_from_db(db)
+    decoded_dates: list[str] = []
+    real = governed._decode_payload
+
+    def spy(raw):
+        payload = real(raw)
+        decoded_dates.append(str(payload.get("Date") or "")[:10])
+        return payload
+
+    monkeypatch.setattr(governed, "_decode_payload", spy)
+    decoded_dates.clear()
+    bounded = view.sealed_daily_source_bars(
+        codes={code},
+        from_date=None,
+        to_date=decision,
+        latest_n=2,
+        as_of=as_of,
+    )
+    assert [row["date"] for row in bounded] == [d_minus_2, decision]
+    assert d_minus_1 not in [row["date"] for row in bounded]
+    assert "2008-01-04" not in decoded_dates
+    assert "2008-01-07" not in decoded_dates
+    decoded_dates.clear()
+    unbounded = view.sealed_daily_source_bars(
+        codes={code},
+        from_date=d_minus_2,
+        to_date=decision,
+    )
+    masked_bounded = personal_retrospective_am_signal_from_source_rows(
+        bounded,
+        as_of=as_of,
+        observed_through=observed,
+        code=code,
+        latest_n=2,
+    )
+    masked_unbounded = personal_retrospective_am_signal_from_source_rows(
+        unbounded,
+        as_of=as_of,
+        observed_through=observed,
+        code=code,
+        latest_n=2,
+    )
+    assert [row["date"] for row in bounded] == [d_minus_2, decision]
+    assert [row["date"] for row in masked_bounded.rows] == [d_minus_2, decision]
+    assert [row["date"] for row in masked_unbounded.rows] == [d_minus_2, decision]
+    assert d_minus_1 not in [row["date"] for row in bounded]
+    view._handle.close()
+
+
+def test_tip_only_am_absent_does_not_block_historical_daily_closure(tmp_path) -> None:
+    import sqlite3
+
+    from _coreseed import TRADING_DAYS, seed_governed_am_pm_session_db
+
+    db = seed_governed_am_pm_session_db(
+        tmp_path,
+        codes=["1332"],
+        days=TRADING_DAYS,
+    )
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "DELETE FROM jquants_records WHERE dataset='equities_bars_daily_am'"
+    )
+    conn.execute(
+        "DELETE FROM receipt_product_materializations WHERE dataset='equities_bars_daily_am'"
+    )
+    conn.commit()
+    conn.close()
+    view = _verified_snapshot_view_from_db(db)
+    rows = view.authorized_rows(
+        as_of=f"{TRADING_DAYS[0]}T11:30:00+09:00",
+        codes={"1332"},
+        from_date=TRADING_DAYS[0],
+        to_date=TRADING_DAYS[0],
+    )
+    assert len(rows) == 1
+    assert rows[0]["close"] > 0.0
+    assert "afternoon_close" not in rows[0]
+    assert rows[0]["authentic_am_session_evidence"] is False
+    from pit.errors import SnapshotObservationClockError
+
+    empty = view.authorized_rows(
+        as_of=f"{TRADING_DAYS[0]}T10:00:00+09:00",
+        codes={"1332"},
+        from_date=TRADING_DAYS[0],
+        to_date=TRADING_DAYS[0],
+    )
+    assert empty == ()
+
+    with pytest.raises(SnapshotObservationClockError, match="after the as_of"):
+        view.authorized_rows(
+            as_of=f"{TRADING_DAYS[0]}T11:30:00+09:00",
+            codes={"1332"},
+            from_date=TRADING_DAYS[0],
+            to_date=TRADING_DAYS[-1],
+        )
 
 
 def test_publisher_clock_write_and_reader_rejections(tmp_path) -> None:

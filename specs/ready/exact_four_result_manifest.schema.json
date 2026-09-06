@@ -40,37 +40,92 @@
     "manifest_id"
   ],
   "properties": {
-    "format": { "const": "exact-four-pilot-result-manifest/v2" },
-    "identity": { "const": "controlled_pilot_v1" },
-    "execution_mode": { "const": "paper" },
-    "pilot_run_id": { "$ref": "#/$defs/nonEmpty" },
-    "readiness_attestation_id": { "$ref": "#/$defs/digest" },
-    "trader_authorization_id": { "$ref": "#/$defs/digest" },
-    "execution_request_id": { "$ref": "#/$defs/digest" },
-    "lease_id": { "$ref": "#/$defs/digest" },
-    "idempotency_key": { "$ref": "#/$defs/digest" },
-    "exact_four_binding_digest": { "$ref": "#/$defs/digest" },
-    "controlled_pilot_policy_digest": { "$ref": "#/$defs/digest" },
-    "budget_scope_digest": { "$ref": "#/$defs/digest" },
-    "plan_set_digest": { "$ref": "#/$defs/digest" },
-    "dependency_closure_set_digest": { "$ref": "#/$defs/digest" },
-    "profile_set_digest": { "$ref": "#/$defs/digest" },
-    "required_dataset_membership_digest": { "$ref": "#/$defs/digest" },
-    "snapshot_id": { "$ref": "#/$defs/digest" },
-    "ready_manifest_digest": { "$ref": "#/$defs/digest" },
-    "immutable_snapshot_digest": { "$ref": "#/$defs/digest" },
-    "execution_issued_at": { "type": "string", "format": "date-time" },
-    "execution_expires_at": { "type": "string", "format": "date-time" },
-    "completed_at": { "type": "string", "format": "date-time" },
+    "format": {
+      "const": "exact-four-pilot-result-manifest/v2"
+    },
+    "identity": {
+      "const": "controlled_pilot_v1"
+    },
+    "execution_mode": {
+      "const": "paper"
+    },
+    "pilot_run_id": {
+      "$ref": "#/$defs/nonEmpty"
+    },
+    "readiness_attestation_id": {
+      "$ref": "#/$defs/digest"
+    },
+    "trader_authorization_id": {
+      "$ref": "#/$defs/digest"
+    },
+    "execution_request_id": {
+      "$ref": "#/$defs/digest"
+    },
+    "lease_id": {
+      "$ref": "#/$defs/digest"
+    },
+    "idempotency_key": {
+      "$ref": "#/$defs/digest"
+    },
+    "exact_four_binding_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "controlled_pilot_policy_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "budget_scope_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "plan_set_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "dependency_closure_set_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "profile_set_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "required_dataset_membership_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "snapshot_id": {
+      "$ref": "#/$defs/digest"
+    },
+    "ready_manifest_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "immutable_snapshot_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "execution_issued_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "execution_expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
     "paper_results": {
       "type": "array",
       "minItems": 4,
       "maxItems": 4,
       "prefixItems": [
-        { "$ref": "#/$defs/paper1" },
-        { "$ref": "#/$defs/paper2" },
-        { "$ref": "#/$defs/paper3" },
-        { "$ref": "#/$defs/paper4" }
+        {
+          "$ref": "#/$defs/paper1"
+        },
+        {
+          "$ref": "#/$defs/paper2"
+        },
+        {
+          "$ref": "#/$defs/paper3"
+        },
+        {
+          "$ref": "#/$defs/paper4"
+        }
       ],
       "items": false
     },
@@ -79,24 +134,49 @@
       "minItems": 4,
       "maxItems": 4,
       "prefixItems": [
-        { "$ref": "#/$defs/risk1" },
-        { "$ref": "#/$defs/risk2" },
-        { "$ref": "#/$defs/risk3" },
-        { "$ref": "#/$defs/risk4" }
+        {
+          "$ref": "#/$defs/risk1"
+        },
+        {
+          "$ref": "#/$defs/risk2"
+        },
+        {
+          "$ref": "#/$defs/risk3"
+        },
+        {
+          "$ref": "#/$defs/risk4"
+        }
       ],
       "items": false
     },
-    "aggregate_selection": { "$ref": "#/$defs/selection" },
-    "knowledge_artifact": { "$ref": "#/$defs/knowledge" },
-    "generation": { "type": "integer", "const": 1 },
-    "one_shot": { "const": true },
-    "automatic_promotion": { "const": false },
-    "mass_research_enabled": { "const": false },
-    "live_trading_enabled": { "const": false },
-    "fill_contract_digest": {
-      "const": "sha256:678985a0f7b142eeecd693ebe28bff822916bc815889f0b39e2841830377377d"
+    "aggregate_selection": {
+      "$ref": "#/$defs/selection"
     },
-    "manifest_id": { "$ref": "#/$defs/digest" }
+    "knowledge_artifact": {
+      "$ref": "#/$defs/knowledge"
+    },
+    "generation": {
+      "type": "integer",
+      "const": 1
+    },
+    "one_shot": {
+      "const": true
+    },
+    "automatic_promotion": {
+      "const": false
+    },
+    "mass_research_enabled": {
+      "const": false
+    },
+    "live_trading_enabled": {
+      "const": false
+    },
+    "fill_contract_digest": {
+      "const": "sha256:3691b4c93bbafc1d5a0e8fec25eb14ec26fae9683aaffa07fd44bb80c4f486b8"
+    },
+    "manifest_id": {
+      "$ref": "#/$defs/digest"
+    }
   },
   "$defs": {
     "digest": {
@@ -121,37 +201,97 @@
         "evidence_id"
       ],
       "properties": {
-        "format": { "const": "paper-result-evidence/v2" },
-        "ordinal": { "type": "integer", "minimum": 1, "maximum": 4 },
-        "plan_id": { "$ref": "#/$defs/nonEmpty" },
-        "plan_binding_digest": { "$ref": "#/$defs/digest" },
-        "paper_result_id": { "$ref": "#/$defs/digest" },
-        "paper_artifact_digest": { "$ref": "#/$defs/digest" },
-        "evidence_id": { "$ref": "#/$defs/digest" }
+        "format": {
+          "const": "paper-result-evidence/v2"
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4
+        },
+        "plan_id": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "plan_binding_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "paper_result_id": {
+          "$ref": "#/$defs/digest"
+        },
+        "paper_artifact_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "evidence_id": {
+          "$ref": "#/$defs/digest"
+        }
       }
     },
     "paper1": {
       "allOf": [
-        { "$ref": "#/$defs/paperBase" },
-        { "properties": { "ordinal": { "const": 1 }, "plan_id": { "const": "exp-mdh-hold10-momentum" } } }
+        {
+          "$ref": "#/$defs/paperBase"
+        },
+        {
+          "properties": {
+            "ordinal": {
+              "const": 1
+            },
+            "plan_id": {
+              "const": "exp-mdh-hold10-momentum"
+            }
+          }
+        }
       ]
     },
     "paper2": {
       "allOf": [
-        { "$ref": "#/$defs/paperBase" },
-        { "properties": { "ordinal": { "const": 2 }, "plan_id": { "const": "exp-xs-hold10-mom5" } } }
+        {
+          "$ref": "#/$defs/paperBase"
+        },
+        {
+          "properties": {
+            "ordinal": {
+              "const": 2
+            },
+            "plan_id": {
+              "const": "exp-xs-hold10-mom5"
+            }
+          }
+        }
       ]
     },
     "paper3": {
       "allOf": [
-        { "$ref": "#/$defs/paperBase" },
-        { "properties": { "ordinal": { "const": 3 }, "plan_id": { "const": "exp-event-post-hold5" } } }
+        {
+          "$ref": "#/$defs/paperBase"
+        },
+        {
+          "properties": {
+            "ordinal": {
+              "const": 3
+            },
+            "plan_id": {
+              "const": "exp-event-post-hold5"
+            }
+          }
+        }
       ]
     },
     "paper4": {
       "allOf": [
-        { "$ref": "#/$defs/paperBase" },
-        { "properties": { "ordinal": { "const": 4 }, "plan_id": { "const": "exp-fund-hold10-value-mom" } } }
+        {
+          "$ref": "#/$defs/paperBase"
+        },
+        {
+          "properties": {
+            "ordinal": {
+              "const": 4
+            },
+            "plan_id": {
+              "const": "exp-fund-hold10-value-mom"
+            }
+          }
+        }
       ]
     },
     "riskBase": {
@@ -169,39 +309,103 @@
         "evidence_id"
       ],
       "properties": {
-        "format": { "const": "risk-result-evidence/v2" },
-        "ordinal": { "type": "integer", "minimum": 1, "maximum": 4 },
-        "plan_id": { "$ref": "#/$defs/nonEmpty" },
-        "plan_binding_digest": { "$ref": "#/$defs/digest" },
-        "paper_result_id": { "$ref": "#/$defs/digest" },
-        "paper_evidence_id": { "$ref": "#/$defs/digest" },
-        "risk_result_id": { "$ref": "#/$defs/digest" },
-        "risk_artifact_digest": { "$ref": "#/$defs/digest" },
-        "evidence_id": { "$ref": "#/$defs/digest" }
+        "format": {
+          "const": "risk-result-evidence/v2"
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4
+        },
+        "plan_id": {
+          "$ref": "#/$defs/nonEmpty"
+        },
+        "plan_binding_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "paper_result_id": {
+          "$ref": "#/$defs/digest"
+        },
+        "paper_evidence_id": {
+          "$ref": "#/$defs/digest"
+        },
+        "risk_result_id": {
+          "$ref": "#/$defs/digest"
+        },
+        "risk_artifact_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "evidence_id": {
+          "$ref": "#/$defs/digest"
+        }
       }
     },
     "risk1": {
       "allOf": [
-        { "$ref": "#/$defs/riskBase" },
-        { "properties": { "ordinal": { "const": 1 }, "plan_id": { "const": "exp-mdh-hold10-momentum" } } }
+        {
+          "$ref": "#/$defs/riskBase"
+        },
+        {
+          "properties": {
+            "ordinal": {
+              "const": 1
+            },
+            "plan_id": {
+              "const": "exp-mdh-hold10-momentum"
+            }
+          }
+        }
       ]
     },
     "risk2": {
       "allOf": [
-        { "$ref": "#/$defs/riskBase" },
-        { "properties": { "ordinal": { "const": 2 }, "plan_id": { "const": "exp-xs-hold10-mom5" } } }
+        {
+          "$ref": "#/$defs/riskBase"
+        },
+        {
+          "properties": {
+            "ordinal": {
+              "const": 2
+            },
+            "plan_id": {
+              "const": "exp-xs-hold10-mom5"
+            }
+          }
+        }
       ]
     },
     "risk3": {
       "allOf": [
-        { "$ref": "#/$defs/riskBase" },
-        { "properties": { "ordinal": { "const": 3 }, "plan_id": { "const": "exp-event-post-hold5" } } }
+        {
+          "$ref": "#/$defs/riskBase"
+        },
+        {
+          "properties": {
+            "ordinal": {
+              "const": 3
+            },
+            "plan_id": {
+              "const": "exp-event-post-hold5"
+            }
+          }
+        }
       ]
     },
     "risk4": {
       "allOf": [
-        { "$ref": "#/$defs/riskBase" },
-        { "properties": { "ordinal": { "const": 4 }, "plan_id": { "const": "exp-fund-hold10-value-mom" } } }
+        {
+          "$ref": "#/$defs/riskBase"
+        },
+        {
+          "properties": {
+            "ordinal": {
+              "const": 4
+            },
+            "plan_id": {
+              "const": "exp-fund-hold10-value-mom"
+            }
+          }
+        }
       ]
     },
     "selection": {
@@ -218,22 +422,30 @@
         "evidence_id"
       ],
       "properties": {
-        "format": { "const": "aggregate-selection-evidence/v2" },
+        "format": {
+          "const": "aggregate-selection-evidence/v2"
+        },
         "paper_evidence_ids": {
           "type": "array",
           "minItems": 4,
           "maxItems": 4,
           "uniqueItems": true,
-          "items": { "$ref": "#/$defs/digest" }
+          "items": {
+            "$ref": "#/$defs/digest"
+          }
         },
         "risk_evidence_ids": {
           "type": "array",
           "minItems": 4,
           "maxItems": 4,
           "uniqueItems": true,
-          "items": { "$ref": "#/$defs/digest" }
+          "items": {
+            "$ref": "#/$defs/digest"
+          }
         },
-        "input_pair_set_digest": { "$ref": "#/$defs/digest" },
+        "input_pair_set_digest": {
+          "$ref": "#/$defs/digest"
+        },
         "selected_plan_ids": {
           "type": "array",
           "maxItems": 4,
@@ -247,9 +459,15 @@
             ]
           }
         },
-        "selection_result_id": { "$ref": "#/$defs/digest" },
-        "selection_artifact_digest": { "$ref": "#/$defs/digest" },
-        "evidence_id": { "$ref": "#/$defs/digest" }
+        "selection_result_id": {
+          "$ref": "#/$defs/digest"
+        },
+        "selection_artifact_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "evidence_id": {
+          "$ref": "#/$defs/digest"
+        }
       }
     },
     "knowledge": {
@@ -264,12 +482,24 @@
         "evidence_id"
       ],
       "properties": {
-        "format": { "const": "knowledge-artifact-evidence/v2" },
-        "selection_evidence_id": { "$ref": "#/$defs/digest" },
-        "selection_result_id": { "$ref": "#/$defs/digest" },
-        "knowledge_artifact_id": { "$ref": "#/$defs/digest" },
-        "knowledge_artifact_digest": { "$ref": "#/$defs/digest" },
-        "evidence_id": { "$ref": "#/$defs/digest" }
+        "format": {
+          "const": "knowledge-artifact-evidence/v2"
+        },
+        "selection_evidence_id": {
+          "$ref": "#/$defs/digest"
+        },
+        "selection_result_id": {
+          "$ref": "#/$defs/digest"
+        },
+        "knowledge_artifact_id": {
+          "$ref": "#/$defs/digest"
+        },
+        "knowledge_artifact_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "evidence_id": {
+          "$ref": "#/$defs/digest"
+        }
       }
     }
   }

@@ -52,6 +52,13 @@ from research.universe_contract import ResolvedUniverseMembership
 
 CONTRACT_REL = Path("specs") / "ready" / "controlled_pilot_v1.generated.json"
 PLAN_SCHEMA_REL = Path("specs") / "experiment_plans" / "schema.json"
+PLAN_IDS = (
+    "exp-mdh-hold10-momentum",
+    "exp-xs-hold10-mom5",
+    "exp-event-post-hold5",
+    "exp-fund-hold10-value-mom",
+)
+RESULT_MANIFEST_SCHEMA_REL = Path("specs") / "ready" / "exact_four_result_manifest.schema.json"
 REGISTRY_RAW_TS_REL = (
     Path("platform")
     / "workers"
@@ -404,8 +411,11 @@ def render_fixtures() -> dict[str, bytes]:
             "authorization_digest": authorization_digest,
             "ready_attestation_id": attestation_id,
             "fill_contract_digest": contract["fill_contract_digest"],
-            "execution_mode": "am_signal_pm_close",
-            "price_basis": "RAW",
+            "execution_mode": contract["fill_contract"]["execution_mode"],
+            "price_basis": "PERSONAL_RETROSPECTIVE_ADJUSTED",
+            "price_evidence_mode": contract["fill_contract"]["price_evidence_mode"],
+            "authentic_am_session_evidence": False,
+            "contemporaneous_observation_unproven": True,
             "lifecycle": "Paper",
             "feature_refs": [],
             "metrics": {
@@ -432,7 +442,7 @@ def render_fixtures() -> dict[str, bytes]:
                 "feature_versions": {},
                 "feature_definition_hashes": {},
                 "strategy_definition_hash": plan["strategy_spec_hash"],
-                "execution_mode": "am_signal_pm_close",
+                "execution_mode": contract["fill_contract"]["execution_mode"],
             },
         }
         paper["semantic_digest"] = canonical_json_digest(paper)
@@ -646,6 +656,64 @@ def render_registry_raw_ts() -> bytes:
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
+def _canonical_fill_contract() -> dict[str, Any]:
+    from execution.controlled_fill_contract import controlled_fill_contract
+
+    return dict(controlled_fill_contract())
+
+
+def render_plan_fill_contracts() -> dict[str, bytes]:
+    fill = _canonical_fill_contract()
+    artifacts: dict[str, bytes] = {}
+    for plan_id in PLAN_IDS:
+        rel = Path("specs") / "experiment_plans" / f"{plan_id}.json"
+        path = ROOT / rel
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["fill_contract"] = fill
+        artifacts[str(rel)] = (
+            json.dumps(payload, indent=2, sort_keys=False, ensure_ascii=True).encode(
+                "utf-8"
+            )
+            + b"\n"
+        )
+    return artifacts
+
+
+def render_plan_schema() -> bytes:
+    fill = _canonical_fill_contract()
+    path = ROOT / PLAN_SCHEMA_REL
+    schema = json.loads(path.read_text(encoding="utf-8"))
+    fill_schema = schema["properties"]["fill_contract"]
+    required = list(fill_schema.get("required", []))
+    if "price_evidence_mode" not in required:
+        idx = required.index("lifecycle") + 1 if "lifecycle" in required else len(required)
+        required.insert(idx, "price_evidence_mode")
+    fill_schema["required"] = required
+    props = fill_schema.setdefault("properties", {})
+    for key, value in fill.items():
+        current = props.get(key, {})
+        if not isinstance(current, dict):
+            current = {}
+        current["const"] = value
+        props[key] = current
+    schema["properties"]["fill_contract"] = fill_schema
+    return json.dumps(schema, indent=2, sort_keys=False, ensure_ascii=True).encode(
+        "utf-8"
+    ) + b"\n"
+
+
+def render_result_manifest_schema() -> bytes:
+    fill = _canonical_fill_contract()
+    path = ROOT / RESULT_MANIFEST_SCHEMA_REL
+    schema = json.loads(path.read_text(encoding="utf-8"))
+    digest_schema = schema.get("properties", {}).get("fill_contract_digest")
+    if isinstance(digest_schema, dict):
+        digest_schema["const"] = fill["contract_digest"]
+    return json.dumps(schema, indent=2, sort_keys=False, ensure_ascii=True).encode(
+        "utf-8"
+    ) + b"\n"
+
+
 def plan_schema_matches_fill_contract(contract: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     path = ROOT / PLAN_SCHEMA_REL
@@ -661,13 +729,28 @@ def plan_schema_matches_fill_contract(contract: dict[str, Any]) -> list[str]:
     for key, value in fill.items():
         if props.get(key, {}).get("const") != value:
             errors.append(f"schema fill_contract.{key} drifted from controlled_pilot_v1")
-    if fill.get("signal_price_dataset") != "equities_bars_daily_am":
-        errors.append("schema/contract signal_price_dataset is not equities_bars_daily_am")
+    if fill.get("signal_price_dataset") != "equities_bars_daily":
+        errors.append("schema/contract signal_price_dataset is not equities_bars_daily")
+    if fill.get("price_evidence_mode") != "historical_daily_reconstruction":
+        errors.append("schema/contract price_evidence_mode is not historical_daily_reconstruction")
+    if fill.get("retrospective_only") is not True:
+        errors.append("schema/contract retrospective_only is not true")
     return errors
 
 
 def write_artifacts(*, check: bool) -> int:
+    plan_artifacts = {
+        str(PLAN_SCHEMA_REL): render_plan_schema(),
+        str(RESULT_MANIFEST_SCHEMA_REL): render_result_manifest_schema(),
+        **render_plan_fill_contracts(),
+    }
+    if not check:
+        for rel, payload in plan_artifacts.items():
+            path = ROOT / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(payload)
     expected = {
+        **plan_artifacts,
         str(CONTRACT_REL): render_contract(),
         str(REGISTRY_RAW_TS_REL): render_registry_raw_ts(),
         **render_fixtures(),

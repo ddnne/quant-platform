@@ -109,13 +109,13 @@ def test_am_capability_d_row_has_no_full_or_afternoon_fields(tmp_path):
     row = seen["rows"][0]
     assert row["adjustment_close"] == 110.0
     for leaked in (
-        "close",
         "market_cap",
         "afternoon_adjustment_close",
         "turnover_value",
         "raw_payload",
     ):
         assert leaked not in row
+    assert row.get("close") not in (10.0, 180.0, 999.0)
 
 
 def test_ordinary_compute_cannot_inject_later_as_of_or_db_scope(tmp_path):

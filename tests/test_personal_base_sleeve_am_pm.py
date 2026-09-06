@@ -208,7 +208,7 @@ def test_am_builder_binds_repo_identities_and_d_m_versus_d_a_nav() -> None:
         "sha256:5fc214947a8fdde7005561820a9bf4b3c301154535b4dc37cff09e9d801bddac"
     )
     assert document["source_run"]["session_view_digest"] == (
-        "sha256:96ec026ad962605aaac6ce9de266be2da37852e9157b24ecfb5e04af97cc1027"
+        "sha256:ad0cfa0d6ad59ba54985798604d1ef948aaed59e0129613f08d636b4ce00bef6"
     )
     assert spec_digest == (
         "sha256:54a59cb980f38c37ac5879f979bd26a635bf23a95974413f2f24358ef936be4d"

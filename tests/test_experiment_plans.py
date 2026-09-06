@@ -101,7 +101,11 @@ def test_pilot_freezes_stay_closed_without_loading_catalog_inventory() -> None:
         p for p in load_experiment_plans() if p.plan_id == "exp-fund-hold10-value-mom"
     )
     assert fund.strategy_spec_id == "fundamentals_hold_10"
-    mom = next(r for r in fund.feature_refs if r.id == "momentum_n")
+    mom = next(
+        r
+        for r in fund.feature_refs
+        if r.id == "retrospective_split_adjusted_momentum_n"
+    )
     assert mom.params["n"] == 10
 
 

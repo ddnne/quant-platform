@@ -108,6 +108,91 @@ def bind_personal_retrospective_am_session_daily_bars(
     )
 
 
+def bind_verified_controlled_am_session_daily_bars(
+    *, as_of: Any, db_path: Any, data_view: Any
+) -> _DailyBarsReaderCapability:
+    """Engine-only AM session reads from the pinned sealed daily product."""
+
+    from pit.governed_am_view import GovernedAmSessionDataView
+    from pit.personal_retrospective_session import (
+        AM_SIGNAL_SESSION_VIEW,
+        am_session_view_digest,
+        personal_retrospective_am_signal_from_source_rows,
+    )
+
+    if type(data_view) is not GovernedAmSessionDataView:
+        raise TypeError(
+            "Controlled AM daily-bar capability requires a verifier-minted data view"
+        )
+    as_of_iso = _require_as_of(as_of)
+    resolved_db = resolve_db_path(db_path)
+    pinned = data_view.assert_pinned_artifact()
+    if str(pinned.resolve()) != str(resolved_db.resolve()):
+        raise ValueError(
+            "bound daily-bar capability db_path does not match compute db_path"
+        )
+    session_digest = am_session_view_digest(include_morning_turnover_history=True)
+
+    def reader(**kwargs: Any):
+        reserved = sorted(
+            (_RUNTIME_SCOPE_FIELDS | {"include_morning_turnover_history"}).intersection(
+                kwargs
+            )
+        )
+        if reserved:
+            raise TypeError(
+                f"AM session daily-bar reader owns runtime-scoped argument(s): "
+                f"{reserved}"
+            )
+        latest_n = kwargs.get("latest_n")
+        decision_day = as_of_iso[:10]
+        from_date = (
+            None
+            if kwargs.get("from_event") is None
+            else str(kwargs.get("from_event"))[:10]
+        )
+        to_date = (
+            None
+            if kwargs.get("to_event") is None
+            else str(kwargs.get("to_event"))[:10]
+        )
+        if latest_n is not None:
+            to_date = (
+                decision_day if to_date is None else min(to_date, decision_day)
+            )
+        source = data_view.sealed_daily_source_bars(
+            codes=(
+                {str(kwargs["code"])}
+                if kwargs.get("code") is not None
+                else (
+                    {str(value) for value in kwargs["codes"]}
+                    if kwargs.get("codes") is not None
+                    else None
+                )
+            ),
+            from_date=from_date,
+            to_date=to_date,
+            latest_n=latest_n,
+            as_of=as_of_iso,
+        )
+        return personal_retrospective_am_signal_from_source_rows(
+            source,
+            as_of=as_of_iso,
+            observed_through=data_view.observed_through,
+            include_morning_turnover_history=True,
+            **kwargs,
+        )
+
+    return _DailyBarsReaderCapability(
+        as_of=as_of_iso,
+        db_path=str(resolved_db),
+        reader=reader,
+        session_view=AM_SIGNAL_SESSION_VIEW,
+        session_view_digest=session_digest,
+        include_morning_turnover_history=True,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class FeatureContext:
     """Read-only PIT-scoped context handed to a feature's ``compute``.

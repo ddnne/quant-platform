@@ -23,7 +23,9 @@ from urllib.parse import quote
 from ops.receipt_product import (
     PRODUCT_ARTIFACT_FIELDS,
     product_artifact_body_digest,
+    _aware_instant,
 )
+from storage.schema import CATALOG_CODE_SQL
 
 from .errors import SnapshotObservationClockError
 from .query import (
@@ -36,7 +38,6 @@ GOVERNED_AM_DATASET_ID = "equities_bars_daily_am"
 GOVERNED_DAILY_DATASET_ID = "equities_bars_daily"
 CONTROLLED_SESSION_DATASET_IDS = (
     GOVERNED_DAILY_DATASET_ID,
-    GOVERNED_AM_DATASET_ID,
     "equities_master",
     "fins_summary",
     "indices_bars_daily_topix",
@@ -141,6 +142,62 @@ def official_afternoon_close_as_of(day: str) -> str:
 
 def am_information_cutoff(day: str) -> str:
     return f"{day}{_MORNING_CLOSE_SUFFIX}"
+
+
+def _require_aware_instant(value: Any, *, label: str):
+    try:
+        return _aware_instant(value, label=label)
+    except ValueError as exc:
+        raise SnapshotObservationClockError(str(exc)) from exc
+
+
+def _aware_instant_after(
+    left: Any, right: Any, *, left_label: str, right_label: str
+) -> bool:
+    return _require_aware_instant(left, label=left_label) > _require_aware_instant(
+        right, label=right_label
+    )
+
+
+def _sealed_catalog_daily_bar(
+    raw: Mapping[str, Any], payload: Mapping[str, Any], *, code: str, day: str
+) -> dict[str, Any]:
+    """Catalog-shaped daily bar. Original clock text is retained."""
+
+    return {
+        "source": str(raw["source"] or ""),
+        "code": code,
+        "date": day,
+        "event_time": str(raw["event_time"] or ""),
+        "available_at": str(raw["available_at"] or ""),
+        "ingested_at": str(raw["ingested_at"] or ""),
+        "close": _payload_price(payload, ("Close", "C")),
+        "morning_close": _payload_price(
+            payload, ("MC", "MorningClose", "morning_close")
+        ),
+        "volume": _payload_price(payload, ("Volume", "Vo")),
+        "adjustment_close": _payload_price(
+            payload, ("AdjustmentClose", "AdjClose", "AdjC")
+        ),
+        "adjustment_volume": _payload_price(
+            payload, ("AdjustmentVolume", "AdjVolume", "AdjVo")
+        ),
+        "morning_adjustment_close": _am_payload_price(payload),
+        "afternoon_adjustment_close": _pm_payload_price(payload),
+        "morning_turnover_value": _payload_price(
+            payload, ("MorningTurnoverValue", "MVa")
+        ),
+        "afternoon_turnover_value": _payload_price(
+            payload, ("AfternoonTurnoverValue", "AVa")
+        ),
+        "morning_adjustment_volume": _payload_price(
+            payload, ("MorningAdjustmentVolume", "MAdjVo")
+        ),
+        "afternoon_adjustment_volume": _payload_price(
+            payload, ("AfternoonAdjustmentVolume", "AAdjVo")
+        ),
+        "raw_payload": dict(payload),
+    }
 
 
 def am_operational_usable_by(day: str) -> str:
@@ -342,6 +399,13 @@ def _load_authorized_am_rows(
     observed_through: str,
     sealed: set[tuple[str, ...]],
 ) -> tuple[tuple[MappingProxyType, ...], tuple[tuple[str, str], ...]]:
+    """Historical daily MAdjC/AAdjC rows. Tip-only AM is not required.
+
+    Original ``available_at`` / ``ingested_at`` are retained. Later-than-noon
+    acquisition is accepted when both clocks are <= snapshot observed_through.
+    Missing morning or afternoon prices are unauthorized; nothing is filled
+    forward or backdated to 11:30.
+    """
     if not sealed:
         return (), ()
     tables = {
@@ -355,7 +419,7 @@ def _load_authorized_am_rows(
         "ingested_at, payload, raw_payload FROM jquants_records "
         "WHERE source='jquants' AND dataset=? "
         "ORDER BY event_time, natural_key",
-        (GOVERNED_AM_DATASET_ID,),
+        (GOVERNED_DAILY_DATASET_ID,),
     ).fetchall()
     authorized: list[MappingProxyType] = []
     unauthorized: list[tuple[str, str]] = []
@@ -366,25 +430,26 @@ def _load_authorized_am_rows(
         if (
             not ingested_at
             or not available_at
-            or ingested_at > observed_through
-            or available_at > observed_through
+            or _aware_instant_after(
+                ingested_at,
+                observed_through,
+                left_label="ingested_at",
+                right_label="observed_through",
+            )
+            or _aware_instant_after(
+                available_at,
+                observed_through,
+                left_label="available_at",
+                right_label="observed_through",
+            )
         ):
             continue
         payload = _decode_payload(raw["payload"])
         day = str(payload.get("Date") or payload.get("date") or "")[:10]
         if len(day) != 10:
             continue
-        expected_event = am_information_cutoff(day)
-        if not am_product_row_matches_session(
-            event_time=event_time,
-            available_at=available_at,
-            ingested_at=ingested_at,
-            session_date=day,
-        ):
-            continue
         morning = _am_payload_price(payload)
-        if morning is None:
-            continue
+        afternoon = _pm_payload_price(payload)
         payload_text = _canonical_payload_text(raw["payload"])
         raw_payload = raw["raw_payload"]
         raw_text = raw_payload if type(raw_payload) is str else ""
@@ -399,19 +464,10 @@ def _load_authorized_am_rows(
             raw_text,
         )
         code = str(payload.get("Code") or payload.get("code") or "")
-        if candidate not in sealed:
+        if candidate not in sealed or morning is None or afternoon is None:
             if code:
                 unauthorized.append((code, day))
             continue
-        declared = str(payload.get("am_row_identity") or "")
-        if declared:
-            live_identity = _row_identity_for_corruption_check(
-                {**dict(raw), "payload": payload}
-            )
-            if declared != live_identity:
-                if code:
-                    unauthorized.append((code, day))
-                continue
         if not code:
             continue
         authorized.append(
@@ -423,8 +479,10 @@ def _load_authorized_am_rows(
                     "available_at": available_at,
                     "ingested_at": ingested_at,
                     "event_time": event_time,
-                    "information_cutoff": expected_event,
-                    "operational_usable_by": am_operational_usable_by(day),
+                    "information_cutoff": am_information_cutoff(day),
+                    "price_evidence_mode": "historical_daily_reconstruction",
+                    "authentic_am_session_evidence": False,
+                    "contemporaneous_observation_unproven": True,
                     "row_identity": _row_identity_for_corruption_check(
                         {**dict(raw), "payload": payload}
                     ),
@@ -468,7 +526,7 @@ def _verified_session_scope_fields(source: Any) -> dict[str, dict[str, Any]]:
 def _verified_am_scope_fields(source: Any) -> dict[str, Any]:
     """Compatibility helper for tests; never mints a production handle."""
 
-    return _verified_session_scope_fields(source)[GOVERNED_AM_DATASET_ID]
+    return _verified_session_scope_fields(source)[GOVERNED_DAILY_DATASET_ID]
 
 
 @dataclass(frozen=True, slots=True)
@@ -833,9 +891,14 @@ class VerifiedControlledSnapshotHandle:
             )
         self.assert_live()
         decision_as_of = normalize_as_of(as_of)
-        if decision_as_of > am_operational_usable_by(to_date):
+        if decision_as_of > self._observed_through:
             raise SnapshotObservationClockError(
-                "AM decision read is after the 12:30 operational deadline"
+                "AM decision as_of is after snapshot observed_through"
+            )
+        as_of_day = decision_as_of[:10]
+        if from_date > as_of_day or to_date > as_of_day:
+            raise SnapshotObservationClockError(
+                "requested AM session is after the as_of morning cutoff"
             )
         visible: list[MappingProxyType] = []
         for row in self._authorized:
@@ -844,14 +907,22 @@ class VerifiedControlledSnapshotHandle:
             day = str(row["date"])
             if day < from_date or day > to_date:
                 continue
-            if not am_product_row_matches_session(
-                event_time=str(row["event_time"]),
-                available_at=str(row["available_at"]),
-                ingested_at=str(row["ingested_at"]),
-                session_date=day,
-            ):
+            if am_information_cutoff(day) > decision_as_of:
                 continue
-            if str(row["available_at"]) > decision_as_of or str(row["ingested_at"]) > decision_as_of:
+            if (
+                _aware_instant_after(
+                    str(row["available_at"]),
+                    self._observed_through,
+                    left_label="available_at",
+                    right_label="observed_through",
+                )
+                or _aware_instant_after(
+                    str(row["ingested_at"]),
+                    self._observed_through,
+                    left_label="ingested_at",
+                    right_label="observed_through",
+                )
+            ):
                 continue
             visible.append(row)
         return tuple(visible)
@@ -890,7 +961,17 @@ class VerifiedControlledSnapshotHandle:
             ingested_at = str(row["ingested_at"] or "")
             if event_time != expected_event or not available_at or not ingested_at:
                 continue
-            if available_at > self._observed_through or ingested_at > self._observed_through:
+            if _aware_instant_after(
+                available_at,
+                self._observed_through,
+                left_label="available_at",
+                right_label="observed_through",
+            ) or _aware_instant_after(
+                ingested_at,
+                self._observed_through,
+                left_label="ingested_at",
+                right_label="observed_through",
+            ):
                 continue
             payload = _decode_payload(row["payload"])
             code = str(payload.get("Code") or payload.get("code") or "")
@@ -912,6 +993,161 @@ class VerifiedControlledSnapshotHandle:
             if price is not None:
                 prices[code] = price
         return prices
+
+    def sealed_daily_source_bars(
+        self,
+        *,
+        codes: set[str] | None,
+        from_date: str | None,
+        to_date: str | None,
+        latest_n: int | None = None,
+        as_of: str | None = None,
+    ) -> tuple[dict[str, Any], ...]:
+        """Sealed daily catalog bars only. Original clock text is retained.
+
+        Date/code bounds are applied in SQL. ``latest_n`` walks newest event
+        days first and stops after that many sealed decision-visible
+        (code, date) rows. Prior rows require event/available <= decision;
+        D uses the observation cutoff.
+        """
+
+        self.assert_live()
+        if latest_n is not None and (
+            isinstance(latest_n, bool)
+            or not isinstance(latest_n, int)
+            or latest_n < 1
+        ):
+            raise SnapshotObservationClockError("latest_n must be a positive integer")
+        if latest_n is not None and (type(as_of) is not str or not as_of):
+            raise SnapshotObservationClockError("latest_n requires decision as_of")
+        decision_day = as_of[:10] if type(as_of) is str and as_of else None
+        wanted = None if codes is None else {str(code) for code in codes if str(code)}
+        if codes is not None and not wanted:
+            return ()
+        clauses = [
+            "source='jquants'",
+            "dataset=?",
+            "event_time IS NOT NULL",
+            "available_at IS NOT NULL",
+            "ingested_at IS NOT NULL",
+        ]
+        params: list[Any] = [GOVERNED_DAILY_DATASET_ID]
+        if from_date is not None:
+            clauses.append("substr(event_time, 1, 10) >= ?")
+            params.append(from_date)
+        if to_date is not None:
+            clauses.append("substr(event_time, 1, 10) <= ?")
+            params.append(to_date)
+        if wanted is not None:
+            placeholders = ",".join("?" for _ in wanted)
+            clauses.append(f"({CATALOG_CODE_SQL}) IN ({placeholders})")
+            params.extend(sorted(wanted))
+        order = (
+            "substr(event_time, 1, 10) DESC, natural_key"
+            if latest_n is not None
+            else "substr(event_time, 1, 10), natural_key"
+        )
+        sql = (
+            "SELECT source, dataset, natural_key, event_time, available_at, "
+            "ingested_at, payload, raw_payload FROM jquants_records WHERE "
+            + " AND ".join(clauses)
+            + f" ORDER BY {order}"
+        )
+        latest: dict[tuple[str, str], tuple[tuple[Any, Any], dict[str, Any]]] = {}
+        current_day: str | None = None
+        pending: dict[tuple[str, str], tuple[tuple[Any, Any], dict[str, Any]]] = {}
+
+        def flush_pending() -> None:
+            for key, item in pending.items():
+                bar = item[1]
+                day = str(bar.get("date") or "")
+                if decision_day is not None and day > decision_day:
+                    continue
+                if latest_n is not None and day != decision_day:
+                    if _aware_instant_after(
+                        str(bar.get("event_time") or ""),
+                        as_of,
+                        left_label="event_time",
+                        right_label="as_of",
+                    ) or _aware_instant_after(
+                        str(bar.get("available_at") or ""),
+                        as_of,
+                        left_label="available_at",
+                        right_label="as_of",
+                    ):
+                        continue
+                latest[key] = item
+            pending.clear()
+
+        for raw in self._connection.execute(sql, params):
+            ingested_at = str(raw["ingested_at"] or "")
+            available_at = str(raw["available_at"] or "")
+            event_time = str(raw["event_time"] or "")
+            if not ingested_at or not available_at or not event_time:
+                continue
+            event_day = event_time[:10]
+            if current_day is not None and event_day != current_day:
+                flush_pending()
+                if latest_n is not None and len(latest) >= latest_n:
+                    break
+            current_day = event_day
+            if _aware_instant_after(
+                ingested_at,
+                self._observed_through,
+                left_label="ingested_at",
+                right_label="observed_through",
+            ) or _aware_instant_after(
+                available_at,
+                self._observed_through,
+                left_label="available_at",
+                right_label="observed_through",
+            ):
+                continue
+            payload = _decode_payload(raw["payload"])
+            day = str(payload.get("Date") or payload.get("date") or "")[:10]
+            if len(day) != 10:
+                continue
+            if from_date is not None and day < from_date:
+                continue
+            if to_date is not None and day > to_date:
+                continue
+            payload_text = _canonical_payload_text(raw["payload"])
+            raw_payload = raw["raw_payload"]
+            raw_text = raw_payload if type(raw_payload) is str else ""
+            candidate = (
+                str(raw["source"] or ""),
+                str(raw["dataset"] or ""),
+                str(raw["natural_key"] or ""),
+                event_time,
+                available_at,
+                ingested_at,
+                payload_text,
+                raw_text,
+            )
+            if candidate not in self._sealed_daily:
+                continue
+            code = str(payload.get("Code") or payload.get("code") or "")
+            if not code:
+                continue
+            if codes is not None and code not in codes:
+                continue
+            vintage = (
+                _require_aware_instant(available_at, label="available_at"),
+                _require_aware_instant(ingested_at, label="ingested_at"),
+            )
+            key = (code, day)
+            previous = pending.get(key)
+            if previous is not None and previous[0] >= vintage:
+                continue
+            pending[key] = (
+                vintage,
+                _sealed_catalog_daily_bar(raw, payload, code=code, day=day),
+            )
+        flush_pending()
+        return tuple(
+            item[1]
+            for _key, item in sorted(latest.items(), key=lambda pair: pair[0])
+        )
 
     def bind_engine_reads(self) -> None:
         self.assert_live()
@@ -1070,6 +1306,23 @@ class GovernedAmSessionDataView:
     def pm_fill_closes(self, *, session_date: str, codes: set[str]) -> dict[str, float]:
         return self._handle.pm_fill_closes(session_date=session_date, codes=codes)
 
+    def sealed_daily_source_bars(
+        self,
+        *,
+        codes: set[str] | None,
+        from_date: str | None,
+        to_date: str | None,
+        latest_n: int | None = None,
+        as_of: str | None = None,
+    ) -> tuple[dict[str, Any], ...]:
+        return self._handle.sealed_daily_source_bars(
+            codes=codes,
+            from_date=from_date,
+            to_date=to_date,
+            latest_n=latest_n,
+            as_of=as_of,
+        )
+
     def bind_engine_reads(self) -> None:
         self._handle.bind_engine_reads()
 
@@ -1177,7 +1430,7 @@ def _open_verified_controlled_snapshot(
         authorized, unauthorized = _load_authorized_am_rows(
             conn,
             observed_through=observed_through,
-            sealed=sealed_by_dataset[GOVERNED_AM_DATASET_ID],
+            sealed=sealed_by_dataset[GOVERNED_DAILY_DATASET_ID],
         )
         if _sqlite_file_identity(resolved) != identity:
             raise SnapshotObservationClockError(
@@ -1200,7 +1453,9 @@ def _open_verified_controlled_snapshot(
 
 
 __all__ = [
+    "CONTROLLED_SESSION_DATASET_IDS",
     "GOVERNED_AM_DATASET_ID",
+    "GOVERNED_DAILY_DATASET_ID",
     "GovernedAmSessionDataView",
     "OfflineFixtureAmSessionDataView",
     "VerifiedControlledSnapshotHandle",

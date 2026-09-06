@@ -221,13 +221,21 @@ def pilot_strategy_specs() -> Mapping[tuple[str, str], StrategySpec]:
     """Return the closed, exact StrategySpec registry for the four-plan pilot."""
     specs = (
         build_multi_day_hold_strategy_spec(
-            strategy_id="paper_mdh_hold10_momentum_topk"
+            strategy_id="paper_mdh_hold10_momentum_topk",
+            momentum_feature_id="retrospective_split_adjusted_momentum_n",
         ),
-        build_cross_section_hold_strategy_spec(strategy_id="cross_section_hold_10"),
+        build_cross_section_hold_strategy_spec(
+            strategy_id="cross_section_hold_10",
+            momentum_feature_id="retrospective_split_adjusted_momentum_n",
+        ),
         build_event_post_strategy_spec(
             strategy_id="paper_event_post_hold5_disclosure_proxy"
         ),
-        build_fundamentals_hold_strategy_spec(strategy_id="fundamentals_hold_10"),
+        build_fundamentals_hold_strategy_spec(
+            strategy_id="fundamentals_hold_10",
+            momentum_feature_id="retrospective_split_adjusted_momentum_n",
+            value_feature_id="retrospective_split_safe_fundamental_value_score",
+        ),
     )
     registry = {(spec.strategy_id, spec.version): spec for spec in specs}
     if len(registry) != len(specs):

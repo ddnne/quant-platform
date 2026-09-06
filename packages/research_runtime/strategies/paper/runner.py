@@ -339,14 +339,6 @@ def execute_paper_backtest(
     _require_feature_price_basis(
         feature_versions, price_basis=config.price_basis
     )
-    if (
-        config.lifecycle is Lifecycle.PAPER
-        and config.execution_mode == "am_signal_pm_close"
-        and config.price_basis == PERSONAL_RETROSPECTIVE_ADJUSTED
-    ):
-        raise ValueError(
-            "Controlled am_signal_pm_close cannot select PERSONAL_RETROSPECTIVE_ADJUSTED"
-        )
     feature_hashes = feature_definition_hashes(feature_versions)
     strategy_hash = strategy_definition_hash(strategy)
     commit = git_commit()

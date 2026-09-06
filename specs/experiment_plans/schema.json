@@ -28,11 +28,26 @@
     "fill_contract"
   ],
   "properties": {
-    "version": {"type": "string", "const": "experiment-plan/v2"},
-    "plan_id": {"type": "string", "minLength": 1},
-    "idea_id": {"type": "string", "minLength": 1},
-    "hypothesis": {"type": "string", "minLength": 1},
-    "strategy_spec_id": {"type": "string", "minLength": 1},
+    "version": {
+      "type": "string",
+      "const": "experiment-plan/v2"
+    },
+    "plan_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "idea_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "hypothesis": {
+      "type": "string",
+      "minLength": 1
+    },
+    "strategy_spec_id": {
+      "type": "string",
+      "minLength": 1
+    },
     "strategy_spec_version": {
       "type": "string",
       "const": "strategy-spec/v3"
@@ -48,20 +63,39 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "version"],
+        "required": [
+          "id",
+          "version"
+        ],
         "properties": {
-          "id": {"type": "string", "minLength": 1},
-          "version": {"type": "string", "minLength": 1},
-          "params": {"type": "object"}
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "params": {
+            "type": "object"
+          }
         }
       }
     },
-    "research_data_profile_id": {"type": "string", "const": "core"},
+    "research_data_profile_id": {
+      "type": "string",
+      "const": "core"
+    },
     "universe": {
       "type": "array",
       "minItems": 1,
       "uniqueItems": true,
-      "items": {"type": "string", "enum": ["tse_prime_with_fins"]}
+      "items": {
+        "type": "string",
+        "enum": [
+          "tse_prime_with_fins"
+        ]
+      }
     },
     "period_start": {
       "type": "string",
@@ -73,33 +107,69 @@
     },
     "cost_scenario": {
       "type": "string",
-      "enum": ["default_one_way_10bp"]
+      "enum": [
+        "default_one_way_10bp"
+      ]
     },
     "evaluation_protocol": {
       "type": "string",
-      "enum": ["standard_research_eval"]
+      "enum": [
+        "standard_research_eval"
+      ]
     },
     "risk_policy": {
       "type": "string",
-      "enum": ["core_crash_high_vol"]
+      "enum": [
+        "core_crash_high_vol"
+      ]
     },
     "budget_allocation": {
       "type": "object",
       "minProperties": 1,
       "additionalProperties": false,
       "properties": {
-        "generations": {"type": "integer", "minimum": 1},
-        "model_calls": {"type": "integer", "minimum": 1},
-        "input_tokens": {"type": "integer", "minimum": 1},
-        "output_tokens": {"type": "integer", "minimum": 1},
-        "cached_tokens": {"type": "integer", "minimum": 1},
-        "paper_runs": {"type": "integer", "minimum": 1},
-        "compute_time_ms": {"type": "integer", "minimum": 1},
-        "estimated_cost_micros": {"type": "integer", "minimum": 1}
+        "generations": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "model_calls": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "output_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "cached_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "paper_runs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "compute_time_ms": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "estimated_cost_micros": {
+          "type": "integer",
+          "minimum": 1
+        }
       }
     },
-    "execution_enabled": {"type": "boolean", "const": false},
-    "identity": {"type": "string", "const": "controlled_pilot_v1"},
+    "execution_enabled": {
+      "type": "boolean",
+      "const": false
+    },
+    "identity": {
+      "type": "string",
+      "const": "controlled_pilot_v1"
+    },
     "fill_contract": {
       "type": "object",
       "additionalProperties": false,
@@ -117,6 +187,7 @@
         "fill_valuation_session",
         "information_cutoff",
         "lifecycle",
+        "price_evidence_mode",
         "retrospective_only",
         "draft",
         "live_trading_evidence",
@@ -128,29 +199,74 @@
         "contract_digest"
       ],
       "properties": {
-        "format": {"const": "controlled-pilot-fill-contract/v1"},
-        "id": {"const": "controlled-pilot-am-signal-pm-close"},
-        "version": {"const": "1.0.0"},
-        "identity": {"const": "controlled_pilot_v1"},
-        "execution_mode": {"const": "am_signal_pm_close"},
-        "signal_session": {"const": "morning_close"},
-        "signal_price_field": {"const": "MAdjC"},
-        "signal_price_dataset": {"const": "equities_bars_daily_am"},
-        "fill_session": {"const": "afternoon_close"},
-        "fill_valuation_field": {"const": "AAdjC"},
-        "fill_valuation_session": {"const": "same_trading_date"},
-        "information_cutoff": {"const": "11:30:00+09:00"},
-        "lifecycle": {"const": "Paper"},
-        "retrospective_only": {"const": false},
-        "draft": {"const": false},
-        "live_trading_evidence": {"const": false},
-        "ready_snapshot_declared": {"const": true},
-        "go": {"const": false},
-        "automatic_promotion": {"const": false},
-        "fallback": {"const": false},
-        "forward_fill": {"const": false},
+        "format": {
+          "const": "controlled-pilot-fill-contract/v1"
+        },
+        "id": {
+          "const": "controlled-pilot-am-signal-pm-close"
+        },
+        "version": {
+          "const": "1.1.0"
+        },
+        "identity": {
+          "const": "controlled_pilot_v1"
+        },
+        "execution_mode": {
+          "const": "am_signal_pm_close"
+        },
+        "signal_session": {
+          "const": "morning_close"
+        },
+        "signal_price_field": {
+          "const": "MAdjC"
+        },
+        "signal_price_dataset": {
+          "const": "equities_bars_daily"
+        },
+        "fill_session": {
+          "const": "afternoon_close"
+        },
+        "fill_valuation_field": {
+          "const": "AAdjC"
+        },
+        "fill_valuation_session": {
+          "const": "same_trading_date"
+        },
+        "information_cutoff": {
+          "const": "11:30:00+09:00"
+        },
+        "lifecycle": {
+          "const": "Paper"
+        },
+        "retrospective_only": {
+          "const": true
+        },
+        "draft": {
+          "const": false
+        },
+        "live_trading_evidence": {
+          "const": false
+        },
+        "ready_snapshot_declared": {
+          "const": true
+        },
+        "go": {
+          "const": false
+        },
+        "automatic_promotion": {
+          "const": false
+        },
+        "fallback": {
+          "const": false
+        },
+        "forward_fill": {
+          "const": false
+        },
         "contract_digest": {
-          "const": "sha256:678985a0f7b142eeecd693ebe28bff822916bc815889f0b39e2841830377377d"
+          "const": "sha256:3691b4c93bbafc1d5a0e8fec25eb14ec26fae9683aaffa07fd44bb80c4f486b8"
+        },
+        "price_evidence_mode": {
+          "const": "historical_daily_reconstruction"
         }
       }
     }
