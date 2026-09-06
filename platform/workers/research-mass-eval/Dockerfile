@@ -11,6 +11,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH=/app/.venv/bin:$PATH
 
 COPY pyproject.toml uv.lock README.md qp_paths.py qp_ofd_continuity.py ./
+COPY scripts/qp-research ./scripts/qp-research
 COPY packages ./packages
 COPY specs ./specs
 COPY platform/workers/research-mass-eval/container ./platform/workers/research-mass-eval/container
