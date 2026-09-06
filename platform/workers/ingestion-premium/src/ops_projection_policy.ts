@@ -376,11 +376,17 @@ export async function closedReceiptVerifyRegistry(
   };
 }
 
-export type ClosedObjectStores = {
-  structured?: { get?(key: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null> } | null;
-  authority?: { get?(key: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null> } | null;
-  raw?: { get?(key: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null> } | null;
-};
+export const OPS_COMPLETE_EVIDENCE_DETAIL = {
+  evidence_basis: "trusted_receipt_at_issuance",
+  physical_availability: "NOT_CHECKED",
+} as const;
+
+export function projectedCompleteDetailJson(existing: unknown): string {
+  return JSON.stringify({
+    ...(parseDigests(existing) ?? {}),
+    ...OPS_COMPLETE_EVIDENCE_DETAIL,
+  });
+}
 
 async function digestBytes(bytes: Uint8Array): Promise<string> {
   const raw = await crypto.subtle.digest("SHA-256", bytes);
@@ -496,7 +502,6 @@ export async function trustedComplete(
   naturalByOp: Map<string, number>,
   environment: string,
   registry: ReceiptVerifyRegistry | null = null,
-  evidence?: ClosedObjectStores | null,
 ): Promise<boolean> {
   if (row.status !== "COMPLETE") return false;
   const dataset = typeof row.dataset === "string" ? row.dataset : "";
@@ -581,7 +586,6 @@ export async function trustedComplete(
   });
   const structured = claims.structured_digest;
   const rawManifest = claims.raw_manifest_digest;
-  const rawManifestFile = claims.extra_digests.acquisition_collection_manifest_file_digest!;
   const artifact = claims.extra_digests.product_artifact_digest!;
   const manifest = claims.extra_digests.product_manifest_digest!;
   const productKey = `${source}\0${claims.run_id}\0${dataset}\0${segment}`;
@@ -609,30 +613,6 @@ export async function trustedComplete(
   const rawKey = claims.raw_manifest_key;
   if (rawKey.includes("/v2/") || rawKey.includes("recovered") || rawKey.includes("audit-only")) {
     return false;
-  }
-  if (!evidence?.structured?.get || !evidence.authority?.get || !evidence.raw?.get) return false;
-  const MAX_ARTIFACT_BYTES = 8 * 1024 * 1024;
-  const MAX_MANIFEST_BYTES = 256 * 1024;
-  const fetches: Array<readonly [
-    { get?(key: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null> } | null | undefined,
-    string,
-    string,
-    number,
-    number,
-  ]> = [
-    [evidence.structured, claims.artifact_key, structured, claims.artifact_byte_count, MAX_ARTIFACT_BYTES],
-    [evidence.authority, claims.manifest_key, manifest, claims.manifest_byte_count, MAX_MANIFEST_BYTES],
-    [evidence.raw, claims.raw_manifest_key, rawManifestFile, claims.raw_manifest_byte_count, MAX_MANIFEST_BYTES],
-  ];
-  for (const [store, key, expectedDigest, expectedBytes, maxBytes] of fetches) {
-    if (!key || !store?.get) return false;
-    if (!Number.isInteger(expectedBytes) || expectedBytes <= 0) return false;
-    const object = await store.get(key);
-    if (!object) return false;
-    const stored = new Uint8Array(await object.arrayBuffer());
-    if (stored.byteLength === 0 || stored.byteLength > maxBytes) return false;
-    if (stored.byteLength !== expectedBytes) return false;
-    if (await digestBytes(stored) !== expectedDigest) return false;
   }
   if (!operations.length) return false;
   const operation = operations.find(
@@ -689,10 +669,9 @@ export async function projectedSegmentStatus(
   naturalByOp: Map<string, number>,
   environment: string,
   registry: ReceiptVerifyRegistry | null = null,
-  evidence?: ClosedObjectStores | null,
 ): Promise<string> {
   if (await trustedComplete(
-    row, receipts, products, operations, requests, naturalByOp, environment, registry, evidence,
+    row, receipts, products, operations, requests, naturalByOp, environment, registry,
   )) {
     return "COMPLETE";
   }

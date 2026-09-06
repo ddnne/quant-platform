@@ -5,6 +5,7 @@ import {
   COVERAGE_POLICY_VERSION,
   aggregateDatasetStatus,
   closedReceiptVerifyRegistry,
+  projectedCompleteDetailJson,
   projectedSegmentStatus,
   type ReceiptVerifyRegistry,
 } from "./ops_projection_policy";
@@ -98,8 +99,6 @@ export type OpsProjectionEnv = {
   DB: D1Database;
   OPS_PROJECTION_DB: D1Database;
   STRUCTURED_BUCKET?: R2Bucket;
-  RAW_BUCKET?: R2Bucket;
-  AUTHORITY_EVIDENCE_BUCKET?: R2Bucket;
   OPS_PROJECTION_SIGNING_PKCS8_B64: string;
   OPS_PROJECTION_VERIFY_SPKI_B64: string;
   OPS_PROJECTION_SIGNING_KEY_ID: string;
@@ -1196,11 +1195,6 @@ export async function publishOpsProjection(
     (row) => projectedSegmentStatus(
       row, receipts, products, operations, requests, naturalByOp, environment,
       receiptRegistry,
-      {
-        structured: env.STRUCTURED_BUCKET,
-        authority: env.AUTHORITY_EVIDENCE_BUCKET,
-        raw: env.RAW_BUCKET,
-      },
     ),
   );
   const statusByCoverageRow = new Map(
@@ -1289,20 +1283,25 @@ export async function publishOpsProjection(
         null,
       last_checked_at: generatedAt,
     })),
-    coverage_segments: coverage.map((row) => ({
-      source: row.source,
-      dataset: row.dataset,
-      segment_id: row.segment_id,
-      policy_version: row.policy_version,
-      segment_start: row.segment_start,
-      segment_end: row.segment_end,
-      expected_scope: row.expected_scope,
-      expected_items: row.expected_items ?? null,
-      status: statusByCoverageRow.get(row) ?? "UNKNOWN",
-      receipt_run_id: row.receipt_run_id ?? null,
-      evaluated_at: row.evaluated_at,
-      detail_json: row.detail_json,
-    })),
+    coverage_segments: coverage.map((row) => {
+      const status = statusByCoverageRow.get(row) ?? "UNKNOWN";
+      return {
+        source: row.source,
+        dataset: row.dataset,
+        segment_id: row.segment_id,
+        policy_version: row.policy_version,
+        segment_start: row.segment_start,
+        segment_end: row.segment_end,
+        expected_scope: row.expected_scope,
+        expected_items: row.expected_items ?? null,
+        status,
+        receipt_run_id: row.receipt_run_id ?? null,
+        evaluated_at: row.evaluated_at,
+        detail_json: status === "COMPLETE"
+          ? projectedCompleteDetailJson(row.detail_json)
+          : row.detail_json,
+      };
+    }),
     dataset_coverage: Object.entries(coverageByDataset).map(([dataset, row]) => {
       const spec = datasetById(dataset);
       const catalog = catalogRows.find((item) => item.dataset_id === dataset);

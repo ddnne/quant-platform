@@ -18,12 +18,12 @@ import {
   type OpsProjectionEnv,
 } from "./ops_projection";
 import {
+  OPS_COMPLETE_EVIDENCE_DETAIL,
   PINNED_RECEIPT_REGISTRY_SCOPE,
   closedReceiptVerifyRegistry,
   projectedSegmentStatus,
   trustedComplete,
   verifySignedReceiptEnvelope,
-  type ClosedObjectStores,
   type ReceiptVerifyRegistry,
 } from "./ops_projection_policy";
 import pinnedProductionReceiptRegistry from "../../../../packages/data_plane/data_contracts/receipt_verify_public_keys.production.json";
@@ -32,6 +32,7 @@ import {
   canonicalDigest,
   canonicalJson,
 } from "../../receipt-evidence-authority/src/canonical";
+import { canonicalProductBody } from "../../receipt-evidence-authority/src/product_materialization";
 
 const receiptRegistryDocuments = vi.hoisted(() => {
   const asDocument = (value: unknown): Record<string, unknown> => {
@@ -353,7 +354,7 @@ async function exactJqProjectedStatus(
   objects: Awaited<ReturnType<typeof seedGovernedObjects>>,
   envelope: Record<string, unknown>,
   registry: Parameters<typeof trustedComplete>[7],
-  stores: ClosedObjectStores | null | undefined,
+  productOverrides: Record<string, unknown> = {},
 ): Promise<string> {
   const receiptDigest = await canonicalJqReceiptDigest(envelope);
   return projectedSegmentStatus(
@@ -406,6 +407,7 @@ async function exactJqProjectedStatus(
       raw_manifest_digest: objects.rawDigest,
       byte_count: objects.artifactBytes,
       committed_at: "2026-08-01T00:00:00Z",
+      ...productOverrides,
     }],
     [{
       run_id: 1,
@@ -441,7 +443,6 @@ async function exactJqProjectedStatus(
     new Map([["op-1", 2]]),
     "production",
     registry,
-    stores,
   );
 }
 
@@ -449,30 +450,52 @@ async function exactJqTrustedComplete(
   objects: Awaited<ReturnType<typeof seedGovernedObjects>>,
   envelope: Record<string, unknown>,
   registry: Parameters<typeof trustedComplete>[7],
-  stores: ClosedObjectStores | null | undefined,
+  productOverrides: Record<string, unknown> = {},
 ): Promise<boolean> {
-  return await exactJqProjectedStatus(objects, envelope, registry, stores) === "COMPLETE";
+  return await exactJqProjectedStatus(
+    objects, envelope, registry, productOverrides,
+  ) === "COMPLETE";
 }
 
-async function seedGovernedObjects(onGet?: (store: string, key: string) => void) {
-  const artifact = new TextEncoder().encode('{"nk":"k1"}\n{"nk":"k2"}\n');
-  const manifest = new TextEncoder().encode('{"format":"product-manifest/v1"}');
+const OVERSIZE_PRODUCT_BYTES = 256 * 1024 + 1;
+
+async function seedGovernedObjects(options?: { oversized?: boolean }) {
+  const payload = options?.oversized === true
+    ? `{"pad":"${"x".repeat(OVERSIZE_PRODUCT_BYTES)}"}`
+    : "{}";
+  const artifact = new TextEncoder().encode(canonicalProductBody([
+    {
+      source: "jquants",
+      dataset: "equities_bars_daily",
+      natural_key: "k1",
+      event_time: "2026-08-01T00:00:00Z",
+      available_at: "2026-08-01T00:00:00Z",
+      ingested_at: "2026-08-01T00:00:00Z",
+      payload,
+      raw_payload: "{}",
+      row_digest: "sha256:" + "11".repeat(32),
+    },
+    {
+      source: "jquants",
+      dataset: "equities_bars_daily",
+      natural_key: "k2",
+      event_time: "2026-08-02T00:00:00Z",
+      available_at: "2026-08-02T00:00:00Z",
+      ingested_at: "2026-08-01T00:00:00Z",
+      payload: "{}",
+      raw_payload: "{}",
+      row_digest: "sha256:" + "22".repeat(32),
+    },
+  ]));
+  const manifest = new TextEncoder().encode(JSON.stringify({
+    format: "product-manifest/v1",
+    artifact_body: new TextDecoder().decode(artifact),
+  }));
   const rawManifest = new TextEncoder().encode('{"format":"jquants-raw-manifest/v1"}');
-  const structuredBucket = wrapR2({ onGet: (key) => onGet?.("structured", key) });
-  const authorityBucket = wrapR2({ onGet: (key) => onGet?.("authority", key) });
-  const rawBucket = wrapR2({ onGet: (key) => onGet?.("raw", key) });
-  await structuredBucket.put("artifact.jsonl", artifact, { onlyIf: { etagDoesNotMatch: "*" } });
-  await authorityBucket.put("manifest.json", manifest, { onlyIf: { etagDoesNotMatch: "*" } });
-  await rawBucket.put("raw.json", rawManifest, { onlyIf: { etagDoesNotMatch: "*" } });
-  const stores = {
-    structured: structuredBucket,
-    authority: authorityBucket,
-    raw: rawBucket,
-  };
   return {
-    bucket: structuredBucket,
-    stores,
     artifact,
+    manifest,
+    rawManifest,
     structured: await sha256Prefixed(artifact),
     manifestDigest: await sha256Prefixed(manifest),
     rawDigest: "sha256:" + "aa".repeat(32),
@@ -673,6 +696,7 @@ async function envFor(
     r2?: boolean;
     version?: { id: string; tag?: string };
     r2OnPut?: (key: string) => void;
+    r2OnGet?: (key: string) => void;
     bucket?: R2Bucket;
     sourceBeforeQuery?: (sql: string) => void;
   },
@@ -681,9 +705,10 @@ async function envFor(
     DB: wrapSqlite(source, { beforeQuery: hooks?.sourceBeforeQuery }),
     OPS_PROJECTION_DB: wrapSqlite(target, hooks),
     STRUCTURED_BUCKET:
-      hooks?.r2 === false ? undefined : hooks?.bucket ?? wrapR2({ onPut: hooks?.r2OnPut }),
-    RAW_BUCKET: hooks?.r2 === false ? undefined : (hooks as { stores?: { raw?: R2Bucket } })?.stores?.raw ?? wrapR2(),
-    AUTHORITY_EVIDENCE_BUCKET: hooks?.r2 === false ? undefined : (hooks as { stores?: { authority?: R2Bucket } })?.stores?.authority ?? wrapR2(),
+      hooks?.r2 === false ? undefined : hooks?.bucket ?? wrapR2({
+        onPut: hooks?.r2OnPut,
+        onGet: hooks?.r2OnGet,
+      }),
     OPS_PROJECTION_SIGNING_PKCS8_B64: keys.pkcs8,
     OPS_PROJECTION_VERIFY_SPKI_B64: keys.spki,
     OPS_PROJECTION_SIGNING_KEY_ID: "ops-projection-cloud-test-v1",
@@ -768,7 +793,7 @@ describe("ops projection cloud publisher", () => {
     const objects = await seedGovernedObjects();
     const envelope = await signV3Claims(pair, await canonicalV3Claims(objects));
     expect(await verifySignedReceiptEnvelope(envelope, registry, "production")).not.toBeNull();
-    expect(await exactJqTrustedComplete(objects, envelope, registry, objects.stores)).toBe(true);
+    expect(await exactJqTrustedComplete(objects, envelope, registry)).toBe(true);
   });
 
   it("does not let caller env data select an alternate receipt registry", async () => {
@@ -1448,7 +1473,10 @@ describe("ops projection cloud publisher", () => {
     expect(await verifySignedReceiptEnvelope(jsdaEnvelope, registry, "production")).not.toBeNull();
     const tampered = { ...jqEnvelope, body_digest: "sha256:" + "ff".repeat(32) };
     expect(await verifySignedReceiptEnvelope(tampered, registry, "production")).toBeNull();
-    expect(await exactJqTrustedComplete(objects, jqEnvelope, registry, objects.stores)).toBe(true);
+    expect(await exactJqTrustedComplete(objects, jqEnvelope, registry)).toBe(true);
+    expect(await exactJqTrustedComplete(objects, jqEnvelope, registry, {
+      artifact_digest: "sha256:" + "ab".repeat(32),
+    })).toBe(false);
     expect(await trustedComplete(
       {
         status: "COMPLETE",
@@ -1467,7 +1495,6 @@ describe("ops projection cloud publisher", () => {
       new Map(),
       "production",
       registry,
-      objects.stores,
     )).toBe(false);
     const v2 = await trustedComplete(
       {
@@ -1487,85 +1514,13 @@ describe("ops projection cloud publisher", () => {
       registry,
     );
     expect(v2).toBe(false);
-    expect(await exactJqTrustedComplete(
-      objects,
-      jqEnvelope,
-      registry,
-      {
-        structured: objects.stores.raw,
-        authority: objects.stores.structured,
-        raw: objects.stores.authority,
-      },
-    )).toBe(false);
-    expect(await exactJqTrustedComplete(
-      objects,
-      jqEnvelope,
-      registry,
-      { ...objects.stores, structured: wrapR2() },
-    )).toBe(false);
-    expect(await exactJqTrustedComplete(
-      objects,
-      jqEnvelope,
-      registry,
-      { ...objects.stores, authority: wrapR2() },
-    )).toBe(false);
-    expect(await exactJqTrustedComplete(
-      objects,
-      jqEnvelope,
-      registry,
-      { ...objects.stores, raw: wrapR2() },
-    )).toBe(false);
-    const wrongStructured = wrapR2();
-    await wrongStructured.put(
-      "artifact.jsonl",
-      new TextEncoder().encode("wrong-artifact\n"),
-    );
-    expect(await exactJqTrustedComplete(
-      objects,
-      jqEnvelope,
-      registry,
-      { ...objects.stores, structured: wrongStructured },
-    )).toBe(false);
-    const wrongAuthority = wrapR2();
-    await wrongAuthority.put(
-      "manifest.json",
-      new TextEncoder().encode("wrong-manifest\n"),
-    );
-    expect(await exactJqTrustedComplete(
-      objects,
-      jqEnvelope,
-      registry,
-      { ...objects.stores, authority: wrongAuthority },
-    )).toBe(false);
-    const wrongRaw = wrapR2();
-    await wrongRaw.put("raw.json", new TextEncoder().encode("wrong-raw\n"));
-    expect(await exactJqTrustedComplete(
-      objects,
-      jqEnvelope,
-      registry,
-      { ...objects.stores, raw: wrongRaw },
-    )).toBe(false);
-    expect(objects.rawDigest).not.toBe(objects.rawFileDigest);
-    const swappedClaims = await canonicalV3Claims(objects, {
-      extra_digests: {
-        ...(jqClaims.extra_digests as Record<string, string>),
-        acquisition_collection_manifest_file_digest: objects.rawDigest,
-      },
-    });
-    const swapped = await signV3Claims(pair, swappedClaims);
-    expect(await exactJqTrustedComplete(
-      objects,
-      swapped,
-      registry,
-      objects.stores,
-    )).toBe(false);
 
     const missingClaims = { ...jqClaims };
     delete missingClaims.natural_key_digest;
     const missing = await signV3Claims(pair, missingClaims);
-    expect(await exactJqProjectedStatus(objects, missing, registry, objects.stores)).toBe("UNKNOWN");
+    expect(await exactJqProjectedStatus(objects, missing, registry)).toBe("UNKNOWN");
     const unknown = await signV3Claims(pair, { ...jqClaims, unexpected: "field" });
-    expect(await exactJqProjectedStatus(objects, unknown, registry, objects.stores)).toBe("UNKNOWN");
+    expect(await exactJqProjectedStatus(objects, unknown, registry)).toBe("UNKNOWN");
     const naturalKeyChainTamper = await signV3Claims(pair, {
       ...jqClaims,
       natural_key_digest: "sha256:" + "97".repeat(32),
@@ -1574,18 +1529,17 @@ describe("ops projection cloud publisher", () => {
       objects,
       naturalKeyChainTamper,
       registry,
-      objects.stores,
     )).toBe("UNKNOWN");
     const brokenScope = await signV3Claims(pair, {
       ...jqClaims,
       scope_digest: "sha256:" + "99".repeat(32),
     });
-    expect(await exactJqProjectedStatus(objects, brokenScope, registry, objects.stores)).toBe("UNKNOWN");
+    expect(await exactJqProjectedStatus(objects, brokenScope, registry)).toBe("UNKNOWN");
     const brokenObservation = await signV3Claims(pair, {
       ...jqClaims,
       observation_digest: "sha256:" + "98".repeat(32),
     });
-    expect(await exactJqProjectedStatus(objects, brokenObservation, registry, objects.stores)).toBe("UNKNOWN");
+    expect(await exactJqProjectedStatus(objects, brokenObservation, registry)).toBe("UNKNOWN");
   });
 
   it("projects authentic ACTIVE-pinned signed JQ COMPLETE and keeps JSDA UNKNOWN without evidence", async () => {
@@ -1598,7 +1552,13 @@ describe("ops projection cloud publisher", () => {
     const raw = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
     const registry = await closedActiveReceiptRegistry(raw);
     const objectReads: string[] = [];
-    const objects = await seedGovernedObjects((store, key) => objectReads.push(`${store}:${key}`));
+    const objects = await seedGovernedObjects({ oversized: true });
+    const productLines = new TextDecoder().decode(objects.artifact).replace(/\n$/, "").split("\n");
+    expect(productLines).toHaveLength(2);
+    expect(JSON.parse(productLines[0]!).payload).toContain("x");
+    expect(JSON.parse(productLines[1]!).natural_key).toBe("k2");
+    expect(objects.artifactBytes).toBeGreaterThan(256 * 1024);
+    expect(objects.manifestBytes).toBeGreaterThan(256 * 1024);
     const claims = await canonicalV3Claims(objects);
     const envelope = await signV3Claims(pair, claims);
     const receiptDigest = await canonicalJqReceiptDigest(envelope);
@@ -1673,27 +1633,27 @@ describe("ops projection cloud publisher", () => {
     ).run("ab".repeat(32), receiptDigest);
     const keys = await keyPair();
     receiptRegistryDocuments.install("production", registry);
-    const env = await envFor(source, target, keys, { bucket: objects.stores.structured, stores: objects.stores } as never);
-    expect(await env.STRUCTURED_BUCKET!.get("artifact.jsonl")).toBeTruthy();
-    expect(await env.AUTHORITY_EVIDENCE_BUCKET!.get("manifest.json")).toBeTruthy();
-    expect(await env.RAW_BUCKET!.get("raw.json")).toBeTruthy();
-    expect(await exactJqTrustedComplete(objects, envelope, registry, {
-      structured: env.STRUCTURED_BUCKET,
-      authority: env.AUTHORITY_EVIDENCE_BUCKET,
-      raw: env.RAW_BUCKET,
-    })).toBe(true);
+    const bucket = wrapR2({ onGet: (key) => objectReads.push(key) });
+    await bucket.put("artifact.jsonl", objects.artifact);
+    await bucket.put("manifest.json", objects.manifest);
+    await bucket.put("raw.json", objects.rawManifest);
+    const env = await envFor(source, target, keys, { bucket });
+    expect(await exactJqTrustedComplete(objects, envelope, registry)).toBe(true);
     objectReads.length = 0;
     const result = await publishOpsProjection(env);
     expect(result.status).toBe("published");
-    expect(objectReads.filter((item) => item === "structured:artifact.jsonl")).toHaveLength(1);
-    expect(objectReads.filter((item) => item === "authority:manifest.json")).toHaveLength(1);
-    expect(objectReads.filter((item) => item === "raw:raw.json")).toHaveLength(1);
+    expect(objectReads.filter((key) =>
+      key === "artifact.jsonl" || key === "manifest.json" || key === "raw.json"
+    )).toEqual([]);
     const rows = target
-      .prepare("SELECT dataset, status FROM coverage_segments ORDER BY dataset")
-      .all() as { dataset: string; status: string }[];
-    const byDataset = Object.fromEntries(rows.map((row) => [row.dataset, row.status]));
-    expect(byDataset.equities_bars_daily).toBe("COMPLETE");
-    expect(byDataset.jsda_otc_bond_reference_prices).toBe("UNKNOWN");
+      .prepare("SELECT dataset, status, detail_json FROM coverage_segments ORDER BY dataset")
+      .all() as { dataset: string; status: string; detail_json: string }[];
+    const byDataset = Object.fromEntries(rows.map((row) => [row.dataset, row]));
+    expect(byDataset.equities_bars_daily.status).toBe("COMPLETE");
+    expect(JSON.parse(byDataset.equities_bars_daily.detail_json)).toMatchObject(
+      OPS_COMPLETE_EVIDENCE_DETAIL,
+    );
+    expect(byDataset.jsda_otc_bond_reference_prices.status).toBe("UNKNOWN");
     const envelopeRow = JSON.parse(
       (target.prepare(
         "SELECT signed_envelope_json FROM ops_projection_generation WHERE generation_id=?",

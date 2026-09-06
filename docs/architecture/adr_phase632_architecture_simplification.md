@@ -132,6 +132,23 @@ non-runtime in-tree replay unless a future live-order ADR says so.
   that identity. It has no local socket/path/store injection.
 - Default pytest has no live-order archive suite.
 
+## Clarification (Ops COMPLETE)
+
+Ops projection COMPLETE means collection reconciliation was proved at receipt
+issuance, not a present-time R2 availability guarantee. Receipt-evidence
+authority already create-only writes product/manifest, reads them back, and
+hashes them; D1 product/receipt/operation records commit matching identities.
+The metadata projection keeps signature, environment, registry, schema, claims,
+and receipt/product/operation/request/natural-count comparisons. It does not
+re-download or re-hash those R2 objects. Projected COMPLETE `detail_json`
+records `evidence_basis=trusted_receipt_at_issuance` and
+`physical_availability=NOT_CHECKED`. Missing or inconsistent identity,
+signature, or committed digest stays non-COMPLETE.
+
+READY still verifies the full observed segment against signed count/digest/size.
+The Controlled Container still verifies signed immutable snapshot bytes before
+Paper. Ops metadata is not READY authority.
+
 ## Residual
 
 | Item | Owner |
