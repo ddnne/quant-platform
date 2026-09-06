@@ -1,0 +1,101 @@
+{
+  "projection_observed_at_utc": "2026-09-06T15:54:43.152Z",
+  "observation_time_basis": "projection_generated_at plus returned projection_age_seconds; parallel calls may differ by seconds",
+  "repository": {
+    "main": "b6880f22b4b4add2dfcac2e1fe1ffa90db860817",
+    "resume_checkpoint": "c3d726687e31af68855e4e093d79527fd2d110b5",
+    "pull_request": 98
+  },
+  "note": "Read-only live measurements; no market rows downloaded; current aggregation is not READY evidence.",
+  "projection": {
+    "plane": "ops_current",
+    "mutable": true,
+    "projection_status": "STALE",
+    "projection_generated_at": "2026-08-21T12:30:49.152421+00:00",
+    "projection_source_generation": "2026-08-21T12:28:33.345482+00:00",
+    "projection_age_seconds": 1394634,
+    "active_generation": "projgen-ef18b4f86ee946048161d25e2a30a2a8",
+    "activated_at": "2026-08-21T12:30:49.152421+00:00",
+    "distinct_projection_generations": [
+      "projgen-ef18b4f86ee946048161d25e2a30a2a8"
+    ],
+    "stale": true,
+    "projection_version": "ops_projection/v3",
+    "last_known_good": {
+      "generated_at": "2026-08-21T12:30:49.152421+00:00",
+      "source_generation": "2026-08-21T12:28:33.345482+00:00",
+      "not_fresh": true
+    },
+    "stages": {
+      "refresh_attempt": false,
+      "refresh_success": false,
+      "projection_generated": true,
+      "d1_applied": true,
+      "mcp_visible": true
+    }
+  },
+  "sync": {
+    "source_cursor": 2897146,
+    "applied_cursor": null,
+    "watermark_count": 23
+  },
+  "b0": {
+    "plane": "ops_current",
+    "mutable": true,
+    "status": "UNKNOWN",
+    "reason": "snapshot quality/B0 projection is unavailable"
+  },
+  "ready": {
+    "plane": "research_ready",
+    "mutable": false,
+    "snapshot": null,
+    "reason": "no published READY generation is bound to this Worker"
+  },
+  "ingestion": {
+    "id": 14796,
+    "ran_at": "2026-09-07T00:15:15+09:00",
+    "source": "jquants",
+    "runtime": "cloudflare",
+    "status": "pass",
+    "detail": {
+      "startedAt": "2026-09-07T00:15:15+09:00",
+      "finishedAt": "2026-09-07T00:15:34+09:00",
+      "status": "pass",
+      "datasetCount": 23,
+      "passed": 23,
+      "failed": 0,
+      "rowsInserted": 14,
+      "rawBytes": 1209637,
+      "triggeredBy": "cron",
+      "concurrency": 6,
+      "rateLimitMs": 120,
+      "failures": []
+    }
+  },
+  "coverage": {
+    "status": "INCOMPLETE",
+    "governed_dataset_count": 26,
+    "gaps": [
+      {
+        "dataset": "equities_bars_daily_am",
+        "status": "PARTIAL",
+        "policy_version": "collection-coverage/v2"
+      },
+      {
+        "dataset": "equities_earnings_calendar",
+        "status": "PARTIAL",
+        "policy_version": "collection-coverage/v2"
+      },
+      {
+        "dataset": "equities_master",
+        "status": "PARTIAL",
+        "policy_version": "collection-coverage/v2"
+      },
+      {
+        "dataset": "jsda_otc_bond_reference_prices",
+        "status": "PARTIAL",
+        "policy_version": "collection-coverage/v2"
+      }
+    ]
+  }
+}

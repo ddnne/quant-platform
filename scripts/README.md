@@ -38,16 +38,17 @@ work remains; an OPEN row may also still contain source work such as crash-safe
 recovery.
 
 [`finding_ledger_gate.py`](finding_ledger_gate.py) remains mandatory before
-authenticated deployment acceptance, release-evidence construction, READY
-publication, and Controlled Pilot. It accepts no ledger path argument:
-production always reads the tracked `docs/phase633_finding_ledger.json` and
-fails until every code-pinned P0 finding is `FIXED` and the independent-review
-unresolved count is zero. Finding IDs are a closed inventory so deleting every
-row cannot vacuously pass. Adding a real finding requires one reviewed change
-that updates the JSON and Markdown rows and the code-pinned ID inventory
-together; the row starts `OPEN`, and a later reviewed evidence commit may mark
-it `FIXED`. Test fixtures may call the private bytes evaluator with an all-FIXED
-document, but no production release CLI accepts a caller-selected ledger.
+authenticated deployment acceptance and release-evidence construction. Runtime
+Worker paths enforce keys, READY, and Trader themselves and do not import the
+ledger. The gate accepts no ledger path argument: production always reads the
+tracked `docs/phase633_finding_ledger.json` and fails until every code-pinned
+P0 finding is `FIXED` and the independent-review unresolved count is zero.
+Finding IDs are a closed inventory so deleting every row cannot vacuously pass.
+Adding a real finding requires one reviewed change that updates the JSON and
+Markdown rows and the code-pinned ID inventory together; the row starts
+`OPEN`, and a later reviewed evidence commit may mark it `FIXED`. Test
+fixtures may call the private bytes evaluator with an all-FIXED document, but
+no production release CLI accepts a caller-selected ledger.
 
 [`verify_all.sh`](verify_all.sh) is a skippable helper only. Merge authority is the live native GitHub check from the Cloudflare Workers & Pages GitHub App for the repository-root Build running `verify_ci.sh`. The caller-supplied receipt aggregator is removed. Do not add `.github/workflows`. See [`docs/ci/workers_builds.md`](../docs/ci/workers_builds.md).
 

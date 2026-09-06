@@ -29,6 +29,8 @@ remote apply results only in immutable release evidence.
   token remains enabled. Do not treat that HOLD as closed.
 - **Controlled Pilot:** **NO-GO** until live evidence in
   `docs/phase62_residual_status.md` passes. Green tests do not arm exact-four.
+  Runtime still separately enforces signed READY, signed Trader authorization,
+  an immutable snapshot, signed projection, and BudgetLedger occupancy.
 - **Release evidence:** publication is **PENDING/HOLD**. Normalized caller JSON
   is schema-only and cannot prove any remote response. The dedicated signed
   release-observation authority has zero active keys and is not implemented;
@@ -51,14 +53,15 @@ remote apply results only in immutable release evidence.
 - **AM history:** do not treat V2 monthly AM completeness as a current target.
   V3 AM is tip-scoped. Residual PARTIAL rows are not permission to mint empty
   COMPLETE receipts.
-- **Authority reachability:** the manifest covers one Cloudflare Receipt
-  authority and six local OS principals. All six local principals now have
-  source-level runner, runtime-config, distinct UID/socket/store/key-backend and
-  launchd/bootstrap paths; READY publication is client-only and Trader and
-  Controlled are bound to fixed root-owned activation documents. This is not
-  operational activation: passive READY preflight is `PENDING/UNKNOWN`, zero
-  local principals are provisioned, active keys/credentials remain zero, and
-  R5, R10, R11 and A2 remain `OPEN`.
+- **Authority reachability:** Paper-only trust is the existing Cloudflare
+  Receipt evidence authority, READY publisher, environment-scoped public-key
+  registries, typed Service Bindings, content-addressed R2 snapshot, and
+  BudgetLedger occupancy. Local six-principal OS users, root installers,
+  WebAuthn, and external-anchor ceremonies are not production tasks on this
+  path. Operational activation remains open: Receipt is PENDING-only, READY
+  and trader registries have active keys=0, no accepted READY sidecar exists,
+  no signed FRESH projection has been produced, Coverage V3 cloud transition
+  is unaccepted, and A2, D2, D3, R5, R10, R11, C4 and C10 remain `OPEN`.
 - **Staged activation:** source now includes a narrow Receipt staging ACTIVE
   validator and a Cron-only `AUDIT_ONLY` recovery canary whose operator RPC is
   read-only. The canary has dedicated Durable Object state/events, never calls
@@ -82,8 +85,10 @@ remote apply results only in immutable release evidence.
   ordinary RPC methods and the reserved `fetch` special.
   This is still operational HOLD: the operator caller principal, active key,
   migration, deploy and live evidence are absent. Do not add a general bypass
-  or execute ACTIVE instructions yet. The all-P0 gate remains mandatory for
-  final release, READY eligibility and Controlled Pilot.
+  or execute ACTIVE instructions yet. The all-P0 gate remains the final
+  release checklist. Runtime Worker paths separately enforce keys, READY,
+  Trader authorization, and BudgetLedger occupancy; those checks are not the
+  all-P0 gate.
 - **Equities master:** the closed acquisition route is available only as
   `ACTIVE_RAW_ONLY`; COMPLETE/reproof eligibility remains
   `PENDING_AUTHORITY_ACTIVATION`. The current generated registry expresses

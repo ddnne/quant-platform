@@ -1,14 +1,24 @@
 # ADR: seven-principal signing authority isolation
 
-Status: Accepted contract, operational activation pending.
+Status: **Superseded for single-user Cloudflare Paper** by
+[`adr_phase632_architecture_simplification.md`](./adr_phase632_architecture_simplification.md).
+Retained as historical and future live-order context only. It is not an
+active Paper-path acceptance requirement.
 
-## Decision
+Paper-only Controlled Pilot uses the existing Cloudflare / READY publication
+trust root, typed Service Binding and public-key verification, content-addressed
+R2 snapshot, BudgetLedger occupancy, and one-shot policy. Local six-principal
+OS custody, Trader WebAuthn human presence, and external-anchor / quiescence
+ceremonies are not current Paper prerequisites. Do not treat this document and
+the Phase 6.3.2 ADR as two competing Accepted contracts.
 
-The platform has exactly seven independent signing principals: `receipt`,
-`d1_sync`, `ops_projection`, `coverage_transition`, `ready`, `trader`, and
-`controlled_execution`. They may share reviewed libraries but may not share a
-service identity, private credential, writable event store, or signing
-entrypoint.
+## Historical decision
+
+The live-order design had exactly seven independent signing principals:
+`receipt`, `d1_sync`, `ops_projection`, `coverage_transition`, `ready`,
+`trader`, and `controlled_execution`. They may share reviewed libraries but
+may not share a service identity, private credential, writable event store, or
+signing entrypoint.
 
 `receipt` runs as the separate
 `quant-platform-receipt-evidence-authority` Cloudflare Worker, built from the
@@ -32,19 +42,22 @@ caller-side inventory, not to the authority's outgoing resource graph. The
 Worker has `workers_dev=false`, `preview_urls=false`, no routes, only the one
 wrapping-key secret, and a fixed 404 public fetch surface.
 
-The remaining six principals run as separate local OS services. Each deployment
-has a unique service user, protected key or credential reference, event store,
+The remaining six principals were specified as separate local OS services for
+future live-order, not for current Paper. Each such deployment would have
+a unique service user, protected key or credential reference, event store,
 and Unix socket. `d1_sync` retains the writable mirror descriptor and may hand
 only an independently opened read-only descriptor to `ops_projection` or
 `coverage_transition`. The common handoff and event schemas are content-bound
 by the principal manifest.
 
-`trader` is not a file-key signer. Authorization requires a WebAuthn platform
-authenticator or hardware credential and human presence. The other five local
-signers use separately protected local keys and service-policy approval.
-READY publication is profile/plan/closure-bound, Trader authorization is one
-human-present exact-four batch, and controlled execution is one exact-four
-one-shot; generic publish, authorize, and execute operations are absent.
+For live-order, `trader` is not a file-key signer. Authorization would require
+a WebAuthn platform authenticator or hardware credential and human presence.
+The other five local signers would use separately protected local keys and
+service-policy approval. READY publication is profile/plan/closure-bound;
+live-order Trader authorization is one human-present exact-four batch, and
+controlled execution is one exact-four one-shot. Generic publish, authorize,
+and execute operations are absent. Paper uses the existing Cloudflare READY
+and trader public-key registries instead of this local WebAuthn ceremony.
 
 All checked-in deployments remain `PENDING_NO_KEY`. The test harness uses only
 a conspicuous dummy wrapping value. Real OS users, Cloudflare resources and
