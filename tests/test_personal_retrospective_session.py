@@ -11,7 +11,13 @@ from core.execution import close_as_of, morning_close_as_of
 from data_contracts.identity import natural_key
 from storage.sqlite_store import SqliteStore
 
-from _coreseed import CODES, TRADING_DAYS, draft_pit_observation_clock, seed_db
+from _coreseed import (
+    CODES,
+    TRADING_DAYS,
+    draft_pit_observation_clock,
+    seed_db,
+    write_snapshot_observation_clock,
+)
 
 D0, D1, D2, D3 = TRADING_DAYS
 CODE = "1332"
@@ -33,6 +39,7 @@ def _am_db(tmp_path, **kwargs):
         morning_turnover_values=_level(111.0),
         turnover_values=_level(500.0),
         market_caps=_level(1_000_000.0),
+        morning_raw_prices=_level(11.0),
     )
     defaults.update(kwargs)
     return seed_db(tmp_path, **defaults)
@@ -56,7 +63,8 @@ def test_am_signal_view_masks_d_and_keeps_prior_full_rows(tmp_path):
     assert d_row["date"] == D2
     assert d_row["adjustment_close"] == 50.0
     assert d_row["adjustment_volume"] == 1.0
-    assert "close" not in d_row
+    assert d_row["close"] == 11.0
+    assert d_row["close"] != prior["close"]
     assert "market_cap" not in d_row
     assert "turnover_value" not in d_row
     assert "afternoon_adjustment_close" not in d_row
@@ -115,7 +123,8 @@ def test_am_signal_d_row_does_not_fall_back_to_full_adjc(tmp_path):
     d_row = result.rows[-1]
     assert d_row["date"] == D0
     assert d_row.get("adjustment_close") is None
-    assert "close" not in d_row
+    assert d_row["close"] == 11.0
+    assert d_row["close"] != 10.0
     assert "afternoon_adjustment_close" not in d_row
     assert d_row.get("adjustment_close") != 999.0
 
@@ -151,13 +160,34 @@ def test_pm_fill_view_returns_only_aadjc(tmp_path):
         "adjustment_close",
         "afternoon_adjustment_close",
     }
+    reconstruction = result.metadata["retrospective_reconstruction"]
+    assert reconstruction["official_pm_close"] == close_as_of(D1)
+    assert reconstruction["d_row_source_event_times"] == [close_as_of(D1)]
 
 
-def test_pm_fill_rejects_as_of_after_official_close(tmp_path):
+def test_pm_fill_rejects_as_of_after_snapshot_observation(tmp_path):
     db = _am_db(tmp_path)
-    with pytest.raises(ValueError, match="official session close"):
+    with pytest.raises(ValueError, match="official_pm_close"):
         pit.get_personal_retrospective_pm_fill_equity_bars_daily(
-            as_of=f"{D1}T17:00:00+09:00",
+            as_of="2099-01-01T00:00:00+09:00",
+            session_date=D1,
+            code=CODE,
+            db_path=db,
+        )
+
+
+def test_pm_fill_rejects_earlier_and_prior_day_as_of(tmp_path):
+    db = _am_db(tmp_path)
+    with pytest.raises(ValueError, match="official_pm_close"):
+        pit.get_personal_retrospective_pm_fill_equity_bars_daily(
+            as_of=morning_close_as_of(D1),
+            session_date=D1,
+            code=CODE,
+            db_path=db,
+        )
+    with pytest.raises(ValueError, match="official_pm_close"):
+        pit.get_personal_retrospective_pm_fill_equity_bars_daily(
+            as_of=close_as_of(D0),
             session_date=D1,
             code=CODE,
             db_path=db,
@@ -237,7 +267,6 @@ _D_AM_FORBIDDEN_FIELDS = frozenset(
         "open",
         "high",
         "low",
-        "close",
         "volume",
         "adjustment_open",
         "adjustment_high",
@@ -273,6 +302,7 @@ def test_am_d_row_is_allowlisted_and_does_not_leak_later_timestamps(tmp_path):
         "source",
         "code",
         "date",
+        "close",
         "adjustment_close",
         "adjustment_volume",
         "morning_turnover_value",
@@ -286,7 +316,9 @@ def test_am_d_row_is_allowlisted_and_does_not_leak_later_timestamps(tmp_path):
                 assert str(row[field]) <= as_of
     reconstruction = result.metadata["retrospective_reconstruction"]
     assert reconstruction["d_row_source_dataset"] == "equities_bars_daily"
-    assert reconstruction["d_row_source_read_as_of"].startswith(D2)
+    assert reconstruction["d_row_source_cutoff"] == "snapshot_observed_through"
+    assert reconstruction["d_row_source_read_as_of"]
+    assert reconstruction["contemporaneous_observation_unproven"] is True
     assert reconstruction["d_row_source_publication_timestamps"]
     source_available = reconstruction["d_row_source_publication_timestamps"][0][
         "source_available_at"
@@ -319,10 +351,13 @@ def test_am_latest_n_bounds_the_prior_query(tmp_path, monkeypatch):
         for call in calls
         if str(call.get("as_of") or "").endswith("T11:30:00+09:00")
     ]
+    from pit.query import snapshot_observed_through
+
+    observed = snapshot_observed_through(db)
     d_calls = [
         call
         for call in calls
-        if str(call.get("as_of") or "").endswith("T15:30:00+09:00")
+        if str(call.get("as_of") or "") == observed
     ]
     assert prior_calls
     assert all(call.get("latest_n") == 2 for call in prior_calls)
@@ -351,6 +386,7 @@ def test_am_adapter_catalog_prior_read_is_physically_limited(tmp_path, monkeypat
             for day in days
         ],
     )
+    write_snapshot_observation_clock(store, close_as_of(D3))
     store.close()
 
     catalog_calls: list[dict] = []
@@ -395,3 +431,175 @@ def test_am_adapter_catalog_prior_read_is_physically_limited(tmp_path, monkeypat
     assert [row["date"] for row in result.rows] == [
         row["date"] for row in unbounded.rows[-2:]
     ]
+
+
+def test_later_ingested_daily_madjc_is_historical_and_times_retained(tmp_path):
+    from _coreseed import write_snapshot_observation_clock
+    from pit.query import snapshot_observed_through
+
+    later = "2026-02-01T08:00:00+09:00"
+    db = seed_db(
+        tmp_path,
+        codes=[CODE],
+        prices=_level(10.0),
+        adjustment_prices=_level(999.0),
+        morning_adjustment_prices=_level(50.0),
+        afternoon_adjustment_prices=_level(80.0),
+        bar_available_at_for={day: later for day in TRADING_DAYS},
+    )
+    store = SqliteStore(db)
+    write_snapshot_observation_clock(store, later)
+    store.close()
+    result = pit.get_personal_retrospective_am_signal_equity_bars_daily(
+        as_of=morning_close_as_of(D1),
+        code=CODE,
+        from_event=D1,
+        to_event=D1,
+        db_path=db,
+    )
+    assert result.rows[-1]["adjustment_close"] == 50.0
+    stamps = result.metadata["retrospective_reconstruction"][
+        "d_row_source_publication_timestamps"
+    ][0]
+    assert stamps["source_available_at"] == later
+    assert stamps["source_ingested_at"] == later
+    assert snapshot_observed_through(db) == later
+    assert result.metadata["retrospective_reconstruction"][
+        "contemporaneous_observation_unproven"
+    ]
+
+
+def test_d_afternoon_change_does_not_alter_d_signal(tmp_path):
+    db = _am_db(
+        tmp_path,
+        morning_adjustment_prices={CODE: {day: 50.0 for day in TRADING_DAYS}},
+        afternoon_adjustment_prices={CODE: {day: 999.0 for day in TRADING_DAYS}},
+    )
+    signal = pit.get_personal_retrospective_am_signal_equity_bars_daily(
+        as_of=morning_close_as_of(D1),
+        code=CODE,
+        from_event=D1,
+        to_event=D1,
+        db_path=db,
+    )
+    assert signal.rows[-1]["adjustment_close"] == 50.0
+    assert "afternoon_adjustment_close" not in signal.rows[-1]
+    fill = pit.get_personal_retrospective_pm_fill_equity_bars_daily(
+        as_of=close_as_of(D1),
+        session_date=D1,
+        code=CODE,
+        db_path=db,
+    )
+    assert fill.rows[0]["adjustment_close"] == 999.0
+
+
+def test_old_v8_compact_am_reader_does_not_infer_missing_mc(tmp_path):
+    import sqlite3
+
+    from data_contracts.identity import session_close_jst
+    from data_contracts.personal_history_compact import (
+        PERSONAL_HISTORY_COMPACT_BARS_CREATE_SQL,
+        PERSONAL_HISTORY_COMPACT_MASTER_CREATE_SQL,
+        compact_history_state,
+    )
+    from personal_history_compact_support import (
+        insert_compact_bar,
+        insert_compact_master,
+        stamp_compact_manifest,
+    )
+    from pit.query import normalize_as_of
+
+    day = D1
+    db = tmp_path / "old-v8-compact.sqlite"
+    connection = sqlite3.connect(db)
+    stamp_compact_manifest(connection)
+    connection.execute(PERSONAL_HISTORY_COMPACT_MASTER_CREATE_SQL)
+    connection.execute(
+        PERSONAL_HISTORY_COMPACT_BARS_CREATE_SQL.replace(
+            "    morning_close REAL,\n", ""
+        )
+    )
+    insert_compact_master(connection, snapshot_date=day, code=CODE)
+    insert_compact_bar(
+        connection,
+        day=day,
+        code=CODE,
+        close=101.0,
+        morning_adjustment_close=11.0,
+        afternoon_adjustment_close=21.0,
+        adjustment_close=101.0,
+    )
+    clock = normalize_as_of(session_close_jst(day))
+    connection.execute(
+        "CREATE TABLE snapshot_observation_clock ("
+        "singleton INTEGER NOT NULL PRIMARY KEY CHECK (singleton = 1), "
+        "observed_through TEXT NOT NULL CHECK (length(observed_through) >= 25))"
+    )
+    connection.execute(
+        "INSERT INTO snapshot_observation_clock(singleton, observed_through) "
+        "VALUES (1, ?)",
+        (clock,),
+    )
+    connection.commit()
+    assert compact_history_state(connection) == "compact"
+    columns = {
+        str(row[1])
+        for row in connection.execute(
+            "PRAGMA table_info(personal_history_compact_bars)"
+        )
+    }
+    assert "morning_close" not in columns
+    connection.close()
+
+    result = pit.get_personal_retrospective_am_signal_equity_bars_daily(
+        as_of=morning_close_as_of(day),
+        code=CODE,
+        from_event=day,
+        to_event=day,
+        db_path=db,
+    )
+    d_row = result.rows[-1]
+    assert d_row["date"] == day
+    assert d_row["close"] is None
+    assert d_row["close"] != 101.0
+    assert d_row["adjustment_close"] == 11.0
+    assert "afternoon_adjustment_close" not in d_row
+
+
+def test_compact_hydrate_am_reader_retains_official_mc(tmp_path, monkeypatch):
+    from ingestion.personal_history import PersonalHistoryHydrator
+    from test_personal_history_hydrator import _HistoryClient, _plan
+
+    db = tmp_path / "compact-hydrate-am.sqlite"
+    store = SqliteStore(db)
+    stamp = "2025-01-08T16:00:00+09:00"
+    monkeypatch.setattr("ingestion.personal_history.now_iso", lambda: stamp)
+    PersonalHistoryHydrator(
+        client=_HistoryClient(), store=store, plan=_plan()
+    ).hydrate()
+    write_snapshot_observation_clock(store, stamp)
+    store.close()
+
+    day = "2025-01-08"
+    result = pit.get_personal_retrospective_am_signal_equity_bars_daily(
+        as_of=morning_close_as_of(day),
+        code="1001",
+        from_event=day,
+        to_event=day,
+        db_path=db,
+    )
+    d_row = result.rows[-1]
+    assert d_row["date"] == day
+    assert d_row["close"] == 51.0
+    assert d_row["close"] != 101.0
+    assert d_row["adjustment_close"] == 11.0
+    assert d_row["adjustment_close"] != 21.0
+    assert "afternoon_adjustment_close" not in d_row
+
+    fill = pit.get_personal_retrospective_pm_fill_equity_bars_daily(
+        as_of=close_as_of(day),
+        session_date=day,
+        code="1001",
+        db_path=db,
+    )
+    assert fill.rows[0]["adjustment_close"] == 21.0

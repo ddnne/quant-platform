@@ -3052,7 +3052,9 @@ def test_controlled_container_runs_canonical_four_with_independent_artifacts(
                     "max_gross_weight_limit": 0.5,
                     "requested_gross_weight": 0.5,
                     "realized_gross_weight": 0.5,
-                    "authentic_am_session_evidence": True,
+                    "authentic_am_session_evidence": False,
+                    "price_evidence_mode": "historical_daily_reconstruction",
+                    "contemporaneous_observation_unproven": True,
                 },
             ),
             reproducibility={
@@ -3109,7 +3111,7 @@ def test_controlled_container_runs_canonical_four_with_independent_artifacts(
     papers = result["papers"]
     assert len(papers) == 4
     assert {row["lifecycle"] for row in papers} == {"Paper"}
-    assert {row["price_basis"] for row in papers} == {"RAW"}
+    assert {row["price_basis"] for row in papers} == {"PERSONAL_RETROSPECTIVE_ADJUSTED"}
     assert len({row["strategy_spec_hash"] for row in papers}) == 4
     assert len(result["risks"]) == 4
     assert all("audit_id" in row for row in result["risks"])

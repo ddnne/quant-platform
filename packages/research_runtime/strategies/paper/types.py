@@ -132,26 +132,21 @@ class PaperRunConfig:
         resolved_price_basis = require_supported_price_basis(self.price_basis)
         if (
             resolved_price_basis == PERSONAL_RETROSPECTIVE_ADJUSTED
-            and lifecycle is not Lifecycle.DRAFT
+            and lifecycle is Lifecycle.PAPER
+            and self.execution_mode != "am_signal_pm_close"
         ):
             raise ValueError(
-                "PERSONAL_RETROSPECTIVE_ADJUSTED is restricted to local DRAFT; "
-                "Controlled PAPER cannot relabel retrospective data"
+                "PERSONAL_RETROSPECTIVE_ADJUSTED Paper is only the canonical "
+                "am_signal_pm_close historical reconstruction"
             )
         object.__setattr__(
             self, "price_basis", resolved_price_basis
         )
         if self.execution_mode == "am_signal_pm_close":
-            if lifecycle is Lifecycle.PAPER and resolved_price_basis != RAW:
+            if resolved_price_basis != PERSONAL_RETROSPECTIVE_ADJUSTED:
                 raise ValueError(
-                    "Controlled am_signal_pm_close requires the as-of-safe RAW fill"
-                )
-            if (
-                lifecycle is Lifecycle.DRAFT
-                and resolved_price_basis != PERSONAL_RETROSPECTIVE_ADJUSTED
-            ):
-                raise ValueError(
-                    "DRAFT am_signal_pm_close uses PERSONAL_RETROSPECTIVE_ADJUSTED"
+                    "am_signal_pm_close uses PERSONAL_RETROSPECTIVE_ADJUSTED "
+                    "historical daily MAdjC/AAdjC reconstruction"
                 )
         if self.universe is not None:
             if getattr(self.universe, "membership_by_date", None) is not None:

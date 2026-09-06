@@ -15,6 +15,8 @@ import fixtureKeys from "../../../../specs/ready/controlled_pilot_verify_keys.ge
 import pythonContainerArtifacts from "../../../../specs/ready/controlled_pilot_container_artifacts.generated.json";
 import {
   CONTROLLED_FILL_CONTRACT_DIGEST,
+  CONTROLLED_FILL_EXECUTION_MODE,
+  CONTROLLED_PILOT_CONTRACT,
   CONTROLLED_PILOT_IDENTITY,
   CONTROLLED_READY_ENVELOPE_FORMAT,
   CONTROLLED_TRADER_BATCH_FORMAT,
@@ -245,6 +247,10 @@ function mockContainer(options?: {
     | "knowledge_wrong_digest"
     | "post_digest_injection"
     | "non_raw_price_basis"
+    | "raw_price_basis"
+    | "unknown_price_evidence_mode"
+    | "authentic_am_session_evidence"
+    | "contemporaneous_observation_claimed"
     | "noncanonical_execution_mode"
     | "missing_semantic_field"
     | "missing_knowledge_payload_field"
@@ -317,8 +323,16 @@ function mockContainer(options?: {
               delete result.papers[0]!.semantic_digest;
               result.papers[0]!.semantic_digest = await sha256Digest(canonicalJson(result.papers[0]!));
             }
-            if (options?.tamper === "non_raw_price_basis") {
-              result.papers[0]!.price_basis = "PIT_ADJUSTED";
+            const paperProvenanceTamper: Record<string, [string, unknown]> = {
+              non_raw_price_basis: ["price_basis", "PIT_ADJUSTED"],
+              raw_price_basis: ["price_basis", "RAW"],
+              unknown_price_evidence_mode: ["price_evidence_mode", "tip_am_session"],
+              authentic_am_session_evidence: ["authentic_am_session_evidence", true],
+              contemporaneous_observation_claimed: ["contemporaneous_observation_unproven", false],
+            };
+            const paperField = options?.tamper ? paperProvenanceTamper[options.tamper] : undefined;
+            if (paperField) {
+              result.papers[0]![paperField[0]] = paperField[1];
               delete result.papers[0]!.semantic_digest;
               result.papers[0]!.semantic_digest = await sha256Digest(canonicalJson(result.papers[0]!));
             }
@@ -458,6 +472,10 @@ async function seedEnv(options?: {
     | "knowledge_wrong_digest"
     | "post_digest_injection"
     | "non_raw_price_basis"
+    | "raw_price_basis"
+    | "unknown_price_evidence_mode"
+    | "authentic_am_session_evidence"
+    | "contemporaneous_observation_claimed"
     | "noncanonical_execution_mode"
     | "missing_semantic_field"
     | "missing_knowledge_payload_field"
@@ -706,6 +724,27 @@ describe("controlled cloud execution", () => {
     expect(body.manifest.children).toHaveLength(10);
     expect(seeded.budget.finalized).toBe(1);
     expect(seeded.budget.heartbeats).toBeGreaterThan(0);
+  });
+
+  it("accepts the Python Container fixture's retrospective reconstruction provenance", async () => {
+    const papers = pythonContainerArtifacts.papers as Array<Record<string, unknown>>;
+    expect(papers).toHaveLength(4);
+    for (const paper of papers) {
+      expect(paper.price_basis).toBe("PERSONAL_RETROSPECTIVE_ADJUSTED");
+      expect(paper.price_evidence_mode).toBe(
+        CONTROLLED_PILOT_CONTRACT.fill_contract.price_evidence_mode,
+      );
+      expect(paper.authentic_am_session_evidence).toBe(false);
+      expect(paper.contemporaneous_observation_unproven).toBe(true);
+      expect(paper.execution_mode).toBe(CONTROLLED_FILL_EXECUTION_MODE);
+      expect(paper.lifecycle).toBe("Paper");
+    }
+    const seeded = await seedEnv();
+    const ctx = new WaitCtx();
+    await submitControlledPilot(seeded.env, seeded.request, ctx);
+    await ctx.pending;
+    const status = await controlledPilotStatus(seeded.env, seeded.request.idempotency_key);
+    expect(((await status.json()) as { status: string }).status).toBe("COMPLETED");
   });
 
   it("replay of an existing SUBMITTED job only repairs its schedule", async () => {
@@ -1210,6 +1249,10 @@ describe("controlled cloud execution", () => {
       "knowledge_wrong_digest",
       "post_digest_injection",
       "non_raw_price_basis",
+      "raw_price_basis",
+      "unknown_price_evidence_mode",
+      "authentic_am_session_evidence",
+      "contemporaneous_observation_claimed",
       "noncanonical_execution_mode",
       "missing_semantic_field",
       "missing_knowledge_payload_field",
@@ -1262,7 +1305,11 @@ describe("controlled cloud execution", () => {
   it("rejects persisted Paper fill-policy fields even when semantic and byte digests are rebound", async () => {
     for (const [field, value] of [
       ["price_basis", "PIT_ADJUSTED"],
+      ["price_basis", "RAW"],
       ["execution_mode", "arbitrary_close"],
+      ["price_evidence_mode", "tip_am_session"],
+      ["authentic_am_session_evidence", true],
+      ["contemporaneous_observation_unproven", false],
     ] as const) {
       const seeded = await seedEnv();
       const ctx = new WaitCtx();

@@ -6,6 +6,7 @@ import {
   CONTROLLED_FILL_CONTRACT_DIGEST,
   CONTROLLED_FILL_EXECUTION_MODE,
   CONTROLLED_JOB_KEY_PREFIX,
+  CONTROLLED_PILOT_CONTRACT,
   CONTROLLED_MAX_GROSS_WEIGHT_PPM,
   CONTROLLED_PILOT_GENERATION,
   CONTROLLED_PILOT_IDENTITY,
@@ -86,6 +87,9 @@ export {
 };
 
 const SHA256_RE = /^sha256:[0-9a-f]{64}$/;
+const CONTROLLED_FILL_PRICE_EVIDENCE_MODE =
+  CONTROLLED_PILOT_CONTRACT.fill_contract.price_evidence_mode;
+const CONTROLLED_PAPER_PRICE_BASIS = "PERSONAL_RETROSPECTIVE_ADJUSTED" as const;
 const CONTROLLED_OUTBOUND_HANDLER = "controlledPilotSnapshot";
 const CONTROLLED_WRITER_OUTBOUND_HANDLER = "controlledPilotWriter";
 const MIN_TTL_MS = 60_000;
@@ -928,6 +932,8 @@ const PAPER_SEMANTIC_FIELDS = new Set([
   "feature_refs", "lifecycle", "experiment_id", "run_id", "metrics",
   "n_equity_points", "n_trades", "resolved_universe_digest", "max_gross_weight_ppm",
   "requested_gross_weight", "realized_gross_weight", "reproducibility", "price_basis",
+  "price_evidence_mode", "authentic_am_session_evidence",
+  "contemporaneous_observation_unproven",
 ]);
 const RISK_SEMANTIC_FIELDS = new Set([
   "ordinal", "plan_id", "plan_binding_digest", "strategy_spec_id",
@@ -1100,7 +1106,11 @@ async function validateContainerArtifacts(
     if (
       paper.identity !== CONTROLLED_PILOT_IDENTITY || paper.kind !== "paper" ||
       paper.lifecycle !== "Paper" || !isRecord(paper.metrics) ||
-      paper.execution_mode !== CONTROLLED_FILL_EXECUTION_MODE || paper.price_basis !== "RAW" ||
+      paper.execution_mode !== CONTROLLED_FILL_EXECUTION_MODE ||
+      paper.price_basis !== CONTROLLED_PAPER_PRICE_BASIS ||
+      paper.price_evidence_mode !== CONTROLLED_FILL_PRICE_EVIDENCE_MODE ||
+      paper.authentic_am_session_evidence !== false ||
+      paper.contemporaneous_observation_unproven !== true ||
       paper.automatic_promotion !== false || paper.live_orders_enabled !== false || paper.mass !== false
     ) {
       lineageError("paper semantic body violates the controlled Paper policy");
@@ -1660,7 +1670,10 @@ async function callContainer(
         !row.metrics ||
         row.fill_contract_digest !== CONTROLLED_FILL_CONTRACT_DIGEST ||
         row.execution_mode !== CONTROLLED_FILL_EXECUTION_MODE ||
-        row.price_basis !== "RAW",
+        row.price_basis !== CONTROLLED_PAPER_PRICE_BASIS ||
+        row.price_evidence_mode !== CONTROLLED_FILL_PRICE_EVIDENCE_MODE ||
+        row.authentic_am_session_evidence !== false ||
+        row.contemporaneous_observation_unproven !== true,
     )
   ) {
     return { ok: false, error: "controlled container did not return Paper evidence" };

@@ -123,7 +123,7 @@ def test_am_mode_decision_time_is_1130_and_fill_is_same_date(tmp_path):
         assert trade["fill_date"] == trade["decision_date"]
         assert trade["decision_date"] == D0
     assert res.metadata["execution_mode"] == "am_signal_pm_close"
-    assert "draft_reconstruction_not_11:30_publication" in (
+    assert "historical_daily_reconstruction_not_11:30_publication" in (
         res.metadata["price_basis_provenance"]["field_time_semantics"]
     )
     assert "may_drift_by_pm_close" in res.metadata["weight_sizing_rule"]
@@ -381,8 +381,9 @@ def test_complete_am_run_is_comparable(tmp_path):
     db = _seed(tmp_path, madjc=100.0, aadjc=100.0)
     res = _run(db, BuyOnce())
     assert res.metrics["comparable"] is True
-    assert res.metrics["selection_eligible"] is False
-    assert res.metrics["comparison_eligible"] is False
+    assert res.metrics["selection_eligible"] is True
+    assert res.metrics["comparison_eligible"] is True
+    assert res.metadata["data_quality"]["production_eligible"] is False
     assert res.metadata["authentic_am_session_evidence"] is False
     assert res.metrics["incomplete_valuation"] is False
     assert res.metadata["information_cutoff"] == "11:30:00+09:00"

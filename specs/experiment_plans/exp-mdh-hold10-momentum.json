@@ -6,10 +6,10 @@
   "hypothesis": "A 10-day sticky hold on momentum_n (n=10) earns after default 10bp one-way costs on TSE Prime names with fundamentals history. Daily flip is not the primary.",
   "strategy_spec_id": "paper_mdh_hold10_momentum_topk",
   "strategy_spec_version": "strategy-spec/v3",
-  "strategy_spec_hash": "sha256:298dca13e0caa1dae7cd9b196ea9c298f3b3507e84a7463bfeecc538ccf7fe8f",
+  "strategy_spec_hash": "sha256:4a308a0d24f1665f268f4a8dc7840019a130e4d4cdda2bb6d3b3d058c808195f",
   "feature_refs": [
     {
-      "id": "momentum_n",
+      "id": "retrospective_split_adjusted_momentum_n",
       "version": "1.0.0",
       "params": {
         "n": 10
@@ -32,18 +32,19 @@
   "fill_contract": {
     "format": "controlled-pilot-fill-contract/v1",
     "id": "controlled-pilot-am-signal-pm-close",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "identity": "controlled_pilot_v1",
     "execution_mode": "am_signal_pm_close",
     "signal_session": "morning_close",
     "signal_price_field": "MAdjC",
-    "signal_price_dataset": "equities_bars_daily_am",
+    "signal_price_dataset": "equities_bars_daily",
     "fill_session": "afternoon_close",
     "fill_valuation_field": "AAdjC",
     "fill_valuation_session": "same_trading_date",
     "information_cutoff": "11:30:00+09:00",
     "lifecycle": "Paper",
-    "retrospective_only": false,
+    "price_evidence_mode": "historical_daily_reconstruction",
+    "retrospective_only": true,
     "draft": false,
     "live_trading_evidence": false,
     "ready_snapshot_declared": true,
@@ -51,6 +52,6 @@
     "automatic_promotion": false,
     "fallback": false,
     "forward_fill": false,
-    "contract_digest": "sha256:678985a0f7b142eeecd693ebe28bff822916bc815889f0b39e2841830377377d"
+    "contract_digest": "sha256:3691b4c93bbafc1d5a0e8fec25eb14ec26fae9683aaffa07fd44bb80c4f486b8"
   }
 }

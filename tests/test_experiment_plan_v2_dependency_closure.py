@@ -42,19 +42,42 @@ from strategies.spec import (
 
 _EXPECTED_REFS = {
     "exp-mdh-hold10-momentum": [
-        {"id": "momentum_n", "version": "1.0.0", "params": {"n": 10}}
+        {
+            "id": "retrospective_split_adjusted_momentum_n",
+            "version": "1.0.0",
+            "params": {"n": 10},
+        }
     ],
     "exp-xs-hold10-mom5": [
-        {"id": "momentum_n", "version": "1.0.0", "params": {"n": 5}}
+        {
+            "id": "retrospective_split_adjusted_momentum_n",
+            "version": "1.0.0",
+            "params": {"n": 5},
+        }
     ],
     "exp-event-post-hold5": [
         {"id": "disclosure_flag_fins", "version": "1.0.0", "params": {}}
     ],
     "exp-fund-hold10-value-mom": [
-        {"id": "fundamental_value_score", "version": "1.0.0", "params": {}},
-        {"id": "momentum_n", "version": "1.0.0", "params": {"n": 10}},
+        {
+            "id": "retrospective_split_safe_fundamental_value_score",
+            "version": "1.0.0",
+            "params": {},
+        },
+        {
+            "id": "retrospective_split_adjusted_momentum_n",
+            "version": "1.0.0",
+            "params": {"n": 10},
+        },
     ],
 }
+_CANONICAL_HISTORICAL_DATASETS = (
+    "equities_bars_daily",
+    "equities_master",
+    "fins_summary",
+    "indices_bars_daily_topix",
+    "markets_calendar",
+)
 
 
 def _payload() -> dict[str, object]:
@@ -92,9 +115,8 @@ def test_closure_is_deterministic_transitive_and_profile_bound() -> None:
         assert closure == build_plan_dependency_closure(plan)
         assert closure.closure_digest.startswith("sha256:")
         assert tuple(sorted(closure.required_datasets)) == closure.required_datasets
-        assert "equities_master" in closure.required_datasets
-        assert "markets_calendar" in closure.required_datasets
-        assert "equities_bars_daily_am" in closure.required_datasets
+        assert closure.required_datasets == _CANONICAL_HISTORICAL_DATASETS
+        assert "equities_bars_daily_am" not in closure.required_datasets
         assert "equities_earnings_calendar" not in closure.required_datasets
         derived = {
             dataset

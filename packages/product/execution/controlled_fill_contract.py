@@ -1,10 +1,12 @@
 """Closed Controlled Pilot fill contract: morning signal, same-day afternoon fill.
 
-The personal retrospective DRAFT contract and the engine default ``next_close``
-cannot authorize Controlled execution.  This object is the user's execution
-contract and is digest-bound through ExperimentPlan, PlanExecutionBinding,
-exact-four aggregate binding, READY, Trader batch authorization, the
-Container job, and Paper/Risk/Selection/Knowledge artifacts.
+The canonical four 2023 plans are historical Paper reconstructions from
+official ``equities_bars_daily`` morning/afternoon columns. They are not
+observations of the tip-only AM endpoint. The personal retrospective DRAFT
+contract and the engine default ``next_close`` cannot authorize Controlled
+execution. This object is digest-bound through ExperimentPlan,
+PlanExecutionBinding, exact-four aggregate binding, READY, Trader batch
+authorization, the Container job, and Paper/Risk/Selection/Knowledge artifacts.
 """
 
 from __future__ import annotations
@@ -22,11 +24,15 @@ from selection.controlled_pilot_policy import (
 
 
 CONTROLLED_FILL_CONTRACT_ID = "controlled-pilot-am-signal-pm-close"
-CONTROLLED_FILL_CONTRACT_VERSION = "1.0.0"
+CONTROLLED_FILL_CONTRACT_VERSION = "1.1.0"
 CONTROLLED_FILL_CONTRACT_FORMAT = "controlled-pilot-fill-contract/v1"
 CONTROLLED_FILL_EXECUTION_MODE = "am_signal_pm_close"
 CONTROLLED_FILL_SIGNAL_SESSION = "morning_close"
 CONTROLLED_FILL_FILL_SESSION = "afternoon_close"
+CONTROLLED_FILL_PRICE_EVIDENCE_MODE = "historical_daily_reconstruction"
+CONTROLLED_FILL_SIGNAL_PRICE_DATASET = "equities_bars_daily"
+CONTROLLED_FILL_SIGNAL_PRICE_FIELD = "MAdjC"
+CONTROLLED_FILL_VALUATION_FIELD = "AAdjC"
 
 _CONTRACT_BODY_FIELDS = (
     "format",
@@ -42,6 +48,7 @@ _CONTRACT_BODY_FIELDS = (
     "fill_valuation_session",
     "information_cutoff",
     "lifecycle",
+    "price_evidence_mode",
     "retrospective_only",
     "draft",
     "live_trading_evidence",
@@ -76,14 +83,15 @@ def controlled_fill_contract_body() -> dict[str, Any]:
         "identity": CONTROLLED_PILOT_IDENTITY,
         "execution_mode": CONTROLLED_FILL_EXECUTION_MODE,
         "signal_session": CONTROLLED_FILL_SIGNAL_SESSION,
-        "signal_price_field": "MAdjC",
-        "signal_price_dataset": "equities_bars_daily_am",
+        "signal_price_field": CONTROLLED_FILL_SIGNAL_PRICE_FIELD,
+        "signal_price_dataset": CONTROLLED_FILL_SIGNAL_PRICE_DATASET,
         "fill_session": CONTROLLED_FILL_FILL_SESSION,
-        "fill_valuation_field": "AAdjC",
+        "fill_valuation_field": CONTROLLED_FILL_VALUATION_FIELD,
         "fill_valuation_session": "same_trading_date",
         "information_cutoff": "11:30:00+09:00",
         "lifecycle": "Paper",
-        "retrospective_only": False,
+        "price_evidence_mode": CONTROLLED_FILL_PRICE_EVIDENCE_MODE,
+        "retrospective_only": True,
         "draft": False,
         "live_trading_evidence": False,
         "ready_snapshot_declared": True,
@@ -137,12 +145,17 @@ def require_controlled_fill_contract(value: object) -> dict[str, Any]:
         or value.get("fill_session") != CONTROLLED_FILL_FILL_SESSION
         or value.get("fill_valuation_session") != "same_trading_date"
         or value.get("lifecycle") != "Paper"
-        or value.get("retrospective_only") is not False
+        or value.get("price_evidence_mode") != CONTROLLED_FILL_PRICE_EVIDENCE_MODE
+        or value.get("retrospective_only") is not True
         or value.get("draft") is not False
+        or value.get("live_trading_evidence") is not False
+        or value.get("go") is not False
+        or value.get("automatic_promotion") is not False
         or value.get("execution_mode") == "next_close"
     ):
         raise ControlledFillContractError(
-            "retrospective DRAFT or next_close cannot authorize Controlled execution"
+            "DRAFT, next_close, or noncanonical evidence mode cannot authorize "
+            "Controlled execution"
         )
     body = {field: value[field] for field in _CONTRACT_BODY_FIELDS}
     expected = controlled_fill_contract_body()
@@ -170,7 +183,11 @@ __all__ = [
     "CONTROLLED_FILL_CONTRACT_VERSION",
     "CONTROLLED_FILL_EXECUTION_MODE",
     "CONTROLLED_FILL_FILL_SESSION",
+    "CONTROLLED_FILL_PRICE_EVIDENCE_MODE",
+    "CONTROLLED_FILL_SIGNAL_PRICE_DATASET",
+    "CONTROLLED_FILL_SIGNAL_PRICE_FIELD",
     "CONTROLLED_FILL_SIGNAL_SESSION",
+    "CONTROLLED_FILL_VALUATION_FIELD",
     "ControlledFillContractError",
     "controlled_fill_contract",
     "controlled_fill_contract_body",

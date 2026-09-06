@@ -62,7 +62,7 @@ CONTROLLED_PILOT_IDENTITY = "controlled_pilot_v1"
 EXACT_FOUR_PROFILE_ID = "controlled-pilot/exact-four"
 EXACT_FOUR_PROFILE_VERSION = "research-data-profile-set/v1"
 EXACT_FOUR_PROFILE_DIGEST = (
-    "sha256:ccad8a7ab0cf9af80cabc68a0b8a5111c064b578d211495423dae56333b8bf63"
+    "sha256:f37aabd1d2ac84d0d060463b62eae7eec6aa38939a097d3d7e044ed84780d53f"
 )
 EXACT_FOUR_PLAN_IDS = (
     "exp-mdh-hold10-momentum",
@@ -71,22 +71,21 @@ EXACT_FOUR_PLAN_IDS = (
     "exp-fund-hold10-value-mom",
 )
 EXACT_FOUR_PLAN_SET_DIGEST = (
-    "sha256:d7c1453b0a0b1d7672bff48af751351a4a88f5baf1438e119d429b9970de91b8"
+    "sha256:b44265e98bc882dbfdde5d36afc34f41d768e271c430552cd236938845a2ad02"
 )
 EXACT_FOUR_CLOSURE_DIGEST = (
-    "sha256:dbda1ed2c7c0bf942817f19b3668163710afceedf265f436114e50b80a7e8cb0"
+    "sha256:a9a279d657bc6101630c22b43f56e9b9e5610c63b3a11b9c925e12ef0681251a"
 )
 EXACT_FOUR_UNIVERSE_RULE_DIGEST = (
     "sha256:710bd711b107dfebec64da6376a13933a8233d3c55e97562432f27f38c34d351"
 )
 CONTROLLED_FILL_CONTRACT_DIGEST = (
-    "sha256:678985a0f7b142eeecd693ebe28bff822916bc815889f0b39e2841830377377d"
+    "sha256:3691b4c93bbafc1d5a0e8fec25eb14ec26fae9683aaffa07fd44bb80c4f486b8"
 )
 CONTROLLED_READY_ENVELOPE_FORMAT = "controlled-pilot-ready-envelope/v1"
 CONTROLLED_SNAPSHOT_KEY_PREFIX = "research/controlled_pilot/v1/snapshots/"
 EXACT_FOUR_DATASET_IDS = (
     "equities_bars_daily",
-    "equities_bars_daily_am",
     "equities_master",
     "fins_summary",
     "indices_bars_daily_topix",

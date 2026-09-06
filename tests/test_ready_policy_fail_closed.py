@@ -33,6 +33,7 @@ from ops.projection_signing import (
     ENVELOPE_SCHEMA,
     sha256_digest,
 )
+from paper_runtime.readiness_attestation import EXACT_FOUR_DATASET_IDS
 from paper_runtime.ready_policy import (
     CoverageEvidence,
     ReadyPublicationPolicy,
@@ -997,14 +998,30 @@ def test_signed_projection_cursor_must_equal_local_snapshot_generation() -> None
         )
 
 
-_SCOPE_DATASETS = (
-    "equities_bars_daily",
-    "equities_bars_daily_am",
-    "equities_master",
-    "fins_summary",
-    "indices_bars_daily_topix",
-    "markets_calendar",
-)
+_SCOPE_DATASETS = EXACT_FOUR_DATASET_IDS
+_LATE_AFTER_OBSERVED = "2026-08-25T12:00:01+00:00"
+
+
+def _daily_equity_bar(
+    code: str,
+    day: str,
+    *,
+    close: float,
+    morning: float,
+    volume: float,
+) -> dict[str, object]:
+    return {
+        "Code": code,
+        "Date": day,
+        "Open": close,
+        "High": close + 1.0,
+        "Low": close - 1.0,
+        "Close": close,
+        "Volume": volume,
+        "MC": morning,
+        "MAdjC": morning,
+        "AAdjC": close,
+    }
 
 
 def _mini_exact_scope_binding() -> SimpleNamespace:
@@ -1071,25 +1088,13 @@ def _seed_exact_pit_scope(
             }
         ],
         "equities_bars_daily": [
-            {
-                "Code": "1332",
-                "Date": day,
-                "Open": 100.0,
-                "High": 101.0,
-                "Low": 99.0,
-                "Close": 100.0,
-                "Volume": 1000.0,
-            }
-            for day in calendar_dates
-        ],
-        "equities_bars_daily_am": [
-            {
-                "Code": "1332",
-                "Date": day,
-                "MAdjC": 100.0,
-                "trusted_receipt_digest": "sha256:" + ("ab" * 32),
-                "product_snapshot_id": "sha256:" + ("cd" * 32),
-            }
+            _daily_equity_bar(
+                "1332",
+                day,
+                close=100.0,
+                morning=99.5,
+                volume=1000.0,
+            )
             for day in calendar_dates
         ],
         "indices_bars_daily_topix": [
@@ -1121,33 +1126,19 @@ def _seed_exact_pit_scope(
             }
         )
         payloads["equities_bars_daily"].extend(
-            {
-                "Code": "9999",
-                "Date": day,
-                "Open": 50.0,
-                "High": 51.0,
-                "Low": 49.0,
-                "Close": 50.0,
-                "Volume": 500.0,
-            }
-            for day in calendar_dates
-        )
-        payloads["equities_bars_daily_am"].extend(
-            {
-                "Code": "9999",
-                "Date": day,
-                "MAdjC": 50.0,
-                "trusted_receipt_digest": "sha256:" + ("ef" * 32),
-                "product_snapshot_id": "sha256:" + ("01" * 32),
-            }
+            _daily_equity_bar(
+                "9999",
+                day,
+                close=50.0,
+                morning=49.5,
+                volume=500.0,
+            )
             for day in calendar_dates
         )
     ingestion_clocks = {
         "markets_calendar": "2022-12-01T00:00:00+09:00",
         "equities_master": "2023-01-02T08:00:00+09:00",
         "fins_summary": "2023-01-03T08:00:00+09:00",
-        "equities_bars_daily": "2023-01-06T16:00:00+09:00",
-        "equities_bars_daily_am": "2023-01-06T11:30:00+09:00",
         "indices_bars_daily_topix": "2023-01-06T16:00:00+09:00",
     }
     with SqliteStore(db_path) as store:
@@ -1159,7 +1150,8 @@ def _seed_exact_pit_scope(
             "(observed_through TEXT NOT NULL)"
         )
         store._conn.execute(  # noqa: SLF001
-            "INSERT INTO snapshot_observation_clock VALUES ('2023-01-06T11:30:00+09:00')"
+            "INSERT INTO snapshot_observation_clock VALUES (?)",
+            (close_as_of("2023-01-06"),),
         )
         store._conn.executescript(  # noqa: SLF001
             """
@@ -1184,7 +1176,7 @@ def _seed_exact_pit_scope(
         )
         for dataset_id in _SCOPE_DATASETS:
             rows = payloads[dataset_id]
-            if dataset_id == "equities_bars_daily_am":
+            if dataset_id == "equities_bars_daily":
                 for row in rows:
                     day = str(row["Date"])
                     store.upsert(
@@ -1192,7 +1184,7 @@ def _seed_exact_pit_scope(
                         normalize_generic(
                             [row],
                             dataset=dataset_id,
-                            ingested_at=f"{day}T11:30:00+09:00",
+                            ingested_at=close_as_of(day),
                         ),
                     )
             else:
@@ -1516,7 +1508,6 @@ def test_exact_pit_dependency_scope_verifies_full_source_artifact_before_univers
         "equities_master",
         "fins_summary",
         "equities_bars_daily",
-        "equities_bars_daily_am",
     ):
         assert full_artifact_counts[dataset_id] > selected_counts[dataset_id]
 
@@ -1794,7 +1785,8 @@ def test_signed_product_digest_survives_sync_projection_and_ready(
             "DELETE FROM snapshot_observation_clock"
         )
         mirror._conn.execute(  # noqa: SLF001
-            "INSERT INTO snapshot_observation_clock VALUES ('2023-01-06T11:30:00+09:00')"
+            "INSERT INTO snapshot_observation_clock VALUES (?)",
+            (close_as_of("2023-01-06"),),
         )
         mirror._conn.executemany(  # noqa: SLF001
             "INSERT INTO dataset_coverage "
@@ -1937,7 +1929,6 @@ def test_signed_product_digest_survives_sync_projection_and_ready(
         ("equities_master", "2023-01-02"),
         ("fins_summary", "2023-01-03"),
         ("equities_bars_daily", "2023-01-05"),
-        ("equities_bars_daily_am", "2023-01-05"),
         ("indices_bars_daily_topix", "2023-01-05"),
     ),
 )
@@ -1954,15 +1945,15 @@ def test_exact_pit_dependency_scope_rejects_each_missing_or_late_dependency(
     _mutate_sqlite(
         db_path,
         "UPDATE jquants_records "
-        "SET available_at='2026-08-25T00:00:00+09:00' "
+        "SET available_at=? "
         "WHERE dataset=? AND substr(event_time,1,10)=?",
-        (victim, event_date),
+        (_LATE_AFTER_OBSERVED, victim, event_date),
     )
     with pytest.raises(MassResearchDisabledError):
         _verify_scope(db_path, binding, monkeypatch)
 
 
-def test_exact_pit_dependency_scope_rejects_am_captured_after_operational_deadline(
+def test_exact_pit_dependency_scope_rejects_daily_bars_missing_session_prices(
     tmp_path,
     receipt_ed25519_keys,
     monkeypatch: pytest.MonkeyPatch,
@@ -1971,13 +1962,13 @@ def test_exact_pit_dependency_scope_rejects_am_captured_after_operational_deadli
     _mutate_sqlite(
         db_path,
         "UPDATE jquants_records "
-        "SET ingested_at='2023-01-05T12:31:00+09:00' "
-        "WHERE dataset='equities_bars_daily_am' "
+        "SET payload=json_remove(payload, '$.MAdjC', '$.AAdjC', '$.MC') "
+        "WHERE dataset='equities_bars_daily' "
         "AND substr(event_time,1,10)='2023-01-05'",
     )
     with pytest.raises(
         MassResearchDisabledError,
-        match="equities_bars_daily_am same-day operational closure missing/late",
+        match="equities_bars_daily historical MAdjC/AAdjC closure missing",
     ):
         _verify_scope(db_path, binding, monkeypatch)
 
@@ -1993,11 +1984,15 @@ def test_exact_pit_dependency_scope_rejects_one_visible_row_and_late_rest(
     _mutate_sqlite(
         db_path,
         "UPDATE jquants_records "
-        "SET available_at='2026-08-25T00:00:00+09:00' "
+        "SET available_at=? "
         "WHERE dataset='equities_bars_daily' "
         "AND substr(event_time,1,10) <> '2023-01-02'",
+        (_LATE_AFTER_OBSERVED,),
     )
-    with pytest.raises(MassResearchDisabledError, match="closure missing/late"):
+    with pytest.raises(
+        MassResearchDisabledError,
+        match="equities_bars_daily historical MAdjC/AAdjC closure missing",
+    ):
         _verify_scope(db_path, binding, monkeypatch)
 
 

@@ -83,6 +83,7 @@ def _bar_rows(
     morning_turnover_values: dict[str, dict[str, float]] | None = None,
     turnover_values: dict[str, dict[str, float]] | None = None,
     market_caps: dict[str, dict[str, float]] | None = None,
+    morning_prices: dict[str, dict[str, float]] | None = None,
 ) -> list[dict]:
     """``prices[code][date] = close``. ``available_at_for[date]`` overrides pub time."""
     rows: list[dict] = []
@@ -93,6 +94,24 @@ def _bar_rows(
                 if available_at_for
                 else close_iso(d)
             )
+            morning_raw = (
+                morning_prices.get(code, {}).get(d)
+                if morning_prices is not None
+                else None
+            )
+            payload = {
+                "Code": code,
+                "Date": d,
+                "C": close,
+            }
+            if morning_raw is not None:
+                payload["MC"] = morning_raw
+            if morning_adjustment_prices is not None:
+                payload["MAdjC"] = morning_adjustment_prices.get(code, {}).get(d)
+            if afternoon_adjustment_prices is not None:
+                payload["AAdjC"] = afternoon_adjustment_prices.get(code, {}).get(d)
+            if adjustment_prices is not None:
+                payload["AdjC"] = adjustment_prices.get(code, {}).get(d)
             rows.append(
                 {
                     "source": "jquants",
@@ -145,6 +164,9 @@ def _bar_rows(
                         morning_turnover_values.get(code, {}).get(d)
                         if morning_turnover_values is not None
                         else None
+                    ),
+                    "raw_payload": json.dumps(
+                        payload, sort_keys=True, separators=(",", ":")
                     ),
                 }
             )
@@ -216,6 +238,7 @@ def seed_db(
     turnover_values: dict | None = None,
     market_caps: dict | None = None,
     master_available_at: str | None = None,
+    morning_raw_prices: dict | None = None,
 ) -> Path:
     """Create a structured DB with calendar + master + bars; return its path."""
     codes = codes or CODES
@@ -238,6 +261,7 @@ def seed_db(
             morning_turnover_values=morning_turnover_values,
             turnover_values=turnover_values,
             market_caps=market_caps,
+            morning_prices=morning_raw_prices,
         ),
     )
     last = (days or TRADING_DAYS)[-1]
@@ -286,6 +310,11 @@ def seed_governed_am_pm_session_db(
                     "morning_adjustment_close": morning,
                     "morning_adjustment_volume": 500.0,
                     "afternoon_adjustment_close": None,
+                    "raw_payload": json.dumps(
+                        {"Code": code, "Date": day, "MC": morning, "MAdjC": morning},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
                 }
             )
             pm_rows.append(
@@ -301,10 +330,23 @@ def seed_governed_am_pm_session_db(
                     "low": morning,
                     "close": afternoon,
                     "volume": 1000.0,
+                    "adjustment_close": afternoon,
                     "morning_adjustment_close": morning,
                     "morning_adjustment_volume": 500.0,
                     "afternoon_adjustment_close": afternoon,
                     "afternoon_adjustment_volume": 1000.0,
+                    "raw_payload": json.dumps(
+                        {
+                            "Code": code,
+                            "Date": day,
+                            "C": afternoon,
+                            "MC": morning,
+                            "MAdjC": morning,
+                            "AAdjC": afternoon,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
                 }
             )
     store.upsert("jquants_daily_bars", am_rows)
@@ -341,6 +383,9 @@ def seed_governed_am_pm_session_db(
             payload = {
                 "Code": code,
                 "Date": day,
+                "C": float(afternoon_prices[code][day]),
+                "AdjC": float(afternoon_prices[code][day]),
+                "MC": float(morning_prices[code][day]),
                 "MAdjC": float(morning_prices[code][day]),
                 "AAdjC": float(afternoon_prices[code][day]),
             }

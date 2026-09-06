@@ -7,6 +7,20 @@
     "pull_request": 98
   },
   "note": "Read-only live measurements; no market rows downloaded; current aggregation is not READY evidence.",
+  "source_ci_checkpoint": {
+    "source_sha": "adabcc6f32cb791977923b9fa23cc19a18d909c9",
+    "required_check": "Workers Builds: quant-platform-ci-aggregate-staging",
+    "app_id": 85455,
+    "build_uuid": "5b31c432-1380-4b9b-a156-1e40ab13ef73",
+    "completed_at_utc": "2026-09-06T17:38:30Z",
+    "conclusion": "SUCCESS",
+    "python_passed": 3554,
+    "python_skipped": 4,
+    "worker_tests_passed": 1099,
+    "worker_lane_parallelism": 2,
+    "active_workers_checked": 8,
+    "note": "Source checkpoint only. Does not attest later AM changes, product deployment, release acceptance or READY. CI deploy command is true."
+  },
   "migration_observation": {
     "observed_on_jst": "2026-09-07",
     "method": "Cloudflare D1 API read-only SELECT on discovered migration tables",

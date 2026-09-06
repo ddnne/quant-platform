@@ -18,6 +18,7 @@ import features
 import pit
 from features.runtime import (
     bind_personal_retrospective_am_session_daily_bars,
+    bind_verified_controlled_am_session_daily_bars,
     compute_with_engine_daily_bars_capability,
 )
 from paper_runtime.code_fingerprints import feature_definition_hashes
@@ -31,6 +32,7 @@ from pit.personal_retrospective_session import (
     INFORMATION_CUTOFF,
     OPERATIONAL_USABLE_BY,
     am_session_view_digest,
+    personal_retrospective_am_signal_from_source_rows,
 )
 from pit.errors import SnapshotObservationClockError
 from pit.governed_am_view import (
@@ -58,7 +60,6 @@ from .execution import (
     close_as_of,
     get_mode,
     morning_close_as_of,
-    operational_usable_by_as_of,
 )
 from .metrics import compute_metrics
 from .result import BacktestResult
@@ -351,7 +352,22 @@ def _load_am_signal_snapshot(
         codes=tuple(sorted(codes)),
         db_path=db_path,
     )
-    for row in result.rows:
+    return _am_snapshot_from_session_rows(
+        result.rows, codes=codes, to_date=to_date, price_basis=price_basis
+    )
+
+
+def _am_snapshot_from_session_rows(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    codes: set[str],
+    to_date: str,
+    price_basis: PriceBasis,
+) -> dict[str, dict[str, Any]]:
+    snapshot: dict[str, dict[str, Any]] = {
+        code: {"close": None, "bars": []} for code in codes
+    }
+    for row in rows:
         code = row.get("code")
         if code not in snapshot:
             continue
@@ -1176,14 +1192,16 @@ def _run_backtest_impl(
     mode = get_mode(execution_mode)
     resolved_price_basis = require_supported_price_basis(price_basis)
     am_pm_mode = mode.name == AM_SIGNAL_PM_CLOSE.name
-    governed_am_pm = am_pm_mode and resolved_price_basis == RAW
     draft_am_pm = (
         am_pm_mode and resolved_price_basis == PERSONAL_RETROSPECTIVE_ADJUSTED
     )
+    governed_am_pm = False
+    if am_pm_mode and resolved_price_basis == RAW:
+        governed_am_pm = True
     if am_pm_mode and not governed_am_pm and not draft_am_pm:
         raise ValueError(
-            "am_signal_pm_close requires RAW (Controlled) or "
-            "PERSONAL_RETROSPECTIVE_ADJUSTED (DRAFT)"
+            "am_signal_pm_close requires PERSONAL_RETROSPECTIVE_ADJUSTED "
+            "historical reconstruction, or RAW only as a fail-closed skip"
         )
     gross_cap = None if max_gross_weight is None else float(max_gross_weight)
     if gross_cap is not None and not (gross_cap > 0.0):
@@ -1193,9 +1211,9 @@ def _run_backtest_impl(
 
     governed_am_view: GovernedAmSessionDataView | None = None
     controlled_hold_reason: str | None = None
-    if governed_am_pm:
-        if type(am_session_data_view) is OfflineFixtureAmSessionDataView:
-            raise TypeError("fixture AM view cannot enter the Controlled path")
+    if type(am_session_data_view) is OfflineFixtureAmSessionDataView:
+        raise TypeError("fixture AM view cannot enter the Controlled path")
+    if am_pm_mode and am_session_data_view is not None:
         candidate = am_session_data_view
         if type(candidate) is VerifiedControlledSnapshotHandle:
             try:
@@ -1217,6 +1235,8 @@ def _run_backtest_impl(
                 controlled_hold_reason = str(exc) or (
                     "pinned snapshot observation clock is missing"
                 )
+    if governed_am_pm and governed_am_view is None and controlled_hold_reason is None:
+        controlled_hold_reason = "missing_verified_production_am_capability"
 
     resolved_candidates = resolve_injected_universe(
         universe, db_path=resolved_db_path
@@ -1310,17 +1330,62 @@ def _run_backtest_impl(
         skip_am_decision = False
         signal_equity: float | None = None
         if am_pm_mode:
-            if governed_am_pm:
-                assert governed_am_view is not None
-                snap_dec = _load_governed_am_signal_snapshot(
-                    operational_usable_by_as_of(d),
-                    held,
-                    d,
-                    context_bar_lookback_days,
-                    db_path=resolved_db_path,
-                    price_basis=resolved_price_basis,
-                    data_view=governed_am_view,
-                )
+            historical_session = (
+                draft_am_pm or governed_am_view is not None
+            ) and resolved_price_basis == PERSONAL_RETROSPECTIVE_ADJUSTED
+            if historical_session:
+                if governed_am_view is not None:
+                    from_date = _shift_date(d, -context_bar_lookback_days)
+                    source_rows = governed_am_view.sealed_daily_source_bars(
+                        codes=held,
+                        from_date=from_date,
+                        to_date=d,
+                    )
+                    am_result = personal_retrospective_am_signal_from_source_rows(
+                        source_rows,
+                        as_of=decision_as_of,
+                        observed_through=governed_am_view.observed_through,
+                        codes=tuple(sorted(held)),
+                        from_event=from_date,
+                        to_event=d,
+                        include_morning_turnover_history=True,
+                    )
+                    snap_dec = _am_snapshot_from_session_rows(
+                        am_result.rows,
+                        codes=held,
+                        to_date=d,
+                        price_basis=resolved_price_basis,
+                    )
+                    fill_closes = _governed_pm_fill_closes(
+                        session_date=d,
+                        codes=held,
+                        db_path=resolved_db_path,
+                        data_view=governed_am_view,
+                    )
+                else:
+                    snap_dec = _load_am_signal_snapshot(
+                        decision_as_of,
+                        held,
+                        d,
+                        context_bar_lookback_days,
+                        db_path=resolved_db_path,
+                        price_basis=resolved_price_basis,
+                    )
+                    fill_closes = _pm_fill_closes(
+                        session_date=d,
+                        codes=held,
+                        db_path=resolved_db_path,
+                    )
+            elif governed_am_pm:
+                snap_dec = {
+                    code: {
+                        "close": None,
+                        "bars": [],
+                        "authentic_am_session_evidence": False,
+                    }
+                    for code in held
+                }
+                fill_closes = {}
             else:
                 snap_dec = _load_am_signal_snapshot(
                     decision_as_of,
@@ -1330,65 +1395,31 @@ def _run_backtest_impl(
                     db_path=resolved_db_path,
                     price_basis=resolved_price_basis,
                 )
-            fill_closes = (
-                _governed_pm_fill_closes(
-                    session_date=d,
-                    codes=held,
-                    db_path=resolved_db_path,
-                    data_view=governed_am_view,
-                )
-                if governed_am_pm
-                else _pm_fill_closes(
+                fill_closes = _pm_fill_closes(
                     session_date=d,
                     codes=held,
                     db_path=resolved_db_path,
                 )
-            )
             morning_prices = _session_prices(
                 snap_dec, d, price_basis=resolved_price_basis
             )
-            if governed_am_pm:
-                missing_evidence = sorted(
-                    code
-                    for code in universe_d
-                    if not snap_dec.get(code, {}).get("authentic_am_session_evidence")
-                )
-                insufficient_lookback = sorted(
+            if governed_am_pm and not historical_session:
+                skip_am_decision = True
+                missing_evidence = sorted(universe_d)
+                am_missing_session_evidence.append(
                     {
-                        code
-                        for code in universe_d
-                        if snap_dec.get(code, {}).get("unauthorized_am_dates")
+                        "date": d,
+                        "reason": "historical_reconstruction_requires_adjusted_basis",
+                        "codes": missing_evidence,
                     }
                 )
-                if missing_evidence:
-                    skip_am_decision = True
-                    am_missing_session_evidence.append(
-                        {
-                            "date": d,
-                            "reason": (
-                                "missing_independently_timestamped_am_session_evidence"
-                            ),
-                            "codes": missing_evidence,
-                        }
-                    )
-                    am_skipped_decisions.append(
-                        {
-                            "date": d,
-                            "reason": (
-                                "missing_independently_timestamped_am_session_evidence"
-                            ),
-                            "codes": missing_evidence,
-                        }
-                    )
-                elif insufficient_lookback:
-                    skip_am_decision = True
-                    am_skipped_decisions.append(
-                        {
-                            "date": d,
-                            "reason": "insufficient_authorized_am_lookback",
-                            "codes": sorted(insufficient_lookback),
-                        }
-                    )
+                am_skipped_decisions.append(
+                    {
+                        "date": d,
+                        "reason": "historical_reconstruction_requires_adjusted_basis",
+                        "codes": missing_evidence,
+                    }
+                )
             held_positions = sorted(
                 code for code, qty in shares.items() if qty
             )
@@ -1416,10 +1447,18 @@ def _run_backtest_impl(
                 float(signal_equity) if signal_equity is not None else float(cash)
             )
             daily_bars_capability = (
-                None
-                if governed_am_pm
-                else bind_personal_retrospective_am_session_daily_bars(
-                    as_of=decision_as_of, db_path=resolved_db_path
+                bind_verified_controlled_am_session_daily_bars(
+                    as_of=decision_as_of,
+                    db_path=resolved_db_path,
+                    data_view=governed_am_view,
+                )
+                if historical_session and governed_am_view is not None
+                else (
+                    bind_personal_retrospective_am_session_daily_bars(
+                        as_of=decision_as_of, db_path=resolved_db_path
+                    )
+                    if historical_session
+                    else None
                 )
             )
         else:
@@ -1724,7 +1763,9 @@ def _run_backtest_impl(
                 "adjustment_scope": "vendor_supported_splits_and_reverse_splits",
                 "time_semantics": "retrospective_not_point_in_time",
                 "position_units": "synthetic_split_adjusted_units",
-                "lifecycle": "DRAFT_only",
+                "lifecycle": "Paper" if governed_am_view is not None else "DRAFT",
+                "price_evidence_mode": "historical_daily_reconstruction",
+                "contemporaneous_observation_unproven": True,
                 "live_trading_eligible": False,
             }
             if resolved_price_basis == PERSONAL_RETROSPECTIVE_ADJUSTED
@@ -1756,12 +1797,9 @@ def _run_backtest_impl(
             "pm_valuation_afternoon_adjustment_close_only"
         )
         metadata["execution_field_time_semantics"] = (
-            "pit_visible_morning_and_afternoon_session_fields"
-            if governed_am_pm
-            else (
-                "draft_personal_retrospective_am_mask_of_equities_bars_daily; "
-                "not a claim that the full daily record was published at 11:30"
-            )
+            "historical_daily_reconstruction_from_equities_bars_daily; "
+            "not contemporaneous tip-only AM observation; "
+            "not a claim that the full daily record was published at 11:30"
         )
         metadata["weight_sizing_rule"] = (
             "target_shares_from_d_morning_prices; "
@@ -1779,9 +1817,7 @@ def _run_backtest_impl(
         ]
         provenance["fill_fields"] = ["afternoon_adjustment_close"]
         provenance["field_time_semantics"] = (
-            "am_event_cutoff_1130_operational_admission_1230"
-            if governed_am_pm
-            else "draft_reconstruction_not_11:30_publication"
+            "historical_daily_reconstruction_not_11:30_publication"
         )
         provenance["weight_sizing"] = (
             "causal_morning_prices_realized_pm_gross_capped"
@@ -1817,23 +1853,16 @@ def _run_backtest_impl(
         non_comparable_session_dates = sorted(
             set(skipped_dates) | set(incomplete_dates) | set(missing_fill_dates)
         )
-        production_eligible = bool(
-            governed_am_pm
-            and governed_am_view is not None
-            and type(governed_am_view) is GovernedAmSessionDataView
-            and not governed_am_view.offline_fixture
-            and not am_missing_session_evidence
-            and controlled_hold_reason is None
-        )
-        selection_eligible = bool(production_eligible and comparable)
-        comparison_eligible = bool(production_eligible and comparable)
-        if draft_am_pm:
-            selection_eligible = False
-            comparison_eligible = False
+        production_eligible = False
+        # Completeness may authorize research comparison/selection. It is not
+        # Live authority, production eligibility, or automatic promotion.
+        selection_eligible = comparable
+        comparison_eligible = comparable
         data_quality = {
             "comparable": comparable,
             "selection_eligible": selection_eligible,
             "comparison_eligible": comparison_eligible,
+            "production_eligible": production_eligible,
             "incomplete_valuation": bool(am_incomplete_valuations),
             "skipped_decision_count": len(am_skipped_decisions),
             "incomplete_valuation_count": len(am_incomplete_valuations),
@@ -1848,16 +1877,16 @@ def _run_backtest_impl(
             "held_missing_afternoon_adjustment_close": am_incomplete_valuations,
             "missing_afternoon_adjustment_close_unfilled": am_unfilled_orders,
         }
-        authentic = bool(production_eligible)
-        metadata["authentic_am_session_evidence"] = authentic
-        if not authentic and governed_am_pm:
+        metadata["authentic_am_session_evidence"] = False
+        metadata["price_evidence_mode"] = "historical_daily_reconstruction"
+        metadata["contemporaneous_observation_unproven"] = True
+        metadata["historical_reconstruction"] = True
+        if governed_am_pm:
             metadata["am_session_evidence_reason"] = (
                 controlled_hold_reason
                 if controlled_hold_reason is not None
-                else "missing_independently_timestamped_am_session_evidence"
+                else "historical_daily_reconstruction_not_contemporaneous_am_evidence"
             )
-        if draft_am_pm:
-            metadata["authentic_am_session_evidence"] = False
         metadata["information_cutoff"] = INFORMATION_CUTOFF
         metadata["operational_usable_by"] = OPERATIONAL_USABLE_BY
         metadata["non_price_information_cutoff"] = INFORMATION_CUTOFF

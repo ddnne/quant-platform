@@ -851,7 +851,7 @@ def _run_controlled_paper(
     strategy: Any,
     config: Any,
 ) -> Any:
-    from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED, RAW
+    from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED
     from strategies.paper import Lifecycle, PaperRunResult
     from strategies.paper.runner import execute_paper_backtest
 
@@ -861,10 +861,10 @@ def _run_controlled_paper(
         raise JobInputError("controlled fill must be morning close to same-day afternoon close")
     if config.execution_mode == "next_close":
         raise JobInputError("next_close cannot authorize Controlled execution")
-    if str(config.price_basis) == PERSONAL_RETROSPECTIVE_ADJUSTED:
-        raise JobInputError("retrospective fill cannot authorize Controlled execution")
-    if str(config.price_basis) != RAW:
-        raise JobInputError("controlled paper requires the as-of-safe RAW fill")
+    if str(config.price_basis) != PERSONAL_RETROSPECTIVE_ADJUSTED:
+        raise JobInputError(
+            "controlled paper uses historical daily MAdjC/AAdjC reconstruction"
+        )
     if float(config.cost_bps) != 10.0:
         raise JobInputError("controlled paper cost is not the governed 10bp scenario")
     job = getattr(_CONTROLLED_VERIFIED_JOB, "document", None)
@@ -962,7 +962,7 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
         _CONTROLLED_VERIFIED_JOB.document = document
         _CONTROLLED_VERIFIED_JOB.physical_digest = physical_digest
         _CONTROLLED_VERIFIED_JOB.snapshot_handle = controlled_handle
-        from price_basis import RAW
+        from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED
         from agents.risk_agent import RiskAgent
         from research.dependency_closure import resolve_strategy_spec
         from research.experiment_plans import PILOT_COST_SCENARIO, load_experiment_plans
@@ -1028,7 +1028,7 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
                     execution_mode=CONTROLLED_FILL_EXECUTION_MODE,
                     cost_bps=10.0,
                     lifecycle=Lifecycle.PAPER,
-                    price_basis=RAW,
+                    price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
                     max_gross_weight=max_gross_weight_ppm / 1_000_000,
                 ),
             )
@@ -1040,9 +1040,17 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
             requested_gross = float(engine_meta.get("requested_gross_weight") or 0.0)
             if realized_gross > 0.5 + 1e-12:
                 raise JobInputError("realized PM gross exceeds 0.5")
-            if engine_meta.get("authentic_am_session_evidence") is not True:
+            if engine_meta.get("authentic_am_session_evidence") is True:
                 raise JobInputError(
-                    "missing independently timestamped AM-session evidence available by 11:30"
+                    "historical reconstruction cannot claim authentic AM-session evidence"
+                )
+            if engine_meta.get("price_evidence_mode") != "historical_daily_reconstruction":
+                raise JobInputError(
+                    "controlled paper must declare historical daily reconstruction"
+                )
+            if engine_meta.get("contemporaneous_observation_unproven") is not True:
+                raise JobInputError(
+                    "controlled paper must declare contemporaneous observation unproven"
                 )
             binding = CONTROLLED_PLAN_BINDINGS.get(plan.plan_id)
             if binding is None:
@@ -1064,7 +1072,10 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
                 "ready_attestation_id": document.get("ready_attestation_id"),
                 "fill_contract_digest": CONTROLLED_FILL_CONTRACT_DIGEST,
                 "execution_mode": CONTROLLED_FILL_EXECUTION_MODE,
-                "price_basis": RAW,
+                "price_basis": PERSONAL_RETROSPECTIVE_ADJUSTED,
+                "price_evidence_mode": "historical_daily_reconstruction",
+                "authentic_am_session_evidence": False,
+                "contemporaneous_observation_unproven": True,
                 "strategy_spec_id": plan.strategy_spec_id,
                 "strategy_spec_hash": plan.strategy_spec_hash,
                 "strategy_spec_version": plan.strategy_spec_version,
@@ -2378,15 +2389,6 @@ def execute_snapshot_job(
                 minimum_free_bytes=SNAPSHOT_MINIMUM_FREE_BYTES,
             )
             summary = hydrator.hydrate()
-            from pit.governed_session_materialize import materialize_canonical_session_fields
-
-            try:
-                materialize_canonical_session_fields(store._conn)
-            except Exception as exc:
-                if "equities_bars_daily_am" in str(exc):
-                    pass
-                else:
-                    raise
             coverage = _session_coverage(store._conn)
             observation = store._conn.execute(
                 "SELECT observed_through, revision_window_calendar_days, "

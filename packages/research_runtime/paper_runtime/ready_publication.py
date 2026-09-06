@@ -15,17 +15,15 @@ from typing import Any, Iterator, Mapping, Sequence
 from core.execution import (
     close_as_of,
     morning_close_as_of,
-    operational_usable_by_as_of,
 )
 from data_contracts import coverage_contract_for
 from data_contracts.identity import natural_key as contract_natural_key
 from pit import PitError
-from pit.governed_am_view import am_product_row_matches_session
+
 from pit.read_clock import (
     PitReadClock,
     SNAPSHOT_OBSERVATION_LABEL,
     install_read_clock,
-    visibility_predicates,
 )
 from research.universe_contract import (
     EXACT_FOUR_UNIVERSE_RULE_DIGEST,
@@ -55,6 +53,18 @@ def _calendar_dates(start: str, end: str) -> tuple[str, ...]:
         values.append(cursor.isoformat())
         cursor += timedelta(days=1)
     return tuple(values)
+
+
+def _payload_session_price(payload: Mapping[str, Any], keys: tuple[str, ...]) -> float | None:
+    for key in keys:
+        value = payload.get(key)
+        try:
+            price = float(value)
+        except (TypeError, ValueError):
+            continue
+        if price == price and price not in (float("inf"), float("-inf")) and price > 0.0:
+            return price
+    return None
 
 
 def canonical_digest(payload: Mapping[str, Any] | Sequence[Any] | str) -> str:
@@ -385,8 +395,14 @@ def _verify_publication_on_authenticated_mirror(
                 event_start: str,
                 event_end: str,
                 codes: Sequence[str] = (),
+                *,
+                available_at_cutoff: str | None = None,
             ) -> Iterator[dict[str, str]]:
-                vis_sql, vis_bound = visibility_predicates(proof_clock)
+                vis_sql = [
+                    "event_time IS NOT NULL",
+                    "available_at IS NOT NULL",
+                    "ingested_at IS NOT NULL",
+                ]
                 wanted = [str(code).strip() for code in codes if str(code).strip()]
                 fields = ",".join(product_row_fields)
                 sql = (
@@ -400,7 +416,6 @@ def _verify_publication_on_authenticated_mirror(
                     dataset,
                     str(event_start)[:10],
                     str(event_end)[:10],
-                    *vis_bound,
                 ]
                 if wanted and dataset not in market_datasets:
                     placeholders = ",".join("?" for _ in wanted)
@@ -413,11 +428,33 @@ def _verify_publication_on_authenticated_mirror(
                         raise PitError(
                             f"{dataset} product row fields must be exact text"
                         )
-                    if (
-                        row["event_time"] > proof_clock.decision_at
-                        or row["available_at"] > proof_clock.decision_at
-                        or row["ingested_at"] > proof_clock.observed_through
-                    ):
+                    available_cutoff = (
+                        available_at_cutoff or proof_clock.decision_at
+                    )
+                    event_at = _as_datetime(
+                        row["event_time"], f"{dataset}.event_time"
+                    )
+                    available_at = _as_datetime(
+                        row["available_at"], f"{dataset}.available_at"
+                    )
+                    ingested_at = _as_datetime(
+                        row["ingested_at"], f"{dataset}.ingested_at"
+                    )
+                    observed = _as_datetime(
+                        proof_clock.observed_through, "observed_through"
+                    )
+                    cutoff = _as_datetime(available_cutoff, "available_at_cutoff")
+                    if available_at_cutoff is None:
+                        decision = _as_datetime(
+                            proof_clock.decision_at, "decision_at"
+                        )
+                        if (
+                            event_at > decision
+                            or available_at > decision
+                            or ingested_at > observed
+                        ):
+                            continue
+                    elif available_at > cutoff or ingested_at > observed:
                         continue
                     yield row
 
@@ -427,6 +464,8 @@ def _verify_publication_on_authenticated_mirror(
                 event_end: str,
                 codes: Sequence[str] = (),
                 page_size: int = 64,
+                *,
+                available_at_cutoff: str | None = None,
             ) -> Iterator[tuple[dict[str, Any], ...]]:
                 if not isinstance(page_size, int) or page_size < 1:
                     raise PitError("READY catalog page size is invalid")
@@ -436,6 +475,7 @@ def _verify_publication_on_authenticated_mirror(
                     event_start,
                     event_end,
                     codes,
+                    available_at_cutoff=available_at_cutoff,
                 ):
                     payload_raw: Any = row["payload"]
                     try:
@@ -529,7 +569,11 @@ def _verify_publication_on_authenticated_mirror(
                         f"{dataset_id} natural key is noncanonical"
                     )
                 ingested = str(fact.get("ingested_at") or "")
-                if not ingested or ingested > proof_clock.observed_through:
+                if not ingested or _as_datetime(
+                    ingested, f"{dataset_id}.ingested_at"
+                ) > _as_datetime(
+                    proof_clock.observed_through, "observed_through"
+                ):
                     raise MassResearchDisabledError(
                         f"{dataset_id} fact ingested after snapshot observed_through"
                     )
@@ -546,13 +590,19 @@ def _verify_publication_on_authenticated_mirror(
                     "ingested_at": ingested,
                 }
 
-            def _iter_dataset_facts(dataset_id: str, *, codes: Sequence[str] = ()):
+            def _iter_dataset_facts(
+                dataset_id: str,
+                *,
+                codes: Sequence[str] = (),
+                available_at_cutoff: str | None = None,
+            ):
                 try:
                     for page in iter_catalog_fact_pages(
                         dataset_id,
                         calendar_start,
                         period_end,
                         codes,
+                        available_at_cutoff=available_at_cutoff,
                     ):
                         for fact in page:
                             yield _compact_fact(dataset_id, fact)
@@ -642,19 +692,14 @@ def _verify_publication_on_authenticated_mirror(
                 if code:
                     fins_by_code.setdefault(code, []).append(row)
             bars_by_day_code: dict[tuple[str, str], list[dict[str, Any]]] = {}
-            for row in _iter_dataset_facts("equities_bars_daily", codes=member_codes):
-                code = _row_code(row)
-                if code:
-                    bars_by_day_code.setdefault((row["event_date"], code), []).append(row)
-            am_by_day_code: dict[tuple[str, str], list[dict[str, Any]]] = {}
             for row in _iter_dataset_facts(
-                "equities_bars_daily_am", codes=member_codes
+                "equities_bars_daily",
+                codes=member_codes,
+                available_at_cutoff=proof_clock.observed_through,
             ):
                 code = _row_code(row)
                 if code:
-                    am_by_day_code.setdefault((row["event_date"], code), []).append(
-                        row
-                    )
+                    bars_by_day_code.setdefault((row["event_date"], code), []).append(row)
             topix_by_day: dict[str, list[dict[str, Any]]] = {}
             for row in _iter_dataset_facts("indices_bars_daily_topix"):
                 topix_by_day.setdefault(row["event_date"], []).append(row)
@@ -709,29 +754,9 @@ def _verify_publication_on_authenticated_mirror(
                     selected_event_dates["fins_summary"][latest_fins["natural_key"]] = (
                         latest_fins["event_date"]
                     )
-                    am_matches = [
-                        row
-                        for row in am_by_day_code.get((day, code), ())
-                        if am_product_row_matches_session(
-                            event_time=row["event_at"].isoformat(),
-                            available_at=row["available_at"].isoformat(),
-                            ingested_at=row["ingested_at"],
-                            session_date=day,
-                        )
-                    ]
-                    if len(am_matches) != 1:
-                        raise MassResearchDisabledError(
-                            "equities_bars_daily_am same-day operational closure "
-                            f"missing/late for {code}/{day}: rows={len(am_matches)}; "
-                            f"usable_by={operational_usable_by_as_of(day)}"
-                        )
-                    selected_keys["equities_bars_daily_am"].add(
-                        am_matches[0]["natural_key"]
-                    )
-                    selected_event_dates["equities_bars_daily_am"][
-                        am_matches[0]["natural_key"]
-                    ] = am_matches[0]["event_date"]
-
+            observed_clock = _as_datetime(
+                proof_clock.observed_through, "observed_through"
+            )
             for day in trading_dates:
                 decision_clock = _as_datetime(close_as_of(day), day)
                 members = (
@@ -743,13 +768,32 @@ def _verify_publication_on_authenticated_mirror(
                     matches = [
                         row
                         for row in bars_by_day_code.get((day, code), ())
-                        if row["event_at"] <= decision_clock
-                        and row["available_at"] <= decision_clock
+                        if row["available_at"] <= observed_clock
+                        and _as_datetime(
+                            row["ingested_at"], "equities_bars_daily.ingested_at"
+                        )
+                        <= _as_datetime(
+                            proof_clock.observed_through, "observed_through"
+                        )
+                        and _payload_session_price(
+                            row["payload"],
+                            ("MAdjC", "MorningAdjustmentClose", "morning_adjustment_close"),
+                        )
+                        is not None
+                        and _payload_session_price(
+                            row["payload"],
+                            (
+                                "AAdjC",
+                                "AfternoonAdjustmentClose",
+                                "afternoon_adjustment_close",
+                            ),
+                        )
+                        is not None
                     ]
                     if len(matches) != 1:
                         raise MassResearchDisabledError(
-                            "equities_bars_daily natural-key closure missing/late for "
-                            f"{code}/{day}: rows={len(matches)}"
+                            "equities_bars_daily historical MAdjC/AAdjC closure "
+                            f"missing for {code}/{day}: rows={len(matches)}"
                         )
                     selected_keys["equities_bars_daily"].add(
                         matches[0]["natural_key"]
