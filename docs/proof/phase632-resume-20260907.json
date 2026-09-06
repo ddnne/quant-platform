@@ -7,6 +7,24 @@
     "pull_request": 98
   },
   "note": "Read-only live measurements; no market rows downloaded; current aggregation is not READY evidence.",
+  "migration_observation": {
+    "observed_on_jst": "2026-09-07",
+    "method": "Cloudflare D1 API read-only SELECT on discovered migration tables",
+    "staging": {
+      "table": "d1_migrations_ingestion",
+      "latest_ingestion_migration": "0010_raw_acquisition_status.sql",
+      "record_count": 10
+    },
+    "production": {
+      "table": "d1_migrations",
+      "latest_ingestion_migration": "0010_raw_acquisition_status.sql",
+      "record_count": 16,
+      "note": "Legacy table mixes ingestion and Ops migration names"
+    },
+    "pending_ingestion_migration_range": "0011 through 0023",
+    "mutations_performed": false,
+    "local_price_data_downloaded": false
+  },
   "projection": {
     "plane": "ops_current",
     "mutable": true,
