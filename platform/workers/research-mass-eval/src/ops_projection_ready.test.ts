@@ -68,7 +68,8 @@ async function validEnvelope(): Promise<Record<string, unknown>> {
     content_digest: await sha256Digest(canonicalJson({ tables: contentManifest })),
     source_db_digest: digest("d"),
     generated_at: "2026-09-02T12:00:00Z",
-    producer_commit_sha: "0123456789abcdef",
+    producer_commit_sha: "a".repeat(40),
+    worker_version_id: "10000000-0000-4000-8000-000000000001",
     contract_digest: digest("e"),
     registry_digest: digest("f"),
     coverage_policy_version: EXACT_FOUR_COVERAGE_POLICY_VERSION,
@@ -97,12 +98,65 @@ async function validEnvelope(): Promise<Record<string, unknown>> {
 }
 
 describe("signed Ops Projection claim consistency", () => {
-  it("accepts one internally coherent exact cursor chain", async () => {
+  it("accepts a producer-shaped envelope with exact SHA and Cloudflare UUID", async () => {
     expect(await validateOpsProjectionEnvelopeClaims(
       await validEnvelope(),
       "staging",
       Date.parse("2026-09-02T12:00:30Z"),
     )).toBeNull();
+  });
+
+  it.each([
+    [
+      "absent worker version",
+      (envelope: Record<string, unknown>) => {
+        delete envelope.worker_version_id;
+      },
+      /fields are not closed/,
+    ],
+    [
+      "invalid worker version",
+      (envelope: Record<string, unknown>) => {
+        envelope.worker_version_id = "not-a-cloudflare-uuid";
+      },
+      /worker_version_id is invalid/,
+    ],
+    [
+      "unknown field",
+      (envelope: Record<string, unknown>) => {
+        envelope.unexpected = true;
+      },
+      /fields are not closed/,
+    ],
+    [
+      "commit used as worker version",
+      (envelope: Record<string, unknown>) => {
+        envelope.worker_version_id = envelope.producer_commit_sha;
+      },
+      /worker_version_id is invalid/,
+    ],
+    [
+      "worker version used as commit",
+      (envelope: Record<string, unknown>) => {
+        envelope.producer_commit_sha = envelope.worker_version_id;
+      },
+      /producer_commit_sha is invalid/,
+    ],
+    [
+      "short commit sha",
+      (envelope: Record<string, unknown>) => {
+        envelope.producer_commit_sha = "0123456789abcdef";
+      },
+      /producer_commit_sha is invalid/,
+    ],
+  ])("rejects %s", async (_name, mutate, pattern) => {
+    const envelope = await validEnvelope();
+    mutate(envelope);
+    expect(await validateOpsProjectionEnvelopeClaims(
+      envelope,
+      "staging",
+      Date.parse("2026-09-02T12:00:30Z"),
+    )).toMatch(pattern);
   });
 
   it("rejects a resource source_change_seq that differs inside the signed envelope", async () => {

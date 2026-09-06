@@ -21,6 +21,9 @@ import {
 } from "./controlled_pilot_json";
 
 const SHA256_RE = /^sha256:[0-9a-f]{64}$/;
+const GIT_SHA = /^[0-9a-f]{40}$/;
+const CF_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SIGNED_DOCUMENT_SCHEMA = "ops-projection-signed-envelope/v1";
 const ENVELOPE_SCHEMA = "ops-projection-envelope/v1";
 const MAX_FUTURE_SKEW_MS = 5 * 60_000;
@@ -43,6 +46,7 @@ const ENVELOPE_FIELDS = new Set([
   "source_db_digest",
   "generated_at",
   "producer_commit_sha",
+  "worker_version_id",
   "contract_digest",
   "registry_digest",
   "coverage_policy_version",
@@ -322,6 +326,16 @@ export async function validateOpsProjectionEnvelopeClaims(
     if (typeof envelope[field] !== "string" || !String(envelope[field]).trim()) {
       return `Ops Projection ${field} is invalid`;
     }
+  }
+  if (!GIT_SHA.test(String(envelope.producer_commit_sha))) {
+    return "Ops Projection producer_commit_sha is invalid";
+  }
+  if (
+    typeof envelope.worker_version_id !== "string" ||
+    !CF_UUID.test(envelope.worker_version_id) ||
+    envelope.worker_version_id === envelope.producer_commit_sha
+  ) {
+    return "Ops Projection worker_version_id is invalid";
   }
   for (const field of [
     "content_digest", "source_db_digest", "contract_digest", "registry_digest",

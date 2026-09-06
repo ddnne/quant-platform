@@ -31,6 +31,15 @@ remote apply results only in immutable release evidence.
   `docs/phase62_residual_status.md` passes. Green tests do not arm exact-four.
   Runtime still separately enforces signed READY, signed Trader authorization,
   an immutable snapshot, signed projection, and BudgetLedger occupancy.
+- **READY publication path:** signing exists at
+  `platform/workers/research-mass-eval/src/ready_publication.ts`, but there is
+  no cloud candidate-preparation or orchestration caller/Service Binding.
+  Premium Ops metadata does not bind exact dependency scope, raw retention,
+  receipt products, or validation proofs; those remain a distinct pending
+  workflow integration. The Trader production signer is absent. The release
+  builder is unconditionally PENDING. Wire the existing trust root; do not add
+  another authority. Activating keys alone does not close any of these gaps.
+  A metadata-only Ops envelope is not READY.
 - **Release evidence:** publication is **PENDING/HOLD**. Normalized caller JSON
   is schema-only and cannot prove any remote response. The dedicated signed
   release-observation authority has zero active keys and is not implemented;
