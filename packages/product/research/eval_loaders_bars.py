@@ -1,24 +1,14 @@
-"""Bar ndjson/sqlite loaders and momentum_series. Skip missing. Never invent.
+"""Typed PIT bar loaders and momentum_series. Skip missing. Never invent.
 
 Public import remains ``research.eval_loaders``. Empty / missing → empty or None.
 """
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from research.eval_loaders import (
-    DEFAULT_BARS_FULL_MIRROR_DIR,
-    DEFAULT_BARS_MIRROR_DIR,
-    _code_of,
-    _date_of,
-    _iter_ndjson,
-    _open_ro,
-    _payload_map,
-    _period_year,
-)
-from research.eval_universe import DEFAULT_SQLITE
+from pit.history_reads import HISTORY_READ_PAGE_SIZE
+from pit.personal_research_view import PersonalResearchDataView
+from research.eval_loaders import _payload_map
 
 
 def _bar_rec(
@@ -45,41 +35,6 @@ def _trim_dated(dmap: Mapping[str, Any], max_days: int | None) -> list:
     return pairs
 
 
-def load_bars_ndjson_rich(
-    path: str | Path,
-    *,
-    codes: Sequence[str] | None = None,
-    max_days: int | None = None,
-    period_start: str | None = None,
-    period_end: str | None = None,
-) -> dict[str, list[tuple[str, dict[str, Any]]]]:
-    """Load bars with close + liquidity fields."""
-    code_filter = {str(c).strip() for c in codes} if codes else None
-    p_start = str(period_start)[:10] if period_start else None
-    p_end = str(period_end)[:10] if period_end else None
-    by_code: dict[str, dict[str, dict[str, Any]]] = {}
-    for payload in _iter_ndjson(path):
-        code = _code_of(payload)
-        date = _date_of(payload)
-        if not code or not date:
-            continue
-        if code_filter is not None and code not in code_filter:
-            continue
-        if p_start and date < p_start:
-            continue
-        if p_end and date > p_end:
-            continue
-        close = payload.get("C")
-        if close is None:
-            close = payload.get("Close") or payload.get("AdjC")
-        try:
-            c = float(close)
-        except (TypeError, ValueError):
-            continue
-        by_code.setdefault(code, {})[date] = _bar_rec(code, date, c, payload)
-    return {code: _trim_dated(dmap, max_days) for code, dmap in by_code.items()}
-
-
 def bars_rich_to_close_panel(
     rich: Mapping[str, Sequence[tuple[str, Mapping[str, Any]]]],
 ) -> dict[str, list[tuple[str, float]]]:
@@ -91,83 +46,63 @@ def bars_rich_to_close_panel(
 
 
 def load_bars_from_sqlite_rich(
+    view: PersonalResearchDataView,
     *,
     codes: Sequence[str],
     period_start: str,
     period_end: str,
-    db_path: str | Path = DEFAULT_SQLITE,
     max_days: int | None = None,
+    decision_date: str | None = None,
 ) -> dict[str, list[tuple[str, dict[str, Any]]]]:
-    """Load extra names from sqlite ``jquants_records`` via PK range per code.
+    """Load bars at one decision vintage from a typed research view.
 
-    Missing requested codes are omitted (no invent). Empty code → omitted.
+    The view emits one latest visible vintage per natural key. Pages are bounded.
     """
+    if not isinstance(view, PersonalResearchDataView):
+        raise TypeError("bar sqlite loader requires PersonalResearchDataView")
     want = [str(c).strip() for c in codes if str(c).strip()]
-    con = _open_ro(db_path)
-    if con is None or not want:
+    if not want:
         return {}
     p0 = str(period_start)[:10]
     p1 = str(period_end)[:10]
-    out: dict[str, list[tuple[str, dict[str, Any]]]] = {}
-    sql = (
-        "SELECT payload FROM jquants_records "
-        "WHERE source = 'jquants' AND dataset = 'equities_bars_daily' "
-        "AND natural_key >= ? AND natural_key <= ?"
-    )
-    try:
-        for code in want:
-            lo = json.dumps({"Code": code, "Date": p0}, separators=(",", ":"))
-            hi = json.dumps({"Code": code, "Date": p1 + "~"}, separators=(",", ":"))
-            dmap: dict[str, dict[str, Any]] = {}
-            for (payload,) in con.execute(sql, (lo, hi)):
-                pl = _payload_map(payload)
-                if pl is None:
-                    continue
-                date = str(pl.get("Date") or pl.get("date") or "")[:10]
-                if not date or date < p0 or date > p1:
-                    continue
-                close = pl.get("C")
-                if close is None:
-                    close = pl.get("Close") or pl.get("AdjC") or pl.get("AAdjC")
-                try:
-                    c = float(close)
-                except (TypeError, ValueError):
-                    continue
-                dmap[date] = _bar_rec(code, date, c, pl)
-            if not dmap:
+    decision = str(decision_date or p1)[:10]
+    if decision < p0:
+        return {}
+    if p1 > decision:
+        p1 = decision
+    want_set = set(want)
+    by_code: dict[str, dict[str, dict[str, Any]]] = {}
+    for page in view.iter_decision_pages(
+        decision_date=decision,
+        dataset="equities_bars_daily",
+        codes=want,
+        start=p0,
+        end=p1,
+        page_size=HISTORY_READ_PAGE_SIZE,
+    ):
+        if len(page) > HISTORY_READ_PAGE_SIZE:
+            raise ValueError("history catalog page exceeded the fixed bound")
+        for row in page:
+            pl = _payload_map(row.get("payload"))
+            if pl is None:
                 continue
-            out[code] = _trim_dated(dmap, max_days)
-    finally:
-        con.close()
-    return out
-
-
-def resolve_bars_path(
-    period_id: str,
-    *,
-    mirror_dir: str | Path = DEFAULT_BARS_MIRROR_DIR,
-    prefer_full: bool = True,
-) -> Path | None:
-    """Map period_id like y2015_q4 / y2015_full → local ndjson mirror path."""
-    d = Path(mirror_dir)
-    year = _period_year(period_id)
-    if year is None:
-        return None
-    pid = str(period_id).lower()
-    want_full = prefer_full and ("full" in pid or not pid.endswith("q4"))
-    full_path = (
-        DEFAULT_BARS_FULL_MIRROR_DIR / f"equities_bars_daily_y{year}_full.ndjson"
-    )
-    q4_path = d / f"equities_bars_daily_y{year}_q4.ndjson"
-    candidates = (
-        [full_path, d / f"equities_bars_daily_y{year}_full.ndjson", q4_path]
-        if want_full
-        else [q4_path, full_path, d / f"equities_bars_daily_y{year}_full.ndjson"]
-    )
-    for c in candidates:
-        if c.exists():
-            return c
-    return None
+            code = str(pl.get("Code") or pl.get("code") or "").strip()
+            if code not in want_set:
+                continue
+            date = str(pl.get("Date") or pl.get("date") or "")[:10]
+            if not date or date < p0 or date > p1:
+                continue
+            close = pl.get("C")
+            if close is None:
+                close = pl.get("Close") or pl.get("AdjC") or pl.get("AAdjC")
+            try:
+                c = float(close)
+            except (TypeError, ValueError):
+                continue
+            by_code.setdefault(code, {})[date] = _bar_rec(code, date, c, pl)
+    return {
+        code: _trim_dated(dmap, max_days) for code, dmap in by_code.items()
+    }
 
 
 def collect_liquidity_bar_rows(

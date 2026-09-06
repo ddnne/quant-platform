@@ -6,7 +6,9 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from research import personal_cli
+import pytest
+
+from cf_platform import personal_offline_cli as personal_cli
 
 
 def _allow_local_market_data(monkeypatch) -> None:
@@ -70,7 +72,10 @@ def test_cli_prints_machine_readable_artifact_summary(
 
     class FakeService:
         def run(self, request):
-            assert request.source_db == database
+            assert not hasattr(request.data_view, "draft_sqlite_path")
+            with pytest.raises(AttributeError):
+                request.data_view.draft_sqlite_path()
+            assert request.data_view.kind == "offline_fixture"
             assert request.period_end == "2026-08-27"
             assert request.cohort_id == "sector-relative-ls-v1"
             assert request.universe_id == "topix_all"
@@ -137,7 +142,6 @@ def test_cli_prints_machine_readable_artifact_summary(
         "artifact_schema_version": "personal-base-sleeve-source/v1",
         "candidate_count_contribution": 0,
         "cohort_id": "sector-relative-ls-v1",
-        "path": str(base_sleeve),
         "ranking_role": "NON_CANDIDATE_NOT_RANKED",
         "role": "INDEX_VOL_OVERLAY_BASE_SOURCE",
         "schema_version": "personal-base-sleeve-reference/v1",

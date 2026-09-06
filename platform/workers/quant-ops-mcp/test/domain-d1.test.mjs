@@ -83,6 +83,11 @@ mock.module("../src/projection_signature.js", {
         ? testProjectionVerifier(generation)
         : projectionSignature.verifyPinnedProjectionGeneration(generation);
     },
+    verifyActiveOpsProjection(generation, env) {
+      return testProjectionVerifier
+        ? testProjectionVerifier(generation)
+        : projectionSignature.verifyActiveOpsProjection(generation, env);
+    },
   },
 });
 const { callOpsTool, OPS_TOOLS } = await import("../src/domain.js");
@@ -135,6 +140,7 @@ function signedGeneration(
     source_db_digest: digest("2"),
     generated_at: now,
     producer_commit_sha: "a".repeat(40),
+    worker_version_id: "10000000-0000-4000-8000-000000000001",
     contract_digest: digest("3"),
     registry_digest: digest("4"),
     coverage_policy_version: "collection-coverage/v3",
@@ -206,6 +212,7 @@ async function seedGeneration(
     afterManifest = null,
     documentTransform = null,
     contentDigestOverride = null,
+    storagePlanePayload = null,
   } = {},
 ) {
   const now = new Date().toISOString();
@@ -264,7 +271,12 @@ async function seedGeneration(
   db.prepare(`INSERT INTO ops_storage_plane_status
     (projection_generation_id,materialized_at,payload_json) VALUES (?,?,?)`).run(
       generation, now,
-      JSON.stringify({ schema: "ops_storage_plane_status/v1", counts: { facts: 12 } }),
+      JSON.stringify(storagePlanePayload || {
+        schema: "ops_storage_plane_status/v1",
+        generation,
+        source_db_digest: `sha256:${"2".repeat(64)}`,
+        counts: { facts: 12 },
+      }),
     );
   if (populate) populate(db, generation, now);
 
@@ -402,6 +414,33 @@ test("a sealed generation cannot be read without the active pointer", async () =
     dataset: "jsda_otc_bond_reference_prices",
   });
   assert.equal(result.status, "NOT_PROJECTED");
+  db.close();
+});
+
+test("staging/production without a real SPKI fail closed", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-live-unprovisioned");
+  const result = await callOpsTool(d1(db), "ops_status", {}, {
+    OPS_PROJECTION_ENVIRONMENT: "production",
+    OPS_PROJECTION_VERIFY_KEY_ID: "ops-projection-20260826-v2",
+  });
+  assert.equal(result.status, "NOT_PROJECTED");
+  assert.match(result.reason, /unprovisioned/);
+  db.close();
+});
+
+test("live environment against the committed PENDING registry fails closed", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-pending-live");
+  const pair = generateKeyPairSync("ed25519");
+  const spki = pair.publicKey.export({ type: "spki", format: "der" }).toString("base64");
+  const result = await callOpsTool(d1(db), "ops_status", {}, {
+    OPS_PROJECTION_ENVIRONMENT: "production",
+    OPS_PROJECTION_VERIFY_KEY_ID: "ops-projection-20260826-v2",
+    OPS_PROJECTION_VERIFY_SPKI_B64: spki,
+  });
+  assert.equal(result.status, "NOT_PROJECTED");
+  assert.match(result.reason, /not ACTIVE/);
   db.close();
 });
 
@@ -941,9 +980,31 @@ test("storage_plane_status reads the publisher aggregate without ingestion table
   const result = await opsCall(db, "storage_plane_status", {});
   assert.equal(result.status, "AVAILABLE");
   assert.equal(result.counts.facts, 12);
+  assert.equal(result.generation, "projgen-storage");
+  assert.equal(result.source_db_digest, `sha256:${"2".repeat(64)}`);
   assert.equal(result.projection_generation, "projgen-storage");
   assert.equal(result.projection_signature_verified, true);
   assert.equal(result.required_content_verified, true);
+  db.close();
+});
+
+test("storage_plane_status is NOT_PROJECTED when payload identity differs", async () => {
+  const db = projectionDb();
+  await seedGeneration(db, "projgen-storage-mismatch", {
+    storagePlanePayload: {
+      schema: "ops_storage_plane_status/v1",
+      generation: "projgen-other",
+      source_db_digest: `sha256:${"9".repeat(64)}`,
+      counts: { facts: 12 },
+    },
+  });
+  const result = await opsCall(db, "storage_plane_status", {});
+  assert.equal(result.status, "NOT_PROJECTED");
+  assert.equal(result.projection_generation, "projgen-storage-mismatch");
+  assert.match(
+    result.reason,
+    /storage aggregate identity does not match the active generation/,
+  );
   db.close();
 });
 

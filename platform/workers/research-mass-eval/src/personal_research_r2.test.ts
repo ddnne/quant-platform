@@ -5,7 +5,14 @@ import {
   PERSONAL_RESEARCH_RUNNER_VERSION,
 } from "./personal_research_contract";
 import { personalResearchR2Outbound } from "./personal_research_r2";
+import { CONTROLLED_PILOT_RUNNER_VERSION } from "./controlled_pilot_contract";
+import { CONTROLLED_JSON_TYPE,
+  CONTROLLED_LEASE_MAX_BYTES,
+  CONTROLLED_LEASE_TTL_SECONDS,
+  controlledContainerR2Outbound } from "./controlled_pilot_container_r2";
+
 import { PERSONAL_SNAPSHOT_FORMAT } from "./personal_snapshot_contract";
+import { sha256Hex } from "./sha256";
 
 vi.stubGlobal(
   "FixedLengthStream",
@@ -212,6 +219,102 @@ describe("personal Container R2 capability", () => {
     expect(denied.status).toBe(400);
   });
 
+  it("rejects late result, snapshot, and conflicting manifest creation after FAILED", async () => {
+    const jobId = "late-after-failed";
+    const requestDigest = `sha256:${"b".repeat(64)}`;
+    const resultKey = `research/personal/jobs/job=${jobId}/result.tar.gz`;
+    const researchTerminalKey =
+      `research/personal/jobs/job=${jobId}/manifest.json`;
+    const rawHex = "d".repeat(64);
+    const snapshotKey =
+      `research/personal/snapshots/sha256=${rawHex}.sqlite.gz`;
+    const snapshotTerminalKey =
+      `research/personal/snapshot-builds/job=${jobId}/manifest.json`;
+    const terminalMetadata = {
+      job_id: jobId,
+      request_digest: requestDigest,
+      status: "FAILED",
+    };
+    const terminals = new Map([
+      [
+        researchTerminalKey,
+        r2Object(
+          researchTerminalKey,
+          new TextEncoder().encode("failed research"),
+          terminalMetadata,
+        ),
+      ],
+      [
+        snapshotTerminalKey,
+        r2Object(
+          snapshotTerminalKey,
+          new TextEncoder().encode("failed snapshot"),
+          terminalMetadata,
+        ),
+      ],
+    ]);
+    const bucket = {
+      head: vi.fn(async (key: string) => terminals.get(key) ?? null),
+      put: vi.fn(),
+    } as unknown as R2Bucket;
+    const commonHeaders = {
+      "content-length": "3",
+      "x-personal-job-id": jobId,
+      "x-personal-request-digest": requestDigest,
+      "x-content-sha256": `sha256:${THREE_BYTE_SHA256}`,
+    };
+
+    const lateResult = await personalResearchR2Outbound(
+      new Request(`http://research.r2/${resultKey}`, {
+        method: "PUT",
+        headers: commonHeaders,
+        body: new Uint8Array([1, 2, 3]),
+      }),
+      { STRUCTURED_BUCKET: bucket },
+    );
+    const lateSnapshot = await personalResearchR2Outbound(
+      new Request(`http://research.r2/${snapshotKey}`, {
+        method: "PUT",
+        headers: {
+          ...commonHeaders,
+          "x-personal-raw-sha256": `sha256:${rawHex}`,
+        },
+        body: new Uint8Array([1, 2, 3]),
+      }),
+      { STRUCTURED_BUCKET: bucket },
+    );
+    const lateManifestDocument = {
+      job_id: jobId,
+      request_digest: requestDigest,
+      status: "FAILED",
+      error: "late child terminal",
+    };
+    const lateManifestBytes = new TextEncoder().encode(
+      JSON.stringify(lateManifestDocument),
+    );
+    const lateManifest = await personalResearchR2Outbound(
+      new Request(`http://research.r2/${researchTerminalKey}`, {
+        method: "PUT",
+        headers: {
+          "content-length": String(lateManifestBytes.byteLength),
+          "x-personal-job-id": jobId,
+          "x-personal-request-digest": requestDigest,
+          "x-content-sha256": `sha256:${await sha256Hex(lateManifestBytes)}`,
+        },
+        body: lateManifestBytes,
+      }),
+      { STRUCTURED_BUCKET: bucket },
+    );
+
+    expect([lateResult.status, lateSnapshot.status, lateManifest.status]).toEqual([
+      409,
+      409,
+      409,
+    ]);
+    expect(bucket.put).not.toHaveBeenCalled();
+    expect(terminals.size).toBe(2);
+  });
+
   it("requires R2 to verify the declared result digest against the stream", async () => {
     const jobId = "exact-four-checksum";
     const requestDigest = `sha256:${"b".repeat(64)}`;
@@ -292,6 +395,9 @@ describe("personal Container R2 capability", () => {
       raw_sha256: `sha256:${raw}`,
       gzip_sha256: gzipDigest,
       snapshot_key: key,
+      observed_through: "2024-12-31T16:00:00+09:00",
+      revision_window_calendar_days: 40,
+      revision_coverage: "BOUNDED_WINDOW",
     };
     const bytes = new TextEncoder().encode(JSON.stringify(manifest));
     const digest = `sha256:${await (await import("./sha256")).sha256Hex(bytes)}`;
@@ -528,5 +634,501 @@ describe("personal Container R2 capability", () => {
     );
     expect(forbidden.status).toBe(403);
     expect(bucket.put).not.toHaveBeenCalled();
+  });
+});
+type StoredObject = {
+  body: Uint8Array;
+  etag: string;
+  customMetadata?: Record<string, string>;
+};
+
+function casBucket(hooks?: { afterLeaseGet?: () => void }) {
+  const objects = new Map<string, StoredObject>();
+  let generation = 0;
+  const bucket = {
+    objects,
+    head: async (key: string) => {
+      const stored = objects.get(key);
+      if (!stored) return null;
+      return {
+        key,
+        size: stored.body.byteLength,
+        etag: stored.etag,
+        httpEtag: stored.etag,
+        customMetadata: stored.customMetadata,
+      };
+    },
+    get: async (key: string) => {
+      const stored = objects.get(key);
+      if (!stored) return null;
+      const snapshot = {
+        key,
+        size: stored.body.byteLength,
+        etag: stored.etag,
+        httpEtag: stored.etag,
+        customMetadata: stored.customMetadata ? { ...stored.customMetadata } : undefined,
+        arrayBuffer: async () =>
+          stored.body.buffer.slice(
+            stored.body.byteOffset,
+            stored.body.byteOffset + stored.body.byteLength,
+          ),
+      };
+      if (key.endsWith("/container-lease.json") && hooks?.afterLeaseGet) {
+        const takeover = hooks.afterLeaseGet;
+        hooks.afterLeaseGet = undefined;
+        takeover();
+      }
+      return snapshot;
+    },
+    put: async (
+      key: string,
+      value: ArrayBuffer | Uint8Array,
+      options?: {
+        onlyIf?: { etagDoesNotMatch?: string; etagMatches?: string };
+        customMetadata?: Record<string, string>;
+      },
+    ) => {
+      const stored = objects.get(key);
+      if (options?.onlyIf?.etagDoesNotMatch === "*" && stored) return null;
+      if (options?.onlyIf?.etagMatches) {
+        if (!stored || stored.etag !== options.onlyIf.etagMatches) return null;
+      }
+      const body = value instanceof Uint8Array ? value : new Uint8Array(value as ArrayBuffer);
+      generation += 1;
+      const etag = `etag-${generation}`;
+      objects.set(key, {
+        body,
+        etag,
+        customMetadata: options?.customMetadata ? { ...options.customMetadata } : undefined,
+      });
+      return { key, etag, httpEtag: etag, size: body.byteLength };
+    },
+  };
+  return bucket as typeof bucket & R2Bucket;
+}
+
+describe("controlled container R2 production router", () => {
+  async function routeControlled(
+    request: Request,
+    env: { STRUCTURED_BUCKET: R2Bucket },
+  ): Promise<Response> {
+    const key = new URL(request.url).pathname.slice(1);
+    return (await controlledContainerR2Outbound(request, env, key)) ??
+      new Response(null, { status: 403 });
+  }
+
+  it("always denies the full controlled prefix through the generic personal capability", async () => {
+    const bucket = casBucket();
+    const forged = {
+      "content-type": CONTROLLED_JSON_TYPE,
+      "content-length": "2",
+      "x-personal-job-id": "controlled-job-1",
+      "x-personal-request-digest": `sha256:${"ab".repeat(32)}`,
+      "x-personal-runner-version": CONTROLLED_PILOT_RUNNER_VERSION,
+      "x-personal-job-kind": "controlled-pilot",
+    };
+    for (const key of [
+      "research/controlled_pilot/v1/jobs/controlled-job-1/container-stage.json",
+      "research/controlled_pilot/v1/ready/forged.json",
+      "research/controlled_pilot/future/object.json",
+    ]) {
+      const response = await personalResearchR2Outbound(
+        new Request(`http://research.r2/${key}`, {
+          method: "PUT",
+          headers: forged,
+          body: "{}",
+        }),
+        { STRUCTURED_BUCKET: bucket },
+      );
+      expect(response.status).toBe(403);
+    }
+    expect(bucket.objects.size).toBe(0);
+  });
+
+  it("allows only closed stage/terminal keys with runner_version and create-only identity", async () => {
+    const jobId = "controlled-job-1";
+    const requestDigest = `sha256:${"ab".repeat(32)}`;
+    const bucket = casBucket();
+    const env = { STRUCTURED_BUCKET: bucket };
+    const key = `research/controlled_pilot/v1/jobs/${jobId}/container-stage.json`;
+    const bodyObj = {
+      identity: "controlled_pilot_v1",
+      job_id: jobId,
+      request_digest: requestDigest,
+      execution_id: requestDigest,
+      runner_version: CONTROLLED_PILOT_RUNNER_VERSION,
+      status: "QUEUED",
+    };
+    const bytes = new TextEncoder().encode(JSON.stringify(bodyObj));
+    const digest = `sha256:${hex(await crypto.subtle.digest("SHA-256", bytes))}`;
+    const headers = {
+      "content-length": String(bytes.byteLength),
+      "content-type": CONTROLLED_JSON_TYPE,
+      "x-personal-job-id": jobId,
+      "x-personal-request-digest": requestDigest,
+      "x-personal-runner-version": CONTROLLED_PILOT_RUNNER_VERSION,
+      "x-personal-job-kind": "controlled-pilot",
+      "x-content-sha256": digest,
+    };
+    const created = await routeControlled(
+      new Request(`http://research.r2/${key}`, { method: "PUT", headers, body: bytes }),
+      env,
+    );
+    expect(created.status).toBe(201);
+    const again = await routeControlled(
+      new Request(`http://research.r2/${key}`, { method: "PUT", headers, body: bytes }),
+      env,
+    );
+    expect(again.status).toBe(200);
+    const different = new TextEncoder().encode(JSON.stringify({ ...bodyObj, execution_id: `sha256:${"cd".repeat(32)}` }));
+    const differentDigest = `sha256:${hex(await crypto.subtle.digest("SHA-256", different))}`;
+    const conflict = await routeControlled(
+      new Request(`http://research.r2/${key}`, {
+        method: "PUT",
+        headers: { ...headers, "content-length": String(different.byteLength), "x-content-sha256": differentDigest },
+        body: different,
+      }),
+      env,
+    );
+    expect(conflict.status).toBe(409);
+    const missingRunner = await routeControlled(
+      new Request(`http://research.r2/${key}`, {
+        method: "PUT",
+        headers: {
+          "content-length": String(bytes.byteLength),
+          "content-type": CONTROLLED_JSON_TYPE,
+          "x-personal-job-id": jobId,
+          "x-personal-request-digest": requestDigest,
+          "x-personal-job-kind": "controlled-pilot",
+          "x-content-sha256": digest,
+        },
+        body: bytes,
+      }),
+      env,
+    );
+    expect(missingRunner.status).toBe(403);
+    const arbitrary = await routeControlled(
+      new Request(`http://research.r2/research/controlled_pilot/v1/jobs/${jobId}/evil.json`, {
+        method: "PUT",
+        headers,
+        body: bytes,
+      }),
+      env,
+    );
+    expect(arbitrary.status).toBe(403);
+    const leaseKey = `research/controlled_pilot/v1/jobs/${jobId}/container-lease.json`;
+    const leaseObj = {
+      identity: "controlled_pilot_v1",
+      job_id: jobId,
+      request_digest: requestDigest,
+      execution_id: requestDigest,
+      runner_version: CONTROLLED_PILOT_RUNNER_VERSION,
+      kind: "controlled-pilot",
+      owner_nonce: "owner-nonce-1",
+      fencing_token: 1,
+      expires_at: Date.now() / 1000 + CONTROLLED_LEASE_TTL_SECONDS,
+      heartbeat_at: Date.now() / 1000,
+      status: "CLAIMED",
+    };
+    const leaseBytes = new TextEncoder().encode(JSON.stringify(leaseObj));
+    const leaseDigest = `sha256:${hex(await crypto.subtle.digest("SHA-256", leaseBytes))}`;
+    const createdLease = await routeControlled(
+      new Request(`http://research.r2/${leaseKey}`, {
+        method: "PUT",
+        headers: {
+          ...headers,
+          "content-length": String(leaseBytes.byteLength),
+          "x-content-sha256": leaseDigest,
+          "if-none-match": "*",
+        },
+        body: leaseBytes,
+      }),
+      env,
+    );
+    expect(createdLease.status).toBe(201);
+    const terminalKey = `research/controlled_pilot/v1/jobs/${jobId}/container-terminal.json`;
+    const terminalObj = {
+      ok: true,
+      identity: "controlled_pilot_v1",
+      job_id: jobId,
+      request_digest: requestDigest,
+      execution_id: requestDigest,
+      runner_version: CONTROLLED_PILOT_RUNNER_VERSION,
+      status: "COMPLETED",
+      owner_nonce: "owner-nonce-1",
+      fencing_token: 1,
+      automatic_promotion: false,
+      live_orders_enabled: false,
+      ephemeral_cleaned: true,
+      papers: [{ k: 1 }, { k: 2 }, { k: 3 }, { k: 4 }],
+      risks: [{ k: 1 }, { k: 2 }, { k: 3 }, { k: 4 }],
+      selection: { decision: "HOLD" },
+      knowledge: { kind: "knowledge" },
+      generation: 1,
+      max_parallel: 2,
+    };
+    const terminalBytes = new TextEncoder().encode(JSON.stringify(terminalObj));
+    const terminalDigest = `sha256:${hex(await crypto.subtle.digest("SHA-256", terminalBytes))}`;
+    const terminalDenied = await routeControlled(
+      new Request(`http://research.r2/${terminalKey}`, {
+        method: "PUT",
+        headers: { ...headers, "content-length": String(terminalBytes.byteLength), "x-content-sha256": terminalDigest },
+        body: terminalBytes,
+      }),
+      env,
+    );
+    expect(terminalDenied.status).toBe(409);
+    const terminal = await routeControlled(
+      new Request(`http://research.r2/${terminalKey}`, {
+        method: "PUT",
+        headers: {
+          ...headers,
+          "content-length": String(terminalBytes.byteLength),
+          "x-content-sha256": terminalDigest,
+          "x-personal-lease-owner": "owner-nonce-1",
+          "x-personal-fencing-token": "1",
+        },
+        body: terminalBytes,
+      }),
+      env,
+    );
+    expect(terminal.status).toBe(201);
+    const conflictLease = await routeControlled(
+      new Request(`http://research.r2/${leaseKey}`, {
+        method: "PUT",
+        headers: {
+          ...headers,
+          "content-length": String(leaseBytes.byteLength),
+          "x-content-sha256": leaseDigest,
+          "if-none-match": "*",
+        },
+        body: leaseBytes,
+      }),
+      env,
+    );
+    expect(conflictLease.status).toBe(412);
+    const takeoverHeartbeat = Date.now() / 1000;
+    const takeoverObj = {
+      ...leaseObj,
+      owner_nonce: "owner-nonce-2",
+      heartbeat_at: takeoverHeartbeat,
+      expires_at: takeoverHeartbeat + CONTROLLED_LEASE_TTL_SECONDS,
+      fencing_token: 2,
+    };
+    const takeoverBytes = new TextEncoder().encode(JSON.stringify(takeoverObj));
+    const takeoverDigest = `sha256:${hex(await crypto.subtle.digest("SHA-256", takeoverBytes))}`;
+    const takeover = await routeControlled(
+      new Request(`http://research.r2/${leaseKey}`, {
+        method: "PUT",
+        headers: {
+          ...headers,
+          "content-length": String(takeoverBytes.byteLength),
+          "x-content-sha256": takeoverDigest,
+          "if-match": "etag-1",
+        },
+        body: takeoverBytes,
+      }),
+      env,
+    );
+    expect(takeover.status).toBe(412);
+    const malformed = await routeControlled(
+      new Request(`http://research.r2/${leaseKey}`, {
+        method: "PUT",
+        headers: {
+          ...headers,
+          "content-length": "2",
+          "x-content-sha256": `sha256:${hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("{}")))}`,
+          "if-none-match": "*",
+        },
+        body: "{}",
+      }),
+      env,
+    );
+    expect(malformed.status).toBeGreaterThanOrEqual(400);
+    const lying = new TextEncoder().encode("x".repeat(64));
+    const lyingDigest = `sha256:${hex(await crypto.subtle.digest("SHA-256", lying))}`;
+    const falseSmall = await routeControlled(
+      new Request(`http://research.r2/${key}`, {
+        method: "PUT",
+        headers: { ...headers, "content-length": "4", "x-content-sha256": lyingDigest },
+        body: lying,
+      }),
+      env,
+    );
+    expect([400, 413].includes(falseSmall.status)).toBe(true);
+    const oversized = new Uint8Array(CONTROLLED_LEASE_MAX_BYTES + 1);
+    const noHeader = await routeControlled(
+      new Request(`http://research.r2/${leaseKey}`, {
+        method: "PUT",
+        headers: {
+          "content-type": CONTROLLED_JSON_TYPE,
+          "x-personal-job-id": jobId,
+          "x-personal-request-digest": requestDigest,
+          "x-personal-runner-version": CONTROLLED_PILOT_RUNNER_VERSION,
+          "x-personal-job-kind": "controlled-pilot",
+          "x-content-sha256": `sha256:${hex(await crypto.subtle.digest("SHA-256", leaseBytes))}`,
+          "if-none-match": "*",
+        },
+        body: leaseBytes,
+      }),
+      env,
+    );
+    expect([201, 200, 412].includes(noHeader.status)).toBe(true);
+  });
+});
+
+describe("controlled terminal lease CAS fence", () => {
+  const jobId = "controlled-job-2";
+  const requestDigest = `sha256:${"ab".repeat(32)}`;
+  const identityHeaders = {
+    "content-type": CONTROLLED_JSON_TYPE,
+    "x-personal-job-id": jobId,
+    "x-personal-request-digest": requestDigest,
+    "x-personal-runner-version": CONTROLLED_PILOT_RUNNER_VERSION,
+    "x-personal-job-kind": "controlled-pilot",
+  };
+
+  function stageLike(status: string, owner: string, token: number) {
+    const bind = {
+      identity: "controlled_pilot_v1",
+      job_id: jobId,
+      request_digest: requestDigest,
+      execution_id: requestDigest,
+      runner_version: CONTROLLED_PILOT_RUNNER_VERSION,
+      status,
+      owner_nonce: owner,
+      fencing_token: token,
+    };
+    if (status === "FAILED") {
+      return {
+        ...bind,
+        ok: false,
+        error: "controlled_execution_failed",
+        go: false,
+        automatic_promotion: false,
+        live_orders_enabled: false,
+      };
+    }
+    return {
+      ...bind,
+      ok: true,
+      automatic_promotion: false,
+      live_orders_enabled: false,
+      ephemeral_cleaned: true,
+      papers: [{ k: 1 }, { k: 2 }, { k: 3 }, { k: 4 }],
+      risks: [{ k: 1 }, { k: 2 }, { k: 3 }, { k: 4 }],
+      selection: { decision: "HOLD" },
+      knowledge: { kind: "knowledge" },
+      generation: 1,
+      max_parallel: 2,
+    };
+  }
+
+  function leaseDoc(owner: string, token: number) {
+    return {
+      identity: "controlled_pilot_v1",
+      job_id: jobId,
+      request_digest: requestDigest,
+      execution_id: requestDigest,
+      runner_version: CONTROLLED_PILOT_RUNNER_VERSION,
+      kind: "controlled-pilot",
+      owner_nonce: owner,
+      fencing_token: token,
+      expires_at: Date.now() / 1000 + CONTROLLED_LEASE_TTL_SECONDS,
+      heartbeat_at: Date.now() / 1000,
+      status: "CLAIMED",
+    };
+  }
+
+  async function putJson(
+    env: { STRUCTURED_BUCKET: R2Bucket },
+    key: string,
+    value: unknown,
+    extra: Record<string, string> = {},
+  ) {
+    const bytes = new TextEncoder().encode(JSON.stringify(value));
+    const digest = `sha256:${hex(await crypto.subtle.digest("SHA-256", bytes))}`;
+    return controlledContainerR2Outbound(
+      new Request(`http://research.r2/${key}`, {
+        method: "PUT",
+        headers: {
+          ...identityHeaders,
+          "content-length": String(bytes.byteLength),
+          "x-content-sha256": digest,
+          ...extra,
+        },
+        body: bytes,
+      }),
+      env,
+      key,
+    ) as Promise<Response>;
+  }
+
+  it("rejects a stale owner after takeover between lease GET and terminal CAS", async () => {
+    const hooks: { afterLeaseGet?: () => void } = {};
+    const bucket = casBucket(hooks);
+    const env = { STRUCTURED_BUCKET: bucket };
+    const leaseKey = `research/controlled_pilot/v1/jobs/${jobId}/container-lease.json`;
+    const terminalKey = `research/controlled_pilot/v1/jobs/${jobId}/container-terminal.json`;
+    const createdLease = await putJson(env, leaseKey, leaseDoc("owner-nonce-1", 1), {
+      "if-none-match": "*",
+    });
+    expect(createdLease.status).toBe(201);
+
+    hooks.afterLeaseGet = () => {
+      const takeoverBytes = new TextEncoder().encode(JSON.stringify(leaseDoc("owner-nonce-2", 2)));
+      bucket.objects.set(leaseKey, {
+        body: takeoverBytes,
+        etag: "etag-taken",
+        customMetadata: { plane: "controlled_pilot", job_id: jobId },
+      });
+    };
+
+    const stale = await putJson(env, terminalKey, stageLike("COMPLETED", "owner-nonce-1", 1), {
+      "x-personal-lease-owner": "owner-nonce-1",
+      "x-personal-fencing-token": "1",
+    });
+    expect(stale.status).toBe(409);
+    expect(bucket.objects.has(terminalKey)).toBe(false);
+
+    const current = await putJson(env, terminalKey, stageLike("COMPLETED", "owner-nonce-2", 2), {
+      "x-personal-lease-owner": "owner-nonce-2",
+      "x-personal-fencing-token": "2",
+    });
+    expect(current.status).toBe(201);
+    const got = await controlledContainerR2Outbound(
+      new Request(`http://research.r2/${terminalKey}`, {
+        method: "GET",
+        headers: identityHeaders,
+      }),
+      env,
+      terminalKey,
+    ) as Response;
+    expect(got.status).toBe(200);
+    expect(JSON.parse(await got.text()).status).toBe("COMPLETED");
+
+    const replay = await putJson(env, terminalKey, stageLike("COMPLETED", "owner-nonce-2", 2), {
+      "x-personal-lease-owner": "owner-nonce-2",
+      "x-personal-fencing-token": "2",
+    });
+    expect(replay.status).toBe(200);
+
+    const conflicting = await putJson(env, terminalKey, stageLike("FAILED", "owner-nonce-2", 2), {
+      "x-personal-lease-owner": "owner-nonce-2",
+      "x-personal-fencing-token": "2",
+    });
+    expect(conflicting.status).toBe(409);
+    const storedLease = bucket.objects.get(leaseKey);
+    expect(storedLease).toBeTruthy();
+    expect(JSON.parse(new TextDecoder().decode(storedLease!.body)).status).toBe("TERMINAL");
+    const storedTerminal = await controlledContainerR2Outbound(
+      new Request(`http://research.r2/${terminalKey}`, {
+        method: "GET",
+        headers: identityHeaders,
+      }),
+      env,
+      terminalKey,
+    ) as Response;
+    expect(JSON.parse(await storedTerminal.text()).status).toBe("COMPLETED");
   });
 });

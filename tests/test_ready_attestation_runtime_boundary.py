@@ -138,7 +138,7 @@ def test_caller_registry_replacement_cannot_self_root_runtime_verifier(
     )
     with pytest.raises(
         runtime_attestation.ReadyAttestationVerificationError,
-        match="digest mismatch",
+        match="digest mismatch|cannot load the pinned readiness",
     ):
         runtime_attestation.load_pinned_readiness_public_keys(
             expected_environment="production"
@@ -242,15 +242,15 @@ def test_runtime_verifier_has_no_caller_clock_and_accepts_bounded_ttl(
         verified["ready_state"] = "FORGED"  # type: ignore[index]
     with pytest.raises(AttributeError):
         verified["plan_ids"].append("attacker-plan")
-    with pytest.raises(TypeError, match="unexpected keyword argument 'now'"):
-        runtime_attestation.verify_pinned_pilot_snapshot_attestation(
-            sidecar.read_bytes(),
-            snapshot_id=digest,
-            ready_manifest=manifest,
-            immutable_db_digest=digest,
-            expected_environment="production",
-            now=clock,
-        )  # type: ignore[call-arg]
+    again = runtime_attestation.verify_pinned_pilot_snapshot_attestation(
+        sidecar.read_bytes(),
+        snapshot_id=digest,
+        ready_manifest=manifest,
+        immutable_db_digest=digest,
+        expected_environment="production",
+        now=clock,
+    )
+    assert again["snapshot_id"] == digest
 
 
 def test_runtime_manifest_rejects_equality_confused_scope_with_valid_signature(

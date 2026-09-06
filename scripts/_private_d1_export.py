@@ -67,6 +67,42 @@ GOVERNED_D1_SYNC_TABLES: tuple[str, ...] = (
 )
 
 
+
+def _require_governed_d1_bindings(
+    bindings: object,
+    *,
+    expected: dict[str, str],
+    allowed_extra: set[tuple[str, str, str]],
+) -> None:
+    if type(bindings) is not list or not bindings:
+        raise RuntimeError("production Wrangler config is not bound to governed D1")
+    seen_db = 0
+    seen: set[tuple[str, str, str]] = set()
+    for row in bindings:
+        if type(row) is not dict:
+            raise RuntimeError("production Wrangler config is not bound to governed D1")
+        identity = (
+            str(row.get("binding") or ""),
+            str(row.get("database_name") or ""),
+            str(row.get("database_id") or ""),
+        )
+        if identity in seen:
+            raise RuntimeError("governed D1 binding is duplicated")
+        seen.add(identity)
+        if row.get("binding") == "DB":
+            seen_db += 1
+            if {
+                "binding": row.get("binding"),
+                "database_name": row.get("database_name"),
+                "database_id": row.get("database_id"),
+            } != expected:
+                raise RuntimeError("production Wrangler config is not bound to governed D1")
+        elif identity not in allowed_extra:
+            raise RuntimeError("production Wrangler config is not bound to governed D1")
+    if seen_db != 1:
+        raise RuntimeError("production Wrangler config is not bound to governed D1")
+
+
 def _validated_governed_wrangler() -> tuple[str, Path]:
     """Return the repository-pinned executable/config after authority checks.
 
@@ -100,8 +136,14 @@ def _validated_governed_wrangler() -> tuple[str, Path]:
         "database_name": GOVERNED_D1_NAME,
         "database_id": GOVERNED_D1_ID,
     }
-    if bindings != [expected]:
-        raise RuntimeError("production Wrangler config is not bound to governed D1")
+    allowed_extra = {
+        (
+            "OPS_PROJECTION_DB",
+            "quant-ops-projection",
+            "1b497e8a-5c69-4e19-ae2e-89a8f3185272",
+        )
+    }
+    _require_governed_d1_bindings(bindings, expected=expected, allowed_extra=allowed_extra)
     return str(executable), config
 
 
@@ -177,14 +219,24 @@ def _validated_authority_wrangler(
         )
     except (OSError, KeyError, TypeError, tomllib.TOMLDecodeError) as exc:
         raise RuntimeError("cannot verify authority governed D1 binding") from exc
-    if bindings != [
-        {
-            "binding": "DB",
-            "database_name": resource["name"],
-            "database_id": resource["database_id"],
-        }
-    ]:
-        raise RuntimeError("authority Wrangler config is not bound to governed D1")
+    expected = {
+        "binding": "DB",
+        "database_name": resource["name"],
+        "database_id": resource["database_id"],
+    }
+    allowed_extra = {
+        (
+            "OPS_PROJECTION_DB",
+            "quant-ops-projection",
+            "1b497e8a-5c69-4e19-ae2e-89a8f3185272",
+        )
+    }
+    try:
+        _require_governed_d1_bindings(
+            bindings, expected=expected, allowed_extra=allowed_extra
+        )
+    except RuntimeError as exc:
+        raise RuntimeError("authority Wrangler config is not bound to governed D1") from exc
     environment_args = ("--env", "production") if environment == "production" else ()
     return (str(node), str(cli)), config, environment_args, resource["name"]
 

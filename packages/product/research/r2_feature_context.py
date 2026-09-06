@@ -27,14 +27,13 @@ from research.r2_available_at import (
     available_at_policy_document,
     repair_available_at_research,
 )
-from research.r2_feature_mirror import materialize_disposable_sqlite_mirror
 from research.r2_feature_normalize import normalize_r2_history_row
 from research.r2_feature_parse import (
     _decode_json_obj,
     parse_r2_structured_bytes,
     parse_r2_structured_line,
 )
-from research.r2_io import R2IOError, default_r2_get_object as _default_r2_get_object
+
 
 HISTORY_SOURCE_R2: str = "r2"
 HISTORY_SOURCE_D1_TIP: str = "d1_tip"
@@ -173,30 +172,6 @@ def filter_history_rows(
     return out
 
 
-def default_r2_get_object(
-    bucket: str,
-    key: str,
-    *,
-    wrangler: str | Path | None = None,
-    config: str | Path | None = None,
-    timeout: int = 300,
-) -> bytes:
-    """Re-export of ``r2_io.default_r2_get_object`` as a research read helper.
-
-    Not artifact authority, not Coverage COMPLETE, not FRESH. Worker
-    children-then-manifest is authority. CLI get is a research read helper.
-    """
-    try:
-        return _default_r2_get_object(
-            bucket,
-            key,
-            wrangler=wrangler,
-            config=config,
-            timeout=timeout,
-        )
-    except R2IOError as exc:
-        raise R2FeatureContextError(str(exc)) from exc
-
 def _load_envelopes_from_sources(
     *,
     dataset: str,
@@ -230,7 +205,11 @@ def _load_envelopes_from_sources(
             )
 
     if object_keys:
-        get_fn = r2_get or default_r2_get_object
+        if r2_get is None:
+            raise R2FeatureContextError(
+                "r2 get capability is required; product does not own network I/O"
+            )
+        get_fn = r2_get
         for key in object_keys:
             body = get_fn(bucket, str(key))
             for r in parse_r2_structured_bytes(body):
@@ -375,7 +354,7 @@ def extract_r2_history_feature_rows(
         "rows_by_dataset": rows_by_dataset,
         "available_at_repairs": aa_repairs,
         "local_sot": False,
-        "disposable_mirror": True,
+        "disposable_mirror": False,
     }
 
 
@@ -647,10 +626,8 @@ __all__ = [
     "available_at_policy_document",
     "build_r2_feature_context",
     "can_build_40d_asof",
-    "default_r2_get_object",
     "extract_r2_history_feature_rows",
     "filter_history_rows",
-    "materialize_disposable_sqlite_mirror",
     "normalize_r2_history_row",
     "parse_r2_structured_bytes",
     "parse_r2_structured_line",

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import os
@@ -65,6 +64,93 @@ _SNAPSHOT_ID_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 class SnapshotRejected(RuntimeError):
     """Raised when a staging DB cannot pass the publication gate."""
+
+
+SNAPSHOT_OBSERVATION_CLOCK_DDL = """
+CREATE TABLE snapshot_observation_clock (
+    singleton INTEGER NOT NULL PRIMARY KEY CHECK (singleton = 1),
+    observed_through TEXT NOT NULL CHECK (length(observed_through) >= 25)
+)
+"""
+
+
+def canonical_observed_through_from_authenticated_exported_at(
+    exported_at: Any,
+) -> str:
+    """Fail-closed observation clock from authenticated frozen exported_at.
+
+    Wall time, decision time, personal_history_manifest, and dataset watermarks
+    are not substitutes. The applied-mirror exported_at identity is the only
+    accepted source.
+    """
+    from pit.errors import AsOfRequired, InvalidAsOf
+    from pit.query import MAX_SNAPSHOT_CLOCK_FUTURE_SKEW, normalize_as_of
+    from ingestion.common.timeutil import now_jst, parse_dt
+
+    if type(exported_at) is not str or not exported_at.strip():
+        raise SnapshotRejected("authenticated exported_at is missing")
+    try:
+        canonical = normalize_as_of(exported_at)
+    except (AsOfRequired, InvalidAsOf) as exc:
+        raise SnapshotRejected("authenticated exported_at is malformed") from exc
+    if exported_at != canonical:
+        raise SnapshotRejected("authenticated exported_at is noncanonical")
+    if parse_dt(canonical) - now_jst() > MAX_SNAPSHOT_CLOCK_FUTURE_SKEW:
+        raise SnapshotRejected("authenticated exported_at is in the future")
+    return canonical
+
+
+def write_publisher_owned_snapshot_observation_clock(
+    conn: sqlite3.Connection, observed_through: str
+) -> str:
+    """Write exactly one publisher-owned clock row into a temporary SQLite."""
+
+    canonical = canonical_observed_through_from_authenticated_exported_at(
+        observed_through
+    )
+    conn.execute("DROP TABLE IF EXISTS snapshot_observation_clock")
+    conn.execute(SNAPSHOT_OBSERVATION_CLOCK_DDL)
+    conn.execute(
+        "INSERT INTO snapshot_observation_clock(singleton, observed_through) "
+        "VALUES (1, ?)",
+        (canonical,),
+    )
+    rows = conn.execute(
+        "SELECT observed_through FROM snapshot_observation_clock"
+    ).fetchall()
+    if len(rows) != 1 or str(rows[0][0]) != canonical:
+        raise SnapshotRejected("publisher observation clock is not a singleton")
+    return canonical
+
+
+def _extract_authenticated_exported_at(ready_evidence: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(ready_evidence, Mapping):
+        return None
+    items = ready_evidence.get("items")
+    if not isinstance(items, list):
+        return None
+    found: list[str] = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        detail = item.get("detail")
+        if not isinstance(detail, Mapping):
+            continue
+        value = detail.get("exported_at") or detail.get("authenticated_exported_at")
+        if type(value) is str and value.strip():
+            found.append(value)
+        nested = detail.get("envelope")
+        if isinstance(nested, Mapping):
+            env = nested.get("exported_at")
+            if type(env) is str and env.strip():
+                found.append(env)
+    unique = list(dict.fromkeys(found))
+    if not unique:
+        return None
+    if len(unique) != 1:
+        raise SnapshotRejected("authenticated exported_at is inconsistent")
+    return unique[0]
+
 
 
 @dataclass(frozen=True)
@@ -492,6 +578,16 @@ def _snapshot_candidate_engine(
             ) from exc
         if not isinstance(quality_results, list) or not quality_results:
             raise SnapshotRejected("production READY quality results are empty")
+        exported_at = _extract_authenticated_exported_at(ready_evidence)
+        if exported_at is None and not fixture_compatibility:
+            raise SnapshotRejected("authenticated exported_at is missing")
+        publisher_observed_through: str | None = None
+        if exported_at is not None:
+            publisher_observed_through = (
+                canonical_observed_through_from_authenticated_exported_at(
+                    exported_at
+                )
+            )
         committed_at = datetime.now(timezone.utc).isoformat()
         manifest: dict[str, Any] = {
             "format": RESEARCH_SNAPSHOT_MANIFEST_FORMAT,
@@ -540,6 +636,8 @@ def _snapshot_candidate_engine(
             "created_at": created_at,
             "committed_at": committed_at,
         }
+        if publisher_observed_through is not None:
+            manifest["observed_through"] = publisher_observed_through
         if profile_bound:
             manifest["profile_coverage_evidence"] = {
                 str(dataset_id): dict(row)
@@ -549,27 +647,40 @@ def _snapshot_candidate_engine(
             manifest["dependency_scope_evidence"] = dict(
                 _dependency_scope_evidence
             )
-        snapshot_id = _research_manifest_id(manifest)
-        manifest["snapshot_id"] = snapshot_id
-        if profile_bound:
-            nested = _ready_manifest_builder(manifest)
-            if not isinstance(nested, Mapping):
-                raise SnapshotRejected("ReadyManifest builder did not return an object")
-            manifest["ready_manifest"] = dict(nested)
-        stem = _artifact_stem(snapshot_id)
-        artifact_path = destination / f"{stem}.sqlite"
-        manifest_path = destination / f"{stem}.manifest.json"
-        publication_marker_path = destination / f"{stem}.publication.json"
-        manifest["artifact"] = artifact_path.name
-        manifest["manifest_digest"] = _research_manifest_digest(manifest)
-
         fd, raw_temp = tempfile.mkstemp(
-            prefix=f".{stem}.", suffix=".sqlite.tmp", dir=destination
+            prefix=".obsclock.", suffix=".sqlite.tmp", dir=destination
         )
         os.close(fd)
         temp_db = Path(raw_temp)
         try:
             _copy_sqlite(conn, temp_db)
+            if publisher_observed_through is None:
+                raise SnapshotRejected("authenticated exported_at is missing")
+            clock_conn = sqlite3.connect(str(temp_db))
+            try:
+                write_publisher_owned_snapshot_observation_clock(
+                    clock_conn, publisher_observed_through
+                )
+                clock_conn.commit()
+            finally:
+                clock_conn.close()
+            snapshot_id = _research_manifest_id(manifest)
+            manifest["snapshot_id"] = snapshot_id
+            if profile_bound:
+                nested = _ready_manifest_builder(manifest)
+                if not isinstance(nested, Mapping):
+                    raise SnapshotRejected("ReadyManifest builder did not return an object")
+                if publisher_observed_through is not None:
+                    nested = dict(nested)
+                    nested["observed_through"] = publisher_observed_through
+                manifest["ready_manifest"] = dict(nested)
+            stem = _artifact_stem(snapshot_id)
+            artifact_path = destination / f"{stem}.sqlite"
+            manifest_path = destination / f"{stem}.manifest.json"
+            publication_marker_path = destination / f"{stem}.publication.json"
+            manifest["artifact"] = artifact_path.name
+            manifest["manifest_digest"] = _research_manifest_digest(manifest)
+
             embedded = sqlite3.connect(str(temp_db))
             embedded.row_factory = sqlite3.Row
             try:
@@ -831,174 +942,18 @@ def _publish_exact_four_pilot_ready_snapshot_via_authority_impl(
     _candidate_engine: Callable[..., ReadySnapshot],
     _product_api: _ReadyPublicationProductApi,
 ) -> Any:
-    """Publish the canonical pilot only through the isolated READY service.
+    """Paper-only READY publication uses the Cloudflare public-key issuer.
 
-    The public product callable accepts no caller-selected signer, registry,
-    profile, dataset membership, manifest builder, or fixture policy.  Its
-    internal product adapter is not an authority: this runner preflights the
-    pinned local authority before inspecting caller evidence, creates an
-    undiscoverable immutable candidate, and asks the authority to independently
-    reopen and sign that exact snapshot.  Publication markers are written only
-    after the returned signature has been verified and retained byte-for-byte.
+    Local six-principal ReadyPublisherAuthorityClient is not on this path.
+    The issuer is unprovisioned, so publication fails closed before mutating
+    caller staging data.
     """
 
-    from scripts.local_authority_clients import ReadyPublisherAuthorityClient
-    from scripts.local_authority_service import LocalAuthorityError
-
-    # Bind the exact production caller UID, active public registry, and launchd
-    # socket before reading or mutating caller-provided publication material.
-    client = ReadyPublisherAuthorityClient(environment="production")
-    client.require_available()
-    if type(signed_projection_document) is not bytes or not signed_projection_document:
-        raise SnapshotRejected("signed Ops projection must be exact non-empty bytes")
-    signed_projection = signed_projection_document
-    governed = _product_api.load_exact_four_binding()
-    evidence = _product_api.verified_projection_evidence(
-        signed_projection,
-        list(governed.required_datasets),
-        expected_environment="production",
-    )
-    if set(evidence.rows) != set(governed.required_datasets):
-        raise SnapshotRejected(
-            "pilot READY evidence must exactly match the dependency closure"
-        )
-    for profile in governed.profiles:
-        if not _product_api.profile_ready(profile, evidence.rows):
-            raise SnapshotRejected(
-                f"pilot READY evidence is incomplete for {profile.plan_id}"
-            )
-    for dataset_id in governed.required_datasets:
-        row = evidence.rows[dataset_id]
-        source = str(row.get("source_generation") or "").strip()
-        exported = str(row.get("export_cursor") or "").strip()
-        applied = str(
-            row.get("applied_sync_generation") or row.get("applied_cursor") or ""
-        ).strip()
-        if not source or source != exported or exported != applied:
-            raise SnapshotRejected(
-                f"pilot READY cursor chain is missing or not current for {dataset_id}"
-            )
-        scopes = [
-            dict(scope)
-            for profile in governed.profiles
-            for scope in profile.dataset_scopes
-            if scope.get("dataset_id") == dataset_id
-        ]
-        required_start = min(str(scope["period_start"]) for scope in scopes)
-        required_end = max(str(scope["period_end"]) for scope in scopes)
-        observed_start = str(row.get("observed_start") or "")[:10]
-        observed_end = str(row.get("observed_end") or "")[:10]
-        if (
-            not observed_start
-            or not observed_end
-            or observed_start > required_start
-            or observed_end < required_end
-        ):
-            raise SnapshotRejected(
-                "pilot READY Coverage does not span the dependency period for "
-                f"{dataset_id}: observed={observed_start}..{observed_end}, "
-                f"required={required_start}..{required_end}"
-            )
-
-    scope_proof = _product_api.verify_exact_four_pit_scope(staging_db, governed)
-
-    def build_manifest(document: Mapping[str, Any]) -> Mapping[str, Any]:
-        return _product_api.build_profile_bound_manifest(
-            document, profile=governed
-        ).to_dict()
-
-    signed_result: dict[str, Any] = {}
-
-    def request_attestation(ready: ReadySnapshot) -> Path:
-        manifest = _product_api.ready_manifest_from_document(ready.manifest)
-        immutable_scope = _product_api.verify_exact_four_pit_scope(
-            ready.db_path, governed
-        )
-        if (
-            manifest.pit_contract_digests.get("dependency_scope")
-            != immutable_scope["proof_digest"]
-        ):
-            raise SnapshotRejected(
-                "immutable snapshot PIT dependency scope drifted before authority call"
-            )
-        event_id = (
-            "ready-publish:"
-            + ready.snapshot_id
-            + ":"
-            + evidence.signed_document_digest
-        )
-        try:
-            result = dict(
-                client.publish_profile_plan_bound(
-                    event_id=event_id,
-                    snapshot_id=ready.snapshot_id,
-                    signed_projection_document=signed_projection,
-                )
-            )
-        except LocalAuthorityError as exc:
-            raise SnapshotRejected("isolated READY authority rejected publication") from exc
-        try:
-            raw = base64.b64decode(result["attestation_base64"], validate=True)
-        except (KeyError, TypeError, ValueError) as exc:
-            raise SnapshotRejected("READY authority returned invalid attestation bytes") from exc
-        if "sha256:" + hashlib.sha256(raw).hexdigest() != result.get(
-            "attestation_digest"
-        ):
-            raise SnapshotRejected("READY authority attestation digest mismatch")
-        path = ready.db_path.with_name(
-            f"{ready.db_path.stem}.{result['attestation_id']}.readiness.json"
-        )
-        try:
-            _atomic_bytes(path, raw, mode=0o444)
-        except Exception:
-            path.unlink(missing_ok=True)
-            raise
-        signed_result.update(result=result, path=path)
-        return path
-
-    snapshot = _candidate_engine(
-        staging_db,
-        snapshot_dir,
-        required_datasets=governed.required_datasets,
-        _profile_coverage_evidence=evidence.rows,
-        _dependency_scope_evidence=scope_proof,
-        _ready_manifest_builder=build_manifest,
-        _ready_attestation_builder=request_attestation,
-        publication_gate=evaluate_ready_publication,
-        fixture_compatibility=False,
-        publication_scope="PRODUCTION",
-    )
-    if set(signed_result) != {"result", "path"}:
-        raise SnapshotRejected("isolated READY authority produced no attestation")
-    # Re-describe through the production metadata verifier after the
-    # publication marker is durable. The result is not a database-read
-    # capability.
-    reopened = describe_snapshot(snapshot_dir, snapshot.snapshot_id)
-    result = signed_result["result"]
-    readiness_path = reopened.readiness_path
-    readiness_bytes = reopened.readiness_bytes
-    ready_manifest = _product_api.ready_manifest_from_document(reopened.manifest)
-    if (
-        not isinstance(readiness_path, Path)
-        or type(readiness_bytes) is not bytes
-        or not readiness_bytes
-        or readiness_path != Path(signed_result["path"])
-        or reopened.readiness_attestation_id != result.get("attestation_id")
-        or reopened.readiness_digest != result.get("attestation_digest")
-    ):
-        raise SnapshotRejected(
-            "published marker does not pin the authority's exact attestation"
-        )
-    readiness = _product_api.load_verified_pilot_readiness_bytes(
-        readiness_bytes,
-        expected_environment="production",
-        expected_snapshot_id=reopened.snapshot_id,
-        expected_ready_manifest_digest=ready_manifest.manifest_digest,
-    )
-    return _product_api.verified_publication_type(
-        snapshot=reopened,
-        readiness=readiness,
-        readiness_path=readiness_path,
+    del staging_db, snapshot_dir, signed_projection_document
+    del _candidate_engine, _product_api
+    raise SnapshotRejected(
+        "READY publication PENDING; Cloudflare/READY public-key issuer is "
+        "unprovisioned"
     )
 
 

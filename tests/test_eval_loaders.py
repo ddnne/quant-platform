@@ -7,6 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from pit.personal_research_view import OfflineFixtureDataView
+from personal_history_compact_support import stamp_compact_manifest
+
 
 def _fins_sqlite(tmp_path: Path) -> Path:
     """Minimal jquants_records fins_summary with official TA / EqAR keys."""
@@ -100,7 +103,7 @@ def _repo_sqlite(tmp_path: Path) -> Path:
         con.execute(
             "CREATE TABLE jsda_repo_rates ("
             "as_of_date TEXT, tenor TEXT, rate_type TEXT, rate REAL, "
-            "available_at TEXT, event_time TEXT)"
+            "available_at TEXT, event_time TEXT, ingested_at TEXT)"
         )
         rows = (
             (
@@ -110,6 +113,7 @@ def _repo_sqlite(tmp_path: Path) -> Path:
                 0.10,
                 "2020-01-06T15:00:00+09:00",
                 "2020-01-06T00:00:00+09:00",
+                "2020-01-06T15:00:00+09:00",
             ),
             (
                 "2020-01-07",
@@ -144,11 +148,24 @@ def _repo_sqlite(tmp_path: Path) -> Path:
                 "2020-01-06T00:00:00+09:00",
             ),
         )
+        # Keep PIT clocks explicit; fixture observation is the last available_at.
+        stamped_rows = []
+        for row in rows:
+            if len(row) == 6:
+                available = row[4] or "2020-01-09T15:00:00+09:00"
+                stamped_rows.append(row + (available,))
+            else:
+                stamped_rows.append(row)
         con.executemany(
             "INSERT INTO jsda_repo_rates "
-            "(as_of_date, tenor, rate_type, rate, available_at, event_time) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            rows,
+            "(as_of_date, tenor, rate_type, rate, available_at, event_time, ingested_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            stamped_rows,
+        )
+        stamp_compact_manifest(
+            con,
+            format_name="unmanaged-catalog",
+            observed_through="2020-01-09T15:00:00+09:00",
         )
         con.commit()
     finally:
@@ -157,49 +174,51 @@ def _repo_sqlite(tmp_path: Path) -> Path:
 
 
 def test_load_repo_rows_from_sqlite_requires_as_of(tmp_path: Path) -> None:
-    from research.eval_loaders import load_repo_rows_from_sqlite
+    from pit.history_reads import fetch_jsda_repo_history_rows
 
     db = _repo_sqlite(tmp_path)
     with pytest.raises(TypeError):
-        load_repo_rows_from_sqlite(db)
+        fetch_jsda_repo_history_rows(db)
     with pytest.raises(ValueError, match="as_of is required"):
-        load_repo_rows_from_sqlite(db, as_of="")
+        fetch_jsda_repo_history_rows(db, as_of="")
     with pytest.raises(ValueError, match="as_of is required"):
-        load_repo_rows_from_sqlite(db, as_of="   ")
+        fetch_jsda_repo_history_rows(db, as_of="   ")
     with pytest.raises(ValueError, match="as_of is required"):
-        load_repo_rows_from_sqlite(db, as_of=None)  # type: ignore[arg-type]
+        fetch_jsda_repo_history_rows(db, as_of=None)  # type: ignore[arg-type]
 
 
 def test_load_repo_rows_from_sqlite_pit_available_at(tmp_path: Path) -> None:
-    from research.eval_loaders import (
-        load_repo_rows_all_tenors_from_sqlite,
-        load_repo_rows_from_sqlite,
-    )
+    from pit.history_reads import fetch_jsda_repo_history_rows
 
     db = _repo_sqlite(tmp_path)
     as_of = "2020-01-07T15:00:00+09:00"
-    rows = load_repo_rows_from_sqlite(db, as_of=as_of)
+    rows = fetch_jsda_repo_history_rows(db, as_of=as_of)
     dates = [r["as_of_date"] for r in rows]
     assert dates == ["2020-01-06", "2020-01-07"]
     assert all(r["available_at"] is not None for r in rows)
     assert all(str(r["available_at"]) <= as_of for r in rows)
 
-    later = load_repo_rows_from_sqlite(db, as_of="2020-01-09T15:00:00+09:00")
+    later = fetch_jsda_repo_history_rows(db, as_of="2020-01-09T15:00:00+09:00")
     later_dates = [r["as_of_date"] for r in later]
     assert "2020-01-09" in later_dates
     assert "2020-01-08" not in later_dates
 
-    all_tenors = load_repo_rows_all_tenors_from_sqlite(db, as_of=as_of)
+    all_tenors = fetch_jsda_repo_history_rows(
+        db, as_of=as_of, tenor_contains=None
+    )
     tenors = {r["tenor"] for r in all_tenors}
     assert any("overnight" in t.lower() for t in tenors)
     assert any("1M" in t for t in tenors)
     assert all(str(r["available_at"]) <= as_of for r in all_tenors)
 
 
-def test_repo_history_plane_status_discloses_sqlite_not_d1() -> None:
+def test_repo_history_plane_status_discloses_sqlite_not_d1(tmp_path: Path) -> None:
     from research.eval_loaders import repo_history_plane_status
 
-    note = repo_history_plane_status()
+    path = tmp_path / "repo-status.sqlite"
+    sqlite3.connect(path).close()
+    view = OfflineFixtureDataView.bind(path, artifact_root=tmp_path / "art")
+    note = repo_history_plane_status(view)
     assert note["invent_complete"] is False
     assert note["ffill_applied"] is False
     assert note["d1_role"] == "hot_tip_only"
@@ -213,8 +232,12 @@ def test_repo_history_plane_status_discloses_sqlite_not_d1() -> None:
 def test_fins_events_keep_ta_eqar_from_payload(tmp_path: Path) -> None:
     from research.eval_loaders import load_fins_events_from_sqlite
 
+    path = _fins_sqlite(tmp_path)
+    view = OfflineFixtureDataView.bind(
+        path, artifact_root=tmp_path / "art", decision_cutoff="session_close"
+    )
     events = load_fins_events_from_sqlite(
-        _fins_sqlite(tmp_path),
+        view,
         codes=["33210"],
         start="2008-01-01",
         end="2008-12-31",
@@ -238,7 +261,15 @@ def test_fins_events_keep_ta_eqar_from_payload(tmp_path: Path) -> None:
 def test_fins_ta_eqar_stats_see_official_keys(tmp_path: Path) -> None:
     from research.eval_loaders import fins_summary_ta_eqar_stats
 
-    stats = fins_summary_ta_eqar_stats(_fins_sqlite(tmp_path), limit=2000)
+    path = _fins_sqlite(tmp_path)
+    view = OfflineFixtureDataView.bind(
+        path, artifact_root=tmp_path / "art2", decision_cutoff="session_close"
+    )
+    stats = fins_summary_ta_eqar_stats(
+        view,
+        as_of="2008-12-31T23:59:59+09:00",
+        limit=2000,
+    )
     assert stats["invent"] is False
     assert stats["official_keys"]["ta"] == "TA"
     assert stats["official_keys"]["eq_ar"] == "EqAR"
@@ -247,3 +278,6 @@ def test_fins_ta_eqar_stats_see_official_keys(tmp_path: Path) -> None:
     assert stats["n_eqar_nonnull"] == 3
     assert (stats["ncta_nonnull"] or 0) < (stats["n_ta_nonnull"] or 0)
     assert stats["ncta_nonnull"] == 1
+    assert stats["evidence_kind"] == "PERSONAL_RETROSPECTIVE_DIAGNOSTIC"
+    assert stats["feeds_controlled"] is False
+    assert stats["feeds_comparable_strategy_metrics"] is False

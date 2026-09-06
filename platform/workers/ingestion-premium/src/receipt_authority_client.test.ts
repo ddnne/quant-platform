@@ -92,10 +92,15 @@ function fakeEnv() {
                 operation_id: operationId,
                 request_nonce: String(args[1]),
                 environment: String(args[2]),
-                dataset: String(args[3]),
-                segment_id: String(args[4]),
+                source: String(args[3]),
+                contract_id: String(args[4]),
+                dataset: String(args[5]),
+                segment_id: String(args[6]),
                 state: "PREPARED",
                 receipt_digest: null,
+                work_key: args[9] == null ? undefined : String(args[9]),
+                expected_contract_digest: args[10] == null ? undefined : String(args[10]),
+                raw_object_key: args[11] == null ? undefined : String(args[11]),
               });
             }
           } else if (sql.includes("UPDATE receipt_authority_requests")) {
@@ -145,7 +150,25 @@ function fakeEnv() {
               : auditRows.get(`${String(args[0])}:${String(args[1])}`);
             return (row ?? null) as T | null;
           }
-          return (rows.get(String(args[0])) ?? null) as T | null;
+          const request = rows.get(String(args[0]));
+          if (sql.includes("FROM receipt_authority_operations")) {
+            if (request === undefined) return null as T | null;
+            return {
+              operation_id: request.operation_id,
+              state: "RECEIPT_COMMITTED",
+              raw_manifest_digest: "sha256:" + "11".repeat(32),
+              structured_digest: "sha256:" + "22".repeat(32),
+            } as T;
+          }
+          if (sql.includes("FROM receipt_product_materializations")) {
+            if (request === undefined) return null as T | null;
+            return {
+              operation_id: request.operation_id,
+              raw_manifest_digest: "sha256:" + "11".repeat(32),
+              artifact_digest: "sha256:" + "22".repeat(32),
+            } as T;
+          }
+          return (request ?? null) as T | null;
         },
         async all<T>() {
           if (sql.includes("FROM sqlite_schema")) {
@@ -409,6 +432,34 @@ function activateAudit(env: ReceiptAuthorityAuditCanaryEnv): void {
 }
 
 describe("Receipt Evidence Authority client", () => {
+  it("derives AM snapshot and JSDA year/file ranges and rejects invented ranges", async () => {
+    const { env, issue } = fakeEnv();
+    await issueGovernedReceipt(env, "production", "equities_bars_daily_am", "2026-09-02");
+    expect(issue).toHaveBeenCalledWith(expect.objectContaining({
+      segment_grain: "same_trading_day_am_snapshot",
+      expected_key_start: "2026-09-02",
+      expected_key_end: "2026-09-02",
+    }));
+    await issueGovernedReceipt(
+      env,
+      "production",
+      "jsda_otc_bond_reference_prices",
+      "2026-08-01",
+      {
+        work_key: "jsda:v2:root:jsda_otc_bond_reference_prices:cron:2026-08-01",
+        expected_contract_digest: `sha256:${"ab".repeat(32)}`,
+        raw_object_key: "raw/jsda/jsda_otc_bond_reference_prices/index_root_2026-08-01/html",
+      },
+    );
+    expect(issue).toHaveBeenCalledWith(expect.objectContaining({
+      segment_grain: "official_archive_index_day",
+      expected_key_start: "2026-08-01",
+      expected_key_end: "2026-08-01",
+      work_key: "jsda:v2:root:jsda_otc_bond_reference_prices:cron:2026-08-01",
+      raw_object_key: "raw/jsda/jsda_otc_bond_reference_prices/index_root_2026-08-01/html",
+    }));
+  });
+
   it("supplies only dataset/month and a CSPRNG nonce over typed RPC", async () => {
     const { env, issue } = fakeEnv();
     const issued = await issueGovernedReceipt(
@@ -422,8 +473,13 @@ describe("Receipt Evidence Authority client", () => {
       schema_version: "receipt-evidence-issue-request/v1",
       operation: "issue_for_segment",
       environment: "production",
+      source: "jquants",
+      contract_id: "jquants_premium_core",
       dataset_id: "indices_bars_daily_topix",
+      segment_grain: "calendar_month",
       segment_id: "2024-02",
+      expected_key_start: "2024-02-01",
+      expected_key_end: "2024-02-29",
       request_nonce: issued.requestNonce,
     });
   });
@@ -449,6 +505,38 @@ describe("Receipt Evidence Authority client", () => {
       "2024-02",
       "not-a-nonce",
     )).rejects.toThrow("recovery nonce is invalid");
+  });
+
+  it("recovers a JSDA PREPARED request from the persisted locator", async () => {
+    const { env, issue, recover, rows } = fakeEnv();
+    const locator = {
+      work_key: "jsda:v2:file:jsda_otc_bond_reference_prices:abc",
+      expected_contract_digest: `sha256:${"ab".repeat(32)}`,
+      raw_object_key: "raw/jsda/file.csv",
+    };
+    issue.mockRejectedValueOnce(new Error("simulated lost JSDA RPC"));
+    await expect(issueGovernedReceipt(
+      env,
+      "production",
+      "jsda_otc_bond_reference_prices",
+      "file_2002-08-02_otc",
+      locator,
+    )).rejects.toThrow("simulated lost JSDA RPC");
+    const [operationId, prepared] = [...rows.entries()][0]!;
+    expect(prepared).toMatchObject({
+      state: "PREPARED",
+      work_key: locator.work_key,
+      raw_object_key: locator.raw_object_key,
+      expected_contract_digest: locator.expected_contract_digest,
+    });
+    const recovered = await recoverPreparedReceipt(env, operationId);
+    expect(recovered.replayed).toBe(true);
+    expect(recover).toHaveBeenCalledWith(expect.objectContaining({
+      operation: "recover_issue",
+      work_key: locator.work_key,
+      raw_object_key: locator.raw_object_key,
+      expected_contract_digest: locator.expected_contract_digest,
+    }));
   });
 
   it("persists the exact request before RPC and recovers a lost response", async () => {

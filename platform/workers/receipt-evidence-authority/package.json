@@ -17,5 +17,8 @@
     "typescript": "5.9.2",
     "vitest": "4.1.11",
     "wrangler": "4.125.0"
+  },
+  "dependencies": {
+    "@e965/xlsx": "0.20.3"
   }
 }

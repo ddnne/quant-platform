@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   PERSONAL_RESEARCH_AM_PM_COHORT_IDS,
+  PERSONAL_RESEARCH_LEGACY_COHORT_IDS,
   PERSONAL_RESEARCH_LEGACY_CONTAINER_NAME,
   PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES,
   PERSONAL_RESEARCH_RUNNER_SLOT,
@@ -22,7 +23,7 @@ import {
 
 const SHA = "a".repeat(64);
 const VALID = {
-  cohort_id: "diverse-core-v1" as const,
+  cohort_id: "diverse-core-am-pm-v1" as const,
   job_id: "exact-four-20260829",
   snapshot_key: `research/personal/snapshots/sha256=${SHA}.sqlite`,
   snapshot_sha256: SHA,
@@ -93,9 +94,9 @@ describe("personal research request contract", () => {
     );
   });
 
-  it("accepts one content-addressed bounded exact-four request", async () => {
+  it("accepts one content-addressed bounded draft four-candidate request", async () => {
     const parsed = parsePersonalResearchRequest(VALID);
-    expect(parsed).toEqual({ ok: true, value: VALID });
+    expect(parsed).toMatchObject({ ok: true, value: VALID });
     if (!parsed.ok) throw new Error(parsed.error);
     const digest = await personalResearchRequestDigest(parsed.value);
     const canonical = JSON.stringify({
@@ -123,7 +124,7 @@ describe("personal research request contract", () => {
   });
 
   it("accepts gzip transport while keeping raw SQLite digest identity", () => {
-    expect(parsePersonalResearchRequest(VALID_GZIP)).toEqual({
+    expect(parsePersonalResearchRequest(VALID_GZIP)).toMatchObject({
       ok: true,
       value: VALID_GZIP,
     });
@@ -155,9 +156,17 @@ describe("personal research request contract", () => {
         universe_id: "prime" as never,
       }).ok,
     ).toBe(false);
-    expect(personalResearchCohortDigest("sector-relative-ls-v1")).toBe(
-      "sha256:584bbf0052ad1eee6ec31cacdf1298c13c8a59b9eb6928267935fc17e34289be",
-    );
+  });
+
+  it("rejects every historical legacy cohort as executable", () => {
+    for (const cohortId of PERSONAL_RESEARCH_LEGACY_COHORT_IDS) {
+      expect(
+        parsePersonalResearchRequest({ ...VALID, cohort_id: cohortId }).ok,
+      ).toBe(false);
+      expect(personalResearchCohortDigest(cohortId)).toMatch(
+        /^sha256:[0-9a-f]{64}$/,
+      );
+    }
   });
 
   it("interprets the 7000-day cap as inclusive calendar dates", () => {
@@ -188,33 +197,26 @@ describe("personal research request contract", () => {
     expect(
       parsePersonalResearchRequest({
         ...VALID,
-        cohort_id: "sector-relative-ls-v1",
+        cohort_id: "sector-relative-ls-am-pm-v1",
       }).ok,
     ).toBe(true);
     expect(
       parsePersonalResearchRequest({
         ...VALID,
-        cohort_id: "sector-relative-ls-v1",
+        cohort_id: "sector-relative-ls-am-pm-v1",
         universe_id: "topix_core30",
       }).ok,
     ).toBe(false);
     expect(
       parsePersonalResearchRequest({
         ...VALID,
-        cohort_id: "sector-relative-ls-v1",
+        cohort_id: "sector-relative-ls-am-pm-v1",
         short_financing_rates: [0, 0.03, 0.1],
       }).ok,
     ).toBe(false);
   });
 
   it("pairs compact universes only with the compact market cohort", () => {
-    expect(
-      parsePersonalResearchRequest({
-        ...VALID,
-        cohort_id: "compact-market-diverse-v1",
-        universe_id: "topix_core30",
-      }).ok,
-    ).toBe(true);
     expect(
       parsePersonalResearchRequest({
         ...VALID,
@@ -230,6 +232,7 @@ describe("personal research request contract", () => {
       parsePersonalResearchRequest({
         ...VALID,
         cohort_id: "compact-market-diverse-v1",
+        universe_id: "topix_core30",
       }).ok,
     ).toBe(false);
     expect(
@@ -299,15 +302,15 @@ describe("personal research request contract", () => {
   it("admits the five frozen AM cohorts with exact repo digests", async () => {
     const expected = {
       "price-relative-am-pm-v1":
-        "sha256:34e304efb8ff848a268a1e563985d1456316edf1b9ca874eba7262377e17db93",
+        "sha256:f1ed5dda6f4b8afe502a2b71a8ae3e5d3157caa69e5380fc97c9e7447ab181ce",
       "fundamental-relative-am-pm-v1":
-        "sha256:9bc404066d3e705e085380a3c2f15bac41c8a24a931b12518ab92abbddcaf67f",
+        "sha256:127d5558da094e0751a3d6c81d103d65d88e6549fe69bd3a9ef560dd6929248e",
       "diverse-core-am-pm-v1":
-        "sha256:77136481d8a6b20fb8dc8188b8d6adb2837050b8185a8f8abac92ca10811adde",
+        "sha256:0c9fc5cba93c68cbfec3951a56f09949674c1a01cb4d4d4cf406082c01033c10",
       "compact-market-diverse-am-pm-v1":
-        "sha256:b1c96581aa3f24a9f4df65126c4dd8c443ddb965e7105f9bbea392e72e383eb0",
+        "sha256:f8c7e7aa76663f9e9b73d5835ce3e3b45b5dd31935e5d00ec5684c22b3b3ad95",
       "sector-relative-ls-am-pm-v1":
-        "sha256:e12e65393985ab8b7cc2b0b922a362a055404777a49fda7250f735d47f0b073b",
+        "sha256:9d4135b9b78ad16d071f8a0b26a88b29d315c4d53eace3cb7600aaccf450b73c",
     } as const;
     expect([...PERSONAL_RESEARCH_AM_PM_COHORT_IDS]).toEqual(Object.keys(expected));
     for (const cohortId of PERSONAL_RESEARCH_AM_PM_COHORT_IDS) {

@@ -385,7 +385,7 @@ def test_legacy_overlay_serialized_identity_is_unchanged() -> None:
     assert report["candidate_policy"]["post_result_selection"] == "NOT_PERFORMED"
 
 
-def test_am_pm_exact_four_ids_and_distinct_schemas() -> None:
+def test_am_pm_draft_overlay_ids_and_distinct_schemas() -> None:
     assert AM_PM_BASE_COHORT_ID == "sector-relative-ls-am-pm-v1"
     assert AM_PM_BASE_SLEEVE_ID != BASE_SLEEVE_ID
     assert AM_PM_BASE_COHORT_ID != BASE_COHORT_ID
@@ -418,7 +418,7 @@ def test_missing_definition_and_legacy_digest_fail_for_the_same_reason() -> None
         "sha256:54a59cb980f38c37ac5879f979bd26a635bf23a95974413f2f24358ef936be4d"
     )
     assert cohort == (
-        "sha256:e12e65393985ab8b7cc2b0b922a362a055404777a49fda7250f735d47f0b073b"
+        "sha256:9d4135b9b78ad16d071f8a0b26a88b29d315c4d53eace3cb7600aaccf450b73c"
     )
     with pytest.raises(AmPmBaseProducerUnavailable, match=AM_PM_BASE_PRODUCER_UNAVAILABLE):
         build_prepared_am_pm_panel_manifest(

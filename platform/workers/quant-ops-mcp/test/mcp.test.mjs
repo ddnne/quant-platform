@@ -54,7 +54,7 @@ test("remote surface is Ops read-only", () => {
 });
 
 test("POST /health and /healthz are 405 GET, HEAD only", async () => {
-  for (const path of ["/health", "/healthz"]) {
+  for (const path of ["/health", "/healthz", "/health/ready"]) {
     const res = handleHealthRequest(
       new Request(`https://ops.test${path}`, { method: "POST" }),
     );
@@ -74,7 +74,7 @@ test("POST /health and /healthz are 405 GET, HEAD only", async () => {
 });
 
 test("GET /health is liveness ok not READY", async () => {
-  for (const path of ["/health", "/healthz"]) {
+  for (const path of ["/health", "/healthz", "/health/ready"]) {
     const res = handleHealthRequest(new Request(`https://ops.test${path}`));
     assert.ok(res);
     assert.equal(res.status, 200);
@@ -146,6 +146,15 @@ test("initialize and tools/list implement MCP 2025-06-18", async () => {
   );
   assert.equal(
     await opsToolSchemaDigest(listed.result.tools),
+    ACCEPTED_OPS_TOOL_SCHEMA_DIGEST,
+  );
+  const renamed = listed.result.tools.map((tool, index) => (
+    index === 0
+      ? { ...tool, description: `${tool.description} (drift)` }
+      : tool
+  ));
+  assert.notEqual(
+    await opsToolSchemaDigest(renamed),
     ACCEPTED_OPS_TOOL_SCHEMA_DIGEST,
   );
   const names = listed.result.tools.map((tool) => tool.name);

@@ -1,5 +1,10 @@
 {
-  "schema_version": "quant-ops-mcp-tool-schema-acceptance/v1",
+  "schema_version": "quant-ops-mcp-tool-schema-acceptance/v2",
+  "mcp_server": {
+    "name": "quant-ops-read",
+    "version": "0.2.0"
+  },
+  "protocol_version": "2025-06-18",
   "tool_count": 17,
   "tool_names": [
     "ops_status",
@@ -20,5 +25,5 @@
     "sync_status",
     "storage_plane_status"
   ],
-  "schema_digest": "sha256:dad7cd29ef002e76ee1f9802b8685a179f94fcbd0bb2e6df685858e41c1778d3"
+  "schema_digest": "sha256:227465ce16df9ebd496bc102b198dcb5cc5c9660a26a8820b0449f824a5b67bc"
 }

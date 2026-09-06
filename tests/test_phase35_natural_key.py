@@ -12,6 +12,7 @@ from cf_platform.ingest_premium.natural_key import (
     natural_key,
     pick_event_time,
 )
+from data_contracts.identity import sha256_fallback
 from data_contracts.loader import all_contracts
 
 
@@ -40,20 +41,19 @@ def test_different_datasets_select_different_identity_fields():
     }
 
 
-def test_incomplete_composite_key_falls_back_instead_of_collapsing_rows():
+def test_incomplete_governed_composite_key_is_rejected():
     row = {"Code": "8697", "Date": "", "Close": 1.0}
-    key = natural_key(row, "equities_bars_daily")
-    assert key.startswith("hash:sha256:")
-    assert len(key.removeprefix("hash:sha256:")) == 64
+    with pytest.raises(ValueError, match="governed natural-key field Date"):
+        natural_key(row, "equities_bars_daily")
 
 
-def test_hash_fallback_is_stable_distinct_and_order_independent():
+def test_ungoverned_hash_fallback_is_stable_distinct_and_order_independent():
     first = {"Close": 100.0, "Volume": 1000}
     reordered = {"Volume": 1000, "Close": 100.0}
     distinct = {"Close": 200.0, "Volume": 1000}
-    first_key = natural_key(first, "markets_breakdown")
-    assert first_key == natural_key(reordered, "markets_breakdown")
-    assert first_key != natural_key(distinct, "markets_breakdown")
+    first_key = sha256_fallback(first)
+    assert first_key == sha256_fallback(reordered)
+    assert first_key != sha256_fallback(distinct)
 
 
 def test_source_aliases_are_canonicalized_in_key():

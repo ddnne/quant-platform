@@ -47,3 +47,16 @@ class DatabaseNotFound(PitError):
 
 class SnapshotNotReady(PitError):
     """Raised when a managed database is not a committed READY generation."""
+
+
+class HistoryReadError(PitError):
+    """Raised when an unmanaged DRAFT history file is present but unreadable."""
+
+
+class SnapshotObservationClockError(PitError):
+    """Raised when the immutable snapshot observation clock is unusable.
+
+    Controlled reads require ``snapshot_observation_clock.observed_through``.
+    Missing, malformed, or inconsistent clocks fail closed. Decision time,
+    infinity, and dataset watermarks are not substitutes.
+    """

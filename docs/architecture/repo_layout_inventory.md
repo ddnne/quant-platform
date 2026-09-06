@@ -174,7 +174,7 @@ Counts = number of `from X …` / `import X` statements under `tests/**/*.py` (s
 
 | Mechanism | Targets |
 |-----------|---------|
-| `importlib.util.spec_from_file_location` | `scripts/sync_d1_to_sqlite.py`, `publish_ops_projection.py`, `export_ops_projection.py`, `run_phase4_accept.py`, `run_ingestion_once.py`, `run_phase35_validation.py` |
+| `importlib.util.spec_from_file_location` | `scripts/sync_d1_to_sqlite.py`, `publish_ops_projection.py`, `export_ops_projection.py`, `run_ingestion_once.py`, `run_phase35_validation.py` |
 | `from scripts.…` | `run_ingestion_once`, `export_ops_projection`, `publish_ops_projection` |
 | Hardcoded `platform/workers/...` paths | migrations SQL, `catalog.ts`, `availability.ts`, `identity.ts`, `index.ts`, `governed.js` parity |
 
@@ -187,7 +187,7 @@ Counts = number of `from X …` / `import X` statements under `tests/**/*.py` (s
 | Pattern | Meaning | Scripts |
 |---------|---------|---------|
 | **A.** `ROOT = Path(__file__).resolve().parents[1]` + `sys.path.insert(0, ROOT)` | Script lives in `scripts/`; parent = repo root | majority |
-| **B.** `_REPO_ROOT = dirname(dirname(abspath(__file__)))` + `sys.path.insert` | Same depth, `os.path` style | `run_ingestion_once`, `run_phase35_validation`, `run_phase4_accept`, `sync_d1_to_sqlite` |
+| **B.** `_REPO_ROOT = dirname(dirname(abspath(__file__)))` + `sys.path.insert` | Same depth, `os.path` style | `run_ingestion_once`, `run_phase35_validation`, `sync_d1_to_sqlite` |
 | **C.** `ROOT = Path(__file__).resolve().parents[2]` | Script under `scripts/ops/` | `ops/cf_premium_backfill.py` |
 | **D.** `ROOT = parents[1]` **without** `sys.path` | Path for subprocess/data only | `ops_reeval_freshness.py`, `run_historical_backfill.py` |
 | **E.** No ROOT bootstrap | standalone | `report_d1_local_sync_lag.py` |
@@ -211,7 +211,6 @@ Counts = number of `from X …` / `import X` statements under `tests/**/*.py` (s
 | `run_historical_backfill.py` | D | ROOT for logs/DB defaults |
 | `run_ingestion_once.py` | B | ingestion CLI |
 | `run_phase35_validation.py` | B | `cf_platform`; default `data/reports` |
-| `run_phase4_accept.py` | B | `cf_platform.live_gates`; reports dir |
 | `sync_d1_to_sqlite.py` | B | invokes sibling `publish_ops_projection.py` by path |
 | `verify_governed_js_drift.py` | A | reads `platform/workers/quant-ops-mcp/src/governed.js` |
 | `write_collection_receipts.py` | A | mentions premium migrations path in messages |
@@ -281,8 +280,7 @@ Naming: `cf_platform` exists because **`platform` is stdlib** and `platform/` on
 | `paper_runtime/snapshot.py` | `cf_platform.ingest_premium.coverage` |
 | `scripts/refresh_coverage_ledger.py` | same |
 | `scripts/run_phase35_validation.py` | coverage |
-| `scripts/run_phase4_accept.py` | `cf_platform.live_gates.b0_pass` |
-| Tests (phase35/4/61) | `availability`, `natural_key`, `validate`, `matrix`, `coverage`, `live_gates` |
+| Tests (phase35/61) | `availability`, `natural_key`, `validate`, `matrix`, `coverage`, `live_gates` |
 
 ### 6.3 Python ↔ Worker **file path** coupling (parity / codegen)
 

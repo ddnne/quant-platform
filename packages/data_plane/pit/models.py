@@ -17,6 +17,19 @@ PIT_API_VERSION = "0.2.0"
 
 
 @dataclass(frozen=True)
+class PitReadClock:
+    """Two-clock PIT observation contract.
+
+    ``event_as_of`` gates ``event_time`` and ``available_at``.
+    ``observed_through`` is the immutable snapshot observation clock that
+    gates ``ingested_at``. It is not the historical decision time.
+    """
+
+    event_as_of: str
+    observed_through: str
+
+
+@dataclass(frozen=True)
 class PitResult:
     """A point-in-time read result: ``rows`` + provenance ``metadata``.
 

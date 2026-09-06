@@ -13,19 +13,21 @@ promotion, or trading authority.
 from __future__ import annotations
 
 import hashlib
-import heapq
 import json
-import sqlite3
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta
-from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Literal, Mapping, Sequence
-from urllib.parse import quote
+from typing import Any, Literal, Mapping
 
 from core.execution import close_as_of, morning_close_as_of
-from data_contracts.identity import canonical_json, natural_key as contract_natural_key
-from data_contracts.personal_history_compact import compact_history_state
+from data_contracts.membership_runs import (
+    MembershipRun,
+    RunLengthMembershipMap,
+    coalesce_daily_memberships,
+    codes_for_runs,
+    iter_run_days,
+    stream_membership_digest,
+    validate_membership_runs,
+)
 from data_contracts.personal_universe import (
     TOPIX_CORE30,
     TOPIX_LARGE70,
@@ -35,6 +37,9 @@ from data_contracts.personal_universe import (
     TOPIX_SMALL_2,
     canonical_topix_scale_category,
 )
+from pit import DatabaseNotFound, PitError
+from pit.personal_research_view import PersonalResearchDataView
+from pit.universe_pit import UniverseDaySlice
 
 
 PERSONAL_UNIVERSE_RULE_VERSION = "personal-topix-scale-with-fins/v1"
@@ -46,7 +51,7 @@ PERSONAL_UNIVERSE_DECISION_CUTOFFS: tuple[str, ...] = (
     "morning_close",
 )
 DEFAULT_PERSONAL_UNIVERSE_DECISION_CUTOFF: PersonalUniverseDecisionCutoff = (
-    "session_close"
+    "morning_close"
 )
 _DECISION_CUTOFF_AS_OF = {
     "session_close": close_as_of,
@@ -213,7 +218,7 @@ def personal_universe_selector(
 
 @dataclass(frozen=True, slots=True)
 class PersonalResolvedUniverseMembership:
-    """Content-addressed daily membership with core-compatible shape."""
+    """Content-addressed membership stored as run-length state changes."""
 
     period_start: str
     period_end: str
@@ -222,6 +227,7 @@ class PersonalResolvedUniverseMembership:
     rule_version: str
     rule_digest: str
     resolved_membership_digest: str = ""
+    membership_runs: tuple[MembershipRun, ...] = ()
 
     def __post_init__(self) -> None:
         if (
@@ -234,28 +240,68 @@ class PersonalResolvedUniverseMembership:
             raise PersonalUniverseError(
                 "personal resolved universe identity is invalid"
             )
+        interned: dict[tuple[str, ...], tuple[str, ...]] = {}
         normalized: list[tuple[str, tuple[str, ...]]] = []
-        seen: set[str] = set()
-        for raw_day, raw_codes in self.decision_memberships:
-            day = str(raw_day)
-            codes = tuple(sorted({str(code).strip() for code in raw_codes}))
-            if (
-                day in seen
-                or day < self.period_start
-                or day > self.period_end
-                or not codes
-                or any(not code for code in codes)
-            ):
-                raise PersonalUniverseError(
-                    "personal resolved universe has invalid daily membership"
+        if self.decision_memberships:
+            seen: set[str] = set()
+            for raw_day, raw_codes in self.decision_memberships:
+                day = str(raw_day)
+                codes = tuple(sorted({str(code).strip() for code in raw_codes}))
+                codes = interned.setdefault(codes, codes)
+                if (
+                    day in seen
+                    or day < self.period_start
+                    or day > self.period_end
+                    or not codes
+                    or any(not code for code in codes)
+                ):
+                    raise PersonalUniverseError(
+                        "personal resolved universe has invalid daily membership"
+                    )
+                seen.add(day)
+                normalized.append((day, codes))
+            normalized.sort(key=lambda item: item[0])
+            if not normalized:
+                raise PersonalUniverseError("personal resolved universe is empty")
+        try:
+            if self.membership_runs:
+                runs = validate_membership_runs(
+                    self.membership_runs,
+                    period_start=self.period_start,
+                    period_end=self.period_end,
                 )
-            seen.add(day)
-            normalized.append((day, codes))
-        normalized.sort(key=lambda item: item[0])
-        if not normalized:
+                if normalized:
+                    from_daily = validate_membership_runs(
+                        coalesce_daily_memberships(normalized),
+                        period_start=self.period_start,
+                        period_end=self.period_end,
+                    )
+                    if from_daily != runs:
+                        raise PersonalUniverseError(
+                            "personal resolved universe membership runs disagree with daily memberships"
+                        )
+            else:
+                if not normalized:
+                    raise PersonalUniverseError("personal resolved universe is empty")
+                runs = validate_membership_runs(
+                    coalesce_daily_memberships(normalized),
+                    period_start=self.period_start,
+                    period_end=self.period_end,
+                )
+        except ValueError as exc:
+            raise PersonalUniverseError(str(exc)) from exc
+        if not runs:
             raise PersonalUniverseError("personal resolved universe is empty")
-        object.__setattr__(self, "decision_memberships", tuple(normalized))
-        expected = _canonical_digest(self.to_canonical_dict())
+        object.__setattr__(self, "membership_runs", runs)
+        object.__setattr__(self, "decision_memberships", tuple(iter_run_days(runs)))
+        expected = stream_membership_digest(
+            rule_id=self.rule_id,
+            rule_version=self.rule_version,
+            rule_digest=self.rule_digest,
+            period_start=self.period_start,
+            period_end=self.period_end,
+            runs=runs,
+        )
         declared = str(self.resolved_membership_digest or "")
         if declared and declared != expected:
             raise PersonalUniverseError(
@@ -265,19 +311,19 @@ class PersonalResolvedUniverseMembership:
 
     @property
     def membership_by_date(self) -> Mapping[str, tuple[str, ...]]:
-        return MappingProxyType(dict(self.decision_memberships))
+        return RunLengthMembershipMap(self.membership_runs)
 
     @property
     def membership_proof(self) -> str:
-        # ``core.universe.ResolvedDailyUniverse`` currently uses this envelope
-        # for every governed daily map.  The embedded rule explicitly remains
-        # PERSONAL_DRAFT/FORBIDDEN and conveys no controlled authority.
-        return "controlled-resolved-universe:" + self.resolved_membership_digest
+        # Distinct from Controlled ``controlled-resolved-universe:``. The core
+        # engine only uses this as a digest envelope for a daily map; rule_id
+        # remains PERSONAL_DRAFT/FORBIDDEN and cannot mint READY or Pilot.
+        return "personal-draft-resolved-universe:" + self.resolved_membership_digest
 
     def codes_for(self, decision_date: str) -> tuple[str, ...]:
         try:
-            return self.membership_by_date[str(decision_date)]
-        except KeyError as exc:
+            return codes_for_runs(self.membership_runs, str(decision_date))
+        except (KeyError, ValueError) as exc:
             raise PersonalUniverseError(
                 f"personal universe has no membership for {decision_date}"
             ) from exc
@@ -289,9 +335,9 @@ class PersonalResolvedUniverseMembership:
             "rule_digest": self.rule_digest,
             "period_start": self.period_start,
             "period_end": self.period_end,
-            "decision_memberships": [
-                {"decision_date": day, "codes": list(codes)}
-                for day, codes in self.decision_memberships
+            "membership_runs": [
+                {"start": run.start, "end": run.end, "codes": list(run.codes)}
+                for run in self.membership_runs
             ],
         }
 
@@ -304,410 +350,80 @@ class PersonalResolvedUniverseMembership:
         }
 
 
-def _parse_datetime(value: Any, *, label: str) -> datetime:
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except (TypeError, ValueError) as exc:
-        raise PersonalUniverseError(f"{label} is not an ISO datetime") from exc
-    if parsed.tzinfo is None:
-        raise PersonalUniverseError(f"{label} must include a timezone")
-    return parsed
-
-
-def _decode_payload(row: Mapping[str, Any], dataset_id: str) -> dict[str, Any]:
-    payload: Any = row.get("payload")
-    if isinstance(payload, str):
-        try:
-            payload = json.loads(payload)
-        except json.JSONDecodeError as exc:
-            raise PersonalUniverseError(
-                f"{dataset_id} payload is not canonical JSON"
-            ) from exc
-    if not isinstance(payload, Mapping):
-        raise PersonalUniverseError(f"{dataset_id} payload is missing")
-    document = {str(key): value for key, value in payload.items()}
-    expected_key = contract_natural_key(document, dataset_id)
+def _map_universe_pit_error(exc: BaseException) -> PersonalUniverseError:
+    message = str(exc)
+    if isinstance(exc, DatabaseNotFound) or "structured DB not found" in message:
+        return PersonalUniverseError(message)
     if (
-        expected_key.startswith("hash:sha256:")
-        or row.get("natural_key") != expected_key
+        "rebuild as personal-draft-history/v8" in message
+        or "compact v7 marker or schema is invalid" in message
+        or "wire-incompatible" in message
     ):
-        raise PersonalUniverseError(
-            f"{dataset_id} natural key is missing or noncanonical"
+        return PersonalUniverseError(
+            "personal universe compact schema is invalid; "
+            "rebuild as personal-draft-history/v8"
         )
-    return document
-
-
-def _pick(payload: Mapping[str, Any], *names: str) -> str:
-    for name in names:
-        value = payload.get(name)
-        if value is not None and str(value).strip():
-            return str(value).strip()
-    return ""
-
-
-def _calendar_dates(start: str, end: str) -> tuple[str, ...]:
-    try:
-        cursor = date.fromisoformat(start)
-        stop = date.fromisoformat(end)
-    except (TypeError, ValueError) as exc:
-        raise PersonalUniverseError(
-            "personal universe period must use ISO dates"
-        ) from exc
-    if cursor > stop:
-        raise PersonalUniverseError("personal universe period is reversed")
-    values: list[str] = []
-    while cursor <= stop:
-        values.append(cursor.isoformat())
-        cursor += timedelta(days=1)
-    return tuple(values)
-
-
-def _synthesize_compact_master_row(raw: Mapping[str, Any]) -> dict[str, Any]:
-    def field(*names: str) -> str:
-        for name in names:
-            value = raw.get(name)
-            if value is not None and str(value).strip():
-                return str(value).strip()
-        return ""
-
-    scale = field("scale_category")
-    source_scale = field("source_scale_category")
-    canonical = canonical_topix_scale_category(scale)
-    if canonical is None:
-        canonical = canonical_topix_scale_category(source_scale)
-    payload = {
-        "Code": field("code"),
-        "Date": field("snapshot_date"),
-        "MarketCode": field("market_code"),
-        "Sector17Code": field("sector_17_code"),
-        "Sector33Code": field("sector_33_code"),
-        "ScaleCategory": scale,
-        "CanonicalScaleCategory": canonical or "",
-        "SourceScaleCategory": source_scale,
-    }
-    return {
-        "source": "jquants",
-        "dataset": "equities_master",
-        "natural_key": contract_natural_key(payload, "equities_master"),
-        "event_time": raw.get("event_time"),
-        "available_at": raw.get("available_at"),
-        "ingested_at": raw.get("ingested_at"),
-        "payload": canonical_json(payload),
-        "raw_payload": None,
-    }
-
-
-def _load_rows(
-    db_path: str | Path, dataset_ids: Sequence[str]
-) -> dict[str, tuple[dict[str, Any], ...]]:
-    source = Path(db_path).resolve()
-    if not source.is_file():
-        raise PersonalUniverseError(f"personal universe snapshot is missing: {source}")
-    uri = "file:" + quote(str(source)) + "?mode=ro"
-    connection: sqlite3.Connection | None = None
-    try:
-        connection = sqlite3.connect(uri, uri=True)
-        connection.row_factory = sqlite3.Row
-        required = {
-            "source",
-            "dataset",
-            "natural_key",
-            "event_time",
-            "available_at",
-            "ingested_at",
-            "payload",
-            "raw_payload",
-        }
-        load_compact_master = False
-        generic_ids = tuple(dataset_ids)
-        if "equities_master" in dataset_ids:
-            compact_state = compact_history_state(connection)
-            if compact_state == "invalid":
-                raise PersonalUniverseError(
-                    "personal universe compact v7 marker or schema is invalid"
-                )
-            if compact_state == "mixed":
-                raise PersonalUniverseError(
-                    "personal universe cannot mix compact master with "
-                    "generic or revision equities_master"
-                )
-            if compact_state == "compact":
-                load_compact_master = True
-                generic_ids = tuple(
-                    dataset_id
-                    for dataset_id in dataset_ids
-                    if dataset_id != "equities_master"
-                )
-        rows: list[dict[str, Any]] = []
-        if generic_ids:
-            placeholders = ",".join("?" for _ in generic_ids)
-            for table in ("jquants_records", "jquants_records_revisions"):
-                columns = {
-                    str(row[1])
-                    for row in connection.execute(f"PRAGMA table_info({table})")
-                }
-                if not columns:
-                    if table == "jquants_records":
-                        raise PersonalUniverseError(
-                            "personal universe requires canonical jquants_records"
-                        )
-                    continue
-                if not required <= columns:
-                    raise PersonalUniverseError(
-                        f"personal universe requires canonical {table} schema"
-                    )
-                rows.extend(
-                    dict(raw)
-                    for raw in connection.execute(
-                        "SELECT source,dataset,natural_key,event_time,available_at,"
-                        f"ingested_at,payload,raw_payload FROM {table} "
-                        f"WHERE source='jquants' AND dataset IN ({placeholders}) "
-                        "ORDER BY dataset,event_time,natural_key,available_at,"
-                        "ingested_at",
-                        tuple(generic_ids),
-                    ).fetchall()
-                )
-        if load_compact_master:
-            rows.extend(
-                _synthesize_compact_master_row(dict(raw))
-                for raw in connection.execute(
-                    "SELECT snapshot_date,code,event_time,available_at,"
-                    "ingested_at,market_code,sector_17_code,sector_33_code,"
-                    "scale_category,source_scale_category "
-                    "FROM personal_history_compact_master "
-                    "ORDER BY event_time,code,available_at,ingested_at"
-                ).fetchall()
-            )
-    except sqlite3.Error as exc:
-        raise PersonalUniverseError("personal universe snapshot query failed") from exc
-    finally:
-        if connection is not None:
-            connection.close()
-    grouped: dict[str, list[dict[str, Any]]] = {
-        str(dataset_id): [] for dataset_id in dataset_ids
-    }
-    for row in rows:
-        dataset_id = str(row["dataset"])
-        row["_payload"] = _decode_payload(row, dataset_id)
-        row["_available"] = _parse_datetime(
-            row.get("available_at"), label=f"{dataset_id}.available_at"
+    if "cannot mix compact" in message:
+        return PersonalUniverseError(
+            "personal universe cannot mix compact master with "
+            "generic or revision equities_master"
         )
-        row["_event"] = _parse_datetime(
-            row.get("event_time"), label=f"{dataset_id}.event_time"
+    if "requires canonical jquants_records" in message:
+        return PersonalUniverseError(
+            "personal universe requires canonical jquants_records"
         )
-        row["_ingested"] = _parse_datetime(
-            row.get("ingested_at"), label=f"{dataset_id}.ingested_at"
-        )
-        grouped[dataset_id].append(row)
-    return {key: tuple(value) for key, value in grouped.items()}
+    if "universe has no trading dates" in message:
+        return PersonalUniverseError("personal universe has no trading dates")
+    return PersonalUniverseError(str(exc) if str(exc) else "personal universe snapshot query failed")
 
 
-def resolve_personal_universe_with_evidence(
-    db_path: str | Path,
+def _apply_personal_selector(
+    slices: tuple[UniverseDaySlice, ...],
+    selector: PersonalUniverseSelector,
     *,
     period_start: str,
     period_end: str,
-    universe_id: str = DEFAULT_PERSONAL_UNIVERSE_ID,
-    decision_cutoff: str = DEFAULT_PERSONAL_UNIVERSE_DECISION_CUTOFF,
 ) -> tuple[PersonalResolvedUniverseMembership, dict[str, Any]]:
-    """Resolve one closed selector from the latest PIT-visible dated master."""
-
-    selector = personal_universe_selector(
-        universe_id, decision_cutoff=decision_cutoff
-    )
-    decision_as_of = _DECISION_CUTOFF_AS_OF[selector.decision_cutoff]
-    rows = _load_rows(
-        db_path, ("markets_calendar", "equities_master", "fins_summary")
-    )
-    activation_events: list[
-        tuple[datetime, str, str, datetime, datetime, int, dict[str, Any]]
-    ] = []
-    calendar_candidate_days: set[str] = set()
-    insertion_order = 0
-    for dataset_rows in rows.values():
-        for row in dataset_rows:
-            dataset_id = str(row["dataset"])
-            if dataset_id == "markets_calendar":
-                calendar_candidate_days.add(str(row["event_time"])[:10])
-            activation_events.append(
-                (
-                    max(row["_event"], row["_available"]),
-                    dataset_id,
-                    str(row["natural_key"]),
-                    row["_available"],
-                    row["_ingested"],
-                    insertion_order,
-                    row,
-                )
-            )
-            insertion_order += 1
-    activation_events.sort(key=lambda item: item[:-1])
-
-    requested_days = _calendar_dates(period_start, period_end)
-    for day in requested_days:
-        if day not in calendar_candidate_days:
-            raise PersonalUniverseError(
-                f"markets_calendar is missing required date {day}"
-            )
-
-    latest_versions: dict[_VersionIdentity, dict[str, Any]] = {}
-    calendar_by_day: dict[str, dict[_VersionIdentity, dict[str, Any]]] = {}
-    master_by_snapshot: dict[str, dict[_VersionIdentity, dict[str, Any]]] = {}
-    master_day_heap: list[tuple[int, str]] = []
-    fins_code_counts: dict[str, int] = {}
-
-    def remove_active(identity: _VersionIdentity, row: dict[str, Any]) -> None:
-        dataset_id = str(row["dataset"])
-        if dataset_id == "markets_calendar":
-            day = str(row["event_time"])[:10]
-            bucket = calendar_by_day.get(day)
-            if bucket is not None:
-                bucket.pop(identity, None)
-                if not bucket:
-                    del calendar_by_day[day]
-        elif dataset_id == "equities_master":
-            day = str(row["event_time"])[:10]
-            bucket = master_by_snapshot.get(day)
-            if bucket is not None:
-                bucket.pop(identity, None)
-                if not bucket:
-                    del master_by_snapshot[day]
-        elif dataset_id == "fins_summary":
-            code = _pick(row["_payload"], "Code", "code")
-            if code:
-                remaining = fins_code_counts.get(code, 0) - 1
-                if remaining > 0:
-                    fins_code_counts[code] = remaining
-                else:
-                    fins_code_counts.pop(code, None)
-
-    def add_active(identity: _VersionIdentity, row: dict[str, Any]) -> None:
-        dataset_id = str(row["dataset"])
-        if dataset_id == "markets_calendar":
-            day = str(row["event_time"])[:10]
-            calendar_by_day.setdefault(day, {})[identity] = row
-        elif dataset_id == "equities_master":
-            day = str(row["event_time"])[:10]
-            if day not in master_by_snapshot:
-                master_by_snapshot[day] = {}
-                heapq.heappush(
-                    master_day_heap, (-date.fromisoformat(day).toordinal(), day)
-                )
-            master_by_snapshot[day][identity] = row
-        elif dataset_id == "fins_summary":
-            code = _pick(row["_payload"], "Code", "code")
-            if code:
-                fins_code_counts[code] = fins_code_counts.get(code, 0) + 1
-
-    def activate(row: dict[str, Any]) -> None:
-        identity: _VersionIdentity = (
-            str(row["source"]),
-            str(row["dataset"]),
-            str(row["natural_key"]),
-        )
-        previous = latest_versions.get(identity)
-        version = (row["_available"], row["_ingested"])
-        if previous is not None and version <= (
-            previous["_available"],
-            previous["_ingested"],
-        ):
-            return
-        if previous is not None:
-            remove_active(identity, previous)
-        latest_versions[identity] = row
-        add_active(identity, row)
-
     allowed = frozenset(selector.scale_categories)
     memberships: list[tuple[str, tuple[str, ...]]] = []
+    interned_codes: dict[tuple[str, ...], tuple[str, ...]] = {}
     daily_observations: list[dict[str, Any]] = []
-    event_index = 0
-    saw_trading_day = False
-    for day in requested_days:
-        as_of = _parse_datetime(decision_as_of(day), label="decision_as_of")
-        while (
-            event_index < len(activation_events)
-            and activation_events[event_index][0] <= as_of
-        ):
-            activate(activation_events[event_index][-1])
-            event_index += 1
-
-        visible_calendar = calendar_by_day.get(day)
-        if not visible_calendar:
-            raise PersonalUniverseError(
-                f"markets_calendar row for {day} is not PIT-visible"
-            )
-        if len(visible_calendar) != 1:
-            raise PersonalUniverseError(
-                f"markets_calendar has duplicate natural keys for {day}"
-            )
-        calendar_row = next(iter(visible_calendar.values()))
-        holiday = _pick(
-            calendar_row["_payload"],
-            "HolidayDivision",
-            "HolDiv",
-            "holiday_division",
-        )
-        if holiday != "1":
-            continue
-        saw_trading_day = True
-
-        while master_day_heap and master_day_heap[0][1] not in master_by_snapshot:
-            heapq.heappop(master_day_heap)
-        if not master_day_heap:
-            raise PersonalUniverseError(
-                f"equities_master has no PIT-visible snapshot for {day}"
-            )
-        latest_snapshot = master_day_heap[0][1]
-        selected_codes: set[str] = set()
-        seen_master: set[str] = set()
-        for row in master_by_snapshot[latest_snapshot].values():
-            payload = row["_payload"]
-            code = _pick(payload, "Code", "code")
-            if not code or code in seen_master:
+    for slice in slices:
+        selected = []
+        seen: set[str] = set()
+        for member in slice.members:
+            if member.code in seen:
                 raise PersonalUniverseError(
                     "equities_master snapshot "
-                    f"{latest_snapshot} has invalid code identity"
+                    f"{slice.snapshot_date} has invalid code identity"
                 )
-            seen_master.add(code)
-            category = canonical_topix_scale_category(
-                _pick(
-                    payload,
-                    "CanonicalScaleCategory",
-                    "ScaleCategory",
-                    "ScaleCat",
-                    "scale_category",
-                )
-            )
+            seen.add(member.code)
+            category = canonical_topix_scale_category(member.scale_category)
             if category in allowed:
-                selected_codes.add(code)
-
-        if not selected_codes:
+                selected.append(member.code)
+        if not selected:
             raise PersonalUniverseError(
-                f"{selector.selector_id} resolves no master members at {day}"
+                f"{selector.selector_id} resolves no master members at {slice.decision_date}"
             )
         resolved = tuple(
-            sorted(
-                code for code in selected_codes if fins_code_counts.get(code, 0) > 0
-            )
+            sorted(code for code in selected if code in slice.fins_codes)
         )
         if not resolved:
             raise PersonalUniverseError(
-                f"{selector.rule_id} resolves empty at {day}"
+                f"{selector.rule_id} resolves empty at {slice.decision_date}"
             )
-        memberships.append((day, resolved))
+        resolved = interned_codes.setdefault(resolved, resolved)
+        if memberships and memberships[-1][1] == resolved:
+            resolved = memberships[-1][1]
+        memberships.append((slice.decision_date, resolved))
         daily_observations.append(
             {
-                "decision_date": day,
-                "selector_master_count": len(selected_codes),
+                "decision_date": slice.decision_date,
+                "selector_master_count": len(selected),
                 "resolved_fins_intersection_count": len(resolved),
-                "resolved_fins_intersection_ratio": len(resolved)
-                / len(selected_codes),
+                "resolved_fins_intersection_ratio": len(resolved) / len(selected),
             }
         )
-
-    if not saw_trading_day:
-        raise PersonalUniverseError("personal universe has no trading dates")
-
     membership = PersonalResolvedUniverseMembership(
         period_start=period_start,
         period_end=period_end,
@@ -745,23 +461,53 @@ def resolve_personal_universe_with_evidence(
             if float(item["resolved_fins_intersection_ratio"])
             == minimum_daily_ratio
         ],
-        "source_complete_claim": False,
         "research_state": "PERSONAL_DRAFT",
         "controlled_live_eligibility": "FORBIDDEN",
     }
     return membership, evidence
 
 
-def resolve_personal_universe(
-    db_path: str | Path,
+def resolve_personal_universe_with_evidence(
+    view: PersonalResearchDataView,
     *,
     period_start: str,
     period_end: str,
     universe_id: str = DEFAULT_PERSONAL_UNIVERSE_ID,
-    decision_cutoff: str = DEFAULT_PERSONAL_UNIVERSE_DECISION_CUTOFF,
+    decision_cutoff: str | None = None,
+) -> tuple[PersonalResolvedUniverseMembership, dict[str, Any]]:
+    """Resolve one closed selector from the latest PIT-visible dated master."""
+    if not isinstance(view, PersonalResearchDataView):
+        raise PersonalUniverseError("personal universe requires a typed research data view")
+    cutoff = str(decision_cutoff or view.decision_cutoff)
+    selector = personal_universe_selector(universe_id, decision_cutoff=cutoff)
+    if selector.decision_cutoff != view.decision_cutoff:
+        raise PersonalUniverseError(
+            "personal universe decision_cutoff must match the research view"
+        )
+    try:
+        slices = view.universe_slices(
+            period_start=period_start, period_end=period_end
+        )
+    except PitError as exc:
+        raise _map_universe_pit_error(exc) from exc
+    return _apply_personal_selector(
+        slices,
+        selector,
+        period_start=period_start,
+        period_end=period_end,
+    )
+
+
+def resolve_personal_universe(
+    view: PersonalResearchDataView,
+    *,
+    period_start: str,
+    period_end: str,
+    universe_id: str = DEFAULT_PERSONAL_UNIVERSE_ID,
+    decision_cutoff: str | None = None,
 ) -> PersonalResolvedUniverseMembership:
     membership, _evidence = resolve_personal_universe_with_evidence(
-        db_path,
+        view,
         period_start=period_start,
         period_end=period_end,
         universe_id=universe_id,

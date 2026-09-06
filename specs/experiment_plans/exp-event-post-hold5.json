@@ -1,5 +1,6 @@
 {
   "version": "experiment-plan/v2",
+  "identity": "controlled_pilot_v1",
   "plan_id": "exp-event-post-hold5",
   "idea_id": "idea-event-post-hold5",
   "hypothesis": "A 5-day post-event hold on disclosure_flag_fins isolates event drift from nested 3-AND event-fund parents. Parent/child reconstitution is not applied here.",
@@ -24,5 +25,29 @@
   "budget_allocation": {
     "generations": 1
   },
-  "execution_enabled": false
+  "execution_enabled": false,
+  "fill_contract": {
+    "format": "controlled-pilot-fill-contract/v1",
+    "id": "controlled-pilot-am-signal-pm-close",
+    "version": "1.0.0",
+    "identity": "controlled_pilot_v1",
+    "execution_mode": "am_signal_pm_close",
+    "signal_session": "morning_close",
+    "signal_price_field": "MAdjC",
+    "signal_price_dataset": "equities_bars_daily_am",
+    "fill_session": "afternoon_close",
+    "fill_valuation_field": "AAdjC",
+    "fill_valuation_session": "same_trading_date",
+    "information_cutoff": "11:30:00+09:00",
+    "lifecycle": "Paper",
+    "retrospective_only": false,
+    "draft": false,
+    "live_trading_evidence": false,
+    "ready_snapshot_declared": true,
+    "go": false,
+    "automatic_promotion": false,
+    "fallback": false,
+    "forward_fill": false,
+    "contract_digest": "sha256:678985a0f7b142eeecd693ebe28bff822916bc815889f0b39e2841830377377d"
+  }
 }

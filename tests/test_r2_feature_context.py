@@ -34,7 +34,6 @@ from research.r2_feature_context import (
     can_build_40d_asof,
     extract_r2_history_feature_rows,
     filter_history_rows,
-    materialize_disposable_sqlite_mirror,
     normalize_r2_history_row,
     parse_r2_structured_line,
     r2_inventory_document,
@@ -130,14 +129,6 @@ def test_t5_defer_hard_reject_on_build_context():
         build_r2_feature_context(
             {"equities_master": [{"code": "x", "available_at": "2026-01-01"}]},
             as_of="2026-08-04T15:30:00+09:00",
-        )
-
-
-def test_t5_defer_hard_reject_on_sqlite_mirror(tmp_path: Path):
-    with pytest.raises(PermanentDeferHistoryError):
-        materialize_disposable_sqlite_mirror(
-            {"equities_bars_daily_am": [{"available_at": "x"}]},
-            db_path=tmp_path / "x.sqlite",
         )
 
 
@@ -275,7 +266,7 @@ def test_filter_history_rows_require_available_at():
     assert len(filter_history_rows(rows, require_available_at=True)) == 1
 
 
-def test_disposable_sqlite_mirror_not_sot(tmp_path: Path):
+def test_r2_extract_is_not_local_sot():
     extract = extract_r2_history_feature_rows(
         ["equities_bars_daily", "markets_calendar"],
         period_start="2026-06-01",
@@ -283,13 +274,9 @@ def test_disposable_sqlite_mirror_not_sot(tmp_path: Path):
         codes=["13010"],
         raw_lines_by_dataset=_s1_two_day_map(include_topix=False),
     )
-    path = materialize_disposable_sqlite_mirror(
-        extract["rows_by_dataset"], db_path=tmp_path / "mirror.sqlite"
-    )
-    assert path.is_file()
-    # Mirror exists for pit convenience only — extract still marks local_sot False
     assert extract["local_sot"] is False
-    assert extract["disposable_mirror"] is True
+    assert extract["disposable_mirror"] is False
+    assert not hasattr(extract_r2_history_feature_rows, "materialize_disposable_sqlite_mirror")
 
 
 def test_can_build_40d_asof_code_path_yes():

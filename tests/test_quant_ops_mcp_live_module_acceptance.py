@@ -113,7 +113,7 @@ def test_exact_module_acceptance_binds_manifest_and_agents_dependency() -> None:
     assert result["status"] == "VERIFIED_EXACT_MODULE_BYTES"
     assert result["module_digest"] == DIGEST
     assert result["binding_manifest_schema_version"] == (
-        "cloudflare-active-worker-bindings/v9"
+        "cloudflare-active-worker-bindings/v10"
     )
     assert result["binding_manifest_digest"].startswith("sha256:")
     assert result["agents_dependency"]["resolved_version"] == "0.17.4"

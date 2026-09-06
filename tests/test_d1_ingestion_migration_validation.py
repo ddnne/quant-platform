@@ -433,10 +433,19 @@ def test_bridge_cannot_clobber_newer_v3_and_active_cutover_retires_v2() -> None:
         ).fetchone() == ("running", "2026-08-26T00:00:00Z")
 
         conn.execute(
+            "INSERT INTO jsda_v3_drain_evidence "
+            "(drain_evidence_digest, observed_at, document_json) "
+            "VALUES (?, '2026-08-26T00:01:00Z', ?)",
+            (
+                "sha256:" + "d" * 64,
+                '{"schema_version":"jsda-v3-drain-evidence/v1"}',
+            ),
+        )
+        conn.execute(
             "UPDATE jsda_v3_cutover_control SET phase='v3_active', "
             "activated_at='2026-08-26T00:01:00Z', activated_source_sha=?, "
-            "drain_evidence_digest=? WHERE singleton=1",
-            ("a" * 40, "sha256:" + "b" * 64),
+            "cutover_config_digest=?, drain_evidence_digest=? WHERE singleton=1",
+            ("a" * 40, "sha256:" + "b" * 64, "sha256:" + "d" * 64),
         )
         conn.commit()
         with pytest.raises(sqlite3.IntegrityError, match="v2 acquisition graph is retired"):
@@ -444,6 +453,94 @@ def test_bridge_cannot_clobber_newer_v3_and_active_cutover_retires_v2() -> None:
                 "UPDATE jsda_acquisition_jobs_v2 SET attempt=attempt+1 "
                 "WHERE work_key='child-a'"
             )
+        with pytest.raises(sqlite3.IntegrityError, match="v1 acquisition graph is retired"):
+            conn.execute(
+                "INSERT INTO jsda_acquisition_jobs ("
+                "job_id,dataset,job_type,target_url,state,attempt,priority,"
+                "created_at,updated_at) VALUES ("
+                "'late-v1','jsda_otc_bond_reference_prices','discover_root',"
+                "'https://market.jsda.or.jp/','pending',0,100,"
+                "'2026-08-26T00:02:00Z','2026-08-26T00:02:00Z')"
+            )
+    finally:
+        conn.close()
+
+
+def test_jsda_v3_cutover_one_way_rejects_null_replace_and_reverse() -> None:
+    conn = _connection_through_0011()
+    try:
+        _finish(conn)
+        assert conn.execute(
+            "SELECT phase FROM jsda_v3_cutover_control WHERE singleton=1"
+        ).fetchone() == ("bridge",)
+        sql_0012 = next(
+            path for path in migration.MIGRATIONS if path.name.startswith("0012_")
+        )
+        conn.executescript(sql_0012.read_text(encoding="utf-8"))
+        assert conn.execute(
+            "SELECT phase FROM jsda_v3_cutover_control WHERE singleton=1"
+        ).fetchone() == ("bridge",)
+
+        with pytest.raises(sqlite3.IntegrityError, match="activation is incomplete"):
+            conn.execute(
+                "UPDATE jsda_v3_cutover_control SET phase='v3_active', "
+                "activated_at='not-a-time', activated_source_sha=?, "
+                "cutover_config_digest=NULL, drain_evidence_digest=NULL "
+                "WHERE singleton=1",
+                ("a" * 40,),
+            )
+        assert conn.execute(
+            "SELECT phase, activated_at, cutover_config_digest, "
+            "drain_evidence_digest FROM jsda_v3_cutover_control WHERE singleton=1"
+        ).fetchone() == ("bridge", None, None, None)
+
+        conn.execute(
+            "INSERT INTO jsda_v3_drain_evidence "
+            "(drain_evidence_digest, observed_at, document_json) "
+            "VALUES (?, '2026-08-26T00:01:00Z', ?)",
+            (
+                "sha256:" + "d" * 64,
+                '{"schema_version":"jsda-v3-drain-evidence/v1"}',
+            ),
+        )
+        conn.execute(
+            "UPDATE jsda_v3_cutover_control SET phase='v3_active', "
+            "activated_at='2026-08-26T00:01:00Z', activated_source_sha=?, "
+            "cutover_config_digest=?, drain_evidence_digest=? WHERE singleton=1",
+            ("a" * 40, "sha256:" + "b" * 64, "sha256:" + "d" * 64),
+        )
+        assert conn.execute(
+            "SELECT phase FROM jsda_v3_cutover_control WHERE singleton=1"
+        ).fetchone() == ("v3_active",)
+
+        with pytest.raises(sqlite3.IntegrityError, match="cannot be replaced"):
+            conn.execute(
+                "INSERT OR REPLACE INTO jsda_v3_cutover_control(singleton,phase) "
+                "VALUES (1,'bridge')"
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="cannot be replaced"):
+            conn.execute(
+                "INSERT INTO jsda_v3_cutover_control(singleton,phase) "
+                "VALUES (1,'bridge')"
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="cannot be deleted"):
+            conn.execute("DELETE FROM jsda_v3_cutover_control WHERE singleton=1")
+        with pytest.raises(sqlite3.IntegrityError, match="immutable after activation"):
+            conn.execute(
+                "UPDATE jsda_v3_cutover_control SET phase='bridge' WHERE singleton=1"
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="immutable after activation"):
+            conn.execute(
+                "UPDATE jsda_v3_cutover_control SET phase='v3_active', "
+                "activated_at='2026-08-26T00:02:00Z', activated_source_sha=?, "
+                "cutover_config_digest=?, drain_evidence_digest=? "
+                "WHERE singleton=1",
+                ("c" * 40, "sha256:" + "e" * 64, "sha256:" + "f" * 64),
+            )
+        assert conn.execute(
+            "SELECT phase, activated_source_sha FROM jsda_v3_cutover_control "
+            "WHERE singleton=1"
+        ).fetchone() == ("v3_active", "a" * 40)
     finally:
         conn.close()
 

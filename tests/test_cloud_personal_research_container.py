@@ -5,7 +5,9 @@ import hashlib
 import importlib.util
 import io
 import json
+import multiprocessing
 import os
+import signal
 import sqlite3
 import sys
 import tarfile
@@ -15,27 +17,43 @@ import urllib.error
 import urllib.parse
 from dataclasses import replace
 from email.message import Message
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from core.result import BacktestResult
 from personal_history_compact_support import (
     insert_compact_bar,
     insert_compact_master,
     install_compact_schema,
     stamp_compact_manifest,
 )
-from research.factor_cohorts import get_research_cohort, is_am_pm_factor_cohort
+from research.factor_cohorts import (
+    AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT,
+    PERSONAL_SHORT_FINANCING_AM_PM_COHORT_ID,
+    get_research_cohort,
+    is_am_pm_factor_cohort,
+    personal_specs_for_cohort,
+)
 from research.personal_base_sleeve import (
+    AM_PM_BASE_SLEEVE_ID,
     EXPECTED_BASE_COHORT_DIGEST,
     EXPECTED_BASE_STRATEGY_SPEC_DIGEST,
+    PERSONAL_BASE_SLEEVE_AM_PM_ARTIFACT_SCHEMA,
+    PERSONAL_BASE_SLEEVE_RANKING_ROLE,
+    PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA,
+    PERSONAL_BASE_SLEEVE_ROLE,
+    build_personal_base_sleeve_am_pm_artifact,
 )
+from test_personal_base_sleeve_am_pm import _build as _build_am_sleeve
 from research.personal_universe import (
     personal_research_universe_decision_cutoff,
     personal_research_universe_rule_digest,
     personal_universe_selector,
 )
-from research.personal_index_vol_overlay import canonical_trading_calendar_digest
+from research.universe_contract import EXACT_FOUR_UNIVERSE_RULE_DIGEST
+from strategies.paper import Lifecycle, PaperRunResult
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = (
@@ -54,6 +72,12 @@ service = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = service
 SPEC.loader.exec_module(service)
 
+PROCESS_CONTEXT = multiprocessing.get_context("fork")
+
+
+def _job_manager(runner, **kwargs):
+    return service.JobManager(runner, process_context=PROCESS_CONTEXT, **kwargs)
+
 
 def _digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -69,13 +93,13 @@ def _sqlite(path: Path) -> str:
 
 
 COHORT_DIGEST = (
-    "sha256:ea37baf3423e5d84e61d4c80c59bdfe8184342dd3dee28646bd339cd45085a84"
+    "sha256:0c9fc5cba93c68cbfec3951a56f09949674c1a01cb4d4d4cf406082c01033c10"
 )
 LONG_SHORT_COHORT_DIGEST = (
-    "sha256:584bbf0052ad1eee6ec31cacdf1298c13c8a59b9eb6928267935fc17e34289be"
+    "sha256:6e4de725046c0b0e55416891d83580b9acb753c00a2beecfd3a26ee0c87a74f9"
 )
 AM_LONG_SHORT_COHORT_DIGEST = (
-    "sha256:e12e65393985ab8b7cc2b0b922a362a055404777a49fda7250f735d47f0b073b"
+    "sha256:9d4135b9b78ad16d071f8a0b26a88b29d315c4d53eace3cb7600aaccf450b73c"
 )
 AM_EXECUTION_CONTRACT_DIGEST = (
     "sha256:5fc214947a8fdde7005561820a9bf4b3c301154535b4dc37cff09e9d801bddac"
@@ -87,7 +111,7 @@ def _job(
     job_id: str = "exact-four-test",
     *,
     compressed: bool = False,
-    cohort_id: str = "diverse-core-v1",
+    cohort_id: str = "diverse-core-am-pm-v1",
     universe_id: str = "topix_all",
     cohort_digest: str | None = None,
     universe_rule_digest: str | None = None,
@@ -127,6 +151,14 @@ def _job(
             "manifest_key": f"research/personal/jobs/job={job_id}/manifest.json",
         }
     )
+
+
+def _manager_completed_result(spec) -> dict:
+    now = service._now()
+    return {
+        **service._manifest_base(spec, started_at=now, finished_at=now),
+        "status": "COMPLETED",
+    }
 
 
 class _SnapshotResponse(io.BytesIO):
@@ -183,7 +215,7 @@ def _runner_summary(
     hold_count: int = 1,
     unexpected_errors: int = 0,
 ) -> dict[str, object]:
-    return {
+    summary: dict[str, object] = {
         "cohort_id": spec.cohort_id,
         "cohort_digest": spec.cohort_digest,
         "universe_id": spec.universe_id,
@@ -206,84 +238,167 @@ def _runner_summary(
         "live_orders_enabled": False,
         "automatic_promotion": False,
     }
+    if is_am_pm_factor_cohort(spec.cohort_id):
+        summary.update(
+            {
+                "execution_mode": "am_signal_pm_close",
+                "execution_contract_digest": AM_EXECUTION_CONTRACT_DIGEST,
+            }
+        )
+    return summary
+
+
+def _artifact(member: str):
+    return SimpleNamespace(archive_member=member)
+
+
+def _direct_run_from_summary(
+    summary: dict[str, object],
+    output: Path,
+    *,
+    exit_code: int = 0,
+):
+    reports = output / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    if not (reports / "report.json").exists():
+        (reports / "report.json").write_text('{"ok":true}', encoding="utf-8")
+    if not (reports / "report.md").exists():
+        (reports / "report.md").write_text("# report", encoding="utf-8")
+    snapshots = output / "snapshots"
+    snapshots.mkdir(parents=True, exist_ok=True)
+    (snapshots / "generated.sqlite").write_bytes(b"large-copy")
+    (snapshots / "generated.manifest.json").write_text(
+        '{"snapshot":true}', encoding="utf-8"
+    )
+    return SimpleNamespace(
+        report_id=summary["report_id"],
+        report_json=_artifact("reports/report.json"),
+        report_markdown=_artifact("reports/report.md"),
+        snapshot=SimpleNamespace(
+            snapshot_id=summary["snapshot_id"],
+            logical_data_snapshot_id=summary["logical_data_snapshot_id"],
+        ),
+        candidate_count=summary["candidate_count"],
+        evaluated_count=summary["evaluated_count"],
+        hold_count=summary["hold_count"],
+        unexpected_errors=summary["unexpected_errors"],
+        cohort_id=summary["cohort_id"],
+        cohort_digest=summary["cohort_digest"],
+        universe_id=summary["universe_id"],
+        universe_rule_digest=summary["universe_rule_digest"],
+        execution_mode=summary.get(
+            "execution_mode",
+            service._personal_cohort_identity(str(summary["cohort_id"]))[
+                "execution_mode"
+            ],
+        ),
+        execution_contract_digest=summary.get(
+            "execution_contract_digest",
+            service._personal_cohort_identity(str(summary["cohort_id"])).get(
+                "execution_contract_digest"
+            ),
+        ),
+        base_sleeve_artifact=summary.get("base_sleeve_artifact"),
+        non_candidate_source_backtest_count=summary.get(
+            "non_candidate_source_backtest_count", 0
+        ),
+        go=summary.get("go", False),
+        ready_snapshot_declared=summary.get("ready_snapshot_declared", False),
+        live_orders_enabled=summary.get("live_orders_enabled", False),
+        automatic_promotion=summary.get("automatic_promotion", False),
+        model_calls=summary.get("model_calls", 0),
+        estimated_ai_cost_usd=summary.get("estimated_ai_cost_usd", 0.0),
+        exit_code=exit_code,
+    )
 
 
 def _base_sleeve_document(spec) -> dict[str, object]:
     source_dates = (spec.period_start, "2024-01-04", spec.period_end)
-    return {
-        "schema_version": "personal-base-sleeve-source/v1",
-        "role": "INDEX_VOL_OVERLAY_BASE_SOURCE",
-        "ranking_role": "NON_CANDIDATE_NOT_RANKED",
-        "candidate_count_contribution": 0,
-        "strategy": {
-            "strategy_id": "personal_sector_balanced_four_factor_v1_ls",
-            "strategy_spec_version": "1.0.0",
-            "strategy_spec_digest": EXPECTED_BASE_STRATEGY_SPEC_DIGEST,
-            "dependency_closure_digest": "sha256:" + "6" * 64,
-        },
-        "cohort": {
-            "cohort_id": "sector-relative-ls-v1",
-            "cohort_digest": EXPECTED_BASE_COHORT_DIGEST,
-        },
-        "universe": {
-            "universe_id": "topix_all",
-            "universe_rule_digest": spec.universe_rule_digest,
-            "resolved_membership_digest": "sha256:" + "7" * 64,
-        },
-        "snapshot": {
-            "snapshot_id": "sha256:" + "2" * 64,
-            "logical_data_snapshot_id": "sha256:" + "3" * 64,
-        },
-        "source_run": {
-            "experiment_id": "base-source-experiment",
-            "run_id": "base-source-run",
+    quality = {
+        "comparable": True,
+        "selection_eligible": True,
+        "comparison_eligible": True,
+        "incomplete_valuation": False,
+        "skipped_decision_count": 0,
+        "incomplete_valuation_count": 0,
+        "unfilled_order_count": 0,
+        "skipped_decision_dates": [],
+        "incomplete_valuation_dates": [],
+        "missing_fill_dates": [],
+        "non_comparable_session_dates": [],
+        "incomplete_valuation_codes": [],
+        "missing_fill_codes": [],
+        "held_missing_morning_adjustment_close": [],
+        "held_missing_afternoon_adjustment_close": [],
+        "missing_afternoon_adjustment_close_unfilled": [],
+    }
+    strategy = next(
+        candidate
+        for candidate in personal_specs_for_cohort(
+            PERSONAL_SHORT_FINANCING_AM_PM_COHORT_ID,
+            universe_id="topix_all",
+        )
+        if candidate.strategy_id == AM_PM_BASE_SLEEVE_ID
+    )
+    result = PaperRunResult(
+        experiment_id="base-source-experiment",
+        run_id="base-source-run",
+        lifecycle=Lifecycle.DRAFT,
+        backtest=BacktestResult(
+            equity_curve=[
+                {"date": day, "signal_equity": nav, "equity": nav}
+                for day, nav in zip(
+                    source_dates,
+                    (999_000.0, 1_000_000.0, 1_001_000.0),
+                    strict=True,
+                )
+            ],
+            trades=[],
+            metrics={"comparable": True},
+            metadata={
+                "execution_mode": "am_signal_pm_close",
+                "session_view_digest": service._personal_cohort_identity(
+                    spec.cohort_id
+                )["session_view_digest"],
+                "data_quality": quality,
+            },
+        ),
+        reproducibility={
+            "execution_mode": "am_signal_pm_close",
             "period": {"start": spec.period_start, "end": spec.period_end},
-            "execution_mode": "next_close",
             "starting_capital": 1_000_000.0,
-            "stock_one_way_cost_bps": 10.0,
-            "short_financing_annual_rate": 0.03,
-            "short_financing_trace_digest": "sha256:" + "8" * 64,
-            "source_session_count": len(source_dates),
-            "source_session_dates_digest": canonical_trading_calendar_digest(
-                source_dates
-            ),
+            "strategy_id": AM_PM_BASE_SLEEVE_ID,
+            "resolved_universe_digest": "sha256:" + "7" * 64,
+        },
+    )
+    return build_personal_base_sleeve_am_pm_artifact(
+        result=result,
+        evidence={
+            "cost_bps": 10.0,
+            "execution_mode": "am_signal_pm_close",
+            "execution_contract": dict(AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT),
+            "short_financing": {
+                "annual_rate": 0.03,
+                "baseline": True,
+                "modelled_assumption": True,
+                "borrow_evidence": False,
+                "trace_digest": "sha256:" + "8" * 64,
+            },
             "paper_artifact": "paper/base.json",
             "risk_artifact": "risk/base.json",
-            "terminal_positions": "NOT_FORCE_LIQUIDATED_BY_SOURCE_RUN",
+            "performance": {"schema_version": "personal-performance/v1"},
         },
-        "return_semantics": (
-            "NET_AFTER_STOCK_EXECUTION_COSTS_AND_SHORT_FINANCING"
-        ),
-        "base_nav_semantics": "CONTINUOUS_PRE_EXISTING_INVESTABLE_NAV",
-        "source_slice_wrapper_cost_semantics": (
-            "EXCLUDES_NAV_WRAPPER_ENTRY_AND_LIQUIDATION"
-        ),
-        "wrapper_entry_cost_applied_to_source": False,
-        "wrapper_liquidation_cost_applied_to_source": False,
-        "daily_path": [
-            {
-                "date": source_dates[0],
-                "equity": 999_000.0,
-                "base_sleeve_return": -0.001,
-            },
-            {
-                "date": source_dates[1],
-                "equity": 1_000_000.0,
-                "base_sleeve_return": 1_000_000.0 / 999_000.0 - 1.0,
-            },
-            {
-                "date": source_dates[2],
-                "equity": 1_001_000.0,
-                "base_sleeve_return": 1_001_000.0 / 1_000_000.0 - 1.0,
-            },
-        ],
-        "performance": {"schema_version": "personal-performance/v1"},
-        "lifecycle": "DRAFT",
-        "ready_snapshot_declared": False,
-        "go": False,
-        "automatic_promotion": False,
-        "live_orders_enabled": False,
-    }
+        spec=strategy,
+        dependency_closure_digest="sha256:" + "6" * 64,
+        cohort_digest=spec.cohort_digest,
+        universe_id="topix_all",
+        universe_rule_digest=spec.universe_rule_digest,
+        resolved_membership_digest="sha256:" + "7" * 64,
+        snapshot_id="sha256:" + "2" * 64,
+        logical_data_snapshot_id="sha256:" + "3" * 64,
+        source_period=(spec.period_start, spec.period_end),
+        source_session_dates=source_dates,
+    )
 
 
 def _write_base_sleeve_output(output: Path, spec) -> dict[str, object]:
@@ -295,8 +410,9 @@ def _write_base_sleeve_output(output: Path, spec) -> dict[str, object]:
     (output / "reports" / "report.md").write_text("# report")
     (output / "paper" / "base.json").write_text('{"paper":true}')
     (output / "risk" / "base.json").write_text('{"risk":true}')
+    artifact_document = _base_sleeve_document(spec)
     artifact_bytes = json.dumps(
-        _base_sleeve_document(spec),
+        artifact_document,
         ensure_ascii=True,
         sort_keys=True,
         separators=(",", ":"),
@@ -313,18 +429,70 @@ def _write_base_sleeve_output(output: Path, spec) -> dict[str, object]:
             "report_markdown": str(output / "reports" / "report.md"),
             "base_sleeve_artifact": {
                 "schema_version": "personal-base-sleeve-reference/v1",
-                "artifact_schema_version": "personal-base-sleeve-source/v1",
+                "artifact_schema_version": artifact_document["schema_version"],
                 "path": str(artifact_path),
                 "archive_member": archive_member,
                 "sha256": f"sha256:{artifact_sha}",
-                "strategy_id": "personal_sector_balanced_four_factor_v1_ls",
-                "cohort_id": "sector-relative-ls-v1",
+                "strategy_id": artifact_document["strategy"]["strategy_id"],
+                "cohort_id": spec.cohort_id,
                 "universe_id": "topix_all",
                 "role": "INDEX_VOL_OVERLAY_BASE_SOURCE",
                 "ranking_role": "NON_CANDIDATE_NOT_RANKED",
                 "candidate_count_contribution": 0,
             },
             "non_candidate_source_backtest_count": 1,
+        }
+    )
+    return summary
+
+
+def _write_am_pm_base_sleeve_output(output: Path, spec) -> dict[str, object]:
+    (output / "reports").mkdir(parents=True, exist_ok=True)
+    (output / "paper").mkdir(exist_ok=True)
+    (output / "risk").mkdir(exist_ok=True)
+    (output / "base-sleeve").mkdir(exist_ok=True)
+    (output / "reports" / "report.json").write_text('{"ok":true}')
+    (output / "reports" / "report.md").write_text("# report")
+    (output / "paper" / "base.json").write_text('{"paper":true}')
+    (output / "risk" / "base.json").write_text('{"risk":true}')
+    summary = _runner_summary(spec)
+    document = _build_am_sleeve()
+    document["universe"]["universe_rule_digest"] = spec.universe_rule_digest
+    document["snapshot"]["snapshot_id"] = summary["snapshot_id"]
+    document["snapshot"]["logical_data_snapshot_id"] = summary[
+        "logical_data_snapshot_id"
+    ]
+    artifact_bytes = json.dumps(
+        document,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    artifact_sha = hashlib.sha256(artifact_bytes).hexdigest()
+    archive_member = f"base-sleeve/{artifact_sha}.json"
+    artifact_path = output / archive_member
+    artifact_path.write_bytes(artifact_bytes)
+    summary.update(
+        {
+            "report_json": str(output / "reports" / "report.json"),
+            "report_markdown": str(output / "reports" / "report.md"),
+            "base_sleeve_artifact": {
+                "schema_version": PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA,
+                "artifact_schema_version": PERSONAL_BASE_SLEEVE_AM_PM_ARTIFACT_SCHEMA,
+                "path": str(artifact_path),
+                "archive_member": archive_member,
+                "sha256": f"sha256:{artifact_sha}",
+                "strategy_id": AM_PM_BASE_SLEEVE_ID,
+                "cohort_id": spec.cohort_id,
+                "universe_id": "topix_all",
+                "role": PERSONAL_BASE_SLEEVE_ROLE,
+                "ranking_role": PERSONAL_BASE_SLEEVE_RANKING_ROLE,
+                "candidate_count_contribution": 0,
+            },
+            "non_candidate_source_backtest_count": 1,
+            "execution_mode": "am_signal_pm_close",
+            "execution_contract_digest": AM_EXECUTION_CONTRACT_DIGEST,
         }
     )
     return summary
@@ -343,7 +511,6 @@ def test_snapshot_digest_mismatch_is_a_durable_failure(tmp_path: Path) -> None:
     manifest = service.execute_job(
         spec,
         work_root=work,
-        command=(sys.executable, "unused.py"),
         downloader=wrong_snapshot,
         uploader=_uploader(uploads),
     )
@@ -592,27 +759,56 @@ def test_runner_timeout_is_failed_and_workspace_is_removed(
     source = tmp_path / "fixture.sqlite"
     sha = _sqlite(source)
     spec = _job(sha)
-    script = tmp_path / "slow.py"
-    script.write_text("import time; time.sleep(5)\n", encoding="utf-8")
     work = tmp_path / "work"
     work.mkdir()
-    uploads: list[tuple[str, bytes, str]] = []
+    writes: list[str] = []
+    ticks = {"t": 0.0}
+
+    def clock() -> float:
+        return ticks["t"]
 
     def copy_snapshot(_spec, destination):
         destination.write_bytes(source.read_bytes())
 
+    def stepped_run(self, request):
+        from pit.cooperative_deadline import DeadlineExceeded, install_deadline
+
+        del self
+        with install_deadline(request.deadline):
+            request.data_view.write_artifact(
+                category="reports", suffix="txt", payload=b"before"
+            )
+            writes.append("before")
+            ticks["t"] = 10.0
+            try:
+                request.data_view.write_artifact(
+                    category="reports", suffix="txt", payload=b"after"
+                )
+                writes.append("after")
+            except DeadlineExceeded:
+                pass
+            raise DeadlineExceeded("personal research deadline cancelled")
+
+    monkeypatch.setattr(
+        "research.personal_service.PersonalResearchService.run", stepped_run
+    )
     monkeypatch.setenv("QP_REPO_ROOT", str(tmp_path))
+    from pit.cooperative_deadline import CooperativeDeadline
+
+    deadline = CooperativeDeadline(deadline_monotonic=5.0, clock=clock)
     manifest = service.execute_job(
         spec,
         work_root=work,
-        command=(sys.executable, str(script)),
-        timeout_seconds=0.05,
+        timeout_seconds=0.01,
         downloader=copy_snapshot,
-        uploader=_uploader(uploads),
+        uploader=_uploader([]),
+        deadline=deadline,
+        clock=clock,
     )
 
     assert manifest["status"] == "FAILED"
-    assert "0.05-second limit" in manifest["error"]
+    assert "limit" in manifest["error"]
+    assert writes == ["before"]
     assert not tuple(work.iterdir())
 
 
@@ -622,84 +818,32 @@ def test_default_timeout_keeps_room_for_durable_terminal_evidence() -> None:
     assert service.DEFAULT_TIMEOUT_SECONDS < service.MAX_JOB_LIFETIME_SECONDS
 
 
-def test_research_process_timeout_kills_the_entire_new_process_group(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[object] = []
-
-    class FakeProcess:
-        pid = 4321
-        returncode = -9
-
-        def communicate(self, timeout=None):
-            calls.append(("communicate", timeout))
-            if timeout is not None:
-                raise service.subprocess.TimeoutExpired(["qp-research"], timeout)
-            return "bounded stdout", "bounded stderr"
-
-    def fake_popen(args, **kwargs):
-        calls.append(("popen", tuple(args), kwargs))
-        return FakeProcess()
-
-    monkeypatch.setattr(service.subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(
-        service.os,
-        "killpg",
-        lambda process_group, used_signal: calls.append(
-            ("killpg", process_group, used_signal)
-        ),
-    )
-
-    with pytest.raises(service.subprocess.TimeoutExpired) as raised:
-        service._run_research_process(
-            ("qp-research",),
-            cwd="/app",
-            env={"PYTHONUNBUFFERED": "1"},
-            timeout=0.25,
+def test_direct_research_timeout_is_enforced_without_a_child_command() -> None:
+    assert not hasattr(service, "_run_research_process")
+    with pytest.raises(TypeError, match="command"):
+        service.execute_job(  # type: ignore[call-arg]
+            _job("a" * 64),
+            work_root=Path("/tmp"),
+            command=("qp-research",),
         )
 
-    popen = next(call for call in calls if call[0] == "popen")
-    assert popen[2]["start_new_session"] is True
-    assert ("killpg", 4321, service.signal.SIGKILL) in calls
-    assert ("communicate", None) in calls
-    assert raised.value.output == "bounded stdout"
-    assert raised.value.stderr == "bounded stderr"
 
-
-def test_execute_job_passes_local_market_data_opt_in_to_child_only(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_default_runner_does_not_read_qp_research_command(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = tmp_path / "fixture.sqlite"
-    sha = _sqlite(source)
-    spec = _job(sha)
-    seen_env: list[dict[str, str]] = []
+    monkeypatch.setenv("QP_RESEARCH_COMMAND", "/tmp/should-not-run")
+    seen: list[object] = []
 
-    def capture_env(args, **kwargs):
-        del args
-        seen_env.append(kwargs["env"])
-        raise RuntimeError("stop after capturing child env")
+    def fake_execute(spec, **kwargs):
+        seen.append((spec, kwargs))
+        return {"status": "COMPLETED"}
 
-    monkeypatch.delenv("QP_ALLOW_LOCAL_MARKET_DATA", raising=False)
-    monkeypatch.setattr(service, "_run_research_process", capture_env)
-    work = tmp_path / "work"
-    work.mkdir()
-    uploads: list[tuple[str, bytes, str]] = []
-
-    def copy_snapshot(_spec, destination):
-        destination.write_bytes(source.read_bytes())
-
-    manifest = service.execute_job(
-        spec,
-        work_root=work,
-        command=(sys.executable, "unused.py"),
-        downloader=copy_snapshot,
-        uploader=_uploader(uploads),
-    )
-
-    assert seen_env
-    assert seen_env[0]["QP_ALLOW_LOCAL_MARKET_DATA"] == "1"
-    assert os.environ.get("QP_ALLOW_LOCAL_MARKET_DATA") is None
-    assert manifest["status"] == "FAILED"
+    monkeypatch.setattr(service, "execute_job", fake_execute)
+    result = service.default_runner(_job("a" * 64), work_root=Path("/tmp"))
+    assert result["status"] == "COMPLETED"
+    assert seen
+    assert "command" not in seen[0][1]
+    assert os.environ.get("QP_RESEARCH_COMMAND") == "/tmp/should-not-run"
 
 
 def _redigest(spec):
@@ -710,8 +854,8 @@ def test_job_spec_accepts_long_short_on_a_broad_universe() -> None:
     spec = _redigest(
         replace(
             _job("a" * 64),
-            cohort_id="sector-relative-ls-v1",
-            cohort_digest=LONG_SHORT_COHORT_DIGEST,
+            cohort_id="sector-relative-ls-am-pm-v1",
+            cohort_digest=AM_LONG_SHORT_COHORT_DIGEST,
         )
     )
 
@@ -743,8 +887,8 @@ def test_job_spec_rejects_long_short_on_a_compact_universe() -> None:
     spec = _redigest(
         replace(
             _job("a" * 64),
-            cohort_id="sector-relative-ls-v1",
-            cohort_digest=LONG_SHORT_COHORT_DIGEST,
+            cohort_id="sector-relative-ls-am-pm-v1",
+            cohort_digest=AM_LONG_SHORT_COHORT_DIGEST,
             universe_id="topix_core30",
         )
     )
@@ -761,11 +905,16 @@ def test_python_container_defaults_to_am_diverse_and_allows_am_ids() -> None:
         "diverse-core-am-pm-v1",
         "compact-market-diverse-am-pm-v1",
         "sector-relative-ls-am-pm-v1",
+    ):
+        assert cohort_id in service.PERSONAL_EXECUTABLE_COHORT_IDS
+    for cohort_id in (
         "diverse-core-v1",
         "sector-relative-ls-v1",
         "compact-market-diverse-v1",
     ):
-        assert cohort_id in service.PERSONAL_EXECUTABLE_COHORT_IDS
+        assert cohort_id not in service.PERSONAL_EXECUTABLE_COHORT_IDS
+        with pytest.raises(service.JobInputError, match="OfflineFixture DRAFT-only"):
+            replace(_job("a" * 64), cohort_id=cohort_id).validate()
     am = _job("a" * 64, cohort_id="diverse-core-am-pm-v1")
     am.validate()
     compact = _job(
@@ -783,52 +932,76 @@ def test_python_container_defaults_to_am_diverse_and_allows_am_ids() -> None:
         ).validate()
 
 
+def test_production_default_runner_starts_and_quiesces_under_spawn(
+    tmp_path: Path,
+) -> None:
+    container_root = str(MODULE_PATH.parent)
+    if container_root not in sys.path:
+        sys.path.insert(0, container_root)
+    spawn_service = importlib.import_module("personal_research_service")
+    template = _job("a" * 64, job_id="spawn-default-runner")
+    spec = spawn_service.JobSpec(
+        **{
+            name: getattr(template, name)
+            for name in template.__dataclass_fields__
+        }
+    )
+    missing_work_root = tmp_path / "missing-work-root"
+    runner = partial(spawn_service.default_runner, work_root=missing_work_root)
+    supervisor = spawn_service._ProcessGroupSupervisor(
+        runner,
+        spec,
+        work_root=tmp_path,
+    )
+
+    assert supervisor._process_context.get_start_method() == "spawn"
+    supervisor.start()
+    outcome = supervisor.wait()
+
+    assert outcome.quiescent is True
+    assert outcome.result is None
+    assert outcome.error is not None
+    assert "No such file or directory" in outcome.error
+
+
+def test_spawn_start_failure_is_quiescent_and_cleans_result_root(
+    tmp_path: Path,
+) -> None:
+    def unpicklable_runner(_spec):
+        return {}
+
+    supervisor = service._ProcessGroupSupervisor(
+        unpicklable_runner,
+        _job("a" * 64, job_id="spawn-start-failure"),
+        work_root=tmp_path,
+    )
+
+    supervisor.start()
+    outcome = supervisor.wait()
+
+    assert outcome.quiescent is True
+    assert outcome.result is None
+    assert outcome.error is not None
+    assert "local object" in outcome.error
+    assert not tuple(tmp_path.glob(".job-supervisor-*"))
+
+
 def test_success_archive_excludes_generated_sqlite_and_manifest_is_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = tmp_path / "fixture.sqlite"
     sha = _sqlite(source)
     spec = _job(sha)
-    script = tmp_path / "fake_research.py"
-    script.write_text(
-        """
-import json
-import pathlib
-import sys
-out = pathlib.Path(sys.argv[sys.argv.index('--output') + 1])
-(out / 'reports').mkdir(parents=True)
-(out / 'snapshots').mkdir(parents=True)
-(out / 'reports' / 'report.json').write_text('{\"ok\":true}')
-(out / 'reports' / 'report.md').write_text('# report')
-(out / 'snapshots' / 'generated.sqlite').write_bytes(b'large-copy')
-(out / 'snapshots' / 'generated.manifest.json').write_text('{\"snapshot\":true}')
-print(json.dumps({
-  'cohort_id': sys.argv[sys.argv.index('--cohort') + 1],
-  'cohort_digest': 'sha256:ea37baf3423e5d84e61d4c80c59bdfe8184342dd3dee28646bd339cd45085a84',
-  'universe_id': sys.argv[sys.argv.index('--universe') + 1],
-  'universe_rule_digest': 'sha256:7b88c89520a7cf751e7b63f160c16130183dba3c7c7e9c3a56660f3149c2c048',
-  'report_id': 'sha256:' + '1' * 64,
-  'report_json': str(out / 'reports' / 'report.json'),
-  'report_markdown': str(out / 'reports' / 'report.md'),
-  'snapshot_id': 'sha256:' + '2' * 64,
-  'logical_data_snapshot_id': 'sha256:' + '3' * 64,
-  'candidate_count': 4,
-  'evaluated_count': 4,
-  'hold_count': 0,
-  'unexpected_errors': 0,
-  'base_sleeve_artifact': None,
-  'non_candidate_source_backtest_count': 0,
-  'model_calls': 0,
-  'estimated_ai_cost_usd': 0.0,
-  'go': False,
-  'ready_snapshot_declared': False,
-  'live_orders_enabled': False,
-  'automatic_promotion': False,
-}))
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
+
+    def fake_success(_spec, *, database, output, timeout_seconds):
+        del _spec, database, timeout_seconds
+        summary = _runner_summary(spec, evaluated_count=4, hold_count=0)
+        identity = service._personal_cohort_identity(spec.cohort_id)
+        summary["execution_mode"] = identity["execution_mode"]
+        summary["execution_contract_digest"] = identity["execution_contract_digest"]
+        return _direct_run_from_summary(summary, output)
+
+    monkeypatch.setattr(service, "_run_direct_research", fake_success)
     work = tmp_path / "work"
     work.mkdir()
     uploads: list[tuple[str, bytes, str]] = []
@@ -840,7 +1013,6 @@ print(json.dumps({
     manifest = service.execute_job(
         spec,
         work_root=work,
-        command=(sys.executable, str(script)),
         downloader=copy_snapshot,
         uploader=_uploader(uploads),
     )
@@ -849,12 +1021,10 @@ print(json.dumps({
     assert manifest["candidate_count"] == 4
     assert manifest["evaluated_count"] == 4
     assert manifest["hold_count"] == 0
-    assert manifest["cohort_id"] == "diverse-core-v1"
-    assert manifest["cohort_digest"] == COHORT_DIGEST
+    assert manifest["cohort_id"] == spec.cohort_id
+    assert manifest["cohort_digest"] == spec.cohort_digest
     assert manifest["universe_id"] == "topix_all"
-    assert manifest["universe_rule_digest"] == (
-        "sha256:7b88c89520a7cf751e7b63f160c16130183dba3c7c7e9c3a56660f3149c2c048"
-    )
+    assert manifest["universe_rule_digest"] == spec.universe_rule_digest
     assert manifest["model_calls"] == 0
     assert manifest["go"] is False
     assert manifest["ready_snapshot_declared"] is False
@@ -883,12 +1053,12 @@ def test_base_sleeve_reference_is_independent_of_candidate_evaluation_count(
     spec = _redigest(
         replace(
             _job(sha, job_id="base-sleeve-independent"),
-            cohort_id="sector-relative-ls-v1",
-            cohort_digest=LONG_SHORT_COHORT_DIGEST,
+            cohort_id="sector-relative-ls-am-pm-v1",
+            cohort_digest=AM_LONG_SHORT_COHORT_DIGEST,
         )
     )
     output = tmp_path / "output"
-    summary = _write_base_sleeve_output(output, spec)
+    summary = _write_am_pm_base_sleeve_output(output, spec)
     summary["evaluated_count"] = 1
 
     reference = service._validated_base_sleeve_reference(
@@ -909,8 +1079,8 @@ def test_evaluated_long_short_result_requires_base_sleeve_source(
     spec = _redigest(
         replace(
             _job(sha, job_id="base-sleeve-required"),
-            cohort_id="sector-relative-ls-v1",
-            cohort_digest=LONG_SHORT_COHORT_DIGEST,
+            cohort_id="sector-relative-ls-am-pm-v1",
+            cohort_digest=AM_LONG_SHORT_COHORT_DIGEST,
         )
     )
     output = tmp_path / "output"
@@ -943,24 +1113,17 @@ def test_long_short_archive_validates_and_preserves_non_candidate_base_source(
     spec = _redigest(
         replace(
             _job(sha, job_id="base-sleeve-source"),
-            cohort_id="sector-relative-ls-v1",
-            cohort_digest=LONG_SHORT_COHORT_DIGEST,
+            cohort_id="sector-relative-ls-am-pm-v1",
+            cohort_digest=AM_LONG_SHORT_COHORT_DIGEST,
         )
     )
 
-    def completed_source_run(args, **kwargs):
-        assert {
-            key: kwargs["env"][key] for key in service._SINGLE_THREAD_NUMERIC_ENV
-        } == service._SINGLE_THREAD_NUMERIC_ENV
-        output = Path(args[args.index("--output") + 1])
-        summary = _write_base_sleeve_output(output, spec)
-        return SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps(summary, sort_keys=True) + "\n",
-            stderr="",
-        )
+    def completed_source_run(_spec, *, database, output, timeout_seconds):
+        del _spec, database, timeout_seconds
+        summary = _write_am_pm_base_sleeve_output(output, spec)
+        return _direct_run_from_summary(summary, output)
 
-    monkeypatch.setattr(service, "_run_research_process", completed_source_run)
+    monkeypatch.setattr(service, "_run_direct_research", completed_source_run)
     work = tmp_path / "work"
     work.mkdir()
     uploads: list[tuple[str, bytes, str]] = []
@@ -971,7 +1134,6 @@ def test_long_short_archive_validates_and_preserves_non_candidate_base_source(
     manifest = service.execute_job(
         spec,
         work_root=work,
-        command=(sys.executable, "unused.py"),
         downloader=copy_snapshot,
         uploader=_uploader(uploads),
     )
@@ -1050,6 +1212,9 @@ def test_am_job_binds_repo_mode_and_rejects_legacy_sleeve_reference(
     assert identity["session_view_digest"].startswith("sha256:")
     output = tmp_path / "output"
     summary = _write_base_sleeve_output(output, spec)
+    summary["base_sleeve_artifact"][
+        "artifact_schema_version"
+    ] = "personal-base-sleeve-source/v1"
     with pytest.raises(RuntimeError, match="base sleeve reference is invalid"):
         service._validated_base_sleeve_reference(
             summary,
@@ -1069,18 +1234,14 @@ def test_am_execute_job_rejects_tampered_child_execution_mode(
         cohort_id="sector-relative-ls-am-pm-v1",
     )
 
-    def completed_source_run(args, **kwargs):
-        output = Path(args[args.index("--output") + 1])
+    def completed_source_run(_spec, *, database, output, timeout_seconds):
+        del _spec, database, timeout_seconds
         summary = _write_base_sleeve_output(output, spec)
         summary["execution_mode"] = "next_close"
         summary["execution_contract_digest"] = "sha256:" + "c" * 64
-        return SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps(summary, sort_keys=True) + "\n",
-            stderr="",
-        )
+        return _direct_run_from_summary(summary, output)
 
-    monkeypatch.setattr(service, "_run_research_process", completed_source_run)
+    monkeypatch.setattr(service, "_run_direct_research", completed_source_run)
     work = tmp_path / "work"
     work.mkdir()
 
@@ -1090,7 +1251,6 @@ def test_am_execute_job_rejects_tampered_child_execution_mode(
     manifest = service.execute_job(
         spec,
         work_root=work,
-        command=(sys.executable, "unused.py"),
         downloader=copy_snapshot,
         uploader=_uploader([]),
     )
@@ -1116,7 +1276,7 @@ def _am_cli_summary(spec, output: Path, *, universe_rule_digest: str) -> dict[st
 def test_am_topix_all_cli_report_digest_uses_morning_cutoff(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:
-    from research import personal_cli
+    from cf_platform import personal_offline_cli as personal_cli
 
     morning = personal_research_universe_rule_digest("topix_all", am_pm=True)
     session = personal_research_universe_rule_digest("topix_all", am_pm=False)
@@ -1220,54 +1380,43 @@ def test_am_topix_all_cli_report_digest_uses_morning_cutoff(
     def copy_snapshot(_spec, destination):
         destination.write_bytes(source.read_bytes())
 
-    def run_matching(args, **kwargs):
-        del kwargs
-        output = Path(args[args.index("--output") + 1])
+    def run_matching(_spec, *, database, output, timeout_seconds):
+        del _spec, database, timeout_seconds
         summary = _am_cli_summary(spec, output, universe_rule_digest=morning)
-        return SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps(summary, sort_keys=True) + "\n",
-            stderr="",
-        )
+        return _direct_run_from_summary(summary, output)
 
-    monkeypatch.setattr(service, "_run_research_process", run_matching)
+    monkeypatch.setattr(service, "_run_direct_research", run_matching)
     work = tmp_path / "work-ok"
     work.mkdir()
     completed = service.execute_job(
         spec,
         work_root=work,
-        command=(sys.executable, "unused.py"),
         downloader=copy_snapshot,
         uploader=_uploader([]),
     )
     assert completed["status"] == "COMPLETED"
     assert completed["universe_rule_digest"] == morning
 
-    def run_mismatch(args, **kwargs):
-        del kwargs
-        output = Path(args[args.index("--output") + 1])
+    def run_mismatch(_spec, *, database, output, timeout_seconds):
+        del _spec, database, timeout_seconds
         summary = _am_cli_summary(spec, output, universe_rule_digest=session)
-        return SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps(summary, sort_keys=True) + "\n",
-            stderr="",
-        )
+        return _direct_run_from_summary(summary, output)
 
-    monkeypatch.setattr(service, "_run_research_process", run_mismatch)
+    monkeypatch.setattr(service, "_run_direct_research", run_mismatch)
     work_bad = tmp_path / "work-mismatch"
     work_bad.mkdir()
     failed = service.execute_job(
         spec,
         work_root=work_bad,
-        command=(sys.executable, "unused.py"),
         downloader=copy_snapshot,
         uploader=_uploader([]),
     )
     assert failed["status"] == "FAILED"
     assert "qp-research violated the fixed personal policy" in failed["error"]
 
-    legacy = _job("a" * 64, job_id="legacy-session", cohort_id="diverse-core-v1")
-    assert legacy.universe_rule_digest == session
+    with pytest.raises(service.JobInputError, match="OfflineFixture DRAFT-only"):
+        _job("a" * 64, job_id="legacy-session", cohort_id="diverse-core-v1")
+    assert session == personal_research_universe_rule_digest("topix_all", am_pm=False)
 
 
 def test_exit_two_with_no_evaluated_candidates_archives_completed_result(
@@ -1276,28 +1425,24 @@ def test_exit_two_with_no_evaluated_candidates_archives_completed_result(
     source = tmp_path / "fixture.sqlite"
     sha = _sqlite(source)
     spec = _job(sha)
-    script = tmp_path / "no_analysis.py"
-    summary = _runner_summary(spec, evaluated_count=0, hold_count=0)
-    script.write_text(
-        "\n".join(
-            (
-                "import json",
-                "import pathlib",
-                "import sys",
-                "out = pathlib.Path(sys.argv[sys.argv.index('--output') + 1])",
-                "(out / 'reports').mkdir(parents=True)",
-                "(out / 'reports' / 'no-analysis.json').write_text('{\"status\":\"NO_ANALYSIS\"}')",
-                "(out / 'reports' / 'no-analysis.md').write_text('# no analysis')",
-                f"summary = {summary!r}",
-                "summary['report_json'] = str(out / 'reports' / 'no-analysis.json')",
-                "summary['report_markdown'] = str(out / 'reports' / 'no-analysis.md')",
-                "print(json.dumps(summary, sort_keys=True))",
-                "raise SystemExit(2)",
-            )
+
+    def no_analysis(_spec, *, database, output, timeout_seconds):
+        del _spec, database, timeout_seconds
+        reports = output / "reports"
+        reports.mkdir(parents=True, exist_ok=True)
+        (reports / "no-analysis.json").write_text(
+            '{"status":"NO_ANALYSIS"}', encoding="utf-8"
         )
-        + "\n",
-        encoding="utf-8",
-    )
+        (reports / "no-analysis.md").write_text("# no analysis", encoding="utf-8")
+        summary = _runner_summary(spec, evaluated_count=0, hold_count=0)
+        summary["report_json"] = str(reports / "no-analysis.json")
+        summary["report_markdown"] = str(reports / "no-analysis.md")
+        run = _direct_run_from_summary(summary, output, exit_code=2)
+        run.report_json = _artifact("reports/no-analysis.json")
+        run.report_markdown = _artifact("reports/no-analysis.md")
+        return run
+
+    monkeypatch.setattr(service, "_run_direct_research", no_analysis)
     work = tmp_path / "work"
     work.mkdir()
     uploads: list[tuple[str, bytes, str]] = []
@@ -1305,11 +1450,9 @@ def test_exit_two_with_no_evaluated_candidates_archives_completed_result(
     def copy_snapshot(_spec, destination):
         destination.write_bytes(source.read_bytes())
 
-    monkeypatch.setenv("QP_REPO_ROOT", str(tmp_path))
     manifest = service.execute_job(
         spec,
         work_root=work,
-        command=(sys.executable, str(script)),
         downloader=copy_snapshot,
         uploader=_uploader(uploads),
     )
@@ -1362,15 +1505,18 @@ def test_runner_exit_and_summary_contract_fail_closed(
     sha = _sqlite(source)
     spec = _job(sha)
     summary = {**_runner_summary(spec), **summary_changes}
-    monkeypatch.setattr(
-        service,
-        "_run_research_process",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            returncode=returncode,
-            stdout=(json.dumps(summary) + "\n" if stdout is None else stdout),
-            stderr="bounded diagnostic",
-        ),
-    )
+    def fake_direct(_spec, *, database, output, timeout_seconds):
+        del _spec, database, timeout_seconds
+        if returncode not in {0, 2}:
+            raise RuntimeError(f"qp-research exited {returncode}: bounded diagnostic")
+        if stdout == "":
+            raise RuntimeError("qp-research emitted no result document")
+        if stdout == "{\n":
+            raise RuntimeError("qp-research result document is invalid")
+        run = _direct_run_from_summary(summary, output, exit_code=returncode)
+        return run
+
+    monkeypatch.setattr(service, "_run_direct_research", fake_direct)
     work = tmp_path / "work"
     work.mkdir()
     uploads: list[tuple[str, bytes, str]] = []
@@ -1381,7 +1527,6 @@ def test_runner_exit_and_summary_contract_fail_closed(
     manifest = service.execute_job(
         spec,
         work_root=work,
-        command=(sys.executable, "unused.py"),
         downloader=copy_snapshot,
         uploader=_uploader(uploads),
     )
@@ -1400,8 +1545,8 @@ def test_exit1_empty_stderr_preserves_candidate_diagnostic_from_report(
     spec = _job(sha)
     detail = "candidate process exited nonzero (1)"
 
-    def failing_candidates(args, **_kwargs):
-        output = Path(args[args.index("--output") + 1])
+    def failing_candidates(_spec, *, database, output, timeout_seconds):
+        del _spec, database, timeout_seconds
         reports = output / "reports"
         reports.mkdir()
         report = {
@@ -1453,13 +1598,12 @@ def test_exit1_empty_stderr_preserves_candidate_diagnostic_from_report(
         )
         summary["report_json"] = str(report_json)
         summary["report_markdown"] = str(report_md)
-        return SimpleNamespace(
-            returncode=1,
-            stdout=json.dumps(summary) + "\n",
-            stderr="",
-        )
+        run = _direct_run_from_summary(summary, output, exit_code=1)
+        run.report_json = _artifact("reports/report.json")
+        run.report_markdown = _artifact("reports/report.md")
+        return run
 
-    monkeypatch.setattr(service, "_run_research_process", failing_candidates)
+    monkeypatch.setattr(service, "_run_direct_research", failing_candidates)
     work = tmp_path / "work"
     work.mkdir()
     uploads: list[tuple[str, bytes, str]] = []
@@ -1470,7 +1614,6 @@ def test_exit1_empty_stderr_preserves_candidate_diagnostic_from_report(
     manifest = service.execute_job(
         spec,
         work_root=work,
-        command=(sys.executable, "unused.py"),
         downloader=copy_snapshot,
         uploader=_uploader(uploads),
     )
@@ -1499,22 +1642,19 @@ def test_completed_summary_requires_report_artifacts_inside_output(
     sha = _sqlite(source)
     spec = _job(sha)
 
-    def missing_report_artifacts(args, **_kwargs):
-        output = Path(args[args.index("--output") + 1])
+    def missing_report_artifacts(_spec, *, database, output, timeout_seconds):
+        del _spec, database, timeout_seconds
         summary = _runner_summary(
             spec,
             evaluated_count=0,
             hold_count=0,
         )
-        summary["report_json"] = str(output / "reports" / "missing.json")
-        summary["report_markdown"] = str(output / "reports" / "missing.md")
-        return SimpleNamespace(
-            returncode=2,
-            stdout=json.dumps(summary) + "\n",
-            stderr="",
-        )
+        run = _direct_run_from_summary(summary, output, exit_code=2)
+        run.report_json = _artifact("reports/missing.json")
+        run.report_markdown = _artifact("reports/missing.md")
+        return run
 
-    monkeypatch.setattr(service, "_run_research_process", missing_report_artifacts)
+    monkeypatch.setattr(service, "_run_direct_research", missing_report_artifacts)
     work = tmp_path / "work"
     work.mkdir()
     uploads: list[tuple[str, bytes, str]] = []
@@ -1525,7 +1665,6 @@ def test_completed_summary_requires_report_artifacts_inside_output(
     manifest = service.execute_job(
         spec,
         work_root=work,
-        command=(sys.executable, "unused.py"),
         downloader=copy_snapshot,
         uploader=_uploader(uploads),
     )
@@ -1562,11 +1701,9 @@ def test_runner_summary_must_remain_within_fixed_policy(
     summary[field] = invalid_value
     monkeypatch.setattr(
         service,
-        "_run_research_process",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps(summary) + "\n",
-            stderr="",
+        "_run_direct_research",
+        lambda _spec, *, database, output, timeout_seconds: _direct_run_from_summary(
+            summary, output
         ),
     )
     work = tmp_path / "work"
@@ -1579,7 +1716,6 @@ def test_runner_summary_must_remain_within_fixed_policy(
     manifest = service.execute_job(
         spec,
         work_root=work,
-        command=(sys.executable, "unused.py"),
         downloader=copy_snapshot,
         uploader=_uploader(uploads),
     )
@@ -1607,21 +1743,16 @@ def test_result_archive_is_byte_deterministic(tmp_path: Path) -> None:
 
 
 def test_manager_allows_only_one_active_job_and_same_job_is_idempotent() -> None:
-    release = threading.Event()
-    entered = threading.Event()
+    release = PROCESS_CONTEXT.Event()
+    entered = PROCESS_CONTEXT.Event()
     terminal = threading.Event()
 
     def runner(spec):
         entered.set()
         assert release.wait(2)
-        return {
-            "job_id": spec.job_id,
-            "request_digest": spec.request_digest,
-            "status": "COMPLETED",
-            "go": False,
-        }
+        return _manager_completed_result(spec)
 
-    manager = service.JobManager(
+    manager = _job_manager(
         runner,
         on_terminal=terminal.set,
         terminal_uploader=lambda *args, **kwargs: None,
@@ -1684,7 +1815,7 @@ def test_inclusive_research_period_cap_is_7000_calendar_dates() -> None:
 
 
 def test_watchdog_writes_durable_failed_terminal_before_shutdown() -> None:
-    entered = threading.Event()
+    entered = PROCESS_CONTEXT.Event()
     terminal = threading.Event()
     wrote = threading.Event()
     uploads: list[tuple[str, dict]] = []
@@ -1692,12 +1823,7 @@ def test_watchdog_writes_durable_failed_terminal_before_shutdown() -> None:
     def runner(spec):
         entered.set()
         time.sleep(1)
-        return {
-            "job_id": spec.job_id,
-            "request_digest": spec.request_digest,
-            "status": "COMPLETED",
-            "go": False,
-        }
+        return _manager_completed_result(spec)
 
     def uploader(key, data, *, spec, content_digest, extra_headers=None):
         del spec, content_digest, extra_headers
@@ -1708,24 +1834,30 @@ def test_watchdog_writes_durable_failed_terminal_before_shutdown() -> None:
         assert wrote.is_set()
         terminal.set()
 
-    manager = service.JobManager(
+    manager = _job_manager(
         runner,
         on_terminal=on_terminal,
         max_job_seconds=0.05,
         terminal_uploader=uploader,
     )
     spec = _job("a" * 64, "watchdog-r2")
+    started = time.monotonic()
     manager.submit(spec)
     assert entered.wait(1)
-    assert terminal.wait(1)
+    assert terminal.wait(3)
+    elapsed = time.monotonic() - started
+    assert elapsed < 0.5
     assert uploads
     assert uploads[0][0] == spec.manifest_key
     assert uploads[0][1]["status"] == "FAILED"
     assert "absolute Container lifetime" in uploads[0][1]["error"]
     assert manager.status(spec.job_id)["status"] == "FAILED"
+    time.sleep(1.1)
+    assert manager.status(spec.job_id)["status"] == "FAILED"
+    assert all(body.get("status") != "COMPLETED" for _key, body in uploads)
 
 
-def test_timeout_create_only_does_not_overwrite_completed_terminal() -> None:
+def test_timeout_without_confirmed_supervisor_withholds_terminal() -> None:
     stored: dict[str, dict] = {}
 
     def uploader(key, data, *, spec, content_digest, extra_headers=None):
@@ -1741,7 +1873,7 @@ def test_timeout_create_only_does_not_overwrite_completed_terminal() -> None:
         "request_digest": spec.request_digest,
         "status": "COMPLETED",
     }
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: {
             "job_id": item.job_id,
             "request_digest": item.request_digest,
@@ -1763,7 +1895,7 @@ def test_timeout_create_only_does_not_overwrite_completed_terminal() -> None:
     manager._active_job_id = spec.job_id
     manager._expire(spec.job_id)
     assert stored[spec.manifest_key]["status"] == "COMPLETED"
-    assert manager.status(spec.job_id)["status"] == "FAILED"
+    assert manager.status(spec.job_id)["status"] == "STOPPING"
 
 
 def test_terminal_upload_retries_then_shuts_down() -> None:
@@ -1776,7 +1908,7 @@ def test_terminal_upload_retries_then_shuts_down() -> None:
         if attempts["n"] < 3:
             raise RuntimeError("R2 upload returned 503")
 
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         terminal_uploader=uploader,
@@ -1804,7 +1936,7 @@ def test_terminal_publication_retries_below_cap_without_shutdown() -> None:
         attempts["n"] += 1
         raise RuntimeError("R2 upload returned 429")
 
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         terminal_uploader=uploader,
@@ -1837,7 +1969,7 @@ def test_terminal_publication_retry_exhaustion_shuts_down(capsys) -> None:
         attempts["n"] += 1
         raise RuntimeError("R2 upload returned 503")
 
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         terminal_uploader=uploader,
@@ -1881,7 +2013,7 @@ def test_terminal_publication_succeeds_on_later_retry_below_cap() -> None:
         if attempts["n"] < limit:
             raise RuntimeError("R2 upload returned 503")
 
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         terminal_uploader=uploader,
@@ -1926,7 +2058,7 @@ def test_failed_terminal_put_and_get_404_retries_without_shutdown(monkeypatch) -
 
     fake = _MissingTerminalR2()
     monkeypatch.setattr(service.urllib.request, "urlopen", fake.urlopen)
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         retry_schedule=(0.05, 0.05),
@@ -1958,7 +2090,7 @@ def test_unavailable_terminal_upload_does_not_shutdown() -> None:
         del key, data, spec, content_digest, extra_headers
         raise RuntimeError("R2 upload returned 503")
 
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         terminal_uploader=uploader,
@@ -1995,7 +2127,7 @@ def test_matching_existing_terminal_is_accepted() -> None:
         del data, spec, content_digest, extra_headers
         raise RuntimeError("R2 upload returned 409")
 
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         terminal_uploader=uploader,
@@ -2023,7 +2155,7 @@ def test_conflicting_terminal_shuts_down_fail_closed() -> None:
         del data, spec, content_digest, extra_headers
         raise RuntimeError("R2 upload returned 409")
 
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         terminal_uploader=uploader,
@@ -2050,7 +2182,7 @@ def test_watchdog_and_normal_race_keeps_one_terminal() -> None:
         stored[key] = body
 
     spec = _job("a" * 64, "one-terminal")
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: {
             "job_id": item.job_id,
             "request_digest": item.request_digest,
@@ -2069,19 +2201,14 @@ def test_watchdog_and_normal_race_keeps_one_terminal() -> None:
 
 
 def test_absolute_watchdog_is_not_renewed_by_status_polling() -> None:
-    release = threading.Event()
-    entered = threading.Event()
+    release = PROCESS_CONTEXT.Event()
+    entered = PROCESS_CONTEXT.Event()
     terminal = threading.Event()
 
     def runner(spec):
         entered.set()
         release.wait(2)
-        return {
-            "job_id": spec.job_id,
-            "request_digest": spec.request_digest,
-            "status": "COMPLETED",
-            "go": False,
-        }
+        return _manager_completed_result(spec)
 
     uploads: list[str] = []
 
@@ -2089,7 +2216,7 @@ def test_absolute_watchdog_is_not_renewed_by_status_polling() -> None:
         del data, spec, content_digest, extra_headers
         uploads.append(key)
 
-    manager = service.JobManager(
+    manager = _job_manager(
         runner,
         on_terminal=terminal.set,
         max_job_seconds=0.05,
@@ -2098,7 +2225,7 @@ def test_absolute_watchdog_is_not_renewed_by_status_polling() -> None:
     spec = _job("a" * 64, "watchdog-job")
     manager.submit(spec)
     assert entered.wait(1)
-    deadline = time.monotonic() + 1
+    deadline = time.monotonic() + 3
     while not terminal.is_set() and time.monotonic() < deadline:
         assert manager.status(spec.job_id) is not None
         time.sleep(0.005)
@@ -2108,7 +2235,126 @@ def test_absolute_watchdog_is_not_renewed_by_status_polling() -> None:
     assert "absolute Container lifetime" in manager.status(spec.job_id)["error"]
     with pytest.raises(service.JobBusyError, match="shutting down"):
         manager.submit(_job("b" * 64, "second-job"))
-    release.set()
+
+
+def test_timeout_kills_term_ignoring_group_before_failed_terminal(tmp_path: Path) -> None:
+    entered = PROCESS_CONTEXT.Event()
+    terminal = threading.Event()
+    late_write = tmp_path / "late-authoritative-write"
+    supervised_pid = {"value": 0}
+
+    def runner(spec):
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        entered.set()
+        time.sleep(0.4)
+        late_write.write_text("forbidden", encoding="utf-8")
+        return _manager_completed_result(spec)
+
+    def uploader(*_args, **_kwargs):
+        with pytest.raises(ProcessLookupError):
+            os.kill(supervised_pid["value"], 0)
+
+    manager = _job_manager(
+        runner,
+        on_terminal=terminal.set,
+        max_job_seconds=0.05,
+        terminal_uploader=uploader,
+        process_term_grace_seconds=0.05,
+        process_kill_grace_seconds=0.5,
+    )
+    spec = _job("a" * 64, "term-ignore-timeout")
+    manager.submit(spec)
+    assert manager._supervisor is not None
+    supervised_pid["value"] = manager._supervisor.pid
+    assert entered.wait(1)
+    assert terminal.wait(2)
+    assert manager.status(spec.job_id)["status"] == "FAILED"
+    time.sleep(0.45)
+    assert not late_write.exists()
+
+
+def test_root_exit_with_live_grandchild_is_stopped_before_terminal(tmp_path: Path) -> None:
+    terminal = threading.Event()
+    grandchild_pid = tmp_path / "grandchild.pid"
+    late_write = tmp_path / "grandchild-write"
+
+    def runner(spec):
+        pid = os.fork()
+        if pid == 0:
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            time.sleep(0.8)
+            late_write.write_text("forbidden", encoding="utf-8")
+            os._exit(0)
+        grandchild_pid.write_text(str(pid), encoding="ascii")
+        return _manager_completed_result(spec)
+
+    manager = _job_manager(
+        runner,
+        on_terminal=terminal.set,
+        terminal_uploader=lambda *_args, **_kwargs: None,
+        process_term_grace_seconds=0.2,
+        process_kill_grace_seconds=0.5,
+    )
+    manager.submit(_job("a" * 64, "grandchild-boundary"))
+    deadline = time.monotonic() + 1
+    while not grandchild_pid.exists() and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert grandchild_pid.exists()
+    assert not terminal.wait(0.05)
+    assert terminal.wait(2)
+    pid = int(grandchild_pid.read_text(encoding="ascii"))
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+    time.sleep(0.85)
+    assert not late_write.exists()
+
+
+def test_cancel_uses_the_bounded_group_stop_path() -> None:
+    entered = PROCESS_CONTEXT.Event()
+    terminal = threading.Event()
+
+    def runner(spec):
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        entered.set()
+        time.sleep(5)
+        return _manager_completed_result(spec)
+
+    manager = _job_manager(
+        runner,
+        on_terminal=terminal.set,
+        terminal_uploader=lambda *_args, **_kwargs: None,
+        process_term_grace_seconds=0.05,
+        process_kill_grace_seconds=0.5,
+    )
+    spec = _job("a" * 64, "cancel-boundary")
+    manager.submit(spec)
+    assert entered.wait(1)
+    assert manager.cancel(spec.job_id) is True
+    assert terminal.wait(2)
+    assert manager.status(spec.job_id)["status"] == "FAILED"
+    assert manager.status(spec.job_id)["error"] == "job cancelled"
+
+
+@pytest.mark.parametrize("mode", ["oversized", "crash"])
+def test_supervised_result_payload_and_child_crash_fail_closed(mode: str) -> None:
+    terminal = threading.Event()
+
+    def runner(spec):
+        if mode == "crash":
+            os._exit(23)
+        return {**_manager_completed_result(spec), "padding": "x" * (128 * 1024)}
+
+    manager = _job_manager(
+        runner,
+        on_terminal=terminal.set,
+        terminal_uploader=lambda *_args, **_kwargs: None,
+    )
+    spec = _job("a" * 64, f"child-{mode}")
+    manager.submit(spec)
+    assert terminal.wait(2)
+    result = manager.status(spec.job_id)
+    assert result["status"] == "FAILED"
+    assert "result" in result["error"]
 
 
 class _UrlResponse(io.BytesIO):
@@ -2200,7 +2446,7 @@ def test_production_conflict_reads_matching_terminal_without_injected_reader(
     fake.objects[spec.manifest_key] = service._canonical_bytes(existing)
     monkeypatch.setattr(service.urllib.request, "urlopen", fake.urlopen)
     terminal = threading.Event()
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         retry_schedule=(0.01,),
@@ -2227,7 +2473,7 @@ def test_production_mismatched_terminal_shuts_down_fail_closed(monkeypatch) -> N
     fake.objects[spec.manifest_key] = service._canonical_bytes(existing)
     monkeypatch.setattr(service.urllib.request, "urlopen", fake.urlopen)
     terminal = threading.Event()
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         retry_schedule=(0.05,),
@@ -2277,7 +2523,7 @@ def test_deterministic_put_then_terminal_get_404_shuts_down_fail_closed(
     )
     terminal = threading.Event()
     spec = _job("a" * 64, f"denied-put-{status}")
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         retry_schedule=(0.05, 0.05),
@@ -2298,7 +2544,7 @@ def test_failed_upload_then_terminal_get_404_retries(monkeypatch) -> None:
         ),
     )
     terminal = threading.Event()
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         retry_schedule=(0.05, 0.05),
@@ -2320,7 +2566,7 @@ def test_transport_error_then_terminal_get_404_retries(monkeypatch) -> None:
         put_error=lambda url: urllib.error.URLError("connection reset"),
     )
     terminal = threading.Event()
-    manager = service.JobManager(
+    manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         retry_schedule=(0.05, 0.05),
@@ -2540,7 +2786,7 @@ def test_session_coverage_fail_closed_state_mapping() -> None:
     try:
         stamp_compact_manifest(invalid)
         _install_typed_bars(invalid)
-        with pytest.raises(RuntimeError, match="compact v7 marker or schema"):
+        with pytest.raises(RuntimeError, match="rebuild as personal-draft-history/v8"):
             service._session_coverage(invalid)
     finally:
         invalid.close()
@@ -2697,6 +2943,953 @@ def test_snapshot_build_fails_closed_on_invalid_compact_marker(
         spec, work_root=tmp_path, uploader=upload, client_factory=lambda _spec: object()
     )
     assert manifest["status"] == "FAILED"
-    assert "compact v7 marker or schema" in manifest["error"]
+    assert "rebuild as personal-draft-history/v8" in manifest["error"]
     assert manifest.get("snapshot_key") is None
     assert [key for key, _ in uploads] == [spec.manifest_key]
+
+
+def _controlled_job_spec(**overrides: object) -> dict[str, object]:
+    ready_fixture = json.loads(
+        Path(service._CONTRACT_PATH)
+        .with_name("controlled_pilot_ready.generated.json")
+        .read_text(encoding="utf-8")
+    )
+    physical = "sha256:" + ("cd" * 32)
+    hex_digest = physical[len("sha256:") :]
+    universe = "sha256:" + ("ab" * 32)
+    spec: dict[str, object] = {
+        "identity": "controlled_pilot_v1",
+        "format": "controlled-pilot-job-spec/v1",
+        "runner_version": service._CONTROLLED_CONTRACT["runner_version"],
+        "job_id": "controlled-job-1",
+        "idempotency_key": "controlled-job-1",
+        "ready_attestation_id": ready_fixture["attestation"]["attestation_id"],
+        "ready_manifest_digest": ready_fixture["ready_manifest"]["manifest_digest"],
+        "signed_projection_document_digest": ready_fixture["attestation"][
+            "signed_projection_document_digest"
+        ],
+        "session_scope": ready_fixture["controlled_session_scope"],
+        "snapshot_id": "sha256:" + ("ab" * 32),
+        "immutable_db_digest": physical,
+        "snapshot_key": f"research/controlled_pilot/v1/snapshots/sha256={hex_digest}.sqlite",
+        "snapshot_size": 16,
+        "fill_contract_digest": service.CONTROLLED_FILL_CONTRACT_DIGEST,
+        "authorization_digest": "sha256:" + ("11" * 32),
+        "request_digest": "sha256:" + ("22" * 32),
+        "resolved_universe_digest": universe,
+        "universe_rule_digest": EXACT_FOUR_UNIVERSE_RULE_DIGEST,
+        "max_gross_weight_ppm": 500_000,
+        "manifest_key": "research/controlled_pilot/v1/jobs/controlled-job-1/container-terminal.json",
+        "execution_id": "sha256:" + ("33" * 32),
+        "profile_digest": service.CONTROLLED_PROFILE_DIGEST,
+        "plan_set_digest": service.CONTROLLED_PLAN_SET_DIGEST,
+        "dependency_closure_digest": service.CONTROLLED_CLOSURE_DIGEST,
+        "exact_four_binding_digest": service.CONTROLLED_BINDING_DIGEST,
+    }
+    spec.update(overrides)
+    return spec
+
+
+def test_controlled_container_rejects_caller_paths_and_bytes() -> None:
+    with pytest.raises(service.JobInputError, match="closed"):
+        service.execute_controlled_pilot_container(
+            {**_controlled_job_spec(), "db_path": "/tmp/attacker.sqlite"}
+        )
+
+
+def test_controlled_container_deletes_ephemeral_snapshot_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kept: list[Path] = []
+
+    def fail_download(key: str, dest: Path, *, expected_hex: str, expected_size: int) -> str:
+        del key, expected_hex, expected_size
+        dest.write_bytes(b"sqlite")
+        kept.append(dest)
+        raise RuntimeError("download failed")
+
+    monkeypatch.setattr(service, "_download_controlled_snapshot", fail_download)
+    with pytest.raises(RuntimeError, match="download failed"):
+        service.execute_controlled_pilot_container(_controlled_job_spec())
+    assert kept
+    assert not kept[0].exists()
+    assert not kept[0].parent.exists()
+
+
+def test_controlled_container_runs_canonical_four_with_independent_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.result import BacktestResult
+    from strategies.paper import Lifecycle, PaperRunResult
+
+    snapshot = tmp_path / "controlled.sqlite"
+    sha = _sqlite(snapshot)
+    physical_id = f"sha256:{sha}"
+    snapshot_id = "sha256:" + ("ab" * 32)
+    calls: list[tuple[str, str]] = []
+
+    def fake_download(key: str, dest: Path, *, expected_hex: str, expected_size: int) -> str:
+        del key, expected_size
+        dest.write_bytes(snapshot.read_bytes())
+        return expected_hex
+
+    def fake_run(strategy: object, config: object) -> PaperRunResult:
+        calls.append((type(strategy).__name__, getattr(config, "lifecycle").value))
+        experiment_id = "e" * 64
+        return PaperRunResult(
+            experiment_id=experiment_id,
+            run_id=experiment_id,
+            lifecycle=Lifecycle.PAPER,
+            backtest=BacktestResult(
+                equity_curve=[{"date": "2023-01-04", "equity": 1.0}],
+                trades=[{"code": "7203"}],
+                metrics={
+                    "total_return_post_cost": 0.0,
+                    "max_drawdown": -0.0,
+                    "num_trades": 1,
+                },
+                metadata={
+                    "max_gross_weight_limit": 0.5,
+                    "requested_gross_weight": 0.5,
+                    "realized_gross_weight": 0.5,
+                    "authentic_am_session_evidence": True,
+                },
+            ),
+            reproducibility={
+                "data_snapshot_id": snapshot_id,
+                "feature_versions": {"momentum_n": "1.0.0"},
+                "feature_definition_hashes": {},
+                "strategy_definition_hash": "sha256:" + ("cd" * 32),
+            },
+        )
+
+    class _Universe:
+        rule_digest = EXACT_FOUR_UNIVERSE_RULE_DIGEST
+        resolved_membership_digest = "sha256:" + ("ab" * 32)
+        membership_by_date = {"2023-01-04": ("7203",)}
+        membership_proof = "controlled-resolved-universe:" + ("sha256:" + ("ab" * 32))
+
+    handle_events: list[str] = []
+
+    class _Handle:
+        def _begin_controlled_batch_reads(self) -> None:
+            handle_events.append("begin")
+
+        def logical_snapshot_id(self) -> str:
+            return snapshot_id
+
+        def resolve_controlled_universe(self, **_kwargs: object) -> _Universe:
+            return _Universe()
+
+        def _end_controlled_batch_reads(self) -> None:
+            handle_events.append("end")
+
+        def close(self) -> None:
+            handle_events.append("close")
+
+    monkeypatch.setattr(service, "_download_controlled_snapshot", fake_download)
+    monkeypatch.setattr(service, "_run_controlled_paper", fake_run)
+    monkeypatch.setattr(service, "_mint_controlled_am_view", lambda *_args: _Handle())
+    result = service.execute_controlled_pilot_container(
+        _controlled_job_spec(
+            snapshot_id=snapshot_id,
+            immutable_db_digest=physical_id,
+            snapshot_key=(
+                "research/controlled_pilot/v1/snapshots/sha256="
+                + physical_id[len("sha256:") :]
+                + ".sqlite"
+            ),
+            snapshot_size=snapshot.stat().st_size,
+        )
+    )
+    assert result["ok"] is True
+    assert result["ephemeral_cleaned"] is True
+    assert result["automatic_promotion"] is False
+    assert result["live_orders_enabled"] is False
+    papers = result["papers"]
+    assert len(papers) == 4
+    assert {row["lifecycle"] for row in papers} == {"Paper"}
+    assert {row["price_basis"] for row in papers} == {"RAW"}
+    assert len({row["strategy_spec_hash"] for row in papers}) == 4
+    assert len(result["risks"]) == 4
+    assert all("audit_id" in row for row in result["risks"])
+    assert result["selection"]["decision"] == "HOLD"
+    assert result["selection"]["automatic_promotion"] is False
+    assert "PROMOTE" not in {
+        row["decision"] for row in result["selection"]["decisions"]
+    }
+    assert result["knowledge"]["digest"].startswith("sha256:")
+    assert len(calls) == 4
+    assert handle_events == ["begin", "end", "close"]
+    assert {lifecycle for _, lifecycle in calls} == {"Paper"}
+    assert "Threshold" not in " ".join(name for name, _ in calls)
+    assert papers[0]["ordinal"] == 1
+    assert papers[0]["plan_id"] == "exp-mdh-hold10-momentum"
+    assert papers[0]["semantic_digest"].startswith("sha256:")
+    from paper_runtime.canonical_json import canonical_json_digest
+
+    paper_body = dict(papers[0])
+    paper_digest = paper_body.pop("semantic_digest")
+    assert paper_digest == canonical_json_digest(paper_body)
+    assert paper_body["metrics"]["total_return_post_cost"] == 0.0
+    assert (
+        result["knowledge"]["semantic_child_set_digest"]
+        == result["selection"]["semantic_child_set_digest"]
+    )
+    assert (
+        result["knowledge"]["selection_semantic_digest"]
+        == result["selection"]["semantic_digest"]
+    )
+    assert result["knowledge"]["artifact_id"] == result["knowledge"]["digest"]
+    assert result["knowledge"]["digest"] == result["knowledge"]["semantic_digest"]
+
+
+def _controlled_completed_result(item) -> dict:
+    return {
+        "ok": True,
+        "identity": service.CONTROLLED_PILOT_IDENTITY,
+        "status": "COMPLETED",
+        "job_id": item.job_id,
+        "request_digest": item.request_digest,
+        "execution_id": item.execution_id,
+        "runner_version": item.runner_version,
+        "automatic_promotion": False,
+        "live_orders_enabled": False,
+        "ephemeral_cleaned": True,
+        "papers": [{"ordinal": index} for index in range(1, 5)],
+        "risks": [{"ordinal": index} for index in range(1, 5)],
+        "selection": {"decision": "HOLD"},
+        "knowledge": {"kind": "knowledge"},
+        "generation": int(service._CONTROLLED_CONTRACT["generation"]),
+        "max_parallel": int(service._CONTROLLED_CONTRACT["max_parallel"]),
+    }
+
+
+def _shared_execution_counter():
+    return PROCESS_CONTEXT.Value("i", 0)
+
+
+def _increment_execution_counter(counter) -> None:
+    with counter.get_lock():
+        counter.value += 1
+
+
+def test_controlled_job_manager_restart_executes_once() -> None:
+    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
+    store: dict[str, bytes] = {}
+    executions = _shared_execution_counter()
+    done = threading.Event()
+
+    def upload(key, data, *, spec, content_digest, extra_headers=None):
+        del spec, content_digest, extra_headers
+        body = data if isinstance(data, bytes) else bytes(data)
+        if key in store:
+            raise service.TerminalReadDenied("create-only")
+        store[key] = body
+
+    def reader(item):
+        raw = store.get(item.manifest_key)
+        if raw is None:
+            return None
+        return json.loads(raw.decode("utf-8"))
+
+    def runner(item):
+        _increment_execution_counter(executions)
+        return _controlled_completed_result(item)
+
+    first = _job_manager(
+        runner,
+        terminal_uploader=upload,
+        terminal_reader=reader,
+        on_terminal=done.set,
+        max_job_seconds=5,
+        retry_schedule=(0.01,),
+    )
+    first.submit(spec)
+    assert done.wait(2.0)
+    second_done = threading.Event()
+    second = _job_manager(
+        runner,
+        terminal_uploader=upload,
+        terminal_reader=reader,
+        on_terminal=second_done.set,
+        max_job_seconds=5,
+        retry_schedule=(0.01,),
+    )
+    recovered = second.submit(spec)
+    assert executions.value == 1
+    assert recovered["status"] == "COMPLETED"
+    assert recovered["execution_id"] == spec.execution_id
+    assert second_done.is_set() is False
+
+
+
+def test_controlled_missing_runner_version_is_rejected() -> None:
+    document = _controlled_job_spec()
+    document["runner_version"] = ""
+    with pytest.raises(service.JobInputError, match="runner_version"):
+        service.ControlledPilotJobSpec.from_document(document)
+    missing = _controlled_job_spec()
+    missing.pop("runner_version")
+    with pytest.raises(service.JobInputError, match="closed"):
+        service.ControlledPilotJobSpec.from_document(missing)
+    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
+    headers = service._terminal_get_headers(spec)
+    assert headers["x-personal-runner-version"] == spec.runner_version
+    assert spec.runner_version == service._CONTROLLED_CONTRACT["runner_version"]
+
+
+def test_python_controlled_terminals_match_the_worker_closed_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
+    monkeypatch.setattr(
+        service,
+        "execute_controlled_pilot_container",
+        lambda _document: {
+            key: value
+            for key, value in _controlled_completed_result(spec).items()
+            if key
+            not in {
+                "status",
+                "job_id",
+                "request_digest",
+                "execution_id",
+                "runner_version",
+            }
+        },
+    )
+    completed = service.default_runner(spec)
+    assert completed["runner_version"] == spec.runner_version
+    closed_completed = {
+        **completed,
+        "owner_nonce": "owner-nonce-1",
+        "fencing_token": 1,
+    }
+    cross_runtime = json.loads(
+        (
+            ROOT
+            / "tests"
+            / "fixtures"
+            / "controlled_pilot_python_terminals.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert closed_completed == cross_runtime["completed"]
+    assert service._controlled_terminal_matches_spec(spec, closed_completed)
+
+    manager = _job_manager(lambda _spec: {}, max_job_seconds=5)
+    timeout = {
+        **manager._timeout_terminal(spec),
+        "owner_nonce": "owner-nonce-1",
+        "fencing_token": 1,
+    }
+    failure = {
+        **manager._failure_terminal(spec, "controlled_execution_failed"),
+        "owner_nonce": "owner-nonce-1",
+        "fencing_token": 1,
+    }
+    assert timeout["runner_version"] == spec.runner_version
+    assert failure["runner_version"] == spec.runner_version
+    assert failure == cross_runtime["failed"]
+    assert service._controlled_terminal_matches_spec(spec, timeout)
+    assert service._controlled_terminal_matches_spec(spec, failure)
+    for malformed in (
+        {key: value for key, value in closed_completed.items() if key != "runner_version"},
+        {**closed_completed, "runner_version": "evil-runner"},
+        {**closed_completed, "fencing_token": "1"},
+        {**closed_completed, "extra": True},
+    ):
+        assert not service._controlled_terminal_matches_spec(spec, malformed)
+
+
+class _ControlledCasStore:
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.objects: dict[str, tuple[bytes, str]] = {}
+        self.seq = 0
+
+    def upload(self, key, data, *, spec, content_digest, extra_headers=None):
+        del spec, content_digest
+        body = data if isinstance(data, bytes) else bytes(data)
+        headers = {str(k).lower(): str(v) for k, v in dict(extra_headers or {}).items()}
+        with self.lock:
+            existing = self.objects.get(key)
+            if key.endswith("/container-lease.json"):
+                if headers.get("if-none-match") == "*":
+                    if existing is not None:
+                        raise service.ControlledLeaseConflict("lease exists")
+                elif headers.get("if-match"):
+                    if existing is None or existing[1] != headers["if-match"]:
+                        raise service.ControlledLeaseConflict("lease cas")
+                elif existing is not None:
+                    raise service.ControlledLeaseConflict("lease precondition")
+            elif existing is not None:
+                if existing[0] == body:
+                    return
+                raise service.JobConflictError("digest conflict")
+            self.seq += 1
+            self.objects[key] = (body, f"etag-{self.seq}")
+
+    def reader(self, item):
+        raw = self.objects.get(item.manifest_key)
+        if raw is None:
+            return None
+        return json.loads(raw[0].decode("utf-8"))
+
+    def object_reader(self, spec, key):
+        del spec
+        raw = self.objects.get(key)
+        if raw is None:
+            return None, ""
+        return json.loads(raw[0].decode("utf-8")), raw[1]
+
+
+def _controlled_runner(executions, started=None, release=None):
+    def runner(item):
+        _increment_execution_counter(executions)
+        if started is not None:
+            started.set()
+        if release is not None:
+            release.wait(2.0)
+        return _controlled_completed_result(item)
+
+    return runner
+
+
+def test_controlled_crash_before_terminal_takeover_after_lease_expiry() -> None:
+    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
+    store = _ControlledCasStore()
+    stage = {
+        "identity": service.CONTROLLED_PILOT_IDENTITY,
+        "job_id": spec.job_id,
+        "request_digest": spec.request_digest,
+        "execution_id": spec.execution_id,
+        "runner_version": spec.runner_version,
+        "status": "QUEUED",
+        "stage": "QUEUED",
+    }
+    lease = {
+        "identity": service.CONTROLLED_PILOT_IDENTITY,
+        "job_id": spec.job_id,
+        "request_digest": spec.request_digest,
+        "execution_id": spec.execution_id,
+        "runner_version": spec.runner_version,
+        "kind": "controlled-pilot",
+        "owner_nonce": "deadownerdeadowner",
+        "fencing_token": 1,
+        "expires_at": 1.0,
+        "heartbeat_at": 0.0,
+        "status": "CLAIMED",
+    }
+    store.objects[spec.stage_key] = (
+        service._canonical_bytes(stage),
+        "etag-stage",
+    )
+    store.objects[spec.lease_key] = (
+        service._canonical_bytes(lease),
+        "etag-dead",
+    )
+    executions = _shared_execution_counter()
+    done = threading.Event()
+    manager = _job_manager(
+        _controlled_runner(executions),
+        terminal_uploader=store.upload,
+        terminal_reader=store.reader,
+        object_reader=store.object_reader,
+        on_terminal=done.set,
+        max_job_seconds=5,
+        retry_schedule=(0.01,),
+    )
+    accepted = manager.submit(spec)
+    assert accepted["status"] in {"QUEUED", "RUNNING", "COMPLETED"}
+    assert done.wait(2.0)
+    assert executions.value == 1
+    claimed, _etag = store.object_reader(spec, spec.lease_key)
+    assert claimed["owner_nonce"] != "deadownerdeadowner"
+    assert float(claimed["expires_at"]) > 1.0
+
+
+def test_controlled_two_managers_race_has_at_most_one_executor() -> None:
+    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
+    store = _ControlledCasStore()
+    executions = _shared_execution_counter()
+    started = PROCESS_CONTEXT.Event()
+    release = PROCESS_CONTEXT.Event()
+    first_done = threading.Event()
+    second_done = threading.Event()
+    first = _job_manager(
+        _controlled_runner(executions, started, release),
+        terminal_uploader=store.upload,
+        terminal_reader=store.reader,
+        object_reader=store.object_reader,
+        on_terminal=first_done.set,
+        max_job_seconds=5,
+        retry_schedule=(0.01,),
+    )
+    second = _job_manager(
+        _controlled_runner(executions, started, release),
+        terminal_uploader=store.upload,
+        terminal_reader=store.reader,
+        object_reader=store.object_reader,
+        on_terminal=second_done.set,
+        max_job_seconds=5,
+        retry_schedule=(0.01,),
+    )
+    results: list[dict] = []
+    errors: list[BaseException] = []
+    ready = threading.Barrier(3)
+
+    def run(manager):
+        try:
+            ready.wait(2.0)
+            results.append(manager.submit(spec))
+        except BaseException as exc:
+            errors.append(exc)
+            raise
+
+    threads = [threading.Thread(target=run, args=(first,)), threading.Thread(target=run, args=(second,))]
+    for thread in threads:
+        thread.start()
+    ready.wait(2.0)
+    for thread in threads:
+        thread.join(2.0)
+        assert not thread.is_alive()
+    assert errors == []
+    assert started.wait(2.0)
+    assert executions.value == 1
+    release.set()
+    assert sum(1 for row in results if row.get("status") in {"QUEUED", "RUNNING", "COMPLETED"}) == 2
+    winner_done = first_done.wait(2.0)
+    if not winner_done:
+        winner_done = second_done.wait(2.0)
+    assert winner_done
+    assert executions.value == 1
+    terminals = [row for row in results if row.get("status") == "COMPLETED"]
+    lookups = [row for row in results if row.get("status") == "RUNNING" and row.get("job_id") == spec.job_id]
+    assert len(terminals) + len(lookups) >= 1
+
+
+def _closed_lease(spec, owner, expires_at, fencing_token=1):
+    return {
+        "identity": service.CONTROLLED_PILOT_IDENTITY,
+        "job_id": spec.job_id,
+        "request_digest": spec.request_digest,
+        "execution_id": spec.execution_id,
+        "runner_version": spec.runner_version,
+        "kind": "controlled-pilot",
+        "owner_nonce": owner,
+        "fencing_token": fencing_token,
+        "expires_at": expires_at,
+        "heartbeat_at": expires_at - 1,
+        "status": "CLAIMED",
+    }
+
+
+def test_fresh_manager_observes_active_lease_then_claims_after_expiry() -> None:
+    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
+    store = _ControlledCasStore()
+    now = __import__("time").time()
+    store.objects[spec.lease_key] = (
+        service._canonical_bytes(_closed_lease(spec, "oldowneroldowner", now + 0.25)),
+        "etag-old",
+    )
+    executions = _shared_execution_counter()
+    done = threading.Event()
+    manager = _job_manager(
+        _controlled_runner(executions),
+        terminal_uploader=store.upload,
+        terminal_reader=store.reader,
+        object_reader=store.object_reader,
+        on_terminal=done.set,
+        max_job_seconds=5,
+        retry_schedule=(0.01,),
+        lease_ttl_seconds=0.4,
+    )
+    first = manager.submit(spec)
+    assert first["status"] == "RUNNING"
+    assert executions.value == 0
+    assert manager.status(spec.job_id)["status"] == "RUNNING"
+    assert done.wait(3.0)
+    assert executions.value == 1
+    claimed, _ = store.object_reader(spec, spec.lease_key)
+    assert claimed["owner_nonce"] != "oldowneroldowner"
+    assert claimed["fencing_token"] == 2
+
+
+def test_crash_before_executor_fresh_manager_takeover() -> None:
+    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
+    store = _ControlledCasStore()
+    now = __import__("time").time()
+    store.objects[spec.lease_key] = (
+        service._canonical_bytes(_closed_lease(spec, "crashedcrashedcr", now + 0.2, 3)),
+        "etag-crash",
+    )
+    executions = _shared_execution_counter()
+    done = threading.Event()
+    manager = _job_manager(
+        _controlled_runner(executions),
+        terminal_uploader=store.upload,
+        terminal_reader=store.reader,
+        object_reader=store.object_reader,
+        on_terminal=done.set,
+        max_job_seconds=5,
+        retry_schedule=(0.01,),
+        lease_ttl_seconds=0.3,
+    )
+    observed = manager.submit(spec)
+    assert observed["status"] == "RUNNING"
+    assert executions.value == 0
+    later = manager.submit(spec)
+    assert later["status"] in {"RUNNING", "QUEUED", "COMPLETED"}
+    assert done.wait(3.0)
+    assert executions.value == 1
+
+
+def test_heartbeat_cas_loss_fences_old_executor_zero_late_success() -> None:
+    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
+    store = _ControlledCasStore()
+    executions = _shared_execution_counter()
+    authorized = _shared_execution_counter()
+    started = PROCESS_CONTEXT.Event()
+
+    def old_runner(item):
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        _increment_execution_counter(executions)
+        started.set()
+        time.sleep(2.0)
+        _increment_execution_counter(authorized)
+        return _controlled_completed_result(item)
+
+    old_done = threading.Event()
+    new_done = threading.Event()
+    old = _job_manager(
+        old_runner,
+        terminal_uploader=store.upload,
+        terminal_reader=store.reader,
+        object_reader=store.object_reader,
+        on_terminal=old_done.set,
+        max_job_seconds=5,
+        retry_schedule=(0.01,),
+        lease_ttl_seconds=0.3,
+        process_term_grace_seconds=0.05,
+        process_kill_grace_seconds=0.5,
+    )
+    new = _job_manager(
+        _controlled_runner(executions),
+        terminal_uploader=store.upload,
+        terminal_reader=store.reader,
+        object_reader=store.object_reader,
+        on_terminal=new_done.set,
+        max_job_seconds=5,
+        retry_schedule=(0.01,),
+        lease_ttl_seconds=0.3,
+    )
+    old.submit(spec)
+    assert started.wait(2.0)
+    assert old._supervisor is not None
+    old_pid = old._supervisor.pid
+    assert old_pid is not None
+    lease, etag = store.object_reader(spec, spec.lease_key)
+    stolen = dict(lease)
+    stolen["owner_nonce"] = "newownernewowner"
+    stolen["fencing_token"] = int(lease["fencing_token"]) + 1
+    stolen["expires_at"] = 1.0
+    store.upload(
+        spec.lease_key,
+        service._canonical_bytes(stolen),
+        spec=spec,
+        content_digest="sha256:" + __import__("hashlib").sha256(service._canonical_bytes(stolen)).hexdigest(),
+        extra_headers={"if-match": etag},
+    )
+    try:
+        old._heartbeat_controlled_lease(spec)
+    except Exception:
+        pass
+    assert old.lease_lost()
+    with pytest.raises(ProcessLookupError):
+        os.kill(old_pid, 0)
+    assert old_done.wait(2.0)
+    takeover = new.submit(spec)
+    assert takeover["status"] in {"QUEUED", "RUNNING", "COMPLETED"}
+    assert new_done.wait(3.0)
+    terminals = [json.loads(raw[0]) for key, raw in store.objects.items() if key.endswith("container-terminal.json")]
+    successes = [row for row in terminals if row.get("status") == "COMPLETED" and row.get("ok") is True]
+    assert len(successes) == 1
+    assert successes[0]["owner_nonce"] != lease["owner_nonce"]
+    assert authorized.value == 0
+
+
+
+def test_delayed_heartbeat_expired_does_not_upload() -> None:
+    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
+    store = _ControlledCasStore()
+    now = time.time()
+    expired = _closed_lease(spec, "ownerxxxowner", now - 5.0, fencing_token=7)
+    store.objects[spec.lease_key] = (service._canonical_bytes(expired), "etag-7")
+    puts: list[str] = []
+    original_upload = store.upload
+
+    def recording_upload(key, data, *, spec, content_digest, extra_headers=None):
+        puts.append(key)
+        return original_upload(
+            key,
+            data,
+            spec=spec,
+            content_digest=content_digest,
+            extra_headers=extra_headers,
+        )
+
+    manager = _job_manager(
+        _controlled_runner(_shared_execution_counter()),
+        terminal_uploader=recording_upload,
+        terminal_reader=store.reader,
+        object_reader=store.object_reader,
+        max_job_seconds=5,
+        retry_schedule=(0.01,),
+        lease_ttl_seconds=0.4,
+    )
+    manager._controlled_lease = dict(expired)
+    manager._lease_etag = "etag-7"
+    before = store.objects[spec.lease_key][0]
+    with pytest.raises(service.JobConflictError, match="expired"):
+        manager._heartbeat_controlled_lease(spec)
+    assert manager.lease_lost()
+    assert puts == []
+    claimed, etag = store.object_reader(spec, spec.lease_key)
+    assert etag == "etag-7"
+    assert claimed["fencing_token"] == 7
+    assert claimed["expires_at"] == expired["expires_at"]
+    assert store.objects[spec.lease_key][0] == before
+
+
+
+
+class _RecordingBytesResponse:
+    def __init__(self, body: bytes, status: int = 200, headers: dict | None = None) -> None:
+        self._buf = io.BytesIO(body)
+        self.status = status
+        self.headers = headers or {"etag": "etag-1", "content-type": "application/json; charset=utf-8"}
+        self.read_sizes: list[int] = []
+
+    def read(self, n: int = -1) -> bytes:
+        self.read_sizes.append(n)
+        return self._buf.read(n)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+
+def _logical_terminal(spec, *, pad: int = 0) -> dict:
+    body = {
+        **_controlled_completed_result(spec),
+        "owner_nonce": "owner-nonce-1",
+        "fencing_token": 1,
+    }
+    if pad:
+        body["papers"][0]["pad"] = "x" * pad
+    return body
+
+
+def _embedded_terminal_lease(spec, payload: bytes, owner: str = "owner-nonce-1") -> dict:
+    digest = "sha256:" + hashlib.sha256(payload).hexdigest()
+    return {
+        "identity": service.CONTROLLED_PILOT_IDENTITY,
+        "job_id": spec.job_id,
+        "request_digest": spec.request_digest,
+        "execution_id": spec.execution_id,
+        "runner_version": spec.runner_version,
+        "kind": "controlled-pilot",
+        "owner_nonce": owner,
+        "fencing_token": 1,
+        "expires_at": 10.0,
+        "heartbeat_at": 9.0,
+        "status": "TERMINAL",
+        "terminal_digest": digest,
+        "terminal_status": "COMPLETED",
+        "terminal_payload_b64": __import__("base64").b64encode(payload).decode("ascii"),
+    }
+
+
+def _near_max_stored_lease(spec) -> tuple[bytes, bytes]:
+    low = 0
+    high = service.CONTROLLED_TERMINAL_MAX_BYTES
+    best_payload = service._canonical_bytes(_logical_terminal(spec))
+    best_stored = service._canonical_bytes(_embedded_terminal_lease(spec, best_payload))
+    while low <= high:
+        mid = (low + high) // 2
+        payload = service._canonical_bytes(_logical_terminal(spec, pad=mid))
+        stored = service._canonical_bytes(_embedded_terminal_lease(spec, payload))
+        if (
+            len(payload) <= service.CONTROLLED_TERMINAL_MAX_BYTES
+            and len(stored) <= service.CONTROLLED_LEASE_STORED_MAX_BYTES
+        ):
+            best_payload, best_stored = payload, stored
+            low = mid + 1
+        else:
+            high = mid - 1
+    assert len(best_payload) > 8 * 1024
+    assert len(best_payload) <= service.CONTROLLED_TERMINAL_MAX_BYTES
+    assert len(best_stored) > service.CONTROLLED_LEASE_MAX_BYTES
+    assert len(best_stored) <= service.CONTROLLED_LEASE_STORED_MAX_BYTES
+    assert service.CONTROLLED_TERMINAL_MAX_BYTES - len(best_payload) < 64
+    return best_payload, best_stored
+
+
+def test_python_stored_lease_cap_matches_worker_formula() -> None:
+    expected = (
+        8 * 1024
+        + ((64 * 1024 + 2) // 3) * 4
+        + 2048
+    )
+    assert service.CONTROLLED_LEASE_MAX_BYTES == 8 * 1024
+    assert service.CONTROLLED_TERMINAL_MAX_BYTES == 64 * 1024
+    assert service.CONTROLLED_LEASE_STORED_MAX_BYTES == expected
+    assert expected == 97624
+
+
+def test_near_maximum_embedded_terminal_lease_recovery(monkeypatch) -> None:
+    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
+    payload, stored = _near_max_stored_lease(spec)
+    logical = json.loads(payload.decode("utf-8"))
+    responses: dict[str, _RecordingBytesResponse] = {}
+    puts: list[str] = []
+
+    def urlopen(request, timeout=None):
+        del timeout
+        key = urllib.parse.urlparse(request.full_url).path.lstrip("/")
+        method = request.get_method()
+        if method == "PUT":
+            puts.append(key)
+            raise AssertionError(f"unexpected PUT {key}")
+        if key == spec.lease_key:
+            response = _RecordingBytesResponse(stored, headers={"etag": "etag-terminal-lease"})
+        elif key == spec.manifest_key:
+            response = _RecordingBytesResponse(payload, headers={"etag": "etag-logical"})
+        else:
+            raise urllib.error.HTTPError(request.full_url, 404, "not found", Message(), io.BytesIO(b""))
+        responses[key] = response
+        return response
+
+    monkeypatch.setattr(service.urllib.request, "urlopen", urlopen)
+    parsed, etag = service._get_json_at(spec, spec.lease_key)
+    assert etag == "etag-terminal-lease"
+    assert parsed is not None
+    assert parsed["status"] == "TERMINAL"
+    assert parsed["terminal_digest"] == "sha256:" + hashlib.sha256(payload).hexdigest()
+    lease_reads = responses[spec.lease_key].read_sizes
+    assert lease_reads == [service.CONTROLLED_LEASE_STORED_MAX_BYTES + 1]
+
+    logical_got = service._get_json(spec)
+    assert logical_got == logical
+    assert responses[spec.manifest_key].read_sizes == [service.CONTROLLED_TERMINAL_MAX_BYTES + 1]
+
+    executions = _shared_execution_counter()
+    done = threading.Event()
+    store = _ControlledCasStore()
+    store.objects[spec.lease_key] = (stored, "etag-terminal-lease")
+
+    def reader(item):
+        del item
+        return dict(logical)
+
+    manager = _job_manager(
+        _controlled_runner(executions),
+        terminal_uploader=store.upload,
+        terminal_reader=reader,
+        object_reader=store.object_reader,
+        on_terminal=done.set,
+        max_job_seconds=5,
+        retry_schedule=(0.01,),
+    )
+    first = manager.submit(spec)
+    assert first["status"] == "COMPLETED"
+    assert first["execution_id"] == spec.execution_id
+    assert executions.value == 0
+    assert done.is_set() is False
+    replay = manager.submit(spec)
+    assert replay["status"] == "COMPLETED"
+    assert executions.value == 0
+    claimed, _ = store.object_reader(spec, spec.lease_key)
+    assert claimed["status"] == "TERMINAL"
+    assert claimed["owner_nonce"] == "owner-nonce-1"
+    assert puts == []
+
+    manager._controlled_lease = {
+        "owner_nonce": "owner-nonce-1",
+        "fencing_token": 1,
+    }
+    manager._lease_etag = "etag-terminal-lease"
+    before = store.objects[spec.lease_key][0]
+    try:
+        manager._heartbeat_controlled_lease(spec)
+        raise AssertionError("heartbeat after terminal must fail closed")
+    except service.JobConflictError:
+        pass
+    assert manager.lease_lost()
+    assert store.objects[spec.lease_key][0] == before
+
+
+def test_oversized_stored_lease_fails_closed(monkeypatch) -> None:
+    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
+    oversized = b"{" + b"x" * service.CONTROLLED_LEASE_STORED_MAX_BYTES
+    assert len(oversized) == service.CONTROLLED_LEASE_STORED_MAX_BYTES + 1
+    response = _RecordingBytesResponse(oversized, headers={"etag": "etag-over"})
+
+    def urlopen(request, timeout=None):
+        del timeout, request
+        return response
+
+    monkeypatch.setattr(service.urllib.request, "urlopen", urlopen)
+    with pytest.raises(service.TerminalReadDenied, match="exceeds bound"):
+        service._get_json_at(spec, spec.lease_key)
+    assert response.read_sizes == [service.CONTROLLED_LEASE_STORED_MAX_BYTES + 1]
+
+    huge_logical = b"{" + b"y" * service.CONTROLLED_TERMINAL_MAX_BYTES
+    logical_response = _RecordingBytesResponse(huge_logical)
+
+    def urlopen_logical(request, timeout=None):
+        del timeout, request
+        return logical_response
+
+    monkeypatch.setattr(service.urllib.request, "urlopen", urlopen_logical)
+    with pytest.raises(service.TerminalReadDenied, match="exceeds bound"):
+        service._get_json(spec)
+    assert logical_response.read_sizes == [service.CONTROLLED_TERMINAL_MAX_BYTES + 1]
+
+
+def test_terminal_lease_does_not_takeover_when_logical_terminal_missing() -> None:
+    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
+    payload, stored = _near_max_stored_lease(spec)
+    del payload
+    store = _ControlledCasStore()
+    store.objects[spec.lease_key] = (stored, "etag-terminal-lease")
+    executions = _shared_execution_counter()
+    manager = _job_manager(
+        _controlled_runner(executions),
+        terminal_uploader=store.upload,
+        terminal_reader=lambda item: None,
+        object_reader=store.object_reader,
+        max_job_seconds=5,
+        retry_schedule=(0.01,),
+    )
+    try:
+        observed = manager.submit(spec)
+        assert observed["status"] == "RUNNING"
+        assert observed.get("lease_observer") is True
+        assert executions.value == 0
+        claimed, _ = store.object_reader(spec, spec.lease_key)
+        assert claimed["status"] == "TERMINAL"
+        assert claimed["owner_nonce"] == "owner-nonce-1"
+    finally:
+        with manager._lock:
+            recovery = manager._lease_recovery
+            manager._lease_recovery = None
+            heartbeat = manager._lease_heartbeat
+            manager._lease_heartbeat = None
+        if recovery is not None:
+            recovery.cancel()
+        if heartbeat is not None:
+            heartbeat.cancel()

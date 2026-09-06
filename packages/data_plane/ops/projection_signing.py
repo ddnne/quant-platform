@@ -1,14 +1,15 @@
 """Public, verify-only cryptography for immutable Ops Projection envelopes.
 
-Production minting stays disabled until a dedicated authority derives the
-envelope from the authenticated full-source handoff.  In particular, this
-module has no private-key loader and no caller-envelope signing API.
+Production minting belongs to the ingestion-premium cloud publisher, which
+derives the envelope from governed source observations.  This local module is
+verify-only: it has no private-key loader or caller-envelope signing API.
 """
 
 from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import hashlib
 import json
 import math
@@ -25,6 +26,18 @@ from ops.trust_domain import projection_resource_identity, require_environment
 
 SIGNED_DOCUMENT_SCHEMA = "ops-projection-signed-envelope/v1"
 ENVELOPE_SCHEMA = "ops-projection-envelope/v1"
+_CANONICAL_PRODUCTION_REGISTRY_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "specs"
+    / "ops_projection"
+    / "verify_public_keys.json"
+)
+_CANONICAL_STAGING_REGISTRY_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "specs"
+    / "ops_projection"
+    / "verify_public_keys.staging.json"
+)
 _PINNED_VERIFY_REGISTRY_PATH = (
     Path(__file__).resolve().parents[3]
     / "specs"
@@ -37,7 +50,7 @@ _PINNED_STAGING_VERIFY_REGISTRY_PATH = (
     / "ops_projection"
     / "verify_public_keys.staging.json"
 )
-PINNED_OPS_PROJECTION_REGISTRY_GENERATION = 2
+PINNED_OPS_PROJECTION_REGISTRY_GENERATION = 3
 # These four values are an independent code pin.  Replacing the checked-in
 # JSON (or redirecting its path) cannot replace the production trust root.
 # They are updated atomically with the governed registry document.
@@ -45,23 +58,38 @@ PINNED_OPS_PROJECTION_PRIOR_REGISTRY_DIGEST = (
     "sha256:bb1dc1ae823784db8b53147891d425b027c02cbf022023a74affa2ce46909abe"
 )
 PINNED_OPS_PROJECTION_REGISTRY_BODY_DIGEST = (
-    "sha256:7e27a111b0cd8f78e40c78011489fc8ce834e9d1c31487b2e5cd6237fa1ab1d6"
+    "sha256:32bd179616eb9e848a47d56c38c2e12b243249b05321a0999fed53d22cd47362"
 )
 PINNED_OPS_PROJECTION_REGISTRY_DOCUMENT_DIGEST = (
-    "sha256:44c55900ffd8e0eb97de298b40f2277f7ad767448c859cdbd46b037ca874064d"
+    "sha256:5bebf8906b263fd9a2edf295a4e1e64e0a5a7e52bb3160123c455ebc3d39dadb"
 )
-PINNED_STAGING_OPS_PROJECTION_REGISTRY_GENERATION = 1
+PINNED_STAGING_OPS_PROJECTION_REGISTRY_GENERATION = 2
 PINNED_STAGING_OPS_PROJECTION_PRIOR_REGISTRY_DIGEST = None
 PINNED_STAGING_OPS_PROJECTION_REGISTRY_BODY_DIGEST = (
-    "sha256:b04a7692f2d754e3494ccd0bbf7e0b0459518886e95ad2d301e479ee42673815"
+    "sha256:c97a025ecf3525e8405cac95ffae73393e687ecba5111165a8a71d4ebc99af1e"
 )
 PINNED_STAGING_OPS_PROJECTION_REGISTRY_DOCUMENT_DIGEST = (
-    "sha256:e4b1ccfbaeb427c7b0ae57c83a0109cadb018baea381ceb37dbbeef507ca165b"
+    "sha256:093fb04a3530cb094b4c4eaf2bbd92f9813706c12a885aa70931fbc4d605b7b9"
 )
 
 
 class OpsProjectionSignatureError(RuntimeError):
     """Projection envelope is unsigned, malformed, or unverifiable."""
+
+
+_CANONICAL_UTC = __import__("re").compile(
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+)
+
+
+def require_canonical_utc(value: object, *, label: str = "timestamp") -> str:
+    if type(value) is not str or _CANONICAL_UTC.fullmatch(value) is None:
+        raise OpsProjectionSignatureError(f"{label} is not canonical UTC")
+    parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    canonical = parsed.strftime("%Y-%m-%dT%H:%M:%SZ")
+    if canonical != value or parsed.tzinfo is not timezone.utc:
+        raise OpsProjectionSignatureError(f"{label} is not canonical UTC")
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,6 +211,7 @@ def _validate_envelope(
         "source_db_digest",
         "generated_at",
         "producer_commit_sha",
+        "worker_version_id",
         "contract_digest",
         "registry_digest",
         "coverage_policy_version",
@@ -232,11 +261,21 @@ def _validate_envelope(
         "generation_id",
         "generated_at",
         "producer_commit_sha",
+        "worker_version_id",
         "coverage_policy_version",
         "projection_status",
     ):
         if type(envelope[field]) is not str or not envelope[field]:
             raise OpsProjectionSignatureError(f"invalid {field}")
+    require_canonical_utc(envelope["generated_at"], label="generated_at")
+    import re as _re
+    if _re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+        str(envelope.get("worker_version_id") or ""),
+    ) is None:
+        raise OpsProjectionSignatureError("invalid worker_version_id")
+    if envelope.get("worker_version_id") == envelope.get("producer_commit_sha"):
+        raise OpsProjectionSignatureError("invalid worker_version_id")
     for field in (
         "content_digest",
         "source_db_digest",
@@ -396,15 +435,48 @@ _REGISTRY_FIELDS = {
     "purpose",
     "generation",
     "authority_status",
+    "authority_instance",
     "prior_registry_digest",
     "keys",
     "registry_digest",
+}
+_REGISTRY_KEY_FIELDS = {
+    "key_id",
+    "algorithm",
+    "public_key_base64",
+    "status",
+    "environment",
+    "not_before",
+    "not_after",
+    "revoked_at",
 }
 
 
 def _registry_digest(document: dict[str, Any]) -> str:
     return sha256_digest(
         {key: value for key, value in document.items() if key != "registry_digest"}
+    )
+
+
+PINNED_OPS_PROJECTION_REGISTRY_RAW_SHA = (
+    "sha256:b8dbdbc826c7d6af6546fd3ba7b681a5c03a688cb0899ac449d1adbfaf96387a"
+)
+PINNED_OPS_PROJECTION_REGISTRY_RAW_SIZE = 1078
+PINNED_STAGING_OPS_PROJECTION_REGISTRY_RAW_SHA = (
+    "sha256:ae06407af2401545e59fb507aa9f9765b9840b4d7cfeb6d8fc528dc43416f2b0"
+)
+PINNED_STAGING_OPS_PROJECTION_REGISTRY_RAW_SIZE = 655
+
+
+def _ops_registry_raw_pin(environment: str) -> tuple[int, str]:
+    if environment == "staging":
+        return (
+            PINNED_STAGING_OPS_PROJECTION_REGISTRY_RAW_SIZE,
+            PINNED_STAGING_OPS_PROJECTION_REGISTRY_RAW_SHA,
+        )
+    return (
+        PINNED_OPS_PROJECTION_REGISTRY_RAW_SIZE,
+        PINNED_OPS_PROJECTION_REGISTRY_RAW_SHA,
     )
 
 
@@ -431,6 +503,9 @@ def ops_registry_document_digest(environment: str) -> str:
     return _ops_registry_contract(environment)[4]
 
 
+_KEY_WINDOWS: dict[str, tuple[str, str]] = {}
+
+
 def _load_pinned_active_keys(
     expected_environment: str = "production",
 ) -> Mapping[str, Ed25519PublicKey]:
@@ -446,6 +521,21 @@ def _load_pinned_active_keys(
         raise OpsProjectionSignatureError(
             "cannot load the pinned Ops Projection public-key registry"
         ) from exc
+    canonical_path, _generation, _prior, _body, _document = _ops_registry_contract(
+        expected_environment
+    )
+    frozen_path = (
+        _CANONICAL_STAGING_REGISTRY_PATH
+        if expected_environment == "staging"
+        else _CANONICAL_PRODUCTION_REGISTRY_PATH
+    )
+    if path.resolve() == frozen_path.resolve():
+        raw_size, raw_sha = _ops_registry_raw_pin(expected_environment)
+        if len(raw_document) != raw_size:
+            raise OpsProjectionSignatureError("pinned Ops Projection registry size mismatch")
+        raw_digest = "sha256:" + hashlib.sha256(raw_document).hexdigest()
+        if raw_digest != raw_sha:
+            raise OpsProjectionSignatureError("pinned Ops Projection registry raw SHA mismatch")
     if type(document) is not dict:
         raise OpsProjectionSignatureError("pinned Ops Projection registry is invalid")
     if sha256_digest(document) != document_digest:
@@ -455,10 +545,11 @@ def _load_pinned_active_keys(
     if (
         set(document) != _REGISTRY_FIELDS
         or type(document.get("schema_version")) is not int
-        or document.get("schema_version") != 2
+        or document.get("schema_version") != 3
         or document.get("purpose") != "ops_projection_verification"
         or type(document.get("generation")) is not int
         or document.get("generation") != generation
+        or document.get("authority_instance") != "ops-projection-cloud"
         or document.get("authority_status") not in {"ACTIVE", "PENDING"}
         or document.get("prior_registry_digest")
         != prior_digest
@@ -476,14 +567,23 @@ def _load_pinned_active_keys(
     for row in rows:
         if (
             type(row) is not dict
-            or set(row) != {"key_id", "algorithm", "public_key_base64", "status"}
+            or set(row) != _REGISTRY_KEY_FIELDS
             or row.get("algorithm") != "Ed25519"
             or row.get("status") not in {"active", "pending", "revoked"}
+            or row.get("environment") not in {"production", "staging"}
+            or (row.get("status") == "revoked" and row.get("revoked_at") in {None, ""})
+            or (row.get("status") != "revoked" and row.get("revoked_at") is not None)
         ):
             raise OpsProjectionSignatureError(
                 "pinned Ops Projection registry key invalid"
             )
-        if any(type(row[field]) is not str for field in row):
+        if any(
+            type(row[field]) is not str
+            for field in row
+            if field != "revoked_at"
+        ) or row.get("revoked_at") not in {None} | (
+            {row["revoked_at"]} if type(row.get("revoked_at")) is str else set()
+        ):
             raise OpsProjectionSignatureError(
                 "pinned Ops Projection registry key invalid"
             )
@@ -502,7 +602,15 @@ def _load_pinned_active_keys(
                 f"invalid Ops Projection public key: {key_id}"
             ) from exc
         if row.get("status") == "active":
+            if row.get("environment") != expected_environment:
+                raise OpsProjectionSignatureError(
+                    "Ops Projection active key environment does not match"
+                )
             keys[key_id] = public_key
+            _KEY_WINDOWS[key_id] = (
+                require_canonical_utc(row["not_before"], label="not_before"),
+                require_canonical_utc(row["not_after"], label="not_after"),
+            )
     expected_active = 1 if document.get("authority_status") == "ACTIVE" else 0
     if len(keys) != expected_active:
         raise OpsProjectionSignatureError(
@@ -591,6 +699,15 @@ def _verify_document_identity(
     if type(envelope) is not dict:
         raise OpsProjectionSignatureError("Ops Projection envelope is missing")
     _validate_envelope(envelope, expected_environment=expected_environment)
+    window = _KEY_WINDOWS.get(key_id)
+    generated_at = require_canonical_utc(envelope.get("generated_at"), label="generated_at")
+    if window is not None:
+        not_before = require_canonical_utc(window[0], label="not_before")
+        not_after = require_canonical_utc(window[1], label="not_after")
+        if generated_at < not_before or generated_at > not_after:
+            raise OpsProjectionSignatureError(
+                "Ops Projection issuer is outside its validity window"
+            )
     body = _signed_body(key_id=key_id, envelope=envelope)
     signature_value = frozen["signature"]
     if not signature_value.startswith("ed25519:"):

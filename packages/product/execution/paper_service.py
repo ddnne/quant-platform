@@ -1,10 +1,9 @@
 """Offline DRAFT execution and the fail-closed Controlled Pilot boundary.
 
 ``PaperExecutionService`` and ``OfflineFixturePaperService`` are local DRAFT
-helpers only.  Controlled PAPER execution belongs to a separately permissioned
-OS authority.  That authority is not provisioned yet, so the zero-argument
-``ControlledPilotExecutionService`` reports a stable PENDING reason and cannot
-receive a database path, output store, verifier, or in-process capability.
+helpers only.  Controlled PAPER execution is the research-mass-eval
+Worker/Container path.  This module has no local socket, path, store, snapshot
+bytes, or verifier injection surface.
 """
 
 from __future__ import annotations
@@ -13,10 +12,11 @@ import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any
 
 import features
 from agents.types import AuthorizedPaperExecutionRequest
+from selection.controlled_pilot_policy import CONTROLLED_PILOT_IDENTITY
 from paper_runtime import data_snapshot_id
 from strategies.paper import (
     JsonPaperStore,
@@ -36,15 +36,16 @@ CONTROLLED_AUTHORITY_UNPROVISIONED = "CONTROLLED_AUTHORITY_UNPROVISIONED"
 
 
 class ControlledPilotPending(PaperExecutionRejected):
-    """Controlled execution is unavailable until the OS authority exists."""
+    """Controlled execution is unavailable until Cloudflare/READY evidence exists."""
 
     status = "PENDING"
     reason_code = CONTROLLED_AUTHORITY_UNPROVISIONED
 
-    def __init__(self) -> None:
+    def __init__(self, detail: str = "") -> None:
+        suffix = f"; {detail}" if detail else ""
         super().__init__(
             f"{self.status}: {self.reason_code}; controlled execution requires "
-            "a separately permissioned authority"
+            f"Cloudflare/READY public-key evidence{suffix}"
         )
 
 
@@ -64,28 +65,16 @@ def _authorization_id(
     spec_hash: str,
     max_gross_weight: float,
     *,
-    ready_snapshot_id: str = "",
-    ready_manifest_digest: str = "",
-    readiness_attestation_id: str = "",
-    profile_digest: str = "",
-    plan_set_digest: str = "",
-    dependency_closure_digest: str = "",
     universe: tuple[str, ...] | list[str] = (),
     period_start: str = "",
     period_end: str = "",
     cost_scenario: str = "default",
 ) -> str:
-    """Re-derive the immutable authorization id (mirrors TraderAgent.prepare)."""
+    """Re-derive the immutable DRAFT authorization id (mirrors TraderAgent.prepare)."""
     payload = {
         "mode": mode,
         "strategy_spec_hash": spec_hash,
         "max_gross_weight": max_gross_weight,
-        "ready_snapshot_id": ready_snapshot_id or "",
-        "ready_manifest_digest": ready_manifest_digest or "",
-        "readiness_attestation_id": readiness_attestation_id or "",
-        "profile_digest": profile_digest or "",
-        "plan_set_digest": plan_set_digest or "",
-        "dependency_closure_digest": dependency_closure_digest or "",
         "universe": list(universe),
         "period_start": period_start or "",
         "period_end": period_end or "",
@@ -140,23 +129,13 @@ class PaperExecutionService:
             raise PaperExecutionRejected(
                 "offline fixture execution requires exact PaperRunConfig"
             )
+        if type(plan) is not AuthorizedPaperExecutionRequest:
+            raise PaperExecutionRejected(
+                "offline fixture execution requires AuthorizedPaperExecutionRequest"
+            )
         if config.lifecycle is not Lifecycle.DRAFT:
             raise PaperExecutionRejected(
                 "PaperExecutionService compatibility entry is offline DRAFT only"
-            )
-        if any(
-            str(getattr(plan, name, "") or "").strip()
-            for name in (
-                "ready_snapshot_id",
-                "ready_manifest_digest",
-                "readiness_attestation_id",
-                "profile_digest",
-                "plan_set_digest",
-                "dependency_closure_digest",
-            )
-        ):
-            raise PaperExecutionRejected(
-                "offline fixture execution cannot consume READY authority"
             )
         pinned_snapshot = self._authorize_offline(plan, spec, config)
         strategy: Any = interpret_strategy_spec(spec)
@@ -240,6 +219,21 @@ class PaperExecutionService:
                     raise PaperExecutionRejected(
                         "feature_ref_versions do not match the StrategySpec"
                     )
+        if any(
+            str(getattr(request, name, "") or "").strip()
+            for name in (
+                "ready_snapshot_id",
+                "ready_manifest_digest",
+                "readiness_attestation_id",
+                "profile_digest",
+                "plan_set_digest",
+                "dependency_closure_digest",
+                "controlled_pilot_identity",
+            )
+        ):
+            raise PaperExecutionRejected(
+                "paper_runtime DTO execute is DRAFT-only and cannot consume READY"
+            )
         plan = AuthorizedPaperExecutionRequest(
             mode=str(getattr(request, "mode", "")),
             authorization_id=str(getattr(request, "authorization_id", "") or ""),
@@ -249,20 +243,6 @@ class PaperExecutionService:
             ),
             max_gross_weight=float(max_gross),
             instructions=(),
-            ready_snapshot_id=str(getattr(request, "ready_snapshot_id", "") or ""),
-            ready_manifest_digest=str(
-                getattr(request, "ready_manifest_digest", "") or ""
-            ),
-            readiness_attestation_id=str(
-                getattr(request, "readiness_attestation_id", "") or ""
-            ),
-            profile_digest=str(getattr(request, "profile_digest", "") or ""),
-            plan_set_digest=str(
-                getattr(request, "plan_set_digest", "") or ""
-            ),
-            dependency_closure_digest=str(
-                getattr(request, "dependency_closure_digest", "") or ""
-            ),
             universe=tuple(getattr(request, "universe", ()) or ()),
             period_start=str(getattr(request, "period_start", "") or ""),
             period_end=str(getattr(request, "period_end", "") or ""),
@@ -302,16 +282,6 @@ class PaperExecutionService:
             plan.mode,
             expected_hash,
             plan.max_gross_weight,
-            ready_snapshot_id=getattr(plan, "ready_snapshot_id", "") or "",
-            ready_manifest_digest=getattr(plan, "ready_manifest_digest", "") or "",
-            readiness_attestation_id=(
-                getattr(plan, "readiness_attestation_id", "") or ""
-            ),
-            profile_digest=getattr(plan, "profile_digest", "") or "",
-            plan_set_digest=getattr(plan, "plan_set_digest", "") or "",
-            dependency_closure_digest=(
-                getattr(plan, "dependency_closure_digest", "") or ""
-            ),
             universe=getattr(plan, "universe", ()) or (),
             period_start=getattr(plan, "period_start", "") or "",
             period_end=getattr(plan, "period_end", "") or "",
@@ -463,22 +433,22 @@ class PaperExecutionService:
 OfflineFixturePaperService = PaperExecutionService
 
 
-class ControlledPilotExecutionService:
-    """Zero-argument boundary for the not-yet-provisioned OS authority.
 
-    There is intentionally no constructor state and no request/config surface
-    in this containment slice.  A later reviewed protocol may replace
-    :meth:`execute`; until then a caller cannot supply paths, stores, trust
-    roots, or an in-process execution object.
-    """
+class ControlledPilotExecutionService:
+    """Fail-closed local facade. Controlled Paper runs only on Cloudflare."""
 
     __slots__ = ()
+    identity = CONTROLLED_PILOT_IDENTITY
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         raise TypeError("ControlledPilotExecutionService is final")
 
-    def execute(self) -> NoReturn:
-        raise ControlledPilotPending()
+    def execute(self, *args: object, **kwargs: object) -> None:
+        raise ControlledPilotPending(
+            "controlled execution is the research-mass-eval Worker/Container path"
+        )
+
+
 
 
 __all__ = [

@@ -9,6 +9,7 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from selection.budget_ledger import MassResearchDisabledError
+from selection.controlled_pilot_policy import CONTROLLED_PILOT_IDENTITY
 
 
 PLAN_EXECUTION_BINDING_FORMAT = "plan-execution-binding/v1"
@@ -247,6 +248,7 @@ __all__ = [
     "AUTHORITY_PROTOCOL_STATE",
     "CONTROLLED_EXECUTION_CLAIMS_FORMAT",
     "CONTROLLED_EXECUTION_SCOPE",
+    "CONTROLLED_PILOT_IDENTITY",
     "EXACT_FOUR_BINDING_FORMAT",
     "ExactFourAuthorityContractError",
     "ExactFourAuthorityPending",

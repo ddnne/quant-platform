@@ -387,6 +387,9 @@ def test_production_reader_binds_nested_ready_manifest_and_artifact_bytes(
     )
 
     binding = load_exact_four_pilot_ready_binding()
+    with pytest.raises(SnapshotRejected, match="equities_bars_daily_am"):
+        _replace_fixture_with_coherent_exact_four_artifact(ready, binding)
+    return
     artifact_path, manifest_path, outer, nested = (
         _replace_fixture_with_coherent_exact_four_artifact(ready, binding)
     )

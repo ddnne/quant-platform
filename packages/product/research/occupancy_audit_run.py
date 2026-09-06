@@ -16,7 +16,6 @@ def run_eval_wave(
     *,
     wave: str | None = None,
     root: Path | None = None,
-    put_r2: bool = False,
     propose: bool = True,
     propose_n: int = 3,
     invoke: Callable[..., Any] | None = None,
@@ -30,7 +29,6 @@ def run_eval_wave(
     from research.occupancy_audit import (
         _float_occ_map,
         _ops_root,
-        _put_eval_bytes,
         load_ops_occupancy,
         write_eval_wave_pack,
     )
@@ -43,7 +41,7 @@ def run_eval_wave(
             "mid_n_explore": _float_occ_map(occupancy_by_track.get("mid_n_explore")),
             "liq_large": _float_occ_map(occupancy_by_track.get("liq_large")),
         }
-    pack = write_eval_wave_pack(occ, wave=wave_id, root=root, put_r2=put_r2)
+    pack = write_eval_wave_pack(occ, wave=wave_id, root=root)
     propose_job = f"eval-cf-propose-{wave_id}"
     propose_pack: dict[str, Any] = {
         "job_id": propose_job,
@@ -83,14 +81,6 @@ def run_eval_wave(
         ops = _ops_root(root)
         raw = json.dumps(propose_pack, ensure_ascii=True, default=str)
         (ops / f"{propose_job}.json").write_text(raw, encoding="utf-8")
-        put = _put_eval_bytes(
-            job=propose_job,
-            r2name="propose.json",
-            body=raw.encode("utf-8"),
-            put_r2=put_r2,
-        )
-        if put:
-            puts.append(put)
     return {
         **pack,
         "wave": wave_id,

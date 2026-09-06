@@ -19,7 +19,7 @@ gzip して手で upload する手順は使いません。curl 例は
 `topix_small2` / `topix_small` / `topix100` / `topix500` も執行判定カットオフで
 PIT 解決し、財務と交差します。既定 AM cohort は 11:30 の情報と当日 PM close を使います。
 
-スナップショットは compact v7、1 つの連続オブジェクト、最大 7,000 inclusive calendar days です。
+スナップショットは compact v8、1 つの連続オブジェクト、最大 7,000 inclusive calendar days です。
 圧縮 R2/HTTP は 4GiB 以下、展開 SQLite / builder は 5GiB 以下です。1 つの `standard-4`
 Container は snapshot/quality 準備を 1 回共有し、最大 4 つの strategy 子プロセスを走らせます。
 batch は最大 8 つの cohort/universe ジョブです。1 Container = 1 strategy ではありません。
@@ -273,13 +273,11 @@ Phase 3.5 の **運用完了** には以下の両方が必要:
   --db data/structured/ingestion.sqlite --tier daily` が exit 0 となること
   （LIVE_GATES: master ≳ 3,000 / bars issuers ≳ 3,000 / latest-day rows ≳ 3,000）。
 
-**Phase 3.5/4 ops complete** は検証と accept の両レポートが緑であることを追加要件とします:
+**Phase 3.5 ops complete** は検証レポートが緑であることを追加要件とします:
 
 - **Validation report (weekly 緑)** — `python3 scripts/run_phase35_validation.py
   --db <DB> --tier weekly` が exit 0 (default `--require-implemented` for weekly).
   レポートは `data/reports/validation_*.json` に恒久化されるので事後監査が可能。
-- **Phase 4 accept report** — `python3 scripts/run_phase4_accept.py` (offline) が
-  exit 0。`QP_LIVE=1` では B0 strict + 50 銘柄サンプル + 50 日以上の BT を通すこと。
 
 **フレームワーク完了 ≠ データ品質完了**。検証マトリクスのコード・カタログ・docs が揃っていても、
 本番 cron が `failed=0` で回り、かつ live B0 strict が通って初めて運用完了と呼べる。

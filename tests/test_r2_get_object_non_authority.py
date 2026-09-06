@@ -3,8 +3,8 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-import research.r2_io as r2_io
-from research.r2_io import default_r2_get_object
+import ops.r2_cli as r2_cli
+from ops.r2_io import default_r2_get_object
 
 
 def test_default_r2_get_object_uses_pinned_remote_read(
@@ -23,7 +23,7 @@ def test_default_r2_get_object_uses_pinned_remote_read(
         Path(output_arg.removeprefix("--file=")).write_bytes(b"payload")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(r2_io.subprocess, "run", fake_run)
+    monkeypatch.setattr(r2_cli.subprocess, "run", fake_run)
     assert default_r2_get_object(
         "quant-structured",
         "research/eval/job=x/result.json",

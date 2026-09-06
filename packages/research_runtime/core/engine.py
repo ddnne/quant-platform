@@ -32,6 +32,12 @@ from pit.personal_retrospective_session import (
     OPERATIONAL_USABLE_BY,
     am_session_view_digest,
 )
+from pit.errors import SnapshotObservationClockError
+from pit.governed_am_view import (
+    GovernedAmSessionDataView,
+    OfflineFixtureAmSessionDataView,
+    VerifiedControlledSnapshotHandle,
+)
 from pit.query import resolve_db_path
 from price_basis import (
     PERSONAL_RETROSPECTIVE_ADJUSTED,
@@ -46,7 +52,14 @@ from .costs import (
     ShortFinancingModel,
     standard_cost,
 )
-from .execution import AM_SIGNAL_PM_CLOSE, NEXT_CLOSE, close_as_of, get_mode
+from .execution import (
+    AM_SIGNAL_PM_CLOSE,
+    NEXT_CLOSE,
+    close_as_of,
+    get_mode,
+    morning_close_as_of,
+    operational_usable_by_as_of,
+)
 from .metrics import compute_metrics
 from .result import BacktestResult
 from .strategy_protocol import Bar, BarContext, OrderIntent, Position
@@ -54,6 +67,7 @@ from .universe import ResolvedDailyUniverse, load_master, resolve_injected_unive
 
 # Result metadata. 0.8.0: am_signal_pm_close personal-retrospective DRAFT path.
 CORE_ENGINE_VERSION = "0.8.0"
+GOVERNED_AM_DATASET_ID = "equities_bars_daily_am"
 
 # J-Quants HolidayDivision: "1" == trading day (exchange open).
 _TRADING_HOLIDAY_DIVISION = "1"
@@ -376,6 +390,140 @@ def _load_am_signal_snapshot(
     return snapshot
 
 
+def _am_payload_digest(payload: Mapping[str, Any]) -> str:
+    body = {key: payload[key] for key in payload if key != "am_row_identity"}
+    encoded = json.dumps(body, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _am_row_identity(row: Mapping[str, Any]) -> str:
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    receipt = str(
+        row.get("trusted_receipt_digest")
+        or payload.get("trusted_receipt_digest")
+        or payload.get("receipt_proof_digest")
+        or ""
+    )
+    product = str(
+        row.get("product_snapshot_id")
+        or payload.get("product_snapshot_id")
+        or payload.get("product_digest")
+        or ""
+    )
+    body = {
+        "dataset": GOVERNED_AM_DATASET_ID,
+        "source": str(row.get("source") or ""),
+        "natural_key": str(row.get("natural_key") or ""),
+        "date": str(payload.get("Date") or payload.get("date") or "")[:10],
+        "event_time": str(row.get("event_time") or ""),
+        "available_at": str(row.get("available_at") or ""),
+        "ingested_at": str(row.get("ingested_at") or ""),
+        "trusted_receipt_digest": receipt,
+        "receipt_proof_digest": str(payload.get("receipt_proof_digest") or receipt),
+        "product_snapshot_id": product,
+        "product_digest": str(payload.get("product_digest") or product),
+        "payload_digest": _am_payload_digest(payload),
+        "snapshot_id": str(payload.get("snapshot_id") or row.get("snapshot_id") or ""),
+        "profile_digest": str(payload.get("profile_digest") or row.get("profile_digest") or ""),
+        "dependency_closure_digest": str(
+            payload.get("dependency_closure_digest")
+            or row.get("dependency_closure_digest")
+            or ""
+        ),
+    }
+    encoded = json.dumps(body, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _load_governed_am_signal_snapshot(
+    as_of: str,
+    codes: set[str],
+    to_date: str,
+    lookback_days: int,
+    *,
+    db_path: Any,
+    price_basis: PriceBasis,
+    data_view: GovernedAmSessionDataView,
+) -> dict[str, dict[str, Any]]:
+    """As-of-safe AM snapshot from a verifier-minted data-view capability.
+
+    Public digest-shaped receipt/product fields and row self-hashes are not
+    authority. The closed verifier already bound rows to sealed product
+    materialization and the immutable snapshot observation clock.
+    """
+    del price_basis
+    if type(data_view) is OfflineFixtureAmSessionDataView:
+        raise TypeError("fixture AM view cannot enter the Controlled path")
+    if type(data_view) is not GovernedAmSessionDataView:
+        raise TypeError("Controlled AM snapshot requires a verifier-minted data view")
+    data_view.assert_pinned_artifact()
+    snapshot: dict[str, dict[str, Any]] = {
+        code: {
+            "close": None,
+            "bars": [],
+            "authentic_am_session_evidence": False,
+            "unauthorized_am_dates": [],
+        }
+        for code in codes
+    }
+    if not codes:
+        return snapshot
+    from_date = _shift_date(to_date, -lookback_days)
+    unauthorized = data_view.unauthorized_dates(
+        codes=codes, from_date=from_date, to_date=to_date
+    )
+    for code, days in unauthorized.items():
+        snapshot[code]["unauthorized_am_dates"].extend(days)
+    for row in data_view.authorized_rows(
+        as_of=as_of,
+        codes=codes,
+        from_date=from_date,
+        to_date=to_date,
+    ):
+        code = str(row["code"])
+        day = str(row["date"])
+        morning = _positive_finite_price(row.get("close"))
+        if morning is None:
+            snapshot[code]["unauthorized_am_dates"].append(day)
+            continue
+        snapshot[code]["bars"].append(
+            Bar(
+                code=code,
+                date=day,
+                open=None,
+                high=None,
+                low=None,
+                close=morning,
+                volume=None,
+                adjustment_close=None,
+            )
+        )
+        if day == to_date:
+            snapshot[code]["authentic_am_session_evidence"] = True
+            snapshot[code]["am_row_identity"] = str(row.get("row_identity") or "")
+    for entry in snapshot.values():
+        morning = None
+        for bar in reversed(entry["bars"]):
+            if bar.date != to_date:
+                continue
+            morning = _positive_finite_price(bar.close)
+            break
+        entry["close"] = morning
+    return snapshot
+
+
+def _governed_pm_fill_closes(
+    *, session_date: str, codes: set[str], db_path: Any,
+    data_view: GovernedAmSessionDataView,
+) -> dict[str, float]:
+    """PIT-visible afternoon session field. No retrospective reconstruction."""
+    del db_path
+    if type(data_view) is not GovernedAmSessionDataView:
+        raise TypeError("Controlled PM fill requires the verified AM capability")
+    data_view.assert_pinned_artifact()
+    return data_view.pm_fill_closes(session_date=session_date, codes=codes)
+
+
 def _prepared_bar_rows(
     *,
     as_of: str,
@@ -665,6 +813,110 @@ def _equity_point(
     }
 
 
+def _apply_gross_cap(
+    intents: Sequence[OrderIntent],
+    max_gross_weight: float | None,
+) -> list[OrderIntent]:
+    """Scale target weights so abs-weight gross cannot exceed the governed cap."""
+
+    rows = list(intents)
+    if max_gross_weight is None:
+        return rows
+    gross = 0.0
+    for intent in rows:
+        weight = float(intent.target_weight)
+        if weight == weight:
+            gross += abs(weight)
+    if gross <= max_gross_weight + 1e-12 or gross <= 0.0:
+        return rows
+    scale = max_gross_weight / gross
+    capped: list[OrderIntent] = []
+    for intent in rows:
+        capped.append(
+            OrderIntent(
+                code=intent.code,
+                target_weight=float(intent.target_weight) * scale,
+            )
+        )
+    return capped
+
+
+def _requested_gross(intents: Sequence[OrderIntent]) -> float:
+    gross = 0.0
+    for intent in intents:
+        weight = float(intent.target_weight)
+        if weight == weight:
+            gross += abs(weight)
+    return gross
+
+
+def _resize_targets_for_realized_gross(
+    targets: dict[str, float],
+    *,
+    current_shares: Mapping[str, float],
+    fill_prices: Mapping[str, float],
+    cash: float,
+    cost_model: CostModel,
+    max_gross_weight: float,
+) -> tuple[dict[str, float], float, float]:
+    """Resize uncommitted PM targets so resulting gross <= cap, including costs."""
+
+    def _simulate(candidate: Mapping[str, float]) -> tuple[float, float]:
+        shares = dict(current_shares)
+        sim_cash = float(cash)
+        for code, target_shares in candidate.items():
+            price = fill_prices.get(code)
+            if price is None or price <= 0:
+                continue
+            current = shares.get(code, 0.0)
+            delta = target_shares - current
+            if abs(delta) < 1e-12:
+                continue
+            notional = delta * price
+            cost = cost_model.one_way_cost(notional)
+            shares[code] = 0.0 if abs(current + delta) < 1e-12 else current + delta
+            sim_cash -= notional + cost
+        position_value = 0.0
+        gross_notional = 0.0
+        for code, qty in shares.items():
+            if not qty:
+                continue
+            price = fill_prices.get(code)
+            if price is None:
+                continue
+            notional = qty * price
+            position_value += notional
+            gross_notional += abs(notional)
+        equity = sim_cash + position_value
+        if equity <= 0.0:
+            return float("inf"), equity
+        return gross_notional / equity, equity
+
+    requested, _ = _simulate(targets)
+    if requested <= max_gross_weight + 1e-12:
+        return dict(targets), requested, requested
+    if requested <= 0.0:
+        return dict(targets), requested, requested
+    scale = (max_gross_weight / requested) * 0.999
+    resized = dict(targets)
+    realized = requested
+    for _ in range(16):
+        resized = {code: qty * scale for code, qty in targets.items()}
+        realized, _ = _simulate(resized)
+        if realized <= max_gross_weight + 1e-9:
+            return resized, requested, realized
+        if not math.isfinite(realized) or realized <= 0.0:
+            break
+        scale *= (max_gross_weight / realized) * 0.999
+    flattened = {code: 0.0 for code in targets}
+    realized, _ = _simulate(flattened)
+    if realized <= max_gross_weight + 1e-9:
+        return flattened, requested, realized
+    raise ValueError(
+        "realized PM gross exceeds max_gross_weight after deterministic resize"
+    )
+
+
 def _resolve_targets(
     intents: list[OrderIntent],
     equity: float,
@@ -887,7 +1139,7 @@ def _apply_daily_financing(
     return cash, short_gap, lev_gap
 
 
-def run_backtest(
+def _run_backtest_impl(
     strategy: Any,
     start: str,
     end: str,
@@ -902,6 +1154,8 @@ def run_backtest(
     lookback_days: int = 30,
     calendar_as_of: str | None = None,
     price_basis: str = RAW,
+    max_gross_weight: float | None = None,
+    am_session_data_view: Any = None,
 ) -> BacktestResult:
     """PIT-only backtest of ``strategy`` over ``[start, end]``.
 
@@ -922,12 +1176,48 @@ def run_backtest(
     mode = get_mode(execution_mode)
     resolved_price_basis = require_supported_price_basis(price_basis)
     am_pm_mode = mode.name == AM_SIGNAL_PM_CLOSE.name
-    if am_pm_mode and resolved_price_basis != PERSONAL_RETROSPECTIVE_ADJUSTED:
+    governed_am_pm = am_pm_mode and resolved_price_basis == RAW
+    draft_am_pm = (
+        am_pm_mode and resolved_price_basis == PERSONAL_RETROSPECTIVE_ADJUSTED
+    )
+    if am_pm_mode and not governed_am_pm and not draft_am_pm:
         raise ValueError(
-            "am_signal_pm_close is allowed only with PERSONAL_RETROSPECTIVE_ADJUSTED"
+            "am_signal_pm_close requires RAW (Controlled) or "
+            "PERSONAL_RETROSPECTIVE_ADJUSTED (DRAFT)"
         )
+    gross_cap = None if max_gross_weight is None else float(max_gross_weight)
+    if gross_cap is not None and not (gross_cap > 0.0):
+        raise ValueError("max_gross_weight must be positive")
     resolved_db_path = resolve_db_path(db_path)
     cost_model = cost_model or standard_cost()
+
+    governed_am_view: GovernedAmSessionDataView | None = None
+    controlled_hold_reason: str | None = None
+    if governed_am_pm:
+        if type(am_session_data_view) is OfflineFixtureAmSessionDataView:
+            raise TypeError("fixture AM view cannot enter the Controlled path")
+        candidate = am_session_data_view
+        if type(candidate) is VerifiedControlledSnapshotHandle:
+            try:
+                candidate = candidate.am_session_data_view()
+            except SnapshotObservationClockError as exc:
+                candidate = None
+                controlled_hold_reason = str(exc) or (
+                    "pinned snapshot observation clock is missing"
+                )
+        if type(candidate) is not GovernedAmSessionDataView:
+            if controlled_hold_reason is None:
+                controlled_hold_reason = "missing_verified_production_am_capability"
+        else:
+            try:
+                candidate.assert_pinned_artifact()
+                candidate.bind_engine_reads()
+                governed_am_view = candidate
+            except SnapshotObservationClockError as exc:
+                controlled_hold_reason = str(exc) or (
+                    "pinned snapshot observation clock is missing"
+                )
+
     resolved_candidates = resolve_injected_universe(
         universe, db_path=resolved_db_path
     )
@@ -940,18 +1230,21 @@ def run_backtest(
         None if daily_resolved is not None else resolved_candidates
     )
 
-    days = _trading_days(
-        start,
-        end,
-        db_path=resolved_db_path,
-        calendar_as_of=calendar_as_of,
-    )
-    if not days:
-        raise ValueError(
-            f"no trading days in [{start}, {end}] from the PIT market calendar "
-            f"(read as_of={calendar_as_of or close_as_of(end)}); seed the "
-            "calendar with holiday_division='1' rows first."
+    if controlled_hold_reason is not None:
+        days: list[str] = []
+    else:
+        days = _trading_days(
+            start,
+            end,
+            db_path=resolved_db_path,
+            calendar_as_of=calendar_as_of,
         )
+        if not days:
+            raise ValueError(
+                f"no trading days in [{start}, {end}] from the PIT market calendar "
+                f"(read as_of={calendar_as_of or close_as_of(end)}); seed the "
+                "calendar with holiday_division='1' rows first."
+            )
 
     shares: dict[str, float] = {}
     cash = float(starting_capital)
@@ -981,6 +1274,17 @@ def run_backtest(
     am_skipped_decisions: list[dict[str, Any]] = []
     am_incomplete_valuations: list[dict[str, Any]] = []
     am_unfilled_orders: list[dict[str, Any]] = []
+    am_missing_session_evidence: list[dict[str, Any]] = []
+    requested_gross_obs: list[float] = []
+    realized_gross_obs: list[float] = []
+    if controlled_hold_reason is not None:
+        hold_event = {
+            "date": start,
+            "reason": controlled_hold_reason,
+            "codes": [],
+        }
+        am_skipped_decisions.append(dict(hold_event))
+        am_missing_session_evidence.append(dict(hold_event))
 
     for d in days:
         decision_as_of = mode.decision_as_of(d)
@@ -1006,22 +1310,85 @@ def run_backtest(
         skip_am_decision = False
         signal_equity: float | None = None
         if am_pm_mode:
-            snap_dec = _load_am_signal_snapshot(
-                decision_as_of,
-                held,
-                d,
-                context_bar_lookback_days,
-                db_path=resolved_db_path,
-                price_basis=resolved_price_basis,
-            )
-            fill_closes = _pm_fill_closes(
-                session_date=d,
-                codes=held,
-                db_path=resolved_db_path,
+            if governed_am_pm:
+                assert governed_am_view is not None
+                snap_dec = _load_governed_am_signal_snapshot(
+                    operational_usable_by_as_of(d),
+                    held,
+                    d,
+                    context_bar_lookback_days,
+                    db_path=resolved_db_path,
+                    price_basis=resolved_price_basis,
+                    data_view=governed_am_view,
+                )
+            else:
+                snap_dec = _load_am_signal_snapshot(
+                    decision_as_of,
+                    held,
+                    d,
+                    context_bar_lookback_days,
+                    db_path=resolved_db_path,
+                    price_basis=resolved_price_basis,
+                )
+            fill_closes = (
+                _governed_pm_fill_closes(
+                    session_date=d,
+                    codes=held,
+                    db_path=resolved_db_path,
+                    data_view=governed_am_view,
+                )
+                if governed_am_pm
+                else _pm_fill_closes(
+                    session_date=d,
+                    codes=held,
+                    db_path=resolved_db_path,
+                )
             )
             morning_prices = _session_prices(
                 snap_dec, d, price_basis=resolved_price_basis
             )
+            if governed_am_pm:
+                missing_evidence = sorted(
+                    code
+                    for code in universe_d
+                    if not snap_dec.get(code, {}).get("authentic_am_session_evidence")
+                )
+                insufficient_lookback = sorted(
+                    {
+                        code
+                        for code in universe_d
+                        if snap_dec.get(code, {}).get("unauthorized_am_dates")
+                    }
+                )
+                if missing_evidence:
+                    skip_am_decision = True
+                    am_missing_session_evidence.append(
+                        {
+                            "date": d,
+                            "reason": (
+                                "missing_independently_timestamped_am_session_evidence"
+                            ),
+                            "codes": missing_evidence,
+                        }
+                    )
+                    am_skipped_decisions.append(
+                        {
+                            "date": d,
+                            "reason": (
+                                "missing_independently_timestamped_am_session_evidence"
+                            ),
+                            "codes": missing_evidence,
+                        }
+                    )
+                elif insufficient_lookback:
+                    skip_am_decision = True
+                    am_skipped_decisions.append(
+                        {
+                            "date": d,
+                            "reason": "insufficient_authorized_am_lookback",
+                            "codes": sorted(insufficient_lookback),
+                        }
+                    )
             held_positions = sorted(
                 code for code, qty in shares.items() if qty
             )
@@ -1048,8 +1415,12 @@ def run_backtest(
             decision_equity = (
                 float(signal_equity) if signal_equity is not None else float(cash)
             )
-            daily_bars_capability = bind_personal_retrospective_am_session_daily_bars(
-                as_of=decision_as_of, db_path=resolved_db_path
+            daily_bars_capability = (
+                None
+                if governed_am_pm
+                else bind_personal_retrospective_am_session_daily_bars(
+                    as_of=decision_as_of, db_path=resolved_db_path
+                )
             )
         else:
             snapshot_loader = (
@@ -1162,6 +1533,8 @@ def run_backtest(
             )
 
             intents = strategy.on_bar(ctx)
+            requested_gross_obs.append(_requested_gross(intents))
+            intents = _apply_gross_cap(intents, gross_cap)
             targets = _resolve_targets(intents, decision_equity, prices_d)
 
         if mode.fill_offset == 1:
@@ -1169,6 +1542,26 @@ def run_backtest(
             if targets:
                 pending = {"targets": targets, "decision_date": d}
         else:
+            if am_pm_mode and gross_cap is not None:
+                if not targets:
+                    targets = {
+                        code: qty for code, qty in shares.items() if qty
+                    }
+                else:
+                    for code, qty in shares.items():
+                        if qty and code not in targets:
+                            targets[code] = qty
+                if targets:
+                    targets, requested_pm, realized_pm = _resize_targets_for_realized_gross(
+                        targets,
+                        current_shares=shares,
+                        fill_prices=fill_closes,
+                        cash=cash,
+                        cost_model=cost_model,
+                        max_gross_weight=gross_cap,
+                    )
+                    requested_gross_obs.append(requested_pm)
+                    realized_gross_obs.append(realized_pm)
             shares, cash, leftover = _apply_fills(
                 targets,
                 decision_date=d,
@@ -1341,6 +1734,15 @@ def run_backtest(
             }
         ),
         "starting_capital": starting_capital,
+        "max_gross_weight_limit": gross_cap,
+        "requested_gross_weight": (
+            max(requested_gross_obs) if requested_gross_obs else 0.0
+        ),
+        "realized_gross_weight": (
+            max(realized_gross_obs) if realized_gross_obs else 0.0
+        ),
+        "daily_requested_gross_weights": list(requested_gross_obs),
+        "daily_realized_gross_weights": list(realized_gross_obs),
         "strategy_id": strategy_id,
         "strategy_params": strategy_params,
         "strategy_params_hash": _params_hash(strategy_params),
@@ -1354,12 +1756,21 @@ def run_backtest(
             "pm_valuation_afternoon_adjustment_close_only"
         )
         metadata["execution_field_time_semantics"] = (
-            "draft_personal_retrospective_am_mask_of_equities_bars_daily; "
-            "not a claim that the full daily record was published at 11:30"
+            "pit_visible_morning_and_afternoon_session_fields"
+            if governed_am_pm
+            else (
+                "draft_personal_retrospective_am_mask_of_equities_bars_daily; "
+                "not a claim that the full daily record was published at 11:30"
+            )
         )
         metadata["weight_sizing_rule"] = (
             "target_shares_from_d_morning_prices; "
-            "realized_weights_may_drift_by_pm_close"
+            "realized_pm_gross_capped_at_max_gross_weight"
+            if governed_am_pm
+            else (
+                "target_shares_from_d_morning_prices; "
+                "realized_weights_may_drift_by_pm_close"
+            )
         )
         provenance = dict(metadata["price_basis_provenance"])
         provenance["signal_fields"] = [
@@ -1368,10 +1779,14 @@ def run_backtest(
         ]
         provenance["fill_fields"] = ["afternoon_adjustment_close"]
         provenance["field_time_semantics"] = (
-            "draft_reconstruction_not_11:30_publication"
+            "am_event_cutoff_1130_operational_admission_1230"
+            if governed_am_pm
+            else "draft_reconstruction_not_11:30_publication"
         )
         provenance["weight_sizing"] = (
-            "causal_morning_prices_pm_fill_may_drift"
+            "causal_morning_prices_realized_pm_gross_capped"
+            if governed_am_pm
+            else "causal_morning_prices_pm_fill_may_drift"
         )
         metadata["price_basis_provenance"] = provenance
         session_digest = am_session_view_digest(
@@ -1402,10 +1817,23 @@ def run_backtest(
         non_comparable_session_dates = sorted(
             set(skipped_dates) | set(incomplete_dates) | set(missing_fill_dates)
         )
+        production_eligible = bool(
+            governed_am_pm
+            and governed_am_view is not None
+            and type(governed_am_view) is GovernedAmSessionDataView
+            and not governed_am_view.offline_fixture
+            and not am_missing_session_evidence
+            and controlled_hold_reason is None
+        )
+        selection_eligible = bool(production_eligible and comparable)
+        comparison_eligible = bool(production_eligible and comparable)
+        if draft_am_pm:
+            selection_eligible = False
+            comparison_eligible = False
         data_quality = {
             "comparable": comparable,
-            "selection_eligible": comparable,
-            "comparison_eligible": comparable,
+            "selection_eligible": selection_eligible,
+            "comparison_eligible": comparison_eligible,
             "incomplete_valuation": bool(am_incomplete_valuations),
             "skipped_decision_count": len(am_skipped_decisions),
             "incomplete_valuation_count": len(am_incomplete_valuations),
@@ -1420,15 +1848,27 @@ def run_backtest(
             "held_missing_afternoon_adjustment_close": am_incomplete_valuations,
             "missing_afternoon_adjustment_close_unfilled": am_unfilled_orders,
         }
+        authentic = bool(production_eligible)
+        metadata["authentic_am_session_evidence"] = authentic
+        if not authentic and governed_am_pm:
+            metadata["am_session_evidence_reason"] = (
+                controlled_hold_reason
+                if controlled_hold_reason is not None
+                else "missing_independently_timestamped_am_session_evidence"
+            )
+        if draft_am_pm:
+            metadata["authentic_am_session_evidence"] = False
         metadata["information_cutoff"] = INFORMATION_CUTOFF
         metadata["operational_usable_by"] = OPERATIONAL_USABLE_BY
+        metadata["non_price_information_cutoff"] = INFORMATION_CUTOFF
+        metadata["am_observation_acquisition_deadline"] = OPERATIONAL_USABLE_BY
         metadata["session_view_digest"] = session_digest
         metadata["data_quality"] = data_quality
         metadata["comparable"] = comparable
-        metadata["selection_eligible"] = comparable
+        metadata["selection_eligible"] = selection_eligible
         metrics["comparable"] = comparable
-        metrics["selection_eligible"] = comparable
-        metrics["comparison_eligible"] = comparable
+        metrics["selection_eligible"] = selection_eligible
+        metrics["comparison_eligible"] = comparison_eligible
         metrics["incomplete_valuation"] = bool(am_incomplete_valuations)
         metrics["skipped_decision_count"] = len(am_skipped_decisions)
         metrics["incomplete_valuation_count"] = len(am_incomplete_valuations)
@@ -1448,3 +1888,47 @@ def run_backtest(
         metrics=metrics,
         metadata=metadata,
     )
+
+
+def run_backtest(
+    strategy: Any,
+    start: str,
+    end: str,
+    *,
+    db_path: Any = None,
+    execution_mode: str = "next_close",
+    cost_model: CostModel | None = None,
+    short_financing: ShortFinancingModel | None = None,
+    leverage_financing: LeverageFinancingModel | None = None,
+    universe: Any = None,
+    starting_capital: float = 1_000_000.0,
+    lookback_days: int = 30,
+    calendar_as_of: str | None = None,
+    price_basis: str = RAW,
+    max_gross_weight: float | None = None,
+    am_session_data_view: Any = None,
+) -> BacktestResult:
+    """Run a backtest and always release a pinned Controlled read binding."""
+
+    try:
+        return _run_backtest_impl(
+            strategy,
+            start,
+            end,
+            db_path=db_path,
+            execution_mode=execution_mode,
+            cost_model=cost_model,
+            short_financing=short_financing,
+            leverage_financing=leverage_financing,
+            universe=universe,
+            starting_capital=starting_capital,
+            lookback_days=lookback_days,
+            calendar_as_of=calendar_as_of,
+            price_basis=price_basis,
+            max_gross_weight=max_gross_weight,
+            am_session_data_view=am_session_data_view,
+        )
+    finally:
+        release = getattr(am_session_data_view, "release_engine_reads", None)
+        if callable(release):
+            release()

@@ -87,10 +87,13 @@ type BudgetRpc = {
 
 type BudgetLedgerRpc = {
   reserveOwned(input: unknown): Promise<unknown>;
+  queryOwned(input: unknown): Promise<unknown>;
   cancelPreProvider(input: unknown): Promise<unknown>;
   markProviderStarted(input: unknown): Promise<unknown>;
   finalizeExact(input: unknown): Promise<unknown>;
+  finalizeOwnedPaper(input: unknown): Promise<unknown>;
   settleUncertain(input: unknown): Promise<unknown>;
+  heartbeat(leaseId: string): Promise<unknown>;
 };
 
 function parseCachedResult(raw: unknown): CachedBudgetBody | null {
@@ -129,6 +132,35 @@ function rpcStatus(error: string | undefined, ok: boolean): number {
   return 400;
 }
 
+async function callBudgetLedger(
+  stub: DurableObjectStub & BudgetLedgerRpc,
+  method: keyof BudgetLedgerRpc,
+  body: unknown,
+): Promise<unknown> {
+  switch (method) {
+    case "reserveOwned":
+      return stub.reserveOwned(body);
+    case "queryOwned":
+      return stub.queryOwned(body);
+    case "cancelPreProvider":
+      return stub.cancelPreProvider(body);
+    case "markProviderStarted":
+      return stub.markProviderStarted(body);
+    case "finalizeExact":
+      return stub.finalizeExact(body);
+    case "finalizeOwnedPaper":
+      return stub.finalizeOwnedPaper(body);
+    case "settleUncertain":
+      return stub.settleUncertain(body);
+    case "heartbeat":
+      return stub.heartbeat(String(body));
+    default: {
+      const exhaustive: never = method;
+      throw new Error(`budget method ${String(exhaustive)} is not on the ledger contract`);
+    }
+  }
+}
+
 async function budgetRpc(
   env: GatewayEnv,
   method: keyof BudgetLedgerRpc,
@@ -141,11 +173,7 @@ async function budgetRpc(
   try {
     const id = env.BUDGET_LEDGER.idFromName(CONTROL_PLANE_LEDGER_NAME);
     const stub = env.BUDGET_LEDGER.get(id) as DurableObjectStub & BudgetLedgerRpc;
-    const fn = stub[method];
-    if (typeof fn !== "function") {
-      return { ok: false, status: 500, error: "budget_rpc_unavailable" };
-    }
-    parsed = await fn.call(stub, body);
+    parsed = await callBudgetLedger(stub, method, body);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     return {
@@ -369,9 +397,9 @@ async function handleGatewayRequest(
   serviceBindingAuthorized = false,
 ): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/health" || url.pathname === "/") {
+    if (url.pathname === "/health" || url.pathname === "/health/ready" || url.pathname === "/") {
       if (request.method !== "GET") return json({ error: "GET required" }, 405);
-      return json({ ok: true, service: "quant-platform-research-ai-gateway" });
+      return json({ ok: true, live: true, service: "quant-platform-research-ai-gateway" });
     }
     if (url.pathname !== "/v1/complete") {
       return json({ error: "not found" }, 404);
@@ -702,6 +730,112 @@ async function handleGatewayRequest(
     return json(responseBody, responseStatus);
 }
 
+async function controlledPaperOwnerCapability(
+  idempotencyKey: string,
+  requestDigest: string,
+): Promise<string> {
+  return sha256Hex(`controlled_pilot_paper/v1:${idempotencyKey}:${requestDigest}`);
+}
+
+function parseControlledPaperRpcInput(body: unknown): {
+  ok: true;
+  idempotency_key: string;
+  request_digest: string;
+  lease_id?: string;
+} | { ok: false; error: string } {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, error: "controlled paper budget input must be an object" };
+  }
+  const rec = body as Record<string, unknown>;
+  const allowed = new Set([
+    "idempotency_key",
+    "request_digest",
+    "lease_id",
+  ]);
+  const extra = Object.keys(rec).filter((key) => !allowed.has(key));
+  if (extra.length) {
+    return { ok: false, error: `unknown field(s): ${extra.sort().join(",")}` };
+  }
+  if ("amounts" in rec || "cost_usd" in rec || "ttl" in rec || "paper_runs" in rec) {
+    return { ok: false, error: "caller cannot override controlled paper budget limits" };
+  }
+  const idempotency = typeof rec.idempotency_key === "string" ? rec.idempotency_key.trim() : "";
+  const rawDigest = typeof rec.request_digest === "string" ? rec.request_digest.trim() : "";
+  const digest = rawDigest.startsWith("sha256:") ? rawDigest.slice("sha256:".length) : rawDigest;
+  if (!idempotency || !digest) {
+    return { ok: false, error: "idempotency_key and request_digest required" };
+  }
+  const lease =
+    typeof rec.lease_id === "string" && rec.lease_id.trim() ? rec.lease_id.trim() : undefined;
+  return {
+    ok: true,
+    idempotency_key: idempotency,
+    request_digest: digest,
+    lease_id: lease,
+  };
+}
+
+function controlledPaperBudgetBody(
+  parsed: {
+    idempotency_key: string;
+    request_digest: string;
+    lease_id?: string;
+  },
+  owner: string,
+  method: "reserveOwned" | "finalizeOwnedPaper" | "cancelPreProvider" | "queryOwned",
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    idempotency_key: parsed.idempotency_key,
+    request_digest: parsed.request_digest,
+    reserve_owner_capability: owner,
+    lease_id: parsed.lease_id,
+  };
+  if (method === "reserveOwned") {
+    body.amounts = {
+      experiment_plans: 4,
+      generations: 1,
+      paper_runs: 4,
+      model_calls: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      cached_tokens: 0,
+      cost_usd: 0,
+    };
+    body.acquire_lease = true;
+  }
+  return body;
+}
+
+async function dispatchControlledPaperRpc(
+  env: GatewayEnv,
+  method: "reserveOwned" | "finalizeOwnedPaper" | "cancelPreProvider" | "queryOwned",
+  body: unknown,
+): Promise<GatewayServiceResult> {
+  const parsed = parseControlledPaperRpcInput(body);
+  if (!parsed.ok) {
+    return { http_status: 400, body: { ok: false, error: parsed.error } };
+  }
+  const owner = await controlledPaperOwnerCapability(
+    parsed.idempotency_key,
+    parsed.request_digest,
+  );
+  const rpc = await budgetRpc(env, method, controlledPaperBudgetBody(parsed, owner, method));
+  return {
+    http_status: rpc.status || (rpc.ok ? 200 : 400),
+    body: {
+      ok: rpc.ok,
+      error: rpc.error,
+      detail: rpc.detail,
+      lease_id: rpc.lease_id,
+      existing: rpc.existing,
+      owner_recovered: rpc.owner_recovered,
+      budget_run_id: rpc.budget_run_id,
+      reservation_status: rpc.reservation_status,
+      settlement_capability: rpc.settlement_capability,
+    },
+  };
+}
+
 export class GatewayService extends WorkerEntrypoint<GatewayEnv> implements GatewayRpc {
   async complete(
     body: unknown,
@@ -727,6 +861,42 @@ export class GatewayService extends WorkerEntrypoint<GatewayEnv> implements Gate
       parsed = { ok: false, error: "gateway_invalid_json" };
     }
     return { http_status: response.status, body: parsed };
+  }
+
+  async reserveControlledPaper(input: unknown): Promise<GatewayServiceResult> {
+    return dispatchControlledPaperRpc(this.env, "reserveOwned", input);
+  }
+
+  async finalizeControlledPaper(input: unknown): Promise<GatewayServiceResult> {
+    return dispatchControlledPaperRpc(this.env, "finalizeOwnedPaper", input);
+  }
+
+  async cancelControlledPaper(input: unknown): Promise<GatewayServiceResult> {
+    return dispatchControlledPaperRpc(this.env, "cancelPreProvider", input);
+  }
+
+  async queryControlledPaper(input: unknown): Promise<GatewayServiceResult> {
+    return dispatchControlledPaperRpc(this.env, "queryOwned", input);
+  }
+
+  async heartbeatControlledPaper(input: unknown): Promise<GatewayServiceResult> {
+    const parsed = parseControlledPaperRpcInput(input);
+    if (!parsed.ok) {
+      return { http_status: 400, body: { ok: false, error: parsed.error } };
+    }
+    if (!parsed.lease_id) {
+      return { http_status: 400, body: { ok: false, error: "lease_id required" } };
+    }
+    const rpc = await budgetRpc(this.env, "heartbeat", parsed.lease_id);
+    return {
+      http_status: rpc.status || (rpc.ok ? 200 : 400),
+      body: {
+        ok: rpc.ok,
+        error: rpc.error,
+        detail: rpc.detail,
+        lease_id: parsed.lease_id,
+      },
+    };
   }
 }
 

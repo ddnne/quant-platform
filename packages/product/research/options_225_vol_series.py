@@ -13,7 +13,6 @@ import statistics
 from collections import defaultdict
 from datetime import date as _date
 from datetime import timedelta
-from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 OPTIONS_225_VOL_SERIES_VERSION: str = "research-options-225-vol-series/v1.3"
@@ -896,14 +895,6 @@ DEFAULT_OPT225_SHORT_N: int = 10
 DEFAULT_OPT225_LONG_N: int = 60
 SPREAD_CONVENTION: str = "atm_iv - base_vol"
 
-_DEFAULT_LOG_DIR = (
-    Path(__file__).resolve().parents[3] / ".glm-logs" / "w0818b_w92_options_vol"
-)
-_W94_LOG_DIR = (
-    Path(__file__).resolve().parents[3] / ".glm-logs" / "w0818d_w94_opt_skew_thick"
-)
-
-
 def _rolling_mean(values: Sequence[float], end_idx: int, win: int) -> float | None:
     if win < 1 or end_idx + 1 < win:
         return None
@@ -1108,92 +1099,6 @@ def build_opt225_regime_bundle(
     return bundle
 
 
-def load_ndjson_series(path: str | Path) -> list[dict[str, Any]]:
-    """Load a daily series ndjson artifact."""
-    p = Path(path)
-    if not p.is_file():
-        return []
-    out: list[dict[str, Any]] = []
-    with p.open() as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(row, Mapping):
-                out.append(dict(row))
-    return out
-
-
-def load_opt225_series_cache(
-    log_dir: str | Path | None = None,
-) -> dict[str, Any] | None:
-    """Load cached series ndjson. Missing skew / CM-term stay empty/None."""
-    candidates: list[Path] = []
-    if log_dir is not None:
-        candidates.append(Path(log_dir))
-    else:
-        candidates.extend([_W94_LOG_DIR, _DEFAULT_LOG_DIR])
-    d: Path | None = None
-    for c in candidates:
-        if (c / "base_vol_series.ndjson").is_file() and (
-            c / "atm_iv_series.ndjson"
-        ).is_file():
-            d = c
-            break
-    if d is None:
-        return None
-    base = load_ndjson_series(d / "base_vol_series.ndjson")
-    atm = load_ndjson_series(d / "atm_iv_series.ndjson")
-    spread_p = d / "spread_series.ndjson"
-    spread = (
-        load_ndjson_series(spread_p)
-        if spread_p.is_file()
-        else build_spread_series(base, atm)
-    )
-    skew_p = d / "skew_series.ndjson"
-    term_p = d / "cm_term_series.ndjson"
-    term_ratio_p = d / "cm_term_ratio_series.ndjson"
-    delta_p = d / "basevol_delta_series.ndjson"
-    skew = load_ndjson_series(skew_p) if skew_p.is_file() else None
-    term = load_ndjson_series(term_p) if term_p.is_file() else None
-    term_ratio = (
-        build_daily_term_ratio_series(load_ndjson_series(term_ratio_p))
-        if term_ratio_p.is_file()
-        else (build_daily_term_ratio_series(term) if term is not None else None)
-    )
-    delta = (
-        load_ndjson_series(delta_p)
-        if delta_p.is_file()
-        else build_daily_basevol_delta_series(base=base)
-    )
-    meta: dict[str, Any] = {}
-    meta_p = d / "meta.json"
-    if meta_p.is_file():
-        try:
-            meta = json.loads(meta_p.read_text())
-        except json.JSONDecodeError:
-            meta = {}
-    return {
-        "base_vol_series": base,
-        "atm_iv_series": atm,
-        "spread_series": spread,
-        "skew_series": skew,
-        "cm_term_series": term,
-        "cm_term_ratio_series": term_ratio,
-        "basevol_delta_series": delta,
-        "meta": meta,
-        "log_dir": str(d),
-        "dataset": DATASET_ID,
-        "source": "opt225_log_cache",
-        "canonical_level": "base_vol",
-        "atm_iv_role": ATM_IV_ROLE,
-    }
-
-
 __all__ = [
     "OPTIONS_225_VOL_SERIES_VERSION",
     "OPTIONS_225_VOL_SERIES_WAVE",
@@ -1226,6 +1131,4 @@ __all__ = [
     "level_series_to_regime_maps",
     "series_rows_to_level_map",
     "build_opt225_regime_bundle",
-    "load_ndjson_series",
-    "load_opt225_series_cache",
 ]

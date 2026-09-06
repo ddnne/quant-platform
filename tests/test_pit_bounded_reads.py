@@ -30,9 +30,24 @@ from personal_history_compact_support import (
 )
 from storage.schema import CATALOG_CODE_SQL
 from storage.sqlite_store import SqliteStore
+from contextlib import contextmanager
 
 AS_OF = "2025-04-10T15:30:00+09:00"
 CODE = "8697"
+
+
+def _observe(path: Path) -> None:
+    connection = sqlite3.connect(path)
+    stamp_compact_manifest(connection, format_name="unmanaged-catalog")
+    connection.commit()
+    connection.close()
+
+
+@contextmanager
+def _observed_store(path: Path):
+    with SqliteStore(path) as store:
+        yield store
+    _observe(path)
 
 
 def _bar(day: str, close: float | None) -> dict:
@@ -70,7 +85,7 @@ def test_empty_revision_table_uses_direct_path_without_window_capability(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     path = tmp_path / "direct.sqlite"
-    with SqliteStore(path) as store:
+    with _observed_store(path) as store:
         store.upsert("jquants_daily_bars", [_typed_bar("2025-04-01", 100.0)])
         assert store.count("jquants_daily_bars_revisions") == 0
 
@@ -109,7 +124,7 @@ def test_revision_check_and_fact_read_share_one_sqlite_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     path = tmp_path / "snapshot-race.sqlite"
-    with SqliteStore(path) as store:
+    with _observed_store(path) as store:
         store.upsert("jquants_daily_bars", [_typed_bar("2025-04-01", 100.0)])
 
     writer_fired = False
@@ -152,6 +167,9 @@ def test_revision_check_and_fact_read_share_one_sqlite_snapshot(
 
         def fetchall(self):
             return self.inner.fetchall()
+
+        def __iter__(self):
+            return iter(self.inner)
 
     class HookConnection:
         def __init__(self, inner) -> None:
@@ -196,7 +214,7 @@ def test_revision_check_and_fact_read_share_one_sqlite_snapshot(
 
 def test_latest_n_ranks_visible_revision_before_sql_limit(tmp_path: Path) -> None:
     path = tmp_path / "revisions.sqlite"
-    with SqliteStore(path) as store:
+    with _observed_store(path) as store:
         store.upsert(
             "jquants_daily_bars",
             [
@@ -247,7 +265,7 @@ def test_latest_n_ranks_visible_revision_before_sql_limit(tmp_path: Path) -> Non
 
 def test_latest_n_is_exact_for_generic_only_compatibility_db(tmp_path: Path) -> None:
     path = tmp_path / "generic.sqlite"
-    with SqliteStore(path) as store:
+    with _observed_store(path) as store:
         store.upsert(
             "jquants_records",
             [
@@ -279,7 +297,7 @@ def test_latest_n_is_applied_as_sql_limit_on_catalog_partition(
 ) -> None:
     path = tmp_path / "catalog-limit.sqlite"
     days = [f"2025-03-{day:02d}" for day in range(1, 21)]
-    with SqliteStore(path) as store:
+    with _observed_store(path) as store:
         store.upsert(
             "jquants_records",
             [
@@ -334,7 +352,7 @@ def test_latest_n_rejects_non_positive_or_non_integer_values(
     latest_n: object,
 ) -> None:
     path = tmp_path / "validation.sqlite"
-    SqliteStore(path).close()
+    SqliteStore(path).close(); _observe(path)
     with pytest.raises(ValueError, match="positive integer"):
         get_equity_bars_daily(
             as_of=AS_OF,
@@ -357,7 +375,7 @@ def test_latest_n_requires_exactly_one_non_empty_code(
     kwargs: dict,
 ) -> None:
     path = tmp_path / "single-code.sqlite"
-    SqliteStore(path).close()
+    SqliteStore(path).close(); _observe(path)
     with pytest.raises(ValueError):
         get_equity_bars_daily(
             as_of=AS_OF,
@@ -371,7 +389,7 @@ def test_latest_master_snapshot_is_global_before_code_filter(tmp_path: Path) -> 
     path = tmp_path / "master.sqlite"
     first = "2025-04-01"
     second = "2025-04-02"
-    with SqliteStore(path) as store:
+    with _observed_store(path) as store:
         store.upsert(
             "jquants_listed_info",
             normalize_listed_info(
@@ -432,7 +450,7 @@ def test_latest_master_snapshot_is_global_before_code_filter(tmp_path: Path) -> 
 
 def test_schema_indexes_match_bounded_pit_query_shapes(tmp_path: Path) -> None:
     path = tmp_path / "indexes.sqlite"
-    with SqliteStore(path) as store:
+    with _observed_store(path) as store:
         store.upsert("jquants_daily_bars", [_typed_bar("2025-04-01", 100.0)])
         store.upsert(
             "jquants_records",
@@ -476,14 +494,14 @@ def test_schema_indexes_match_bounded_pit_query_shapes(tmp_path: Path) -> None:
 
 
 def _open_compact(path: Path) -> sqlite3.Connection:
-    SqliteStore(path).close()
+    SqliteStore(path).close(); _observe(path)
     conn = sqlite3.connect(path)
     install_compact_schema(conn)
     return conn
 
 
 def _seed_typed_equity(path: Path) -> None:
-    with SqliteStore(path) as store:
+    with _observed_store(path) as store:
         store.upsert(
             "jquants_listed_info",
             normalize_listed_info(
@@ -509,13 +527,15 @@ def test_genuine_v6_legacy_keeps_typed_catalog_reads(tmp_path: Path) -> None:
     path = tmp_path / "genuine-v6.sqlite"
     _seed_typed_equity(path)
     with sqlite3.connect(path) as conn:
+        conn.execute("DROP TABLE IF EXISTS personal_history_manifest")
         conn.execute(
             "CREATE TABLE personal_history_manifest ("
-            "singleton INTEGER PRIMARY KEY, format TEXT)"
+            "singleton INTEGER PRIMARY KEY, format TEXT, observed_through TEXT)"
         )
         conn.execute(
-            "INSERT INTO personal_history_manifest(singleton, format) "
-            "VALUES (1, 'personal-draft-history/v6')"
+            "INSERT INTO personal_history_manifest("
+            "singleton, format, observed_through) "
+            "VALUES (1, 'personal-draft-history/v6', '2099-01-01T00:00:00+09:00')"
         )
         conn.commit()
 
@@ -537,7 +557,7 @@ def test_malformed_or_mixed_compact_v7_fail_closed(tmp_path: Path) -> None:
     with sqlite3.connect(malformed) as conn:
         stamp_compact_manifest(conn)
         conn.commit()
-    _assert_equity_reads_fail_closed(malformed, match="compact v7 marker or schema")
+    _assert_equity_reads_fail_closed(malformed, match="rebuild as personal-draft-history/v8")
 
     mixed = tmp_path / "mixed-typed.sqlite"
     _seed_typed_equity(mixed)
@@ -598,7 +618,7 @@ def test_compact_v7_latest_master_snapshot_does_not_resurrect_delisted(
     ]
     assert latest.metadata["table"] == "jquants_listed_info"
     assert latest.metadata["snapshot_date"] == second
-    assert latest.metadata["personal_history_format"] == "personal-draft-history/v7"
+    assert latest.metadata["personal_history_format"] == "personal-draft-history/v8"
     assert latest.rows[0]["source"] == "jquants"
     assert latest.rows[0]["raw_payload"] is None
     assert latest.rows[0]["company_name"] is None
@@ -661,7 +681,7 @@ def test_compact_v7_bars_honor_codes_date_bounds_and_latest_n(
     assert bounded.rows == unbounded.rows[-2:]
     assert bounded.metadata["table"] == "jquants_daily_bars"
     assert bounded.metadata["latest_n"] == 2
-    assert bounded.metadata["personal_history_format"] == "personal-draft-history/v7"
+    assert bounded.metadata["personal_history_format"] == "personal-draft-history/v8"
     sample = multi.rows[0]
     assert sample["source"] == "jquants"
     assert sample["raw_payload"] is None

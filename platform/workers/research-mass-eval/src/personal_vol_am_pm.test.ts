@@ -1062,11 +1062,12 @@ describe("AM/PM immutable artifact", () => {
       producer_dependency: PERSONAL_VOL_AM_PM_PRODUCER_DEPENDENCY,
     });
     expect(result.execution_contract).toMatchObject({
-      exact_four: true,
+      purpose_id: "draft_am_pm_smile_cohort_v1",
       fill: "D_AAdjC",
       first_pnl: "D_AAdjC_to_next_AAdjC",
       cash_index_executable_fill: false,
     });
+    expect(result.execution_contract).not.toHaveProperty("exact_four");
     expect((result.strategies as unknown[])).toHaveLength(4);
     expect(result.control).toMatchObject({
       control_id: PERSONAL_VOL_AM_PM_CONTROL.control_id,
@@ -1197,7 +1198,7 @@ describe("AM/PM immutable artifact", () => {
     ).resolves.toMatchObject({ comparisonNotEvaluated: true });
   });
 
-  it("marks every exact-four candidate and the control unevaluated on a shared hole", async () => {
+  it("marks every draft four-candidate and the control unevaluated on a shared hole", async () => {
     const mem = new MemR2();
     const panels = await Promise.all(
       PERSONAL_VOL_PERIODS.map((period) => panelForPeriod(period)),
@@ -1217,7 +1218,8 @@ describe("AM/PM immutable artifact", () => {
       },
     );
     expect(result.execution_contract).toMatchObject({
-      exact_four_evaluation_complete: false,
+      purpose_id: "draft_am_pm_smile_cohort_v1",
+      cohort_evaluation_complete: false,
     });
     expect(result.execution_summary).toEqual(
       expect.arrayContaining([

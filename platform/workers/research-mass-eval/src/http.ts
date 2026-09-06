@@ -7,6 +7,87 @@ export { sha256Hex } from "./sha256";
 export { authorized } from "./authorized";
 export { freezePayload } from "./freeze";
 
+async function cancelRequestBody(request: Request): Promise<void> {
+  const body = request.body;
+  if (!body) return;
+  try {
+    await body.cancel();
+  } catch {
+    // Body may already be locked or closed.
+  }
+}
+
+/** Stream a request body up to `maximum` bytes. Does not trust Content-Length alone. */
+export async function readBoundedRequestBytes(
+  request: Request,
+  maximum: number,
+): Promise<
+  | { ok: true; bytes: Uint8Array }
+  | { ok: false; status: number; error: string }
+> {
+  const raw = request.headers.get("content-length");
+  let declared: number | null = null;
+  if (raw !== null && raw !== "") {
+    if (!/^\d+$/.test(raw)) {
+      await cancelRequestBody(request);
+      return { ok: false, status: 400, error: "content-length required" };
+    }
+    const length = Number(raw);
+    if (!Number.isSafeInteger(length) || length < 1) {
+      await cancelRequestBody(request);
+      return { ok: false, status: 400, error: "content-length required" };
+    }
+    if (length > maximum) {
+      await cancelRequestBody(request);
+      return { ok: false, status: 413, error: "request body exceeds the bound" };
+    }
+    declared = length;
+  }
+  if (request.body === null) {
+    return { ok: false, status: 400, error: "request body exceeds the bound" };
+  }
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  while (true) {
+    let step: ReadableStreamReadResult<Uint8Array>;
+    try {
+      step = await reader.read();
+    } catch {
+      try {
+        await reader.cancel("request body exceeds the bound");
+      } catch {
+        // ignore
+      }
+      return { ok: false, status: 400, error: "request body exceeds the bound" };
+    }
+    if (step.done) break;
+    received += step.value.byteLength;
+    if (received > maximum) {
+      try {
+        await reader.cancel("request body exceeds the bound");
+      } catch {
+        // ignore
+      }
+      return { ok: false, status: 413, error: "request body exceeds the bound" };
+    }
+    chunks.push(step.value);
+  }
+  if (received < 1) {
+    return { ok: false, status: 400, error: "invalid JSON body" };
+  }
+  if (declared !== null && received !== declared) {
+    return { ok: false, status: 400, error: "content-length mismatch" };
+  }
+  const bytes = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { ok: true, bytes };
+}
+
 export async function readBoundedJson(
   request: Request,
   maximum: number,
@@ -16,18 +97,21 @@ export async function readBoundedJson(
 > {
   const raw = request.headers.get("content-length");
   if (!raw || !/^\d+$/.test(raw)) {
+    await cancelRequestBody(request);
     return { ok: false, status: 400, error: "content-length required" };
   }
   const length = Number(raw);
   if (!Number.isSafeInteger(length) || length < 1 || length > maximum) {
+    await cancelRequestBody(request);
     return { ok: false, status: 413, error: "request body exceeds the bound" };
   }
-  const bytes = new Uint8Array(await request.arrayBuffer());
-  if (bytes.byteLength !== length) {
+  const bounded = await readBoundedRequestBytes(request, maximum);
+  if (!bounded.ok) return bounded;
+  if (bounded.bytes.byteLength !== length) {
     return { ok: false, status: 400, error: "content-length mismatch" };
   }
   try {
-    return { ok: true, value: JSON.parse(new TextDecoder().decode(bytes)) };
+    return { ok: true, value: JSON.parse(new TextDecoder().decode(bounded.bytes)) };
   } catch {
     return { ok: false, status: 400, error: "invalid JSON body" };
   }
@@ -64,6 +148,8 @@ export type CreateOnlyBytesOptions = {
   customMetadata?: Record<string, string>;
 };
 
+const CREATE_ONLY_COMPARE_MAX_BYTES = 256 * 1024;
+
 async function compareExisting(
   bucket: R2Bucket,
   key: string,
@@ -71,7 +157,27 @@ async function compareExisting(
 ): Promise<CreateOnlyPutResult | null> {
   const obj = await bucket.get(key);
   if (!obj) return null;
+  if (obj.size > CREATE_ONLY_COMPARE_MAX_BYTES) {
+    return {
+      key,
+      bytes: obj.size,
+      created: false,
+      digest,
+      conflict: true,
+      status: 409,
+    };
+  }
   const existingBytes = new Uint8Array(await obj.arrayBuffer());
+  if (existingBytes.byteLength > CREATE_ONLY_COMPARE_MAX_BYTES) {
+    return {
+      key,
+      bytes: existingBytes.byteLength,
+      created: false,
+      digest,
+      conflict: true,
+      status: 409,
+    };
+  }
   const existingDigest = `sha256:${await sha256Hex(existingBytes)}`;
   if (existingDigest === digest) {
     return {

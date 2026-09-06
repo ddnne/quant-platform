@@ -28,3 +28,9 @@ head_sampling_rate = 1
 
 [env.production.version_metadata]
 binding = "CF_VERSION_METADATA"
+
+# HOLD until Access + JSDA service binding are provisioned. ENVIRONMENT stays disabled.
+[[env.production.services]]
+binding = "JSDA_INGESTION"
+service = "quant-platform-ingestion-jsda"
+entrypoint = "JsdaReadinessService"

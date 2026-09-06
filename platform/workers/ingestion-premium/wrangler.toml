@@ -35,7 +35,7 @@ workers_dev = false
 preview_urls = false
 
 [secrets]
-required = ["DATA_EXPORT_TOKEN", "INGESTION_RUN_TOKEN", "JQUANTS_API_KEY"]
+required = ["DATA_EXPORT_TOKEN", "INGESTION_RUN_TOKEN", "JQUANTS_API_KEY", "OPS_PROJECTION_SIGNING_PKCS8_B64"]
 
 # R2 — full response pages + manifest under raw/{dataset}/{run_id}/.
 [[r2_buckets]]
@@ -48,11 +48,23 @@ bucket_name = "quant-raw"
 binding = "STRUCTURED_BUCKET"
 bucket_name = "quant-structured"
 
+[[r2_buckets]]
+binding = "AUTHORITY_EVIDENCE_BUCKET"
+bucket_name = "quant-receipt-evidence"
+
 # D1 — control plane + low-volume / hot-window structured (not full history).
 [[d1_databases]]
 binding = "DB"
 database_name = "quant-ingest"
 database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
+migrations_dir = "migrations"
+
+[[d1_databases]]
+binding = "OPS_PROJECTION_DB"
+database_name = "quant-ops-projection"
+database_id = "1b497e8a-5c69-4e19-ae2e-89a8f3185272"
+migrations_dir = "../quant-ops-mcp/migrations/projection"
+migrations_table = "d1_migrations_ops_projection"
 
 [[services]]
 binding = "RECEIPT_EVIDENCE_AUTHORITY"
@@ -69,6 +81,10 @@ entrypoint = "ReceiptAuthorityService"
 INGEST_CONCURRENCY = "6"
 RECEIPT_AUTHORITY_ENVIRONMENT = "production"
 RECEIPT_AUTHORITY_OPERATION_MODE = "PENDING"
+OPS_PROJECTION_ENVIRONMENT = "production"
+OPS_PROJECTION_SIGNING_KEY_ID = "ops-projection-20260826-v2"
+# OPS_PROJECTION_VERIFY_SPKI_B64 is a public var provisioned after key review.
+# Missing SPKI fails publication closed. Deploy this Worker before MCP.
 # MASTER_SCD2_ONLY = "1"  # optional: route equities_master structured to R2 only
 
 [triggers]
@@ -88,7 +104,7 @@ workers_dev = false
 preview_urls = false
 
 [env.production.secrets]
-required = ["DATA_EXPORT_TOKEN", "INGESTION_RUN_TOKEN", "JQUANTS_API_KEY"]
+required = ["DATA_EXPORT_TOKEN", "INGESTION_RUN_TOKEN", "JQUANTS_API_KEY", "OPS_PROJECTION_SIGNING_PKCS8_B64"]
 
 [[env.production.r2_buckets]]
 binding = "RAW_BUCKET"
@@ -98,10 +114,22 @@ bucket_name = "quant-raw"
 binding = "STRUCTURED_BUCKET"
 bucket_name = "quant-structured"
 
+[[env.production.r2_buckets]]
+binding = "AUTHORITY_EVIDENCE_BUCKET"
+bucket_name = "quant-receipt-evidence"
+
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "quant-ingest"
 database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
+migrations_dir = "migrations"
+
+[[env.production.d1_databases]]
+binding = "OPS_PROJECTION_DB"
+database_name = "quant-ops-projection"
+database_id = "1b497e8a-5c69-4e19-ae2e-89a8f3185272"
+migrations_dir = "../quant-ops-mcp/migrations/projection"
+migrations_table = "d1_migrations_ops_projection"
 
 [[env.production.services]]
 binding = "RECEIPT_EVIDENCE_AUTHORITY"
@@ -112,6 +140,8 @@ entrypoint = "ReceiptAuthorityService"
 INGEST_CONCURRENCY = "6"
 RECEIPT_AUTHORITY_ENVIRONMENT = "production"
 RECEIPT_AUTHORITY_OPERATION_MODE = "PENDING"
+OPS_PROJECTION_ENVIRONMENT = "production"
+OPS_PROJECTION_SIGNING_KEY_ID = "ops-projection-20260826-v2"
 
 [env.production.triggers]
 # Named environments do not inherit top-level triggers.

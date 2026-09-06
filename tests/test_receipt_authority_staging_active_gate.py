@@ -261,6 +261,10 @@ def _chain_documents(
             "compatibility_date": surface["compatibility_date"],
             "usage_model": "standard",
         }
+        if surface["compatibility_flags"]:
+            runtime["compatibility_flags"] = copy.deepcopy(
+                surface["compatibility_flags"]
+            )
         migration = live._expected_migration_tag(surface)
         if migration is not None:
             runtime["migration_tag"] = migration

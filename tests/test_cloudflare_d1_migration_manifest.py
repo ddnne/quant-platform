@@ -45,62 +45,99 @@ def test_remote_applied_state_is_never_fabricated() -> None:
         assert production["database_name"] != staging["database_name"]
 
 
-def test_ingestion_apply_policy_is_source_only_and_fail_closed() -> None:
+def test_ingestion_apply_policy_is_single_operator_and_fail_closed() -> None:
     manifest = build_manifest()
     assert manifest["schema_version"] == "cloudflare-d1-migration-manifest/v2"
     policy = manifest["targets"]["quant-ingest"]["application_policy"]
     assert policy == {
-        "mode": "source-only-hold/v2",
-        "owner_command": None,
-        "observation_recovery_command": (
-            "scripts/apply_ingestion_d1_migrations.py"
-        ),
-        "remote_mutation_authorized": False,
+        "mode": "single-operator-cloudflare/v1",
+        "owner_command": "scripts/activate_jsda_v3_cutover.py",
+        "check_command": "scripts/apply_ingestion_d1_migrations.py --check",
+        "remote_mutation_authority": "OWNER_COMMAND_ONLY",
+        "direct_wrangler_apply": "FORBIDDEN",
         "environment_order": ["staging", "production"],
-        "authorization_state": {
-            "staging": "HOLD",
-            "production": "HOLD",
+        "rollback_authority": "CLOUDFLARE_D1_TIME_TRAVEL",
+        "local_whole_file_export_in_cutover": "FORBIDDEN",
+        "recovery_cache": {
+            "role": "SMALL_CREATE_ONLY_CONTROL_INTENT",
+            "authority": False,
+            "source_of_truth": "REMOTE_D1_CUTOVER_RUN_AND_LIVE_CLOUDFLARE",
         },
-        "canonical_reservation_identity": [
-            "environment",
-            "database_id",
-            "source_sha",
-            "canonical_manifest_digest",
-        ],
-        "hold_until": [
-            "trusted-remote-cross-host-exclusive-lock",
-            "trusted-control-plane-source-sha-attestation",
-        ],
-        "local_o_excl_role": "SINGLE_HOST_CRASH_AUDIT_MARKER_ONLY",
-        "production_staging_evidence": (
-            "independent-canonical-staging-d1-reobservation"
+        "lease": {
+            "store": "quant_ingest_mutation_lease",
+            "acquire": "D1_CAS",
+            "spawn_fence": "MIGRATING_REMOTE_SPAWNED",
+            "sticky_after_spawn": True,
+        },
+        "pending_from_live_applied_through": "quant-ingest:0010_raw_acquisition_status",
+        "production_admission": (
+            "STAGING_ACTIVATED_SAME_SOURCE_SHA_AND_LIVE_CONFIG_QUEUE_CRON_SMOKE"
         ),
-        "caller_staging_artifacts": "FORBIDDEN",
-        "encrypted_backup_role": "ROLLBACK_ONLY",
-        "encrypted_backup_grants_authority": False,
-        "recovery_states": {
-            "APPLIED": "fresh-exact-canonical-postflight-and-zero-pending",
-            "NOT_APPLIED": (
-                "fresh-observation-exactly-matches-recorded-preflight-baseline"
-            ),
-            "UNKNOWN": "all-other-or-unobservable-states",
-        },
-        "recovery_grants_mutation_authority": False,
-        "jsda_acceptance": {
-            "endpoint": "/health/ready",
-            "http_status": 200,
-            "product_ready": True,
-            "cutover": "V3_ACTIVE",
-            "response_digest_bound_to_provenance": True,
-            "deployment_version_and_source_sha_bound": True,
-        },
         "requires": [
             "canonical-live-database-identity",
-            "time-travel-bookmark",
-            "rollback-only-encrypted-export-checksum",
-            "exact-export-preflight",
-            "exact-export-postflight",
-            "signed-jsda-v3-cutover-authority-before-readiness",
-            "jsda-v3-readiness-smoke-before-product-acceptance",
+            "production-backend-time-travel",
+            "pre-migration-bookmark-after-writer-and-queue-quiescence",
+            "bookmark-and-undo-persisted-before-migration",
+            "same-d1-cas-mutation-lease",
+            "exact-remote-schema-and-migration-inventory",
+            "staging-activation-before-production",
         ],
     }
+
+
+def test_jsda_v2_v3_and_ops_projection_migrations_are_canonical_for_both_envs() -> None:
+    targets = build_manifest()["targets"]
+    ingest = [
+        row["migration_id"] for row in targets["quant-ingest"]["migrations"]
+    ]
+    assert ingest.index("quant-ingest:0010_raw_acquisition_status") < ingest.index(
+        "quant-ingest:0011_jsda_queue_v2"
+    )
+    assert ingest.index("quant-ingest:0011_jsda_queue_v2") < ingest.index(
+        "quant-ingest:0012_jsda_observation_identity"
+    )
+    assert ingest.index("quant-ingest:0012_jsda_observation_identity") < ingest.index(
+        "quant-ingest:0013_restore_specialized_jquants_schema"
+    )
+    policy = targets["quant-ingest"]["application_policy"]
+    assert policy["pending_from_live_applied_through"] == (
+        "quant-ingest:0010_raw_acquisition_status"
+    )
+    assert ingest[ingest.index("quant-ingest:0011_jsda_queue_v2") :] == [
+        f"quant-ingest:{index:04d}_{name}"
+        for index, name in (
+            (11, "jsda_queue_v2"),
+            (12, "jsda_observation_identity"),
+            (13, "restore_specialized_jquants_schema"),
+            (14, "receipt_authority_reconciliation"),
+            (15, "receipt_authority_requests"),
+            (16, "receipt_authority_immutability"),
+            (17, "receipt_authority_run_evidence"),
+            (18, "receipt_product_materialization"),
+            (19, "receipt_authority_recovery_smoke"),
+            (20, "receipt_authority_governed_sources"),
+            (21, "snapshot_quality_evidence"),
+            (22, "receipt_authority_jsda_locator"),
+            (23, "mutation_lease"),
+        )
+    ]
+    projection = [
+        row["migration_id"]
+        for row in targets["quant-ops-projection"]["migrations"]
+    ]
+    assert projection == [
+        "quant-ops-projection:0001_ops_projection",
+        "quant-ops-projection:0002_receipt_product_materializations",
+    ]
+    for environment in ("staging", "production"):
+        ingest_env = targets["quant-ingest"]["environments"][environment]
+        projection_env = targets["quant-ops-projection"]["environments"][
+            environment
+        ]
+        quota_env = targets["quant-ops-quota"]["environments"][environment]
+        assert ingest_env["applied_state"] == "UNVERIFIED"
+        assert ingest_env["binding"] == "DB"
+        assert projection_env["binding"] == "OPS_PROJECTION_DB"
+        assert quota_env["binding"] == "QUOTA_DB"
+        assert projection_env["applied_state"] == "UNVERIFIED"
+        assert quota_env["applied_state"] == "UNVERIFIED"

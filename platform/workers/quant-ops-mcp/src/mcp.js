@@ -1,8 +1,13 @@
 import { OPS_TOOLS, callOpsTool } from "./domain.js";
 import { QuotaExceeded, quotaCost } from "./quota.js";
-import { acceptedOpsToolSchemaDigest } from "./tool_schema_digest.js";
+import {
+  acceptedOpsToolSchemaDigest,
+  OPS_MCP_PROTOCOL_VERSION,
+  OPS_MCP_SERVER_NAME,
+  OPS_MCP_SERVER_VERSION,
+} from "./tool_schema_digest.js";
 
-export const MCP_PROTOCOL_VERSION = "2025-06-18";
+export const MCP_PROTOCOL_VERSION = OPS_MCP_PROTOCOL_VERSION;
 
 /** @param {unknown} id @param {unknown} result */
 function response(id, result) {
@@ -18,7 +23,8 @@ function error(id, code, message) {
  * @param {unknown} payload
  * @param {D1Database} db
  * @param {{quota?:{charge:(principal:{subject:string,clientId:string}, units:number)=>Promise<unknown>},
- * principal?:{subject:string,clientId:string}}} context
+ * principal?:{subject:string,clientId:string},
+ * env?:Record<string, unknown>}} context
  */
 export async function handleJsonRpc(payload, db, context = {}) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -51,7 +57,7 @@ export async function handleJsonRpc(payload, db, context = {}) {
       return response(id, {
         protocolVersion: MCP_PROTOCOL_VERSION,
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: "quant-ops-read", version: "0.2.0" },
+        serverInfo: { name: OPS_MCP_SERVER_NAME, version: OPS_MCP_SERVER_VERSION },
         instructions: "Signed immutable Ops status only. Research rows are not exposed by this server.",
       });
     }
@@ -72,7 +78,7 @@ export async function handleJsonRpc(payload, db, context = {}) {
       }
       const values = /** @type {Record<string, unknown>} */ (params);
       if (typeof values.name !== "string") return error(id, -32602, "tool name is required");
-      const value = await callOpsTool(db, values.name, values.arguments);
+      const value = await callOpsTool(db, values.name, values.arguments, context.env);
       const quota = context.quota && context.principal
         ? await context.quota.charge(context.principal, quotaCost(value))
         : null;
@@ -96,7 +102,8 @@ export async function handleJsonRpc(payload, db, context = {}) {
 /**
  * @param {Request} request @param {D1Database} db
  * @param {{quota?:{charge:(principal:{subject:string,clientId:string}, units:number)=>Promise<unknown>},
- * principal?:{subject:string,clientId:string}}} context
+ * principal?:{subject:string,clientId:string},
+ * env?:Record<string, unknown>}} context
  */
 export async function handleMcpHttp(request, db, context = {}) {
   if (request.method === "GET") {

@@ -84,12 +84,21 @@ _SIGNED_ENVELOPE_FIELDS = frozenset(
 _V3_SIGNED_ENVELOPE_FIELDS = _SIGNED_ENVELOPE_FIELDS | frozenset(
     {"environment", "authority_instance_digest"}
 )
-_JQUANTS_ACQUISITION_EXTRA_DIGEST_FIELDS = frozenset(
+_ACQUISITION_EXTRA_DIGEST_FIELDS = frozenset(
     {
         "acquisition_collection_manifest_file_digest",
         "acquisition_collection_digest",
         "acquisition_terminal_chain_digest",
     }
+)
+_PRODUCT_EXTRA_DIGEST_FIELDS = frozenset(
+    {
+        "product_artifact_digest",
+        "product_manifest_digest",
+    }
+)
+_AUTHORITY_BASE_EXTRA_DIGEST_FIELDS = (
+    _ACQUISITION_EXTRA_DIGEST_FIELDS | _PRODUCT_EXTRA_DIGEST_FIELDS
 )
 _JQUANTS_MASTER_CALENDAR_EXTRA_DIGEST_FIELDS = frozenset(
     {
@@ -99,10 +108,6 @@ _JQUANTS_MASTER_CALENDAR_EXTRA_DIGEST_FIELDS = frozenset(
         "official_business_dates_digest",
         "official_calendar_binding_digest",
     }
-)
-_JQUANTS_AUTHORITY_EXTRA_DIGEST_FIELDS = (
-    _JQUANTS_ACQUISITION_EXTRA_DIGEST_FIELDS
-    | _JQUANTS_MASTER_CALENDAR_EXTRA_DIGEST_FIELDS
 )
 _SCHEMA_ONLY_DIGEST = "sha256:" + "0" * 64
 
@@ -295,6 +300,18 @@ def _deep_freeze(value: Any) -> Any:
     return value
 
 
+def _thaw_verified_json(value: Any) -> Any:
+    """Return a detached JSON value from verifier-owned frozen claims."""
+    if isinstance(value, Mapping):
+        return {
+            str(key): _thaw_verified_json(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, tuple):
+        return [_thaw_verified_json(item) for item in value]
+    return value
+
+
 @dataclass(frozen=True, eq=False)
 class VerifiedCollectionClosure:
     """Opaque proof that every COMPLETE input is signed and bound."""
@@ -342,6 +359,10 @@ class VerifiedCollectionClosure:
         return str(self._value("source"))
 
     @property
+    def contract_id(self) -> str:
+        return str(self._value("contract_id"))
+
+    @property
     def dataset(self) -> str:
         return str(self._value("dataset"))
 
@@ -356,6 +377,42 @@ class VerifiedCollectionClosure:
     @property
     def segment_end(self) -> str:
         return str(self._value("segment_end"))
+
+    @property
+    def receipt_issue_digest(self) -> str:
+        return str(self._value("receipt_issue_digest"))
+
+    @property
+    def artifact_key(self) -> str:
+        return str(self._value("artifact_key"))
+
+    @property
+    def artifact_byte_count(self) -> int:
+        return int(self._value("artifact_byte_count"))
+
+    @property
+    def manifest_key(self) -> str:
+        return str(self._value("manifest_key"))
+
+    @property
+    def manifest_byte_count(self) -> int:
+        return int(self._value("manifest_byte_count"))
+
+    @property
+    def raw_manifest_key(self) -> str:
+        return str(self._value("raw_manifest_key"))
+
+    @property
+    def raw_manifest_byte_count(self) -> int:
+        return int(self._value("raw_manifest_byte_count"))
+
+    @property
+    def raw_byte_count(self) -> int:
+        return int(self._value("raw_byte_count"))
+
+    @property
+    def natural_key_digest(self) -> str:
+        return str(self._value("natural_key_digest"))
 
     @property
     def expected_scope(self) -> Mapping[str, Any]:
@@ -406,6 +463,10 @@ class VerifiedCollectionClosure:
         return str(self._value("raw_digest"))
 
     @property
+    def source_request_digest(self) -> str:
+        return str(self._value("source_request_digest"))
+
+    @property
     def raw_manifest_digest(self) -> str:
         return str(self._value("raw_manifest_digest"))
 
@@ -448,10 +509,21 @@ class VerifiedCollectionClosure:
             "authority_instance_digest": self.authority_instance_digest,
             "coverage_policy_version": self.coverage_policy_version,
             "source": self.source,
+            "contract_id": self.contract_id,
             "dataset": self.dataset,
             "segment_id": self.segment_id,
             "segment_start": self.segment_start,
             "segment_end": self.segment_end,
+            "receipt_issue_digest": self.receipt_issue_digest,
+            "artifact_key": self.artifact_key,
+            "artifact_byte_count": self.artifact_byte_count,
+            "manifest_key": self.manifest_key,
+            "manifest_byte_count": self.manifest_byte_count,
+            "raw_manifest_key": self.raw_manifest_key,
+            "raw_manifest_byte_count": self.raw_manifest_byte_count,
+            "raw_byte_count": self.raw_byte_count,
+            "natural_key_digest": self.natural_key_digest,
+            "expected_scope": _thaw_verified_json(self.expected_scope),
             "scope_digest": self.scope_digest,
             "expected_items": self.expected_items,
             "observed_items": self.observed_items,
@@ -460,6 +532,7 @@ class VerifiedCollectionClosure:
             "structured_row_count": self.structured_row_count,
             "pagination_exhausted": self.pagination_exhausted,
             "discovery_exhausted": self.discovery_exhausted,
+            "source_request_digest": self.source_request_digest,
             "raw_manifest_digest": self.raw_manifest_digest,
             "raw_digest": self.raw_digest,
             "structured_digest": self.structured_digest,
@@ -467,6 +540,7 @@ class VerifiedCollectionClosure:
             "observation_digest": self.observation_digest,
             "run_id": self.run_id,
             "checked_at": self.checked_at,
+            "extra_digests": _thaw_verified_json(self.extra_digests),
         }
 
 
@@ -509,12 +583,13 @@ def _validate_v3_dataset_digest_inventory(claims: Mapping[str, Any]) -> None:
     extras = claims.get("extra_digests")
     if type(extras) is not dict:
         raise ReceiptVerificationError("signed extra_digests must be an exact object")
-    present = frozenset(extras) & _JQUANTS_AUTHORITY_EXTRA_DIGEST_FIELDS
-    expected = frozenset()
-    if claims.get("source") == "jquants":
-        expected = _JQUANTS_ACQUISITION_EXTRA_DIGEST_FIELDS
-        if claims.get("dataset") == "equities_master":
-            expected |= _JQUANTS_MASTER_CALENDAR_EXTRA_DIGEST_FIELDS
+    present = frozenset(extras)
+    expected = _AUTHORITY_BASE_EXTRA_DIGEST_FIELDS
+    if (
+        claims.get("source") == "jquants"
+        and claims.get("dataset") == "equities_master"
+    ):
+        expected |= _JQUANTS_MASTER_CALENDAR_EXTRA_DIGEST_FIELDS
     if present != expected:
         raise ReceiptVerificationError(
             "signed J-Quants authority digest inventory does not match source/dataset"
@@ -530,6 +605,10 @@ def _validate_v3_dataset_digest_inventory(claims: Mapping[str, Any]) -> None:
             raise ReceiptVerificationError(
                 f"signed J-Quants authority digest {name!r} is not sha256"
             )
+    if extras["product_artifact_digest"] != claims.get("structured_digest"):
+        raise ReceiptVerificationError(
+            "signed product artifact digest does not bind structured digest"
+        )
 
 
 def _normalize_legacy_claims_for_schema(
@@ -550,28 +629,25 @@ def _normalize_legacy_claims_for_schema(
     normalized.setdefault(
         "authority_instance_digest", expected_authority_instance_digest
     )
-    extras = dict(normalized.get("extra_digests", {}))
-    if normalized.get("source") == "jquants":
-        extras.update(
-            {
-                name: _SCHEMA_ONLY_DIGEST
-                for name in _JQUANTS_ACQUISITION_EXTRA_DIGEST_FIELDS
-            }
-        )
-        if normalized.get("dataset") == "equities_master":
-            extras.update(
-                {
-                    name: _SCHEMA_ONLY_DIGEST
-                    for name in _JQUANTS_MASTER_CALENDAR_EXTRA_DIGEST_FIELDS
-                }
-            )
-        else:
-            for name in _JQUANTS_MASTER_CALENDAR_EXTRA_DIGEST_FIELDS:
-                extras.pop(name, None)
-    else:
-        for name in _JQUANTS_AUTHORITY_EXTRA_DIGEST_FIELDS:
-            extras.pop(name, None)
-    normalized["extra_digests"] = extras
+    normalized.setdefault("contract_id", "schema-only-legacy-contract")
+    normalized.setdefault("receipt_issue_digest", _SCHEMA_ONLY_DIGEST)
+    normalized.setdefault("artifact_key", "schema-only/legacy/artifact")
+    normalized.setdefault("artifact_byte_count", 1)
+    normalized.setdefault("manifest_key", "schema-only/legacy/manifest")
+    normalized.setdefault("manifest_byte_count", 1)
+    normalized.setdefault("raw_manifest_key", "schema-only/legacy/raw-manifest")
+    normalized.setdefault("raw_manifest_byte_count", 1)
+    normalized.setdefault("raw_byte_count", 1)
+    normalized.setdefault("natural_key_digest", _SCHEMA_ONLY_DIGEST)
+    expected_extras = set(_AUTHORITY_BASE_EXTRA_DIGEST_FIELDS)
+    if (
+        normalized.get("source") == "jquants"
+        and normalized.get("dataset") == "equities_master"
+    ):
+        expected_extras.update(_JQUANTS_MASTER_CALENDAR_EXTRA_DIGEST_FIELDS)
+    normalized["extra_digests"] = {
+        name: _SCHEMA_ONLY_DIGEST for name in expected_extras
+    }
     return normalized
 
 
@@ -608,14 +684,22 @@ def _validate_digest_chain(
         scope = {
             "environment": claims["environment"],
             "authority_instance_digest": claims["authority_instance_digest"],
-            **scope,
+            "coverage_policy_version": claims["coverage_policy_version"],
+            "source": claims["source"],
+            "contract_id": claims["contract_id"],
+            "dataset": claims["dataset"],
+            "segment_id": claims["segment_id"],
+            "segment_start": claims["segment_start"],
+            "segment_end": claims["segment_end"],
+            "expected_scope": claims["expected_scope"],
+            "expected_items": claims["expected_items"],
         }
     _require_same(
         "scope_digest chain",
         claims["scope_digest"],
         canonical_evidence_digest(scope),
     )
-    observation = {
+    observation: dict[str, Any] = {
         **scope,
         "observed_items": claims["observed_items"],
         "raw_page_count": claims["raw_page_count"],
@@ -625,6 +709,22 @@ def _validate_digest_chain(
         "error": claims["error"],
         "pagination_exhausted": claims["pagination_exhausted"],
         "discovery_exhausted": claims["discovery_exhausted"],
+    }
+    if environment_scoped:
+        observation.update(
+            {
+                "receipt_issue_digest": claims["receipt_issue_digest"],
+                "artifact_key": claims["artifact_key"],
+                "artifact_byte_count": claims["artifact_byte_count"],
+                "manifest_key": claims["manifest_key"],
+                "manifest_byte_count": claims["manifest_byte_count"],
+                "raw_manifest_key": claims["raw_manifest_key"],
+                "raw_manifest_byte_count": claims["raw_manifest_byte_count"],
+                "raw_byte_count": claims["raw_byte_count"],
+                "natural_key_digest": claims["natural_key_digest"],
+            }
+        )
+    observation.update({
         "source_request_digest": claims["source_request_digest"],
         "raw_manifest_digest": claims["raw_manifest_digest"],
         "raw_digest": claims["raw_digest"],
@@ -634,7 +734,7 @@ def _validate_digest_chain(
         "run_id": claims["run_id"],
         "checked_at": claims["checked_at"],
         "extra_digests": claims["extra_digests"],
-    }
+    })
     _require_same(
         "observation_digest chain",
         claims["observation_digest"],

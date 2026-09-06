@@ -399,6 +399,7 @@ def build_strategy_dependency_closure(
     research_data_profile_id: str,
     period_start: str,
     period_end: str,
+    extra_datasets: Sequence[str] = (),
 ) -> PlanDependencyClosure:
     """Compile a dependency closure for any canonical ``StrategySpec``.
 
@@ -474,6 +475,8 @@ def build_strategy_dependency_closure(
         required_datasets.update(dependency.dataset_dependencies)
     for dependency in (*universe, evaluation, risk, cost):
         required_datasets.update(dependency.dataset_dependencies)
+    if extra_datasets:
+        required_datasets.update(_dataset_ids(tuple(extra_datasets), "fill contract datasets"))
 
     lookback_by_dataset = {dataset_id: 0 for dataset_id in required_datasets}
     for dependency, lookback in zip(
@@ -537,6 +540,11 @@ def build_plan_dependency_closure(plan: ExperimentPlan) -> PlanDependencyClosure
     )
     risk = _contract(_RISK_DEPENDENCIES, plan.risk_policy, "risk")
     cost = _contract(_COST_DEPENDENCIES, plan.cost_scenario, "cost")
+    fill_datasets: tuple[str, ...] = ()
+    fill = dict(plan.fill_contract)
+    signal_dataset = fill.get("signal_price_dataset")
+    if type(signal_dataset) is str and signal_dataset.strip():
+        fill_datasets = (signal_dataset.strip(),)
     return build_strategy_dependency_closure(
         plan_id=plan.plan_id,
         plan_digest=experiment_plan_digest(plan),
@@ -548,6 +556,7 @@ def build_plan_dependency_closure(plan: ExperimentPlan) -> PlanDependencyClosure
         research_data_profile_id=plan.research_data_profile_id,
         period_start=plan.period_start,
         period_end=plan.period_end,
+        extra_datasets=fill_datasets,
     )
 
 

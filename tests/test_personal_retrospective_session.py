@@ -11,7 +11,7 @@ from core.execution import close_as_of, morning_close_as_of
 from data_contracts.identity import natural_key
 from storage.sqlite_store import SqliteStore
 
-from _coreseed import CODES, TRADING_DAYS, seed_db
+from _coreseed import CODES, TRADING_DAYS, draft_pit_observation_clock, seed_db
 
 D0, D1, D2, D3 = TRADING_DAYS
 CODE = "1332"
@@ -369,28 +369,29 @@ def test_am_adapter_catalog_prior_read_is_physically_limited(tmp_path, monkeypat
     monkeypatch.setattr(api_module, "_catalog_partition_rows", spy_catalog)
     monkeypatch.setattr(api_module, "_catalog_daily_bars", spy_decode)
 
-    result = pit.get_personal_retrospective_am_signal_equity_bars_daily(
-        as_of=morning_close_as_of(D3),
-        code=CODE,
-        latest_n=2,
-        db_path=db,
-    )
-    bounded_decode_lengths = list(decoded_lengths)
-    prior_limits = [
-        call.get("limit")
-        for call in catalog_calls
-        if call.get("limit") is not None
-    ]
-    assert prior_limits
-    assert all(limit == 2 for limit in prior_limits)
-    assert bounded_decode_lengths
-    assert all(length <= 2 for length in bounded_decode_lengths)
-    assert [row["date"] for row in result.rows] == [D2, D3]
-    unbounded = pit.get_personal_retrospective_am_signal_equity_bars_daily(
-        as_of=morning_close_as_of(D3),
-        code=CODE,
-        db_path=db,
-    )
+    with draft_pit_observation_clock(close_as_of(D3)):
+        result = pit.get_personal_retrospective_am_signal_equity_bars_daily(
+            as_of=morning_close_as_of(D3),
+            code=CODE,
+            latest_n=2,
+            db_path=db,
+        )
+        bounded_decode_lengths = list(decoded_lengths)
+        prior_limits = [
+            call.get("limit")
+            for call in catalog_calls
+            if call.get("limit") is not None
+        ]
+        assert prior_limits
+        assert all(limit == 2 for limit in prior_limits)
+        assert bounded_decode_lengths
+        assert all(length <= 2 for length in bounded_decode_lengths)
+        assert [row["date"] for row in result.rows] == [D2, D3]
+        unbounded = pit.get_personal_retrospective_am_signal_equity_bars_daily(
+            as_of=morning_close_as_of(D3),
+            code=CODE,
+            db_path=db,
+        )
     assert [row["date"] for row in result.rows] == [
         row["date"] for row in unbounded.rows[-2:]
     ]

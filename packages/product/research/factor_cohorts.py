@@ -25,6 +25,16 @@ from research.paper_candidate_specs import build_factor_rank_strategy_spec
 
 
 COHORT_REGISTRY_VERSION = "personal-factor-cohorts/v2"
+DRAFT_FACTOR_COHORT_PURPOSE_ID = "draft_factor_cohort_v1"
+DRAFT_VOL_OVERLAY_COHORT_PURPOSE_ID = "draft_vol_overlay_cohort_v1"
+DRAFT_AM_PM_SMILE_COHORT_PURPOSE_ID = "draft_am_pm_smile_cohort_v1"
+DRAFT_RESEARCH_PURPOSE_IDS = frozenset(
+    {
+        DRAFT_FACTOR_COHORT_PURPOSE_ID,
+        DRAFT_VOL_OVERLAY_COHORT_PURPOSE_ID,
+        DRAFT_AM_PM_SMILE_COHORT_PURPOSE_ID,
+    }
+)
 LEGACY_DEFAULT_FACTOR_COHORT_ID = "diverse-core-v1"
 LEGACY_COMPACT_MARKET_COHORT_ID = "compact-market-diverse-v1"
 LEGACY_PERSONAL_SHORT_FINANCING_COHORT_ID = "sector-relative-ls-v1"
@@ -415,6 +425,7 @@ class ResearchCohort:
     description: str = ""
     document_version: str | None = None
     execution_contract: Mapping[str, Any] | None = None
+    purpose_id: str = DRAFT_FACTOR_COHORT_PURPOSE_ID
 
     def __post_init__(self) -> None:
         if self.backend not in {"strategy_spec", "bar_native"}:
@@ -423,12 +434,16 @@ class ResearchCohort:
             raise ValueError("cohort must declare exactly one executable surface")
         if len(self.strategy_specs or self.logic_ids) != 4:
             raise ValueError("every bounded cohort must contain exactly four candidates")
+        if self.purpose_id not in DRAFT_RESEARCH_PURPOSE_IDS:
+            raise ValueError(
+                "draft cohort purpose_id must be a closed draft research purpose"
+            )
         if self.execution_contract is not None:
             object.__setattr__(
                 self, "execution_contract", MappingProxyType(dict(self.execution_contract))
             )
 
-    def to_dict(self) -> dict[str, Any]:
+    def _document_body(self) -> dict[str, Any]:
         body = {
             "version": COHORT_REGISTRY_VERSION,
             "cohort_id": self.cohort_id,
@@ -442,18 +457,17 @@ class ResearchCohort:
             "description": self.description,
             "draft_only": True,
             "automatic_promotion": False,
+            "purpose_id": self.purpose_id,
         }
         if self.document_version is not None:
             body["document_version"] = self.document_version
         if self.execution_contract is not None:
             body["execution_contract"] = dict(self.execution_contract)
-        encoded = json.dumps(
-            body, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-        ).encode("utf-8")
-        return {
-            **body,
-            "cohort_digest": "sha256:" + hashlib.sha256(encoded).hexdigest(),
-        }
+        return body
+
+    def to_dict(self) -> dict[str, Any]:
+        body = self._document_body()
+        return {**body, "cohort_digest": _cohort_digest_for(body)}
 
     @property
     def execution_mode(self) -> str:
@@ -565,6 +579,7 @@ _COHORTS: dict[str, ResearchCohort] = {
         ),
         short_financing_required=True,
         description="BaseVol, ATM IV, skew, and near/next maturity ratios.",
+        purpose_id=DRAFT_VOL_OVERLAY_COHORT_PURPOSE_ID,
     ),
 }
 
@@ -788,6 +803,43 @@ def canonical_trading_calendar_digest(session_dates: Sequence[str]) -> str:
     )
 
 
+def _cohort_digest_for(body: Mapping[str, Any]) -> str:
+    encoded = json.dumps(
+        dict(body),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def validate_cohort_document(payload: Mapping[str, Any]) -> str:
+    """Validate a cohort document and return its purpose_id.
+
+    New writers bind ``purpose_id`` into ``cohort_digest``. Historical
+    artifacts that hashed the body without ``purpose_id`` are accepted only
+    here; they are not re-emitted.
+    """
+
+    if not isinstance(payload, Mapping):
+        raise ValueError("cohort document must be an object")
+    declared = payload.get("cohort_digest")
+    if not isinstance(declared, str) or not declared.startswith("sha256:"):
+        raise ValueError("cohort_digest must be a canonical sha256 digest")
+    body = {key: value for key, value in payload.items() if key != "cohort_digest"}
+    purpose = body.get("purpose_id")
+    if purpose in DRAFT_RESEARCH_PURPOSE_IDS and _cohort_digest_for(body) == declared:
+        return str(purpose)
+    historical = {key: value for key, value in body.items() if key != "purpose_id"}
+    if _cohort_digest_for(historical) == declared:
+        if purpose in DRAFT_RESEARCH_PURPOSE_IDS:
+            return str(purpose)
+        if purpose in (None, ""):
+            return DRAFT_FACTOR_COHORT_PURPOSE_ID
+        raise ValueError("historical cohort purpose_id is not a draft research purpose")
+    raise ValueError("cohort_digest does not bind the document body")
+
+
 def verified_am_pm_base_digests() -> tuple[str, str]:
     """Return the repository AM sleeve spec/cohort digests or fail closed."""
 
@@ -824,6 +876,10 @@ __all__ = [
     "AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT",
     "AM_SIGNAL_PM_CLOSE_EXECUTION_MODE",
     "COHORT_REGISTRY_VERSION",
+    "DRAFT_AM_PM_SMILE_COHORT_PURPOSE_ID",
+    "DRAFT_FACTOR_COHORT_PURPOSE_ID",
+    "DRAFT_RESEARCH_PURPOSE_IDS",
+    "DRAFT_VOL_OVERLAY_COHORT_PURPOSE_ID",
     "COMPACT_MARKET_AM_PM_COHORT_ID",
     "COMPACT_MARKET_COHORT_ID",
     "COMPACT_MARKET_COHORT_IDS",
@@ -856,6 +912,7 @@ __all__ = [
     "is_personal_short_financing_cohort",
     "legacy_next_close_execution_contract",
     "personal_specs_for_cohort",
+    "validate_cohort_document",
     "validate_personal_cohort_universe",
     "verified_am_pm_base_digests",
 ]

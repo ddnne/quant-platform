@@ -1,4 +1,4 @@
-"""Bounded personal DRAFT research over a compact-v7 snapshot.
+"""Bounded personal DRAFT research over a compact-v8 snapshot.
 
 The normal path is cloud: R2 is the snapshot authority, D1 is small job
 state, and Container SQLite is ephemeral. Persistent local market, price, or
@@ -10,10 +10,10 @@ Core30, Large70, Mid400, Small, TOPIX100, and TOPIX500 selectors are
 PIT-resolved and intersected with financials at the execution decision cutoff.
 Default AM cohorts use 11:30 information and same-day PM close.
 
-Snapshot build is compact v7, one continuous object, at most 7000 inclusive
+Snapshot build is compact v8, one continuous object, at most 7000 inclusive
 calendar days. Compressed R2/HTTP is <= 4 GiB; expanded SQLite/builder is
 <= 5 GiB. One standard-4 Container shares one snapshot/quality prep and runs
-up to four strategy child processes; a batch runs up to eight cohort/universe
+the typed personal service in-process; a batch runs up to eight cohort/universe
 jobs.
 
 This module intentionally does not participate in the controlled-pilot or
@@ -29,37 +29,37 @@ import hashlib
 import itertools
 import json
 import math
-import multiprocessing
-import os
-import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
-from pathlib import Path
-from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from typing import Any
-from urllib.parse import quote
 
 import features
 from agents.risk_agent import RiskAgent
-from core.execution import close_as_of
 from execution.personal_paper_service import PersonalPaperExecutionService
-from paper_runtime.personal_snapshot import (
-    PersonalSnapshot,
-    materialize_personal_snapshot,
-    verify_personal_snapshot,
+from paper_runtime.personal_draft_bind import (
+    execute_personal_draft,
+    prepare_draft_snapshot,
+    prepared_frame_scope,
+    verify_draft_snapshot,
 )
-from paper_runtime.personal_prepared_frame import _personal_prepared_frame_scope
 from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED
 from strategies.paper import Lifecycle, PaperRunConfig, PaperRunResult
 from strategies.spec import StrategySpec, iter_feature_refs, strategy_spec_digest
 
-from data_contracts.personal_history_compact import (
-    DEFAULT_MIN_OBSERVED_BAR_RATIO,
-    PERSONAL_HISTORY_COMPACT_BARS_TABLE,
-    allowed_missing_observed_bars,
-    compact_history_state,
+from data_contracts.personal_history_compact import DEFAULT_MIN_OBSERVED_BAR_RATIO
+from pit.cooperative_deadline import CooperativeDeadline, install_deadline
+from pit.personal_research_view import (
+    CONTAINER_EPHEMERAL_KIND,
+    DEFAULT_DECISION_CUTOFF,
+    LEGACY_SESSION_CLOSE_CUTOFF,
+    OFFLINE_FIXTURE_KIND,
+    ArtifactRef,
+    PersonalResearchDataView,
+    SnapshotIdentity,
 )
+from pit import PERSONAL_BAR_COVERAGE_EVIDENCE
 
 from research.dependency_closure import (
     ContractDependency,
@@ -92,7 +92,6 @@ from research.personal_universe import (
     PersonalResolvedUniverseMembership,
     PersonalUniverseError,
     PersonalUniverseSelector,
-    personal_research_universe_decision_cutoff,
     personal_universe_selector,
     resolve_personal_universe_with_evidence,
 )
@@ -120,14 +119,13 @@ from research.stats_metrics import sharpe_ratio
 PERSONAL_RESEARCH_REPORT_VERSION = "personal-research-report/v11"
 PERSONAL_DECISION_POLICY = "personal_drawdown_cost_stress/v3"
 PERSONAL_DATA_PROFILE = "personal-japan-equities-paper/v3"
-PERSONAL_BAR_COVERAGE_EVIDENCE = "observed-pit-market-breadth/v1"
 PERSONAL_SHORT_FINANCING_SCHEMA = "personal-short-financing-sensitivity/v1"
 PERSONAL_SHORT_FINANCING_FORMULA_VERSION = "fixed-baseline-position-short-financing/v1"
 PERSONAL_SHORT_FINANCING_TRACE_SCHEMA = "personal-short-notional-trace/v1"
 PERSONAL_SHORT_FINANCING_ANNUAL_RATES = (0.0, 0.03, 0.10)
 PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE = 0.03
 PERSONAL_SHORT_FINANCING_SESSIONS_PER_YEAR = 245
-PERSONAL_EXACT_FOUR_MAX_BACKTESTS = 25
+PERSONAL_DRAFT_COHORT_MAX_BACKTESTS = 25
 _CANDIDATE_PROCESS_RESULT_SCHEMA = "personal-candidate-process-result/v1"
 _CANDIDATE_PROCESS_STOP_GRACE_SECONDS = 5.0
 _TYPED_BAR_TABLES = ("jquants_daily_bars", "jquants_daily_bars_revisions")
@@ -153,7 +151,7 @@ class PersonalResearchPolicy:
     max_drawdown: float = 0.25
     min_fills: int = 100
     max_candidates: int = 12
-    max_parallel: int = 4
+    max_parallel: int = 1
     min_observed_bar_coverage: float = DEFAULT_MIN_OBSERVED_BAR_RATIO
     min_universe_fins_breadth: float = 0.95
 
@@ -170,8 +168,10 @@ class PersonalResearchPolicy:
             raise ValueError("max_drawdown must be in (0, 1]")
         if self.min_fills < 0 or self.max_candidates < 1:
             raise ValueError("fill and candidate limits cannot be negative")
-        if not 1 <= self.max_parallel <= 4:
-            raise ValueError("personal research parallelism must be in [1, 4]")
+        if self.max_parallel != 1:
+            raise ValueError(
+                "personal research calculation is serial; max_parallel must be 1"
+            )
         if not 0.0 < self.min_observed_bar_coverage <= 1.0:
             raise ValueError("min_observed_bar_coverage must be in (0, 1]")
         if not 0.0 < self.min_universe_fins_breadth <= 1.0:
@@ -202,21 +202,50 @@ class PersonalResearchPolicy:
 
 @dataclass(frozen=True, slots=True)
 class PersonalResearchRequest:
-    source_db: Path
+    data_view: PersonalResearchDataView
     period_end: str
-    output_root: Path
     period_start: str | None = None
     specs: tuple[StrategySpec, ...] | None = None
     cohort_id: str | None = None
     universe_id: str = DEFAULT_PERSONAL_UNIVERSE_ID
+    deadline: CooperativeDeadline | None = None
+
+
+class _ReadableArtifact:
+    """Bytes capability for one written artifact. Not a filesystem Path."""
+
+    __slots__ = ("_view", "_ref")
+
+    def __init__(self, view: PersonalResearchDataView, ref: ArtifactRef) -> None:
+        self._view = view
+        self._ref = ref
+
+    def read_text(self, encoding: str = "utf-8") -> str:
+        return self._view.read_artifact(self._ref.archive_member).decode(encoding)
+
+    def read_bytes(self) -> bytes:
+        return self._view.read_artifact(self._ref.archive_member)
+
+    @property
+    def archive_member(self) -> str:
+        return self._ref.archive_member
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, _ReadableArtifact):
+            return NotImplemented
+        return self._ref == other._ref
+
+    def __str__(self) -> str:
+        return self._ref.archive_member
 
 
 @dataclass(frozen=True, slots=True)
 class PersonalResearchRun:
     report_id: str
-    report_json_path: Path
-    report_markdown_path: Path
-    snapshot: PersonalSnapshot
+    report_json: ArtifactRef
+    report_markdown: ArtifactRef
+    data_view: PersonalResearchDataView
+    snapshot: SnapshotIdentity
     candidate_count: int
     evaluated_count: int
     hold_count: int
@@ -227,11 +256,24 @@ class PersonalResearchRun:
     universe_rule_digest: str | None = None
     execution_mode: str = LEGACY_NEXT_CLOSE_EXECUTION_MODE
     execution_contract_digest: str | None = None
-    base_sleeve_artifact_path: Path | None = None
     base_sleeve_artifact_digest: str | None = None
     base_sleeve_archive_member: str | None = None
     base_sleeve_artifact: dict[str, Any] | None = None
     non_candidate_source_backtest_count: int = 0
+    go: bool = False
+    ready_snapshot_declared: bool = False
+    live_orders_enabled: bool = False
+    automatic_promotion: bool = False
+    model_calls: int = 0
+    estimated_ai_cost_usd: float = 0.0
+
+    @property
+    def report_json_path(self) -> _ReadableArtifact:
+        return _ReadableArtifact(self.data_view, self.report_json)
+
+    @property
+    def report_markdown_path(self) -> _ReadableArtifact:
+        return _ReadableArtifact(self.data_view, self.report_markdown)
 
     @property
     def exit_code(self) -> int:
@@ -277,6 +319,16 @@ _EVALUATION = ContractDependency(
     dependency_id="personal_walk_forward",
     version="personal-walk-forward/v1",
     dataset_dependencies=("equities_bars_daily", "markets_calendar"),
+)
+_EVALUATION_AM = ContractDependency(
+    kind="evaluation",
+    dependency_id="personal_walk_forward",
+    version="personal-walk-forward/v1",
+    dataset_dependencies=(
+        "equities_bars_daily",
+        "equities_bars_daily_am",
+        "markets_calendar",
+    ),
 )
 _RISK = ContractDependency(
     kind="risk",
@@ -533,7 +585,15 @@ def _closures(
                 plan_digest=_digest(plan_body),
                 spec=spec,
                 universe_dependencies=(universe_dependency,),
-                evaluation_dependency=_EVALUATION,
+                evaluation_dependency=(
+                    _EVALUATION_AM
+                    if (
+                        isinstance(execution_contract, Mapping)
+                        and execution_contract.get("execution_mode")
+                        == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
+                    )
+                    else _EVALUATION
+                ),
                 risk_dependency=_RISK,
                 cost_dependency=_SHORT_COST if uses_short else _COST,
                 research_data_profile_id=PERSONAL_DATA_PROFILE,
@@ -576,323 +636,6 @@ def _periods(
             return None
         folds.append((selected[0], selected[-1]))
     return tuple(folds), (holdout[0], holdout[-1])
-
-
-def _table_names(connection: sqlite3.Connection) -> set[str]:
-    return {
-        str(row[0])
-        for row in connection.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'"
-        )
-    }
-
-
-def _table_columns(connection: sqlite3.Connection, table: str) -> set[str]:
-    if table not in _table_names(connection):
-        return set()
-    return {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")}
-
-
-def _compact_v7_bar_read_state(
-    connection: sqlite3.Connection,
-) -> tuple[str, str | None]:
-    state = compact_history_state(connection)
-    if state == "invalid":
-        return "invalid", "compact_v7_marker_or_schema_invalid"
-    if state == "mixed":
-        return "mixed", "mixed_compact_and_typed_or_generic_bars"
-    if state == "compact":
-        return "compact", None
-    return "legacy", None
-
-
-def _observed_bar_day_evidence(
-    day: str,
-    *,
-    expected: int,
-    observed: int,
-    minimum_ratio: float,
-) -> dict[str, Any]:
-    """Record one session's observed breadth without rounding it up to the floor."""
-
-    missing = expected - observed
-    allowed_missing = allowed_missing_observed_bars(expected, minimum_ratio)
-    ratio = (observed / expected) if expected else 0.0
-    return {
-        "date": day,
-        "expected": expected,
-        "observed": observed,
-        "missing": missing,
-        "allowed_missing": allowed_missing,
-        "ratio": ratio,
-        "within_allowed_missing": missing <= allowed_missing,
-        "meets_minimum_ratio": ratio >= minimum_ratio,
-    }
-
-
-def _observed_market_bar_coverage(
-    db_path: Path,
-    universe: PersonalResolvedUniverseMembership,
-    *,
-    minimum_ratio: float,
-) -> dict[str, Any]:
-    """Measure exact PIT-visible bar breadth without claiming source completeness.
-
-    This is deliberately an observed-data guard, not a signed coverage system.
-    It prevents a materially incomplete local file from silently turning
-    missing issuers into apparent losers/winners while remaining practical for
-    one person's SQLite workflow.
-    """
-
-    uri = "file:" + quote(str(Path(db_path).resolve()), safe="/") + "?mode=ro"
-    connection = sqlite3.connect(uri, uri=True)
-    try:
-        tables = _table_names(connection)
-        read_state, compact_reason = _compact_v7_bar_read_state(connection)
-        if read_state in {"invalid", "mixed"}:
-            return {
-                "version": PERSONAL_BAR_COVERAGE_EVIDENCE,
-                "evidence_kind": "OBSERVED",
-                "status": "FAIL",
-                "reason": compact_reason,
-                "minimum_ratio": minimum_ratio,
-                "source_complete_claim": False,
-            }
-        selects: list[str] = []
-        if read_state == "compact":
-            selects.append(
-                "SELECT date AS day, code AS code "
-                f"FROM {PERSONAL_HISTORY_COMPACT_BARS_TABLE} "
-                "WHERE date BETWEEN ? AND ? "
-                "AND available_at IS NOT NULL "
-                "AND event_time IS NOT NULL "
-                "AND available_at <= event_time"
-            )
-        else:
-            for table in _TYPED_BAR_TABLES:
-                if table in tables:
-                    selects.append(
-                        "SELECT date AS day, code AS code "
-                        f"FROM {table} "
-                        "WHERE source='jquants' AND date BETWEEN ? AND ? "
-                        "AND available_at IS NOT NULL "
-                        "AND event_time IS NOT NULL "
-                        "AND available_at <= event_time"
-                    )
-            code_sql = (
-                "COALESCE("
-                "CASE WHEN json_valid(payload) "
-                "THEN CAST(json_extract(payload, '$.Code') AS TEXT) END,"
-                "CASE WHEN json_valid(raw_payload) "
-                "THEN CAST(json_extract(raw_payload, '$.Code') AS TEXT) END)"
-            )
-            for table in _GENERIC_BAR_TABLES:
-                if table in tables:
-                    selects.append(
-                        "SELECT substr(event_time, 1, 10) AS day, "
-                        f"{code_sql} AS code FROM {table} "
-                        "WHERE source='jquants' "
-                        "AND dataset = 'equities_bars_daily' "
-                        "AND substr(event_time, 1, 10) BETWEEN ? AND ? "
-                        "AND available_at IS NOT NULL "
-                        "AND event_time IS NOT NULL "
-                        "AND available_at <= event_time"
-                    )
-        expected_by_day = dict(universe.decision_memberships)
-        expected_total = sum(len(codes) for codes in expected_by_day.values())
-        if not selects or expected_total == 0:
-            return {
-                "version": PERSONAL_BAR_COVERAGE_EVIDENCE,
-                "evidence_kind": "OBSERVED",
-                "status": "UNKNOWN",
-                "reason": "bar_tables_or_expected_membership_missing",
-                "minimum_ratio": minimum_ratio,
-                "source_complete_claim": False,
-            }
-        params: list[str] = []
-        for _ in selects:
-            params.extend((universe.period_start, universe.period_end))
-        union_sql = " UNION ALL ".join(selects)
-        cursor = connection.execute(
-            "SELECT day, code FROM (" + union_sql + ") "
-            "WHERE day IS NOT NULL AND code IS NOT NULL "
-            "GROUP BY day, code ORDER BY day, code",
-            params,
-        )
-        observed_total = 0
-        seen_days: set[str] = set()
-        daily: list[dict[str, Any]] = []
-        missing_sample: list[dict[str, str]] = []
-        for day, rows in itertools.groupby(cursor, key=lambda row: str(row[0])):
-            expected_codes = set(expected_by_day.get(day, ()))
-            if not expected_codes:
-                continue
-            observed_codes = {
-                str(row[1]) for row in rows if str(row[1]) in expected_codes
-            }
-            seen_days.add(day)
-            observed = len(observed_codes)
-            expected = len(expected_codes)
-            observed_total += observed
-            daily.append(
-                _observed_bar_day_evidence(
-                    day,
-                    expected=expected,
-                    observed=observed,
-                    minimum_ratio=minimum_ratio,
-                )
-            )
-            if len(missing_sample) < 20:
-                missing_sample.extend(
-                    {"date": day, "code": code}
-                    for code in sorted(expected_codes - observed_codes)[
-                        : 20 - len(missing_sample)
-                    ]
-                )
-        for day, codes in universe.decision_memberships:
-            if day in seen_days:
-                continue
-            daily.append(
-                _observed_bar_day_evidence(
-                    day,
-                    expected=len(codes),
-                    observed=0,
-                    minimum_ratio=minimum_ratio,
-                )
-            )
-            if len(missing_sample) < 20:
-                missing_sample.extend(
-                    {"date": day, "code": code}
-                    for code in codes[: 20 - len(missing_sample)]
-                )
-        overall_ratio = observed_total / expected_total
-        minimum_daily_ratio = min(float(row["ratio"]) for row in daily)
-        daily_missing_ok = all(bool(row["within_allowed_missing"]) for row in daily)
-        passed = overall_ratio >= minimum_ratio and daily_missing_ok
-        evidence: dict[str, Any] = {
-            "version": PERSONAL_BAR_COVERAGE_EVIDENCE,
-            "evidence_kind": "OBSERVED",
-            "status": "PASS" if passed else "FAIL",
-            "minimum_ratio": minimum_ratio,
-            "overall_ratio": overall_ratio,
-            "minimum_daily_ratio": minimum_daily_ratio,
-            "daily_missing_ok": daily_missing_ok,
-            "expected_rows": expected_total,
-            "observed_rows": observed_total,
-            "missing_rows": expected_total - observed_total,
-            "worst_days": sorted(
-                daily, key=lambda row: (float(row["ratio"]), str(row["date"]))
-            )[:10],
-            "missing_sample": missing_sample,
-            "source_complete_claim": False,
-        }
-        if not passed:
-            evidence["reason"] = (
-                "daily_missing_above_allowance"
-                if not daily_missing_ok
-                else "overall_ratio_below_minimum"
-            )
-        return evidence
-    finally:
-        connection.close()
-
-
-def _source_sync_evidence(
-    db_path: Path,
-    snapshot_manifest: dict[str, Any],
-    *,
-    required_datasets: Sequence[str],
-) -> dict[str, Any]:
-    """Use lightweight sync controls when present; keep plain fixtures usable."""
-
-    provenance = snapshot_manifest.get("source_policy_provenance")
-    source_policy = dict(provenance) if isinstance(provenance, dict) else {}
-    managed = bool(
-        source_policy.get("table_present") and source_policy.get("row_present")
-    )
-    uri = "file:" + quote(str(Path(db_path).resolve()), safe="/") + "?mode=ro"
-    connection = sqlite3.connect(uri, uri=True)
-    connection.row_factory = sqlite3.Row
-    try:
-        tables = _table_names(connection)
-        has_validation = "ingestion_validation" in tables
-        has_watermarks = "ingestion_watermarks" in tables
-        if not managed and not has_validation and not has_watermarks:
-            return {
-                "status": "PASS",
-                "basis": "legacy_unmanaged_local_database",
-                "source_publication_state": None,
-                "required_datasets": list(required_datasets),
-                "source_complete_claim": False,
-            }
-        if not has_validation or not has_watermarks:
-            return {
-                "status": "UNKNOWN",
-                "basis": "managed_sync_controls_missing",
-                "source_publication_state": source_policy.get("publication_state"),
-                "required_datasets": list(required_datasets),
-                "source_complete_claim": False,
-            }
-        validation_columns = _table_columns(connection, "ingestion_validation")
-        watermark_columns = _table_columns(connection, "ingestion_watermarks")
-        if not {"dataset", "status"} <= validation_columns or not {
-            "dataset",
-            "last_ingested_at",
-        } <= watermark_columns:
-            return {
-                "status": "UNKNOWN",
-                "basis": "managed_sync_controls_incompatible",
-                "source_publication_state": source_policy.get("publication_state"),
-                "required_datasets": list(required_datasets),
-                "source_complete_claim": False,
-            }
-        order_column = "id" if "id" in validation_columns else "rowid"
-        latest_rows = connection.execute(
-            "SELECT v.dataset,v.status"
-            + " FROM ingestion_validation v JOIN ("
-            + f"SELECT dataset,MAX({order_column}) AS latest_id "
-            + "FROM ingestion_validation GROUP BY dataset) latest "
-            + f"ON latest.dataset=v.dataset AND latest.latest_id=v.{order_column}",
-        ).fetchall()
-        validation: dict[str, dict[str, Any]] = {}
-        for row in latest_rows:
-            dataset = str(row["dataset"] or "")
-            validation[dataset] = {
-                "status": str(row["status"] or "").lower(),
-            }
-        watermark_rows = connection.execute(
-            "SELECT dataset,last_ingested_at FROM ingestion_watermarks"
-        ).fetchall()
-        watermarks = {
-            str(row["dataset"]): str(row["last_ingested_at"] or "")
-            for row in watermark_rows
-        }
-        failures: list[dict[str, Any]] = []
-        for dataset in required_datasets:
-            latest = validation.get(dataset)
-            watermark = watermarks.get(dataset, "")
-            if latest is None or latest["status"] != "pass":
-                failures.append(
-                    {
-                        "dataset": dataset,
-                        "reason": "latest_validation_not_pass",
-                        "observed_status": None if latest is None else latest["status"],
-                    }
-                )
-            if not watermark:
-                failures.append(
-                    {"dataset": dataset, "reason": "watermark_missing"}
-                )
-        return {
-            "status": "FAIL" if failures else "PASS",
-            "basis": "latest_local_validation_and_watermark",
-            "source_publication_state": source_policy.get("publication_state"),
-            "required_datasets": list(required_datasets),
-            "failures": failures,
-            "source_complete_claim": False,
-        }
-    finally:
-        connection.close()
 
 
 def _daily_returns_from_equity_curve(
@@ -1048,21 +791,12 @@ def _risk_document(result: PaperRunResult, limit: float) -> dict[str, Any]:
     }
 
 
-def _write_artifact(root: Path, category: str, suffix: str, content: bytes) -> str:
-    digest = hashlib.sha256(content).hexdigest()
-    directory = root / category
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"{digest}.{suffix}"
-    try:
-        with path.open("xb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        path.chmod(0o444)
-    except FileExistsError:
-        if path.read_bytes() != content:
-            raise RuntimeError(f"content-address collision for {path.name}")
-    return path.relative_to(root).as_posix()
+def _write_artifact(
+    view: PersonalResearchDataView, category: str, suffix: str, content: bytes
+) -> str:
+    return view.write_artifact(
+        category=category, suffix=suffix, payload=content
+    ).archive_member
 
 
 def _portable_paper_document(result: PaperRunResult) -> dict[str, Any]:
@@ -1247,284 +981,6 @@ def _candidate_evidence_assessment(candidate: Mapping[str, Any]) -> str:
     return f"REJECT: {failed}. The observed evidence does not support promotion."
 
 
-def _universe_corporate_action_check(
-    db_path: Path,
-    *,
-    universe: PersonalResolvedUniverseMembership,
-    lookback_days: int,
-) -> dict[str, Any]:
-    """Classify handled split boundaries and advisory adjusted-price moves.
-
-    Vendor factor boundaries are expected under the explicitly retrospective
-    DRAFT basis and therefore are evidence, not automatic rejection. A large
-    move that remains in adjusted prices is not proof of a corporate action:
-    it can be a genuine market move. Preserve it as a review warning without
-    rejecting a candidate. Missing adjusted evidence remains fail-closed in
-    the adjusted-price execution path.
-    """
-
-    expected_codes = {
-        code
-        for _day, codes in universe.decision_memberships
-        for code in codes
-    }
-    if not expected_codes:
-        return {
-            "status": "UNKNOWN",
-            "price_basis": PERSONAL_RETROSPECTIVE_ADJUSTED,
-            "reason": "resolved_universe_empty",
-            "checked_codes": 0,
-            "affected_codes": [],
-            "suspicious_jump_codes": [],
-            "supported_factor_events": [],
-            "extreme_price_move_events": [],
-        }
-    start = (
-        date.fromisoformat(universe.period_start) - timedelta(days=lookback_days)
-    ).isoformat()
-    end = universe.period_end
-    end_as_of = close_as_of(end)
-    uri = "file:" + quote(str(Path(db_path).resolve()), safe="/") + "?mode=ro"
-    connection = sqlite3.connect(uri, uri=True)
-    try:
-        tables = _table_names(connection)
-        read_state, compact_reason = _compact_v7_bar_read_state(connection)
-        if read_state in {"invalid", "mixed"}:
-            return {
-                "status": "FAIL",
-                "price_basis": PERSONAL_RETROSPECTIVE_ADJUSTED,
-                "reason": compact_reason,
-                "checked_codes": 0,
-                "affected_codes": [],
-                "suspicious_jump_codes": [],
-                "supported_factor_events": [],
-                "extreme_price_move_events": [],
-            }
-        selects: list[str] = []
-        if read_state == "compact":
-            selects.append(
-                "SELECT code,date AS day,close AS raw_close,"
-                "adjustment_close AS adjusted_close,volume AS raw_volume,"
-                "adjustment_volume AS adjusted_volume,available_at,ingested_at "
-                f"FROM {PERSONAL_HISTORY_COMPACT_BARS_TABLE} "
-                "WHERE date BETWEEN ? AND ? "
-                "AND available_at <= ?"
-            )
-        else:
-            for table in _TYPED_BAR_TABLES:
-                if table in tables:
-                    selects.append(
-                        "SELECT code,date AS day,close AS raw_close,"
-                        "adjustment_close AS adjusted_close,volume AS raw_volume,"
-                        "adjustment_volume AS adjusted_volume,available_at,ingested_at "
-                        f"FROM {table} "
-                        "WHERE source='jquants' AND date BETWEEN ? AND ? "
-                        "AND available_at <= ?"
-                    )
-            code_sql = (
-                "COALESCE("
-                "CASE WHEN json_valid(payload) "
-                "THEN CAST(json_extract(payload, '$.Code') AS TEXT) END,"
-                "CASE WHEN json_valid(raw_payload) "
-                "THEN CAST(json_extract(raw_payload, '$.Code') AS TEXT) END)"
-            )
-            raw_close_sql = (
-                "COALESCE("
-                "CASE WHEN json_valid(payload) "
-                "THEN json_extract(payload, '$.Close') END,"
-                "CASE WHEN json_valid(raw_payload) "
-                "THEN json_extract(raw_payload, '$.Close') END)"
-            )
-            adjusted_close_sql = (
-                "COALESCE("
-                "CASE WHEN json_valid(payload) THEN COALESCE("
-                "json_extract(payload, '$.AdjustmentClose'),"
-                "json_extract(payload, '$.AdjClose'),"
-                "json_extract(payload, '$.AdjC')) END,"
-                "CASE WHEN json_valid(raw_payload) THEN COALESCE("
-                "json_extract(raw_payload, '$.AdjustmentClose'),"
-                "json_extract(raw_payload, '$.AdjClose'),"
-                "json_extract(raw_payload, '$.AdjC')) END)"
-            )
-            raw_volume_sql = (
-                "COALESCE("
-                "CASE WHEN json_valid(payload) "
-                "THEN json_extract(payload, '$.Volume') END,"
-                "CASE WHEN json_valid(raw_payload) "
-                "THEN json_extract(raw_payload, '$.Volume') END)"
-            )
-            adjusted_volume_sql = (
-                "COALESCE("
-                "CASE WHEN json_valid(payload) THEN COALESCE("
-                "json_extract(payload, '$.AdjustmentVolume'),"
-                "json_extract(payload, '$.AdjVolume'),"
-                "json_extract(payload, '$.AdjVo')) END,"
-                "CASE WHEN json_valid(raw_payload) THEN COALESCE("
-                "json_extract(raw_payload, '$.AdjustmentVolume'),"
-                "json_extract(raw_payload, '$.AdjVolume'),"
-                "json_extract(raw_payload, '$.AdjVo')) END)"
-            )
-            for table in _GENERIC_BAR_TABLES:
-                if table in tables:
-                    selects.append(
-                        f"SELECT {code_sql} AS code,substr(event_time,1,10) AS day,"
-                        f"{raw_close_sql} AS raw_close,"
-                        f"{adjusted_close_sql} AS adjusted_close,"
-                        f"{raw_volume_sql} AS raw_volume,"
-                        f"{adjusted_volume_sql} AS adjusted_volume,"
-                        "available_at,ingested_at "
-                        f"FROM {table} "
-                        "WHERE source='jquants' AND dataset='equities_bars_daily' "
-                        "AND substr(event_time,1,10) BETWEEN ? AND ? "
-                        "AND available_at <= ?"
-                    )
-        if not selects:
-            return {
-                "status": "UNKNOWN",
-                "price_basis": PERSONAL_RETROSPECTIVE_ADJUSTED,
-                "reason": "bar_tables_missing",
-                "checked_codes": 0,
-                "affected_codes": [],
-                "suspicious_jump_codes": [],
-                "supported_factor_events": [],
-                "extreme_price_move_events": [],
-            }
-        params: list[str] = []
-        for _ in selects:
-            params.extend((start, end, end_as_of))
-        cursor = connection.execute(
-            "SELECT code,day,raw_close,adjusted_close,raw_volume,adjusted_volume,"
-            "available_at,ingested_at FROM ("
-            + " UNION ALL ".join(selects)
-            + ") WHERE code IS NOT NULL AND day IS NOT NULL "
-            "ORDER BY code,day,available_at,ingested_at",
-            params,
-        )
-        supported_events: list[dict[str, Any]] = []
-        extreme_price_move_events: list[dict[str, Any]] = []
-        observed_codes: set[str] = set()
-        missing_adjusted_codes: set[str] = set()
-        adjusted_observations = 0
-        observations = 0
-        previous: dict[str, tuple[str, float, float, float | None]] = {}
-        for (code, _day), rows in itertools.groupby(
-            cursor, key=lambda row: (str(row[0]), str(row[1]))
-        ):
-            if code not in expected_codes:
-                continue
-            versions = list(rows)
-            latest_marker = max(
-                (str(row[6] or ""), str(row[7] or "")) for row in versions
-            )
-            pairs = [
-                (row[2], row[3], row[4], row[5])
-                for row in versions
-                if row[2] is not None
-                and (str(row[6] or ""), str(row[7] or "")) == latest_marker
-            ]
-            if not pairs:
-                continue
-            observed_codes.add(code)
-            observations += 1
-            raw_value = float(pairs[-1][0])
-            adjusted_value = pairs[-1][1]
-            if adjusted_value is None or raw_value <= 0.0:
-                missing_adjusted_codes.add(code)
-                continue
-            adjusted = float(adjusted_value)
-            if adjusted <= 0.0:
-                missing_adjusted_codes.add(code)
-                continue
-            adjusted_observations += 1
-            price_ratio = adjusted / raw_value
-            raw_volume = pairs[-1][2]
-            adjusted_volume = pairs[-1][3]
-            volume_ratio: float | None = None
-            if (
-                raw_volume is not None
-                and float(raw_volume) != 0.0
-                and adjusted_volume is not None
-            ):
-                volume_ratio = float(adjusted_volume) / float(raw_volume)
-            prior = previous.get(code)
-            if prior is not None:
-                prior_day, prior_adjusted, prior_price_ratio, prior_volume_ratio = prior
-                price_factor_changed = (
-                    prior_price_ratio != 0.0
-                    and abs(price_ratio / prior_price_ratio - 1.0) > 0.01
-                )
-                volume_factor_changed = (
-                    volume_ratio is not None
-                    and prior_volume_ratio is not None
-                    and prior_volume_ratio != 0.0
-                    and abs(volume_ratio / prior_volume_ratio - 1.0) > 0.01
-                )
-                if price_factor_changed or volume_factor_changed:
-                    supported_events.append(
-                        {
-                            "code": code,
-                            "date": _day,
-                            "previous_date": prior_day,
-                            "price_ratio_changed": price_factor_changed,
-                            "volume_ratio_changed": volume_factor_changed,
-                        }
-                    )
-                adjusted_return = adjusted / prior_adjusted - 1.0
-                if abs(adjusted_return) > 0.35:
-                    extreme_price_move_events.append(
-                        {
-                            "code": code,
-                            "date": _day,
-                            "previous_date": prior_day,
-                            "adjusted_close_return": adjusted_return,
-                            "classification": "advisory_market_or_data_move",
-                        }
-                    )
-            previous[code] = (_day, adjusted, price_ratio, volume_ratio)
-    finally:
-        connection.close()
-    missing_codes = sorted(expected_codes - observed_codes)
-    supported_codes = sorted({event["code"] for event in supported_events})
-    extreme_move_codes = sorted(
-        {event["code"] for event in extreme_price_move_events}
-    )
-    warned = bool(
-        extreme_price_move_events or missing_codes or missing_adjusted_codes
-    )
-    adjustment_ratio = (
-        adjusted_observations / observations if observations else 0.0
-    )
-    return {
-        "status": "WARN" if warned else "PASS",
-        "price_basis": PERSONAL_RETROSPECTIVE_ADJUSTED,
-        "reason": (
-            "extreme_adjusted_price_move_or_missing_evidence"
-            if warned
-            else "supported_factor_events_handled_by_retrospective_basis"
-        ),
-        "checked_codes": len(expected_codes),
-        "lookback_start": start,
-        "period_end": end,
-        "adjustment_observation_ratio": adjustment_ratio,
-        "affected_codes": supported_codes,
-        "suspicious_jump_codes": extreme_move_codes,
-        "risk_codes": [],
-        "supported_factor_events": supported_events,
-        "extreme_price_move_events": extreme_price_move_events,
-        "missing_codes": missing_codes,
-        "missing_adjusted_codes": sorted(missing_adjusted_codes),
-        "adjusted_jump_threshold": 0.35,
-        "adjustment_factor_change_threshold": 0.01,
-        "handling": (
-            "supported_factor_events_are_handled; extreme_adjusted_price_"
-            "moves_are_review_advisories_not_corporate_action_proof"
-        ),
-        "future_event_policy": "never_reject_an_earlier_fold",
-        "unfilled_rank_bias_possible": True,
-        "source_complete_claim": False,
-    }
-
-
 _DATA_QUALITY_FLAG_NAMES = (
     "comparable",
     "selection_eligible",
@@ -1584,17 +1040,17 @@ def _paper_evidence(
     result: PaperRunResult,
     *,
     config: PaperRunConfig,
-    output_root: Path,
+    view: PersonalResearchDataView,
     max_drawdown: float,
     short_financing_annual_rate: float | None = None,
     execution_contract: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[float], list[str]]:
     paper_path = _write_artifact(
-        output_root, "paper", "json", _canonical_bytes(_portable_paper_document(result))
+        view, "paper", "json", _canonical_bytes(_portable_paper_document(result))
     )
     risk = _risk_document(result, max_drawdown)
     risk_path = _write_artifact(
-        output_root, "risk", "json", _canonical_bytes(risk)
+        view, "risk", "json", _canonical_bytes(risk)
     )
     returns = _daily_returns(result, config.starting_capital)
     sharpe = sharpe_ratio(returns, periods_per_year=252.0).get("sharpe")
@@ -1674,13 +1130,11 @@ def _run_one(
     executor: PersonalPaperExecutionService,
     spec: StrategySpec,
     *,
-    db_path: Path,
-    snapshot_id: str,
+    view: PersonalResearchDataView,
     universe: PersonalResolvedUniverseMembership,
     period: tuple[str, str],
     cost_bps: float,
     lookback_days: int,
-    output_root: Path,
     max_drawdown: float,
     short_financing_annual_rate: float | None = None,
     execution_mode: str = LEGACY_NEXT_CLOSE_EXECUTION_MODE,
@@ -1704,17 +1158,16 @@ def _run_one(
         rule_version=universe.rule_version,
         rule_digest=universe.rule_digest,
     )
-    config = PaperRunConfig(
-        start=period[0],
-        end=period[1],
-        db_path=db_path,
+    result = execute_personal_draft(
+        executor,
+        spec,
+        view=view,
         universe=period_universe,
-        execution_mode=execution_mode,
+        period=period,
         cost_bps=cost_bps,
-        starting_capital=1_000_000.0,
         lookback_days=_calendar_lookback_days(lookback_days),
-        lifecycle=Lifecycle.DRAFT,
-        price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+        execution_mode=execution_mode,
+        short_financing_annual_rate=short_financing_annual_rate,
         short_financing_enabled=short_financing_annual_rate is not None,
         short_financing_spread_bp=(
             None
@@ -1724,17 +1177,20 @@ def _run_one(
         short_financing_fallback_repo_annual_bp=0.0,
         short_financing_auto_load_repo=False,
         leverage_financing_enabled=False,
+        lifecycle=Lifecycle.DRAFT,
+        price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
     )
-    result = executor.execute(
-        spec,
-        config,
-        expected_snapshot_id=snapshot_id,
-        approved_feature_refs=iter_feature_refs(spec),
+    config = SimpleNamespace(
+        start=period[0],
+        end=period[1],
+        cost_bps=cost_bps,
+        execution_mode=execution_mode,
+        starting_capital=1_000_000.0,
     )
     evidence, returns, dates = _paper_evidence(
         result,
         config=config,
-        output_root=output_root,
+        view=view,
         max_drawdown=max_drawdown,
         short_financing_annual_rate=short_financing_annual_rate,
         execution_contract=execution_contract,
@@ -1747,16 +1203,16 @@ def _write_continuous_base_sleeve_artifact(
     spec: StrategySpec,
     closure: PlanDependencyClosure,
     *,
-    snapshot: PersonalSnapshot,
+    view: PersonalResearchDataView,
     universe: PersonalResolvedUniverseMembership,
     source_period: tuple[str, str],
-    output_root: Path,
     cohort_digest: str,
     execution_mode: str = LEGACY_NEXT_CLOSE_EXECUTION_MODE,
     execution_contract: Mapping[str, Any] | None = None,
-) -> tuple[dict[str, Any], Path, str]:
+) -> tuple[dict[str, Any], ArtifactRef, str]:
     """Execute one full-period base sleeve outside candidate selection."""
 
+    snapshot = view.snapshot_identity()
     am_sleeve = (
         execution_mode == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
         or spec.strategy_id == INDEX_VOL_AM_PM_BASE_SLEEVE_ID
@@ -1764,13 +1220,11 @@ def _write_continuous_base_sleeve_artifact(
     evidence, _returns, _dates, paper_result = _run_one(
         executor,
         spec,
-        db_path=snapshot.db_path,
-        snapshot_id=snapshot.logical_data_snapshot_id,
+        view=view,
         universe=universe,
         period=source_period,
         cost_bps=PERSONAL_BASE_SLEEVE_COST_BPS,
         lookback_days=closure.required_lookback_trading_days,
-        output_root=output_root,
         max_drawdown=1.0,
         short_financing_annual_rate=(
             PERSONAL_BASE_SLEEVE_SHORT_FINANCING_RATE
@@ -1810,19 +1264,16 @@ def _write_continuous_base_sleeve_artifact(
             if source_period[0] <= day <= source_period[1]
         ),
     )
-    archive_member = _write_artifact(
-        output_root,
-        "base-sleeve",
-        "json",
-        _canonical_bytes(document),
+    written = view.write_artifact(
+        category="base-sleeve",
+        suffix="json",
+        payload=_canonical_bytes(document),
     )
-    artifact_path = output_root / archive_member
-    artifact_digest = "sha256:" + artifact_path.stem
     reference = {
         "schema_version": PERSONAL_BASE_SLEEVE_REFERENCE_SCHEMA,
         "artifact_schema_version": document["schema_version"],
-        "archive_member": archive_member,
-        "sha256": artifact_digest,
+        "archive_member": written.archive_member,
+        "sha256": written.sha256,
         "strategy_id": document["strategy"]["strategy_id"],
         "cohort_id": document["cohort"]["cohort_id"],
         "universe_id": document["universe"]["universe_id"],
@@ -1830,7 +1281,7 @@ def _write_continuous_base_sleeve_artifact(
         "ranking_role": PERSONAL_BASE_SLEEVE_RANKING_ROLE,
         "candidate_count_contribution": 0,
     }
-    return reference, artifact_path, artifact_digest
+    return reference, written, written.sha256
 
 
 def _short_financing_sensitivity_document(
@@ -1887,11 +1338,10 @@ def _candidate_evaluation(
     spec: StrategySpec,
     closure: PlanDependencyClosure,
     *,
-    snapshot: PersonalSnapshot,
+    view: PersonalResearchDataView,
     universe: PersonalResolvedUniverseMembership,
     fold_periods: tuple[tuple[str, str], ...],
     holdout_period: tuple[str, str],
-    output_root: Path,
     policy: PersonalResearchPolicy,
     short_financing_required: bool = False,
     execution_mode: str = LEGACY_NEXT_CLOSE_EXECUTION_MODE,
@@ -1918,13 +1368,11 @@ def _candidate_evaluation(
         evidence, returns, dates, paper_result = _run_one(
             executor,
             spec,
-            db_path=snapshot.db_path,
-            snapshot_id=snapshot.logical_data_snapshot_id,
+            view=view,
             universe=universe,
             period=period,
             cost_bps=policy.base_cost_bps,
             lookback_days=closure.required_lookback_trading_days,
-            output_root=output_root,
             max_drawdown=policy.max_drawdown,
             short_financing_annual_rate=baseline_rate,
             execution_mode=execution_mode,
@@ -2035,13 +1483,11 @@ def _candidate_evaluation(
     stress, _, _, _ = _run_one(
         executor,
         spec,
-        db_path=snapshot.db_path,
-        snapshot_id=snapshot.logical_data_snapshot_id,
+        view=view,
         universe=universe,
         period=(fold_periods[0][0], fold_periods[-1][1]),
         cost_bps=policy.stress_cost_bps,
         lookback_days=closure.required_lookback_trading_days,
-        output_root=output_root,
         max_drawdown=policy.max_drawdown,
         short_financing_annual_rate=(
             PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE
@@ -2073,13 +1519,11 @@ def _candidate_evaluation(
     holdout, _, _, _ = _run_one(
         executor,
         spec,
-        db_path=snapshot.db_path,
-        snapshot_id=snapshot.logical_data_snapshot_id,
+        view=view,
         universe=universe,
         period=holdout_period,
         cost_bps=policy.base_cost_bps,
         lookback_days=closure.required_lookback_trading_days,
-        output_root=output_root,
         max_drawdown=policy.max_drawdown,
         short_financing_annual_rate=(
             PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE
@@ -2111,116 +1555,6 @@ def _candidate_evaluation(
     return candidate
 
 
-@dataclass(frozen=True, slots=True)
-class _CandidateProcessTask:
-    ordinal: int
-    strategy_spec_document: bytes
-    dependency_closure_document: bytes
-    snapshot: PersonalSnapshot
-    universe: PersonalResolvedUniverseMembership
-    fold_periods: tuple[tuple[str, str], ...]
-    holdout_period: tuple[str, str]
-    output_root: Path
-    policy: PersonalResearchPolicy
-    short_financing_required: bool
-    execution_mode: str = LEGACY_NEXT_CLOSE_EXECUTION_MODE
-    execution_contract: Mapping[str, Any] | None = None
-
-
-def _process_contract_dependency(
-    document: Any,
-    *,
-    expected_kind: str,
-) -> ContractDependency:
-    if not isinstance(document, Mapping):
-        raise RuntimeError("candidate process contract document is invalid")
-    try:
-        dependency = ContractDependency(
-            kind=document["kind"],
-            dependency_id=document["id"],
-            version=document["version"],
-            dataset_dependencies=tuple(document["dataset_dependencies"]),
-        )
-    except (KeyError, TypeError, ValueError) as error:
-        raise RuntimeError(
-            "candidate process contract document cannot be reconstructed"
-        ) from error
-    if dependency.kind != expected_kind or dependency.to_dict() != dict(document):
-        raise RuntimeError("candidate process contract identity mismatch")
-    return dependency
-
-
-def _candidate_process_domain(
-    task: _CandidateProcessTask,
-) -> tuple[StrategySpec, PlanDependencyClosure]:
-    """Rebuild immutable domain values from canonical, pickle-safe bytes."""
-
-    try:
-        spec_document = json.loads(task.strategy_spec_document)
-        closure_document = json.loads(task.dependency_closure_document)
-    except (TypeError, json.JSONDecodeError) as error:
-        raise RuntimeError("candidate process document is invalid") from error
-    if not isinstance(spec_document, dict) or not isinstance(closure_document, dict):
-        raise RuntimeError("candidate process document must be an object")
-    spec = StrategySpec.from_dict(spec_document)
-    if spec.to_dict() != spec_document:
-        raise RuntimeError("candidate process strategy identity mismatch")
-    universe_documents = closure_document.get("universe_dependencies")
-    if not isinstance(universe_documents, list):
-        raise RuntimeError("candidate process universe dependencies are invalid")
-    closure = build_strategy_dependency_closure(
-        plan_id=closure_document["plan_id"],
-        plan_digest=closure_document["plan_digest"],
-        spec=spec,
-        universe_dependencies=tuple(
-            _process_contract_dependency(document, expected_kind="universe")
-            for document in universe_documents
-        ),
-        evaluation_dependency=_process_contract_dependency(
-            closure_document.get("evaluation_dependency"),
-            expected_kind="evaluation",
-        ),
-        risk_dependency=_process_contract_dependency(
-            closure_document.get("risk_dependency"),
-            expected_kind="risk",
-        ),
-        cost_dependency=_process_contract_dependency(
-            closure_document.get("cost_dependency"),
-            expected_kind="cost",
-        ),
-        research_data_profile_id=closure_document["research_data_profile_id"],
-        period_start=closure_document["period_start"],
-        period_end=closure_document["period_end"],
-    )
-    if closure.to_dict() != closure_document:
-        raise RuntimeError("candidate process dependency closure identity mismatch")
-    return spec, closure
-
-
-def _candidate_process(task: _CandidateProcessTask) -> tuple[int, dict[str, Any]]:
-    """Evaluate one candidate in an isolated process-local prepared frame."""
-
-    spec, closure = _candidate_process_domain(task)
-    executor = PersonalPaperExecutionService()
-    with _personal_prepared_frame_scope(
-        db_path=task.snapshot.db_path,
-        snapshot_id=task.snapshot.logical_data_snapshot_id,
-    ):
-        candidate = _candidate_evaluation(
-            executor,
-            spec,
-            closure,
-            snapshot=task.snapshot,
-            universe=task.universe,
-            fold_periods=task.fold_periods,
-            holdout_period=task.holdout_period,
-            output_root=task.output_root,
-            policy=task.policy,
-            short_financing_required=task.short_financing_required,
-            execution_mode=task.execution_mode,
-            execution_contract=task.execution_contract,
-        )
-    return task.ordinal, candidate
 
 
 def _unexpected_candidate(
@@ -2230,12 +1564,8 @@ def _unexpected_candidate(
     *,
     execution_contract: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if isinstance(error, _CandidateProcessReportedError):
-        error_type = error.error_type
-        detail = error.detail
-    else:
-        error_type = type(error).__name__
-        detail = " ".join(str(error).split())[:400]
+    error_type = type(error).__name__
+    detail = " ".join(str(error).split())[:400]
     return {
         "strategy_id": spec.strategy_id,
         "strategy_spec_version": spec.version,
@@ -2263,307 +1593,6 @@ def _unexpected_candidate(
         },
     }
 
-
-class _CandidateProcessReportedError(RuntimeError):
-    """A bounded child error transported without a semaphore-backed channel."""
-
-    def __init__(self, error_type: str, detail: str) -> None:
-        super().__init__(f"{error_type}: {detail}")
-        self.error_type = error_type
-        self.detail = detail
-
-
-def _candidate_process_identity(task: _CandidateProcessTask) -> dict[str, Any]:
-    spec, closure = _candidate_process_domain(task)
-    return {
-        "ordinal": task.ordinal,
-        "strategy_id": spec.strategy_id,
-        "strategy_spec_version": spec.version,
-        "strategy_spec_digest": strategy_spec_digest(spec),
-        "dependency_closure_digest": closure.closure_digest,
-    }
-
-
-def _validate_candidate_process_candidate(
-    candidate: Any,
-    identity: Mapping[str, Any],
-) -> dict[str, Any]:
-    if not isinstance(candidate, dict):
-        raise RuntimeError("candidate process result must be an object")
-    expected = {
-        "strategy_id": identity["strategy_id"],
-        "strategy_spec_version": identity["strategy_spec_version"],
-        "strategy_spec_digest": identity["strategy_spec_digest"],
-        "dependency_closure_digest": identity["dependency_closure_digest"],
-    }
-    if any(candidate.get(key) != value for key, value in expected.items()):
-        raise RuntimeError("candidate process result identity mismatch")
-    return candidate
-
-
-def _candidate_process_error_document(error: BaseException) -> dict[str, str]:
-    return {
-        "type": type(error).__name__,
-        "detail": " ".join(str(error).split())[:400] or "no detail",
-    }
-
-
-def _write_candidate_process_envelope(
-    result_path: Path,
-    envelope: Mapping[str, Any],
-) -> None:
-    """Publish one result atomically on the result directory's filesystem."""
-
-    temporary_path = result_path.with_name(
-        f".{result_path.name}.{os.getpid()}.tmp"
-    )
-    try:
-        with temporary_path.open("xb") as handle:
-            handle.write(_canonical_bytes(envelope))
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_path, result_path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
-
-
-def _candidate_process_to_file(
-    task: _CandidateProcessTask,
-    result_path: Path,
-    candidate_worker: Any,
-) -> None:
-    """Child entrypoint: evaluate and publish one closed atomic JSON envelope."""
-
-    identity = _candidate_process_identity(task)
-    try:
-        ordinal, candidate = candidate_worker(task)
-        if ordinal != task.ordinal:
-            raise RuntimeError("candidate process ordinal mismatch")
-        candidate = _validate_candidate_process_candidate(candidate, identity)
-    except Exception as error:
-        envelope: dict[str, Any] = {
-            "schema_version": _CANDIDATE_PROCESS_RESULT_SCHEMA,
-            "status": "ERROR",
-            **identity,
-            "error": _candidate_process_error_document(error),
-        }
-    else:
-        envelope = {
-            "schema_version": _CANDIDATE_PROCESS_RESULT_SCHEMA,
-            "status": "SUCCESS",
-            **identity,
-            "candidate": candidate,
-        }
-    _write_candidate_process_envelope(result_path, envelope)
-
-
-def _read_candidate_process_envelope(
-    task: _CandidateProcessTask,
-    result_path: Path,
-) -> dict[str, Any]:
-    try:
-        raw = result_path.read_bytes()
-    except FileNotFoundError as error:
-        raise RuntimeError("candidate process result file is missing") from error
-    try:
-        envelope = json.loads(raw)
-    except (TypeError, UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise RuntimeError("candidate process result file is malformed") from error
-    if not isinstance(envelope, dict):
-        raise RuntimeError("candidate process result envelope must be an object")
-    try:
-        canonical = _canonical_bytes(envelope)
-    except (TypeError, ValueError) as error:
-        raise RuntimeError(
-            "candidate process result envelope is not canonical"
-        ) from error
-    if raw != canonical:
-        raise RuntimeError("candidate process result envelope is not canonical")
-
-    identity = _candidate_process_identity(task)
-    common_fields = {
-        "schema_version",
-        "status",
-        "ordinal",
-        "strategy_id",
-        "strategy_spec_version",
-        "strategy_spec_digest",
-        "dependency_closure_digest",
-    }
-    if envelope.get("schema_version") != _CANDIDATE_PROCESS_RESULT_SCHEMA:
-        raise RuntimeError("candidate process result schema mismatch")
-    if any(envelope.get(key) != value for key, value in identity.items()):
-        raise RuntimeError("candidate process result envelope identity mismatch")
-
-    status = envelope.get("status")
-    if status == "SUCCESS":
-        if set(envelope) != common_fields | {"candidate"}:
-            raise RuntimeError("candidate process success fields are not closed")
-        return _validate_candidate_process_candidate(
-            envelope.get("candidate"), identity
-        )
-    if status == "ERROR":
-        if set(envelope) != common_fields | {"error"}:
-            raise RuntimeError("candidate process error fields are not closed")
-        child_error = envelope.get("error")
-        if (
-            not isinstance(child_error, dict)
-            or set(child_error) != {"type", "detail"}
-            or not isinstance(child_error.get("type"), str)
-            or not child_error["type"]
-            or len(child_error["type"]) > 120
-            or not isinstance(child_error.get("detail"), str)
-            or not child_error["detail"]
-            or len(child_error["detail"]) > 400
-        ):
-            raise RuntimeError("candidate process error document is invalid")
-        raise _CandidateProcessReportedError(
-            child_error["type"], child_error["detail"]
-        )
-    raise RuntimeError("candidate process result status is invalid")
-
-
-def _process_is_alive(process: Any) -> bool:
-    try:
-        return bool(process.is_alive())
-    except (AssertionError, ValueError):
-        return False
-
-
-def _shutdown_candidate_processes(
-    processes: Sequence[Any],
-    *,
-    attempted_processes: Sequence[Any],
-    terminate_live: bool,
-) -> None:
-    """Reap and close every process; force survivors only on abnormal unwind."""
-
-    if terminate_live:
-        for process in attempted_processes:
-            if _process_is_alive(process):
-                process.terminate()
-        for process in attempted_processes:
-            try:
-                process.join(_CANDIDATE_PROCESS_STOP_GRACE_SECONDS)
-            except (AssertionError, ValueError):
-                # A truly unstarted Process has no child to join. An attempted
-                # start can still leave a live child, which is checked below.
-                continue
-        for process in attempted_processes:
-            if _process_is_alive(process):
-                process.kill()
-        for process in attempted_processes:
-            try:
-                process.join()
-            except (AssertionError, ValueError):
-                continue
-    unreaped = any(_process_is_alive(process) for process in attempted_processes)
-    for process in processes:
-        try:
-            process.close()
-        except ValueError:
-            # A Process constructed but never started has no resources to close.
-            continue
-    if unreaped:
-        raise RuntimeError("candidate process could not be reaped")
-
-
-def _evaluate_candidates_concurrently(
-    tasks: Sequence[_CandidateProcessTask],
-    *,
-    max_workers: int,
-    process_context: Any | None = None,
-    candidate_worker: Any | None = None,
-) -> tuple[list[dict[str, Any]], int]:
-    """Directly spawn bounded children and fan-in through atomic result files."""
-
-    if not tasks or not 1 <= max_workers <= 4 or max_workers > len(tasks):
-        raise ValueError("candidate process fan-out is outside its closed bound")
-    if [task.ordinal for task in tasks] != list(range(len(tasks))):
-        raise ValueError("candidate process tasks must be globally contiguous")
-    output_roots = {task.output_root.resolve() for task in tasks}
-    if len(output_roots) != 1:
-        raise ValueError("candidate process tasks must share one output root")
-    output_root = output_roots.pop()
-    output_root.mkdir(parents=True, exist_ok=True)
-    context = (
-        multiprocessing.get_context("spawn")
-        if process_context is None
-        else process_context
-    )
-    worker = _candidate_process if candidate_worker is None else candidate_worker
-    ordered: list[dict[str, Any] | None] = [None] * len(tasks)
-    unexpected_errors = 0
-    with TemporaryDirectory(
-        prefix=".candidate-process-results-",
-        dir=output_root,
-    ) as temporary_directory:
-        result_root = Path(temporary_directory)
-        completed_rows: list[tuple[_CandidateProcessTask, Path, int | None]] = []
-        for wave_start in range(0, len(tasks), max_workers):
-            wave = tasks[wave_start : wave_start + max_workers]
-            rows: list[tuple[_CandidateProcessTask, Path, Any]] = []
-            attempted_processes: list[Any] = []
-            try:
-                for task in wave:
-                    result_path = result_root / f"candidate-{task.ordinal}.json"
-                    process = context.Process(
-                        target=_candidate_process_to_file,
-                        args=(task, result_path, worker),
-                        name=f"qp-candidate-{task.ordinal}",
-                        daemon=False,
-                    )
-                    rows.append((task, result_path, process))
-                # Every child in this bounded wave starts before its first
-                # join. A Process is tracked before start(), because a failed
-                # start may already have made its child live.
-                for _task, _result_path, process in rows:
-                    attempted_processes.append(process)
-                    process.start()
-                for _task, _result_path, process in rows:
-                    process.join()
-                exitcodes = [process.exitcode for _task, _path, process in rows]
-            except BaseException:
-                _shutdown_candidate_processes(
-                    [process for _task, _path, process in rows],
-                    attempted_processes=attempted_processes,
-                    terminate_live=True,
-                )
-                raise
-            else:
-                _shutdown_candidate_processes(
-                    [process for _task, _path, process in rows],
-                    attempted_processes=attempted_processes,
-                    terminate_live=False,
-                )
-            completed_rows.extend(
-                (task, result_path, exitcode)
-                for (task, result_path, _process), exitcode in zip(
-                    rows, exitcodes, strict=True
-                )
-            )
-
-        for task, result_path, exitcode in completed_rows:
-            try:
-                if exitcode != 0:
-                    raise RuntimeError(
-                        f"candidate process exited nonzero ({exitcode})"
-                    )
-                candidate = _read_candidate_process_envelope(task, result_path)
-            except Exception as error:
-                unexpected_errors += 1
-                spec, closure = _candidate_process_domain(task)
-                ordered[task.ordinal] = _unexpected_candidate(
-                    spec,
-                    closure,
-                    error,
-                    execution_contract=task.execution_contract,
-                )
-            else:
-                ordered[task.ordinal] = candidate
-    if any(candidate is None for candidate in ordered):
-        raise RuntimeError("candidate process fan-in was incomplete")
-    return [candidate for candidate in ordered if candidate is not None], unexpected_errors
 
 
 def _comparison_document(candidates: Sequence[dict[str, Any]]) -> dict[str, Any]:
@@ -2965,9 +1994,21 @@ class PersonalResearchService:
     def run(self, request: PersonalResearchRequest) -> PersonalResearchRun:
         if not isinstance(request, PersonalResearchRequest):
             raise TypeError("PersonalResearchRequest required")
-        source = Path(request.source_db).expanduser().resolve()
-        if not source.is_file():
-            raise PersonalResearchInputError(f"database does not exist: {source}")
+        with install_deadline(request.deadline):
+            return self._run(request)
+
+    def _run(self, request: PersonalResearchRequest) -> PersonalResearchRun:
+        view = request.data_view
+        if not isinstance(view, PersonalResearchDataView):
+            raise TypeError("PersonalResearchDataView required")
+        if view.kind not in {OFFLINE_FIXTURE_KIND, CONTAINER_EPHEMERAL_KIND}:
+            raise PersonalResearchInputError(
+                "personal DRAFT requires an OfflineFixture or container view"
+            )
+        if view.controlled_eligible:
+            raise PersonalResearchInputError(
+                "Controlled views cannot feed personal DRAFT"
+            )
         end_day = _parse_day(request.period_end, "period_end")
         start_day = (
             _parse_day(request.period_start, "period_start")
@@ -2992,11 +2033,23 @@ class PersonalResearchService:
             and request.cohort_id is None,
         )
         execution_mode = str(execution_contract["execution_mode"])
+        if execution_mode == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE:
+            if view.decision_cutoff != DEFAULT_DECISION_CUTOFF:
+                raise PersonalResearchInputError(
+                    "active AM→PM uses morning_close only"
+                )
+        elif (
+            view.kind != OFFLINE_FIXTURE_KIND
+            or not view.allows_legacy_session_close
+            or view.decision_cutoff != LEGACY_SESSION_CLOSE_CUTOFF
+        ):
+            raise PersonalResearchInputError(
+                "session_close is legacy OfflineFixture DRAFT and is not "
+                "selectable by cloud or container composition"
+            )
         try:
             universe_selector = universe_selector.with_decision_cutoff(
-                personal_research_universe_decision_cutoff(
-                    am_pm=execution_mode == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
-                )
+                view.decision_cutoff
             )
         except PersonalUniverseError as exc:
             raise PersonalResearchInputError(str(exc)) from exc
@@ -3020,10 +2073,10 @@ class PersonalResearchService:
             planned_maximum = len(specs) * (self.policy.validation_folds + 2) + int(
                 base_sleeve_required
             )
-            if planned_maximum > PERSONAL_EXACT_FOUR_MAX_BACKTESTS:
+            if planned_maximum > PERSONAL_DRAFT_COHORT_MAX_BACKTESTS:
                 raise PersonalResearchInputError(
                     "closed exact-four cohort exceeds the fixed "
-                    f"{PERSONAL_EXACT_FOUR_MAX_BACKTESTS}-backtest budget"
+                    f"{PERSONAL_DRAFT_COHORT_MAX_BACKTESTS}-backtest budget"
                 )
         cohort_ref: dict[str, str] | None = None
         if cohort is not None:
@@ -3051,8 +2104,6 @@ class PersonalResearchService:
             cohort_ref=cohort_ref,
             execution_contract=execution_contract,
         )
-        output_root = Path(request.output_root).expanduser().resolve()
-        output_root.mkdir(parents=True, exist_ok=True)
         required = tuple(
             sorted(
                 {
@@ -3062,26 +2113,27 @@ class PersonalResearchService:
                 }
             )
         )
-        snapshot = materialize_personal_snapshot(
-            source,
-            output_root / "snapshots",
-            required_datasets=required,
-            period_start=start_day.isoformat(),
-            period_end=end_day.isoformat(),
-            closure_digests=tuple(c.closure_digest for c in closures),
-        )
-        verify_personal_snapshot(snapshot)
-        snapshot_manifest = json.loads(
-            snapshot.manifest_path.read_text(encoding="utf-8")
-        )
-        source_sync = _source_sync_evidence(
-            snapshot.db_path,
+        try:
+            snapshot = prepare_draft_snapshot(
+                view,
+                required_datasets=required,
+                period_start=start_day.isoformat(),
+                period_end=end_day.isoformat(),
+                closure_digests=tuple(c.closure_digest for c in closures),
+            )
+        except Exception as exc:
+            message = str(exc)
+            if "does not exist" in message or "database does not exist" in message:
+                raise PersonalResearchInputError(message) from exc
+            raise
+        snapshot_manifest = dict(snapshot.manifest)
+        source_sync = view.source_sync_evidence(
             snapshot_manifest,
             required_datasets=required,
         )
         try:
             universe, universe_breadth = resolve_personal_universe_with_evidence(
-                snapshot.db_path,
+                view,
                 period_start=start_day.isoformat(),
                 period_end=end_day.isoformat(),
                 universe_id=universe_selector.selector_id,
@@ -3099,13 +2151,11 @@ class PersonalResearchService:
                 else "FAIL"
             ),
         }
-        bar_coverage = _observed_market_bar_coverage(
-            snapshot.db_path,
+        bar_coverage = view.observed_bar_coverage(
             universe,
             minimum_ratio=self.policy.min_observed_bar_coverage,
         )
-        corporate_actions = _universe_corporate_action_check(
-            snapshot.db_path,
+        corporate_actions = view.corporate_action_check(
             universe=universe,
             lookback_days=_calendar_lookback_days(
                 max(
@@ -3131,7 +2181,6 @@ class PersonalResearchService:
         candidates: list[dict[str, Any]] = []
         unexpected_errors = 0
         base_sleeve_reference: dict[str, Any] | None = None
-        base_sleeve_artifact_path: Path | None = None
         base_sleeve_artifact_digest: str | None = None
         candidate_execution = {
             "model": "not_started",
@@ -3142,7 +2191,7 @@ class PersonalResearchService:
         }
         if (
             bar_coverage["status"] != "PASS"
-            or source_sync["status"] != "PASS"
+            or not source_sync.get("execution_allowed")
             or universe_breadth["status"] != "PASS"
             or periods is None
         ):
@@ -3151,7 +2200,7 @@ class PersonalResearchService:
                 if bar_coverage["status"] != "PASS"
                 else (
                     "source_sync_evidence_unusable"
-                    if source_sync["status"] != "PASS"
+                    if not source_sync.get("execution_allowed")
                     else (
                         "universe_fins_breadth_below_threshold"
                         if universe_breadth["status"] != "PASS"
@@ -3190,10 +2239,7 @@ class PersonalResearchService:
             fold_periods, holdout_period = periods
             executor = PersonalPaperExecutionService()
             if base_sleeve_required:
-                with _personal_prepared_frame_scope(
-                    db_path=snapshot.db_path,
-                    snapshot_id=snapshot.logical_data_snapshot_id,
-                ):
+                with prepared_frame_scope(view):
                     if cohort_ref is None:
                         raise RuntimeError("base sleeve cohort provenance is absent")
                     matching = [
@@ -3209,91 +2255,56 @@ class PersonalResearchService:
                     base_spec, base_closure = matching[0]
                     (
                         base_sleeve_reference,
-                        base_sleeve_artifact_path,
+                        _base_sleeve_ref,
                         base_sleeve_artifact_digest,
                     ) = _write_continuous_base_sleeve_artifact(
                         executor,
                         base_spec,
                         base_closure,
-                        snapshot=snapshot,
+                        view=view,
                         universe=universe,
                         source_period=(fold_periods[0][0], holdout_period[1]),
-                        output_root=output_root,
                         cohort_digest=cohort_ref["cohort_digest"],
                         execution_mode=execution_mode,
                         execution_contract=execution_contract,
                     )
-            worker_count = min(len(specs), self.policy.max_parallel)
-            if worker_count > 1:
-                tasks = tuple(
-                    _CandidateProcessTask(
-                        ordinal=ordinal,
-                        strategy_spec_document=_canonical_bytes(spec.to_dict()),
-                        dependency_closure_document=_canonical_bytes(
-                            closure.to_dict()
-                        ),
-                        snapshot=snapshot,
-                        universe=universe,
-                        fold_periods=fold_periods,
-                        holdout_period=holdout_period,
-                        output_root=output_root,
-                        policy=self.policy,
-                        short_financing_required=short_financing_required,
-                        execution_mode=execution_mode,
-                        execution_contract=execution_contract,
-                    )
-                    for ordinal, (spec, closure) in enumerate(
-                        zip(specs, closures, strict=True)
-                    )
-                )
-                candidates, unexpected_errors = _evaluate_candidates_concurrently(
-                    tasks,
-                    max_workers=worker_count,
-                )
-                candidate_execution = {
-                    **candidate_execution,
-                    "model": "direct_spawn_atomic_files",
-                    "worker_processes": worker_count,
-                }
-            else:
-                candidate_execution = {
-                    **candidate_execution,
-                    "model": "serial",
-                    "worker_processes": 1,
-                }
-                with _personal_prepared_frame_scope(
-                    db_path=snapshot.db_path,
-                    snapshot_id=snapshot.logical_data_snapshot_id,
-                ):
-                    for spec, closure in zip(specs, closures, strict=True):
-                        try:
-                            candidates.append(
-                                _candidate_evaluation(
-                                    executor,
-                                    spec,
-                                    closure,
-                                    snapshot=snapshot,
-                                    universe=universe,
-                                    fold_periods=fold_periods,
-                                    holdout_period=holdout_period,
-                                    output_root=output_root,
-                                    policy=self.policy,
-                                    short_financing_required=short_financing_required,
-                                    execution_mode=execution_mode,
-                                    execution_contract=execution_contract,
-                                )
+            candidate_execution = {
+                **candidate_execution,
+                "model": "serial",
+                "worker_processes": 1,
+                "max_parallel_bound": 1,
+            }
+            with prepared_frame_scope(view):
+                for spec, closure in zip(specs, closures, strict=True):
+                    if request.deadline is not None:
+                        request.deadline.check()
+                    try:
+                        candidates.append(
+                            _candidate_evaluation(
+                                executor,
+                                spec,
+                                closure,
+                                view=view,
+                                universe=universe,
+                                fold_periods=fold_periods,
+                                holdout_period=holdout_period,
+                                policy=self.policy,
+                                short_financing_required=short_financing_required,
+                                execution_mode=execution_mode,
+                                execution_contract=execution_contract,
                             )
-                        except Exception as error:  # report; CLI still exits 1
-                            unexpected_errors += 1
-                            candidates.append(
-                                _unexpected_candidate(
-                                    spec,
-                                    closure,
-                                    error,
-                                    execution_contract=execution_contract,
-                                )
+                        )
+                    except Exception as error:  # report; CLI still exits 1
+                        unexpected_errors += 1
+                        candidates.append(
+                            _unexpected_candidate(
+                                spec,
+                                closure,
+                                error,
+                                execution_contract=execution_contract,
                             )
-        verify_personal_snapshot(snapshot)
+                        )
+        verify_draft_snapshot(view)
         evaluated_count = sum(
             candidate["decision"] in {"HOLD", "REJECT"}
             for candidate in candidates
@@ -3327,9 +2338,7 @@ class PersonalResearchService:
                 "snapshot_id": snapshot.snapshot_id,
                 "logical_data_snapshot_id": snapshot.logical_data_snapshot_id,
                 "manifest": snapshot_manifest,
-                "manifest_artifact": snapshot.manifest_path.relative_to(
-                    output_root
-                ).as_posix(),
+                "manifest_artifact": snapshot.snapshot_id,
             },
             "dependency_closures": [closure.to_dict() for closure in closures],
             "data_quality": {
@@ -3384,19 +2393,19 @@ class PersonalResearchService:
             )
         report_id = _digest(body)
         report = {**body, "report_id": report_id}
-        json_path = _write_artifact(
-            output_root, "reports", "json", _canonical_bytes(report)
+        report_json = view.write_artifact(
+            category="reports", suffix="json", payload=_canonical_bytes(report)
         )
-        markdown_path = _write_artifact(
-            output_root,
-            "reports",
-            "md",
-            _markdown(report).encode("utf-8"),
+        report_markdown = view.write_artifact(
+            category="reports",
+            suffix="md",
+            payload=_markdown(report).encode("utf-8"),
         )
         return PersonalResearchRun(
             report_id=report_id,
-            report_json_path=output_root / json_path,
-            report_markdown_path=output_root / markdown_path,
+            report_json=report_json,
+            report_markdown=report_markdown,
+            data_view=view,
             snapshot=snapshot,
             candidate_count=len(candidates),
             evaluated_count=evaluated_count,
@@ -3412,7 +2421,6 @@ class PersonalResearchService:
             execution_contract_digest=str(
                 execution_contract.get("contract_digest")
             ),
-            base_sleeve_artifact_path=base_sleeve_artifact_path,
             base_sleeve_artifact_digest=base_sleeve_artifact_digest,
             base_sleeve_archive_member=(
                 None
@@ -3428,8 +2436,9 @@ class PersonalResearchService:
 
 __all__ = [
     "DEFAULT_PERSONAL_UNIVERSE_ID",
+    "PERSONAL_BAR_COVERAGE_EVIDENCE",
     "PERSONAL_DECISION_POLICY",
-    "PERSONAL_EXACT_FOUR_MAX_BACKTESTS",
+    "PERSONAL_DRAFT_COHORT_MAX_BACKTESTS",
     "PERSONAL_EXECUTABLE_COHORT_IDS",
     "PERSONAL_RESEARCH_REPORT_VERSION",
     "PERSONAL_SHORT_FINANCING_ANNUAL_RATES",

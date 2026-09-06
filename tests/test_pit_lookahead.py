@@ -13,6 +13,7 @@ import sqlite3
 
 import pytest
 
+from _coreseed import write_snapshot_observation_clock
 from personal_history_compact_support import (
     insert_compact_bar,
     insert_compact_master,
@@ -21,11 +22,14 @@ from personal_history_compact_support import (
 from pit import get_equity_bars_daily, get_equity_master, get_jquants_records
 from storage.sqlite_store import SqliteStore
 
+OBSERVED_THROUGH = "2025-12-31T23:59:59+09:00"
+
 
 def _seed_bars(tmp_path, rows):
     path = tmp_path / "ing.sqlite"
     store = SqliteStore(path)
     store.upsert("jquants_daily_bars", rows)
+    write_snapshot_observation_clock(store, OBSERVED_THROUGH)
     store.close()
     return path
 
@@ -118,6 +122,7 @@ def test_lookahead_guard_applies_to_generic_table_too(tmp_path):
     path = tmp_path / "ing.sqlite"
     store = SqliteStore(path)
     store.upsert("jquants_records", rows)
+    write_snapshot_observation_clock(store, OBSERVED_THROUGH)
     store.close()
 
     res = get_jquants_records(

@@ -155,6 +155,7 @@ class _HistoryClient:
                     "Code": code,
                     "Date": day,
                     "Close": 100 + ordinal,
+                    "MC": 50 + ordinal,
                     "AdjustmentClose": 100 + ordinal,
                     "Volume": 1_000 * ordinal,
                     "AdjustmentVolume": 1_000 * ordinal,
@@ -518,8 +519,12 @@ def test_compact_tables_are_without_rowid_and_keyed(tmp_path):
     bars_sql = _without_rowid_sql(store, "personal_history_compact_bars")
     assert "WITHOUT ROWID" in master_sql.upper()
     assert "WITHOUT ROWID" in bars_sql.upper()
-    assert "PRIMARY KEY (snapshot_date, code)" in " ".join(master_sql.split())
-    assert "PRIMARY KEY (code, date)" in " ".join(bars_sql.split())
+    assert "PRIMARY KEY (snapshot_date, code, available_at, ingested_at)" in " ".join(
+        master_sql.split()
+    )
+    assert "PRIMARY KEY (code, date, available_at, ingested_at)" in " ".join(
+        bars_sql.split()
+    )
     master_cols = {
         row[1]
         for row in store._conn.execute(
@@ -729,6 +734,45 @@ def test_direct_compact_write_is_atomic_with_checkpoint_counts(tmp_path):
     )
     assert first_bar["close"] == 101.0
     assert first_bar["morning_adjustment_close"] == 11.0
+    assert first_bar["morning_close"] == 51.0
+    assert first_bar["morning_close"] != first_bar["close"]
+    assert first_bar["morning_close"] != first_bar["afternoon_adjustment_close"]
+    store.close()
+
+
+def test_hydrator_rejects_old_v8_missing_morning_close_without_mutating(tmp_path):
+    import sqlite3
+
+    from data_contracts.personal_history_compact import (
+        PERSONAL_HISTORY_COMPACT_BARS_CREATE_SQL,
+        PERSONAL_HISTORY_COMPACT_MASTER_CREATE_SQL,
+    )
+    from personal_history_compact_support import stamp_compact_manifest
+
+    db = tmp_path / "old-v8-writer.sqlite"
+    connection = sqlite3.connect(db)
+    stamp_compact_manifest(connection)
+    connection.execute(PERSONAL_HISTORY_COMPACT_MASTER_CREATE_SQL)
+    connection.execute(
+        PERSONAL_HISTORY_COMPACT_BARS_CREATE_SQL.replace(
+            "    morning_close REAL,\n", ""
+        )
+    )
+    connection.commit()
+    connection.close()
+
+    store = SqliteStore(db)
+    with pytest.raises(PersonalHistoryError, match="does not match builder DDL"):
+        PersonalHistoryHydrator(
+            client=_HistoryClient(), store=store, plan=_plan()
+        )
+    columns = {
+        str(row[1])
+        for row in store._conn.execute(
+            "PRAGMA table_info(personal_history_compact_bars)"
+        )
+    }
+    assert "morning_close" not in columns
     store.close()
 
 
@@ -769,15 +813,14 @@ def test_resume_does_not_duplicate_compact_rows_on_pk_conflict(tmp_path):
         "WHERE dataset='equities_bars_daily' AND segment_id='bars:2025-01-06'"
     )
     store._conn.commit()
-    with pytest.raises(PersonalHistoryError, match="UNIQUE constraint"):
-        hydrator.hydrate()
+    hydrator.hydrate()
     assert _compact_bar_rows(store) == before_bars
     assert _compact_master_rows(store) == before_master
-    failed = store._conn.execute(
+    resumed = store._conn.execute(
         "SELECT state FROM personal_history_segments "
         "WHERE dataset='equities_bars_daily' AND segment_id='bars:2025-01-06'"
     ).fetchone()
-    assert failed[0] == "FAILED"
+    assert resumed[0] == "OBSERVED"
     store.close()
 
 
@@ -1257,7 +1300,7 @@ def test_compact_master_uses_snapshot_date_0800_jst(snapshot_day: str) -> None:
         (
             "UPDATE personal_history_compact_bars SET ingested_at=? "
             "WHERE date='2025-01-06'",
-            ("2025-01-06T15:00:00+09:00",),
+            ("2025-01-06T15:00:00",),
             "ingested_at",
         ),
         (
@@ -1269,7 +1312,7 @@ def test_compact_master_uses_snapshot_date_0800_jst(snapshot_day: str) -> None:
         (
             "UPDATE personal_history_compact_master SET available_at=? "
             "WHERE snapshot_date='2025-01-02'",
-            ("2025-01-02T09:00:00+09:00",),
+            ("2025-01-02T07:00:00+09:00",),
             "08:00 JST",
         ),
         (
@@ -1281,7 +1324,7 @@ def test_compact_master_uses_snapshot_date_0800_jst(snapshot_day: str) -> None:
         (
             "UPDATE personal_history_compact_master SET ingested_at=? "
             "WHERE snapshot_date='2025-01-02'",
-            ("2025-01-02T07:00:00+09:00",),
+            ("2025-01-02T07:00:00",),
             "ingested_at",
         ),
     ),
@@ -1297,7 +1340,7 @@ def test_compact_v7_sql_timestamp_invariants_reject_anomalies(
     store._conn.execute(sql, params)
     store._conn.commit()
     with pytest.raises(PersonalHistoryError, match=match):
-        hydrator._assert_compact_v7_timestamps()
+        hydrator._assert_compact_timestamps()
     store.close()
 
 
@@ -1525,6 +1568,7 @@ class _FloorHistoryClient:
                     "AdjustmentVolume": 1_000 * ordinal,
                     "TurnoverValue": 1_000_000 * ordinal,
                     "MktCap": 10_000_000 * ordinal,
+                    "MC": 50 + ordinal,
                     "MAdjC": 10 + ordinal,
                     "AAdjC": 20 + ordinal,
                     "MVa": 100 * ordinal,

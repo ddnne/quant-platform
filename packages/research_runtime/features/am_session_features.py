@@ -661,10 +661,51 @@ AmSessionFundamentalRatio: FeatureDefinition = register(
 )
 
 
+
+GOVERNED_AM_SESSION_BARS_ID = "governed_am_session_bars"
+AM_DATASET_ID = "equities_bars_daily_am"
+
+
+def _governed_am_session_bars(ctx: Any) -> FeatureOutput:
+    """Declare the AM dataset; the engine is the Controlled reader."""
+    del ctx
+    return FeatureOutput(
+        value=None,
+        metadata={"dataset": AM_DATASET_ID, "engine_owned": True},
+    )
+
+
+GovernedAmSessionBars: FeatureDefinition = register(
+    FeatureDefinition(
+        id=GOVERNED_AM_SESSION_BARS_ID,
+        version=FeatureVersion(1, 0, 0),
+        inputs=FeatureInput(
+            required_kwargs=("code",),
+            as_of_rule="morning_close",
+        ),
+        description=(
+            "Governed Controlled AM session bars from independent "
+            "equities_bars_daily_am product provenance. Not inferred from "
+            "daily-close MAdjC/AAdjC timestamps. Draft AM-session features "
+            "remain on equities_bars_daily."
+        ),
+        compute=_governed_am_session_bars,
+        dataset_dependencies=(AM_DATASET_ID,),
+        tags=("price", "am_session", "controlled", "governed"),
+        intended_role="signal",
+        status="approved",
+        price_basis="RAW",
+    )
+)
+
+
 __all__ = [
+    "AM_DATASET_ID",
     "AM_SESSION_FEATURE_IDS",
     "AM_SESSION_FUNDAMENTAL_RATIO_ID",
     "AM_SESSION_PRICE_RATIO_ID",
+    "GOVERNED_AM_SESSION_BARS_ID",
     "AmSessionFundamentalRatio",
     "AmSessionPriceRatio",
+    "GovernedAmSessionBars",
 ]

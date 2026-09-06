@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 import gc
 import json
 from pathlib import Path
@@ -15,6 +15,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from jsonschema import Draft202012Validator
 
 from data_contracts.coverage import all_coverage_contracts, coverage_policy_binding
+from ops import d1_sync_signing as signing
 from ops import projection_signing
 from ops.projection_meta import build_projection_metadata
 from ops.projection_content import (
@@ -169,6 +170,7 @@ def _test_mirror_identity(
     source_cursor: object = 7,
     applied_cursor: object = 7,
     distinct_source_schema: bool = False,
+    exported_at: object = "2026-08-25T12:00:00+00:00",
 ):
     def identity(conn: sqlite3.Connection) -> dict[str, object]:
         marker = conn.execute(
@@ -201,6 +203,7 @@ def _test_mirror_identity(
             "table_counts": {
                 table: 0 for table in sync_script.DEFAULT_TABLES
             },
+            "exported_at": exported_at,
         }
 
     return identity
@@ -1184,12 +1187,11 @@ def test_publish_dry_run_does_not_write_artifacts(tmp_path: Path, capsys) -> Non
     meta = tmp_path / "ops/projection.json"
     assert publisher.main(
         [f"--db={source}", f"--output={output}", f"--meta-output={meta}", "--dry-run"]
-    ) == 0
+    ) == 7
     assert not output.exists()
     assert not meta.exists()
-    rendered = capsys.readouterr().out
-    assert '"generation_id"' in rendered
-    assert '"source_db_digest"' in rendered
+    captured = capsys.readouterr()
+    assert "not a production authority" in captured.err
 
 
 def test_publish_writes_content_addressed_generation_metadata(tmp_path: Path) -> None:
@@ -1199,21 +1201,9 @@ def test_publish_writes_content_addressed_generation_metadata(tmp_path: Path) ->
     meta = tmp_path / "ops/projection.json"
     assert publisher.main(
         [f"--db={source}", f"--output={output}", f"--meta-output={meta}"]
-    ) == 0
-    document = json.loads(meta.read_text(encoding="utf-8"))
-    assert document["generation_id"].startswith("projgen-")
-    assert document["source_db_digest"].startswith("sha256:")
-    assert document["row_counts"]["ops_projection_metadata"] == 1
-    target = _target()
-    target.executescript(output.read_text(encoding="utf-8"))
-    assert target.execute(
-        "SELECT status FROM ops_projection_generation WHERE generation_id=?",
-        (document["generation_id"],),
-    ).fetchone() == ("SEALED",)
-    assert target.execute(
-        "SELECT generation_id FROM ops_projection_active WHERE singleton=1"
-    ).fetchone() == (document["generation_id"],)
-    target.close()
+    ) == 7
+    assert not output.exists()
+    assert not meta.exists()
 
 
 def test_signed_projection_envelope_binds_content_cursors_and_gate_evidence(
@@ -1564,24 +1554,16 @@ def test_authenticated_mirror_pins_one_snapshot_and_is_single_use(
     finally:
         writer.close()
 
-    observed = sync_script._consume_authenticated_applied_mirror(
-        handle,
-        lambda conn, identity: (
-            conn.execute("SELECT value FROM opaque_source_marker").fetchone()[0],
-            identity["source_content_digest"],
-        ),
+    identity = _identity_from_opaque_source(source)
+    assert identity["source_content_digest"] == sha256_digest(
+        {"opaque_source_marker": "original"}
     )
-    assert observed == (
-        "original",
-        sha256_digest({"opaque_source_marker": "original"}),
-    )
+    with pytest.raises(RuntimeError, match="PENDING full-source authority"):
+        _render_trusted_projection_bundle(handle)
     with sqlite3.connect(source, timeout=0) as writer:
         writer.execute("UPDATE opaque_source_marker SET value='after-consume'")
     with pytest.raises(RuntimeError, match="already consumed"):
-        sync_script._consume_authenticated_applied_mirror(
-            handle,
-            lambda _conn, _identity: pytest.fail("replayed source was consumed"),
-        )
+        _render_trusted_projection_bundle(handle)
 
 
 def test_authenticated_mirror_releases_writer_lock_after_consumer_error(
@@ -1597,13 +1579,8 @@ def test_authenticated_mirror_releases_writer_lock_after_consumer_error(
     )
     handle = sync_script.open_authenticated_applied_mirror(source)
 
-    def fail_consumer(_conn, _identity):
-        raise LookupError("consumer failed")
-
-    with pytest.raises(LookupError, match="consumer failed"):
-        sync_script._consume_authenticated_applied_mirror(
-            handle, fail_consumer
-        )
+    with pytest.raises(RuntimeError, match="PENDING full-source authority"):
+        _render_trusted_projection_bundle(handle)
     with sqlite3.connect(source, timeout=0) as writer:
         writer.execute("UPDATE opaque_source_marker SET value='unlocked'")
 
@@ -1687,15 +1664,11 @@ def test_authenticated_mirror_preserves_distinct_source_schema_identity(
         "_authenticated_applied_mirror_identity_from_conn",
         _test_mirror_identity(distinct_source_schema=True),
     )
+    identity = _identity_from_opaque_source(source, distinct_source_schema=True)
+    assert identity["source_schema_digest"] != identity["schema_digest"]
     handle = sync_script.open_authenticated_applied_mirror(source)
-    observed = sync_script._consume_authenticated_applied_mirror(
-        handle,
-        lambda _conn, identity: (
-            identity["source_schema_digest"],
-            identity["schema_digest"],
-        ),
-    )
-    assert observed[0] != observed[1]
+    with pytest.raises(RuntimeError, match="PENDING full-source authority"):
+        _render_trusted_projection_bundle(handle)
 
 
 def test_authenticated_mirror_rejects_path_replacement_before_consumer(
@@ -1716,16 +1689,10 @@ def test_authenticated_mirror_rejects_path_replacement_before_consumer(
     consumed: list[bool] = []
 
     with pytest.raises(RuntimeError, match="path was replaced"):
-        sync_script._consume_authenticated_applied_mirror(
-            handle,
-            lambda _conn, _identity: consumed.append(True),
-        )
+        _render_trusted_projection_bundle(handle)
     assert consumed == []
     with pytest.raises(RuntimeError, match="already consumed"):
-        sync_script._consume_authenticated_applied_mirror(
-            handle,
-            lambda _conn, _identity: None,
-        )
+        _render_trusted_projection_bundle(handle)
 
 
 @pytest.mark.parametrize(
@@ -1758,6 +1725,199 @@ def test_authenticated_mirror_rejects_null_or_mismatched_cursor_at_open(
         sync_script.open_authenticated_applied_mirror(source)
 
 
+def _identity_from_opaque_source(path: Path, **identity_kwargs) -> dict[str, object]:
+    with sqlite3.connect(path) as conn:
+        return _test_mirror_identity(**identity_kwargs)(conn)
+
+
+def test_authenticated_mirror_identity_binds_canonical_exported_at(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    exported_at = "2026-08-25T12:00:00+00:00"
+    monkeypatch.setattr(
+        sync_script,
+        "_authenticated_applied_mirror_identity_from_conn",
+        _test_mirror_identity(exported_at=exported_at),
+    )
+    identity = _identity_from_opaque_source(source, exported_at=exported_at)
+    canonical = json.loads(
+        sync_script._canonical_applied_mirror_identity_json(identity)
+    )
+    assert canonical["exported_at"] == exported_at
+    assert set(canonical) == sync_script._APPLIED_MIRROR_IDENTITY_FIELDS
+    handle = sync_script.open_authenticated_applied_mirror(source)
+    with pytest.raises(RuntimeError, match="PENDING full-source authority"):
+        _render_trusted_projection_bundle(handle)
+    assert identity["exported_at"] == exported_at
+    assert identity["source_change_seq"] == identity["applied_change_seq"] == 7
+    assert identity["export_digest"] == canonical["export_digest"]
+    assert identity["audit_digest"] == canonical["audit_digest"]
+    assert identity["schema_digest"] == canonical["schema_digest"]
+    assert identity["table_counts"] == canonical["table_counts"]
+
+
+def test_canonical_applied_mirror_identity_rejects_missing_exported_at(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    identity = _identity_from_opaque_source(source)
+    del identity["exported_at"]
+    with pytest.raises(ValueError, match="identity is not closed"):
+        sync_script._canonical_applied_mirror_identity_json(identity)
+
+
+@pytest.mark.parametrize(
+    ("exported_at", "match"),
+    [
+        ("2026-08-25T12:00:00+00:00X", "exported_at is invalid"),
+        ("2026-08-25T12:00:00+00:00 ", "exported_at is invalid"),
+        ("not-an-export-time", "exported_at is invalid"),
+        ("2026-08-25T12:00:00Z", "exported_at is not canonical"),
+        ("2026-08-25T12:00:00", "exported_at is not canonical"),
+        ("2026-08-25T21:00:00+09:00", "exported_at is not canonical"),
+        ("2026-08-25T12:00:00.000000+00:00", "exported_at is not canonical"),
+    ],
+)
+def test_canonical_applied_mirror_identity_rejects_tampered_or_noncanonical_exported_at(
+    tmp_path: Path,
+    exported_at: object,
+    match: str,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    identity = _identity_from_opaque_source(source, exported_at=exported_at)
+    with pytest.raises(ValueError, match=match):
+        sync_script._canonical_applied_mirror_identity_json(identity)
+
+
+def test_canonical_applied_mirror_identity_rejects_future_exported_at(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    exported_at = (
+        now
+        + timedelta(seconds=signing.D1_SYNC_AUDIT_MAX_FUTURE_SKEW_SECONDS + 1)
+    ).isoformat()
+    identity = _identity_from_opaque_source(source, exported_at=exported_at)
+    with pytest.raises(ValueError, match="exported_at is in the future"):
+        sync_script._canonical_applied_mirror_identity_json(identity)
+
+
+@pytest.mark.parametrize(
+    "exported_at",
+    [
+        None,
+        "2026-08-25T12:00:00+00:00X",
+        "2026-08-25T12:00:00Z",
+        "2026-08-25T12:00:00",
+        "2026-08-25T21:00:00+09:00",
+    ],
+)
+def test_authenticated_mirror_rejects_missing_tampered_or_noncanonical_exported_at_at_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    exported_at: object,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    if exported_at is None:
+        def identity(conn: sqlite3.Connection) -> dict[str, object]:
+            value = _test_mirror_identity()(conn)
+            del value["exported_at"]
+            return value
+    else:
+        identity = _test_mirror_identity(exported_at=exported_at)
+    monkeypatch.setattr(
+        sync_script,
+        "_authenticated_applied_mirror_identity_from_conn",
+        identity,
+    )
+    with pytest.raises(ValueError, match="authenticated current D1 export"):
+        sync_script.open_authenticated_applied_mirror(source)
+
+
+def test_authenticated_mirror_rejects_future_exported_at_at_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    exported_at = (
+        now
+        + timedelta(seconds=signing.D1_SYNC_AUDIT_MAX_FUTURE_SKEW_SECONDS + 1)
+    ).isoformat()
+    monkeypatch.setattr(
+        sync_script,
+        "_authenticated_applied_mirror_identity_from_conn",
+        _test_mirror_identity(exported_at=exported_at),
+    )
+    with pytest.raises(ValueError, match="authenticated current D1 export"):
+        sync_script.open_authenticated_applied_mirror(source)
+
+
+def test_freeze_authenticated_sync_identity_binds_canonical_exported_at(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    identity = _identity_from_opaque_source(source)
+    frozen = MappingProxyType(
+        {
+            **identity,
+            "table_counts": MappingProxyType(identity["table_counts"]),
+        }
+    )
+    copied = exporter._freeze_authenticated_sync_identity(frozen)
+    assert copied["exported_at"] == identity["exported_at"]
+    assert set(copied) == exporter._SYNC_IDENTITY_FIELDS
+
+
+def test_freeze_authenticated_sync_identity_rejects_missing_exported_at(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    identity = _identity_from_opaque_source(source)
+    del identity["exported_at"]
+    frozen = MappingProxyType(
+        {
+            **identity,
+            "table_counts": MappingProxyType(identity["table_counts"]),
+        }
+    )
+    with pytest.raises(RuntimeError, match="not authority-frozen"):
+        exporter._freeze_authenticated_sync_identity(frozen)
+
+
+def test_authenticated_mirror_exported_at_does_not_relax_cursor_equality(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "authenticated.sqlite"
+    _opaque_source(source, "trusted")
+    monkeypatch.setattr(
+        sync_script,
+        "_authenticated_applied_mirror_identity_from_conn",
+        _test_mirror_identity(
+            source_cursor=7,
+            applied_cursor=6,
+            exported_at="2026-08-25T12:00:00+00:00",
+        ),
+    )
+    with pytest.raises(ValueError, match="authenticated current D1 export"):
+        sync_script.open_authenticated_applied_mirror(source)
+
+
 def test_trusted_renderer_consumes_handle_before_pending_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1774,50 +1934,6 @@ def test_trusted_renderer_consumes_handle_before_pending_authority(
         _render_trusted_projection_bundle(handle)
     with pytest.raises(RuntimeError, match="already consumed"):
         _render_trusted_projection_bundle(handle)
-
-
-@pytest.mark.parametrize("dry_run", [False, True])
-def test_remote_publish_requires_dedicated_ops_projection_signer_before_effects(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    dry_run: bool,
-) -> None:
-    source = tmp_path / "source.sqlite"
-    _source(source)
-    output = tmp_path / "projection.sql"
-    meta = tmp_path / "projection.json"
-    monkeypatch.setattr(publisher, "GOVERNED_LOCAL_DB", source.resolve())
-    monkeypatch.setattr(
-        publisher, "_authenticated_export_cursor_chain", lambda _path: (1, 1)
-    )
-    monkeypatch.setattr(
-        publisher,
-        "read_remote_active_cursor",
-        lambda: pytest.fail("remote probe happened before authority gate"),
-    )
-    argv = [
-        f"--db={source}",
-        f"--output={output}",
-        f"--meta-output={meta}",
-        "--refresh-coverage",
-        "--apply-remote",
-    ]
-    if dry_run:
-        argv.append("--dry-run")
-    assert publisher.main(argv) == 6
-    assert not output.exists()
-    assert not meta.exists()
-
-
-def test_remote_publish_rejects_arbitrary_db_before_signing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source = tmp_path / "manual.sqlite"
-    _source(source)
-    monkeypatch.setattr(
-        publisher, "_authenticated_export_cursor_chain", lambda _path: (9, 9)
-    )
-    assert publisher.main([f"--db={source}", "--apply-remote"]) == 7
 
 
 @pytest.mark.parametrize(
@@ -1837,155 +1953,22 @@ def test_publisher_has_no_public_evidence_or_signer_override(
         publisher.main(forbidden)
 
 
-def test_remote_probe_uses_pinned_ops_wrangler_and_withholds_output(
-    monkeypatch: pytest.MonkeyPatch, capsys
-) -> None:
-    secret = "provider-secret-must-not-appear"
-    calls = []
-
-    def fail(argv, **kwargs):
-        calls.append((argv, kwargs))
-        return SimpleNamespace(returncode=1, stdout=secret, stderr=secret)
-
-    monkeypatch.setattr(publisher.subprocess, "run", fail)
-    assert publisher.count_remote_complete() is None
+def test_apply_remote_is_refused_without_cloud_effects(tmp_path: Path, capsys) -> None:
+    source = tmp_path / "source.sqlite"
+    _source(source)
+    output = tmp_path / "projection.sql"
+    meta = tmp_path / "projection.json"
+    assert publisher.main([
+        f"--db={source}",
+        f"--output={output}",
+        f"--meta-output={meta}",
+        "--apply-remote",
+    ]) == 7
     captured = capsys.readouterr()
-    assert secret not in captured.out
-    assert secret not in captured.err
-    argv, kwargs = calls[0]
-    assert argv[0] == str(publisher.OPS_WRANGLER_BIN.resolve())
-    assert "npx" not in argv
-    assert argv[1:4] == ["d1", "execute", "quant-ops-projection"]
-    assert argv[argv.index("--env") + 1] == "production"
-    assert kwargs["cwd"] == str(publisher.OPS_WRANGLER_CWD)
-    assert kwargs["capture_output"] is True
-
-
-@pytest.mark.parametrize(
-    ("row", "expected"),
-    [
-        ({"active_count": 0}, 0),
-        (
-            {
-                "active_count": 1,
-                "source_cursor": 8,
-                "export_cursor": 8,
-                "applied_cursor": 8,
-            },
-            8,
-        ),
-        (
-            {
-                "active_count": 1,
-                "source_cursor": 8,
-                "export_cursor": 7,
-                "applied_cursor": 8,
-            },
-            None,
-        ),
-        (
-            {
-                "active_count": 1,
-                "source_cursor": None,
-                "export_cursor": None,
-                "applied_cursor": None,
-            },
-            None,
-        ),
-    ],
-)
-def test_remote_active_cursor_requires_exact_chain(
-    monkeypatch: pytest.MonkeyPatch, row: dict[str, object], expected: int | None
-) -> None:
-    monkeypatch.setattr(
-        publisher.subprocess,
-        "run",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps([{"results": [row]}]),
-            stderr="",
-        ),
-    )
-    assert publisher.read_remote_active_cursor() == expected
-
-
-@pytest.mark.parametrize("remote_cursor", [None, 5])
-def test_remote_publish_rejects_unknown_or_regressing_active_cursor(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    remote_cursor: int | None,
-) -> None:
-    source = tmp_path / "source.sqlite"
-    _source(source)
-    monkeypatch.setattr(publisher, "GOVERNED_LOCAL_DB", source.resolve())
-    monkeypatch.setattr(
-        publisher, "_authenticated_export_cursor_chain", lambda _path: (4, 4)
-    )
-    monkeypatch.setattr(
-        publisher,
-        "open_ops_projection_signing_service",
-        lambda: TestOpsProjectionSigningKey(
-            "ops-projection-test-v1", Ed25519PrivateKey.generate()
-        ),
-    )
-    monkeypatch.setattr(
-        publisher, "read_remote_active_cursor", lambda: remote_cursor
-    )
-    assert publisher.main([f"--db={source}", "--apply-remote"]) == 7
-
-
-@pytest.mark.parametrize(
-    ("attack", "expected"),
-    [("cursor_second_view", 7), ("complete_count_regression", 3)],
-)
-def test_remote_guards_use_exact_descriptor_render_bundle(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    attack: str,
-    expected: int,
-) -> None:
-    source = tmp_path / "source.sqlite"
-    _source(source)
-    base = exporter.render_projection_bundle(source)
-    cursor = 8 if attack == "cursor_second_view" else 7
-    trusted = replace(
-        base,
-        complete_coverage_segments=2,
-        envelope={
-            **base.envelope,
-            "source_cursor": cursor,
-            "export_cursor": cursor,
-            "applied_cursor": cursor,
-        },
-    )
-    monkeypatch.setattr(publisher, "GOVERNED_LOCAL_DB", source.resolve())
-    monkeypatch.setattr(
-        publisher, "_authenticated_export_cursor_chain", lambda _path: (7, 7)
-    )
-    monkeypatch.setattr(
-        publisher,
-        "open_ops_projection_signing_service",
-        lambda: TestOpsProjectionSigningKey(
-            "ops-projection-test-v1", Ed25519PrivateKey.generate()
-        ),
-    )
-    monkeypatch.setattr(publisher, "read_remote_active_cursor", lambda: 7)
-    monkeypatch.setattr(
-        publisher, "open_authenticated_applied_mirror", lambda _path: object()
-    )
-    monkeypatch.setattr(
-        publisher, "_render_trusted_projection_bundle", lambda *_a, **_k: trusted
-    )
-    remote_count_calls: list[bool] = []
-
-    def remote_count(**_kwargs):
-        remote_count_calls.append(True)
-        return 3
-
-    monkeypatch.setattr(publisher, "count_remote_complete", remote_count)
-    assert publisher.main([f"--db={source}", "--apply-remote"]) == expected
-    assert remote_count_calls == ([] if attack == "cursor_second_view" else [True])
-    assert not hasattr(publisher, "count_local_complete")
+    assert "not a production authority" in captured.err
+    assert "provider-secret" not in captured.out + captured.err
+    assert not output.exists()
+    assert not meta.exists()
 
 
 def test_production_projection_package_is_verify_only(
@@ -2059,8 +2042,8 @@ def test_pinned_ops_registry_rejects_duplicate_key_json(
         ROOT / "specs/ops_projection/verify_public_keys.json"
     ).read_text(encoding="utf-8")
     duplicate = current.replace(
-        '"schema_version": 2,',
-        '"schema_version": 1, "schema_version": 2,',
+        '"schema_version": 3,',
+        '"schema_version": 1, "schema_version": 3,',
         1,
     )
     path = tmp_path / "duplicate-ops-registry.json"
@@ -2103,102 +2086,6 @@ def test_pinned_ops_registry_rejects_float_integer_fields(
 
     with pytest.raises(OpsProjectionSignatureError, match="registry is invalid"):
         verify_pinned_ops_projection({})
-
-
-@pytest.mark.parametrize(
-    "extra",
-    [
-        ["--snapshot-dir", "/tmp/caller-snapshot"],
-        ["--otc-index-html", "/tmp/caller-index.html"],
-        ["--storage-hot-cutoff", "2026-01-01"],
-    ],
-)
-def test_remote_publish_rejects_caller_selected_evidence_paths_and_policy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra: list[str],
-) -> None:
-    source = tmp_path / "source.sqlite"
-    _source(source)
-    monkeypatch.setattr(publisher, "GOVERNED_LOCAL_DB", source.resolve())
-    monkeypatch.setattr(
-        publisher, "_authenticated_export_cursor_chain", lambda _path: (1, 1)
-    )
-    assert publisher.main([f"--db={source}", "--apply-remote", *extra]) == 7
-
-
-def test_failed_refresh_never_publishes_fresh_or_applies(
-    tmp_path: Path, monkeypatch,
-) -> None:
-    source = tmp_path / "source.sqlite"
-    _source(source)
-
-    def fail(*_args, **_kwargs):
-        raise RuntimeError("ledger failure")
-
-    monkeypatch.setattr(publisher, "GOVERNED_LOCAL_DB", source.resolve())
-    monkeypatch.setattr(
-        publisher, "_authenticated_export_cursor_chain", lambda _path: (1, 1)
-    )
-    monkeypatch.setattr("storage.coverage_ledger.refresh_coverage_ledger", fail)
-    monkeypatch.setattr(publisher, "count_remote_complete", lambda **_kwargs: 0)
-    monkeypatch.setattr(publisher, "read_remote_active_cursor", lambda: 1)
-    monkeypatch.setattr(
-        publisher,
-        "open_ops_projection_signing_service",
-        lambda **_kwargs: TestOpsProjectionSigningKey(
-            "ops-projection-test-v1", Ed25519PrivateKey.generate()
-        ),
-    )
-    output = tmp_path / "ops/projection.sql"
-    meta = tmp_path / "ops/projection.json"
-    assert publisher.main(
-        [
-            f"--db={source}", f"--output={output}", f"--meta-output={meta}",
-            "--refresh-coverage", "--apply-remote",
-        ]
-    ) == 4
-    assert not output.exists()
-    assert not meta.exists()
-
-
-def test_successful_refresh_must_reverify_and_freeze_same_owner_before_apply(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source = tmp_path / "source.sqlite"
-    _source(source)
-    monkeypatch.setattr(publisher, "GOVERNED_LOCAL_DB", source.resolve())
-    monkeypatch.setattr(
-        publisher, "_authenticated_export_cursor_chain", lambda _path: (1, 1)
-    )
-    monkeypatch.setattr(
-        "storage.coverage_ledger.refresh_coverage_ledger",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        publisher,
-        "_freeze_authenticated_current_applied_mirror",
-        lambda _store: (_ for _ in ()).throw(RuntimeError("audit drift")),
-    )
-    monkeypatch.setattr(publisher, "read_remote_active_cursor", lambda: 1)
-    monkeypatch.setattr(
-        publisher,
-        "open_ops_projection_signing_service",
-        lambda: TestOpsProjectionSigningKey(
-            "ops-projection-test-v1", Ed25519PrivateKey.generate()
-        ),
-    )
-    output = tmp_path / "ops/projection.sql"
-    meta = tmp_path / "ops/projection.json"
-    assert publisher.main(
-        [
-            f"--db={source}",
-            f"--output={output}",
-            f"--meta-output={meta}",
-            "--refresh-coverage",
-            "--apply-remote",
-        ]
-    ) == 4
-    assert not output.exists()
-    assert not meta.exists()
 
 
 def test_projection_metadata_requires_successful_refresh_for_fresh(tmp_path: Path) -> None:

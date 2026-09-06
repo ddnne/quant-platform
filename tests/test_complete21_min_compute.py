@@ -199,6 +199,7 @@ def test_margin_interest_change_1d_on_seeded_records(tmp_path):
     out, _, _ = _seed_feat(
         tmp_path,
         "margin_interest_change_1d",
+        days=["2025-04-01", "2025-04-08"],
         payloads={
             "markets_margin_interest": [
                 _margin_row("2025-04-01", 100.0, 50.0),

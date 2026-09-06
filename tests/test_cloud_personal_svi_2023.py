@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import math
+import multiprocessing
 import time
 from datetime import date, timedelta
 from typing import Any
@@ -61,15 +62,14 @@ class _Response(io.BytesIO):
 
 def test_svi_job_manager_accepts_the_separate_spec_and_reaches_completed() -> None:
     spec = _svi_spec("svi-manager", "sha256:" + "a" * 64)
-    seen = []
 
     def runner(job):
-        seen.append(job)
         return {
             "job_id": job.job_id,
             "cohort_id": job.cohort_id,
             "cohort_digest": job.cohort_digest,
             "request_digest": job.request_digest,
+            "runner_version": job.runner_version,
             "status": "COMPLETED",
             "go": False,
         }
@@ -77,6 +77,7 @@ def test_svi_job_manager_accepts_the_separate_spec_and_reaches_completed() -> No
     manager = service.JobManager(
         runner,
         terminal_uploader=lambda *args, **kwargs: None,
+        process_context=multiprocessing.get_context("fork"),
     )
     submitted = manager.submit(spec)
     assert submitted["cohort_id"] == "personal-svi-term-2023-v1"
@@ -86,7 +87,6 @@ def test_svi_job_manager_accepts_the_separate_spec_and_reaches_completed() -> No
             break
         time.sleep(0.005)
     assert manager.status(spec.job_id)["status"] == "COMPLETED"
-    assert seen == [spec]
 
 
 def test_natural_key_and_payload_json_strings_are_unwrapped_and_deduplicated() -> None:

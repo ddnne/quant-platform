@@ -5,12 +5,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import subprocess
 import time
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 from uuid import uuid4
 
+_DEFAULT_WRANGLER = None
+DEFAULT_RESEARCH_WORKER_URL = (
+    "https://quant-platform-research-mass-eval.taku-haga.workers.dev"
+)
 from qp_paths import repo_root as _qp_repo_root
 from research.bar_native_specs import BAR_NATIVE_SPECS
 from research.cf_mass_eval_stage import (
@@ -23,14 +26,11 @@ from research.cf_mass_eval_stage import (
 )
 from research.eval_windows import DEFAULT_REAL_MULTIYEAR_PERIODS
 from research.freezes import CONTINUOUS_PAPER, MASS_RESEARCH, PHASE7
-from research.r2_io import put_research_artifact
 from research.research_capabilities import require_capability
 
 CF_MASS_EVAL_VERSION: str = "cf-mass-eval-job/v6"
 CF_MASS_EVAL_WAVE: str = "research-mass-eval"
-DEFAULT_WORKER_URL: str = (
-    "https://quant-platform-research-mass-eval.taku-haga.workers.dev"
-)
+DEFAULT_WORKER_URL: str = DEFAULT_RESEARCH_WORKER_URL
 DEFAULT_ONE_WAY: float = 0.001
 
 DEFAULT_MASS_EVAL_MODE: str = "r2_panels"
@@ -50,15 +50,6 @@ DEFAULT_LITE_PERIODS: tuple[dict[str, str], ...] = (
 )
 
 _REPO_ROOT = _qp_repo_root()
-_DEFAULT_WRANGLER = (
-    _REPO_ROOT
-    / "platform"
-    / "workers"
-    / "ingestion-premium"
-    / "node_modules"
-    / ".bin"
-    / "wrangler"
-)
 _WORKER_DIR = _REPO_ROOT / "platform" / "workers" / "research-mass-eval"
 _WORKER_CONFIG = _WORKER_DIR / "wrangler.toml"
 
@@ -98,24 +89,9 @@ def _freeze() -> dict[str, Any]:
 
 
 def resolve_research_run_token() -> str | None:
-    for env_name in (
-        "RESEARCH_RUN_TOKEN",
-        "INGESTION_RUN_TOKEN",
-        "MASS_EVAL_RUN_TOKEN",
-    ):
-        v = (os.environ.get(env_name) or "").strip()
-        if v:
-            return v
-    for name in ("ingestion_run_token", "data_export_token"):
-        p = Path.home() / ".config" / "quant-platform" / name
-        if p.is_file():
-            try:
-                t = p.read_text(encoding="utf-8").strip().splitlines()[0].strip()
-                if t:
-                    return t
-            except OSError:
-                continue
-    return None
+    from ops.research_token import resolve_research_run_token as _resolve
+
+    return _resolve()
 
 
 def design_mass_factory_paths(job_id: str) -> dict[str, Any]:
@@ -220,51 +196,14 @@ def panels_cache_id(
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
-def try_r2_get_json(key: str) -> dict[str, Any] | None:
-    """Best-effort wrangler r2 object get --remote for panel cache reuse.
+def try_r2_get_json(
+    key: str, *, getter: Callable[[str, str], dict[str, Any] | None] | None = None
+) -> dict[str, Any] | None:
+    """Product port: JSON result only. Operator I/O is injected."""
 
-    CLI get is not artifact authority, not Coverage COMPLETE, not Projection
-    FRESH, and not Worker children-then-manifest. None on CLI miss is a
-    cache miss, not COMPLETE. Does not PUT.
-    """
-    wr = _DEFAULT_WRANGLER
-    cfg = (
-        _REPO_ROOT
-        / "platform"
-        / "workers"
-        / "ingestion-premium"
-        / "wrangler.toml"
-    )
-    wr_bin = str(wr) if wr.is_file() else "npx"
-    cmd = [wr_bin] if wr.is_file() else ["npx", "wrangler"]
-    cmd += [
-        "r2",
-        "object",
-        "get",
-        f"{RESEARCH_ARTIFACT_BUCKET}/{key}",
-        "--pipe",
-        f"--config={cfg}",
-        "--remote",
-    ]
-    try:
-        # CLI get --remote is panel cache reuse, not artifact authority / not COMPLETE.
-        proc = subprocess.run(
-            cmd,
-            cwd=str(cfg.parent),
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if proc.returncode != 0:
-        return None
-    try:
-        obj = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        return None
-    return obj if isinstance(obj, dict) else None
+    if getter is None:
+        raise RuntimeError("closed artifact get port is required")
+    return getter(RESEARCH_ARTIFACT_BUCKET, key)
 
 
 def resolve_or_stage_panels(
@@ -276,8 +215,13 @@ def resolve_or_stage_panels(
     force_stage: bool = False,
     staging_dir: str | Path | None = None,
     track: str | None = None,
+    artifact_put: Callable[..., Any] | None = None,
+    artifact_get: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     """Reuse track×periods×codes×days panel cache, or stage once. Never head-N."""
+    from research.mass_disabled import refuse_mass_host_entrypoint
+
+    refuse_mass_host_entrypoint("resolve_or_stage_panels")
     from research.eval_tracks import eval_track, infer_eval_track
     from research.eval_universe import select_eval_universe
 
@@ -295,7 +239,7 @@ def resolve_or_stage_panels(
     prefix = f"{PANELS_CACHE_PREFIX}/{cid}/panels"
 
     if not force_stage:
-        existing = try_r2_get_json(meta_key)
+        existing = try_r2_get_json(meta_key, getter=artifact_get)
         if existing and int(existing.get("n_ok") or 0) > 0:
             existing["reused"] = True
             existing["force_stage"] = False
@@ -333,7 +277,9 @@ def resolve_or_stage_panels(
         "job_id_staged": str(job_id),
     }
     try:
-        put_research_artifact(
+        if artifact_put is None:
+            raise RuntimeError("closed artifact put port is required")
+        artifact_put(
             RESEARCH_ARTIFACT_BUCKET,
             meta_key,
             json.dumps(meta, indent=2, default=str).encode("utf-8"),
@@ -408,11 +354,22 @@ def build_cf_mass_eval_job_spec(
     }
 
 
-from research.cf_mass_eval_run import (  # noqa: E402
-    invoke_cf_mass_eval_worker,
-    run_cf_mass_eval_job,
-    try_cf_mass_eval_status,
-)
+def invoke_cf_mass_eval_worker(*args, **kwargs):
+    from research.cf_mass_eval_run import invoke_cf_mass_eval_worker as invoke
+
+    return invoke(*args, **kwargs)
+
+
+def run_cf_mass_eval_job(*args, **kwargs):
+    from research.cf_mass_eval_run import run_cf_mass_eval_job as run
+
+    return run(*args, **kwargs)
+
+
+def try_cf_mass_eval_status(*args, **kwargs):
+    from research.cf_mass_eval_run import try_cf_mass_eval_status as status
+
+    return status(*args, **kwargs)
 
 
 __all__ = [

@@ -24,7 +24,7 @@ DEFAULT_MAX_AGE_SECONDS = 86400
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def build_projection_metadata(

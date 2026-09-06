@@ -45,6 +45,17 @@ _TYPED_DAILY_BARS_COLUMNS = {
 
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _UNSTABLE_PUBLICATION_STATES = frozenset({"BUILDING", "VALIDATING"})
+_STABLE_MANAGED_PUBLICATION_STATES = frozenset({"SYNCED", "READY", "REJECTED"})
+_SOURCE_POLICY_FIELDS = frozenset(
+    {
+        "table_present",
+        "row_present",
+        "require_manifest",
+        "snapshot_ready",
+        "publication_state",
+        "last_error",
+    }
+)
 _MANIFEST_IDENTITY_FIELDS = frozenset(
     {
         "format",
@@ -188,6 +199,36 @@ def _typed_daily_bars_observation(
 
 
 def _source_policy_provenance(connection: sqlite3.Connection) -> dict[str, Any]:
+    marker_columns = _table_columns(connection, _PERSONAL_PROVENANCE_TABLE)
+    if marker_columns:
+        required = {
+            "singleton",
+            "source_policy_json",
+        }
+        if not required <= marker_columns:
+            raise PersonalSnapshotError(
+                "personal snapshot provenance marker is incomplete"
+            )
+        marker = connection.execute(
+            f"SELECT source_policy_json FROM {_PERSONAL_PROVENANCE_TABLE} "
+            "WHERE singleton=1"
+        ).fetchone()
+        if marker is None:
+            raise PersonalSnapshotError(
+                "personal snapshot provenance marker is empty"
+            )
+        try:
+            embedded = json.loads(str(marker["source_policy_json"]))
+        except json.JSONDecodeError as exc:
+            raise PersonalSnapshotError(
+                "personal snapshot provenance marker is invalid"
+            ) from exc
+        if not isinstance(embedded, Mapping) or set(embedded) != _SOURCE_POLICY_FIELDS:
+            raise PersonalSnapshotError(
+                "personal snapshot source policy provenance is invalid"
+            )
+        return dict(embedded)
+
     columns = _table_columns(connection, "local_snapshot_policy")
     provenance: dict[str, Any] = {
         "table_present": bool(columns),
@@ -238,7 +279,12 @@ def _install_personal_draft_policy(
     source_provenance: Mapping[str, Any],
 ) -> None:
     if _table_columns(connection, _PERSONAL_PROVENANCE_TABLE):
-        raise PersonalSnapshotError("source is already a personal snapshot")
+        _verify_personal_draft_policy(
+            connection,
+            personal_policy=_personal_policy_document(),
+            source_provenance=source_provenance,
+        )
+        return
     columns = _table_columns(connection, "local_snapshot_policy")
     if not columns:
         connection.execute(
@@ -403,6 +449,96 @@ def _publish_file_without_replace(temporary: Path, destination: Path) -> None:
         os.link(temporary, destination)
     except FileExistsError:
         pass
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _bind_personal_draft_source(
+    source_db: str | Path,
+    bind_dir: str | Path,
+) -> tuple[Path, bool]:
+    """Return an unmanaged DRAFT source, copying stable managed input first.
+
+    This is the OfflineFixture/container composition boundary.  Ordinary PIT
+    readers still reject managed pre-READY bytes.  A stable managed source is
+    transactionally backed up, stripped of its publication authority, marked
+    PERSONAL_DRAFT, and content-addressed before a typed DRAFT view can bind
+    it.  Active BUILDING/VALIDATING input is always rejected.
+    """
+
+    source_path = Path(source_db).expanduser().resolve()
+    if not source_path.is_file():
+        raise FileNotFoundError(f"personal draft source is missing: {source_path}")
+    source = _readonly_connection(source_path)
+    try:
+        _reject_unstable_policy(source, where="source")
+        if _table_columns(source, _PERSONAL_PROVENANCE_TABLE):
+            provenance = _source_policy_provenance(source)
+            _verify_personal_draft_policy(
+                source,
+                personal_policy=_personal_policy_document(),
+                source_provenance=provenance,
+            )
+            return source_path, False
+        policy_columns = _table_columns(source, "local_snapshot_policy")
+        if not policy_columns:
+            return source_path, False
+        policy = source.execute(
+            "SELECT * FROM local_snapshot_policy WHERE singleton=1"
+        ).fetchone()
+        if policy is None:
+            return source_path, False
+        require_manifest = bool(
+            policy["require_manifest"] if "require_manifest" in policy.keys() else 0
+        )
+        snapshot_ready = bool(
+            policy["snapshot_ready"] if "snapshot_ready" in policy.keys() else 0
+        )
+        managed = require_manifest or snapshot_ready
+        if not managed:
+            return source_path, False
+        state = str(
+            policy["publication_state"]
+            if "publication_state" in policy.keys()
+            and policy["publication_state"] is not None
+            else ""
+        ).upper()
+        if state not in _STABLE_MANAGED_PUBLICATION_STATES:
+            raise PersonalSnapshotError(
+                "managed personal draft source has no stable publication state"
+            )
+    finally:
+        source.close()
+
+    destination = Path(bind_dir).expanduser().resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+    fd, raw_temporary = tempfile.mkstemp(
+        prefix=".personal-draft-bind.", suffix=".sqlite.tmp", dir=destination
+    )
+    os.close(fd)
+    temporary = Path(raw_temporary)
+    try:
+        provenance = _backup_sqlite(source_path, temporary)
+        copied = _readonly_connection(temporary)
+        try:
+            _verify_personal_draft_policy(
+                copied,
+                personal_policy=_personal_policy_document(),
+                source_provenance=provenance,
+            )
+        finally:
+            copied.close()
+        os.utime(temporary, ns=(0, 0))
+        digest = _file_digest(temporary)
+        bound_path = destination / f"personal-draft-bind-{_stem(digest)}.sqlite"
+        os.chmod(temporary, 0o444)
+        _publish_file_without_replace(temporary, bound_path)
+        if _file_digest(bound_path) != digest:
+            raise PersonalSnapshotError(
+                f"personal draft bind collision or tamper: {bound_path}"
+            )
+        os.chmod(bound_path, 0o444)
+        return bound_path.resolve(), True
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -596,15 +732,7 @@ def _verify_personal_draft_policy(
             "personal snapshot source policy provenance is missing"
         )
     source_document = dict(source_provenance)
-    expected_source_keys = {
-        "table_present",
-        "row_present",
-        "require_manifest",
-        "snapshot_ready",
-        "publication_state",
-        "last_error",
-    }
-    if set(source_document) != expected_source_keys:
+    if set(source_document) != _SOURCE_POLICY_FIELDS:
         raise PersonalSnapshotError(
             "personal snapshot source policy provenance is invalid"
         )

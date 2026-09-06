@@ -1,5 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "purpose": "controlled_trader_authorization_verification",
+  "environment": "staging",
+  "authority_instance_id": "trader-authority/staging/v1",
   "keys": []
 }

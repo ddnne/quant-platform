@@ -53,6 +53,18 @@ _CHECKED_AT = "2026-08-25T00:00:00+00:00"
 _POLICY_VERSION = coverage_policy_binding(_DATASET)["policy_version"]
 _BUILD_ID = "build-exact-coverage-test"
 _PUBLICATION_CUTOFF = "2008-01-31"
+_V3_ONLY_RECEIPT_FIELDS = (
+    "contract_id",
+    "receipt_issue_digest",
+    "artifact_key",
+    "artifact_byte_count",
+    "manifest_key",
+    "manifest_byte_count",
+    "raw_manifest_key",
+    "raw_manifest_byte_count",
+    "raw_byte_count",
+    "natural_key_digest",
+)
 
 
 def _seed_closed_segment(tmp_path, receipt_ed25519_keys):
@@ -684,6 +696,8 @@ def test_snapshot_proof_rejects_validly_signed_audit_version(
     claims["version"] = audit_version
     claims.pop("environment")
     claims.pop("authority_instance_digest")
+    for field in _V3_ONLY_RECEIPT_FIELDS:
+        claims.pop(field)
     legacy_scope = {
         key: claims[key]
         for key in (

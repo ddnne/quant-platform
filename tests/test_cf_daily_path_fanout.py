@@ -5,13 +5,11 @@ import pytest
 
 from research.cf_daily_path_job import (
     CF_EVENT_DAILY_PATH_IDS,
-    FANOUT_VERSION,
     run_both_track_sleeve_fanout,
     run_cf_daily_path_fanout,
     sleeve_durability_logic_ids,
 )
 from research.cf_mass_eval_job import CF_BAR_NATIVE_LOGIC_IDS, panels_cache_id
-from research.evaluation_ir import candidate_from_job_artifact
 
 
 @pytest.fixture(autouse=True)
@@ -28,141 +26,23 @@ def _allow_mass_screen_capability(monkeypatch) -> None:
     )
 
 
-def test_fanout_aggregates_cells_and_does_not_promote() -> None:
-    def fake_post(*, url: str, body: bytes, headers: dict) -> dict:
-        assert url.endswith("/v1/daily-path")
-        import json
+def test_mass_fanout_fails_before_network_or_local_staging(tmp_path) -> None:
+    from research.mass_disabled import MassResearchDisabledError
 
-        spec = json.loads(body.decode("utf-8"))
-        lid = spec["logics"][0]["logic_id"]
-        pid = spec["periods"][0]["period_id"]
-        return {
-            "ok": True,
-            "cells": [
-                {
-                    "logic_id": lid,
-                    "window": pid,
-                    "window_id": pid,
-                    "daily_path_DD": -0.02,
-                    "total_ret_net": 0.01,
-                    "dd_duration": 3,
-                    "recovered": True,
-                    "recovery_days": 2,
-                    "n_days": 40,
-                    "daily_path_complete": True,
-                    "survived": False,
-                    "go": False,
-                }
-            ],
-        }
+    staging_dir = tmp_path / "mass-stage"
 
-    ids = list(CF_BAR_NATIVE_LOGIC_IDS)[:3]
-    pack = run_cf_daily_path_fanout(
-        job_id="test-fanout-dp",
-        logic_ids=ids,
-        skip_stage=True,
-        mode="synthetic",
-        http_post=fake_post,
-        max_workers=3,
-        periods=[{"period_id": "y2015_full", "period_start": "2015-01-05", "period_end": "2015-03-01"}],
-    )
-    assert pack["version"] == FANOUT_VERSION
-    assert pack["parallel_model"] == "cf_isolate_fanout_one_logic"
-    assert pack["n_logics"] == 3
-    assert pack["n_cells"] == 3
-    assert pack["n_daily_path_complete"] == 3
-    assert pack["go"] is False
-    assert pack["not_a_pass"] is True
-    assert pack["promote_as_main"] is False
-    assert pack["survived"] is False
-    ir = pack["evaluation_ir"]
-    assert ir["version"] == "evaluation-ir/v1"
-    assert pack["candidate_grade"] is ir["candidate"]
-    assert candidate_from_job_artifact(pack) is True
-    assert ir["n_expected"] == 3
-    assert ir["n_cells"] == 3
-    assert ir["n_complete"] == 3
-    assert ir["candidate"] is True
-    assert pack["longest_isolate_sec"] is not None
-    assert pack["fanout_sec"] is not None
+    def unexpected_post(**_kwargs):
+        raise AssertionError("disabled Mass fanout must not issue HTTP")
 
-
-def test_fanout_path_broken_cells_are_not_complete() -> None:
-    def fake_post(*, url: str, body: bytes, headers: dict) -> dict:
-        import json
-
-        spec = json.loads(body.decode("utf-8"))
-        lid = spec["logics"][0]["logic_id"]
-        pid = spec["periods"][0]["period_id"]
-        return {
-            "ok": True,
-            "cells": [
-                {
-                    "logic_id": lid,
-                    "window_id": pid,
-                    "daily_path_complete": True,
-                    "eval_path": "cs_generic",
-                    "path_fallback": "path_broken",
-                    "daily_path_DD": -0.02,
-                    "total_ret_net": 0.01,
-                    "n_days": 40,
-                    "survived": False,
-                    "go": False,
-                }
-            ],
-        }
-
-    pack = run_cf_daily_path_fanout(
-        job_id="test-fanout-broken",
-        logic_ids=["unwired_overlay"],
-        skip_stage=True,
-        mode="synthetic",
-        http_post=fake_post,
-        max_workers=1,
-        periods=[
-            {
-                "period_id": "y2015_full",
-                "period_start": "2015-01-05",
-                "period_end": "2015-03-01",
-            }
-        ],
-    )
-    assert pack["n_cells"] == 1
-    assert pack["n_daily_path_complete"] == 0
-    assert pack["n_logic_ok"] == 0
-    assert pack["go"] is False
-    assert pack["survived"] is False
-    assert pack["promote_as_main"] is False
-    ir = pack["evaluation_ir"]
-    assert pack["candidate_grade"] is ir["candidate"]
-    assert candidate_from_job_artifact(pack) is False
-    assert ir["candidate"] is False
-    assert ir["n_broken"] == 1
-
-
-def test_fanout_rejects_job_scoped_panels_prefix_on_r2() -> None:
-    """Occupancy reuse must be panels_cache/{track cache id}, not job=.../panels."""
-    from research.cf_mass_eval_job import CfMassEvalError
-
-    try:
+    with pytest.raises(MassResearchDisabledError, match="Mass research remains"):
         run_cf_daily_path_fanout(
-            job_id="test-bad-prefix",
-            logic_ids=["event_eps_down_sales_down"],
-            mode="r2_panels",
-            track="mid_n_explore",
-            max_codes=80,
-            panels_prefix=(
-                "research/mass_eval/job="
-                "eval-occupancy-audit-20260824ar-mid_n_explore/panels"
-            ),
-            http_post=lambda **_k: (_ for _ in ()).throw(
-                AssertionError("must not POST mismatched panels_prefix")
-            ),
+            job_id="test-disabled-fanout",
+            logic_ids=["nky_vol_abs_level"],
+            mode="synthetic",
+            staging_dir=staging_dir,
+            http_post=unexpected_post,
         )
-    except CfMassEvalError as exc:
-        assert "panels_prefix must match" in str(exc)
-    else:
-        raise AssertionError("expected CfMassEvalError")
+    assert not staging_dir.exists()
 
 
 def test_daily_path_spec_keeps_unique_event() -> None:
@@ -292,82 +172,6 @@ def test_both_track_sleeve_fanout_default_is_off_network(monkeypatch) -> None:
     assert pack["compare"]["go"] is False
     assert pack["compare"]["liq_print_is_not_stable"] is True
     assert pack.get("r2_keys") is None  # dry_run does not write R2
-
-
-def test_both_track_sleeve_fanout_records_via_daily_path() -> None:
-    from research.eval_tracks import EVAL_TRACK_LIQ_LARGE, EVAL_TRACK_MID_N, EVAL_TRACKS
-
-    posts: list[tuple[str, int, str]] = []
-
-    def fake_post(*, url: str, body: bytes, headers: dict) -> dict:
-        import json
-
-        spec = json.loads(body.decode("utf-8"))
-        lid = spec["logics"][0]["logic_id"]
-        pid = spec["periods"][0]["period_id"]
-        posts.append((url, int(spec["max_codes"]), lid))
-        return {
-            "ok": True,
-            "cells": [
-                {
-                    "logic_id": lid,
-                    "window_id": pid,
-                    "daily_path_DD": -0.02,
-                    "total_ret_net": 0.01,
-                    "n_days": 40,
-                    "daily_path_complete": True,
-                    "survived": False,
-                    "go": False,
-                    "occupancy": 0.21,
-                    "occupancy_frac": 0.21,
-                }
-            ],
-        }
-
-    pack = run_both_track_sleeve_fanout(
-        job_id="test-both-sleeve-record",
-        dry_run=True,
-        logic_ids=["event_eqar_high_pead", "cs_margin_up_chase"],
-        select_universe=_fake_select_not_head_n,
-        http_post=fake_post,
-        skip_stage=True,
-        mode="synthetic",
-        max_workers=2,
-        periods=[
-            {
-                "period_id": "y2015_full",
-                "period_start": "2015-01-05",
-                "period_end": "2015-03-01",
-            }
-        ],
-    )
-    assert pack["go"] is False
-    assert pack["not_a_pass"] is True
-    assert pack["skipped_live_cf"] is True
-    assert pack["n_tracks"] == 2
-    tracks = {t["eval_track"]: t for t in pack["tracks"]}
-    assert tracks[EVAL_TRACK_MID_N]["max_codes"] == EVAL_TRACKS[EVAL_TRACK_MID_N]["max_codes"]
-    assert tracks[EVAL_TRACK_LIQ_LARGE]["max_codes"] == EVAL_TRACKS[EVAL_TRACK_LIQ_LARGE]["max_codes"]
-    assert tracks[EVAL_TRACK_MID_N]["n_cells"] == 2
-    assert tracks[EVAL_TRACK_LIQ_LARGE]["n_cells"] == 2
-    assert "n_logic_ok" in tracks[EVAL_TRACK_MID_N]
-    assert "n_logic_ok" in tracks[EVAL_TRACK_LIQ_LARGE]
-    assert tracks[EVAL_TRACK_MID_N]["occupancy_by_logic"]
-    assert tracks[EVAL_TRACK_LIQ_LARGE]["occupancy_by_logic"]
-    assert all(
-        abs(float(v) - 0.21) < 1e-9
-        for v in tracks[EVAL_TRACK_MID_N]["occupancy_by_logic"].values()
-    )
-    assert pack["occupancy_by_track"][EVAL_TRACK_MID_N] == tracks[EVAL_TRACK_MID_N]["occupancy_by_logic"]
-    assert pack["occupancy_by_track"][EVAL_TRACK_LIQ_LARGE] == tracks[EVAL_TRACK_LIQ_LARGE]["occupancy_by_logic"]
-    assert all(url.endswith("/v1/daily-path") for url, _n, _lid in posts)
-    max_codes = {n for _url, n, _lid in posts}
-    assert max_codes == {
-        int(EVAL_TRACKS[EVAL_TRACK_MID_N]["max_codes"]),
-        int(EVAL_TRACKS[EVAL_TRACK_LIQ_LARGE]["max_codes"]),
-    }
-    assert pack["compare"]["go"] is False
-    assert pack["compare"]["not_a_pass"] is True
 
 
 def test_mass_eval_spec_drops_unique_but_keeps_bar_native() -> None:

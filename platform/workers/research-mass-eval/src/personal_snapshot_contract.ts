@@ -5,7 +5,7 @@ import {
 } from "./personal_research_contract";
 import { sha256Hex } from "./sha256";
 
-export const PERSONAL_SNAPSHOT_FORMAT = "personal-draft-history/v7";
+export const PERSONAL_SNAPSHOT_FORMAT = "personal-draft-history/v8";
 export const PERSONAL_SNAPSHOT_DEFAULT_LOOKBACK_SESSIONS = 10;
 export const PERSONAL_SNAPSHOT_MAX_LOOKBACK_SESSIONS = 252;
 export const PERSONAL_SNAPSHOT_MAX_REQUEST_BYTES = 8 * 1024;
@@ -183,4 +183,38 @@ export async function personalSnapshotRequestDigest(
     runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
   });
   return `sha256:${await sha256Hex(new TextEncoder().encode(canonical))}`;
+}
+
+export type SnapshotObservationEvidence = {
+  observed_through: string;
+  revision_window_calendar_days: number;
+  revision_coverage: string;
+};
+
+export function verifySnapshotObservationEvidence(
+  manifest: Record<string, unknown>,
+  sqlite: SnapshotObservationEvidence,
+): { ok: true } | { ok: false; error: string } {
+  if (manifest.status !== "COMPLETED") {
+    return { ok: false, error: "snapshot is not COMPLETED" };
+  }
+  if (typeof manifest.observed_through !== "string" || !manifest.observed_through) {
+    return { ok: false, error: "observed_through missing" };
+  }
+  if (manifest.observed_through !== sqlite.observed_through) {
+    return { ok: false, error: "observed_through mismatch" };
+  }
+  if (manifest.revision_window_calendar_days !== sqlite.revision_window_calendar_days) {
+    return { ok: false, error: "revision_window_calendar_days mismatch" };
+  }
+  if (manifest.revision_coverage !== sqlite.revision_coverage) {
+    return { ok: false, error: "revision_coverage mismatch" };
+  }
+  if (
+    sqlite.revision_coverage !== "WINDOW_COMPLETE" &&
+    sqlite.revision_coverage !== "BOUNDED_WINDOW"
+  ) {
+    return { ok: false, error: "revision_coverage invalid" };
+  }
+  return { ok: true };
 }

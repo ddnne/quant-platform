@@ -1,8 +1,7 @@
 """Offline DRAFT execution plus a fail-closed Controlled Pilot boundary.
 
-The importable paper runtime cannot create controlled PAPER evidence.  The
-dedicated execution authority is not provisioned, so its public boundary is
-PENDING and has no path, store, verifier, or transport injection surface.
+The importable paper runtime cannot create controlled PAPER evidence.
+Controlled Paper runs only in the research-mass-eval Worker/Container.
 """
 
 from __future__ import annotations

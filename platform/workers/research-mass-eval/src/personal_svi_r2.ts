@@ -10,6 +10,7 @@ import {
   isPersonalSviDigest,
   isPersonalSviJobId,
   optionsDayFromKey,
+  personalSviJobRequestDigest,
   personalSviFeatureKey,
   personalSviInputManifestKey,
   personalSviReportKey,
@@ -315,6 +316,34 @@ async function completedChildrenMatch(
   return featureMatches && reportMatches;
 }
 
+async function exactTerminalExists(
+  env: R2Env,
+  identityValue: SviIdentity,
+): Promise<boolean> {
+  const object = await env.STRUCTURED_BUCKET.get(
+    personalSviTerminalManifestKey(identityValue.jobId),
+  );
+  if (!object || object.size < 1 || object.size > TERMINAL_MAX_BYTES) return false;
+  try {
+    const parsed: unknown = await object.json();
+    const requestDigest = await personalSviJobRequestDigest(
+      { job_id: identityValue.jobId, cohort_id: PERSONAL_SVI_2023_COHORT_ID },
+      identityValue.inputDigest,
+    );
+    return (
+      isObject(parsed) &&
+      parsed.job_id === identityValue.jobId &&
+      parsed.cohort_id === PERSONAL_SVI_2023_COHORT_ID &&
+      parsed.runner_version === PERSONAL_SVI_2023_RUNNER_VERSION &&
+      parsed.input_manifest_digest === identityValue.inputDigest &&
+      parsed.request_digest === requestDigest &&
+      (parsed.status === "COMPLETED" || parsed.status === "FAILED")
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function putOutput(
   request: Request,
   env: R2Env,
@@ -390,6 +419,9 @@ async function putOutput(
   }
   if (await env.STRUCTURED_BUCKET.head(key)) {
     return json({ error: "immutable SVI output conflict" }, 409);
+  }
+  if (await exactTerminalExists(env, identityValue)) {
+    return json({ error: "SVI terminal already exists" }, 409);
   }
   const put = await env.STRUCTURED_BUCKET.put(key, bytes, {
     httpMetadata: {

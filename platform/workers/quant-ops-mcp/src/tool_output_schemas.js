@@ -134,13 +134,13 @@ export const OPS_OUTPUT_SCHEMAS = Object.freeze({
   storage_plane_status: closedOutput({
     schema: STRING,
     generation: STRING,
-    materialized_at: STRING,
-    source_db_digest: STRING,
     counts: OBJECT,
     hot_window: OBJECT,
-    jsda_coverage: OBJECT,
-    missing_source_tables: { type: "array", items: STRING },
-    p0_claims: OBJECT,
+    plane: STRING,
+    jsda: OBJECT,
+    reason: { type: ["string", "null"] },
+    source_db_digest: STRING,
+    materialized_at: STRING,
     research_note: STRING,
   }),
 });

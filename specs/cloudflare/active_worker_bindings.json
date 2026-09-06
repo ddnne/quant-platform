@@ -60,8 +60,9 @@
     ],
     "unclassified": "REJECT"
   },
-  "manifest_digest": "sha256:9674f9d6a362d116cf8c9b545cbf2a5e9d0a2ad5e496cc820b6ca07aef3ef1c3",
-  "schema_version": "cloudflare-active-worker-bindings/v9",
+  "manifest_digest": "sha256:688b6a2d0ba3790847a900f3d52ab2fdc4ef79f3a3ad8f53936f0c6dd11c0afb",
+  "ops_binding_identity_digest": "sha256:881176391253aed791eeca79c264384838fe9f6edfc8f33e48c2353e450cb6e3",
+  "schema_version": "cloudflare-active-worker-bindings/v10",
   "test_harness_surfaces": {
     "ingestion-jsda": {
       "account_id": null,
@@ -142,7 +143,16 @@
         "USER_AGENT": "quant-platform-jsda-runtime-test/0.1"
       },
       "version_metadata": {},
-      "worker_entrypoints": [],
+      "worker_entrypoints": [
+        {
+          "fetch_reserved_special": true,
+          "handlers": [
+            "class"
+          ],
+          "name": "JsdaReadinessService",
+          "rpc_methods": []
+        }
+      ],
       "workers_dev": false
     },
     "ingestion-premium": {
@@ -158,6 +168,13 @@
           "binding": "DB",
           "database_id": "00000000-0000-0000-0000-000000000019",
           "database_name": "quant-ingest-premium-audit-test"
+        },
+        {
+          "binding": "OPS_PROJECTION_DB",
+          "database_id": "00000000-0000-0000-0000-000000000021",
+          "database_name": "quant-ops-projection-test",
+          "migrations_dir": "../quant-ops-mcp/migrations/projection",
+          "migrations_table": "d1_migrations_ops_projection"
         }
       ],
       "default_handler": {
@@ -174,7 +191,20 @@
       "preview_urls": false,
       "queue_consumers": [],
       "queue_producers": [],
-      "r2_buckets": [],
+      "r2_buckets": [
+        {
+          "binding": "AUTHORITY_EVIDENCE_BUCKET",
+          "bucket_name": "quant-receipt-evidence-test"
+        },
+        {
+          "binding": "RAW_BUCKET",
+          "bucket_name": "quant-raw-test"
+        },
+        {
+          "binding": "STRUCTURED_BUCKET",
+          "bucket_name": "quant-structured-test"
+        }
+      ],
       "ratelimits": [],
       "route": null,
       "routes": [],
@@ -195,6 +225,8 @@
         "wrangler": "4.125.0"
       },
       "vars": {
+        "OPS_PROJECTION_ENVIRONMENT": "staging",
+        "OPS_PROJECTION_SIGNING_KEY_ID": "ops-projection-cloud-test-v1",
         "RECEIPT_AUTHORITY_ENVIRONMENT": "staging",
         "RECEIPT_AUTHORITY_OPERATION_MODE": "ACTIVE"
       },
@@ -498,7 +530,9 @@
       "account_id": null,
       "ai": {},
       "compatibility_date": "2026-08-01",
-      "compatibility_flags": [],
+      "compatibility_flags": [
+        "nodejs_compat"
+      ],
       "config": "platform/workers/receipt-evidence-authority/wrangler.test.toml",
       "containers": [],
       "crons": [],
@@ -553,6 +587,14 @@
         {
           "binding": "AUTHORITY_EVIDENCE_BUCKET",
           "bucket_name": "quant-receipt-evidence-test"
+        },
+        {
+          "binding": "RAW_BUCKET",
+          "bucket_name": "quant-raw-test"
+        },
+        {
+          "binding": "STRUCTURED_BUCKET",
+          "bucket_name": "quant-structured-test"
         }
       ],
       "ratelimits": [],
@@ -619,8 +661,10 @@
           "rpc_methods": [
             "cancelPreProvider",
             "finalizeExact",
+            "finalizeOwnedPaper",
             "heartbeat",
             "markProviderStarted",
+            "queryOwned",
             "release",
             "reserve",
             "reserveOwned",
@@ -675,7 +719,12 @@
           ],
           "name": "GatewayService",
           "rpc_methods": [
-            "complete"
+            "cancelControlledPaper",
+            "complete",
+            "finalizeControlledPaper",
+            "heartbeatControlledPaper",
+            "queryControlledPaper",
+            "reserveControlledPaper"
           ]
         }
       ],
@@ -746,7 +795,18 @@
         "READY_DECLARED": "false"
       },
       "version_metadata": {},
-      "worker_entrypoints": [],
+      "worker_entrypoints": [
+        {
+          "fetch_reserved_special": true,
+          "handlers": [
+            "class"
+          ],
+          "name": "PilotReadyPublicationService",
+          "rpc_methods": [
+            "publishPilotReady"
+          ]
+        }
+      ],
       "workers_dev": false
     }
   },
@@ -760,7 +820,9 @@
   "worker_package_scripts": {
     "ingestion-jsda": {
       "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
-      "deploy": "wrangler deploy --config=wrangler.toml --env=production",
+      "deploy": "python3 ../../../scripts/activate_jsda_v3_cutover.py --environment production --activate --yes",
+      "deploy:staging": "python3 ../../../scripts/activate_jsda_v3_cutover.py --environment staging --activate --yes",
+      "deploy:unsafe-dev": "wrangler deploy --config=wrangler.toml --env=\"\"",
       "tail": "wrangler tail --config=wrangler.toml --env=production",
       "test": "vitest run --config vitest.config.ts && vitest run --config vitest.runtime.config.ts",
       "typecheck": "tsc --noEmit",
@@ -769,6 +831,7 @@
     "ingestion-premium": {
       "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
       "cf-typegen": "wrangler types --config=wrangler.toml --env=\"\"",
+      "deploy": "python3 ../../scripts/cloudflare_binding_manifest.py --deploy-tagged --config wrangler.toml --env production",
       "test": "vitest run --config vitest.config.ts && vitest run --config vitest.runtime.config.ts",
       "typecheck": "tsc --noEmit",
       "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"
@@ -782,7 +845,7 @@
     },
     "quant-ops-mcp": {
       "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
-      "deploy": "wrangler deploy --config=wrangler.toml --env=production",
+      "deploy": "python3 ../../scripts/predeploy_ops_projection_gate.py --environment production && python3 ../../scripts/cloudflare_binding_manifest.py --deploy-tagged --config wrangler.toml --env production",
       "test": "node --experimental-test-module-mocks --test test/*.test.mjs && vitest run --config vitest.runtime.config.ts && vitest run --config vitest.harness.config.ts",
       "typecheck": "tsc --noEmit",
       "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"
@@ -803,17 +866,18 @@
     },
     "research-ai-gateway": {
       "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
-      "deploy": "wrangler deploy --config=wrangler.toml --env=production",
+      "deploy": "python3 ../../scripts/cloudflare_binding_manifest.py --deploy-tagged --config wrangler.toml --env production",
       "test": "vitest run --config vitest.config.ts && vitest run --config vitest.harness.config.ts",
       "typecheck": "tsc --noEmit",
       "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"
     },
     "research-mass-eval": {
       "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
-      "deploy": "wrangler deploy --config=wrangler.toml --env=production",
+      "deploy": "python3 ../../scripts/cloudflare_binding_manifest.py --deploy-tagged --config wrangler.toml --env production",
       "dev": "wrangler dev --config=wrangler.toml --env=\"\"",
       "tail": "wrangler tail --config=wrangler.toml --env=production",
       "test": "vitest run",
+      "test:runtime": "vitest run --config vitest.runtime.config.mts",
       "typecheck": "tsc --noEmit",
       "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"
     }
@@ -890,7 +954,13 @@
         "secret_names": [
           "INGESTION_RUN_TOKEN"
         ],
-        "services": [],
+        "services": [
+          {
+            "binding": "RECEIPT_EVIDENCE_AUTHORITY",
+            "entrypoint": "ReceiptAuthorityService",
+            "service": "quant-platform-receipt-evidence-authority"
+          }
+        ],
         "tail_consumers": [],
         "toolchain": {
           "@cloudflare/vitest-plugin": "1.0.0",
@@ -901,12 +971,23 @@
         },
         "vars": {
           "JSDA_DLQ_QUEUE": "quant-jsda-ingestion-dlq",
+          "RECEIPT_AUTHORITY_ENVIRONMENT": "production",
+          "RECEIPT_AUTHORITY_OPERATION_MODE": "PENDING",
           "USER_AGENT": "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
         },
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
-        "worker_entrypoints": [],
+        "worker_entrypoints": [
+          {
+            "fetch_reserved_special": true,
+            "handlers": [
+              "class"
+            ],
+            "name": "JsdaReadinessService",
+            "rpc_methods": []
+          }
+        ],
         "workers_dev": false
       },
       "production": {
@@ -979,7 +1060,13 @@
         "secret_names": [
           "INGESTION_RUN_TOKEN"
         ],
-        "services": [],
+        "services": [
+          {
+            "binding": "RECEIPT_EVIDENCE_AUTHORITY",
+            "entrypoint": "ReceiptAuthorityService",
+            "service": "quant-platform-receipt-evidence-authority"
+          }
+        ],
         "tail_consumers": [],
         "toolchain": {
           "@cloudflare/vitest-plugin": "1.0.0",
@@ -990,12 +1077,23 @@
         },
         "vars": {
           "JSDA_DLQ_QUEUE": "quant-jsda-ingestion-dlq",
+          "RECEIPT_AUTHORITY_ENVIRONMENT": "production",
+          "RECEIPT_AUTHORITY_OPERATION_MODE": "PENDING",
           "USER_AGENT": "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
         },
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
-        "worker_entrypoints": [],
+        "worker_entrypoints": [
+          {
+            "fetch_reserved_special": true,
+            "handlers": [
+              "class"
+            ],
+            "name": "JsdaReadinessService",
+            "rpc_methods": []
+          }
+        ],
         "workers_dev": false
       },
       "staging": {
@@ -1064,7 +1162,13 @@
         "route": null,
         "routes": [],
         "secret_names": [],
-        "services": [],
+        "services": [
+          {
+            "binding": "RECEIPT_EVIDENCE_AUTHORITY",
+            "entrypoint": "ReceiptAuthorityService",
+            "service": "quant-platform-receipt-evidence-authority-staging"
+          }
+        ],
         "tail_consumers": [],
         "toolchain": {
           "@cloudflare/vitest-plugin": "1.0.0",
@@ -1075,12 +1179,23 @@
         },
         "vars": {
           "JSDA_DLQ_QUEUE": "quant-jsda-ingestion-dlq-staging",
+          "RECEIPT_AUTHORITY_ENVIRONMENT": "staging",
+          "RECEIPT_AUTHORITY_OPERATION_MODE": "PENDING",
           "USER_AGENT": "quant-platform-staging-ingest/0.1"
         },
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
-        "worker_entrypoints": [],
+        "worker_entrypoints": [
+          {
+            "fetch_reserved_special": true,
+            "handlers": [
+              "class"
+            ],
+            "name": "JsdaReadinessService",
+            "rpc_methods": []
+          }
+        ],
         "workers_dev": false
       }
     },
@@ -1099,7 +1214,15 @@
           {
             "binding": "DB",
             "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
-            "database_name": "quant-ingest"
+            "database_name": "quant-ingest",
+            "migrations_dir": "migrations"
+          },
+          {
+            "binding": "OPS_PROJECTION_DB",
+            "database_id": "1b497e8a-5c69-4e19-ae2e-89a8f3185272",
+            "database_name": "quant-ops-projection",
+            "migrations_dir": "../quant-ops-mcp/migrations/projection",
+            "migrations_table": "d1_migrations_ops_projection"
           }
         ],
         "default_handler": {
@@ -1121,6 +1244,10 @@
         "queue_producers": [],
         "r2_buckets": [
           {
+            "binding": "AUTHORITY_EVIDENCE_BUCKET",
+            "bucket_name": "quant-receipt-evidence"
+          },
+          {
             "binding": "RAW_BUCKET",
             "bucket_name": "quant-raw"
           },
@@ -1135,7 +1262,8 @@
         "secret_names": [
           "DATA_EXPORT_TOKEN",
           "INGESTION_RUN_TOKEN",
-          "JQUANTS_API_KEY"
+          "JQUANTS_API_KEY",
+          "OPS_PROJECTION_SIGNING_PKCS8_B64"
         ],
         "services": [
           {
@@ -1154,6 +1282,8 @@
         },
         "vars": {
           "INGEST_CONCURRENCY": "6",
+          "OPS_PROJECTION_ENVIRONMENT": "production",
+          "OPS_PROJECTION_SIGNING_KEY_ID": "ops-projection-20260826-v2",
           "RECEIPT_AUTHORITY_ENVIRONMENT": "production",
           "RECEIPT_AUTHORITY_OPERATION_MODE": "PENDING"
         },
@@ -1198,7 +1328,15 @@
           {
             "binding": "DB",
             "database_id": "be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
-            "database_name": "quant-ingest"
+            "database_name": "quant-ingest",
+            "migrations_dir": "migrations"
+          },
+          {
+            "binding": "OPS_PROJECTION_DB",
+            "database_id": "1b497e8a-5c69-4e19-ae2e-89a8f3185272",
+            "database_name": "quant-ops-projection",
+            "migrations_dir": "../quant-ops-mcp/migrations/projection",
+            "migrations_table": "d1_migrations_ops_projection"
           }
         ],
         "default_handler": {
@@ -1220,6 +1358,10 @@
         "queue_producers": [],
         "r2_buckets": [
           {
+            "binding": "AUTHORITY_EVIDENCE_BUCKET",
+            "bucket_name": "quant-receipt-evidence"
+          },
+          {
             "binding": "RAW_BUCKET",
             "bucket_name": "quant-raw"
           },
@@ -1234,7 +1376,8 @@
         "secret_names": [
           "DATA_EXPORT_TOKEN",
           "INGESTION_RUN_TOKEN",
-          "JQUANTS_API_KEY"
+          "JQUANTS_API_KEY",
+          "OPS_PROJECTION_SIGNING_PKCS8_B64"
         ],
         "services": [
           {
@@ -1253,6 +1396,8 @@
         },
         "vars": {
           "INGEST_CONCURRENCY": "6",
+          "OPS_PROJECTION_ENVIRONMENT": "production",
+          "OPS_PROJECTION_SIGNING_KEY_ID": "ops-projection-20260826-v2",
           "RECEIPT_AUTHORITY_ENVIRONMENT": "production",
           "RECEIPT_AUTHORITY_OPERATION_MODE": "PENDING"
         },
@@ -1298,6 +1443,13 @@
             "database_name": "quant-ingest-staging",
             "migrations_dir": "migrations",
             "migrations_table": "d1_migrations_ingestion"
+          },
+          {
+            "binding": "OPS_PROJECTION_DB",
+            "database_id": "68ee96d5-766c-4832-836b-54c079bd6265",
+            "database_name": "quant-ops-projection-staging",
+            "migrations_dir": "../quant-ops-mcp/migrations/projection",
+            "migrations_table": "d1_migrations_ops_projection"
           }
         ],
         "default_handler": {
@@ -1319,6 +1471,10 @@
         "queue_producers": [],
         "r2_buckets": [
           {
+            "binding": "AUTHORITY_EVIDENCE_BUCKET",
+            "bucket_name": "quant-receipt-evidence-staging"
+          },
+          {
             "binding": "RAW_BUCKET",
             "bucket_name": "quant-raw-staging"
           },
@@ -1331,7 +1487,8 @@
         "route": null,
         "routes": [],
         "secret_names": [
-          "INGESTION_RUN_TOKEN"
+          "INGESTION_RUN_TOKEN",
+          "OPS_PROJECTION_SIGNING_PKCS8_B64"
         ],
         "services": [
           {
@@ -1350,6 +1507,8 @@
         },
         "vars": {
           "INGEST_CONCURRENCY": "2",
+          "OPS_PROJECTION_ENVIRONMENT": "staging",
+          "OPS_PROJECTION_SIGNING_KEY_ID": "ops-projection-cloud-staging-v1",
           "RECEIPT_AUTHORITY_ENVIRONMENT": "staging",
           "RECEIPT_AUTHORITY_OPERATION_MODE": "PENDING"
         },
@@ -1756,7 +1915,9 @@
         "vars": {
           "ALLOWED_LOGIN": "ddnne",
           "DAILY_ROW_QUOTA": "25000",
-          "OAUTH_AUTHORIZATION_SERVER": "https://quant-platform-ops-read-mcp.taku-haga.workers.dev"
+          "OAUTH_AUTHORIZATION_SERVER": "https://quant-platform-ops-read-mcp.taku-haga.workers.dev",
+          "OPS_PROJECTION_ENVIRONMENT": "production",
+          "OPS_PROJECTION_VERIFY_KEY_ID": "ops-projection-20260826-v2"
         },
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
@@ -1918,7 +2079,9 @@
         "vars": {
           "ALLOWED_LOGIN": "ddnne",
           "DAILY_ROW_QUOTA": "25000",
-          "OAUTH_AUTHORIZATION_SERVER": "https://quant-platform-ops-read-mcp.taku-haga.workers.dev"
+          "OAUTH_AUTHORIZATION_SERVER": "https://quant-platform-ops-read-mcp.taku-haga.workers.dev",
+          "OPS_PROJECTION_ENVIRONMENT": "production",
+          "OPS_PROJECTION_VERIFY_KEY_ID": "ops-projection-20260826-v2"
         },
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
@@ -2075,7 +2238,9 @@
         },
         "vars": {
           "ALLOWED_LOGIN": "ddnne",
-          "DAILY_ROW_QUOTA": "25000"
+          "DAILY_ROW_QUOTA": "25000",
+          "OPS_PROJECTION_ENVIRONMENT": "staging",
+          "OPS_PROJECTION_VERIFY_KEY_ID": "ops-projection-cloud-staging-v1"
         },
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
@@ -2165,7 +2330,13 @@
         "route": null,
         "routes": [],
         "secret_names": [],
-        "services": [],
+        "services": [
+          {
+            "binding": "JSDA_INGESTION",
+            "entrypoint": "JsdaReadinessService",
+            "service": "quant-platform-ingestion-jsda"
+          }
+        ],
         "tail_consumers": [],
         "toolchain": {
           "@cloudflare/vitest-plugin": "1.0.0",
@@ -2216,6 +2387,11 @@
         "secret_names": [],
         "services": [
           {
+            "binding": "JSDA_INGESTION",
+            "entrypoint": "JsdaReadinessService",
+            "service": "quant-platform-ingestion-jsda-staging"
+          },
+          {
             "binding": "PREMIUM_RECEIPT_OPERATOR",
             "entrypoint": "PremiumReceiptAuditEvidenceService",
             "service": "quant-platform-ingestion-premium-staging"
@@ -2244,7 +2420,9 @@
         "account_id": null,
         "ai": {},
         "compatibility_date": "2026-08-01",
-        "compatibility_flags": [],
+        "compatibility_flags": [
+          "nodejs_compat"
+        ],
         "config": "platform/workers/receipt-evidence-authority/wrangler.toml",
         "containers": [],
         "crons": [],
@@ -2302,6 +2480,14 @@
           {
             "binding": "AUTHORITY_EVIDENCE_BUCKET",
             "bucket_name": "quant-receipt-evidence"
+          },
+          {
+            "binding": "RAW_BUCKET",
+            "bucket_name": "quant-raw"
+          },
+          {
+            "binding": "STRUCTURED_BUCKET",
+            "bucket_name": "quant-structured"
           }
         ],
         "ratelimits": [],
@@ -2355,7 +2541,9 @@
         "account_id": null,
         "ai": {},
         "compatibility_date": "2026-08-01",
-        "compatibility_flags": [],
+        "compatibility_flags": [
+          "nodejs_compat"
+        ],
         "config": "platform/workers/receipt-evidence-authority/wrangler.toml",
         "containers": [],
         "crons": [],
@@ -2413,6 +2601,14 @@
           {
             "binding": "AUTHORITY_EVIDENCE_BUCKET",
             "bucket_name": "quant-receipt-evidence"
+          },
+          {
+            "binding": "RAW_BUCKET",
+            "bucket_name": "quant-raw"
+          },
+          {
+            "binding": "STRUCTURED_BUCKET",
+            "bucket_name": "quant-structured"
           }
         ],
         "ratelimits": [],
@@ -2466,7 +2662,9 @@
         "account_id": null,
         "ai": {},
         "compatibility_date": "2026-08-01",
-        "compatibility_flags": [],
+        "compatibility_flags": [
+          "nodejs_compat"
+        ],
         "config": "platform/workers/receipt-evidence-authority/wrangler.staging.toml",
         "containers": [],
         "crons": [],
@@ -2524,6 +2722,14 @@
           {
             "binding": "AUTHORITY_EVIDENCE_BUCKET",
             "bucket_name": "quant-receipt-evidence-staging"
+          },
+          {
+            "binding": "RAW_BUCKET",
+            "bucket_name": "quant-raw-staging"
+          },
+          {
+            "binding": "STRUCTURED_BUCKET",
+            "bucket_name": "quant-structured-staging"
           }
         ],
         "ratelimits": [],
@@ -2600,8 +2806,10 @@
             "rpc_methods": [
               "cancelPreProvider",
               "finalizeExact",
+              "finalizeOwnedPaper",
               "heartbeat",
               "markProviderStarted",
+              "queryOwned",
               "release",
               "reserve",
               "reserveOwned",
@@ -2663,7 +2871,12 @@
             ],
             "name": "GatewayService",
             "rpc_methods": [
-              "complete"
+              "cancelControlledPaper",
+              "complete",
+              "finalizeControlledPaper",
+              "heartbeatControlledPaper",
+              "queryControlledPaper",
+              "reserveControlledPaper"
             ]
           }
         ],
@@ -2694,8 +2907,10 @@
             "rpc_methods": [
               "cancelPreProvider",
               "finalizeExact",
+              "finalizeOwnedPaper",
               "heartbeat",
               "markProviderStarted",
+              "queryOwned",
               "release",
               "reserve",
               "reserveOwned",
@@ -2757,7 +2972,12 @@
             ],
             "name": "GatewayService",
             "rpc_methods": [
-              "complete"
+              "cancelControlledPaper",
+              "complete",
+              "finalizeControlledPaper",
+              "heartbeatControlledPaper",
+              "queryControlledPaper",
+              "reserveControlledPaper"
             ]
           }
         ],
@@ -2788,8 +3008,10 @@
             "rpc_methods": [
               "cancelPreProvider",
               "finalizeExact",
+              "finalizeOwnedPaper",
               "heartbeat",
               "markProviderStarted",
+              "queryOwned",
               "release",
               "reserve",
               "reserveOwned",
@@ -2849,7 +3071,12 @@
             ],
             "name": "GatewayService",
             "rpc_methods": [
-              "complete"
+              "cancelControlledPaper",
+              "complete",
+              "finalizeControlledPaper",
+              "heartbeatControlledPaper",
+              "queryControlledPaper",
+              "reserveControlledPaper"
             ]
           }
         ],
@@ -2924,7 +3151,8 @@
         "route": null,
         "routes": [],
         "secret_names": [
-          "MASS_EVAL_TOKEN"
+          "MASS_EVAL_TOKEN",
+          "READY_ED25519_PRIVATE_KEY"
         ],
         "services": [
           {
@@ -2949,7 +3177,7 @@
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
           "ENVIRONMENT": "production",
-          "MASS_EVAL_VERSION": "research-mass-eval/v154-compact-v7-cloud-history",
+          "MASS_EVAL_VERSION": "research-mass-eval/v155-compact-v8-cloud-history",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -2960,7 +3188,18 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
-        "worker_entrypoints": [],
+        "worker_entrypoints": [
+          {
+            "fetch_reserved_special": true,
+            "handlers": [
+              "class"
+            ],
+            "name": "PilotReadyPublicationService",
+            "rpc_methods": [
+              "publishPilotReady"
+            ]
+          }
+        ],
         "workers_dev": true
       },
       "production": {
@@ -3030,7 +3269,8 @@
         "route": null,
         "routes": [],
         "secret_names": [
-          "MASS_EVAL_TOKEN"
+          "MASS_EVAL_TOKEN",
+          "READY_ED25519_PRIVATE_KEY"
         ],
         "services": [
           {
@@ -3055,7 +3295,7 @@
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
           "ENVIRONMENT": "production",
-          "MASS_EVAL_VERSION": "research-mass-eval/v154-compact-v7-cloud-history",
+          "MASS_EVAL_VERSION": "research-mass-eval/v155-compact-v8-cloud-history",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -3066,7 +3306,18 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
-        "worker_entrypoints": [],
+        "worker_entrypoints": [
+          {
+            "fetch_reserved_special": true,
+            "handlers": [
+              "class"
+            ],
+            "name": "PilotReadyPublicationService",
+            "rpc_methods": [
+              "publishPilotReady"
+            ]
+          }
+        ],
         "workers_dev": true
       },
       "staging": {
@@ -3136,7 +3387,8 @@
         "route": null,
         "routes": [],
         "secret_names": [
-          "MASS_EVAL_TOKEN"
+          "MASS_EVAL_TOKEN",
+          "READY_ED25519_PRIVATE_KEY"
         ],
         "services": [
           {
@@ -3161,7 +3413,7 @@
         "vars": {
           "CONTINUOUS_PAPER": "UNARMED",
           "ENVIRONMENT": "staging",
-          "MASS_EVAL_VERSION": "research-mass-eval/v154-compact-v7-cloud-history",
+          "MASS_EVAL_VERSION": "research-mass-eval/v155-compact-v8-cloud-history",
           "MASS_EVAL_WAVE": "research-mass-eval",
           "MASS_RESEARCH": "NO-GO",
           "NETS_ONLY": "deny",
@@ -3172,7 +3424,18 @@
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"
         },
-        "worker_entrypoints": [],
+        "worker_entrypoints": [
+          {
+            "fetch_reserved_special": true,
+            "handlers": [
+              "class"
+            ],
+            "name": "PilotReadyPublicationService",
+            "rpc_methods": [
+              "publishPilotReady"
+            ]
+          }
+        ],
         "workers_dev": true
       }
     }

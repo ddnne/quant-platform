@@ -375,33 +375,52 @@ def _data_snapshot_id_from_open_connection(
     main_file_state: Mapping[str, int] | None = None,
 ) -> str:
     """Derive identity from an already descriptor-pinned SQLite connection."""
-    connection.execute("BEGIN")
-    tables = {
-        str(row["name"])
-        for row in connection.execute(
-            "SELECT name FROM sqlite_schema WHERE type = 'table'"
-        )
-    }
-    manifest_state = _manifest_snapshot_state(connection, tables)
-    if manifest_state is not None:
-        return str(manifest_state["manifest_id"])
-    watermarks = _watermark_state(connection, tables)
-    state: dict[str, Any] = {
-        "format": DATA_SNAPSHOT_FORMAT,
-        "schema": _schema_state(connection),
-        "watermarks": watermarks,
-        "validation": _validation_state(connection, tables),
-    }
-    if not watermarks:
-        if main_file_state is None:
-            raise RuntimeError(
-                "descriptor-pinned snapshot identity has no main-file state"
+    owns_transaction = not connection.in_transaction
+    if owns_transaction:
+        connection.execute("BEGIN")
+    try:
+        tables = {
+            str(row["name"])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_schema WHERE type = 'table'"
             )
-        state["fallback"] = {
-            "fact_tables": _fact_table_state(connection, tables),
-            "main_file": dict(main_file_state),
         }
-    return _canonical_digest(state)
+        manifest_state = _manifest_snapshot_state(connection, tables)
+        if manifest_state is not None:
+            return str(manifest_state["manifest_id"])
+        watermarks = _watermark_state(connection, tables)
+        state: dict[str, Any] = {
+            "format": DATA_SNAPSHOT_FORMAT,
+            "schema": _schema_state(connection),
+            "watermarks": watermarks,
+            "validation": _validation_state(connection, tables),
+        }
+        if not watermarks:
+            if main_file_state is None:
+                raise RuntimeError(
+                    "descriptor-pinned snapshot identity has no main-file state"
+                )
+            state["fallback"] = {
+                "fact_tables": _fact_table_state(connection, tables),
+                "main_file": dict(main_file_state),
+            }
+        return _canonical_digest(state)
+    finally:
+        if owns_transaction:
+            connection.rollback()
+
+
+def _immutable_data_snapshot_id_from_pinned_connection(
+    connection: sqlite3.Connection,
+    *,
+    path: Path,
+) -> str:
+    """Internal Controlled identity read; never reopens the verified path."""
+
+    return _data_snapshot_id_from_open_connection(
+        connection,
+        main_file_state=_main_file_state(path),
+    )
 
 
 def data_snapshot_id(db_path: str | Path) -> str:
@@ -414,4 +433,14 @@ def _immutable_data_snapshot_id(db_path: str | Path) -> str:
     return _data_snapshot_id(db_path, immutable=True)
 
 
-__all__ = ["DATA_SNAPSHOT_FORMAT", "data_snapshot_id"]
+def immutable_data_snapshot_id(db_path: str | Path) -> str:
+    """Canonical logical identity of one immutable SQLite snapshot artifact."""
+
+    return _immutable_data_snapshot_id(db_path)
+
+
+__all__ = [
+    "DATA_SNAPSHOT_FORMAT",
+    "data_snapshot_id",
+    "immutable_data_snapshot_id",
+]

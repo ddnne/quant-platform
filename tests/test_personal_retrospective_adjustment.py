@@ -6,7 +6,7 @@ import json
 
 import features
 import pytest
-from _coreseed import TRADING_DAYS, seed_db
+from _coreseed import TRADING_DAYS, draft_pit_observation_clock, seed_db
 from core import PERSONAL_RETROSPECTIVE_ADJUSTED, run_backtest, standard_cost
 from core.execution import close_as_of
 from core.strategies.buy_hold import BuyHold
@@ -105,13 +105,14 @@ def test_adjusted_close_missing_fails_without_raw_fallback(tmp_path) -> None:
         )
 
 
-def test_retrospective_basis_is_draft_only_and_pit_adjusted_stays_closed() -> None:
-    with pytest.raises(ValueError, match="restricted to local DRAFT"):
+def test_retrospective_basis_allows_controlled_paper_and_pit_adjusted_stays_closed() -> None:
+    with pytest.raises(ValueError, match="DRAFT"):
         PaperRunConfig(
             start="2025-01-01",
             end="2025-01-02",
             lifecycle=Lifecycle.PAPER,
             price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+            execution_mode="am_signal_pm_close",
         )
     with pytest.raises(ValueError, match="not enabled"):
         PaperRunConfig(
@@ -178,6 +179,7 @@ def test_split_safe_value_blacks_out_changed_per_share_units(tmp_path) -> None:
     payload = {
         "Code": "1332",
         "DiscDate": "2025-04-01",
+        "DiscNo": "split-safe-value",
         "CurPerEn": "2025-04-01",
         "BPS": 80.0,
     }
@@ -199,15 +201,16 @@ def test_split_safe_value_blacks_out_changed_per_share_units(tmp_path) -> None:
     )
     store.close()
 
-    output = features.compute(
-        features.get(
-            "retrospective_split_safe_fundamental_value_score",
-            version="1.0.0",
-        ),
-        as_of=close_as_of(days[-1]),
-        code="1332",
-        db_path=db,
-    )
+    with draft_pit_observation_clock(close_as_of(days[-1])):
+        output = features.compute(
+            features.get(
+                "retrospective_split_safe_fundamental_value_score",
+                version="1.0.0",
+            ),
+            as_of=close_as_of(days[-1]),
+            code="1332",
+            db_path=db,
+        )
 
     assert output.value is None
     assert output.metadata["reason"] == "per_share_split_blackout"

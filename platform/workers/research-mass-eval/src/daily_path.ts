@@ -233,7 +233,7 @@ function incompletePack(
     status: "unsupported_strategy",
     daily_path_complete: false,
     skip_reason: reason,
-    eval_path: "controlled_exact_four",
+    eval_path: "controlled_pilot_v1",
     path_fallback: `path_broken_${reason}`,
   };
 }
@@ -376,7 +376,7 @@ export function cellsFromPeriodPacks(
         promote_as_main: false,
         go: false,
         incomplete_reason: pack.skip_reason || pack.status,
-        eval_path: pack.eval_path || "controlled_exact_four",
+        eval_path: pack.eval_path || "controlled_pilot_v1",
         path_fallback: pack.path_fallback || "path_broken_incomplete",
         period_net_dd_only_pass_forbidden: true,
       };

@@ -19,7 +19,8 @@ const INDEX_TS = join(here, "index.ts");
 const LEGACY_SHORT_RATIO_KEY = '{"Date":"2025-04-01","S33":null}';
 const SHORT_RATIO_PAYLOAD = {
   Date: "2025-04-01",
-  S33: null,
+  S33: "0050",
+  Name: "電気・ガス",
   Ratio: 1.25,
 };
 
@@ -136,12 +137,12 @@ describe("NATURAL_KEY_MIGRATION_ID", () => {
 });
 
 describe("naturalKey via identity", () => {
-  it("hashes an incomplete short-ratio identity and keeps a complete pair", async () => {
+  it("rejects an incomplete short-ratio identity and keeps a complete pair", async () => {
     const spec = datasetById("markets_short_ratio");
     expect(spec).toBeDefined();
-    const hashed = await naturalKey(SHORT_RATIO_PAYLOAD, spec!);
-    expect(hashed.startsWith("hash:sha256:")).toBe(true);
-    expect(hashed).not.toBe(LEGACY_SHORT_RATIO_KEY);
+    await expect(naturalKey({ Date: "2025-04-01", Ratio: 1.25 }, spec!)).rejects.toThrow(
+      /governed natural-key field/,
+    );
     expect(
       await naturalKey({ Date: "2025-04-01", S33: "0050", Name: "電気・ガス" }, spec!),
     ).toBe('{"Date":"2025-04-01","S33":"0050"}');

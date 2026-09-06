@@ -6,9 +6,8 @@ Trader, or start execution.  The three positive capability types are nominal
 and non-constructible until their separately permissioned verifiers exist.
 
 ``TraderAuthorizationClaimsV2`` is retained only so existing result manifests
-remain replayable. It is not the production v2 Trader authorization contract;
-that contract uses a deterministic pre-approval subject and a separate
-WebAuthn/ledger evidence envelope in ``exact_four_trader_v2``.
+remain replayable. It is not a production authorization contract. WebAuthn
+Trader v2 is a future live-order surface, not an active Pilot dependency.
 
 The existing v1 verification paths remain available for audit compatibility.
 Nothing in this module enables Mass, live orders, generation two, or automatic
@@ -68,11 +67,14 @@ from execution.exact_four_protocol import (
     require_verified_trader_authorization_v2,
 )
 from selection.controlled_pilot_policy import (
+    CONTROLLED_PILOT_IDENTITY,
     CONTROLLED_PILOT_POLICY_DIGEST,
     CONTROLLED_PILOT_POLICY_ID,
     CONTROLLED_PILOT_POLICY_RAW_DIGEST,
+    ControlledPilotPolicyError,
     ControlledPilotPolicyPin,
     load_controlled_pilot_policy,
+    require_controlled_pilot_identity,
 )
 
 
@@ -239,6 +241,7 @@ class PilotReadinessAttestationClaimsV2:
     issuer: str = "PilotReadyPublicationService/v2"
     format: str = PILOT_READINESS_CLAIMS_FORMAT
     authority_scope: str = PILOT_READINESS_SCOPE
+    identity: str = CONTROLLED_PILOT_IDENTITY
 
     def __post_init__(self) -> None:
         if type(self.snapshot) is not ReadySnapshotLineage:
@@ -276,6 +279,15 @@ class PilotReadinessAttestationClaimsV2:
             )
         self.snapshot.__post_init__()
         self.exact_four.__post_init__()
+        try:
+            require_controlled_pilot_identity(self.identity)
+            require_controlled_pilot_identity(self.exact_four.identity)
+        except ControlledPilotPolicyError as exc:
+            raise ExactFourAuthorityContractError(str(exc)) from exc
+        if self.identity != self.exact_four.identity:
+            raise ExactFourAuthorityContractError(
+                "READY claims identity does not match execution binding identity"
+            )
         _require_bounded_window(
             self.issued_at,
             self.expires_at,
@@ -304,6 +316,7 @@ class PilotReadinessAttestationClaimsV2:
     def to_canonical_dict(self) -> dict[str, Any]:
         return {
             "format": self.format,
+            "identity": self.identity,
             "issuer": self.issuer,
             "authority_scope": self.authority_scope,
             "pilot_run_id": self.pilot_run_id,
@@ -524,8 +537,13 @@ class ControlledExecutionClaimsV2:
     automatic_promotion: bool = False
     mass_research_enabled: bool = False
     live_trading_enabled: bool = False
+    identity: str = CONTROLLED_PILOT_IDENTITY
 
     def __post_init__(self) -> None:
+        try:
+            require_controlled_pilot_identity(self.identity)
+        except ControlledPilotPolicyError as exc:
+            raise ExactFourAuthorityContractError(str(exc)) from exc
         if (
             type(self.format) is not str
             or self.format != CONTROLLED_EXECUTION_CLAIMS_FORMAT
@@ -604,6 +622,7 @@ class ControlledExecutionClaimsV2:
     def to_canonical_dict(self) -> dict[str, Any]:
         return {
             "format": self.format,
+            "identity": self.identity,
             "authority_scope": self.authority_scope,
             "execution_mode": self.execution_mode,
             "pilot_run_id": self.pilot_run_id,
@@ -1065,9 +1084,11 @@ __all__ = [
     "AuthorizedExactFourExecutionV2",
     "CONTROLLED_EXECUTION_CLAIMS_FORMAT",
     "CONTROLLED_EXECUTION_SCOPE",
+    "CONTROLLED_PILOT_IDENTITY",
     "CONTROLLED_PILOT_POLICY_DIGEST",
     "CONTROLLED_PILOT_POLICY_ID",
     "CONTROLLED_PILOT_POLICY_RAW_DIGEST",
+    "require_controlled_pilot_identity",
     "ControlledExecutionClaimsV2",
     "ControlledPilotArtifactCardinality",
     "ControlledPilotPolicyPin",

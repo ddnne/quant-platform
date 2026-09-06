@@ -26,6 +26,7 @@ _GENERIC_ERASURE = (
     "any",
     "unknown",
     "object",
+    "Fetcher",
     "Record<string, unknown>",
     "DurableObjectNamespace<any>",
     "DurableObjectNamespace",
@@ -87,6 +88,36 @@ def _durable_object_type(
             f"{worker}/{environment}: Durable Object class_name is not a typed identifier"
         )
     return f'DurableObjectNamespace<import("{source_import}").{class_name}>'
+
+
+def expected_env_properties(
+    worker: str,
+    environment: str,
+    *,
+    source_import: str = "./src/index",
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Return required Env keys plus optional keys Wrangler emits for ``base``.
+
+    ``wrangler types --env=`` treats an empty selector as unset, so it hashes
+    every environment in the same ``wrangler.toml``. Bindings that exist only
+    under ``[env.production]`` are therefore required on ``ProductionEnv`` and
+    optional (``?:``) on aggregate ``Cloudflare.Env``. Staging lives in a
+    separate config and is not part of that aggregate.
+    """
+    required = expected_types(
+        worker, environment, source_import=source_import
+    )
+    optional: dict[str, str] = {}
+    if environment == "base":
+        production = expected_types(
+            worker, "production", source_import=source_import
+        )
+        optional = {
+            name: type_name
+            for name, type_name in production.items()
+            if name not in required
+        }
+    return required, optional
 
 
 def expected_types(
@@ -156,11 +187,20 @@ def render_assertion(
     *,
     source_import: str = "./src/index",
 ) -> str:
+    required, optional = expected_env_properties(
+        worker, environment, source_import=source_import
+    )
     properties = "\n".join(
-        f"  readonly {_property_name(name)}: {type_name};"
-        for name, type_name in expected_types(
-            worker, environment, source_import=source_import
-        ).items()
+        [
+            *(
+                f"  readonly {_property_name(name)}: {type_name};"
+                for name, type_name in required.items()
+            ),
+            *(
+                f"  readonly {_property_name(name)}?: {type_name};"
+                for name, type_name in optional.items()
+            ),
+        ]
     )
     return f"""// Generated CI assertion; never deployed.
 type ExpectedWorkerEnv = {{
@@ -202,9 +242,11 @@ def write_check(
     source_import = (
         relative_source if relative_source.startswith(".") else f"./{relative_source}"
     )
-    expected = expected_types(
+    required, optional = expected_env_properties(
         worker, environment, source_import=source_import
     )
+    expected = dict(required)
+    expected.update(optional)
     if any(type_name == "Service" for type_name in expected.values()) and re.search(
         r":\s*Fetcher\b", raw
     ):

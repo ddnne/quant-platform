@@ -70,7 +70,7 @@ function panel(options: { adv?: boolean; events?: boolean } = {}): PeriodPanel {
 }
 
 describe("controlled daily path", () => {
-  it("evaluates each exact-four structural path without a catalog id table", () => {
+  it("evaluates each controlled-pilot structural path without a catalog id table", () => {
     const cases = [
       {
         logic_id: "paper_mdh_hold10_momentum_topk",

@@ -1,7 +1,6 @@
 /** Contract-driven natural key, event_time, available_at, and persist run identity. */
 
 import type { DatasetSpec } from "./catalog";
-import { sha256HexFromString } from "./sha256.ts";
 
 /** Persist/SCD2 run identity. crypto.randomUUID, not Math.random. */
 export function newRunId(prefix: string): string {
@@ -81,7 +80,9 @@ export async function naturalKey(
   for (const field of spec.natural_key_fields) {
     const value = pick(row, spec, field);
     if (value === null || value === "") {
-      return `hash:sha256:${await sha256HexFromString(stableJson(row))}`;
+      throw new Error(
+        `governed natural-key field ${field} is absent; structured product is rejected`,
+      );
     }
     picked[field] = value;
   }

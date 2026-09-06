@@ -1,6 +1,7 @@
 name = "quant-platform-receipt-evidence-authority-test"
 main = "src/index.ts"
 compatibility_date = "2026-08-01"
+compatibility_flags = ["nodejs_compat"]
 workers_dev = false
 preview_urls = false
 
@@ -14,6 +15,14 @@ RECEIPT_KEY_GENERATION = "1"
 [[r2_buckets]]
 binding = "AUTHORITY_EVIDENCE_BUCKET"
 bucket_name = "quant-receipt-evidence-test"
+
+[[r2_buckets]]
+binding = "RAW_BUCKET"
+bucket_name = "quant-raw-test"
+
+[[r2_buckets]]
+binding = "STRUCTURED_BUCKET"
+bucket_name = "quant-structured-test"
 
 [[d1_databases]]
 binding = "DB"

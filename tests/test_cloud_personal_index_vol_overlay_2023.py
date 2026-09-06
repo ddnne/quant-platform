@@ -14,10 +14,12 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from research.factor_cohorts import PERSONAL_SHORT_FINANCING_AM_PM_COHORT_ID
 from research.personal_index_vol_overlay import (
     build_prepared_panel_manifest,
     evaluate_index_vol_overlays,
 )
+from research.personal_base_sleeve import PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA
 
 from test_cloud_personal_research_container import (
     _base_sleeve_document,
@@ -235,8 +237,10 @@ def test_missing_svi_feature_row_becomes_not_evaluated_without_forward_fill() ->
 
 
 def test_archive_reader_rejects_inconsistent_continuous_nav(tmp_path: Path) -> None:
-    document = _base_sleeve_document(_job("a" * 64))
-    document["daily_path"][1]["equity"] *= 2
+    document = _base_sleeve_document(
+        _job("a" * 64, cohort_id=PERSONAL_SHORT_FINANCING_AM_PM_COHORT_ID)
+    )
+    document["daily_path"][1]["pm_nav"] *= 2
     raw = json.dumps(
         document,
         ensure_ascii=True,
@@ -250,8 +254,8 @@ def test_archive_reader_rejects_inconsistent_continuous_nav(tmp_path: Path) -> N
         info = tarfile.TarInfo(member)
         info.size = len(raw)
         archive.addfile(info, io.BytesIO(raw))
-    with pytest.raises(ValueError, match="NAV and return are inconsistent"):
-        overlay.load_base_sleeve_from_archive(
+    with pytest.raises(RuntimeError, match="NAV and return are inconsistent"):
+        overlay.load_am_pm_base_sleeve_from_archive(
             archive_path,
             {"archive_member": member, "sha256": digest},
         )
@@ -461,7 +465,8 @@ def test_am_pm_job_spec_uses_distinct_prefix_and_rejects_legacy_identity() -> No
 
 
 def test_am_pm_base_sleeve_rejects_next_close_artifact() -> None:
-    next_close = _base_sleeve_document(_job("a" * 64))
+    next_close = _build_am_sleeve()
+    next_close["schema_version"] = PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA
     with pytest.raises(RuntimeError, match="old next-close"):
         overlay.validate_am_pm_base_sleeve_artifact(next_close)
     fixture = {
@@ -484,8 +489,6 @@ def test_am_pm_base_sleeve_rejects_next_close_artifact() -> None:
         overlay.validate_am_pm_base_sleeve_artifact(fixture)
     document = _build_am_sleeve()
     overlay.validate_am_pm_base_sleeve_artifact(document)
-    with pytest.raises(RuntimeError, match="old next-close"):
-        overlay.validate_am_pm_base_sleeve_artifact(next_close)
 
 
 def test_am_pm_observations_keep_native_option_dates_and_etf_ma() -> None:

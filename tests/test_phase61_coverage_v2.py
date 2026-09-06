@@ -124,18 +124,54 @@ def _signed_digests(
     """Sign with the tmp Ed25519 registry from receipt_ed25519_keys."""
     assert _SIGNED_KEY is not None
     sha_empty = "sha256:" + "0" * 64
+    policy = coverage_contract_for(dataset)
+    contract_id = policy.collection_scope
+    receipt_issue_digest = canonical_evidence_digest(
+        {
+            "schema_version": "test-receipt-issue/v1",
+            "source": source,
+            "contract_id": contract_id,
+            "dataset_id": dataset,
+            "segment_id": segment_id,
+            "run_id": run_id,
+        }
+    )
+    artifact_key = f"test/receipt-products/{source}/{dataset}/{segment_id}/artifact"
+    manifest_key = f"test/receipt-products/{source}/{dataset}/{segment_id}/manifest"
+    raw_manifest_key = f"test/receipt-raw/{source}/{dataset}/{segment_id}/manifest"
     scope = {
         "environment": PRODUCTION_RECEIPT_ENVIRONMENT,
         "authority_instance_digest": PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
-        "coverage_policy_version": coverage_contract_for(dataset).policy_version,
+        "coverage_policy_version": policy.policy_version,
+        "source": source,
+        "contract_id": contract_id,
         "dataset": dataset,
         "segment_id": segment_id,
-        "source": source,
         "segment_start": segment_start,
         "segment_end": segment_end,
         "expected_scope": dict(expected_scope or {}),
         "expected_items": expected_items,
     }
+    structured_digest_value = structured_digest or sha_empty
+    authority_extras = canonical_test_authority_extra_digests(
+        source=source,
+        dataset=dataset,
+        segment_id=segment_id,
+        run_id=run_id,
+        extra_digests=extra_digests,
+    )
+    authority_extras.setdefault(
+        "product_artifact_digest", structured_digest_value
+    )
+    authority_extras.setdefault(
+        "product_manifest_digest",
+        canonical_evidence_digest(
+            {
+                "artifact_key": artifact_key,
+                "artifact_digest": structured_digest_value,
+            }
+        ),
+    )
     claims = {
         **scope,
         "observed_items": raw_count if observed_items is None else observed_items,
@@ -143,26 +179,36 @@ def _signed_digests(
         "raw_digest": raw_digest,
         "raw_count": raw_count,
         "structured_count": structured_count,
-        "structured_digest": structured_digest or sha_empty,
+        "structured_digest": structured_digest_value,
         "pagination_exhausted": pagination_exhausted,
         "discovery_exhausted": pagination_exhausted,
         "status": "SUCCESS",
         "error": None,
         "source_request_digest": source_request_digest or sha_empty,
         "raw_manifest_digest": raw_manifest_digest or raw_digest,
+        "receipt_issue_digest": receipt_issue_digest,
+        "artifact_key": artifact_key,
+        "artifact_byte_count": max(1, structured_count),
+        "manifest_key": manifest_key,
+        "manifest_byte_count": 1,
+        "raw_manifest_key": raw_manifest_key,
+        "raw_manifest_byte_count": 1,
+        "raw_byte_count": max(1, raw_count),
+        "natural_key_digest": canonical_evidence_digest(
+            {
+                "schema_version": "test-natural-keys/v1",
+                "dataset": dataset,
+                "segment_id": segment_id,
+                "structured_count": structured_count,
+            }
+        ),
         "structured_generation": (
             structured_generation if structured_generation is not None else run_id
         ),
         "scope_digest": canonical_evidence_digest(scope),
         "run_id": run_id,
         "checked_at": checked_at,
-        "extra_digests": canonical_test_authority_extra_digests(
-            source=source,
-            dataset=dataset,
-            segment_id=segment_id,
-            run_id=run_id,
-            extra_digests=extra_digests,
-        ),
+        "extra_digests": authority_extras,
     }
     claims["observation_digest"] = canonical_evidence_digest(claims)
     signed = build_test_signed_digest_fields(
@@ -222,8 +268,8 @@ def test_sticky_complete_cannot_use_transplanted_outer_identity():
     ) is None
 
 
-def test_event_zero_successful_exhausted_raw_receipt_is_complete():
-    """Genuine event_driven fins windows COMPLETE on empty exhausted receipts."""
+def test_policy_bearing_expected_empty_extra_is_not_v3_complete():
+    """Unknown policy-bearing extras cannot extend the v3 signed inventory."""
     for dataset_id in (
         "fins_summary",
         "fins_details",
@@ -244,8 +290,8 @@ def test_event_zero_successful_exhausted_raw_receipt_is_complete():
                 extra_digests={EXPECTED_EMPTY_WITH_EVIDENCE: True},
             ),
         )
-        assert status == "COMPLETE", dataset_id
-        assert detail["event_zero"] is True
+        assert status == "PARTIAL", dataset_id
+        assert "digest inventory" in detail["reason"]
 
 
 def test_tip_snapshot_empty_receipt_is_partial_not_complete():

@@ -119,6 +119,45 @@ def test_missing_table_or_column_is_invalid() -> None:
     assert _state(missing_column) == "invalid"
 
 
+def test_unrelated_missing_nullable_column_is_invalid() -> None:
+    def build(connection: sqlite3.Connection) -> None:
+        stamp_compact_manifest(connection)
+        connection.execute(
+            PERSONAL_HISTORY_COMPACT_MASTER_CREATE_SQL.replace(
+                "    source_scale_category TEXT,\n", ""
+            )
+        )
+        connection.execute(PERSONAL_HISTORY_COMPACT_BARS_CREATE_SQL)
+
+    assert _state(build) == "invalid"
+
+
+def test_old_v8_missing_morning_close_column_is_compact() -> None:
+    def build(connection: sqlite3.Connection) -> None:
+        stamp_compact_manifest(connection)
+        connection.execute(PERSONAL_HISTORY_COMPACT_MASTER_CREATE_SQL)
+        connection.execute(
+            PERSONAL_HISTORY_COMPACT_BARS_CREATE_SQL.replace(
+                "    morning_close REAL,\n", ""
+            )
+        )
+
+    assert _state(build) == "compact"
+
+
+def test_wrong_type_morning_close_is_invalid() -> None:
+    def build(connection: sqlite3.Connection) -> None:
+        stamp_compact_manifest(connection)
+        connection.execute(PERSONAL_HISTORY_COMPACT_MASTER_CREATE_SQL)
+        connection.execute(
+            PERSONAL_HISTORY_COMPACT_BARS_CREATE_SQL.replace(
+                "morning_close REAL", "morning_close TEXT"
+            )
+        )
+
+    assert _state(build) == "invalid"
+
+
 def test_view_under_compact_name_is_invalid() -> None:
     def build(connection: sqlite3.Connection) -> None:
         stamp_compact_manifest(connection)
@@ -217,16 +256,16 @@ def test_integer_available_at_nullable_and_no_pk_lookalikes_are_invalid() -> Non
     integer_available_at = PERSONAL_HISTORY_COMPACT_MASTER_CREATE_SQL.replace(
         "available_at TEXT NOT NULL", "available_at INTEGER NOT NULL", 1
     )
-    nullable_available_at = PERSONAL_HISTORY_COMPACT_BARS_CREATE_SQL.replace(
-        "available_at TEXT NOT NULL", "available_at TEXT", 1
+    nullable_close = PERSONAL_HISTORY_COMPACT_BARS_CREATE_SQL.replace(
+        "close REAL NOT NULL", "close REAL", 1
     )
     no_pk = PERSONAL_HISTORY_COMPACT_MASTER_CREATE_SQL.replace(
-        ",\n    PRIMARY KEY (snapshot_date, code)\n) WITHOUT ROWID",
+        ",\n    PRIMARY KEY (snapshot_date, code, available_at, ingested_at)\n) WITHOUT ROWID",
         "\n)",
         1,
     )
     wrong_pk = PERSONAL_HISTORY_COMPACT_MASTER_CREATE_SQL.replace(
-        "PRIMARY KEY (snapshot_date, code)",
+        "PRIMARY KEY (snapshot_date, code, available_at, ingested_at)",
         "PRIMARY KEY (code, snapshot_date)",
         1,
     )
@@ -239,7 +278,7 @@ def test_integer_available_at_nullable_and_no_pk_lookalikes_are_invalid() -> Non
     def nullable_bars(connection: sqlite3.Connection) -> None:
         stamp_compact_manifest(connection)
         connection.execute(PERSONAL_HISTORY_COMPACT_MASTER_CREATE_SQL)
-        connection.execute(nullable_available_at)
+        connection.execute(nullable_close)
 
     def missing_pk(connection: sqlite3.Connection) -> None:
         stamp_compact_manifest(connection)
@@ -295,8 +334,8 @@ def test_generic_calendar_and_fins_are_allowed() -> None:
     assert _state(build) == "compact"
 
 
-def test_compact_format_constant_is_v7() -> None:
-    assert PERSONAL_HISTORY_COMPACT_FORMAT == "personal-draft-history/v7"
+def test_compact_format_constant_is_v8() -> None:
+    assert PERSONAL_HISTORY_COMPACT_FORMAT == "personal-draft-history/v8"
 
 
 def test_insert_compact_bar_defaults_to_official_session_close() -> None:

@@ -1,12 +1,17 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "purpose": "controlled_trader_authorization_verification",
+  "environment": "production",
+  "authority_instance_id": "trader-authority/production/v1",
   "keys": [
     {
       "key_id": "trader-authorization-20260825-v1",
       "algorithm": "Ed25519",
       "public_key_b64": "WBDPvEg6RW7vUDxBgTn+W6Y50pSc3WddXnDINKTRc2g=",
-      "status": "revoked"
+      "status": "revoked",
+      "not_before": "2026-01-01T00:00:00Z",
+      "not_after": "2099-01-01T00:00:00Z",
+      "revoked_at": "2026-08-25T00:00:00Z"
     }
   ]
 }

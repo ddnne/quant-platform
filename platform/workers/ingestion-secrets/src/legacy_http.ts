@@ -98,11 +98,11 @@ export async function handleHttpRequest(
     env, request, url.pathname, startedAt, response, outcome, datasetPath,
   );
 
-  if (url.pathname === "/health") {
+  if (url.pathname === "/health" || url.pathname === "/health/ready") {
     if (request.method !== "GET") {
       return reply(json({ error: "GET required" }, 405), "method_rejected");
     }
-    return reply(json({ ok: true, worker: "ingestion-secrets" }), "health");
+    return reply(json({ ok: true, live: true, worker: "ingestion-secrets" }), "health");
   }
 
   if (url.pathname === "/v1/proxy/jquants") {

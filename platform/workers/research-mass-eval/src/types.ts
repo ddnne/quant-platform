@@ -7,6 +7,8 @@ export type Env = Omit<Cloudflare.Env, "AI_GATEWAY" | "JQUANTS_ACQUISITION"> & {
   AI_GATEWAY: GatewayRpc;
   JQUANTS_ACQUISITION?: JquantsAcquisitionRpc;
   MASS_EVAL_TOKEN?: string;
+  READY_ED25519_PRIVATE_KEY?: string;
+  READY_ED25519_KEY_ID?: string;
   PERSONAL_RESEARCH_CONTAINER?: DurableObjectNamespace<PersonalResearchContainer>;
 };
 

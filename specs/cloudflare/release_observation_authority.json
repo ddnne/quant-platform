@@ -10,15 +10,15 @@
       "target_worker": "quant-platform-ingestion-jsda",
       "endpoint": "/health/ready",
       "transport": "private-service-binding",
-      "binding_name": null,
-      "transport_implemented": false,
-      "status": "HOLD"
+      "binding_name": "JSDA_INGESTION",
+      "transport_implemented": true,
+      "collector_worker": "receipt-activation-observer",
+      "status": "PENDING"
     }
   },
   "closure_requires": [
-    "isolated-release-observation-principal",
-    "active-public-key-registry",
-    "exact-response-byte-signatures",
+    "existing-release-evidence-trust-root",
+    "exact-response-bytes-bound-to-response-digest",
     "private-jsda-readiness-service-binding",
     "independent-staging-and-production-acceptance"
   ]

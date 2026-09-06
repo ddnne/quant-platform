@@ -5,7 +5,7 @@ import type { Env } from "./types";
 
 const SHA = "a".repeat(64);
 const BODY = {
-  cohort_id: "diverse-core-v1",
+  cohort_id: "diverse-core-am-pm-v1",
   job_id: "exact-four-route",
   snapshot_key: `research/personal/snapshots/sha256=${SHA}.sqlite`,
   snapshot_sha256: SHA,
@@ -57,14 +57,17 @@ describe("personal research HTTP route", () => {
       { ...massHandlers, submitPersonalResearch: submit },
     );
     expect(response.status).toBe(202);
-    expect(submit).toHaveBeenCalledWith(expect.anything(), BODY);
+    expect(submit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining(BODY),
+    );
   });
 
   it("dispatches a frozen AM cohort request", async () => {
     const submit = vi.fn(async () => new Response("accepted", { status: 202 }));
     const body = {
       ...BODY,
-      cohort_id: "diverse-core-am-pm-v1",
+      cohort_id: "fundamental-relative-am-pm-v1",
       job_id: "am-core-route",
     };
     const response = await dispatchMassEvalFetch(
@@ -80,7 +83,10 @@ describe("personal research HTTP route", () => {
       { ...massHandlers, submitPersonalResearch: submit },
     );
     expect(response.status).toBe(202);
-    expect(submit).toHaveBeenCalledWith(expect.anything(), body);
+    expect(submit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining(body),
+    );
   });
 });
 

@@ -6,7 +6,11 @@
  */
 export function handleHealthRequest(request) {
   const url = new URL(request.url);
-  if (url.pathname !== "/healthz" && url.pathname !== "/health") return null;
+  if (
+    url.pathname !== "/healthz" &&
+    url.pathname !== "/health" &&
+    url.pathname !== "/health/ready"
+  ) return null;
   if (request.method !== "GET" && request.method !== "HEAD") {
     return new Response(null, { status: 405, headers: { Allow: "GET, HEAD" } });
   }

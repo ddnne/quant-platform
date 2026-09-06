@@ -9,6 +9,7 @@ import {
   PERSONAL_SVI_2023_STRATEGY_ID,
   personalSviFeatureKey,
   personalSviInputManifestKey,
+  personalSviJobRequestDigest,
   personalSviReportKey,
   personalSviTerminalManifestKey,
   type PersonalSviInputManifest,
@@ -301,5 +302,56 @@ describe("manifest-constrained SVI Container R2 capability", () => {
     expect(await replay.response.json()).toMatchObject({ created: false });
     const conflict = await put(featureKey, '{"date":"changed"}\n', "jsonl");
     expect(conflict.response.status).toBe(409);
+  });
+
+  it("rejects late child output creation after an exact FAILED terminal", async () => {
+    const fixed = await fixture();
+    const terminalKey = personalSviTerminalManifestKey(fixed.jobId);
+    const terminal = {
+      status: "FAILED",
+      job_id: fixed.jobId,
+      cohort_id: PERSONAL_SVI_2023_COHORT_ID,
+      runner_version: PERSONAL_SVI_2023_RUNNER_VERSION,
+      input_manifest_digest: fixed.inputDigest,
+      request_digest: await personalSviJobRequestDigest(
+        { job_id: fixed.jobId, cohort_id: PERSONAL_SVI_2023_COHORT_ID },
+        fixed.inputDigest,
+      ),
+      draft_only: true,
+      screening_only: true,
+      ready: false,
+      mass: false,
+      promotion: false,
+      live_orders: false,
+      go: false,
+      not_a_pass: true,
+    };
+    fixed.mem.seed(
+      terminalKey,
+      new TextEncoder().encode(JSON.stringify(terminal)),
+      "failed-terminal",
+    );
+    const featureKey = personalSviFeatureKey(fixed.jobId);
+    const bytes = new TextEncoder().encode('{"date":"late"}\n');
+    const response = await personalSviR2Outbound(
+      new Request(`http://research.r2/${featureKey}`, {
+        method: "PUT",
+        headers: {
+          ...fixed.headers,
+          "content-length": String(bytes.byteLength),
+          "x-content-sha256": `sha256:${await sha256Hex(bytes)}`,
+        },
+        body: bytes,
+      }),
+      { STRUCTURED_BUCKET: fixed.mem.asBucket() },
+      featureKey,
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: "SVI terminal already exists",
+    });
+    expect(fixed.mem.objects.has(featureKey)).toBe(false);
+    expect(fixed.mem.putOptions).toHaveLength(0);
   });
 });

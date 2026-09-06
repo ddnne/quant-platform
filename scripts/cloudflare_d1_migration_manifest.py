@@ -48,58 +48,37 @@ TARGETS: Mapping[str, Mapping[str, str]] = {
 
 APPLICATION_POLICIES: Mapping[str, Mapping[str, Any]] = {
     "quant-ingest": {
-        "mode": "source-only-hold/v2",
-        "owner_command": None,
-        "observation_recovery_command": (
-            "scripts/apply_ingestion_d1_migrations.py"
-        ),
-        "remote_mutation_authorized": False,
+        "mode": "single-operator-cloudflare/v1",
+        "owner_command": "scripts/activate_jsda_v3_cutover.py",
+        "check_command": "scripts/apply_ingestion_d1_migrations.py --check",
+        "remote_mutation_authority": "OWNER_COMMAND_ONLY",
+        "direct_wrangler_apply": "FORBIDDEN",
         "environment_order": ["staging", "production"],
-        "authorization_state": {
-            "staging": "HOLD",
-            "production": "HOLD",
+        "rollback_authority": "CLOUDFLARE_D1_TIME_TRAVEL",
+        "local_whole_file_export_in_cutover": "FORBIDDEN",
+        "recovery_cache": {
+            "role": "SMALL_CREATE_ONLY_CONTROL_INTENT",
+            "authority": False,
+            "source_of_truth": "REMOTE_D1_CUTOVER_RUN_AND_LIVE_CLOUDFLARE",
         },
-        "canonical_reservation_identity": [
-            "environment",
-            "database_id",
-            "source_sha",
-            "canonical_manifest_digest",
-        ],
-        "hold_until": [
-            "trusted-remote-cross-host-exclusive-lock",
-            "trusted-control-plane-source-sha-attestation",
-        ],
-        "local_o_excl_role": "SINGLE_HOST_CRASH_AUDIT_MARKER_ONLY",
-        "production_staging_evidence": (
-            "independent-canonical-staging-d1-reobservation"
+        "lease": {
+            "store": "quant_ingest_mutation_lease",
+            "acquire": "D1_CAS",
+            "spawn_fence": "MIGRATING_REMOTE_SPAWNED",
+            "sticky_after_spawn": True,
+        },
+        "pending_from_live_applied_through": "quant-ingest:0010_raw_acquisition_status",
+        "production_admission": (
+            "STAGING_ACTIVATED_SAME_SOURCE_SHA_AND_LIVE_CONFIG_QUEUE_CRON_SMOKE"
         ),
-        "caller_staging_artifacts": "FORBIDDEN",
-        "encrypted_backup_role": "ROLLBACK_ONLY",
-        "encrypted_backup_grants_authority": False,
-        "recovery_states": {
-            "APPLIED": "fresh-exact-canonical-postflight-and-zero-pending",
-            "NOT_APPLIED": (
-                "fresh-observation-exactly-matches-recorded-preflight-baseline"
-            ),
-            "UNKNOWN": "all-other-or-unobservable-states",
-        },
-        "recovery_grants_mutation_authority": False,
-        "jsda_acceptance": {
-            "endpoint": "/health/ready",
-            "http_status": 200,
-            "product_ready": True,
-            "cutover": "V3_ACTIVE",
-            "response_digest_bound_to_provenance": True,
-            "deployment_version_and_source_sha_bound": True,
-        },
         "requires": [
             "canonical-live-database-identity",
-            "time-travel-bookmark",
-            "rollback-only-encrypted-export-checksum",
-            "exact-export-preflight",
-            "exact-export-postflight",
-            "signed-jsda-v3-cutover-authority-before-readiness",
-            "jsda-v3-readiness-smoke-before-product-acceptance",
+            "production-backend-time-travel",
+            "pre-migration-bookmark-after-writer-and-queue-quiescence",
+            "bookmark-and-undo-persisted-before-migration",
+            "same-d1-cas-mutation-lease",
+            "exact-remote-schema-and-migration-inventory",
+            "staging-activation-before-production",
         ],
     },
     "quant-ops-projection": {
@@ -219,9 +198,9 @@ def build_manifest() -> dict[str, Any]:
     manifest = {
         "schema_version": "cloudflare-d1-migration-manifest/v2",
         "applied_state_policy": (
-            "UNVERIFIED is fail-closed source state; source policy HOLD never "
-            "authorizes remote mutation, and remote post-apply state belongs in "
-            "immutable release evidence"
+            "UNVERIFIED is fail-closed source state; only the single operator "
+            "command may mutate remote D1 under the same-D1 CAS lease, and "
+            "remote post-apply state belongs in immutable release evidence"
         ),
         "targets": targets,
     }

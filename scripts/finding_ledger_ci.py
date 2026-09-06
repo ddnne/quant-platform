@@ -4,10 +4,10 @@
 This command deliberately does not authorize a production release or decide
 source safety.  It validates only the tracked schema and finding inventory;
 independent review may accept an inactive fail-closed implementation even when
-an OPEN row still needs source work, administration, or a human-present
-ceremony.  Authenticated deployment acceptance, release evidence, READY
-publication, and Controlled Pilot entrypoints continue to call
+an OPEN row still needs source work or administration.  Authenticated
+deployment acceptance and release-evidence construction continue to call
 ``finding_ledger_gate.py`` and require every P0 finding to be FIXED.
+Runtime Worker paths enforce keys, READY, and Trader themselves.
 """
 
 from __future__ import annotations

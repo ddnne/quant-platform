@@ -39,7 +39,7 @@ def _main() -> int:
         str(root / "packages" / "research_runtime"),
         str(root / "packages" / "product"),
     ]
-    from research.personal_cli import main
+    from cf_platform.personal_offline_cli import main
 
     return main()
 

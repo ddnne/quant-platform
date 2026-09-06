@@ -21,10 +21,14 @@ from ops.projection_content import (
     PROJECTED_CONTENT_TABLES,
     build_projection_content_manifest,
 )
+from core.execution import close_as_of
 from ops.receipt_product import (
     canonical_product_artifact_bytes,
+    iter_observed_segment_product_rows,
     product_artifact_digest,
+    product_artifact_digest_ordered,
 )
+from pit.query import normalize_as_of
 from ops.projection_signing import (
     ENVELOPE_SCHEMA,
     sha256_digest,
@@ -130,8 +134,9 @@ def _signed_projection_evidence(
         "generation_id": "projection-generation-7",
         "content_digest": content_digest,
         "source_db_digest": digest,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "producer_commit_sha": "deadbeef",
+        "worker_version_id": "11111111-2222-4333-8444-555555555555",
         "contract_digest": digest,
         "registry_digest": digest,
         "coverage_policy_version": policy_set["policy_version"],
@@ -994,6 +999,7 @@ def test_signed_projection_cursor_must_equal_local_snapshot_generation() -> None
 
 _SCOPE_DATASETS = (
     "equities_bars_daily",
+    "equities_bars_daily_am",
     "equities_master",
     "fins_summary",
     "indices_bars_daily_topix",
@@ -1031,8 +1037,12 @@ def _mini_exact_scope_binding() -> SimpleNamespace:
 def _seed_exact_pit_scope(
     tmp_path,
     receipt_ed25519_keys,
+    *,
+    include_nonmember_rows: bool = False,
+    include_after_decision_rows: bool = False,
+    poison_unselected_rows: bool = False,
 ) -> tuple[object, object]:
-    """Five-day exact natural-key closure with governed v4 receipts."""
+    """Synthetic five-day exact natural-key closure with governed v4 receipts."""
     db_path = tmp_path / "pit-scope.sqlite"
     calendar_dates: list[str] = []
     cursor = date(2023, 1, 2)
@@ -1072,6 +1082,16 @@ def _seed_exact_pit_scope(
             }
             for day in calendar_dates
         ],
+        "equities_bars_daily_am": [
+            {
+                "Code": "1332",
+                "Date": day,
+                "MAdjC": 100.0,
+                "trusted_receipt_digest": "sha256:" + ("ab" * 32),
+                "product_snapshot_id": "sha256:" + ("cd" * 32),
+            }
+            for day in calendar_dates
+        ],
         "indices_bars_daily_topix": [
             {
                 "Date": day,
@@ -1083,16 +1103,63 @@ def _seed_exact_pit_scope(
             for day in calendar_dates
         ],
     }
+    if include_nonmember_rows:
+        payloads["equities_master"].append(
+            {
+                "Code": "9999",
+                "Date": "2023-01-02",
+                "CompanyName": "Standard Nonmember",
+                "MarketCode": "0112",
+            }
+        )
+        payloads["fins_summary"].append(
+            {
+                "Code": "9999",
+                "DiscDate": "2023-01-03",
+                "DiscTime": "08:00:00",
+                "DiscNo": "disc-9999",
+            }
+        )
+        payloads["equities_bars_daily"].extend(
+            {
+                "Code": "9999",
+                "Date": day,
+                "Open": 50.0,
+                "High": 51.0,
+                "Low": 49.0,
+                "Close": 50.0,
+                "Volume": 500.0,
+            }
+            for day in calendar_dates
+        )
+        payloads["equities_bars_daily_am"].extend(
+            {
+                "Code": "9999",
+                "Date": day,
+                "MAdjC": 50.0,
+                "trusted_receipt_digest": "sha256:" + ("ef" * 32),
+                "product_snapshot_id": "sha256:" + ("01" * 32),
+            }
+            for day in calendar_dates
+        )
     ingestion_clocks = {
         "markets_calendar": "2022-12-01T00:00:00+09:00",
         "equities_master": "2023-01-02T08:00:00+09:00",
         "fins_summary": "2023-01-03T08:00:00+09:00",
         "equities_bars_daily": "2023-01-06T16:00:00+09:00",
+        "equities_bars_daily_am": "2023-01-06T11:30:00+09:00",
         "indices_bars_daily_topix": "2023-01-06T16:00:00+09:00",
     }
     with SqliteStore(db_path) as store:
         store._conn.execute(  # noqa: SLF001
             "ALTER TABLE ingestion_run_log ADD COLUMN authority_operation_id TEXT"
+        )
+        store._conn.execute(  # noqa: SLF001
+            "CREATE TABLE IF NOT EXISTS snapshot_observation_clock "
+            "(observed_through TEXT NOT NULL)"
+        )
+        store._conn.execute(  # noqa: SLF001
+            "INSERT INTO snapshot_observation_clock VALUES ('2023-01-06T11:30:00+09:00')"
         )
         store._conn.executescript(  # noqa: SLF001
             """
@@ -1116,13 +1183,48 @@ def _seed_exact_pit_scope(
             """
         )
         for dataset_id in _SCOPE_DATASETS:
+            rows = payloads[dataset_id]
+            if dataset_id == "equities_bars_daily_am":
+                for row in rows:
+                    day = str(row["Date"])
+                    store.upsert(
+                        "jquants_records",
+                        normalize_generic(
+                            [row],
+                            dataset=dataset_id,
+                            ingested_at=f"{day}T11:30:00+09:00",
+                        ),
+                    )
+            else:
+                store.upsert(
+                    "jquants_records",
+                    normalize_generic(
+                        rows,
+                        dataset=dataset_id,
+                        ingested_at=ingestion_clocks[dataset_id],
+                    ),
+                )
+        if include_after_decision_rows:
             store.upsert(
                 "jquants_records",
                 normalize_generic(
-                    payloads[dataset_id],
-                    dataset=dataset_id,
-                    ingested_at=ingestion_clocks[dataset_id],
+                    [
+                        {
+                            "Code": "1332",
+                            "DiscDate": "2023-01-06",
+                            "DiscTime": "16:00:00",
+                            "DiscNo": "disc-1332-after-close",
+                        }
+                    ],
+                    dataset="fins_summary",
+                    ingested_at="2023-01-06T16:00:00+09:00",
                 ),
+            )
+        if poison_unselected_rows and include_after_decision_rows:
+            store._conn.execute(  # noqa: SLF001
+                "UPDATE jquants_records SET natural_key='after-decision-noncanonical' "
+                "WHERE dataset='fins_summary' "
+                "AND payload LIKE '%disc-1332-after-close%'"
             )
         authority = _TestSignedReceiptAuthority(
             signing_key=receipt_ed25519_keys.signing_key
@@ -1251,14 +1353,117 @@ def _seed_exact_pit_scope(
     return db_path, _mini_exact_scope_binding()
 
 
+AUTHENTICATED_EXPORT_AT = "2026-08-25T12:00:00+00:00"
+
+
+def authenticate_applied_mirror(
+    path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    exported_at: str = AUTHENTICATED_EXPORT_AT,
+) -> str:
+    """Seal one existing SQLite file as the current authenticated applied mirror."""
+    from ops import d1_sync_signing as signing
+    from scripts import sync_d1_to_sqlite as sync
+    from storage.sqlite_store import SqliteStore
+    from tests.test_d1_sync_signing import (
+        _install_external_key_registry,
+        _install_test_sealed_audit,
+        _resign,
+        _signed_document,
+    )
+
+    now = datetime.fromisoformat(exported_at)
+    private, _registry_path, registry = _install_external_key_registry(
+        path.parent, monkeypatch
+    )
+    monkeypatch.setattr(signing, "_utc_now", lambda: now)
+    store = SqliteStore(path)
+    store._conn.execute("DROP TABLE IF EXISTS personal_history_manifest")  # noqa: SLF001
+    sync._ensure_control_tables(store._conn)  # noqa: SLF001
+    sync._ensure_export_sync_audit(store)
+    existing = {
+        row[0]
+        for row in store._conn.execute(  # noqa: SLF001
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+    }
+    for table in sync.DEFAULT_TABLES:
+        if table not in existing:
+            store._conn.execute(  # noqa: SLF001
+                f'CREATE TABLE "{table}" (placeholder TEXT)'
+            )
+    applied = sync._last_change_seq(store)
+    if applied <= 0:
+        sync._record_change_seq(store, 7)
+        applied = 7
+    store._conn.commit()  # noqa: SLF001
+    content, schema, counts = sync._private_export.governed_content_identity(
+        store._conn, sync.DEFAULT_TABLES  # noqa: SLF001
+    )
+    document = _signed_document(private, registry, issued_at=now)
+    document["envelope"].update(
+        {
+            "source_content_digest": content,
+            "local_content_digest": content,
+            "source_schema_digest": schema,
+            "schema_digest": schema,
+            "table_counts": counts,
+            "source_change_seq": applied,
+            "applied_change_seq": applied,
+            "exported_at": exported_at,
+            "issued_at": exported_at,
+        }
+    )
+    _resign(private, document)
+    _install_test_sealed_audit(monkeypatch, document)
+    sync._mark_authenticated_export_complete(store, object())
+    sync._freeze_authenticated_current_applied_mirror(store)
+    store.close()
+    return exported_at
+
+
+def _open_ready_handle(
+    path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    exported_at: str = AUTHENTICATED_EXPORT_AT,
+):
+    from scripts import sync_d1_to_sqlite as sync
+
+    authenticate_applied_mirror(path, monkeypatch, exported_at=exported_at)
+    return sync.open_authenticated_applied_mirror(path)
+
+
+def _verify_scope(
+    path: Path,
+    binding,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    exported_at: str = AUTHENTICATED_EXPORT_AT,
+):
+    handle = _open_ready_handle(path, monkeypatch, exported_at=exported_at)
+    return _verify_exact_four_pit_dependency_scope(handle, binding)
+
+
+def _mutate_sqlite(path: Path, sql: str, params: tuple[object, ...] = ()) -> None:
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(sql, params)
+        connection.commit()
+    finally:
+        connection.close()
+
+
 def test_exact_pit_dependency_scope_accepts_complete_receipt_bound_fixture(
     tmp_path,
     receipt_ed25519_keys,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db_path, binding = _seed_exact_pit_scope(
         tmp_path, receipt_ed25519_keys
     )
-    proof = _verify_exact_four_pit_dependency_scope(db_path, binding)
+    proof = _verify_scope(db_path, binding, monkeypatch)
     assert proof["status"] == "PASS"
     assert proof["period_start"] == "2023-01-04"
     assert proof["period_end"] == "2023-01-06"
@@ -1267,33 +1472,263 @@ def test_exact_pit_dependency_scope_accepts_complete_receipt_bound_fixture(
         _SCOPE_DATASETS
     )
     assert all(row["receipt_digests"] for row in proof["entries"])
+    assert proof["exported_at"] == AUTHENTICATED_EXPORT_AT
+    assert proof["observed_through"] == AUTHENTICATED_EXPORT_AT
+    listing_conn = sqlite3.connect(db_path)
+    try:
+        listing = listing_conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='personal_history_manifest'"
+        ).fetchone()
+    finally:
+        listing_conn.close()
+    assert listing is None
+
+
+def test_exact_pit_dependency_scope_verifies_full_source_artifact_before_universe_selection(
+    tmp_path,
+    receipt_ed25519_keys,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path, binding = _seed_exact_pit_scope(
+        tmp_path,
+        receipt_ed25519_keys,
+        include_nonmember_rows=True,
+    )
+
+    proof = _verify_scope(db_path, binding, monkeypatch)
+
+    assert proof["status"] == "PASS"
+    assert all(
+        day["member_count"] == 1 for day in proof["universe_daily_summary"]
+    )
+    selected_counts = {
+        entry["dataset_id"]: entry["natural_key_count"]
+        for entry in proof["entries"]
+    }
+    with sqlite3.connect(db_path) as connection:
+        full_artifact_counts = dict(
+            connection.execute(
+                "SELECT dataset,row_count FROM receipt_product_materializations"
+            ).fetchall()
+        )
+    for dataset_id in (
+        "equities_master",
+        "fins_summary",
+        "equities_bars_daily",
+        "equities_bars_daily_am",
+    ):
+        assert full_artifact_counts[dataset_id] > selected_counts[dataset_id]
+
+
+def test_exact_pit_scope_verifies_full_artifact_excluding_after_cutoff_and_nonmember_from_selection(
+    tmp_path,
+    receipt_ed25519_keys,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path, binding = _seed_exact_pit_scope(
+        tmp_path,
+        receipt_ed25519_keys,
+        include_nonmember_rows=True,
+        include_after_decision_rows=True,
+        poison_unselected_rows=True,
+    )
+    with SqliteStore(db_path) as store:
+        store.upsert(
+            "jquants_records",
+            normalize_generic(
+                [
+                    {
+                        "Code": "1332",
+                        "DiscDate": "2023-01-05",
+                        "DiscTime": "08:00:00",
+                        "DiscNo": "disc-1332-late-observation",
+                    }
+                ],
+                dataset="fins_summary",
+                ingested_at="2026-08-26T00:00:00+09:00",
+            ),
+        )
+
+    proof = _verify_scope(db_path, binding, monkeypatch)
+
+    assert proof["status"] == "PASS"
+    selected = {
+        entry["dataset_id"]: entry for entry in proof["entries"]
+    }
+    assert selected["fins_summary"]["natural_key_count"] == 1
+    observed_through = normalize_as_of(proof["observed_through"])
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        member_key = connection.execute(
+            "SELECT natural_key FROM jquants_records "
+            "WHERE dataset='fins_summary' AND payload LIKE '%disc-1332\"%' "
+            "AND payload LIKE '%2023-01-03%'"
+        ).fetchone()[0]
+        artifact_count, artifact_digest, _nbytes = product_artifact_digest_ordered(
+            iter_observed_segment_product_rows(
+                connection,
+                source="jquants",
+                dataset="fins_summary",
+                segment_start="2023-01-02",
+                segment_end="2023-01-06",
+                observed_through=observed_through,
+            )
+        )
+        artifact_keys = {
+            row["natural_key"]
+            for row in iter_observed_segment_product_rows(
+                connection,
+                source="jquants",
+                dataset="fins_summary",
+                segment_start="2023-01-02",
+                segment_end="2023-01-06",
+                observed_through=observed_through,
+            )
+        }
+        stored = connection.execute(
+            "SELECT row_count, artifact_digest FROM receipt_product_materializations "
+            "WHERE dataset='fins_summary'"
+        ).fetchone()
+        listed = list(
+            connection.execute(
+                "SELECT natural_key, event_time, available_at, ingested_at, payload "
+                "FROM jquants_records WHERE dataset='fins_summary'"
+            )
+        )
+        nonmember_key = connection.execute(
+            "SELECT natural_key FROM jquants_records "
+            "WHERE dataset='fins_summary' AND payload LIKE '%disc-9999%'"
+        ).fetchone()[0]
+    assert member_key not in {
+        "after-decision-noncanonical",
+        nonmember_key,
+    }
+    assert selected["fins_summary"]["natural_key_digest"] == canonical_digest(
+        [member_key]
+    )
+    assert artifact_count == stored["row_count"]
+    assert artifact_digest == stored["artifact_digest"]
+    assert selected["fins_summary"]["product_artifact_digests"] == [
+        artifact_digest
+    ]
+    assert "after-decision-noncanonical" in artifact_keys
+    assert nonmember_key in artifact_keys
+    assert all(
+        day["member_count"] == 1 for day in proof["universe_daily_summary"]
+    )
+    assert any(
+        "disc-1332-after-close" in str(row["payload"])
+        and row["event_time"] > close_as_of("2023-01-06")
+        and row["available_at"] > close_as_of("2023-01-06")
+        for row in listed
+    )
+    assert any("disc-9999" in str(row["payload"]) for row in listed)
+    assert any(
+        "disc-1332-late-observation" in str(row["payload"])
+        and row["ingested_at"] > observed_through
+        for row in listed
+    )
+    late_keys = {
+        row["natural_key"]
+        for row in listed
+        if "disc-1332-late-observation" in str(row["payload"])
+    }
+    assert late_keys
+    assert late_keys.isdisjoint(artifact_keys)
+    assert member_key not in late_keys
+
+
+def test_observed_segment_iterator_compares_aware_ingestion_instants() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    connection.execute(
+        "CREATE TABLE jquants_records ("
+        "source TEXT, dataset TEXT, natural_key TEXT, event_time TEXT, "
+        "available_at TEXT, ingested_at TEXT, payload TEXT, raw_payload TEXT)"
+    )
+    stamp = "2023-01-06T16:00:00+09:00"
+    cutoff = "2026-08-25T21:00:00+09:00"
+
+    def load(rows: tuple[tuple[str, str], ...]) -> None:
+        connection.execute("DELETE FROM jquants_records")
+        connection.executemany(
+            "INSERT INTO jquants_records VALUES ("
+            "'jquants','fins_summary',?,?,?,?, '{}','{}')",
+            [(key, stamp, stamp, ingested) for key, ingested in rows],
+        )
+
+    def iterate(*, observed_through: str = cutoff):
+        return list(
+            iter_observed_segment_product_rows(
+                connection,
+                source="jquants",
+                dataset="fins_summary",
+                segment_start="2023-01-06",
+                segment_end="2023-01-06",
+                observed_through=observed_through,
+            )
+        )
+
+    load(
+        (
+            ("utc-eq", "2026-08-25T12:00:00.000Z"),
+            ("jst-eq", "2026-08-25T21:00:00+09:00"),
+            ("utc-later-frac", "2026-08-25T12:00:00.001Z"),
+        )
+    )
+    found = iterate()
+    assert [row["natural_key"] for row in found] == ["jst-eq", "utc-eq"]
+    assert found[0]["ingested_at"] == "2026-08-25T21:00:00+09:00"
+    assert found[1]["ingested_at"] == "2026-08-25T12:00:00.000Z"
+    load((("malformed", "not-an-instant"),))
+    with pytest.raises(ValueError, match="ingestion clock is malformed"):
+        iterate()
+    load((("naive", "2026-08-25T21:00:00"),))
+    with pytest.raises(ValueError, match="lacks timezone"):
+        iterate()
+    load((("utc-eq", "2026-08-25T12:00:00.000Z"),))
+    with pytest.raises(ValueError, match="lacks timezone"):
+        iterate(observed_through="2026-08-25T21:00:00")
+    connection.close()
 
 
 def test_product_jsonl_vector_matches_authority_utf8_order() -> None:
     rows = [
         {
-            "source": "jquants",
-            "dataset": "indices_bars_daily_topix",
+            "source": "jsda",
+            "dataset": "jsda_otc_bond_reference_prices",
             "natural_key": natural_key,
             "event_time": "2024-02-01T00:00:00Z",
             "available_at": "2024-02-01T00:00:00Z",
             "ingested_at": "2024-02-02T00:00:00Z",
-            "payload": f'{{"key":"{natural_key}"}}',
-            "raw_payload": f'{{"key":"{natural_key}"}}',
+            "payload": f'{{"label":"{label}"}}',
+            "raw_payload": f'{{"label":"{label}"}}',
         }
-        for natural_key in ("z-key", "a-key")
+        for natural_key, label in (("日本-債券", "日本語"), ("A-001", "ASCII"))
     ]
     body = canonical_product_artifact_bytes(rows)
-    assert body.index(b"a-key") < body.index(b"z-key")
+    expected = (
+        '{"available_at":"2024-02-01T00:00:00Z","dataset":"jsda_otc_bond_reference_prices",'
+        '"event_time":"2024-02-01T00:00:00Z","ingested_at":"2024-02-02T00:00:00Z",'
+        '"natural_key":"A-001","payload":"{\\"label\\":\\"ASCII\\"}",'
+        '"raw_payload":"{\\"label\\":\\"ASCII\\"}","source":"jsda"}\n'
+        '{"available_at":"2024-02-01T00:00:00Z","dataset":"jsda_otc_bond_reference_prices",'
+        '"event_time":"2024-02-01T00:00:00Z","ingested_at":"2024-02-02T00:00:00Z",'
+        '"natural_key":"日本-債券","payload":"{\\"label\\":\\"日本語\\"}",'
+        '"raw_payload":"{\\"label\\":\\"日本語\\"}","source":"jsda"}\n'
+    ).encode("utf-8")
+    assert body == expected
     assert product_artifact_digest(rows) == (
-        "sha256:fc5f92e255656fa9c17298cc492b6f72"
-        "ee1c647fa47a749174ea66c290f9dc8e"
+        "sha256:29c603492f7aca5df78d543161ae31b7"
+        "d7ea1d76d5256a027198256c98fc8a66"
     )
 
 
 def test_signed_product_digest_survives_sync_projection_and_ready(
     tmp_path,
     receipt_ed25519_keys,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source_path, binding = _seed_exact_pit_scope(
         tmp_path, receipt_ed25519_keys
@@ -1351,6 +1786,16 @@ def test_signed_product_digest_survives_sync_projection_and_ready(
                     "{}",
                 )
             )
+        mirror._conn.execute(  # noqa: SLF001
+            "CREATE TABLE IF NOT EXISTS snapshot_observation_clock "
+            "(observed_through TEXT NOT NULL)"
+        )
+        mirror._conn.execute(  # noqa: SLF001
+            "DELETE FROM snapshot_observation_clock"
+        )
+        mirror._conn.execute(  # noqa: SLF001
+            "INSERT INTO snapshot_observation_clock VALUES ('2023-01-06T11:30:00+09:00')"
+        )
         mirror._conn.executemany(  # noqa: SLF001
             "INSERT INTO dataset_coverage "
             "(dataset,status,policy_version,collection_scope,"
@@ -1363,9 +1808,7 @@ def test_signed_product_digest_survives_sync_projection_and_ready(
         )
         mirror._conn.commit()  # noqa: SLF001
 
-    dependency_proof = _verify_exact_four_pit_dependency_scope(
-        mirror_path, binding
-    )
+    dependency_proof = _verify_scope(mirror_path, binding, monkeypatch)
     product_digests = {
         digest
         for entry in dependency_proof["entries"]
@@ -1494,106 +1937,134 @@ def test_signed_product_digest_survives_sync_projection_and_ready(
         ("equities_master", "2023-01-02"),
         ("fins_summary", "2023-01-03"),
         ("equities_bars_daily", "2023-01-05"),
+        ("equities_bars_daily_am", "2023-01-05"),
         ("indices_bars_daily_topix", "2023-01-05"),
     ),
 )
 def test_exact_pit_dependency_scope_rejects_each_missing_or_late_dependency(
     tmp_path,
     receipt_ed25519_keys,
+    monkeypatch: pytest.MonkeyPatch,
     victim: str,
     event_date: str,
 ) -> None:
     db_path, binding = _seed_exact_pit_scope(
         tmp_path, receipt_ed25519_keys
     )
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            "UPDATE jquants_records "
-            "SET available_at='2026-08-25T00:00:00+09:00' "
-            "WHERE dataset=? AND substr(event_time,1,10)=?",
-            (victim, event_date),
-        )
+    _mutate_sqlite(
+        db_path,
+        "UPDATE jquants_records "
+        "SET available_at='2026-08-25T00:00:00+09:00' "
+        "WHERE dataset=? AND substr(event_time,1,10)=?",
+        (victim, event_date),
+    )
     with pytest.raises(MassResearchDisabledError):
-        _verify_exact_four_pit_dependency_scope(db_path, binding)
+        _verify_scope(db_path, binding, monkeypatch)
+
+
+def test_exact_pit_dependency_scope_rejects_am_captured_after_operational_deadline(
+    tmp_path,
+    receipt_ed25519_keys,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path, binding = _seed_exact_pit_scope(tmp_path, receipt_ed25519_keys)
+    _mutate_sqlite(
+        db_path,
+        "UPDATE jquants_records "
+        "SET ingested_at='2023-01-05T12:31:00+09:00' "
+        "WHERE dataset='equities_bars_daily_am' "
+        "AND substr(event_time,1,10)='2023-01-05'",
+    )
+    with pytest.raises(
+        MassResearchDisabledError,
+        match="equities_bars_daily_am same-day operational closure missing/late",
+    ):
+        _verify_scope(db_path, binding, monkeypatch)
 
 
 def test_exact_pit_dependency_scope_rejects_one_visible_row_and_late_rest(
     tmp_path,
     receipt_ed25519_keys,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db_path, binding = _seed_exact_pit_scope(
         tmp_path, receipt_ed25519_keys
     )
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            "UPDATE jquants_records "
-            "SET available_at='2026-08-25T00:00:00+09:00' "
-            "WHERE dataset='equities_bars_daily' "
-            "AND substr(event_time,1,10) <> '2023-01-02'"
-        )
+    _mutate_sqlite(
+        db_path,
+        "UPDATE jquants_records "
+        "SET available_at='2026-08-25T00:00:00+09:00' "
+        "WHERE dataset='equities_bars_daily' "
+        "AND substr(event_time,1,10) <> '2023-01-02'",
+    )
     with pytest.raises(MassResearchDisabledError, match="closure missing/late"):
-        _verify_exact_four_pit_dependency_scope(db_path, binding)
+        _verify_scope(db_path, binding, monkeypatch)
 
 
 def test_exact_pit_dependency_scope_rejects_unreceipted_natural_keys(
     tmp_path,
     receipt_ed25519_keys,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db_path, binding = _seed_exact_pit_scope(
         tmp_path, receipt_ed25519_keys
     )
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            "DELETE FROM collection_receipts "
-            "WHERE dataset='indices_bars_daily_topix'"
-        )
+    _mutate_sqlite(
+        db_path,
+        "DELETE FROM collection_receipts "
+        "WHERE dataset='indices_bars_daily_topix'",
+    )
     with pytest.raises(MassResearchDisabledError, match="signed receipt"):
-        _verify_exact_four_pit_dependency_scope(db_path, binding)
+        _verify_scope(db_path, binding, monkeypatch)
 
 
 @pytest.mark.parametrize("attack", ("missing", "r2_readback_body", "product_row"))
 def test_exact_pit_dependency_scope_rejects_missing_or_tampered_product(
     tmp_path,
     receipt_ed25519_keys,
+    monkeypatch: pytest.MonkeyPatch,
     attack: str,
 ) -> None:
     db_path, binding = _seed_exact_pit_scope(tmp_path, receipt_ed25519_keys)
-    with sqlite3.connect(db_path) as conn:
-        if attack == "missing":
-            conn.execute(
-                "DELETE FROM receipt_product_materializations "
-                "WHERE dataset='indices_bars_daily_topix'"
-            )
-        elif attack == "r2_readback_body":
-            conn.execute(
-                "UPDATE receipt_product_materializations "
-                "SET artifact_body=artifact_body || ' ' "
-                "WHERE dataset='indices_bars_daily_topix'"
-            )
-        else:
-            conn.execute(
-                "UPDATE jquants_records SET raw_payload='{}' "
-                "WHERE dataset='indices_bars_daily_topix'"
-            )
+    if attack == "missing":
+        _mutate_sqlite(
+            db_path,
+            "DELETE FROM receipt_product_materializations "
+            "WHERE dataset='indices_bars_daily_topix'",
+        )
+    elif attack == "r2_readback_body":
+        _mutate_sqlite(
+            db_path,
+            "UPDATE receipt_product_materializations "
+            "SET artifact_body=artifact_body || ' ' "
+            "WHERE dataset='indices_bars_daily_topix'",
+        )
+    else:
+        _mutate_sqlite(
+            db_path,
+            "UPDATE jquants_records SET raw_payload='{}' "
+            "WHERE dataset='indices_bars_daily_topix'",
+        )
     with pytest.raises(MassResearchDisabledError, match="signed receipt"):
-        _verify_exact_four_pit_dependency_scope(db_path, binding)
+        _verify_scope(db_path, binding, monkeypatch)
 
 
 def test_exact_pit_dependency_scope_rejects_noncanonical_natural_key(
     tmp_path,
     receipt_ed25519_keys,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db_path, binding = _seed_exact_pit_scope(
         tmp_path, receipt_ed25519_keys
     )
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            "UPDATE jquants_records SET natural_key='caller-supplied' "
-            "WHERE dataset='equities_bars_daily' "
-            "AND substr(event_time,1,10)='2023-01-05'"
-        )
+    _mutate_sqlite(
+        db_path,
+        "UPDATE jquants_records SET natural_key='caller-supplied' "
+        "WHERE dataset='equities_bars_daily' "
+        "AND substr(event_time,1,10)='2023-01-05'",
+    )
     with pytest.raises(MassResearchDisabledError, match="natural key"):
-        _verify_exact_four_pit_dependency_scope(db_path, binding)
+        _verify_scope(db_path, binding, monkeypatch)
 
 
 def test_caller_controlled_pytest_environment_cannot_enable_fixture_ready(

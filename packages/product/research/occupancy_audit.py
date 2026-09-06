@@ -118,26 +118,6 @@ def load_ops_occupancy(root: str | Path | None = None) -> dict[str, dict[str, fl
     return merge_occupancy_cell_dumps(ops)
 
 
-def _put_eval_bytes(
-    *,
-    job: str,
-    r2name: str,
-    body: bytes,
-    put_r2: bool,
-) -> dict[str, Any] | None:
-    if not put_r2:
-        return None
-    from research.cf_mass_eval_stage import RESEARCH_ARTIFACT_BUCKET
-    from research.r2_io import put_research_artifact
-
-    put = put_research_artifact(
-        RESEARCH_ARTIFACT_BUCKET,
-        f"research/eval/job={job}/{r2name}",
-        body,
-    )
-    return {"job": job, "status": put.get("status"), "bytes": put.get("bytes")}
-
-
 def _track_from_cells_name(name: str) -> str | None:
     if "liq_large" in name:
         return "liq_large"
@@ -322,9 +302,8 @@ def write_usable_eval_snapshot(
     *,
     wave: str,
     root: Path | None = None,
-    put_r2: bool = False,
 ) -> dict[str, Any]:
-    """Write inventory / usable-read / cost-risk / jsonl. Optional R2. Not GO."""
+    """Write a local replay snapshot. This legacy path is never R2 authority."""
     from research.unique_logic.catalog import write_combo_thesis_jsonl
 
     snap = usable_eval_snapshot(occupancy_by_track)
@@ -347,23 +326,6 @@ def write_usable_eval_snapshot(
     for path, body in files.values():
         path.write_text(body, encoding="utf-8")
     jsonl = write_combo_thesis_jsonl(ops / f"{jsonl_job}.jsonl")
-    puts: list[dict[str, Any]] = []
-    mapping = (
-        (inv_job, f"{inv_job}.json", "inventory.json"),
-        (read_job, f"{read_job}.json", "usable_read.json"),
-        (series_job, f"{series_job}.json", "series.json"),
-        (cost_job, f"{cost_job}.json", "cost_risk.json"),
-        (jsonl_job, f"{jsonl_job}.jsonl", "combo_thesis.jsonl"),
-    )
-    for job, fname, r2name in mapping:
-        put = _put_eval_bytes(
-            job=job,
-            r2name=r2name,
-            body=(ops / fname).read_bytes(),
-            put_r2=put_r2,
-        )
-        if put:
-            puts.append(put)
     return {
         "wave": wave,
         "n_usable": snap["inventory"]["n_usable"],
@@ -372,7 +334,7 @@ def write_usable_eval_snapshot(
         "series_job": series_job,
         "cost_risk_job": cost_job,
         "jsonl": jsonl,
-        "puts": puts,
+        "puts": [],
         "go": False,
         "not_a_pass": True,
         "yaml_still_present": False,
@@ -384,7 +346,6 @@ def write_eval_wave_pack(
     *,
     wave: str,
     root: Path | None = None,
-    put_r2: bool = False,
 ) -> dict[str, Any]:
     """Snapshot plus drift / unique22 park / reconstitution detect. Not GO.
 
@@ -404,9 +365,7 @@ def write_eval_wave_pack(
         unique22_occupancy_park,
     )
 
-    snap = write_usable_eval_snapshot(
-        occupancy_by_track, wave=wave, root=root, put_r2=put_r2
-    )
+    snap = write_usable_eval_snapshot(occupancy_by_track, wave=wave, root=root)
     ops = _ops_root(root)
     drift = occupancy_recorded_drift(
         occupancy_by_track, sorted(countable_thesis_ids())
@@ -488,26 +447,10 @@ def write_eval_wave_pack(
             "not_a_pass": True,
         },
     }
-    r2_names = {
-        maps_job: "occupancy_maps.json",
-        drift_job: "drift.json",
-        u22_job: "park.json",
-        recon_job: "reconstitution_plan.json",
-        sleeve_job: "series_sleeve.json",
-    }
-    puts = list(snap.get("puts") or [])
     for job, body in extras.items():
         path = ops / f"{job}.json"
         raw = json.dumps(body, ensure_ascii=True, default=str)
         path.write_text(raw, encoding="utf-8")
-        put = _put_eval_bytes(
-            job=job,
-            r2name=r2_names[job],
-            body=raw.encode("utf-8"),
-            put_r2=put_r2,
-        )
-        if put:
-            puts.append(put)
     return {
         **snap,
         "occupancy_maps_job": maps_job,
@@ -519,7 +462,7 @@ def write_eval_wave_pack(
         "n_unique22_lifted": len(lifted),
         "n_mid": len(mid),
         "n_liq": len(liq),
-        "puts": puts,
+        "puts": [],
         "catalog_and_plus_n_stopped": bool(CATALOG_AND_PLUS_N_STOPPED),
         "reconstitution_apply": bool(RECONSTITUTION_APPLY),
         "go": False,

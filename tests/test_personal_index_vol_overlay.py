@@ -524,7 +524,7 @@ def test_beta_is_bounded_to_126_source_sessions_and_requires_fresh_pair() -> Non
     ]
 
 
-def test_base_g1_h0_control_is_diagnostic_and_outside_exact_four() -> None:
+def test_base_g1_h0_control_is_diagnostic_and_outside_draft_overlay_cohort() -> None:
     rows, dates = _panel()
     report = _evaluate(
         rows,

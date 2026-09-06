@@ -85,7 +85,7 @@ asdf rebuild.
   This merge check is not the production finding-ledger release gate.
 - Uses pinned `uv 0.11.26` and `uv sync --frozen --extra dev` with the tracked lockfile.
 - the complete `pytest tests/` suite using two file-scoped workers, catalog freeze, Evaluation IR schema/codec.
-- Eight active workers run in parallel: `package-lock.json` required, `npm ci`, `npm test`, `npm run typecheck`, generated types `--check`, and Wrangler dry-runs for base, production, and isolated staging.
+- Eight active workers still all run, fail-closed: `package-lock.json` required, `npm ci`, `npm test`, `npm run typecheck`, generated types `--check`, and Wrangler dry-runs for base, production, and isolated staging. At most two Worker lanes execute at once via the standalone process `scripts/ci_bounded_jobs.sh` so eight Vitest/workerd stacks do not start together on the two-CPU Workers Builds image. Each lane is a new bash process, so a parent `if !` cannot disable errexit and mask an intermediate `npm test` failure. This bound is CI process scheduling only; it does not change Paper/backtest runtime parallelism or product budget/time limits. Remaining lanes still run after a failure, and the aggregate exit is nonzero if any lane failed.
 - [`active_worker_bindings.json`](../../specs/cloudflare/active_worker_bindings.json) freezes D1, R2, Queue/DLQ, Durable Object, Service Binding, Cron, vars, and secret names. Values of secrets are never read or stored.
 - Wrangler `[secrets].required` declarations are part of generated Env exactness for base and production. Staging declares no production secrets.
 - Wrangler, TypeScript, and Cloudflare Worker types are exact-version policy across all active workers.

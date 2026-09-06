@@ -7,8 +7,10 @@ import {
   createBudget,
   createBudgetCoordinator,
   finalizeBudget,
+  finalizeOwnedPaperReservation,
   heartbeatLease,
   markProviderStarted,
+  queryOwnedBudget,
   recoverExpiredLeases,
   releaseBudget,
   reserveBudget,
@@ -193,6 +195,10 @@ export class BudgetLedger extends DurableObject<unknown> {
     return this.coordinator.reserveOwned(input);
   }
 
+  queryOwned(input: Parameters<typeof queryOwnedBudget>[1]) {
+    return this.coordinator.queryOwned(input);
+  }
+
   markProviderStarted(input: Parameters<typeof markProviderStarted>[1]) {
     return this.coordinator.markProviderStarted(input);
   }
@@ -203,6 +209,10 @@ export class BudgetLedger extends DurableObject<unknown> {
 
   finalizeExact(input: Parameters<typeof finalizeBudget>[1]) {
     return this.coordinator.finalizeExact(input);
+  }
+
+  finalizeOwnedPaper(input: Parameters<typeof finalizeOwnedPaperReservation>[1]) {
+    return this.coordinator.finalizeOwnedPaper(input);
   }
 
   settleUncertain(input: Parameters<typeof settleUncertainBudget>[1]) {

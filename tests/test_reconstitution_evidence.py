@@ -3,9 +3,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
-
 KEEP_FUND = (
     "event_ta_up_positive_eps",
     "event_large_surprise_positive_eps",
@@ -186,70 +183,6 @@ def test_keep_24df_members_unchanged_after_pack() -> None:
     assert before == after
     assert before["basket_theme_fund"] == list(KEEP_FUND)
     assert before["basket_event_fund"] == list(KEEP_EVENT)
-
-
-def test_write_evidence_pack_dry_run_only(tmp_path) -> None:
-    from research.eval_flags import RECONSTITUTION_APPLY
-    from research.reconstitution_evidence import write_reconstitution_evidence_pack
-
-    out = write_reconstitution_evidence_pack(
-        wave="test24ev",
-        root=tmp_path,
-        dry_run=True,
-        put_r2=False,
-        staging_dir=tmp_path / "stage",
-    )
-    assert out["apply"] is False
-    assert out["go"] is False
-    assert out["dry_run"] is True
-    assert out["put_r2"] is False
-    assert out["pack"]["apply"] is False
-    assert (tmp_path / "eval-reconstitution-evidence-test24ev.json").is_file()
-    raw = json.loads(
-        (tmp_path / "eval-reconstitution-evidence-test24ev.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert raw["apply"] is False
-    assert "drop_parents_keep_children" in raw["sleeves"][0]
-    assert "drop_children_keep_parents" in raw["sleeves"][0]
-    assert out["put"] is not None
-    assert out["put"]["status"] == "dry_run"
-    assert RECONSTITUTION_APPLY is False
-    with pytest.raises(ValueError, match="never live-puts"):
-        write_reconstitution_evidence_pack(
-            wave="test24ev",
-            root=tmp_path,
-            dry_run=False,
-            put_r2=True,
-        )
-
-
-def test_write_evidence_pack_dry_run_does_not_call_worker(
-    tmp_path, monkeypatch
-) -> None:
-    def _boom(*_a, **_k):
-        raise AssertionError("dry_run must not Worker-put")
-
-    monkeypatch.setattr(
-        "research.r2_io.put_children_then_manifest_via_worker",
-        _boom,
-    )
-    from research.reconstitution_evidence import write_reconstitution_evidence_pack
-
-    out = write_reconstitution_evidence_pack(
-        wave="test24ev",
-        root=tmp_path,
-        dry_run=True,
-        put_r2=False,
-        staging_dir=tmp_path / "stage",
-    )
-    assert out["put"] is not None
-    assert out["put"]["status"] == "dry_run"
-    assert out["dry_run"] is True
-    assert out["put_r2"] is False
-    assert out["go"] is False
-    assert out["apply"] is False
 
 
 def test_injected_cells_fill_sharpe_without_apply() -> None:

@@ -57,6 +57,7 @@ import {
   sha256Digest,
 } from "../../receipt-evidence-authority/src/canonical";
 import {
+  issueGovernedReceipt,
   recoverPreparedReceipts,
   type ReceiptAuthorityEnvironment,
 } from "./receipt_authority_client";
@@ -65,6 +66,7 @@ import {
   runStagingReceiptAuditRecoveryCanary,
   type ReceiptOperatorAuditEvidenceV1,
 } from "./receipt_authority_audit_canary";
+import { publishOpsProjectionBestEffort } from "./ops_projection";
 
 /** Generated bindings plus secret/optional var refinements only. */
 export type Env = Omit<
@@ -81,6 +83,11 @@ export type Env = Omit<
   DATA_EXPORT_TOKEN?: string;
   MASTER_SCD2_ONLY?: string;
   ALLOW_D1_STRUCTURED_DATASETS?: string;
+  OPS_PROJECTION_DB: D1Database;
+  OPS_PROJECTION_SIGNING_PKCS8_B64: string;
+  OPS_PROJECTION_VERIFY_SPKI_B64: string;
+  OPS_PROJECTION_SIGNING_KEY_ID: string;
+  OPS_PROJECTION_ENVIRONMENT: "staging" | "production";
 };
 
 // P0-4 parallel ingest knobs — drive near Premium ~500/min ceiling.
@@ -155,11 +162,19 @@ function collectionSegment(
       throw new Error(`collection window unavailable for ${spec.id}`);
     }
   }
-  const start = [...dates].sort()[0];
-  const end = [...dates].sort().at(-1)!;
-  const id = start.slice(0, 7) === end.slice(0, 7)
-    ? start.slice(0, 7)
-    : `${start}_${end}`;
+  let start = [...dates].sort()[0];
+  let end = [...dates].sort().at(-1)!;
+  const grain = spec.coverage.segment_granularity;
+  const snapshot = grain === "same_trading_day_am_snapshot" || grain === "collection_cutoff_snapshot";
+  const id = snapshot
+    ? end
+    : start.slice(0, 7) === end.slice(0, 7)
+      ? start.slice(0, 7)
+      : `${start}_${end}`;
+  if (snapshot) {
+    start = id;
+    end = id;
+  }
   const month = start.slice(0, 7);
   const historyStart = spec.coverage.history_target_start;
   const requiredStart = historyStart.slice(0, 7) === month
@@ -169,10 +184,12 @@ function collectionSegment(
   const requiredEnd = currentDay.slice(0, 7) === month
     ? currentDay
     : monthEnd(start);
-  const canonicalMonth = id === month
-    && month <= currentDay.slice(0, 7)
-    && start === requiredStart
-    && end === requiredEnd;
+  const canonicalMonth = snapshot
+    ? id === currentDay
+    : id === month
+      && month <= currentDay.slice(0, 7)
+      && start === requiredStart
+      && end === requiredEnd;
   return {
     id,
     start,
@@ -393,19 +410,35 @@ async function ingestOne(
   if (segment === null) {
     throw new Error(`successful collection has no segment for ${spec.id}`);
   }
-  await writeCollectionReceipt(env, spec, runId, segment, {
-    observedItems: spec.coverage.expected_frequency === "event_driven"
-      ? outcome.rowsSeen
-      : outcome.queries.length,
-    rawPageCount: rawPages.length,
-    rawRowCount: outcome.rowsSeen,
-    structuredRowCount,
-    paginationExhausted: outcome.paginationErrors === 0,
-    rawDigest: dataDigest,
-    manifestKey: rawKey,
-    status: "SUCCESS",
-    error: null,
-  });
+  const collected: CollectionSegment = segment;
+  const paginationExhausted = outcome.paginationErrors === 0;
+  if (
+    env.RECEIPT_AUTHORITY_OPERATION_MODE === "ACTIVE" &&
+    paginationExhausted &&
+    structuredRowCount > 0 &&
+    collected.canonicalMonth
+  ) {
+    await issueGovernedReceipt(
+      env,
+      receiptEnvironment(env),
+      spec.id,
+      collected.id,
+    );
+  } else {
+    await writeCollectionReceipt(env, spec, runId, collected, {
+      observedItems: spec.coverage.expected_frequency === "event_driven"
+        ? outcome.rowsSeen
+        : outcome.queries.length,
+      rawPageCount: rawPages.length,
+      rawRowCount: outcome.rowsSeen,
+      structuredRowCount,
+      paginationExhausted,
+      rawDigest: dataDigest,
+      manifestKey: rawKey,
+      status: "SUCCESS",
+      error: null,
+    });
+  }
 
   const availableBounds = await selectAvailableBounds(env, spec.id);
 
@@ -875,6 +908,7 @@ function receiptOperatorVersion(
  * header, is the caller authority.  Registration is non-positive and remains
  * PENDING-only at the Receipt authority itself.
  */
+
 export class PremiumReceiptOperatorService
   extends WorkerEntrypoint<Env>
   implements PremiumReceiptOperatorRpc {
@@ -912,9 +946,15 @@ export class PremiumReceiptAuditEvidenceService
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/health") {
+    if (url.pathname === "/health" || url.pathname === "/health/ready") {
       if (request.method !== "GET") return json({ error: "GET required" }, 405);
-      return handleHealth(env);
+      const response = await handleHealth(env);
+      if (url.pathname !== "/health/ready") return response;
+      const payload = await response.json() as { ok?: boolean };
+      return json(
+        { ...payload, live: true },
+        payload.ok === true ? 200 : 503,
+      );
     }
     if (url.pathname === "/v1/admin/rebuild-natural-keys-v2") {
       return handleNaturalKeyRebuild(env, request);
@@ -940,11 +980,16 @@ export default {
   async scheduled(
     _controller: ScheduledController, env: Env, ctx: ExecutionContext,
   ): Promise<void> {
-    ctx.waitUntil(runIngestion(env, {}, "cron", fetch));
-    ctx.waitUntil(recoverPreparedReceipts(env));
-    if (
-      env.RECEIPT_AUTHORITY_OPERATION_MODE === "ACTIVE" &&
-      env.RECEIPT_AUTHORITY_ENVIRONMENT === "staging"
-    ) ctx.waitUntil(runStagingReceiptAuditRecoveryCanary(env));
+    ctx.waitUntil((async () => {
+      await runIngestion(env, {}, "cron", fetch);
+      await recoverPreparedReceipts(env);
+      if (
+        env.RECEIPT_AUTHORITY_OPERATION_MODE === "ACTIVE" &&
+        env.RECEIPT_AUTHORITY_ENVIRONMENT === "staging"
+      ) {
+        await runStagingReceiptAuditRecoveryCanary(env);
+      }
+      await publishOpsProjectionBestEffort(env);
+    })());
   },
 };

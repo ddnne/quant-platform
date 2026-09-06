@@ -1,0 +1,400 @@
+{
+  "schema_version": "quant-ingest-schema-invariants/v1",
+  "purpose": "independent expected sqlite_master objects through 0020; not generated from the migration chain at test time",
+  "through_migration": "0020_receipt_authority_governed_sources.sql",
+  "trigger_count": 45,
+  "index_count": 47,
+  "receipt_authority_foreign_key_count": 3,
+  "triggers": [
+    {
+      "name": "jsda_migration_v2_discoveries_insert_to_v3",
+      "tbl_name": "jsda_acquisition_discoveries_v2"
+    },
+    {
+      "name": "jsda_migration_v2_events_insert_to_v3",
+      "tbl_name": "jsda_acquisition_events_v2"
+    },
+    {
+      "name": "jsda_migration_v2_jobs_insert_to_v3",
+      "tbl_name": "jsda_acquisition_jobs_v2"
+    },
+    {
+      "name": "jsda_migration_v2_jobs_update_to_v3",
+      "tbl_name": "jsda_acquisition_jobs_v2"
+    },
+    {
+      "name": "jsda_run_membership_enqueued_insert",
+      "tbl_name": "jsda_acquisition_jobs_v3"
+    },
+    {
+      "name": "jsda_run_membership_enqueued_sync",
+      "tbl_name": "jsda_acquisition_jobs_v3"
+    },
+    {
+      "name": "jsda_v1_jobs_delete_retired",
+      "tbl_name": "jsda_acquisition_jobs"
+    },
+    {
+      "name": "jsda_v1_jobs_insert_bridge",
+      "tbl_name": "jsda_acquisition_jobs"
+    },
+    {
+      "name": "jsda_v1_jobs_insert_retired",
+      "tbl_name": "jsda_acquisition_jobs"
+    },
+    {
+      "name": "jsda_v1_jobs_update_bridge",
+      "tbl_name": "jsda_acquisition_jobs"
+    },
+    {
+      "name": "jsda_v1_jobs_update_retired",
+      "tbl_name": "jsda_acquisition_jobs"
+    },
+    {
+      "name": "jsda_v2_discoveries_insert_retired",
+      "tbl_name": "jsda_acquisition_discoveries_v2"
+    },
+    {
+      "name": "jsda_v2_events_insert_retired",
+      "tbl_name": "jsda_acquisition_events_v2"
+    },
+    {
+      "name": "jsda_v2_jobs_delete_retired",
+      "tbl_name": "jsda_acquisition_jobs_v2"
+    },
+    {
+      "name": "jsda_v2_jobs_insert_retired",
+      "tbl_name": "jsda_acquisition_jobs_v2"
+    },
+    {
+      "name": "jsda_v2_jobs_update_retired",
+      "tbl_name": "jsda_acquisition_jobs_v2"
+    },
+    {
+      "name": "jsda_v3_cutover_activate_requires_facts",
+      "tbl_name": "jsda_v3_cutover_control"
+    },
+    {
+      "name": "jsda_v3_cutover_guard_no_delete",
+      "tbl_name": "jsda_v3_cutover_insert_guard"
+    },
+    {
+      "name": "jsda_v3_cutover_immutable_active",
+      "tbl_name": "jsda_v3_cutover_control"
+    },
+    {
+      "name": "jsda_v3_cutover_mark_inserted",
+      "tbl_name": "jsda_v3_cutover_control"
+    },
+    {
+      "name": "jsda_v3_cutover_no_delete",
+      "tbl_name": "jsda_v3_cutover_control"
+    },
+    {
+      "name": "jsda_v3_cutover_no_second_insert",
+      "tbl_name": "jsda_v3_cutover_control"
+    },
+    {
+      "name": "jsda_v3_drain_evidence_no_delete",
+      "tbl_name": "jsda_v3_drain_evidence"
+    },
+    {
+      "name": "jsda_v3_drain_evidence_no_update",
+      "tbl_name": "jsda_v3_drain_evidence"
+    },
+    {
+      "name": "receipt_authority_operations_identity_immutable",
+      "tbl_name": "receipt_authority_operations"
+    },
+    {
+      "name": "receipt_authority_operations_monotonic",
+      "tbl_name": "receipt_authority_operations"
+    },
+    {
+      "name": "receipt_authority_operations_no_delete",
+      "tbl_name": "receipt_authority_operations"
+    },
+    {
+      "name": "receipt_authority_raw_identity_immutable",
+      "tbl_name": "receipt_authority_operations"
+    },
+    {
+      "name": "receipt_authority_raw_manifest_no_delete",
+      "tbl_name": "raw_retention_manifests"
+    },
+    {
+      "name": "receipt_authority_raw_manifest_no_update",
+      "tbl_name": "raw_retention_manifests"
+    },
+    {
+      "name": "receipt_authority_receipts_match_operation",
+      "tbl_name": "collection_receipts"
+    },
+    {
+      "name": "receipt_authority_receipts_no_delete",
+      "tbl_name": "collection_receipts"
+    },
+    {
+      "name": "receipt_authority_receipts_no_update",
+      "tbl_name": "collection_receipts"
+    },
+    {
+      "name": "receipt_authority_recovery_audit_monotonic",
+      "tbl_name": "receipt_authority_recovery_audit_attestations"
+    },
+    {
+      "name": "receipt_authority_recovery_audit_no_delete",
+      "tbl_name": "receipt_authority_recovery_audit_attestations"
+    },
+    {
+      "name": "receipt_authority_requests_monotonic",
+      "tbl_name": "receipt_authority_requests"
+    },
+    {
+      "name": "receipt_authority_requests_no_delete",
+      "tbl_name": "receipt_authority_requests"
+    },
+    {
+      "name": "receipt_authority_rows_insert_collecting",
+      "tbl_name": "receipt_authority_structured_rows"
+    },
+    {
+      "name": "receipt_authority_rows_no_delete",
+      "tbl_name": "receipt_authority_structured_rows"
+    },
+    {
+      "name": "receipt_authority_rows_no_update",
+      "tbl_name": "receipt_authority_structured_rows"
+    },
+    {
+      "name": "receipt_authority_run_identity_immutable",
+      "tbl_name": "ingestion_run_log"
+    },
+    {
+      "name": "receipt_authority_run_no_delete",
+      "tbl_name": "ingestion_run_log"
+    },
+    {
+      "name": "receipt_product_materializations_insert_state",
+      "tbl_name": "receipt_product_materializations"
+    },
+    {
+      "name": "receipt_product_materializations_no_delete",
+      "tbl_name": "receipt_product_materializations"
+    },
+    {
+      "name": "receipt_product_materializations_no_update",
+      "tbl_name": "receipt_product_materializations"
+    }
+  ],
+  "indexes": [
+    {
+      "name": "ix_bars_available_at",
+      "tbl_name": "jquants_daily_bars"
+    },
+    {
+      "name": "ix_calendar_available_at",
+      "tbl_name": "jquants_market_calendar"
+    },
+    {
+      "name": "ix_collection_receipts_segment_latest",
+      "tbl_name": "collection_receipts"
+    },
+    {
+      "name": "ix_coverage_segments_dataset_status",
+      "tbl_name": "coverage_segments"
+    },
+    {
+      "name": "ix_ingestion_change_log_table_seq",
+      "tbl_name": "ingestion_change_log"
+    },
+    {
+      "name": "ix_jsda_artifact_locations_digest",
+      "tbl_name": "jsda_artifact_locations"
+    },
+    {
+      "name": "ix_jsda_discoveries_v2_run",
+      "tbl_name": "jsda_acquisition_discoveries_v2"
+    },
+    {
+      "name": "ix_jsda_discoveries_v3_run",
+      "tbl_name": "jsda_acquisition_discoveries_v3"
+    },
+    {
+      "name": "ix_jsda_events_v2_run_time",
+      "tbl_name": "jsda_acquisition_events_v2"
+    },
+    {
+      "name": "ix_jsda_events_v3_run_time",
+      "tbl_name": "jsda_acquisition_events_v3"
+    },
+    {
+      "name": "ix_jsda_job_closures_run",
+      "tbl_name": "jsda_job_closures"
+    },
+    {
+      "name": "ix_jsda_jobs_state_priority",
+      "tbl_name": "jsda_acquisition_jobs"
+    },
+    {
+      "name": "ix_jsda_jobs_v2_run_parent",
+      "tbl_name": "jsda_acquisition_jobs_v2"
+    },
+    {
+      "name": "ix_jsda_jobs_v2_state_updated",
+      "tbl_name": "jsda_acquisition_jobs_v2"
+    },
+    {
+      "name": "ix_jsda_jobs_v3_run_parent",
+      "tbl_name": "jsda_acquisition_jobs_v3"
+    },
+    {
+      "name": "ix_jsda_jobs_v3_state_updated",
+      "tbl_name": "jsda_acquisition_jobs_v3"
+    },
+    {
+      "name": "ix_jsda_observations_artifact",
+      "tbl_name": "jsda_observations"
+    },
+    {
+      "name": "ix_jsda_observations_source_time",
+      "tbl_name": "jsda_observations"
+    },
+    {
+      "name": "ix_jsda_queue_rejects_v2_time",
+      "tbl_name": "jsda_queue_rejects_v2"
+    },
+    {
+      "name": "ix_jsda_run_closures_state",
+      "tbl_name": "jsda_run_closures"
+    },
+    {
+      "name": "ix_jsda_run_membership_parent",
+      "tbl_name": "jsda_run_membership"
+    },
+    {
+      "name": "ix_jsda_run_membership_run_child",
+      "tbl_name": "jsda_run_membership"
+    },
+    {
+      "name": "ix_master_available_at",
+      "tbl_name": "jquants_listed_info"
+    },
+    {
+      "name": "ix_nk_v2_changes_stage_identity",
+      "tbl_name": "ingestion_change_log_nk_v2_stage"
+    },
+    {
+      "name": "ix_nk_v2_versions_stage_identity",
+      "tbl_name": "jquants_records_nk_v2_versions_stage"
+    },
+    {
+      "name": "ix_raw_retention_run_complete",
+      "tbl_name": "raw_retention_manifests"
+    },
+    {
+      "name": "ix_receipt_authority_requests_pending",
+      "tbl_name": "receipt_authority_requests"
+    },
+    {
+      "name": "ix_receipt_authority_rows_dataset",
+      "tbl_name": "receipt_authority_structured_rows"
+    },
+    {
+      "name": "ix_receipt_authority_segment",
+      "tbl_name": "receipt_authority_operations"
+    },
+    {
+      "name": "ix_receipt_product_segment",
+      "tbl_name": "receipt_product_materializations"
+    },
+    {
+      "name": "ix_records_dataset_avail",
+      "tbl_name": "jquants_records"
+    },
+    {
+      "name": "ix_validation_dataset",
+      "tbl_name": "ingestion_validation"
+    },
+    {
+      "name": "ix_watermarks_last_ingested_at",
+      "tbl_name": "ingestion_watermarks"
+    },
+    {
+      "name": "ux_daily_bars_revisions_version",
+      "tbl_name": "jquants_daily_bars_revisions"
+    },
+    {
+      "name": "ux_ingestion_change_log_version",
+      "tbl_name": "ingestion_change_log"
+    },
+    {
+      "name": "ux_ingestion_run_authority_operation",
+      "tbl_name": "ingestion_run_log"
+    },
+    {
+      "name": "ux_jsda_events_v3_legacy_event",
+      "tbl_name": "jsda_acquisition_events_v3"
+    },
+    {
+      "name": "ux_jsda_jobs_v2_fetched_file_url",
+      "tbl_name": "jsda_acquisition_jobs_v2"
+    },
+    {
+      "name": "ux_jsda_jobs_v3_archive_file_url",
+      "tbl_name": "jsda_acquisition_jobs_v3"
+    },
+    {
+      "name": "ux_jsda_jobs_v3_rolling_file_epoch",
+      "tbl_name": "jsda_acquisition_jobs_v3"
+    },
+    {
+      "name": "ux_jsda_observations_epoch",
+      "tbl_name": "jsda_observations"
+    },
+    {
+      "name": "ux_jsda_observations_source_seq",
+      "tbl_name": "jsda_observations"
+    },
+    {
+      "name": "ux_jsda_source_objects_locator",
+      "tbl_name": "jsda_source_objects"
+    },
+    {
+      "name": "ux_listed_info_revisions_version",
+      "tbl_name": "jquants_listed_info_revisions"
+    },
+    {
+      "name": "ux_market_calendar_revisions_version",
+      "tbl_name": "jquants_market_calendar_revisions"
+    },
+    {
+      "name": "ux_nk_v2_revisions_stage_version",
+      "tbl_name": "jquants_records_nk_v2_revisions_stage"
+    },
+    {
+      "name": "ux_records_revisions_version",
+      "tbl_name": "jquants_records_revisions"
+    }
+  ],
+  "receipt_authority_foreign_keys": [
+    {
+      "table": "receipt_authority_structured_rows",
+      "from": "operation_id",
+      "ref_table": "receipt_authority_operations",
+      "to": "operation_id"
+    },
+    {
+      "table": "receipt_product_materializations",
+      "from": "run_id",
+      "ref_table": "ingestion_run_log",
+      "to": "id"
+    },
+    {
+      "table": "receipt_product_materializations",
+      "from": "operation_id",
+      "ref_table": "receipt_authority_operations",
+      "to": "operation_id"
+    }
+  ]
+}

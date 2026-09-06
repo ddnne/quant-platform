@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 from research.bar_native_specs import BAR_NATIVE_SPECS
+from dataclasses import replace
+
 from research.factor_cohorts import (
     AM_PM_PERSONAL_EXECUTABLE_COHORT_IDS,
     AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT,
@@ -16,6 +18,8 @@ from research.factor_cohorts import (
     COMPACT_MARKET_AM_PM_COHORT_ID,
     COMPACT_MARKET_COHORT_ID,
     DEFAULT_FACTOR_COHORT_ID,
+    DRAFT_FACTOR_COHORT_PURPOSE_ID,
+    DRAFT_VOL_OVERLAY_COHORT_PURPOSE_ID,
     LEGACY_DEFAULT_FACTOR_COHORT_ID,
     LEGACY_PERSONAL_EXECUTABLE_COHORT_IDS,
     PERSONAL_EXECUTABLE_COHORT_IDS,
@@ -23,6 +27,7 @@ from research.factor_cohorts import (
     RESEARCH_COHORTS,
     get_research_cohort,
     personal_specs_for_cohort,
+    validate_cohort_document,
     validate_personal_cohort_universe,
 )
 
@@ -47,7 +52,7 @@ from strategies.spec import (
 )
 
 
-def test_cohorts_are_small_closed_exact_four_batches() -> None:
+def test_cohorts_are_small_closed_draft_batches() -> None:
     assert PERSONAL_EXECUTABLE_COHORT_IDS == (
         *LEGACY_PERSONAL_EXECUTABLE_COHORT_IDS,
         *AM_PM_PERSONAL_EXECUTABLE_COHORT_IDS,
@@ -63,6 +68,11 @@ def test_cohorts_are_small_closed_exact_four_batches() -> None:
         assert document["cohort_digest"].startswith("sha256:")
         assert document["draft_only"] is True
         assert document["automatic_promotion"] is False
+        assert "exact_four" not in document
+        if cohort.cohort_id == "vol-surface-relative-v1":
+            assert document["purpose_id"] == DRAFT_VOL_OVERLAY_COHORT_PURPOSE_ID
+        else:
+            assert document["purpose_id"] == DRAFT_FACTOR_COHORT_PURPOSE_ID
         spec_ids = [spec.strategy_id for spec in cohort.strategy_specs]
         assert len(spec_ids) == len(set(spec_ids))
     assert DEFAULT_FACTOR_COHORT_ID == "diverse-core-am-pm-v1"
@@ -189,13 +199,45 @@ def test_legacy_cohort_documents_and_digests_match_captured_fixtures() -> None:
     assert set(captured) == set(_AM_PM_BY_LEGACY)
     for cohort_id, expected in captured.items():
         actual = get_research_cohort(cohort_id).to_dict()
-        assert actual == expected
+        assert actual["purpose_id"] == DRAFT_FACTOR_COHORT_PURPOSE_ID
+        assert "exact_four" not in actual
+        historical = dict(expected)
+        assert "purpose_id" not in historical
+        assert validate_cohort_document(historical) == DRAFT_FACTOR_COHORT_PURPOSE_ID
+        live_body = {key: value for key, value in actual.items() if key != "cohort_digest"}
+        expected_body = dict(expected)
+        expected_body.pop("cohort_digest")
+        expected_body["purpose_id"] = DRAFT_FACTOR_COHORT_PURPOSE_ID
+        assert live_body == expected_body
+        assert actual["cohort_digest"] != expected["cohort_digest"]
         assert "execution_contract" not in actual
         assert "document_version" not in actual
         assert actual["version"] == "personal-factor-cohorts/v2"
 
 
-def test_am_pm_cohorts_are_exact_four_and_bind_the_same_canonical_contract() -> None:
+def test_purpose_id_is_bound_into_new_cohort_digests() -> None:
+    cohort = get_research_cohort(DEFAULT_FACTOR_COHORT_ID)
+    document = cohort.to_dict()
+    body = {key: value for key, value in document.items() if key != "cohort_digest"}
+    assert body["purpose_id"] == DRAFT_FACTOR_COHORT_PURPOSE_ID
+    encoded = json.dumps(
+        body, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+    assert document["cohort_digest"] == "sha256:" + hashlib.sha256(encoded).hexdigest()
+    relabeled = replace(cohort, purpose_id=DRAFT_VOL_OVERLAY_COHORT_PURPOSE_ID)
+    assert relabeled.to_dict()["cohort_digest"] != document["cohort_digest"]
+    omitted = dict(document)
+    omitted.pop("purpose_id")
+    with pytest.raises(ValueError, match="cohort_digest"):
+        validate_cohort_document(omitted)
+    mutated = dict(document)
+    mutated["purpose_id"] = DRAFT_VOL_OVERLAY_COHORT_PURPOSE_ID
+    with pytest.raises(ValueError, match="cohort_digest"):
+        validate_cohort_document(mutated)
+    assert validate_cohort_document(document) == DRAFT_FACTOR_COHORT_PURPOSE_ID
+
+
+def test_am_pm_cohorts_are_draft_factor_batches_and_bind_the_same_canonical_contract() -> None:
     canonical = dict(AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT)
     digests: set[str] = set()
     for legacy_id, am_id in _AM_PM_BY_LEGACY.items():
@@ -357,7 +399,11 @@ def test_am_strategy_ids_are_distinct_and_ls_base_is_stable() -> None:
 def test_am_pm_cohort_digests_are_recomputed_from_corrected_specs() -> None:
     for cohort_id in AM_PM_PERSONAL_EXECUTABLE_COHORT_IDS:
         document = get_research_cohort(cohort_id).to_dict()
-        body = {key: value for key, value in document.items() if key != "cohort_digest"}
+        body = {
+            key: value
+            for key, value in document.items()
+            if key != "cohort_digest"
+        }
         encoded = json.dumps(
             body, sort_keys=True, separators=(",", ":"), ensure_ascii=True
         ).encode("utf-8")

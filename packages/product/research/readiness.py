@@ -32,6 +32,16 @@ from selection.budget_ledger import (
     MassResearchDisabledError,
     ResearchBudgetCapability,
 )
+from execution.controlled_fill_contract import (
+    CONTROLLED_FILL_CONTRACT_DIGEST,
+    require_controlled_fill_contract_digest,
+    ControlledFillContractError,
+)
+from selection.controlled_pilot_policy import (
+    CONTROLLED_PILOT_IDENTITY,
+    ControlledPilotPolicyError,
+    require_controlled_pilot_identity,
+)
 
 READINESS_SIGNATURE_ALGORITHM = "Ed25519"
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -82,25 +92,11 @@ def ready_publication_authority_status() -> ReadyPublicationAuthorityStatus:
     """Report operational truth without mistaking filesystem preflight for liveness.
 
     Product code intentionally has no private-key type, private-key loader,
-    signer factory, or issuer injection hook.  The positive observation is a
-    pinned public registry plus launchd socket metadata is only a preflight: it
-    cannot prove a live listener or authenticate its kernel peer.  Only an
-    actual publication call can do that, so this passive status remains
-    PENDING/UNKNOWN even when the preflight material is present.
+    signer factory, or issuer injection hook.  Passive status cannot prove a
+    live Cloudflare/READY publisher.  Only a verified public-key attestation
+    can do that, so this report remains PENDING/UNKNOWN until that evidence
+    exists.
     """
-
-    try:
-        from scripts.local_authority_clients import ReadyPublisherAuthorityClient
-        from scripts.local_authority_service import LocalAuthorityError
-
-        ReadyPublisherAuthorityClient(environment="production").require_available()
-    except LocalAuthorityError:
-        reason = "dedicated READY publication authority is not provisioned"
-    else:
-        reason = (
-            "pinned READY registry and socket metadata are present; "
-            "listener liveness and peer identity are unverified until a call"
-        )
 
     return ReadyPublicationAuthorityStatus(
         state="PENDING",
@@ -108,7 +104,10 @@ def ready_publication_authority_status() -> ReadyPublicationAuthorityStatus:
         contract_version=READY_PUBLICATION_AUTHORITY_CONTRACT,
         required_checks=READY_PUBLICATION_REQUIRED_CHECKS,
         mass_state="DISABLED",
-        reason=reason,
+        reason=(
+            "Cloudflare/READY public-key issuer is unprovisioned; "
+            "local six-principal publication is not on the Paper-only path"
+        ),
     )
 
 
@@ -395,6 +394,8 @@ class _VerifiedReadiness:
     evidence_digest: str
     key_id: str
     signature: str
+    identity: str
+    fill_contract_digest: str = CONTROLLED_FILL_CONTRACT_DIGEST
     issuer: str = "ReadyPublicationService/v3"
 
     def __post_init__(self) -> None:
@@ -427,6 +428,35 @@ class _VerifiedReadiness:
                 f"{concrete_type.__name__} requires readiness_scope "
                 f"{expected_scope!r}"
             )
+        identity = object.__getattribute__(self, "identity")
+        if concrete_type is VerifiedPilotReadiness:
+            try:
+                object.__setattr__(
+                    self, "identity", require_controlled_pilot_identity(identity)
+                )
+            except ControlledPilotPolicyError as exc:
+                raise ValueError(
+                    "VerifiedPilotReadiness identity must be exactly "
+                    f"{CONTROLLED_PILOT_IDENTITY!r}"
+                ) from exc
+        elif identity == CONTROLLED_PILOT_IDENTITY:
+            raise MassResearchDisabledError(
+                "VerifiedMassReadiness cannot carry controlled_pilot_v1"
+            )
+        if concrete_type is VerifiedPilotReadiness:
+            try:
+                object.__setattr__(
+                    self,
+                    "fill_contract_digest",
+                    require_controlled_fill_contract_digest(
+                        object.__getattribute__(self, "fill_contract_digest")
+                    ),
+                )
+            except ControlledFillContractError as exc:
+                raise ValueError(
+                    "VerifiedPilotReadiness fill_contract_digest must be the "
+                    "governed morning-close to same-day afternoon-close contract"
+                ) from exc
 
     def to_canonical_body(self) -> dict[str, Any]:
         return {
@@ -439,6 +469,7 @@ class _VerifiedReadiness:
                 self.signed_projection_document_digest
             ),
             "readiness_scope": self.readiness_scope,
+            "identity": self.identity,
             "snapshot_id": self.snapshot_id,
             "profile_id": self.profile_id,
             "profile_version": self.profile_version,
@@ -469,6 +500,7 @@ class _VerifiedReadiness:
             "evidence_digest": self.evidence_digest,
             "key_id": self.key_id,
             "issuer": self.issuer,
+            "fill_contract_digest": self.fill_contract_digest,
         }
 
     def to_dict(self) -> dict[str, Any]:
@@ -706,6 +738,7 @@ def _canonical_pilot_body(values: Mapping[str, Any]) -> dict[str, Any]:
             "signed_projection_document_digest"
         ],
         "readiness_scope": values["readiness_scope"],
+        "identity": values["identity"],
         "snapshot_id": values["snapshot_id"],
         "profile_id": values["profile_id"],
         "profile_version": values["profile_version"],
@@ -736,6 +769,7 @@ def _canonical_pilot_body(values: Mapping[str, Any]) -> dict[str, Any]:
         "evidence_digest": values["evidence_digest"],
         "key_id": values["key_id"],
         "issuer": values["issuer"],
+        "fill_contract_digest": values["fill_contract_digest"],
     }
 
 
@@ -825,6 +859,7 @@ def _verify_exact_pilot_readiness_values(
     )
     if (
         values["readiness_scope"] != "PILOT"
+        or values["identity"] != CONTROLLED_PILOT_IDENTITY
         or values["environment"] != expected_environment
         or values["authority_instance_id"]
         != ready_authority_instance_id(expected_environment)
@@ -1062,8 +1097,13 @@ def require_mass_research_start(
     expected_snapshot_id: str | None = None,
 ) -> tuple[ResearchBudgetCapability, VerifiedMassReadiness]:
     """Fail-closed Mass start: only a valid Mass-scoped capability is accepted."""
+    del budget, expected_snapshot_id
+    if type(readiness) is VerifiedPilotReadiness:
+        raise MassResearchDisabledError(
+            "Mass Research rejects VerifiedPilotReadiness"
+        )
     raise MassResearchDisabledError(
-        "Mass Research remains disabled in Phase 6.3.1"
+        "Mass Research remains disabled; VerifiedMassReadiness cannot start it"
     )
 
 

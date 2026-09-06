@@ -28,11 +28,19 @@ READINESS_SIGNATURE_ALGORITHM = "Ed25519"
 MIN_READY_ATTESTATION_TTL_SECONDS = 60
 MAX_READY_ATTESTATION_TTL_SECONDS = 86_400
 PINNED_READINESS_REGISTRY_DOCUMENT_DIGEST = (
-    "sha256:17c2978493dc3be0d72f3b94dbefd09aaff91c021f9e3d109464b6a7edcefa50"
+    "sha256:8f2f7fe9353dc2082d57a0a3bd480575adf1095836e4729364b763d8b4459d84"
 )
+PINNED_READINESS_REGISTRY_RAW_DIGEST = (
+    "sha256:9150653e615dfdaa9b02965f0d05fa5d58fbee9786689eec49c2b2157c068e9d"
+)
+PINNED_READINESS_REGISTRY_RAW_SIZE = 497
 PINNED_STAGING_READINESS_REGISTRY_DOCUMENT_DIGEST = (
     "sha256:30a7a04c4cca8ed96f0813423e1ceb049d4d80c36c0db62c01e327354e5c8aae"
 )
+PINNED_STAGING_READINESS_REGISTRY_RAW_DIGEST = (
+    "sha256:deca43c153d75cc76a5fdde76f5504f5a99c2bf435c32dae24b13fdc77ed7556"
+)
+PINNED_STAGING_READINESS_REGISTRY_RAW_SIZE = 176
 _PINNED_READINESS_REGISTRY_PATH = (
     Path(__file__).resolve().parents[3]
     / "specs"
@@ -50,10 +58,11 @@ _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 # Compile-time consumer pin for the sole accepted pilot lineage.  Updating any
 # plan/profile/closure requires an explicit code review at this trust boundary.
+CONTROLLED_PILOT_IDENTITY = "controlled_pilot_v1"
 EXACT_FOUR_PROFILE_ID = "controlled-pilot/exact-four"
 EXACT_FOUR_PROFILE_VERSION = "research-data-profile-set/v1"
 EXACT_FOUR_PROFILE_DIGEST = (
-    "sha256:6e5af32e15d89498cd754f954c9188f785a9841300df40e46cfe1f44903797cc"
+    "sha256:ccad8a7ab0cf9af80cabc68a0b8a5111c064b578d211495423dae56333b8bf63"
 )
 EXACT_FOUR_PLAN_IDS = (
     "exp-mdh-hold10-momentum",
@@ -62,16 +71,22 @@ EXACT_FOUR_PLAN_IDS = (
     "exp-fund-hold10-value-mom",
 )
 EXACT_FOUR_PLAN_SET_DIGEST = (
-    "sha256:3da05a67d22d8f8d65b9fc2e36db089c618221f32749b087eeb9e99ff278a0c8"
+    "sha256:d7c1453b0a0b1d7672bff48af751351a4a88f5baf1438e119d429b9970de91b8"
 )
 EXACT_FOUR_CLOSURE_DIGEST = (
-    "sha256:c2caee361198b40ba261cf9ff32bf461869d801882242d64611ee7755fc2cea4"
+    "sha256:dbda1ed2c7c0bf942817f19b3668163710afceedf265f436114e50b80a7e8cb0"
 )
 EXACT_FOUR_UNIVERSE_RULE_DIGEST = (
-    "sha256:2d8b9b49ff0b99e9da1f206f839aeb5b1f88e264be4796cd17954ea181a7e860"
+    "sha256:710bd711b107dfebec64da6376a13933a8233d3c55e97562432f27f38c34d351"
 )
+CONTROLLED_FILL_CONTRACT_DIGEST = (
+    "sha256:678985a0f7b142eeecd693ebe28bff822916bc815889f0b39e2841830377377d"
+)
+CONTROLLED_READY_ENVELOPE_FORMAT = "controlled-pilot-ready-envelope/v1"
+CONTROLLED_SNAPSHOT_KEY_PREFIX = "research/controlled_pilot/v1/snapshots/"
 EXACT_FOUR_DATASET_IDS = (
     "equities_bars_daily",
+    "equities_bars_daily_am",
     "equities_master",
     "fins_summary",
     "indices_bars_daily_topix",
@@ -109,6 +124,8 @@ _READY_MANIFEST_FIELDS = {
     "catalog_generation",
     "created_at",
     "published_at",
+    "identity",
+    "fill_contract_digest",
     "manifest_digest",
 }
 _ATTESTATION_FIELDS = {
@@ -119,6 +136,7 @@ _ATTESTATION_FIELDS = {
     "authority_resource_digest",
     "signed_projection_document_digest",
     "readiness_scope",
+    "identity",
     "snapshot_id",
     "profile_id",
     "profile_version",
@@ -150,6 +168,7 @@ _ATTESTATION_FIELDS = {
     "key_id",
     "signature",
     "issuer",
+    "fill_contract_digest",
 }
 
 
@@ -247,12 +266,16 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _clock(now: datetime | None) -> datetime:
+    return now if now is not None else _now()
+
+
 def _canonical_bytes(value: Mapping[str, Any]) -> bytes:
     return json.dumps(
         dict(value),
         sort_keys=True,
         separators=(",", ":"),
-        ensure_ascii=True,
+        ensure_ascii=False,
         allow_nan=False,
         default=str,
     ).encode("utf-8")
@@ -317,16 +340,20 @@ def derive_ready_authority_resource_digest(
     )
 
 
-def _registry_contract(environment: str) -> tuple[Path, str]:
+def _registry_contract(environment: str) -> tuple[Path, str, str, int]:
     selected = _require_environment(environment)
     if selected == "staging":
         return (
             _PINNED_STAGING_READINESS_REGISTRY_PATH,
             PINNED_STAGING_READINESS_REGISTRY_DOCUMENT_DIGEST,
+            PINNED_STAGING_READINESS_REGISTRY_RAW_DIGEST,
+            PINNED_STAGING_READINESS_REGISTRY_RAW_SIZE,
         )
     return (
         _PINNED_READINESS_REGISTRY_PATH,
         PINNED_READINESS_REGISTRY_DOCUMENT_DIGEST,
+        PINNED_READINESS_REGISTRY_RAW_DIGEST,
+        PINNED_READINESS_REGISTRY_RAW_SIZE,
     )
 
 
@@ -336,11 +363,15 @@ def _load_pinned_readiness_public_keys(
     """Load the exact committed registry generation; no path/env injection."""
 
     selected = _require_environment(expected_environment)
-    registry_path, registry_digest = _registry_contract(selected)
+    registry_path, registry_digest, raw_digest, raw_size = _registry_contract(selected)
     try:
-        document = decode_strict_ready_json(
-            registry_path.read_bytes()
-        )
+        raw = registry_path.read_bytes()
+        observed_raw = "sha256:" + hashlib.sha256(raw).hexdigest()
+        if len(raw) != raw_size or observed_raw != raw_digest or raw_digest == registry_digest:
+            raise ReadyAttestationVerificationError(
+                "pinned readiness public-key registry raw digest mismatch"
+            )
+        document = decode_strict_ready_json(raw)
     except (OSError, ReadyAttestationVerificationError) as exc:
         raise ReadyAttestationVerificationError(
             "cannot load the pinned readiness public-key registry"
@@ -377,7 +408,7 @@ def _load_pinned_readiness_public_keys(
     for row in document["keys"]:
         if (
             type(row) is not dict
-            or set(row) != {"key_id", "algorithm", "public_key_b64", "status"}
+            or set(row) != {"key_id", "algorithm", "public_key_b64", "status", "not_before", "not_after", "revoked_at"}
             or row.get("algorithm") != READINESS_SIGNATURE_ALGORITHM
             or row.get("status") not in {"active", "revoked"}
             or type(row.get("key_id")) is not str
@@ -406,6 +437,24 @@ def _load_pinned_readiness_public_keys(
             "pinned readiness registry has multiple active keys"
         )
     return keys
+
+
+
+def _load_pinned_readiness_key_meta(*, expected_environment: str, key_id: str) -> dict[str, Any]:
+    selected = _require_environment(expected_environment)
+    registry_path, _digest, _raw_digest, _raw_size = _registry_contract(selected)
+    document = decode_strict_ready_json(registry_path.read_bytes())
+    if type(document) is not dict or type(document.get("keys")) is not list:
+        raise ReadyAttestationVerificationError("pinned readiness public-key registry is not an object")
+    for row in document["keys"]:
+        if type(row) is dict and str(row.get("key_id") or "").strip() == key_id:
+            return {
+                "not_before": row.get("not_before"),
+                "not_after": row.get("not_after"),
+                "revoked_at": row.get("revoked_at"),
+                "status": row.get("status"),
+            }
+    raise ReadyAttestationVerificationError("READY attestation issuer is not trusted")
 
 
 def load_pinned_readiness_public_keys(
@@ -453,6 +502,8 @@ def _validate_exact_four_ready_manifest(
         or frozen.get("universe_rule_digest")
         != EXACT_FOUR_UNIVERSE_RULE_DIGEST
         or frozen.get("dataset_ids") != list(EXACT_FOUR_DATASET_IDS)
+        or frozen.get("identity") != CONTROLLED_PILOT_IDENTITY
+        or frozen.get("fill_contract_digest") != CONTROLLED_FILL_CONTRACT_DIGEST
     ):
         raise ReadyAttestationVerificationError(
             "embedded ReadyManifest is not the canonical exact-four binding"
@@ -552,6 +603,7 @@ def verify_pinned_pilot_snapshot_attestation(
     ready_manifest: Mapping[str, Any],
     immutable_db_digest: str,
     expected_environment: str,
+    now: datetime | None = None,
 ) -> Mapping[str, Any]:
     """Verify one exact sidecar byte string against immutable snapshot facts.
 
@@ -586,6 +638,7 @@ def verify_pinned_pilot_snapshot_attestation(
         or document.get("authority_instance_id")
         != ready_authority_instance_id(selected_environment)
         or document.get("readiness_scope") != "PILOT"
+        or document.get("identity") != CONTROLLED_PILOT_IDENTITY
         or document.get("ready_state") != "READY"
         or document.get("issuer") != "ReadyPublicationService/v3"
         or document.get("snapshot_id") != snapshot_id
@@ -619,6 +672,7 @@ def verify_pinned_pilot_snapshot_attestation(
         "source_generation": "source_generation",
         "export_cursor": "export_cursor",
         "applied_cursor": "applied_cursor",
+        "fill_contract_digest": "fill_contract_digest",
     }
     if any(
         document.get(attestation_field) != manifest.get(manifest_field)
@@ -647,6 +701,7 @@ def verify_pinned_pilot_snapshot_attestation(
         "evidence_digest",
         "authority_resource_digest",
         "signed_projection_document_digest",
+        "fill_contract_digest",
     )
     if any(not _is_sha256(document.get(field)) for field in digest_fields):
         raise ReadyAttestationVerificationError(
@@ -658,6 +713,10 @@ def verify_pinned_pilot_snapshot_attestation(
     if document.get("evidence_digest") != expected_evidence_digest:
         raise ReadyAttestationVerificationError(
             "READY attestation evidence digest is invalid"
+        )
+    if document.get("fill_contract_digest") != CONTROLLED_FILL_CONTRACT_DIGEST:
+        raise ReadyAttestationVerificationError(
+            "READY attestation fill contract cannot authorize Controlled execution"
         )
     expected_authority_resource_digest = derive_ready_authority_resource_digest(
         environment=selected_environment,
@@ -681,17 +740,15 @@ def verify_pinned_pilot_snapshot_attestation(
             "READY attestation exact-four membership is invalid"
         )
     try:
-        verified_at = datetime.fromisoformat(
-            document["verified_at"].replace("Z", "+00:00")
-        )
-        expires_at = datetime.fromisoformat(
-            document["expires_at"].replace("Z", "+00:00")
-        )
-    except (AttributeError, TypeError, ValueError) as exc:
+        from paper_runtime.canonical_utc import CanonicalUtcError, parse_canonical_utc
+
+        verified_at = parse_canonical_utc(document["verified_at"], label="verified_at")
+        expires_at = parse_canonical_utc(document["expires_at"], label="expires_at")
+    except (AttributeError, TypeError, ValueError, CanonicalUtcError) as exc:
         raise ReadyAttestationVerificationError(
             "READY attestation timestamps are invalid"
         ) from exc
-    clock = _now()
+    clock = _clock(now)
     try:
         manifest_published_at = datetime.fromisoformat(
             manifest["published_at"].replace("Z", "+00:00")
@@ -728,6 +785,26 @@ def verify_pinned_pilot_snapshot_attestation(
         raise ReadyAttestationVerificationError(
             "READY attestation issuer is not trusted"
         )
+    from paper_runtime.canonical_utc import CanonicalUtcError, require_key_validity_window
+
+    try:
+        meta = _load_pinned_readiness_key_meta(
+            expected_environment=selected_environment, key_id=key_id
+        )
+    except ReadyAttestationVerificationError:
+        meta = None
+    if meta is not None:
+        try:
+            require_key_validity_window(
+                signed_at=verified_at,
+                not_before=meta["not_before"],
+                not_after=meta["not_after"],
+                revoked_at=meta["revoked_at"],
+                status=meta["status"],
+                label="ready key",
+            )
+        except CanonicalUtcError as exc:
+            raise ReadyAttestationVerificationError(str(exc)) from exc
     signed_body = {key: value for key, value in document.items() if key != "signature"}
     try:
         key.verify(
@@ -741,6 +818,105 @@ def verify_pinned_pilot_snapshot_attestation(
     return _deep_immutable_json(document)
 
 
+_ENVELOPE_FIELDS = {
+    "format",
+    "identity",
+    "environment",
+    "attestation",
+    "ready_manifest",
+    "physical",
+}
+_PHYSICAL_FIELDS = {"key", "digest", "size"}
+
+
+def controlled_physical_snapshot_key(immutable_db_digest: str) -> str:
+    if type(immutable_db_digest) is not str or not _is_sha256(immutable_db_digest):
+        raise ReadyAttestationVerificationError(
+            "physical snapshot digest must be an exact sha256 string"
+        )
+    hex_digest = immutable_db_digest[len("sha256:") :]
+    return f"{CONTROLLED_SNAPSHOT_KEY_PREFIX}sha256={hex_digest}.sqlite"
+
+
+def verify_pinned_pilot_ready_envelope(
+    envelope_bytes: bytes,
+    *,
+    expected_environment: str,
+    expected_snapshot_id: str,
+    now: datetime | None = None,
+) -> Mapping[str, Any]:
+    """Verify one closed READY envelope. Physical identity is never the logical ID."""
+
+    selected_environment = _require_environment(expected_environment)
+    if type(envelope_bytes) is not bytes:
+        raise ReadyAttestationVerificationError(
+            "READY envelope must be one immutable byte string"
+        )
+    if type(expected_snapshot_id) is not str or not _is_sha256(expected_snapshot_id):
+        raise ReadyAttestationVerificationError(
+            "logical snapshot_id must be an exact sha256 string"
+        )
+    decoded = decode_strict_ready_json(envelope_bytes)
+    document = _materialize_exact_json(decoded, field="READY envelope")
+    if type(document) is not dict or set(document) != _ENVELOPE_FIELDS:
+        raise ReadyAttestationVerificationError("READY envelope shape is invalid")
+    if (
+        document.get("format") != CONTROLLED_READY_ENVELOPE_FORMAT
+        or document.get("identity") != CONTROLLED_PILOT_IDENTITY
+        or document.get("environment") != selected_environment
+    ):
+        raise ReadyAttestationVerificationError(
+            "READY envelope identity or environment is invalid"
+        )
+    physical = document.get("physical")
+    if type(physical) is not dict or set(physical) != _PHYSICAL_FIELDS:
+        raise ReadyAttestationVerificationError(
+            "READY envelope physical metadata is invalid"
+        )
+    digest = physical.get("digest")
+    key = physical.get("key")
+    size = physical.get("size")
+    if (
+        type(size) is not int
+        or size < 1
+        or type(key) is not str
+        or not _is_sha256(digest)
+        or digest == expected_snapshot_id
+        or key != controlled_physical_snapshot_key(digest)
+    ):
+        raise ReadyAttestationVerificationError(
+            "READY envelope physical snapshot identity is invalid"
+        )
+    attestation = document.get("attestation")
+    if type(attestation) is not dict:
+        raise ReadyAttestationVerificationError(
+            "READY envelope attestation must be an object"
+        )
+    attestation_bytes = _canonical_bytes(attestation)
+    verified = verify_pinned_pilot_snapshot_attestation(
+        attestation_bytes,
+        snapshot_id=expected_snapshot_id,
+        ready_manifest=document["ready_manifest"],
+        immutable_db_digest=digest,
+        expected_environment=selected_environment,
+        now=now,
+    )
+    return _deep_immutable_json(
+        {
+            "format": CONTROLLED_READY_ENVELOPE_FORMAT,
+            "identity": CONTROLLED_PILOT_IDENTITY,
+            "environment": selected_environment,
+            "attestation": dict(verified),
+            "ready_manifest": document["ready_manifest"],
+            "physical": {
+                "key": key,
+                "digest": digest,
+                "size": size,
+            },
+        }
+    )
+
+
 __all__ = [
     "EXACT_FOUR_CLOSURE_DIGEST",
     "EXACT_FOUR_DATASET_IDS",
@@ -750,6 +926,9 @@ __all__ = [
     "EXACT_FOUR_PROFILE_ID",
     "EXACT_FOUR_PROFILE_VERSION",
     "EXACT_FOUR_UNIVERSE_RULE_DIGEST",
+    "CONTROLLED_FILL_CONTRACT_DIGEST",
+    "CONTROLLED_READY_ENVELOPE_FORMAT",
+    "CONTROLLED_SNAPSHOT_KEY_PREFIX",
     "MAX_READY_ATTESTATION_TTL_SECONDS",
     "MIN_READY_ATTESTATION_TTL_SECONDS",
     "PINNED_READINESS_REGISTRY_DOCUMENT_DIGEST",
@@ -759,5 +938,7 @@ __all__ = [
     "derive_ready_authority_resource_digest",
     "load_pinned_readiness_public_keys",
     "ready_authority_instance_id",
+    "controlled_physical_snapshot_key",
+    "verify_pinned_pilot_ready_envelope",
     "verify_pinned_pilot_snapshot_attestation",
 ]

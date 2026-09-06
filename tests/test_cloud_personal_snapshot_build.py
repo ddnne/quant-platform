@@ -76,11 +76,43 @@ class _FakeHydrator:
 
     def hydrate(self):
         self.store._conn.execute(
-            "INSERT OR IGNORE INTO jquants_daily_bars("
-            "source,code,date,event_time,available_at,ingested_at,close) "
-            "VALUES ('jquants','1001','2024-01-04','2024-01-04T15:00:00+09:00',"
-            "'2024-01-04T15:00:00+09:00','2024-01-04T16:00:00+09:00',100)"
+            "CREATE TABLE IF NOT EXISTS personal_history_manifest ("
+            "singleton INTEGER PRIMARY KEY, format TEXT, status TEXT, "
+            "observed_through TEXT, revision_window_calendar_days INTEGER, "
+            "revision_coverage TEXT)"
         )
+        columns = {
+            str(row[1])
+            for row in self.store._conn.execute(
+                "PRAGMA table_info(personal_history_manifest)"
+            )
+        }
+        if "observed_through" not in columns:
+            self.store._conn.execute(
+                "ALTER TABLE personal_history_manifest ADD COLUMN observed_through TEXT"
+            )
+        if "revision_window_calendar_days" not in columns:
+            self.store._conn.execute(
+                "ALTER TABLE personal_history_manifest "
+                "ADD COLUMN revision_window_calendar_days INTEGER"
+            )
+        if "revision_coverage" not in columns:
+            self.store._conn.execute(
+                "ALTER TABLE personal_history_manifest ADD COLUMN revision_coverage TEXT"
+            )
+        updated = self.store._conn.execute(
+            "UPDATE personal_history_manifest SET observed_through=?,"
+            "revision_window_calendar_days=?,revision_coverage=? WHERE singleton=1",
+            ("2024-12-31T16:00:00+09:00", 40, "WINDOW_COMPLETE"),
+        )
+        if updated.rowcount == 0:
+            self.store._conn.execute(
+                "INSERT INTO personal_history_manifest("
+                "singleton, format, status, observed_through, "
+                "revision_window_calendar_days, revision_coverage) "
+                "VALUES (1, 'unmanaged-catalog', 'COMPLETE_DRAFT', "
+                "'2024-12-31T16:00:00+09:00', 40, 'WINDOW_COMPLETE')"
+            )
         self.store._conn.commit()
         lookback = int(self.plan.lookback_sessions)
         return SimpleNamespace(

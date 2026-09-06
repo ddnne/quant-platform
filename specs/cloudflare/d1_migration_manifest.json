@@ -1,61 +1,44 @@
 {
   "schema_version": "cloudflare-d1-migration-manifest/v2",
-  "applied_state_policy": "UNVERIFIED is fail-closed source state; source policy HOLD never authorizes remote mutation, and remote post-apply state belongs in immutable release evidence",
+  "applied_state_policy": "UNVERIFIED is fail-closed source state; only the single operator command may mutate remote D1 under the same-D1 CAS lease, and remote post-apply state belongs in immutable release evidence",
   "targets": {
     "quant-ingest": {
       "target_role": "ingestion_source_of_truth",
       "owner": "platform/workers/ingestion-premium",
       "migration_dir": "platform/workers/ingestion-premium/migrations",
       "application_policy": {
-        "mode": "source-only-hold/v2",
-        "owner_command": null,
-        "observation_recovery_command": "scripts/apply_ingestion_d1_migrations.py",
-        "remote_mutation_authorized": false,
+        "mode": "single-operator-cloudflare/v1",
+        "owner_command": "scripts/activate_jsda_v3_cutover.py",
+        "check_command": "scripts/apply_ingestion_d1_migrations.py --check",
+        "remote_mutation_authority": "OWNER_COMMAND_ONLY",
+        "direct_wrangler_apply": "FORBIDDEN",
         "environment_order": [
           "staging",
           "production"
         ],
-        "authorization_state": {
-          "staging": "HOLD",
-          "production": "HOLD"
+        "rollback_authority": "CLOUDFLARE_D1_TIME_TRAVEL",
+        "local_whole_file_export_in_cutover": "FORBIDDEN",
+        "recovery_cache": {
+          "role": "SMALL_CREATE_ONLY_CONTROL_INTENT",
+          "authority": false,
+          "source_of_truth": "REMOTE_D1_CUTOVER_RUN_AND_LIVE_CLOUDFLARE"
         },
-        "canonical_reservation_identity": [
-          "environment",
-          "database_id",
-          "source_sha",
-          "canonical_manifest_digest"
-        ],
-        "hold_until": [
-          "trusted-remote-cross-host-exclusive-lock",
-          "trusted-control-plane-source-sha-attestation"
-        ],
-        "local_o_excl_role": "SINGLE_HOST_CRASH_AUDIT_MARKER_ONLY",
-        "production_staging_evidence": "independent-canonical-staging-d1-reobservation",
-        "caller_staging_artifacts": "FORBIDDEN",
-        "encrypted_backup_role": "ROLLBACK_ONLY",
-        "encrypted_backup_grants_authority": false,
-        "recovery_states": {
-          "APPLIED": "fresh-exact-canonical-postflight-and-zero-pending",
-          "NOT_APPLIED": "fresh-observation-exactly-matches-recorded-preflight-baseline",
-          "UNKNOWN": "all-other-or-unobservable-states"
+        "lease": {
+          "store": "quant_ingest_mutation_lease",
+          "acquire": "D1_CAS",
+          "spawn_fence": "MIGRATING_REMOTE_SPAWNED",
+          "sticky_after_spawn": true
         },
-        "recovery_grants_mutation_authority": false,
-        "jsda_acceptance": {
-          "endpoint": "/health/ready",
-          "http_status": 200,
-          "product_ready": true,
-          "cutover": "V3_ACTIVE",
-          "response_digest_bound_to_provenance": true,
-          "deployment_version_and_source_sha_bound": true
-        },
+        "pending_from_live_applied_through": "quant-ingest:0010_raw_acquisition_status",
+        "production_admission": "STAGING_ACTIVATED_SAME_SOURCE_SHA_AND_LIVE_CONFIG_QUEUE_CRON_SMOKE",
         "requires": [
           "canonical-live-database-identity",
-          "time-travel-bookmark",
-          "rollback-only-encrypted-export-checksum",
-          "exact-export-preflight",
-          "exact-export-postflight",
-          "signed-jsda-v3-cutover-authority-before-readiness",
-          "jsda-v3-readiness-smoke-before-product-acceptance"
+          "production-backend-time-travel",
+          "pre-migration-bookmark-after-writer-and-queue-quiescence",
+          "bookmark-and-undo-persisted-before-migration",
+          "same-d1-cas-mutation-lease",
+          "exact-remote-schema-and-migration-inventory",
+          "staging-activation-before-production"
         ]
       },
       "environments": {
@@ -165,7 +148,7 @@
         {
           "migration_id": "quant-ingest:0012_jsda_observation_identity",
           "path": "platform/workers/ingestion-premium/migrations/0012_jsda_observation_identity.sql",
-          "checksum": "sha256:ca5fd557d39e467aa3d96fd4c63c92bf0c6a4289b22c72da2aed6f9d90a1667f",
+          "checksum": "sha256:2d04b72ce5cf05c57aaf805d15939b7b0cbfbbbf65b003fec46eea270c330097",
           "order": 12,
           "depends_on": "quant-ingest:0011_jsda_queue_v2"
         },
@@ -217,6 +200,34 @@
           "checksum": "sha256:34b05bcfcf9e5f33d631d8876a51ee325fd15d0303e56c396d8c5aa87c9f12ce",
           "order": 19,
           "depends_on": "quant-ingest:0018_receipt_product_materialization"
+        },
+        {
+          "migration_id": "quant-ingest:0020_receipt_authority_governed_sources",
+          "path": "platform/workers/ingestion-premium/migrations/0020_receipt_authority_governed_sources.sql",
+          "checksum": "sha256:1c332ceae7fd92621633a70c359533c1ab4da8605727445ac5ffa76c7f7c7f01",
+          "order": 20,
+          "depends_on": "quant-ingest:0019_receipt_authority_recovery_smoke"
+        },
+        {
+          "migration_id": "quant-ingest:0021_snapshot_quality_evidence",
+          "path": "platform/workers/ingestion-premium/migrations/0021_snapshot_quality_evidence.sql",
+          "checksum": "sha256:e7e808acd174ea692c395c1bd2927657ec4645a394c72e2ebb38bcf2922bb333",
+          "order": 21,
+          "depends_on": "quant-ingest:0020_receipt_authority_governed_sources"
+        },
+        {
+          "migration_id": "quant-ingest:0022_receipt_authority_jsda_locator",
+          "path": "platform/workers/ingestion-premium/migrations/0022_receipt_authority_jsda_locator.sql",
+          "checksum": "sha256:c3c17dccf33fc0b62ac3231cba2c7ea2ae7d6b29fbeeb830772371335f365521",
+          "order": 22,
+          "depends_on": "quant-ingest:0021_snapshot_quality_evidence"
+        },
+        {
+          "migration_id": "quant-ingest:0023_mutation_lease",
+          "path": "platform/workers/ingestion-premium/migrations/0023_mutation_lease.sql",
+          "checksum": "sha256:2fbe181870625d81bf679fe014b5562e5b419a87d90ae3005a8bd9b4c371f1fd",
+          "order": 23,
+          "depends_on": "quant-ingest:0022_receipt_authority_jsda_locator"
         }
       ]
     },
@@ -263,7 +274,7 @@
         {
           "migration_id": "quant-ops-projection:0001_ops_projection",
           "path": "platform/workers/quant-ops-mcp/migrations/projection/0001_ops_projection.sql",
-          "checksum": "sha256:18fe5cbae5d404e9f111b4c841047db8b72c25f9cc70c7fe5d5ffcf8ff4b30f0",
+          "checksum": "sha256:a79bb35d1f49c52f86cd20f79796a1aedc3a010199f17cdf244e587d2b349e1c",
           "order": 1,
           "depends_on": null
         },

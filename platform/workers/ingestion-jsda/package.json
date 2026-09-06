@@ -4,7 +4,9 @@
   "type": "module",
   "version": "0.1.0",
   "scripts": {
-    "deploy": "wrangler deploy --config=wrangler.toml --env=production",
+    "deploy": "python3 ../../../scripts/activate_jsda_v3_cutover.py --environment production --activate --yes",
+    "deploy:staging": "python3 ../../../scripts/activate_jsda_v3_cutover.py --environment staging --activate --yes",
+    "deploy:unsafe-dev": "wrangler deploy --config=wrangler.toml --env=\"\"",
     "tail": "wrangler tail --config=wrangler.toml --env=production",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --config vitest.config.ts && vitest run --config vitest.runtime.config.ts",

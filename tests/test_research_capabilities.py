@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import urllib.request
 
+import pytest
+
 from research.candidate_policy import job_candidate_grade
 from research.research_capabilities import (
     research_capabilities,
@@ -56,17 +58,17 @@ def test_mass_eval_driver_refuses_without_http(monkeypatch) -> None:
     assert out["error"] == "capability_missing"
     assert out["capability"] == "mass_screen"
     assert out["go"] is False
-    job = run_cf_mass_eval_job(
-        job_id="cap-deny-job",
-        logic_ids=["nky_vol_abs_level"],
-        mode="synthetic",
-        stage_panels=False,
-        deploy_if_needed=False,
-        http_post=_boom,
-    )
-    assert job["ok"] is False
-    assert job["error"] == "capability_missing"
-    assert job["go"] is False
+    from selection.budget_ledger import MassResearchDisabledError
+
+    with pytest.raises(MassResearchDisabledError, match="run_cf_mass_eval_job"):
+        run_cf_mass_eval_job(
+            job_id="cap-deny-job",
+            logic_ids=["nky_vol_abs_level"],
+            mode="synthetic",
+            stage_panels=False,
+            deploy_if_needed=False,
+            http_post=_boom,
+        )
 
 
 def test_daily_path_driver_refuses_without_http(monkeypatch) -> None:
@@ -81,24 +83,24 @@ def test_daily_path_driver_refuses_without_http(monkeypatch) -> None:
     assert out["error"] == "capability_missing"
     assert out["capability"] == "mass_screen"
     assert out["go"] is False
-    pack = run_cf_daily_path_fanout(
-        job_id="cap-deny-fan",
-        logic_ids=["nky_vol_abs_level"],
-        skip_stage=True,
-        mode="synthetic",
-        http_post=_boom,
-        max_workers=1,
-        periods=[
-            {
-                "period_id": "y2015_full",
-                "period_start": "2015-01-05",
-                "period_end": "2015-03-01",
-            }
-        ],
-    )
-    assert pack["ok"] is False
-    assert pack["error"] == "capability_missing"
-    assert pack["go"] is False
+    from selection.budget_ledger import MassResearchDisabledError
+
+    with pytest.raises(MassResearchDisabledError, match="run_cf_daily_path_fanout"):
+        run_cf_daily_path_fanout(
+            job_id="cap-deny-fan",
+            logic_ids=["nky_vol_abs_level"],
+            skip_stage=True,
+            mode="synthetic",
+            http_post=_boom,
+            max_workers=1,
+            periods=[
+                {
+                    "period_id": "y2015_full",
+                    "period_start": "2015-01-05",
+                    "period_end": "2015-03-01",
+                }
+            ],
+        )
 
 
 def test_propose_driver_refuses_without_http(monkeypatch) -> None:

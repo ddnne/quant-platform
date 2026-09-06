@@ -25,7 +25,8 @@ function receiptAuthorityStub(
 export class ReceiptAuthorityService
   extends WorkerEntrypoint<ReceiptAuthorityEnv>
   implements ReceiptEvidenceAuthorityRpc {
-  override fetch(_request: Request): Promise<Response> {
+  override fetch(request: Request): Promise<Response> {
+    void request;
     return Promise.resolve(new Response(null, {
       status: 404,
       headers: {

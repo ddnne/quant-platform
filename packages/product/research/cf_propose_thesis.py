@@ -44,6 +44,7 @@ def _attach_reviews(
     *,
     write_sidecar: bool = False,
     job_id: str | None = None,
+    artifact_put: Any | None = None,
 ) -> dict[str, Any]:
     """Stamp review_proposal_row onto a Worker payload. Never injects."""
     rows = [p for p in (out.get("proposals") or []) if isinstance(p, Mapping)]
@@ -65,11 +66,12 @@ def _attach_reviews(
     out["go"] = False
     out["not_a_pass"] = True
     if write_sidecar and job_id:
+        if artifact_put is None:
+            raise RuntimeError("closed artifact put port is required")
         from research.cf_mass_eval_stage import RESEARCH_ARTIFACT_BUCKET
-        from research.r2_io import put_research_artifact
 
         key = f"research/eval/job={job_id}/review.json"
-        put_research_artifact(
+        artifact_put(
             RESEARCH_ARTIFACT_BUCKET,
             key,
             json.dumps(
@@ -181,45 +183,7 @@ def invoke_cf_propose_thesis(
             job_id=str(body.get("job_id") or "") or None,
         )
     else:
-        import urllib.error
-        import urllib.request
-
-        req = urllib.request.Request(url, data=payload, method="POST", headers=headers)
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                raw = resp.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            detail = ""
-            try:
-                detail = exc.read().decode("utf-8")[:4000]
-            except Exception:
-                detail = str(exc)
-            try:
-                failed = json.loads(detail)
-            except json.JSONDecodeError:
-                failed = None
-            if (
-                isinstance(failed, dict)
-                and failed.get("error") == "llm_failed"
-            ):
-                raw = json.dumps(failed)
-            else:
-                raise CfMassEvalError(
-                    f"propose-thesis HTTP {exc.code}: {detail}"
-                ) from exc
-        except urllib.error.URLError as exc:
-            raise CfMassEvalError(f"propose-thesis network error: {exc}") from exc
-        try:
-            out = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise CfMassEvalError(f"propose-thesis non-json: {raw[:500]}") from exc
-        if not isinstance(out, dict):
-            raise CfMassEvalError("propose-thesis response not an object")
-        reviewed = _attach_reviews(
-            out,
-            write_sidecar=bool(write_artifacts),
-            job_id=str(body.get("job_id") or "") or None,
-        )
+        raise CfMassEvalError("closed JSON client is required")
     if (
         retry_on_clone
         and reviewed.get("workers_ai_used")

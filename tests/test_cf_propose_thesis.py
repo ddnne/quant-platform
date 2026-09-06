@@ -87,7 +87,6 @@ def test_review_sidecar_uses_worker_put(monkeypatch) -> None:
         seen.append(key)
         return {"status": "put_ok"}
 
-    monkeypatch.setattr("research.r2_io.put_research_artifact", _fake_put)
     out = _attach_reviews(
         {
             "proposals": [
@@ -101,6 +100,7 @@ def test_review_sidecar_uses_worker_put(monkeypatch) -> None:
         },
         write_sidecar=True,
         job_id="eval-cf-propose-test24em",
+        artifact_put=_fake_put,
     )
     assert out["auto_inject"] is False
     assert out["catalog_written"] is False

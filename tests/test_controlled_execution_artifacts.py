@@ -93,6 +93,7 @@ def _authorization(
         "expires_at": (issued + timedelta(seconds=ttl_seconds)).isoformat(),
         "key_id": key_id,
         "issuer": "ControlledTraderAuthorizationService/v1",
+        "identity": "controlled_pilot_v1",
     }
     body["authorization_id"] = _digest(body)
     signature = _signature(private, body)

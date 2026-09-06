@@ -142,6 +142,14 @@ def _seed_publishable_db(path) -> tuple[str, ...]:
             _generic_row(dataset, f"{dataset}-{index}", today, Code=f"{index:04d}")
             for index in range(3000)
         )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS snapshot_observation_clock "
+        "(observed_through TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO snapshot_observation_clock VALUES (?)",
+        (datetime.now(timezone.utc).replace(microsecond=0).isoformat(),),
+    )
     conn.executemany(
         "INSERT INTO jquants_records "
         "(source,dataset,natural_key,event_time,available_at,ingested_at,"

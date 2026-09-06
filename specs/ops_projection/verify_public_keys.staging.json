@@ -1,9 +1,21 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "purpose": "ops_projection_verification",
-  "generation": 1,
+  "generation": 2,
   "authority_status": "PENDING",
+  "authority_instance": "ops-projection-cloud",
   "prior_registry_digest": null,
-  "keys": [],
-  "registry_digest": "sha256:b04a7692f2d754e3494ccd0bbf7e0b0459518886e95ad2d301e479ee42673815"
+  "keys": [
+    {
+      "key_id": "ops-projection-cloud-staging-v1",
+      "algorithm": "Ed25519",
+      "public_key_base64": "2SbRlMyXKEgrcdXtjSQs/9xaawAQT95wG5q4SMOWpl4=",
+      "status": "pending",
+      "environment": "staging",
+      "not_before": "2026-08-26T00:00:00Z",
+      "not_after": "2027-08-26T00:00:00Z",
+      "revoked_at": null
+    }
+  ],
+  "registry_digest": "sha256:c97a025ecf3525e8405cac95ffae73393e687ecba5111165a8a71d4ebc99af1e"
 }

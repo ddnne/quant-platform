@@ -481,6 +481,25 @@ def test_public_chain_rejects_near_future_issuance_without_clock_grace(
         )
 
 
+def test_ready_and_execution_documents_reject_omitted_or_mutated_identity() -> None:
+    readiness, _trader, execution = _claims()
+    for claims in (readiness, execution):
+        document = claims.to_dict()
+        assert document["identity"] == "controlled_pilot_v1"
+        omitted = dict(document)
+        omitted.pop("identity")
+        with pytest.raises(ExactFourAuthorityContractError):
+            parse_and_validate_exact_four_authority_document(
+                json.dumps(omitted).encode("utf-8")
+            )
+        mutated = dict(document)
+        mutated["identity"] = "draft_factor_cohort_v1"
+        with pytest.raises(ExactFourAuthorityContractError):
+            parse_and_validate_exact_four_authority_document(
+                json.dumps(mutated).encode("utf-8")
+            )
+
+
 def test_downstream_parsers_reject_split_brain_parent_claims() -> None:
     readiness, trader, execution = _claims()
     other_ready = replace(readiness, pilot_run_id="pilot-run-split-brain")

@@ -57,7 +57,9 @@
     "feature_generation",
     "catalog_generation",
     "created_at",
-    "published_at"
+    "published_at",
+    "identity",
+    "fill_contract_digest"
   ],
   "properties": {
     "format": { "const": "ready-manifest/v1" },
@@ -102,6 +104,9 @@
     "catalog_generation": { "$ref": "#/$defs/generation_pin" },
     "created_at": { "$ref": "#/$defs/iso_datetime" },
     "published_at": { "$ref": "#/$defs/iso_datetime" },
+    "identity": { "$ref": "#/$defs/nonempty_string" },
+    "fill_contract_digest": { "$ref": "#/$defs/proof_digest" },
+    "observed_through": { "$ref": "#/$defs/iso_datetime" },
     "manifest_digest": { "$ref": "#/$defs/sha256_digest" }
   }
 }

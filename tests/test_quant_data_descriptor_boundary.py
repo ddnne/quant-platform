@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from _coreseed import write_snapshot_observation_clock
 import data_access.adapter as adapter_module
 from data_access import QuantDataAccess, QuantDataConfig
 from paper_runtime.snapshot import ReadySnapshot
@@ -135,6 +136,9 @@ def test_same_uid_mutation_is_detected_before_result_is_returned(
                     "raw_payload": '{"value":"original"}',
                 }
             ],
+        )
+        write_snapshot_observation_clock(
+            store, "2025-01-02T09:00:00+09:00"
         )
     snapshot.chmod(0o400)
     ready = _ready(snapshot)

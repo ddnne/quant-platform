@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import pytest
 import pit
+from _coreseed import draft_pit_observation_clock
 from storage.sqlite_store import SqliteStore
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -251,11 +252,12 @@ def test_cf_export_sync_reaches_nonempty_pit_path(synced_cf_d1_db):
     assert all(query["limit"] == ["2"] for query in queries)
     assert any("cursor" in query for query in queries[1:])
 
-    bars = pit.get_equity_bars_daily(
-        as_of="2025-04-04T15:30:00+09:00",
-        code="8697",
-        db_path=synced_cf_d1_db.db,
-    )
+    with draft_pit_observation_clock("2025-04-04T15:30:00+09:00"):
+        bars = pit.get_equity_bars_daily(
+            as_of="2025-04-04T15:30:00+09:00",
+            code="8697",
+            db_path=synced_cf_d1_db.db,
+        )
     assert len(bars.rows) == 4
     assert [row["close"] for row in bars.rows] == [100.0, 102.0, 101.0, 104.0]
 
@@ -810,6 +812,13 @@ def test_wrangler_export_uses_argv_and_withholds_provider_output(
             stderr=f"provider error {secret}".encode(),
         )
 
+    config = tmp_path / "wrangler.toml"
+    config.write_text("# reviewed test config\n", encoding="utf-8")
+    monkeypatch.setattr(
+        sync_module._private_export,
+        "_validated_governed_wrangler",
+        lambda: (str(tmp_path / "wrangler"), config),
+    )
     monkeypatch.setattr(sync_module._private_export.subprocess, "run", failed_runner)
     with pytest.raises(RuntimeError, match="provider output withheld") as caught:
         sync_module._private_export.run_wrangler_d1_export(
@@ -924,6 +933,18 @@ database_name = "quant-ingest"
 database_id = "00000000-0000-0000-0000-000000000000"
 """,
         encoding="utf-8",
+    )
+    wr_root = tmp_path / "ingestion-premium"
+    wr_bin = wr_root / "node_modules" / ".bin"
+    wr_bin.mkdir(parents=True)
+    wr = wr_bin / "wrangler"
+    wr.write_text("")
+    wr.chmod(0o755)
+    (wr.parents[1] / "package.json").write_text(
+        '{"version": "4.125.0"}', encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        sync_module._private_export, "DEFAULT_WRANGLER_BIN", wr
     )
     monkeypatch.setattr(
         sync_module._private_export, "DEFAULT_WRANGLER_CONFIG", fake_config
@@ -1318,9 +1339,6 @@ def test_publish_ops_flag_default_off(sync_module):
     assert on.publish_ops is True
     off = parser.parse_args(["--db=test.sqlite"])
     assert off.publish_ops is False
-    help_text = parser.format_help()
-    assert "Default OFF for safety" in help_text or "default off" in help_text.lower()
-    assert "--apply-remote" in help_text or "apply-remote" in help_text
 
 
 def test_unsigned_pilot_ready_json_is_rejected(

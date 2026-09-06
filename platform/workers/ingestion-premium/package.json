@@ -3,13 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Phase 3.5 — J-Quants Premium core ingestion closed loop on Cloudflare",
+  "description": "Phase 3.5 \u2014 J-Quants Premium core ingestion closed loop on Cloudflare",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run --config vitest.config.ts && vitest run --config vitest.runtime.config.ts",
     "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
     "cf-typegen": "wrangler types --config=wrangler.toml --env=\"\"",
-    "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"
+    "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false",
+    "deploy": "python3 ../../scripts/cloudflare_binding_manifest.py --deploy-tagged --config wrangler.toml --env production"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.0.0",

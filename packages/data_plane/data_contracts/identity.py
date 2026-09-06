@@ -1,8 +1,7 @@
 """Contract-driven, cross-runtime row identity and PIT timestamps.
 
 The TypeScript mirror imports the same JSON contract.  ``canonical_json`` is
-defined to match JavaScript JSON number rendering and UTF-16 object-key order,
-which makes the SHA-256 fallback byte-identical in Python and Workers.
+defined to match JavaScript JSON number rendering and UTF-16 object-key order.
 
 Finite numbers follow ECMAScript ``JSON.stringify`` (ordinary fractions,
 negatives, ``-0``, the ``1e-6`` / ``1e21`` exponent thresholds, and integers
@@ -107,6 +106,59 @@ def canonical_json(value: Any) -> str:
     raise TypeError(f"not an interoperable JSON value: {type(value).__name__}")
 
 
+_JS_SAFE_INTEGER = (1 << 53) - 1
+
+
+def _validate_unicode_scalar_string(value: str, *, path: str) -> None:
+    if any(0xD800 <= ord(char) <= 0xDFFF for char in value):
+        raise ValueError(f"{path} contains an unpaired UTF-16 surrogate")
+
+
+def _validate_finite_safe_json(value: Any, *, path: str) -> None:
+    """Validate the closed, non-lossy cross-runtime JSON value profile."""
+
+    if value is None or type(value) is bool:
+        return
+    if type(value) is str:
+        _validate_unicode_scalar_string(value, path=path)
+        return
+    if type(value) is int:
+        if abs(value) > _JS_SAFE_INTEGER:
+            raise ValueError(f"{path} is outside the JavaScript safe-integer range")
+        return
+    if type(value) is float:
+        if not math.isfinite(value):
+            raise ValueError(f"{path} is not a finite JSON number")
+        if value.is_integer() and abs(value) > _JS_SAFE_INTEGER:
+            raise ValueError(f"{path} is outside the JavaScript safe-integer range")
+        return
+    if type(value) in {list, tuple}:
+        for index, item in enumerate(value):
+            _validate_finite_safe_json(item, path=f"{path}[{index}]")
+        return
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if type(key) is not str:
+                raise TypeError(f"{path} object key is not a string")
+            _validate_unicode_scalar_string(key, path=f"{path} object key")
+            _validate_finite_safe_json(item, path=f"{path}.{key}")
+        return
+    raise TypeError(f"{path} is not an interoperable JSON value: {type(value).__name__}")
+
+
+def canonical_finite_safe_json(value: Any) -> str:
+    """Serialize the Controlled cross-runtime canonical JSON profile.
+
+    The legacy row identity contract intentionally mirrors JavaScript's lossy
+    integer coercion. Controlled artifacts must instead reject values that do
+    not retain a unique Python/JavaScript identity. The established
+    :func:`canonical_json` remains the single number formatter.
+    """
+
+    _validate_finite_safe_json(value, path="$")
+    return canonical_json(value)
+
+
 def sha256_fallback(row: Mapping[str, Any]) -> str:
     digest = hashlib.sha256(canonical_json(row).encode("utf-8")).hexdigest()
     return f"hash:sha256:{digest}"
@@ -124,17 +176,22 @@ def _pick(
 
 
 def natural_key(row: Mapping[str, Any], dataset_id: str) -> str:
-    """Return the contract-selected natural key or SHA-256 row fallback.
+    """Return the complete contract-selected natural key.
 
-    Composite keys are all-or-nothing.  A missing discriminator uses the row
-    hash instead of a partial key that could collapse distinct observations.
+    Composite keys are all-or-nothing. A missing governed discriminator is a
+    malformed structured product and is rejected, matching the Worker ingest
+    authority. Hash fallback remains available only to ungoverned add-on
+    normalizers through :func:`sha256_fallback`.
     """
     contract = contract_for(dataset_id)
     picked: dict[str, Any] = {}
     for field in contract.natural_key_fields:
         value = _pick(row, contract, field)
         if value is None or value == "":
-            return sha256_fallback(row)
+            raise ValueError(
+                f"governed natural-key field {field} is absent; "
+                "structured product is rejected"
+            )
         picked[field] = value
     return canonical_json(picked)
 
@@ -345,6 +402,7 @@ def available_at_for(
 
 __all__ = [
     "available_at_for",
+    "canonical_finite_safe_json",
     "canonical_json",
     "event_time_for",
     "natural_key",

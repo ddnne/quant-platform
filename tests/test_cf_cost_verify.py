@@ -112,9 +112,11 @@ def test_remote_cost_verify_uses_worker_put(monkeypatch) -> None:
         seen.append(key)
         return {"status": "put_ok"}
 
-    monkeypatch.setattr("research.r2_io.put_research_artifact", _fake_put)
     pack = run_cost_on_off_compare(
-        logic_ids=["liq_unit"], dry_run=False, job_id="eval-cf-cost-test"
+        logic_ids=["liq_unit"],
+        dry_run=False,
+        job_id="eval-cf-cost-test",
+        artifact_put=_fake_put,
     )
     assert pack["go"] is False
     assert pack["written"] is True

@@ -37,9 +37,16 @@ binding = "DB"
 database_name = "quant-ingest-staging"
 database_id = "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb"
 
+[[services]]
+binding = "RECEIPT_EVIDENCE_AUTHORITY"
+service = "quant-platform-receipt-evidence-authority-staging"
+entrypoint = "ReceiptAuthorityService"
+
 [vars]
 USER_AGENT = "quant-platform-staging-ingest/0.1"
 JSDA_DLQ_QUEUE = "quant-jsda-ingestion-dlq-staging"
+RECEIPT_AUTHORITY_ENVIRONMENT = "staging"
+RECEIPT_AUTHORITY_OPERATION_MODE = "PENDING"
 
 [observability]
 enabled = true

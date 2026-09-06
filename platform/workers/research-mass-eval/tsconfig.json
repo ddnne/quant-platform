@@ -5,10 +5,11 @@
     "moduleResolution": "Bundler",
     "lib": ["ES2022"],
     "types": ["@cloudflare/workers-types"],
+    "resolveJsonModule": true,
     "strict": true,
     "noEmit": true,
     "skipLibCheck": false
   },
   "include": ["src/**/*.ts", "worker-configuration.d.ts"],
-  "exclude": ["src/**/*.test.ts"]
+  "exclude": ["src/**/*.test.ts", "runtime/**/*.ts"]
 }

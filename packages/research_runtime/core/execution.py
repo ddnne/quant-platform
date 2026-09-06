@@ -18,7 +18,9 @@ The two implemented modes are deliberately conservative about look-ahead:
   excludes *D*'s close by construction, so filling at *D*'s close is not
   look-ahead. Use this only when you accept intraday decision timing.
 * :data:`AM_SIGNAL_PM_CLOSE` — decide at *D*'s morning close (11:30 JST) and
-  fill at *D*'s afternoon adjusted close. Personal-retrospective DRAFT only.
+  fill at *D*'s afternoon adjusted close. Controlled RAW requires independently
+  timestamped AM-session evidence available by 11:30. Personal-retrospective
+  reconstruction of morning fields from a later close remains DRAFT-only.
   The decision clock is explicit; it is not inferred from ``fill_offset``.
 
 The close time follows the Tokyo Stock Exchange's 2024-11-05 change

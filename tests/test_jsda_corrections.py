@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from _coreseed import draft_pit_observation_clock
 from ingestion.common.http import HttpResponse
 from ingestion.jsda.corrections import _available_at, run_otc_reference_corrections
 from ingestion.jsda.normalize import (
@@ -23,6 +26,12 @@ from storage import read_collection_receipts
 from storage.sqlite_store import SqliteStore
 
 _FIXTURES = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture(autouse=True)
+def _bound_draft_observation_clock():
+    with draft_pit_observation_clock("2025-04-03T09:00:00+09:00"):
+        yield
 
 
 def _fixture(name: str) -> bytes:

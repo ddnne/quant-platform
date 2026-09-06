@@ -27,12 +27,15 @@ from research.research_data_profile import (
     profile_from_dependency_closure,
 )
 from selection.budget_ledger import MassResearchDisabledError
+from selection.controlled_pilot_policy import CONTROLLED_PILOT_IDENTITY
 
 SCHEMA_REL = Path("specs") / "experiment_plans" / "schema.json"
 PLANS_REL = Path("specs") / "experiment_plans"
 SCHEMA_NAME = "schema.json"
 
 # Explicit shortlist. Not catalog_active.pilot_candidates() / n_active.
+# These four plans are the controlled_pilot_v1 set, not a Draft cohort.
+CONTROLLED_PILOT_PLAN_IDENTITY = CONTROLLED_PILOT_IDENTITY
 PILOT_EXPERIMENT_PLAN_IDS: tuple[str, ...] = (
     "exp-mdh-hold10-momentum",
     "exp-xs-hold10-mom5",
@@ -90,6 +93,25 @@ def _require_typed_payload(payload: Mapping[str, Any]) -> ExperimentPlan:
         raise ValueError(f"{plan.plan_id}: execution_enabled must be false")
     if plan.version != EXPERIMENT_PLAN_VERSION:
         raise ValueError(f"{plan.plan_id}: version must be {EXPERIMENT_PLAN_VERSION}")
+    if plan.identity != CONTROLLED_PILOT_IDENTITY:
+        raise ValueError(
+            f"{plan.plan_id}: identity must be {CONTROLLED_PILOT_IDENTITY!r}"
+        )
+    from execution.controlled_fill_contract import (
+        CONTROLLED_FILL_CONTRACT_DIGEST,
+        require_controlled_fill_contract,
+        ControlledFillContractError,
+    )
+
+    try:
+        fill = require_controlled_fill_contract(dict(plan.fill_contract))
+    except ControlledFillContractError as exc:
+        raise ValueError(
+            f"{plan.plan_id}: fill_contract must be morning-close to "
+            "same-day afternoon-close"
+        ) from exc
+    if fill["contract_digest"] != CONTROLLED_FILL_CONTRACT_DIGEST:
+        raise ValueError(f"{plan.plan_id}: fill_contract digest is not canonical")
     if not plan.period_start or not plan.period_end:
         raise ValueError(f"{plan.plan_id}: period required")
     if not plan.cost_scenario:
@@ -190,6 +212,7 @@ def start(*_args: object, **_kwargs: object) -> None:
 
 
 __all__ = [
+    "CONTROLLED_PILOT_PLAN_IDENTITY",
     "PILOT_COST_SCENARIO",
     "PILOT_EVALUATION_PROTOCOL",
     "PILOT_EXECUTION_ENABLED",

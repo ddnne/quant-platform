@@ -69,10 +69,15 @@ receipt claims/parser versionが現行trusted pathと一致しない旧署名は
   reconcileを要求する。zero-eventを許す場合もcaller flagではなく契約とtrusted
   acquisition evidenceからissuerが導出する。
 - dataset は全 required segment が COMPLETE のときだけ COMPLETE になる。途中の欠落は PARTIAL。
-- READY publication はgeneric/global publisherを持たない。canonical exact-fourの
+- READY publication はgeneric/global publisherを持たない。`controlled_pilot_v1` の
   ExperimentPlan → StrategySpec/FeatureRef → PlanDependencyClosure →
   ResearchDataProfileで必要なdatasetだけを解決し、signed Ops projectionの
   per-dataset policy proof、B0/B4、source/export/applied cursorを再検証する。
+  Historical publication profile id `controlled-pilot/exact-four` remains
+  backward-readable; it is not a second active identity.
+- Active paths are only Draft Research, Controlled Pilot (`controlled_pilot_v1`),
+  and disabled Mass. See
+  [architecture/adr_phase632_architecture_simplification.md](architecture/adr_phase632_architecture_simplification.md).
 - PilotとMassは別のnominal capabilityである。Pilot READYはMass schedulerへ渡せず、
   Mass READY mint/schedulerはPhase 6.3.1でhard-disabledのまま。
 

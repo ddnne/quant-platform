@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,8 @@ from personal_history_compact_support import (
     install_compact_schema,
     stamp_compact_manifest,
 )
+from pit.personal_research_view import OfflineFixtureDataView
+from pit.universe_pit import resolve_universe_day_slices
 from research.personal_universe import (
     PERSONAL_UNIVERSE_DECISION_CUTOFFS,
     PERSONAL_UNIVERSE_IDS,
@@ -26,7 +29,14 @@ from research.personal_universe import (
     resolve_personal_universe,
     resolve_personal_universe_with_evidence,
 )
+from research.universe_contract import resolve_tse_prime_with_fins
 from storage.sqlite_store import SqliteStore
+
+
+def _view(path: Path, *, cutoff: str = "morning_close") -> OfflineFixtureDataView:
+    return OfflineFixtureDataView.bind(
+        path, artifact_root=path.parent / "personal-art", decision_cutoff=cutoff
+    )
 
 
 def _row(
@@ -133,12 +143,16 @@ def test_default_topix_all_keeps_pre_and_post_reform_non_prime_members(
     reform_snapshot: Path,
 ) -> None:
     membership = resolve_personal_universe(
-        reform_snapshot,
+        _view(reform_snapshot),
         period_start="2022-04-01",
         period_end="2022-04-04",
     )
 
     assert membership.rule_id == "topix_all_with_fins"
+    assert membership.membership_proof.startswith("personal-draft-resolved-universe:")
+    assert not membership.membership_proof.startswith(
+        "controlled-resolved-universe:"
+    )
     assert membership.codes_for("2022-04-01") == ("1001", "1002")
     assert membership.codes_for("2022-04-04") == ("1001", "1002", "1003")
     assert ResolvedDailyUniverse(membership).codes_for("2022-04-04") == (
@@ -164,7 +178,7 @@ def test_closed_scale_selectors(
     expected: tuple[str, ...],
 ) -> None:
     membership = resolve_personal_universe(
-        reform_snapshot,
+        _view(reform_snapshot),
         period_start="2022-04-04",
         period_end="2022-04-04",
         universe_id=universe_id,
@@ -190,16 +204,18 @@ def test_selector_surface_is_closed() -> None:
     assert PERSONAL_UNIVERSE_DECISION_CUTOFFS == ("session_close", "morning_close")
     default = personal_universe_selector("topix_all")
     am = personal_universe_selector("topix_all", decision_cutoff="morning_close")
-    assert default.to_canonical_dict()["decision_clock"] == "tse_session_close_jst"
+    assert default.to_canonical_dict()["decision_clock"] == "tse_morning_close_jst"
     assert am.to_canonical_dict()["decision_clock"] == "tse_morning_close_jst"
-    assert default.rule_digest != am.rule_digest
+    assert default.rule_digest == am.rule_digest
+    session = personal_universe_selector("topix_all", decision_cutoff="session_close")
+    assert session.to_canonical_dict()["decision_clock"] == "tse_session_close_jst"
     assert personal_research_universe_decision_cutoff(am_pm=True) == "morning_close"
     assert personal_research_universe_decision_cutoff(am_pm=False) == "session_close"
     assert personal_research_universe_rule_digest("topix_all", am_pm=True) == (
         am.rule_digest
     )
     assert personal_research_universe_rule_digest("topix_all", am_pm=False) == (
-        default.rule_digest
+        session.rule_digest
     )
     with pytest.raises(PersonalUniverseError, match="decision_cutoff"):
         personal_universe_selector("topix_all", decision_cutoff="session_open")
@@ -240,6 +256,10 @@ def _write_generic_calendar_and_fins(
     store = SqliteStore(path)
     store.upsert("jquants_records", rows)
     store.close()
+    connection = sqlite3.connect(path)
+    stamp_compact_manifest(connection, format_name="unmanaged-catalog")
+    connection.commit()
+    connection.close()
 
 
 def _install_compact_master(
@@ -282,13 +302,13 @@ def test_compact_v7_classification_change_updates_latest_snapshot(
     )
 
     membership = resolve_personal_universe(
-        path,
+        _view(path),
         period_start="2025-04-01",
         period_end="2025-04-02",
         universe_id="topix_small",
     )
     core = resolve_personal_universe(
-        path,
+        _view(path),
         period_start="2025-04-01",
         period_end="2025-04-01",
         universe_id="topix_core30",
@@ -323,7 +343,7 @@ def test_compact_v7_daily_pit_and_delisting(tmp_path: Path) -> None:
     )
 
     membership = resolve_personal_universe(
-        path,
+        _view(path),
         period_start="2025-04-01",
         period_end="2025-04-02",
     )
@@ -343,9 +363,9 @@ def test_compact_v7_fail_closed_state_mapping(tmp_path: Path) -> None:
     stamp_compact_manifest(conn)
     conn.commit()
     conn.close()
-    with pytest.raises(PersonalUniverseError, match="compact v7 marker or schema"):
+    with pytest.raises(PersonalUniverseError, match="rebuild as personal-draft-history/v8"):
         resolve_personal_universe(
-            invalid,
+            _view(invalid),
             period_start="2025-04-01",
             period_end="2025-04-01",
         )
@@ -375,7 +395,7 @@ def test_compact_v7_fail_closed_state_mapping(tmp_path: Path) -> None:
     )
     with pytest.raises(PersonalUniverseError, match="cannot mix compact master"):
         resolve_personal_universe(
-            mixed,
+            _view(mixed),
             period_start="2025-04-01",
             period_end="2025-04-01",
         )
@@ -404,19 +424,21 @@ def test_v6_manifest_without_compact_master_keeps_legacy_generic_path(
         ],
     )
     conn = sqlite3.connect(path)
+    conn.execute("DROP TABLE IF EXISTS personal_history_manifest")
     conn.execute(
         "CREATE TABLE personal_history_manifest ("
-        "singleton INTEGER PRIMARY KEY, format TEXT)"
+        "singleton INTEGER PRIMARY KEY, format TEXT, observed_through TEXT)"
     )
     conn.execute(
-        "INSERT INTO personal_history_manifest(singleton, format) VALUES (1, ?)",
+        "INSERT INTO personal_history_manifest(singleton, format, observed_through) "
+        "VALUES (1, ?, '2099-01-01T00:00:00+09:00')",
         ("personal-draft-history/v6",),
     )
     conn.commit()
     conn.close()
 
     membership = resolve_personal_universe(
-        path,
+        _view(path),
         period_start="2025-04-01",
         period_end="2025-04-01",
     )
@@ -473,17 +495,22 @@ def test_am_cutoff_excludes_afternoon_fins_until_next_trading_day(
     store = SqliteStore(path)
     store.upsert("jquants_records", rows)
     store.close()
+    connection = sqlite3.connect(path)
+    stamp_compact_manifest(connection, format_name="unmanaged-catalog")
+    connection.commit()
+    connection.close()
 
     am, am_evidence = resolve_personal_universe_with_evidence(
-        path,
+        _view(path, cutoff="morning_close"),
         period_start=day,
         period_end=nxt,
         decision_cutoff="morning_close",
     )
     close_path = resolve_personal_universe(
-        path,
+        _view(path, cutoff="session_close"),
         period_start=day,
         period_end=nxt,
+        decision_cutoff="session_close",
     )
 
     assert morning_close_as_of(day) == f"{day}T11:30:00+09:00"
@@ -495,3 +522,273 @@ def test_am_cutoff_excludes_afternoon_fins_until_next_trading_day(
     assert close_path.codes_for(day) == ("1001", "1002")
     assert close_path.codes_for(nxt) == ("1001", "1002")
     assert close_path.rule_digest != am.rule_digest
+
+
+def test_master_scale_correction_obeys_decision_cutoff(tmp_path: Path) -> None:
+    path = tmp_path / "master-correction.sqlite"
+    day = "2025-04-01"
+    store = SqliteStore(path)
+    rows = [
+        _row(
+            "markets_calendar",
+            {"Date": day, "HolidayDivision": "1"},
+            event_time=f"{day}T00:00:00+09:00",
+            available_at=f"{day}T00:00:00+09:00",
+        ),
+        _row(
+            "fins_summary",
+            {"Code": "1001", "DiscDate": "2025-03-31", "DiscNo": "1"},
+            event_time="2025-03-31T15:00:00+09:00",
+            available_at="2025-03-31T15:00:00+09:00",
+        ),
+        _row(
+            "equities_master",
+            {
+                "Code": "1001",
+                "Date": day,
+                "MarketCode": "0111",
+                "ScaleCategory": "TOPIX Core30",
+            },
+            event_time=f"{day}T08:00:00+09:00",
+            available_at=f"{day}T08:00:00+09:00",
+        ),
+    ]
+    store.upsert("jquants_records", rows)
+    store.upsert(
+        "jquants_records",
+        [
+            _row(
+                "equities_master",
+                {
+                    "Code": "1001",
+                    "Date": day,
+                    "MarketCode": "0111",
+                    "ScaleCategory": "TOPIX Small 1",
+                },
+                event_time=f"{day}T08:00:00+09:00",
+                available_at=f"{day}T14:00:00+09:00",
+            )
+        ],
+    )
+    store.close()
+
+    morning = resolve_personal_universe(
+        _view(path, cutoff="morning_close"),
+        period_start=day,
+        period_end=day,
+        universe_id="topix_core30",
+        decision_cutoff="morning_close",
+    )
+    close_small = resolve_personal_universe(
+        _view(path, cutoff="session_close"),
+        period_start=day,
+        period_end=day,
+        universe_id="topix_small",
+        decision_cutoff="session_close",
+    )
+
+    assert morning.codes_for(day) == ("1001",)
+    assert close_small.codes_for(day) == ("1001",)
+    with pytest.raises(PersonalUniverseError, match="resolves no master members"):
+        resolve_personal_universe(
+            _view(path, cutoff="session_close"),
+            period_start=day,
+            period_end=day,
+            universe_id="topix_core30",
+            decision_cutoff="session_close",
+        )
+    with pytest.raises(PersonalUniverseError, match="resolves no master members"):
+        resolve_personal_universe(
+            _view(path, cutoff="morning_close"),
+            period_start=day,
+            period_end=day,
+            universe_id="topix_small",
+            decision_cutoff="morning_close",
+        )
+
+
+def test_future_effective_master_snapshot_is_not_visible_before_event(
+    tmp_path: Path,
+) -> None:
+    """Apr-2 snapshot published early must not win Apr-1 decisions."""
+
+    path = tmp_path / "future-effective-master.sqlite"
+    day = "2025-04-01"
+    nxt = "2025-04-02"
+    rows = [
+        _row(
+            "markets_calendar",
+            {"Date": value, "HolidayDivision": "1"},
+            event_time=f"{value}T00:00:00+09:00",
+            available_at=f"{value}T00:00:00+09:00",
+        )
+        for value in (day, nxt)
+    ]
+    rows.append(
+        _row(
+            "equities_master",
+            {
+                "Code": "1001",
+                "Date": day,
+                "MarketCode": "0111",
+                "ScaleCategory": "TOPIX Core30",
+            },
+            event_time=f"{day}T08:00:00+09:00",
+            available_at=f"{day}T08:00:00+09:00",
+        )
+    )
+    rows.append(
+        _row(
+            "equities_master",
+            {
+                "Code": "1002",
+                "Date": nxt,
+                "MarketCode": "0111",
+                "ScaleCategory": "TOPIX Core30",
+            },
+            event_time=f"{nxt}T08:00:00+09:00",
+            available_at=f"{day}T14:00:00+09:00",
+        )
+    )
+    for ordinal, code in enumerate(("1001", "1002"), start=1):
+        rows.append(
+            _row(
+                "fins_summary",
+                {"Code": code, "DiscDate": "2025-03-31", "DiscNo": str(ordinal)},
+                event_time="2025-03-31T15:00:00+09:00",
+                available_at="2025-03-31T15:00:00+09:00",
+            )
+        )
+    store = SqliteStore(path)
+    store.upsert("jquants_records", rows)
+    store.close()
+    connection = sqlite3.connect(path)
+    stamp_compact_manifest(connection, format_name="unmanaged-catalog")
+    connection.commit()
+    connection.close()
+
+    personal_close = resolve_personal_universe(
+        _view(path, cutoff="session_close"),
+        period_start=day,
+        period_end=nxt,
+        universe_id="topix_core30",
+        decision_cutoff="session_close",
+    )
+    personal_am = resolve_personal_universe(
+        _view(path, cutoff="morning_close"),
+        period_start=day,
+        period_end=nxt,
+        universe_id="topix_core30",
+        decision_cutoff="morning_close",
+    )
+    as_of_for_day = {day: close_as_of(day), nxt: close_as_of(nxt)}
+    controlled = resolve_tse_prime_with_fins(
+        resolve_universe_day_slices(
+            path, period_start=day, period_end=nxt, as_of_for_day=as_of_for_day
+        ),
+        period_start=day,
+        period_end=nxt,
+    )
+
+    assert close_as_of(day).endswith("T15:30:00+09:00")
+    assert morning_close_as_of(day) == f"{day}T11:30:00+09:00"
+    assert personal_close.codes_for(day) == ("1001",)
+    assert personal_am.codes_for(day) == ("1001",)
+    assert personal_close.codes_for(nxt) == ("1002",)
+    assert personal_am.codes_for(nxt) == ("1002",)
+    assert controlled.codes_for(day) == ("1001",)
+    assert controlled.codes_for(nxt) == ("1002",)
+
+
+def test_pre_window_master_and_fins_history_are_not_materialized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pit.universe_pit as universe_pit
+
+    path = tmp_path / "pre-window-history.sqlite"
+    day = "2025-04-01"
+    rows = [
+        _row(
+            "markets_calendar",
+            {"Date": day, "HolidayDivision": "1"},
+            event_time=f"{day}T00:00:00+09:00",
+            available_at=f"{day}T00:00:00+09:00",
+        ),
+        _row(
+            "equities_master",
+            {
+                "Code": "1001",
+                "Date": day,
+                "MarketCode": "0111",
+                "ScaleCategory": "TOPIX Core30",
+            },
+            event_time=f"{day}T08:00:00+09:00",
+            available_at=f"{day}T08:00:00+09:00",
+        ),
+        _row(
+            "fins_summary",
+            {"Code": "1001", "DiscDate": "2025-03-31", "DiscNo": "1"},
+            event_time="2025-03-31T15:00:00+09:00",
+            available_at="2025-03-31T15:00:00+09:00",
+        ),
+    ]
+    for offset in range(180):
+        old = date(2010, 1, 1) + timedelta(days=offset)
+        stamp = f"{old.isoformat()}T08:00:00+09:00"
+        rows.append(
+            _row(
+                "equities_master",
+                {
+                    "Code": "9999",
+                    "Date": old.isoformat(),
+                    "MarketCode": "0111",
+                    "ScaleCategory": "TOPIX Core30",
+                },
+                event_time=stamp,
+                available_at=stamp,
+            )
+        )
+        rows.append(
+            _row(
+                "fins_summary",
+                {
+                    "Code": "8888",
+                    "DiscDate": old.isoformat(),
+                    "DiscNo": "1",
+                },
+                event_time=f"{old.isoformat()}T15:00:00+09:00",
+                available_at=f"{old.isoformat()}T15:00:00+09:00",
+            )
+        )
+    store = SqliteStore(path)
+    store.upsert("jquants_records", rows)
+    store.close()
+    connection = sqlite3.connect(path)
+    stamp_compact_manifest(connection, format_name="unmanaged-catalog")
+    connection.commit()
+    connection.close()
+
+    captured: dict[str, object] = {}
+    real_master = universe_pit._iter_master_events
+
+    def spy_master(*args, **kwargs):
+        codes: set[str] = set()
+        count = 0
+        for event in real_master(*args, **kwargs):
+            count += 1
+            codes.add(event.code)
+            yield event
+        captured["master_codes"] = codes
+        captured["master_count"] = count
+
+    monkeypatch.setattr(universe_pit, "_iter_master_events", spy_master)
+    membership = resolve_personal_universe(
+        _view(path),
+        period_start=day,
+        period_end=day,
+        universe_id="topix_core30",
+    )
+
+    assert membership.codes_for(day) == ("1001",)
+    assert captured["master_codes"] == {"1001"}
+    assert captured["master_count"] == 1

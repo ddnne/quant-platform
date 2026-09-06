@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from _coreseed import draft_pit_observation_clock
 from pit import (
     get_equity_bars_daily,
     get_equity_master,
@@ -22,6 +23,13 @@ from storage.sqlite_store import SqliteStore
 
 # A single publication instant late enough that every seeded row is visible.
 AS_OF = "2025-04-02T09:00:00+09:00"
+OBSERVED_THROUGH = "2025-04-03T09:00:00+09:00"
+
+
+@pytest.fixture(autouse=True)
+def _bound_draft_observation_clock():
+    with draft_pit_observation_clock(OBSERVED_THROUGH):
+        yield
 
 
 def _store(tmp_path):
@@ -145,6 +153,56 @@ def test_market_calendar_happy_path(tmp_path):
 
     res = get_market_calendar(as_of=AS_OF, from_date="2025-04-01", db_path=path)
     assert [r["date"] for r in res] == ["2025-04-15"]
+
+
+def test_generic_prepublished_calendars_keep_availability_and_observation_walls(
+    tmp_path,
+):
+    path = tmp_path / "ing.sqlite"
+    records = [
+        {
+            "source": "jquants",
+            "dataset": dataset,
+            "natural_key": f"{dataset}:{label}",
+            "event_time": event_time,
+            "available_at": available_at,
+            "ingested_at": ingested_at,
+            "payload": f'{{"label":"{label}"}}',
+            "raw_payload": f'{{"label":"{label}"}}',
+        }
+        for dataset in ("markets_calendar", "equities_earnings_calendar")
+        for label, event_time, available_at, ingested_at in (
+            (
+                "visible",
+                "2025-04-15T09:00:00+09:00",
+                "2025-04-01T17:00:00+09:00",
+                "2025-04-01T17:01:00+09:00",
+            ),
+            (
+                "not_available",
+                "2025-04-16T09:00:00+09:00",
+                "2025-04-03T09:00:00+09:00",
+                "2025-04-03T09:01:00+09:00",
+            ),
+            (
+                "not_observed",
+                "2025-04-17T09:00:00+09:00",
+                "2025-04-01T17:00:00+09:00",
+                "2025-04-02T09:00:01+09:00",
+            ),
+        )
+    ]
+    with SqliteStore(path) as store:
+        store.upsert("jquants_records", records)
+
+    with draft_pit_observation_clock(AS_OF):
+        for dataset in ("markets_calendar", "equities_earnings_calendar"):
+            result = get_jquants_records(
+                as_of=AS_OF,
+                dataset=dataset,
+                db_path=path,
+            )
+            assert [row["payload"]["label"] for row in result.rows] == ["visible"]
 
 
 # --- jquants_records -------------------------------------------------------

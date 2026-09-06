@@ -7,11 +7,32 @@ preview_urls = false
 [vars]
 RECEIPT_AUTHORITY_ENVIRONMENT = "staging"
 RECEIPT_AUTHORITY_OPERATION_MODE = "ACTIVE"
+OPS_PROJECTION_ENVIRONMENT = "staging"
+OPS_PROJECTION_SIGNING_KEY_ID = "ops-projection-cloud-test-v1"
+
+[[r2_buckets]]
+binding = "RAW_BUCKET"
+bucket_name = "quant-raw-test"
+
+[[r2_buckets]]
+binding = "STRUCTURED_BUCKET"
+bucket_name = "quant-structured-test"
+
+[[r2_buckets]]
+binding = "AUTHORITY_EVIDENCE_BUCKET"
+bucket_name = "quant-receipt-evidence-test"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "quant-ingest-premium-audit-test"
 database_id = "00000000-0000-0000-0000-000000000019"
+
+[[d1_databases]]
+binding = "OPS_PROJECTION_DB"
+database_name = "quant-ops-projection-test"
+database_id = "00000000-0000-0000-0000-000000000021"
+migrations_dir = "../quant-ops-mcp/migrations/projection"
+migrations_table = "d1_migrations_ops_projection"
 
 [[services]]
 binding = "AUDIT_ONLY"

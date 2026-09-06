@@ -287,9 +287,9 @@ def _natural_key(row: dict, key_fields: Iterable[str], dataset: str = "") -> str
     Without this, re-ingesting the same bar via the other transport would
     insert a duplicate row instead of upserting (the inverse-collapse bug).
 
-    Premium-core keys are selected solely by the canonical dataset contract.
-    Add-ons retain their catalog-specific fields until they receive contracts.
-    Missing identity discriminators fall back to ``hash:sha256:<digest>``.
+    Premium-core keys are selected solely by the canonical dataset contract and
+    reject missing governed discriminators. Add-ons retain their catalog-specific
+    fields until they receive contracts and use a row hash only when none exist.
     """
     if catalog.is_premium_core(dataset):
         return contract_natural_key(row, dataset)
@@ -344,11 +344,13 @@ def normalize_generic(
 ) -> List[dict]:
     """Normalize any catalog dataset into ``jquants_records`` rows.
 
-    The natural key comes from :func:`_natural_key` (catalog identity fields,
-    row-hash fallback). ``payload`` is a stable (key-sorted) serialization of
-    the row for easy diffing; ``raw_payload`` keeps the verbatim source order
-    for traceability and amendment detection in the store. ``available_at`` is
-    an explicit trusted-caller capability and is never read from ``rows``.
+    The natural key comes from :func:`_natural_key`; governed premium rows must
+    contain their complete contract identity, while ungoverned add-ons may use
+    the legacy row-hash fallback. ``payload`` is a stable (key-sorted)
+    serialization of the row for easy diffing; ``raw_payload`` keeps the
+    verbatim source order for traceability and amendment detection in the
+    store. ``available_at`` is an explicit trusted-caller capability and is
+    never read from ``rows``.
     """
     entry = catalog.get(dataset)
     key_fields = entry.get("key", [])

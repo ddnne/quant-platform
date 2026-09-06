@@ -7,8 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from _coreseed import write_snapshot_observation_clock
 from data_access import QuantDataAccess, QuantDataConfig
 from mcp_servers.quant_data.server import QuantDataMCPServer
+from storage.sqlite_store import SqliteStore
 
 
 EXPECTED_TOOLS = {
@@ -58,6 +60,10 @@ def test_ops_coverage_tool_descriptions_echo_stored_policy_not_frozen_v2():
 def test_query_dataset_uses_ready_snapshot_and_filters_future_facts(
     synced_cf_d1_db, monkeypatch
 ):
+    with SqliteStore(synced_cf_d1_db.db) as store:
+        write_snapshot_observation_clock(
+            store, "2025-04-04T15:30:00+09:00"
+        )
     access = QuantDataAccess(
         QuantDataConfig(
             snapshot_dir=synced_cf_d1_db.db.parent,

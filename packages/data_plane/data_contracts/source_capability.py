@@ -51,7 +51,9 @@ _BUNDLED_CONTRACT_FILES = frozenset(
         "fins_earnings_date.json",
         "fins_summary.json",
         "indices_bars_daily_topix.json",
+        "jsda_corporate_bond_transactions.json",
         "jsda_otc_bond_reference_prices.json",
+        "jsda_tokyo_repo_rates.json",
         "markets_calendar.json",
     }
 )
@@ -77,6 +79,7 @@ REQUIRED_DOMAIN_BASES = frozenset(
         "issued_collection_cutoff_snapshot",
         "official_archive_publication_days",
         "official_archive_periods",
+        "official_time_series_file",
     }
 )
 EMPTY_SUCCESS_POLICIES = frozenset(
@@ -495,6 +498,7 @@ _BASIS_HISTORY_MODE: Mapping[str, str] = MappingProxyType(
         "issued_collection_cutoff_snapshot": "next_business_day_snapshot",
         "official_archive_publication_days": "official_archive_index",
         "official_archive_periods": "periodic_archive",
+        "official_time_series_file": "bounded_history",
     }
 )
 _BASIS_GRAIN: Mapping[str, str] = MappingProxyType(
@@ -505,6 +509,7 @@ _BASIS_GRAIN: Mapping[str, str] = MappingProxyType(
         "issued_collection_cutoff_snapshot": "collection_cutoff_snapshot",
         "official_archive_publication_days": "official_archive_index_day",
         "official_archive_periods": "official_archive_year",
+        "official_time_series_file": "source_time_series_file",
     }
 )
 

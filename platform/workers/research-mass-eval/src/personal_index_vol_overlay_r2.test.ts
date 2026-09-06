@@ -277,6 +277,45 @@ describe("index-vol overlay exact-reference R2 capability", () => {
     expect((await put(fixed, "prepared-panel", panelDoc)).response.status).toBe(200);
     expect(fixed.mem.writes).toHaveLength(3);
   });
+
+  it("rejects late child artifact creation after an exact FAILED terminal", async () => {
+    const fixed = await fixture();
+    const terminalKey = personalIndexVolOverlay2023TerminalManifestKey(
+      fixed.jobId,
+    );
+    const terminal = {
+      schema_version: personalIndexOverlayFamilyTerminalSchema(
+        PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID,
+      ),
+      status: "FAILED",
+      ...authority(fixed),
+      runner_version: personalIndexOverlayFamilyRunnerVersion(
+        PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID,
+      ),
+      request_digest: await familyRequestDigest(
+        fixed.jobId,
+        PERSONAL_INDEX_VOL_OVERLAY_2023_COHORT_ID,
+        fixed.inputDigest,
+      ),
+    };
+    fixed.mem.seed(
+      terminalKey,
+      new TextEncoder().encode(JSON.stringify(terminal)),
+      "failed-terminal",
+    );
+    const panelDoc = {
+      schema_version: "personal-index-vol-overlay-prepared-panel/v1",
+      ...authority(fixed),
+    };
+    const late = await put(fixed, "prepared-panel", panelDoc);
+
+    expect(late.response.status).toBe(409);
+    expect(await late.response.json()).toEqual({
+      error: "overlay terminal already exists",
+    });
+    expect(fixed.mem.values.has(late.key)).toBe(false);
+    expect(fixed.mem.writes).toHaveLength(0);
+  });
 });
 
 async function smileFixture() {

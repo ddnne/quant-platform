@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "description": "Strict Workers AI gateway. Research mass-eval must not bind AI.",
   "scripts": {
-    "deploy": "wrangler deploy --config=wrangler.toml --env=production",
+    "deploy": "python3 ../../scripts/cloudflare_binding_manifest.py --deploy-tagged --config wrangler.toml --env production",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --config vitest.config.ts && vitest run --config vitest.harness.config.ts",
     "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",

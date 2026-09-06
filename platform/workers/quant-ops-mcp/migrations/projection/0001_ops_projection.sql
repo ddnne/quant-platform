@@ -184,7 +184,7 @@ CREATE TABLE IF NOT EXISTS collection_sla_status (
 CREATE TABLE IF NOT EXISTS ops_projection_metadata (
     projection_generation_id TEXT PRIMARY KEY,
     generated_at       TEXT NOT NULL,
-    source_generation  TEXT,
+    source_generation  INTEGER,
     source_cursor       INTEGER,
     export_cursor       INTEGER,
     applied_cursor      INTEGER,

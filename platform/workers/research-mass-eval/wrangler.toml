@@ -50,7 +50,7 @@ tag = "personal-research-container-v1"
 new_sqlite_classes = ["PersonalResearchContainer"]
 
 [secrets]
-required = ["MASS_EVAL_TOKEN"]
+required = ["MASS_EVAL_TOKEN", "READY_ED25519_PRIVATE_KEY"]
 
 # R2 — research mass-eval artifacts (and optional staged panels).
 [[r2_buckets]]
@@ -70,7 +70,7 @@ entrypoint = "IngestionSecretsService"
 
 [vars]
 ENVIRONMENT = "production"
-MASS_EVAL_VERSION = "research-mass-eval/v154-compact-v7-cloud-history"
+MASS_EVAL_VERSION = "research-mass-eval/v155-compact-v8-cloud-history"
 MASS_EVAL_WAVE = "research-mass-eval"
 # Freezes — do not flip operational gates from this worker.
 MASS_RESEARCH = "NO-GO"
@@ -106,7 +106,7 @@ name = "PERSONAL_RESEARCH_CONTAINER"
 class_name = "PersonalResearchContainer"
 
 [env.production.secrets]
-required = ["MASS_EVAL_TOKEN"]
+required = ["MASS_EVAL_TOKEN", "READY_ED25519_PRIVATE_KEY"]
 
 [[env.production.r2_buckets]]
 binding = "STRUCTURED_BUCKET"
@@ -124,7 +124,7 @@ entrypoint = "IngestionSecretsService"
 
 [env.production.vars]
 ENVIRONMENT = "production"
-MASS_EVAL_VERSION = "research-mass-eval/v154-compact-v7-cloud-history"
+MASS_EVAL_VERSION = "research-mass-eval/v155-compact-v8-cloud-history"
 MASS_EVAL_WAVE = "research-mass-eval"
 MASS_RESEARCH = "NO-GO"
 PHASE7 = "OFF"

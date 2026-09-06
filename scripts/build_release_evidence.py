@@ -7,8 +7,8 @@ built. A caller-supplied JSON document is not an observation authority: names,
 UUIDs, timestamps and response digests are self-claims unless a dedicated
 service collected and signed the exact response bytes. Consequently every
 production publication entrypoint in this module is intentionally unavailable
-until that signed release-observation authority and its private JSDA Service
-Binding collector exist.
+until an ACTIVE observation key is provisioned. The private JSDA Service
+Binding collector is implemented in receipt-activation-observer.
 """
 
 from __future__ import annotations
@@ -23,12 +23,25 @@ import re
 from typing import Any, Iterable, Mapping, NoReturn
 from urllib.parse import urlsplit
 
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
 try:
+    from scripts.cloudflare_binding_manifest import (
+        binding_identity,
+        binding_identity_digest,
+        build_manifest as build_binding_manifest,
+    )
     from scripts.finding_ledger_gate import (
         FindingLedgerSnapshot,
         require_pinned_finding_ledger_gate,
     )
 except ModuleNotFoundError:  # Direct ``python scripts/...`` execution.
+    from cloudflare_binding_manifest import (  # type: ignore[no-redef]
+        binding_identity,
+        binding_identity_digest,
+        build_manifest as build_binding_manifest,
+    )
     from finding_ledger_gate import (  # type: ignore[no-redef]
         FindingLedgerSnapshot,
         require_pinned_finding_ledger_gate,
@@ -73,6 +86,7 @@ _ACTIVE_WORKERS = frozenset(
         "quant-platform-receipt-evidence-authority",
         "quant-platform-research-ai-gateway",
         "quant-platform-research-mass-eval",
+        "quant-platform-receipt-activation-observer",
     }
 )
 _JSDA_WORKER = "quant-platform-ingestion-jsda"
@@ -100,8 +114,12 @@ _MCP_TOOL_NAMES = (
     "storage_plane_status",
 )
 _ACCEPTED_MCP_SCHEMA_DIGEST = (
-    "sha256:dad7cd29ef002e76ee1f9802b8685a179f94fcbd0bb2e6df685858e41c1778d3"
+    "sha256:438ae3100a4b33e76e8e50c14f2fe7a0937e8d0edaa06509099cebce45f47ec9"
 )
+_MCP_TOOL_SCHEMA_DOCUMENT_VERSION = "quant-ops-mcp-tool-schemas/v2"
+_MCP_SERVER_NAME = "quant-ops-read"
+_MCP_SERVER_VERSION = "0.2.0"
+_MCP_PROTOCOL_VERSION = "2025-06-18"
 _BACKUP_FORMAT = "quant-platform-d1-backup/aes-256-gcm-v3"
 _BACKUP_SCHEMA_PROFILE = "quant-ingest-production/v1"
 _GOVERNED_DATABASE_NAME = "quant-ingest"
@@ -173,18 +191,19 @@ def _load_pending_release_observation_contract() -> Mapping[str, Any]:
             "transport",
             "binding_name",
             "transport_implemented",
+            "collector_worker",
             "status",
         }
         or jsda.get("target_worker") != _JSDA_WORKER
         or jsda.get("endpoint") != _JSDA_READY_ENDPOINT
         or jsda.get("transport") != "private-service-binding"
-        or jsda.get("binding_name") is not None
-        or jsda.get("transport_implemented") is not False
-        or jsda.get("status") != "HOLD"
+        or jsda.get("binding_name") != "JSDA_INGESTION"
+        or jsda.get("transport_implemented") is not True
+        or jsda.get("collector_worker") != "receipt-activation-observer"
+        or jsda.get("status") != "PENDING"
     ):
         raise RuntimeError(
-            "release-observation authority must remain exact PENDING/HOLD while "
-            "publication and the JSDA collector are unimplemented"
+            "release-observation authority collector contract drifted"
         )
     return raw
 
@@ -192,21 +211,52 @@ def _load_pending_release_observation_contract() -> Mapping[str, Any]:
 _PENDING_RELEASE_OBSERVATION_CONTRACT = _load_pending_release_observation_contract()
 
 
-def _require_signed_release_observation_authority() -> NoReturn:
-    """Keep production publication unreachable until its authority exists.
+def verify_private_release_observation(
+    document: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """Verify a private collector envelope against exact response bytes.
 
-    This function deliberately has no flag, capability parameter, environment
-    override, or test hook that can turn a normalized caller document into
-    trusted evidence. A future implementation must replace this boundary with
-    verification of an authority-signed, exact-byte observation envelope.
+    Caller-supplied public keys and key IDs are never authority.
+    """
+    if document.get("schema_version") != "quant-platform-release-observation/v1":
+        raise ReleaseObservationAuthorityUnavailable("observation schema is invalid")
+    if document.get("transport") != "private-service-binding":
+        raise ReleaseObservationAuthorityUnavailable("JSDA collector transport is not private")
+    if document.get("binding_name") != "JSDA_INGESTION":
+        raise ReleaseObservationAuthorityUnavailable("JSDA collector binding is missing")
+    digest = document.get("response_digest")
+    if type(digest) is not str or not digest.startswith("sha256:"):
+        raise ReleaseObservationAuthorityUnavailable("response digest is missing")
+    raw_b64 = document.get("exact_response_b64")
+    if type(raw_b64) is not str:
+        raise ReleaseObservationAuthorityUnavailable("exact response bytes are missing")
+    try:
+        raw = base64.b64decode(raw_b64, validate=True)
+    except ValueError as exc:
+        raise ReleaseObservationAuthorityUnavailable("exact response bytes are malformed") from exc
+    if int(document.get("exact_response_bytes") or -1) != len(raw):
+        raise ReleaseObservationAuthorityUnavailable("exact response size drifted")
+    observed = "sha256:" + hashlib.sha256(raw).hexdigest()
+    if observed != digest:
+        raise ReleaseObservationAuthorityUnavailable("exact response bytes do not match digest")
+    return document
+
+
+def _require_signed_release_observation_authority() -> NoReturn:
+    """Publication stays closed until an ACTIVE observation key is provisioned.
+
+    Caller-supplied JSON is never trusted. The private JSDA Service Binding
+    collector exists in receipt-activation-observer; this boundary still
+    requires a verified signed exact-response envelope.
     """
 
     if _PENDING_RELEASE_OBSERVATION_CONTRACT["publication_authorized"] is not False:
         raise RuntimeError("release-observation authority contract is not fail-closed")
+    if _PENDING_RELEASE_OBSERVATION_CONTRACT["active_key_count"] != 0:
+        raise RuntimeError("release-observation authority must fail closed at zero keys")
     raise ReleaseObservationAuthorityUnavailable(
-        "release evidence publication is PENDING: the signed release-observation "
-        "authority and private JSDA /health/ready Service Binding collector are "
-        "not implemented; caller-supplied JSON is schema-only and untrusted"
+        "release evidence publication is PENDING: observation keys are unprovisioned; "
+        "caller-supplied JSON is schema-only and untrusted"
     )
 
 
@@ -217,6 +267,41 @@ def canonical_bytes(value: Any) -> bytes:
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
+
+
+def mcp_tool_schema_digest(
+    tools: Iterable[Mapping[str, Any]],
+    *,
+    server_name: str = _MCP_SERVER_NAME,
+    server_version: str = _MCP_SERVER_VERSION,
+    protocol_version: str = _MCP_PROTOCOL_VERSION,
+) -> str:
+    document = {
+        "mcp_server": {"name": server_name, "version": server_version},
+        "protocol_version": protocol_version,
+        "schema_version": _MCP_TOOL_SCHEMA_DOCUMENT_VERSION,
+        "tools": [
+            {
+                "description": tool["description"],
+                "inputSchema": tool["inputSchema"],
+                "name": tool["name"],
+                "outputSchema": tool["outputSchema"],
+            }
+            for tool in tools
+        ],
+    }
+    return _digest_bytes(canonical_bytes(document))
+
+
+def _canonical_worker_surfaces() -> dict[str, dict[str, Any]]:
+    workers = build_binding_manifest()["workers"]
+    return {
+        str(envs["production"]["name"]): {
+            "production": envs["production"],
+            "staging": envs["staging"],
+        }
+        for envs in workers.values()
+    }
 
 
 def _digest_bytes(value: bytes) -> str:
@@ -257,11 +342,27 @@ _CANONICAL_MIGRATION_MANIFEST_DIGEST, _CANONICAL_MIGRATIONS = (
 )
 
 
+def _is_observed_binding_secret_inventory(path: tuple[str, ...], key: str) -> bool:
+    """Allow public secret *names* inside canonical binding identity only.
+
+    Values are still scanned. This is not a secret value and is required so
+    observed Worker bindings can be compared to canonical identity.
+    """
+    return (
+        key == "secret_names"
+        and len(path) == 4
+        and path[0] == "deployments"
+        and path[3] == "effective_bindings"
+    )
+
+
 def _walk(value: Any, path: tuple[str, ...] = ()) -> None:
     if isinstance(value, Mapping):
         for raw_key, item in value.items():
             key = str(raw_key)
-            if _SENSITIVE_KEY.search(key):
+            if _SENSITIVE_KEY.search(key) and not _is_observed_binding_secret_inventory(
+                path, key
+            ):
                 raise ValueError(
                     f"release evidence contains a secret-shaped key: {'.'.join(path + (key,))}"
                 )
@@ -450,6 +551,7 @@ def _validate_deployments(payload: Mapping[str, Any]) -> None:
     deployments = _require_mapping(payload["deployments"], "deployments")
     if set(deployments) != _ACTIVE_WORKERS:
         raise ValueError("deployments must contain exactly the active Worker inventory")
+    canonical_surfaces = _canonical_worker_surfaces()
     for worker, raw in deployments.items():
         environments = _require_mapping(raw, f"deployments.{worker}")
         if set(environments) != {"staging", "production"}:
@@ -462,6 +564,7 @@ def _validate_deployments(payload: Mapping[str, Any]) -> None:
                 {
                     "version_id",
                     "source_sha",
+                    "effective_bindings",
                     "effective_bindings_digest",
                     "provenance",
                 },
@@ -470,14 +573,35 @@ def _validate_deployments(payload: Mapping[str, Any]) -> None:
             _require_digest(
                 row["effective_bindings_digest"], f"{label}.effective_bindings_digest"
             )
+            expected_identity = binding_identity(
+                canonical_surfaces[worker][environment]
+            )
+            expected_digest = binding_identity_digest(
+                canonical_surfaces[worker][environment]
+            )
+            if row["effective_bindings"] != expected_identity:
+                raise ValueError(
+                    f"{label} effective_bindings are not the canonical "
+                    "Worker/environment binding identity"
+                )
+            if row["effective_bindings_digest"] != expected_digest:
+                raise ValueError(
+                    f"{label} effective_bindings_digest is not the canonical "
+                    "Worker/environment binding identity"
+                )
             if row["source_sha"] != source_sha:
                 raise ValueError(f"{label} is not pinned to release source SHA")
-            _validate_provenance(
+            provenance = _validate_provenance(
                 row["provenance"],
                 f"{label}.provenance",
                 expected_collector="cloudflare-workers-versions-api/v1",
                 source_sha=source_sha,
             )
+            if provenance["response_digest"] != expected_digest:
+                raise ValueError(
+                    f"{label} provenance.response_digest must equal the "
+                    "observed canonical binding identity digest"
+                )
 
 
 def _validate_migrations(payload: Mapping[str, Any]) -> None:
@@ -545,6 +669,7 @@ def _validate_smoke(payload: Mapping[str, Any]) -> None:
                         "http_status",
                         "product_ready",
                         "cutover",
+                        "activated_source_sha",
                         "response_digest",
                     }
                 )
@@ -573,11 +698,13 @@ def _validate_smoke(payload: Mapping[str, Any]) -> None:
                     or row["http_status"] != 200
                     or row["product_ready"] is not True
                     or row["cutover"] != "V3_ACTIVE"
+                    or row["activated_source_sha"] != source_sha
                     or row["response_digest"] != provenance["response_digest"]
                 ):
                     raise ValueError(
                         f"{label} must prove HTTP 200 product readiness from "
-                        f"{_JSDA_READY_ENDPOINT} with a provenance-bound response"
+                        f"{_JSDA_READY_ENDPOINT} with activated_source_sha "
+                        "equal to the deployed source SHA"
                     )
 
 
