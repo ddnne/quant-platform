@@ -7,6 +7,7 @@ import pytest
 
 from scripts.verify_generated_worker_env import (
     active_worker_environments,
+    expected_env_properties,
     expected_types,
     write_check,
 )
@@ -112,9 +113,53 @@ def test_typed_service_and_durable_object_refinements_are_required() -> None:
     )
     assert secrets["PROXY_RATE_LIMITER"] == "RateLimit"
     assert observer["JSDA_INGESTION"] == "Service"
+    assert "JSDA_INGESTION" not in expected_types(
+        "receipt-activation-observer", "base"
+    )
     assert expected_types("ingestion-jsda", "production")["CF_VERSION_METADATA"] == (
         "WorkerVersionMetadata"
     )
+
+
+def test_base_env_keeps_same_toml_production_bindings_optional() -> None:
+    required, optional = expected_env_properties(
+        "receipt-activation-observer", "base"
+    )
+    assert "JSDA_INGESTION" not in required
+    assert optional["JSDA_INGESTION"] == "Service"
+    assert "PREMIUM_RECEIPT_OPERATOR" not in optional
+    mcp_required, mcp_optional = expected_env_properties("quant-ops-mcp", "base")
+    assert mcp_required["OPS_PROJECTION_ENVIRONMENT"] == '"production"'
+    assert mcp_required["OPS_PROJECTION_VERIFY_KEY_ID"] == (
+        '"ops-projection-20260826-v2"'
+    )
+    assert mcp_optional == {}
+
+
+def test_base_assertion_emits_optional_production_service(tmp_path: Path) -> None:
+    generated = tmp_path / "env.d.ts"
+    generated.write_text(
+        "interface __BaseEnv_Env {\n"
+        '  CF_VERSION_METADATA: WorkerVersionMetadata;\n'
+        '  ENVIRONMENT: "disabled";\n'
+        "  JSDA_INGESTION?: Service;\n"
+        "}\n"
+        "declare namespace Cloudflare { interface Env extends __BaseEnv_Env {} }\n"
+        "interface Env extends __BaseEnv_Env {}\n",
+        encoding="utf-8",
+    )
+    assertion = tmp_path / "assert.ts"
+    write_check(
+        worker="receipt-activation-observer",
+        environment="base",
+        generated_types=generated,
+        assertion=assertion,
+        tsconfig=tmp_path / "tsconfig.json",
+    )
+    text = assertion.read_text(encoding="utf-8")
+    assert 'readonly "ENVIRONMENT": "disabled";' in text
+    assert 'readonly "JSDA_INGESTION"?: Service;' in text
+    assert "PREMIUM_RECEIPT_OPERATOR" not in text
 
 
 def test_generic_fetcher_or_do_erasure_is_rejected(tmp_path: Path) -> None:
