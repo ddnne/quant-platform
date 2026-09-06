@@ -1109,34 +1109,42 @@ describe("ops projection cloud publisher", () => {
     ).toBe(open.generated_at);
   });
 
-  it("publishes more than the live 12,940 segments with bounded D1 reads and writes", async () => {
+  // Integration-scale pagination/query-count fixture, not a 5s product SLA.
+  // CI under parallel Cloudflare Worker lanes can exceed Vitest's default 5000ms.
+  it("publishes more than the live 12,940 segments with bounded D1 reads and writes", { timeout: 30_000 }, async () => {
     const source = new DatabaseSync(":memory:");
     applySqlDir(source, ingestionMigrations);
     seedBase(source);
-    const insert = source.prepare(
-      `INSERT INTO coverage_segments(
-         source,dataset,segment_id,policy_version,segment_start,segment_end,expected_scope,
-         expected_items,status,receipt_run_id,evaluated_at,detail_json
-       ) VALUES ('jquants','equities_bars_daily',?,'collection-coverage/v3',
-                 '2026-08-01','2026-08-01','day',1,'PARTIAL',NULL,
-                 '2026-08-01T00:00:00Z','{}')`,
-    );
-    source.exec("BEGIN");
-    for (let index = 0; index < 12_941; index += 1) {
-      insert.run(`segment-${String(index).padStart(5, "0")}`);
-    }
-    const unrelatedOperation = source.prepare(
-      `INSERT INTO receipt_authority_operations(
-         operation_id,request_digest,run_id,environment,source,contract_id,dataset,
-         segment_id,segment_start,segment_end,state,checked_at,updated_at
-       ) VALUES (?, ?, ?, 'production','jquants','jquants_premium_core',
-                 'equities_bars_daily','2000-01','2000-01-01','2000-01-31','COLLECTING',
-                 '2026-08-01T00:00:00Z','2026-08-01T00:00:00Z')`,
-    );
-    for (let index = 0; index < 100; index += 1) {
-      unrelatedOperation.run(`unrelated-${index}`, `request-${index}`, 10_000 + index);
-    }
-    source.exec("COMMIT");
+    source.exec(`
+      INSERT INTO coverage_segments(
+        source,dataset,segment_id,policy_version,segment_start,segment_end,expected_scope,
+        expected_items,status,receipt_run_id,evaluated_at,detail_json
+      )
+      WITH RECURSIVE seq(i) AS (
+        SELECT 0
+        UNION ALL
+        SELECT i + 1 FROM seq WHERE i < 12940
+      )
+      SELECT 'jquants','equities_bars_daily',
+             printf('segment-%05d', i),'collection-coverage/v3',
+             '2026-08-01','2026-08-01','day',1,'PARTIAL',NULL,
+             '2026-08-01T00:00:00Z','{}'
+        FROM seq;
+      INSERT INTO receipt_authority_operations(
+        operation_id,request_digest,run_id,environment,source,contract_id,dataset,
+        segment_id,segment_start,segment_end,state,checked_at,updated_at
+      )
+      WITH RECURSIVE seq(i) AS (
+        SELECT 0
+        UNION ALL
+        SELECT i + 1 FROM seq WHERE i < 99
+      )
+      SELECT printf('unrelated-%d', i), printf('request-%d', i), 10000 + i,
+             'production','jquants','jquants_premium_core',
+             'equities_bars_daily','2000-01','2000-01-01','2000-01-31','COLLECTING',
+             '2026-08-01T00:00:00Z','2026-08-01T00:00:00Z'
+        FROM seq;
+    `);
     const target = new DatabaseSync(":memory:");
     applySqlDir(target, projectionMigrations);
     const keys = await keyPair();
