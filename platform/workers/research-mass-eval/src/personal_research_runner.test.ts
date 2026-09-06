@@ -104,6 +104,77 @@ describe("personal research runner identity gate", () => {
     expect(destroy).not.toHaveBeenCalled();
   });
 
+  it("aborts a stalled readiness fetch that only rejects on abort", async () => {
+    const destroy = vi.fn(async () => undefined);
+    const fetch = vi.fn((request: Request) => new Promise<Response>((_resolve, reject) => {
+      const fail = () => {
+        const error = new Error("The operation was aborted.");
+        error.name = "AbortError";
+        reject(error);
+      };
+      if (request.signal.aborted) {
+        fail();
+        return;
+      }
+      request.signal.addEventListener("abort", fail, { once: true });
+    }));
+    const env = {
+      PERSONAL_RESEARCH_CONTAINER: { getByName: vi.fn(() => ({ destroy, fetch })) },
+    } as unknown as Env;
+
+    await expect(verifiedPersonalResearchContainer(env, RUNNER_NAME)).rejects.toThrow(
+      "runner readiness unknown: probe failed: container request timeout",
+    );
+    expect(destroy).not.toHaveBeenCalled();
+  }, 15_000);
+
+  it("aborts a stalled readiness body that never yields bytes except on abort", async () => {
+    const destroy = vi.fn(async () => undefined);
+    const body = JSON.stringify({ ok: true, service: PERSONAL_RESEARCH_RUNNER_VERSION });
+    const fetch = vi.fn(async () => new Response(
+      new ReadableStream<Uint8Array>({
+        start() {},
+        cancel() {},
+      }),
+      {
+        status: 200,
+        headers: {
+          "content-length": String(new TextEncoder().encode(body).byteLength),
+          "content-type": "application/json; charset=utf-8",
+        },
+      },
+    ));
+    const env = {
+      PERSONAL_RESEARCH_CONTAINER: { getByName: vi.fn(() => ({ destroy, fetch })) },
+    } as unknown as Env;
+
+    await expect(verifiedPersonalResearchContainer(env, RUNNER_NAME)).rejects.toThrow(
+      /probe (failed|body failed): container request timeout/,
+    );
+    expect(destroy).not.toHaveBeenCalled();
+  }, 15_000);
+
+  it("fails closed when mismatched runner destroy stays pending until abort", async () => {
+    const destroy = vi.fn(() => new Promise<void>(() => {
+      // Destroy RPC is not cancelled; only the wait is bounded.
+    }));
+    const old = {
+      destroy,
+      fetch: vi.fn(async () => readyResponse("personal-cloud-runner/v6")),
+    };
+    const replacement = runnerStub(PERSONAL_RESEARCH_RUNNER_VERSION);
+    const { env, getByName } = runnerEnv(old, replacement);
+
+    await expect(verifiedPersonalResearchContainer(env, RUNNER_NAME)).rejects.toThrow(
+      "runner identity mismatch cleanup failed: container request timeout",
+    );
+
+    expect(destroy).toHaveBeenCalledOnce();
+    expect(getByName).toHaveBeenCalledOnce();
+    expect(replacement.fetch).not.toHaveBeenCalled();
+    expect(replacement.destroy).not.toHaveBeenCalled();
+  }, 15_000);
+
   it("does not destroy a replacement whose reprobe is unknown", async () => {
     const old = runnerStub("personal-cloud-runner/v6");
     const replacementDestroy = vi.fn(async () => undefined);

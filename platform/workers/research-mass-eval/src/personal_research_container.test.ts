@@ -86,6 +86,7 @@ import {
   personalJobContainerName,
 } from "./personal_research_contract";
 import { personalHistorySourceOutbound } from "./personal_history_source";
+import { withRequestDeadline } from "./bounded_container_request";
 import * as controlledPilot from "./controlled_pilot";
 import {
   PersonalResearchContainer,
@@ -356,6 +357,77 @@ describe("personal research Container admission", () => {
     expect(values.get("controlled_resume_next_due")).not.toBe(generation);
     clock.mockRestore();
   });
+
+  it("returns from a stalled container callback so the lifecycle deadline stays enforceable", async () => {
+    const { values, storage } = controlledStorage();
+    const container = new PersonalResearchContainer() as PersonalResearchContainer & {
+      schedules: ControlledSchedule[];
+    };
+    Object.assign(container as object, { ctx: { storage }, env: {} });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    await container.scheduleControlledPilot("controlled-job-deadline");
+    const first = takeActiveControlledSchedule(container, values);
+    const expire = vi.spyOn(controlledPilot, "expireControlledPilotJob").mockResolvedValue();
+    vi.spyOn(controlledPilot, "runControlledPilotJob").mockImplementation(async () => {
+      await withRequestDeadline(async (signal) => {
+        await new Promise<never>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("container request timeout")), { once: true });
+        });
+      });
+    });
+    vi.spyOn(controlledPilot, "controlledPilotStatus").mockResolvedValue(
+      Response.json({ status: "SUBMITTED" }, { status: 202 }),
+    );
+    clock.mockReturnValue(first.payload.next_due);
+
+    await container.resumeControlledPilot(first.payload);
+    expect(values.get("controlled_job_id")).toBe("controlled-job-deadline");
+    expect(expire).not.toHaveBeenCalled();
+
+    const retry = takeActiveControlledSchedule(container, values);
+    clock.mockReturnValue(1_000_000 + 180 * 60 * 1_000);
+    await container.resumeControlledPilot(retry.payload);
+    expect(expire).toHaveBeenCalledTimes(1);
+    expect(values.has("controlled_job_id")).toBe(false);
+    expire.mockRestore();
+    clock.mockRestore();
+  }, 15_000);
+
+  it("does not delete durable cleanup state when expire stays pending until abort", async () => {
+    const { values, storage } = controlledStorage();
+    const container = new PersonalResearchContainer() as PersonalResearchContainer & {
+      destroyCount: number;
+      outboundClearCount: number;
+      schedules: Array<{ payload: { job_id: string; next_due: number } }>;
+    };
+    Object.assign(container as object, { ctx: { storage }, env: {} });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const expire = vi.spyOn(controlledPilot, "expireControlledPilotJob").mockImplementation(
+      () => new Promise(() => {
+        // Never settles; the wait unblocks on abort without cancelling the RPC.
+      }),
+    );
+    const run = vi.spyOn(controlledPilot, "runControlledPilotJob");
+    run.mockClear();
+    await container.scheduleControlledPilot("controlled-job-cleanup-timeout");
+    const first = takeActiveControlledSchedule(container, values);
+    clock.mockReturnValue(1_000_000 + 180 * 60 * 1_000);
+
+    try {
+      await container.resumeControlledPilot(first.payload);
+      expect(values.get("controlled_job_id")).toBe("controlled-job-cleanup-timeout");
+      expect(container.destroyCount).toBe(1);
+      expect(container.outboundClearCount).toBe(1);
+      expect(run).not.toHaveBeenCalled();
+      expect(container.schedules.some(
+        (item) => item.payload.next_due === values.get("controlled_resume_next_due"),
+      )).toBe(true);
+    } finally {
+      expire.mockRestore();
+      run.mockRestore();
+      clock.mockRestore();
+    }
+  }, 15_000);
 
   it("keeps cleanup durable until the container is destroyed and outbound is atomically cleared", async () => {
     const { values, storage } = controlledStorage();

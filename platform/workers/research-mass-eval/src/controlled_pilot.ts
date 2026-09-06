@@ -60,6 +60,10 @@ import { CONTROLLED_R2_HOST } from "./controlled_pilot_r2";
 import { CONTROLLED_WRITER_R2_HOST } from "./controlled_pilot_container_r2";
 import * as registries from "./controlled_pilot_registries";
 import type { PinnedVerifyKey } from "./controlled_pilot_registries";
+import {
+  fetchContainerBytes,
+  isContainerRequestTimeout,
+} from "./bounded_container_request";
 import { verifiedPersonalResearchContainer } from "./personal_research_runner";
 import type { Env } from "./types";
 import type { ControlledSessionScope } from "./ops_projection_ready";
@@ -1588,10 +1592,11 @@ async function callContainer(
   }
   let parsed: unknown = { accepted: true };
   if (!options?.skipPost) {
-    let response: Response;
+    let posted: { status: number; bytes: Uint8Array };
     try {
       const target = await verifiedPersonalResearchContainer(env, containerName);
-      response = await target.fetch(
+      posted = await fetchContainerBytes(
+        target,
         new Request("http://container/v1/controlled-pilot", {
           method: "POST",
           headers: { "content-type": "application/json; charset=utf-8" },
@@ -1600,17 +1605,22 @@ async function callContainer(
       );
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      return { ok: false, error: detail, timeout: /timeout/i.test(detail), pending: true };
-    }
-    if (response.status !== 202) {
       return {
         ok: false,
-        error: `controlled container POST must return 202, got ${response.status}`,
-        pending: response.status >= 500,
+        error: detail,
+        timeout: isContainerRequestTimeout(error),
+        pending: true,
+      };
+    }
+    if (posted.status !== 202) {
+      return {
+        ok: false,
+        error: `controlled container POST must return 202, got ${posted.status}`,
+        pending: posted.status >= 500,
       };
     }
     try {
-      parsed = await response.json();
+      parsed = JSON.parse(new TextDecoder().decode(posted.bytes));
     } catch {
       return { ok: false, error: "controlled container returned invalid JSON", accepted: true };
     }
@@ -1710,20 +1720,24 @@ async function waitForContainerJob(
   if (isRecord(submitted) && Array.isArray(submitted.papers)) {
     return { ok: false, error: "controlled container must accept with 202 and publish via GET" };
   }
-  let status: Response;
+  let status: { status: number; bytes: Uint8Array };
   try {
     const target = await verifiedPersonalResearchContainer(env, containerName);
-    status = await target.fetch(new Request(`http://container/v1/jobs/${jobId}`));
+    status = await fetchContainerBytes(
+      target,
+      new Request(`http://container/v1/jobs/${jobId}`),
+    );
   } catch (error) {
     return {
       ok: false,
       error: error instanceof Error ? error.message : "controlled container status unavailable",
+      timeout: isContainerRequestTimeout(error),
       pending: true,
     };
   }
   let parsed: unknown;
   try {
-    parsed = await status.json();
+    parsed = JSON.parse(new TextDecoder().decode(status.bytes));
   } catch {
     return { ok: false, error: "controlled container status is invalid" };
   }

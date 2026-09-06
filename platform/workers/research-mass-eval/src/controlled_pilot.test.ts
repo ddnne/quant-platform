@@ -130,6 +130,46 @@ function readyProbe(): Response {
   });
 }
 
+function rejectWhenAborted(signal: AbortSignal): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    const fail = () => {
+      const error = new Error("The operation was aborted.");
+      error.name = "AbortError";
+      reject(error);
+    };
+    if (signal.aborted) {
+      fail();
+      return;
+    }
+    signal.addEventListener("abort", fail, { once: true });
+  });
+}
+
+function stalledBodyResponse(status: number, extraHeaders?: Record<string, string>): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start() {
+        // Intentionally never enqueues or closes; abort must cancel the reader.
+      },
+      cancel() {},
+    }),
+    {
+      status,
+      headers: {
+        "content-type": "application/json",
+        ...extraHeaders,
+      },
+    },
+  );
+}
+
+type ContainerStall = {
+  ready?: boolean;
+  post?: boolean;
+  status?: boolean;
+  body?: "ready" | "post" | "status";
+};
+
 type BudgetState = {
   reserved: number;
   finalized: number;
@@ -213,6 +253,7 @@ function mockContainer(options?: {
     | "semantic_rebound_knowledge";
   delay?: { complete: boolean };
   forgetFirstStatus?: boolean;
+  stall?: ContainerStall;
   scheduled?: string[];
   outbound?: Map<string, unknown>;
 }): Env["PERSONAL_RESEARCH_CONTAINER"] {
@@ -228,11 +269,22 @@ function mockContainer(options?: {
         },
         fetch: async (request: Request) => {
           const url = new URL(request.url);
-          if (url.pathname === "/ready") return readyProbe();
+          if (url.pathname === "/ready") {
+            if (options?.stall?.ready) return rejectWhenAborted(request.signal);
+            if (options?.stall?.body === "ready") {
+              const body = JSON.stringify({ ok: true, service: PERSONAL_RESEARCH_RUNNER_VERSION });
+              return stalledBodyResponse(200, {
+                "content-length": String(new TextEncoder().encode(body).byteLength),
+              });
+            }
+            return readyProbe();
+          }
           fetches.n += 1;
           if (options?.fail === "timeout") throw new Error("container timeout");
           if (options?.fail === "error") throw new Error("container exploded");
           if (request.method === "POST" && url.pathname === "/v1/controlled-pilot") {
+            if (options?.stall?.post) return rejectWhenAborted(request.signal);
+            if (options?.stall?.body === "post") return stalledBodyResponse(202);
             fetches.post += 1;
             const body = (await request.json()) as { job_id: string; snapshot_id: string };
             const result = await artifacts(body.snapshot_id);
@@ -332,6 +384,8 @@ function mockContainer(options?: {
           }
           const match = url.pathname.match(/^\/v1\/jobs\/([^/]+)$/);
           if (request.method === "GET" && match) {
+            if (options?.stall?.status) return rejectWhenAborted(request.signal);
+            if (options?.stall?.body === "status") return stalledBodyResponse(200);
             if (options?.forgetFirstStatus && !forgotFirstStatus) {
               forgotFirstStatus = true;
               jobs.clear();
@@ -412,6 +466,7 @@ async function seedEnv(options?: {
     | "semantic_rebound_knowledge";
   delay?: { complete: boolean };
   forgetFirstStatus?: boolean;
+  stall?: ContainerStall;
 }) {
   const mem = new MemR2();
   const snapshot = new TextEncoder().encode("controlled-pilot-physical-sqlite");
@@ -451,6 +506,7 @@ async function seedEnv(options?: {
       tamper: options?.tamper,
       delay: options?.delay,
       forgetFirstStatus: options?.forgetFirstStatus,
+      stall: options?.stall,
       scheduled,
       outbound,
     }),
@@ -1253,6 +1309,61 @@ describe("controlled cloud execution", () => {
     expect(errored.scheduled).toEqual([errored.request.idempotency_key]);
     expect(errored.mem.putOrder.some((key) => key.endsWith("/manifest.json"))).toBe(false);
   });
+
+  it("aborts a stalled readiness probe and retries the same job", async () => {
+    const stall: ContainerStall = { ready: true };
+    const seeded = await seedEnv({ stall });
+    const ctx = new WaitCtx();
+    expect((await submitControlledPilot(seeded.env, seeded.request, ctx)).status).toBe(202);
+    await ctx.pending;
+    expect(seeded.fetches.post).toBe(0);
+    expect(seeded.budget.cancelled).toBe(0);
+
+    stall.ready = false;
+    await runControlledPilotJob(seeded.env, seeded.request.idempotency_key);
+    expect(seeded.fetches.post).toBe(1);
+    expect(((await (await controlledPilotStatus(
+      seeded.env,
+      seeded.request.idempotency_key,
+    )).json()) as { status: string }).status).toBe("COMPLETED");
+  }, 15_000);
+
+  it("aborts a stalled POST that only rejects on abort and retries without a second reservation", async () => {
+    const stall: ContainerStall = { post: true };
+    const seeded = await seedEnv({ stall });
+    const ctx = new WaitCtx();
+    expect((await submitControlledPilot(seeded.env, seeded.request, ctx)).status).toBe(202);
+    await ctx.pending;
+    expect(seeded.fetches.post).toBe(0);
+    expect(seeded.mem.putOrder.some((key) => key.endsWith("/manifest.json"))).toBe(false);
+
+    stall.post = false;
+    await runControlledPilotJob(seeded.env, seeded.request.idempotency_key);
+    expect(seeded.fetches.post).toBe(1);
+    expect(seeded.budget.reserved).toBe(1);
+    expect(((await (await controlledPilotStatus(
+      seeded.env,
+      seeded.request.idempotency_key,
+    )).json()) as { status: string }).status).toBe("COMPLETED");
+  }, 15_000);
+
+  it("aborts a stalled status body that only ends on abort and still completes on retry", async () => {
+    const stall: ContainerStall = { body: "status" };
+    const seeded = await seedEnv({ stall });
+    const ctx = new WaitCtx();
+    expect((await submitControlledPilot(seeded.env, seeded.request, ctx)).status).toBe(202);
+    await ctx.pending;
+    expect(seeded.fetches.post).toBe(1);
+    expect(seeded.mem.putOrder.some((key) => key.endsWith("/manifest.json"))).toBe(false);
+
+    stall.body = undefined;
+    await runControlledPilotJob(seeded.env, seeded.request.idempotency_key);
+    expect(seeded.fetches.post).toBe(1);
+    expect(((await (await controlledPilotStatus(
+      seeded.env,
+      seeded.request.idempotency_key,
+    )).json()) as { status: string }).status).toBe("COMPLETED");
+  }, 15_000);
 });
 
 describe("mass remains disabled for controlled readiness", () => {

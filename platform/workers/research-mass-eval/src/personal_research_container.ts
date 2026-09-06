@@ -33,6 +33,12 @@ import {
   controlledPilotR2Outbound,
   denyControlledPilotR2Outbound,
 } from "./controlled_pilot_r2";
+import {
+  awaitUntilAborted,
+  CONTROLLED_CONTAINER_REQUEST_DEADLINE_MS,
+  readAbortedBytes,
+  withRequestDeadline,
+} from "./bounded_container_request";
 import { verifiedPersonalResearchContainer } from "./personal_research_runner";
 import type { Env } from "./types";
 
@@ -184,27 +190,24 @@ export class PersonalResearchContainer extends Container<Env> {
       ? deadline - CONTROLLED_LEASE_TTL_SECONDS * 1_000
       : Number.NaN;
     if (!Number.isFinite(cleanupAt) || now >= cleanupAt) {
-      let expired = false;
-      let destroyed = false;
-      let released = false;
-      try {
-        await controlled.expireControlledPilotJob(this.env, payloadJob, false);
-        expired = true;
-      } catch {
-        // Cleanup is retried below without restarting execution.
-      }
-      try {
-        await this.releaseControlledOutbound();
-        released = true;
-      } catch {
-        // Do not discard the only durable cleanup retry.
-      }
-      try {
-        await this.destroy();
-        destroyed = true;
-      } catch {
-        // Resume state remains until both stop and capability cleanup succeed.
-      }
+      const bounded = async (work: Promise<void>): Promise<boolean> => {
+        try {
+          await withRequestDeadline(
+            (signal) => awaitUntilAborted(work, signal),
+            CONTROLLED_CONTAINER_REQUEST_DEADLINE_MS,
+          );
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      // Stop first so a hung expire/accounting wait cannot skip shutdown.
+      // Each RPC is awaited independently; late completion is tolerated on retry.
+      const destroyed = await bounded(this.destroy());
+      const expired = await bounded(
+        controlled.expireControlledPilotJob(this.env, payloadJob, false),
+      );
+      const released = await bounded(this.releaseControlledOutbound());
       if (expired && destroyed && released) {
         await this.clearControlledResume();
       } else {
@@ -219,15 +222,30 @@ export class PersonalResearchContainer extends Container<Env> {
     }
     let phase = "SUBMITTED";
     try {
-      const response = await controlled.controlledPilotStatus(this.env, payloadJob);
-      const body = await response.clone().json() as { status?: unknown };
-      if (body.status === "FINALIZE_RETRY") {
+      const outcome = await withRequestDeadline(async (signal) => {
+        const response = await awaitUntilAborted(
+          controlled.controlledPilotStatus(this.env, payloadJob),
+          signal,
+        );
+        const bytes = await readAbortedBytes(response, signal);
+        return {
+          status: response.status,
+          body: JSON.parse(new TextDecoder().decode(bytes)) as { status?: unknown },
+        };
+      }, CONTROLLED_CONTAINER_REQUEST_DEADLINE_MS);
+      if (outcome.body.status === "FINALIZE_RETRY") {
         phase = "FINALIZE_RETRY";
-        await this.releaseControlledOutbound();
+        await withRequestDeadline(
+          (signal) => awaitUntilAborted(this.releaseControlledOutbound(), signal),
+          CONTROLLED_CONTAINER_REQUEST_DEADLINE_MS,
+        );
       }
-      if (response.status === 200 && (body.status === "COMPLETED" || body.status === "FAILED")) {
+      if (outcome.status === 200 && (outcome.body.status === "COMPLETED" || outcome.body.status === "FAILED")) {
         try {
-          await this.releaseControlledOutbound();
+          await withRequestDeadline(
+            (signal) => awaitUntilAborted(this.releaseControlledOutbound(), signal),
+            CONTROLLED_CONTAINER_REQUEST_DEADLINE_MS,
+          );
         } catch {
           await this.scheduleControlledCallback(payloadJob, CONTROLLED_RESUME_INITIAL_SECONDS);
           return;

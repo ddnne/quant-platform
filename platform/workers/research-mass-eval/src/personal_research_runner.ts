@@ -1,3 +1,9 @@
+import {
+  awaitUntilAborted,
+  readAbortedBytes,
+  withContainerFetch,
+  withRequestDeadline,
+} from "./bounded_container_request";
 import { PERSONAL_RESEARCH_RUNNER_VERSION } from "./personal_research_contract";
 import type { Env } from "./types";
 
@@ -48,12 +54,55 @@ export function personalResearchContainer(
 async function probeRunnerIdentity(
   target: PersonalResearchContainerStub,
 ): Promise<RunnerIdentityProbe> {
-  let response: Response;
   try {
-    response = await target.fetch(
+    return await withContainerFetch(
+      target,
       new Request(RUNNER_READY_URL, {
         headers: { accept: "application/json" },
       }),
+      async (response, signal) => {
+        if (response.status !== 200) {
+          return {
+            state: "UNKNOWN" as const,
+            reason: `probe returned HTTP ${response.status}`,
+          };
+        }
+        const rawLength = response.headers.get("content-length") ?? "";
+        if (
+          !/^\d+$/.test(rawLength) ||
+          Number(rawLength) < 1 ||
+          Number(rawLength) > MAX_RUNNER_READY_BYTES
+        ) {
+          return { state: "UNKNOWN" as const, reason: "probe length was not trustworthy" };
+        }
+        let bytes: Uint8Array;
+        try {
+          bytes = await readAbortedBytes(response, signal, MAX_RUNNER_READY_BYTES);
+        } catch (error) {
+          return {
+            state: "UNKNOWN" as const,
+            reason: `probe body failed: ${errorDetail(error)}`,
+          };
+        }
+        if (
+          bytes.byteLength !== Number(rawLength) ||
+          bytes.byteLength > MAX_RUNNER_READY_BYTES
+        ) {
+          return { state: "UNKNOWN" as const, reason: "probe body length did not match" };
+        }
+        let body: unknown;
+        try {
+          body = JSON.parse(new TextDecoder().decode(bytes));
+        } catch {
+          return { state: "UNKNOWN" as const, reason: "probe body was not valid JSON" };
+        }
+        if (!isExactRunnerIdentity(body)) {
+          return { state: "UNKNOWN" as const, reason: "probe body schema was not trusted" };
+        }
+        return body.service === PERSONAL_RESEARCH_RUNNER_VERSION
+          ? { state: "MATCH" as const }
+          : { state: "MISMATCH" as const, service: body.service };
+      },
     );
   } catch (error) {
     return {
@@ -61,54 +110,15 @@ async function probeRunnerIdentity(
       reason: `probe failed: ${errorDetail(error)}`,
     };
   }
-  if (response.status !== 200) {
-    return {
-      state: "UNKNOWN",
-      reason: `probe returned HTTP ${response.status}`,
-    };
-  }
-  const rawLength = response.headers.get("content-length") ?? "";
-  if (
-    !/^\d+$/.test(rawLength) ||
-    Number(rawLength) < 1 ||
-    Number(rawLength) > MAX_RUNNER_READY_BYTES
-  ) {
-    return { state: "UNKNOWN", reason: "probe length was not trustworthy" };
-  }
-  let bytes: ArrayBuffer;
-  try {
-    bytes = await response.arrayBuffer();
-  } catch (error) {
-    return {
-      state: "UNKNOWN",
-      reason: `probe body failed: ${errorDetail(error)}`,
-    };
-  }
-  if (
-    bytes.byteLength !== Number(rawLength) ||
-    bytes.byteLength > MAX_RUNNER_READY_BYTES
-  ) {
-    return { state: "UNKNOWN", reason: "probe body length did not match" };
-  }
-  let body: unknown;
-  try {
-    body = JSON.parse(new TextDecoder().decode(bytes));
-  } catch {
-    return { state: "UNKNOWN", reason: "probe body was not valid JSON" };
-  }
-  if (!isExactRunnerIdentity(body)) {
-    return { state: "UNKNOWN", reason: "probe body schema was not trusted" };
-  }
-  return body.service === PERSONAL_RESEARCH_RUNNER_VERSION
-    ? { state: "MATCH" }
-    : { state: "MISMATCH", service: body.service };
 }
 
 async function destroyMismatchedRunner(
   target: PersonalResearchContainerStub,
 ): Promise<void> {
   try {
-    await target.destroy();
+    await withRequestDeadline(
+      (signal) => awaitUntilAborted(target.destroy(), signal),
+    );
   } catch (error) {
     throw new Error(
       `runner identity mismatch cleanup failed: ${errorDetail(error)}`,
