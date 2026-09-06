@@ -40,6 +40,7 @@ from storage.receipt_crypto import (
 from storage.coverage_ledger import CollectionReceipt
 from storage.schema import CATALOG_CODE_SQL
 from ops.receipt_product import (
+    iter_observed_segment_product_rows,
     product_artifact_body_digest,
     product_artifact_digest_ordered,
 )
@@ -844,15 +845,19 @@ def _verify_publication_on_authenticated_mirror(
                     ]
                     # A receipt attests the complete governed source segment,
                     # not the smaller set of natural keys selected by this
-                    # plan's PIT universe.  Reconstruct and verify that full
-                    # artifact here; universe filtering belongs only to the
-                    # dependency-key selection above.
+                    # plan's PIT universe. Reconstruct that full artifact
+                    # under segment identity and the authenticated mirror
+                    # observation instant only. Trading-decision cutoff and
+                    # daily PIT membership stay on dependency-key selection.
                     observed_count, observed_product_digest, observed_bytes = (
                         product_artifact_digest_ordered(
-                            iter_catalog_product_rows(
-                                dataset_id,
-                                closure.segment_start[:10],
-                                closure.segment_end[:10],
+                            iter_observed_segment_product_rows(
+                                conn,
+                                source="jquants",
+                                dataset=dataset_id,
+                                segment_start=closure.segment_start,
+                                segment_end=closure.segment_end,
+                                observed_through=proof_clock.observed_through,
                             )
                         )
                     )

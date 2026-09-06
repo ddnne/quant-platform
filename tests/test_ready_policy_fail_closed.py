@@ -21,10 +21,14 @@ from ops.projection_content import (
     PROJECTED_CONTENT_TABLES,
     build_projection_content_manifest,
 )
+from core.execution import close_as_of
 from ops.receipt_product import (
     canonical_product_artifact_bytes,
+    iter_observed_segment_product_rows,
     product_artifact_digest,
+    product_artifact_digest_ordered,
 )
+from pit.query import normalize_as_of
 from ops.projection_signing import (
     ENVELOPE_SCHEMA,
     sha256_digest,
@@ -1035,6 +1039,8 @@ def _seed_exact_pit_scope(
     receipt_ed25519_keys,
     *,
     include_nonmember_rows: bool = False,
+    include_after_decision_rows: bool = False,
+    poison_unselected_rows: bool = False,
 ) -> tuple[object, object]:
     """Synthetic five-day exact natural-key closure with governed v4 receipts."""
     db_path = tmp_path / "pit-scope.sqlite"
@@ -1198,6 +1204,28 @@ def _seed_exact_pit_scope(
                         ingested_at=ingestion_clocks[dataset_id],
                     ),
                 )
+        if include_after_decision_rows:
+            store.upsert(
+                "jquants_records",
+                normalize_generic(
+                    [
+                        {
+                            "Code": "1332",
+                            "DiscDate": "2023-01-06",
+                            "DiscTime": "16:00:00",
+                            "DiscNo": "disc-1332-after-close",
+                        }
+                    ],
+                    dataset="fins_summary",
+                    ingested_at="2023-01-06T16:00:00+09:00",
+                ),
+            )
+        if poison_unselected_rows and include_after_decision_rows:
+            store._conn.execute(  # noqa: SLF001
+                "UPDATE jquants_records SET natural_key='after-decision-noncanonical' "
+                "WHERE dataset='fins_summary' "
+                "AND payload LIKE '%disc-1332-after-close%'"
+            )
         authority = _TestSignedReceiptAuthority(
             signing_key=receipt_ed25519_keys.signing_key
         )
@@ -1491,6 +1519,178 @@ def test_exact_pit_dependency_scope_verifies_full_source_artifact_before_univers
         "equities_bars_daily_am",
     ):
         assert full_artifact_counts[dataset_id] > selected_counts[dataset_id]
+
+
+def test_exact_pit_scope_verifies_full_artifact_excluding_after_cutoff_and_nonmember_from_selection(
+    tmp_path,
+    receipt_ed25519_keys,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path, binding = _seed_exact_pit_scope(
+        tmp_path,
+        receipt_ed25519_keys,
+        include_nonmember_rows=True,
+        include_after_decision_rows=True,
+        poison_unselected_rows=True,
+    )
+    with SqliteStore(db_path) as store:
+        store.upsert(
+            "jquants_records",
+            normalize_generic(
+                [
+                    {
+                        "Code": "1332",
+                        "DiscDate": "2023-01-05",
+                        "DiscTime": "08:00:00",
+                        "DiscNo": "disc-1332-late-observation",
+                    }
+                ],
+                dataset="fins_summary",
+                ingested_at="2026-08-26T00:00:00+09:00",
+            ),
+        )
+
+    proof = _verify_scope(db_path, binding, monkeypatch)
+
+    assert proof["status"] == "PASS"
+    selected = {
+        entry["dataset_id"]: entry for entry in proof["entries"]
+    }
+    assert selected["fins_summary"]["natural_key_count"] == 1
+    observed_through = normalize_as_of(proof["observed_through"])
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        member_key = connection.execute(
+            "SELECT natural_key FROM jquants_records "
+            "WHERE dataset='fins_summary' AND payload LIKE '%disc-1332\"%' "
+            "AND payload LIKE '%2023-01-03%'"
+        ).fetchone()[0]
+        artifact_count, artifact_digest, _nbytes = product_artifact_digest_ordered(
+            iter_observed_segment_product_rows(
+                connection,
+                source="jquants",
+                dataset="fins_summary",
+                segment_start="2023-01-02",
+                segment_end="2023-01-06",
+                observed_through=observed_through,
+            )
+        )
+        artifact_keys = {
+            row["natural_key"]
+            for row in iter_observed_segment_product_rows(
+                connection,
+                source="jquants",
+                dataset="fins_summary",
+                segment_start="2023-01-02",
+                segment_end="2023-01-06",
+                observed_through=observed_through,
+            )
+        }
+        stored = connection.execute(
+            "SELECT row_count, artifact_digest FROM receipt_product_materializations "
+            "WHERE dataset='fins_summary'"
+        ).fetchone()
+        listed = list(
+            connection.execute(
+                "SELECT natural_key, event_time, available_at, ingested_at, payload "
+                "FROM jquants_records WHERE dataset='fins_summary'"
+            )
+        )
+        nonmember_key = connection.execute(
+            "SELECT natural_key FROM jquants_records "
+            "WHERE dataset='fins_summary' AND payload LIKE '%disc-9999%'"
+        ).fetchone()[0]
+    assert member_key not in {
+        "after-decision-noncanonical",
+        nonmember_key,
+    }
+    assert selected["fins_summary"]["natural_key_digest"] == canonical_digest(
+        [member_key]
+    )
+    assert artifact_count == stored["row_count"]
+    assert artifact_digest == stored["artifact_digest"]
+    assert selected["fins_summary"]["product_artifact_digests"] == [
+        artifact_digest
+    ]
+    assert "after-decision-noncanonical" in artifact_keys
+    assert nonmember_key in artifact_keys
+    assert all(
+        day["member_count"] == 1 for day in proof["universe_daily_summary"]
+    )
+    assert any(
+        "disc-1332-after-close" in str(row["payload"])
+        and row["event_time"] > close_as_of("2023-01-06")
+        and row["available_at"] > close_as_of("2023-01-06")
+        for row in listed
+    )
+    assert any("disc-9999" in str(row["payload"]) for row in listed)
+    assert any(
+        "disc-1332-late-observation" in str(row["payload"])
+        and row["ingested_at"] > observed_through
+        for row in listed
+    )
+    late_keys = {
+        row["natural_key"]
+        for row in listed
+        if "disc-1332-late-observation" in str(row["payload"])
+    }
+    assert late_keys
+    assert late_keys.isdisjoint(artifact_keys)
+    assert member_key not in late_keys
+
+
+def test_observed_segment_iterator_compares_aware_ingestion_instants() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    connection.execute(
+        "CREATE TABLE jquants_records ("
+        "source TEXT, dataset TEXT, natural_key TEXT, event_time TEXT, "
+        "available_at TEXT, ingested_at TEXT, payload TEXT, raw_payload TEXT)"
+    )
+    stamp = "2023-01-06T16:00:00+09:00"
+    cutoff = "2026-08-25T21:00:00+09:00"
+
+    def load(rows: tuple[tuple[str, str], ...]) -> None:
+        connection.execute("DELETE FROM jquants_records")
+        connection.executemany(
+            "INSERT INTO jquants_records VALUES ("
+            "'jquants','fins_summary',?,?,?,?, '{}','{}')",
+            [(key, stamp, stamp, ingested) for key, ingested in rows],
+        )
+
+    def iterate(*, observed_through: str = cutoff):
+        return list(
+            iter_observed_segment_product_rows(
+                connection,
+                source="jquants",
+                dataset="fins_summary",
+                segment_start="2023-01-06",
+                segment_end="2023-01-06",
+                observed_through=observed_through,
+            )
+        )
+
+    load(
+        (
+            ("utc-eq", "2026-08-25T12:00:00.000Z"),
+            ("jst-eq", "2026-08-25T21:00:00+09:00"),
+            ("utc-later-frac", "2026-08-25T12:00:00.001Z"),
+        )
+    )
+    found = iterate()
+    assert [row["natural_key"] for row in found] == ["jst-eq", "utc-eq"]
+    assert found[0]["ingested_at"] == "2026-08-25T21:00:00+09:00"
+    assert found[1]["ingested_at"] == "2026-08-25T12:00:00.000Z"
+    load((("malformed", "not-an-instant"),))
+    with pytest.raises(ValueError, match="ingestion clock is malformed"):
+        iterate()
+    load((("naive", "2026-08-25T21:00:00"),))
+    with pytest.raises(ValueError, match="lacks timezone"):
+        iterate()
+    load((("utc-eq", "2026-08-25T12:00:00.000Z"),))
+    with pytest.raises(ValueError, match="lacks timezone"):
+        iterate(observed_through="2026-08-25T21:00:00")
+    connection.close()
 
 
 def test_product_jsonl_vector_matches_authority_utf8_order() -> None:
