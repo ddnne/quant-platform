@@ -123,7 +123,7 @@ fi
 
 # Python integration tests exercise the repository-pinned Wrangler boundary.
 # Install every active Worker's locked graph before pytest, once, and reuse it
-# for the parallel runtime/typecheck/dry-run lanes below.
+# for the bounded Worker runtime/typecheck/dry-run lanes below.
 ci_log_dir="$(mktemp -d "${TMPDIR:-/tmp}/quant-platform-ci.XXXXXX")"
 trap 'rm -rf -- "$ci_log_dir"' EXIT
 
@@ -147,26 +147,11 @@ prepare_worker_dependencies() {
   (cd "$dir" && npm ci)
 }
 
-echo "==> active Worker dependency graphs (parallel, locked)"
-dependency_pids=()
-dependency_names=()
-for dir in "${WORKERS[@]}"; do
-  name="$(basename "$dir")"
-  dependency_names+=("$name")
-  (prepare_worker_dependencies "$dir") \
-    >"$ci_log_dir/install-$name.log" 2>&1 &
-  dependency_pids+=("$!")
-done
-dependency_failed=0
-for i in "${!dependency_pids[@]}"; do
-  name="${dependency_names[$i]}"
-  if ! wait "${dependency_pids[$i]}"; then
-    dependency_failed=1
-    echo "worker dependency install failed: $name" >&2
-  fi
-  cat "$ci_log_dir/install-$name.log"
-done
-if [[ "$dependency_failed" -ne 0 ]]; then
+echo "==> active Worker dependency graphs (at most 2 concurrent, locked)"
+export ROOT
+export -f prepare_worker_dependencies
+if ! bash "$ROOT/scripts/ci_bounded_jobs.sh" 2 "$ci_log_dir" "install-" \
+  "worker dependency install" prepare_worker_dependencies "${WORKERS[@]}"; then
   echo "one or more active Worker dependency installs failed" >&2
   exit 1
 fi
@@ -359,26 +344,11 @@ verify_worker() {
   done
 }
 
-echo "==> active Worker lanes (parallel, fail-closed aggregation)"
-worker_pids=()
-worker_names=()
-for dir in "${WORKERS[@]}"; do
-  name="$(basename "$dir")"
-  worker_names+=("$name")
-  (verify_worker "$dir") >"$ci_log_dir/$name.log" 2>&1 &
-  worker_pids+=("$!")
-done
-
-worker_failed=0
-for i in "${!worker_pids[@]}"; do
-  name="${worker_names[$i]}"
-  if ! wait "${worker_pids[$i]}"; then
-    worker_failed=1
-    echo "worker lane failed: $name" >&2
-  fi
-  cat "$ci_log_dir/$name.log"
-done
-if [[ "$worker_failed" -ne 0 ]]; then
+echo "==> active Worker lanes (at most 2 concurrent, fail-closed aggregation)"
+export ROOT py ci_log_dir
+export -f npm_script_body verify_worker
+if ! bash "$ROOT/scripts/ci_bounded_jobs.sh" 2 "$ci_log_dir" "" "worker lane" \
+  verify_worker "${WORKERS[@]}"; then
   echo "one or more active Worker lanes failed" >&2
   exit 1
 fi

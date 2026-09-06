@@ -17,6 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "verify_ci.sh"
 WRAPPER = ROOT / "scripts" / "workers_builds_verify_ci.sh"
+BOUNDED_JOBS = ROOT / "scripts" / "ci_bounded_jobs.sh"
 DEPLOYMENT_ACCEPTANCE = (
     ROOT / "scripts" / "verify_cloudflare_deployment_acceptance.sh"
 )
@@ -59,11 +60,13 @@ def _acceptance_fixture(tmp_path: Path) -> Path:
 
 
 def test_authoritative_ci_entrypoints_are_executable_shell() -> None:
-    for path in (SCRIPT, WRAPPER, DEPLOYMENT_ACCEPTANCE):
+    for path in (SCRIPT, WRAPPER, DEPLOYMENT_ACCEPTANCE, BOUNDED_JOBS):
         assert path.is_file()
-        assert os.access(path, os.X_OK)
         checked = _bash_syntax(path)
         assert checked.returncode == 0, checked.stderr
+    for path in (SCRIPT, WRAPPER, DEPLOYMENT_ACCEPTANCE):
+        assert os.access(path, os.X_OK)
+    assert os.access(BOUNDED_JOBS, os.X_OK)
 
 
 def test_all_active_workers_have_locked_required_scripts() -> None:
@@ -236,3 +239,137 @@ def test_github_actions_remains_absent() -> None:
         check=True,
     )
     assert listed.stdout.strip() == ""
+
+
+def _bounded_driver(tmp_path: Path) -> Path:
+    driver = tmp_path / "bounded_driver.sh"
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    runner = tmp_path / "lane_job.sh"
+    runner.write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+name="$(basename "$1")"
+mkdir "{tmp_path}/running/$name"
+ls -1 "{tmp_path}/running" | wc -l | tr -d ' ' >> "{tmp_path}/peaks"
+sleep 0.2
+echo "job $name"
+rmdir "{tmp_path}/running/$name"
+case "$name" in
+  fail-*) exit 7 ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    runner.chmod(0o755)
+    (tmp_path / "running").mkdir()
+    driver.write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+if ! bash "{BOUNDED_JOBS}" 2 "{log_dir}" "" "worker lane" "{runner}" "$@"; then
+  exit 1
+fi
+""",
+        encoding="utf-8",
+    )
+    driver.chmod(0o755)
+    return driver
+
+
+def test_bounded_jobs_succeed_with_at_most_two_concurrent(tmp_path: Path) -> None:
+    driver = _bounded_driver(tmp_path)
+    names = ["ok-a", "ok-b", "ok-c", "ok-d"]
+    result = subprocess.run(
+        [str(driver), *names],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert [line for line in result.stdout.splitlines() if line.startswith("job ")] == [
+        "job ok-a",
+        "job ok-b",
+        "job ok-c",
+        "job ok-d",
+    ]
+    peaks = [
+        int(line)
+        for line in (tmp_path / "peaks").read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    assert peaks
+    assert max(peaks) <= 2
+
+
+def test_bounded_jobs_propagate_intermediate_command_failure(tmp_path: Path) -> None:
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    runner = tmp_path / "intermediate_fail.sh"
+    runner.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+false
+echo UNEXPECTED_AFTER_FAILURE
+""",
+        encoding="utf-8",
+    )
+    runner.chmod(0o755)
+    parent = tmp_path / "parent.sh"
+    parent.write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+if ! bash "{BOUNDED_JOBS}" 2 "{log_dir}" "" "probe" "{runner}" lane; then
+  echo FAILED
+else
+  echo PASSED
+fi
+""",
+        encoding="utf-8",
+    )
+    parent.chmod(0o755)
+    result = subprocess.run(
+        [str(parent)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    combined = result.stdout + result.stderr
+    assert "UNEXPECTED_AFTER_FAILURE" not in combined
+    assert "FAILED" in result.stdout
+    assert "PASSED" not in result.stdout
+    assert "probe failed: lane" in result.stderr
+    assert result.returncode == 0
+
+
+def test_bounded_jobs_run_all_and_aggregate_failures(tmp_path: Path) -> None:
+    driver = _bounded_driver(tmp_path)
+    names = ["ok-a", "fail-b", "ok-c", "fail-d", "ok-e"]
+    result = subprocess.run(
+        [str(driver), *names],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    stdout_jobs = [
+        line for line in result.stdout.splitlines() if line.startswith("job ")
+    ]
+    assert stdout_jobs == [
+        "job ok-a",
+        "job fail-b",
+        "job ok-c",
+        "job fail-d",
+        "job ok-e",
+    ]
+    assert "worker lane failed: fail-b" in result.stderr
+    assert "worker lane failed: fail-d" in result.stderr
+    assert "worker lane failed: ok-a" not in result.stderr
+    peaks = [
+        int(line)
+        for line in (tmp_path / "peaks").read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    assert max(peaks) <= 2
