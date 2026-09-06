@@ -27,7 +27,11 @@ class D1:
         self.connection.executescript(owner.BOOTSTRAP.read_text(encoding="utf-8"))
         self.apply_calls = 0
         self.apply_returncode = 0
-        self.backend_version = "production"
+        self.backend_version: str | None = None
+        self.info_uuid: str | None = None
+        self.info_name: str | None = None
+        self.travel_payload: dict[str, Any] = {"current_bookmark": BOOKMARK}
+        self.travel_returncode = 0
 
     def runner(
         self, argv: Sequence[str], _cwd: Path
@@ -40,12 +44,24 @@ class D1:
             payload = {
                 "name": binding["database_name"],
                 "uuid": binding["database_id"],
-                "version": self.backend_version,
+                "created_at": "2024-01-01T00:00:00.000Z",
+                "num_tables": 10,
+                "running_in_region": "WNAM",
+                "read_replication": {"mode": "disabled"},
+                "jurisdiction": None,
+                "database_size": 1024,
             }
+            payload["name"] = self.info_name or binding["database_name"]
+            payload["uuid"] = self.info_uuid or binding["database_id"]
+            if self.backend_version is not None:
+                payload["version"] = self.backend_version
             return subprocess.CompletedProcess(args, 0, json.dumps(payload), "")
         if args[1:4] == ["d1", "time-travel", "info"]:
             return subprocess.CompletedProcess(
-                args, 0, json.dumps({"current_bookmark": BOOKMARK}), ""
+                args,
+                self.travel_returncode,
+                json.dumps(self.travel_payload),
+                "",
             )
         if args[1:4] == ["d1", "migrations", "apply"]:
             self.apply_calls += 1
@@ -130,9 +146,34 @@ def test_time_travel_requires_exact_production_backend_without_node_modules(
 ) -> None:
     store = D1()
     monkeypatch.setattr(owner, "WORKER", tmp_path / "worker-without-node-modules")
-    assert owner.time_travel_bookmark("staging", runner=store.runner)["bookmark"] == BOOKMARK
+    omitted = owner.time_travel_bookmark("staging", runner=store.runner)
+    assert omitted["bookmark"] == BOOKMARK
+    assert "version" not in omitted
+    store.backend_version = "production"
+    explicit = owner.time_travel_bookmark("staging", runner=store.runner)
+    assert explicit["bookmark"] == BOOKMARK
+    assert explicit["version"] == "production"
     store.backend_version = "alpha"
     with pytest.raises(owner.GuardedMigrationError, match="production backend"):
+        owner.time_travel_bookmark("staging", runner=store.runner)
+    store.backend_version = None
+    store.info_uuid = "00000000-0000-0000-0000-000000000000"
+    with pytest.raises(owner.GuardedMigrationError, match="canonical D1 identity"):
+        owner.time_travel_bookmark("staging", runner=store.runner)
+    store.info_uuid = None
+    store.info_name = "not-the-canonical-database"
+    with pytest.raises(owner.GuardedMigrationError, match="canonical D1 identity"):
+        owner.time_travel_bookmark("staging", runner=store.runner)
+    store.info_name = None
+    store.travel_payload = {}
+    with pytest.raises(owner.GuardedMigrationError, match="bookmark"):
+        owner.time_travel_bookmark("staging", runner=store.runner)
+    store.travel_payload = {"current_bookmark": "not-a-bookmark"}
+    with pytest.raises(owner.GuardedMigrationError, match="bookmark"):
+        owner.time_travel_bookmark("staging", runner=store.runner)
+    store.travel_payload = {"current_bookmark": BOOKMARK}
+    store.travel_returncode = 1
+    with pytest.raises(owner.GuardedMigrationError, match="Time Travel info failed"):
         owner.time_travel_bookmark("staging", runner=store.runner)
 
 

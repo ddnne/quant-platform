@@ -231,6 +231,14 @@ def _find_bookmark(value: Any) -> str:
 def time_travel_bookmark(
     environment: str, *, runner: Runner = _default_runner
 ) -> dict[str, str]:
+    """Look up the current Time Travel bookmark for the canonical database.
+
+    Wrangler 4.125.0 ``d1 info --json`` omits the legacy backend ``version``
+    field. Do not treat that absence as a non-production backend, and do not
+    default missing metadata to production. Explicit alpha/legacy ``version``
+    still fails closed. Capability is a successful ``d1 time-travel info``
+    response plus exactly one valid bookmark.
+    """
     prefix, binding = _runner_wrangler_prefix(environment, runner=runner)
     common = _environment_args(binding)
     version = runner((*prefix, "--version"), WORKER)
@@ -258,7 +266,8 @@ def time_travel_bookmark(
     visit(info)
     if len(candidates) != 1 or candidates[0].get("name") != binding["database_name"]:
         raise GuardedMigrationError("canonical D1 identity is not exact")
-    if candidates[0].get("version") != "production":
+    observed_backend = candidates[0].get("version")
+    if observed_backend is not None and observed_backend != "production":
         raise GuardedMigrationError("D1 Time Travel requires production backend")
     travel = _json_output(
         runner(
@@ -275,13 +284,15 @@ def time_travel_bookmark(
         ),
         "D1 Time Travel info",
     )
-    return {
+    observed = {
         "bookmark": _find_bookmark(travel),
         "database_id": binding["database_id"],
         "database_name": binding["database_name"],
-        "version": "production",
         "response_digest": _digest(travel),
     }
+    if observed_backend == "production":
+        observed["version"] = "production"
+    return observed
 
 
 def observe_migration_state(
