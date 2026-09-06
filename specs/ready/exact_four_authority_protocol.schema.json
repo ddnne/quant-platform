@@ -173,7 +173,7 @@
         "period_end": { "type": "string", "format": "date" },
         "cost_scenario": { "$ref": "#/$defs/nonEmpty" },
         "fill_contract_digest": {
-          "const": "sha256:678985a0f7b142eeecd693ebe28bff822916bc815889f0b39e2841830377377d"
+          "const": "sha256:3691b4c93bbafc1d5a0e8fec25eb14ec26fae9683aaffa07fd44bb80c4f486b8"
         },
         "binding_digest": { "$ref": "#/$defs/digest" }
       }
@@ -279,7 +279,7 @@
         },
         "coverage_policy_version": { "const": "collection-coverage/v3" },
         "coverage_policy_digest": {
-          "const": "sha256:9e5d8d7c5d668c2b6eb5bf10650f869d876c7d37f8ddf3c08fa3381595df09aa"
+          "const": "sha256:f98d44ec18da2e892fa8c138fa1785e969cc80fa08bf9d519c942ce026ab19d7"
         },
         "budget_scope_digest": { "$ref": "#/$defs/digest" },
         "execution_limit_set_digest": { "$ref": "#/$defs/digest" },
@@ -288,7 +288,7 @@
         "mass_research_enabled": { "const": false },
         "live_trading_enabled": { "const": false },
         "fill_contract_digest": {
-          "const": "sha256:678985a0f7b142eeecd693ebe28bff822916bc815889f0b39e2841830377377d"
+          "const": "sha256:3691b4c93bbafc1d5a0e8fec25eb14ec26fae9683aaffa07fd44bb80c4f486b8"
         },
         "binding_digest": { "$ref": "#/$defs/digest" }
       }

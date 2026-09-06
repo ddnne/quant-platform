@@ -115,6 +115,121 @@ def test_generated_controlled_pilot_contract_matches_compiler() -> None:
     assert generated["fill_contract"]["retrospective_only"] is True
     assert generated["fill_contract"]["price_evidence_mode"] == "historical_daily_reconstruction"
     assert generated["fill_contract"]["signal_price_dataset"] == "equities_bars_daily"
+    from jsonschema import Draft202012Validator, FormatChecker
+    from execution.exact_four_binding import load_exact_four_execution_binding
+    from execution.exact_four_protocol import (
+        load_exact_four_authority_schema,
+        load_exact_four_result_schema,
+    )
+
+    authority_schema = load_exact_four_authority_schema()
+    load_exact_four_result_schema()
+    Draft202012Validator(
+        {
+            "$schema": authority_schema["$schema"],
+            "$ref": "#/$defs/exactFour",
+            "$defs": authority_schema["$defs"],
+        },
+        format_checker=FormatChecker(),
+    ).validate(load_exact_four_execution_binding().to_dict())
+
+
+def test_generator_repairs_stale_plan_fill_before_compile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import hashlib
+    import sys
+
+    from qp_paths import repo_root
+
+    scripts = str(repo_root() / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import generate_controlled_pilot_v1_contract as gen
+
+    workspace = tmp_path / "controlled-pilot-root"
+    rels = [
+        gen.PLAN_SCHEMA_REL,
+        gen.RESULT_MANIFEST_SCHEMA_REL,
+        gen.AUTHORITY_SCHEMA_REL,
+        gen.PROTOCOL_PY_REL,
+        *[
+            Path("specs") / "experiment_plans" / f"{plan_id}.json"
+            for plan_id in gen.PLAN_IDS
+        ],
+        *[rel for _name, rel in gen.REGISTRY_FILES],
+    ]
+    for rel in rels:
+        dest = workspace / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes((repo_root() / rel).read_bytes())
+    stale = {str(rel): (workspace / rel).read_bytes() for rel in rels}
+    new_fill = dict(gen._canonical_fill_contract())
+    new_fill["contract_digest"] = "sha256:" + hashlib.sha256(
+        b"next-canonical-fill-contract"
+    ).hexdigest()
+
+    monkeypatch.setattr(gen, "ROOT", workspace)
+    monkeypatch.setattr(gen, "_canonical_fill_contract", lambda: dict(new_fill))
+
+    compile_calls: list[str] = []
+    real_compile = gen.controlled_pilot_v1_contract
+
+    def compile_after_repair() -> dict:
+        for plan_id in gen.PLAN_IDS:
+            payload = json.loads(
+                (
+                    workspace
+                    / "specs"
+                    / "experiment_plans"
+                    / f"{plan_id}.json"
+                ).read_text(encoding="utf-8")
+            )
+            if payload.get("fill_contract") != new_fill:
+                raise ValueError(
+                    f"{plan_id}: fill_contract digest is not canonical"
+                )
+        schema = json.loads(
+            (workspace / gen.PLAN_SCHEMA_REL).read_text(encoding="utf-8")
+        )
+        if (
+            schema["properties"]["fill_contract"]["properties"][
+                "contract_digest"
+            ]["const"]
+            != new_fill["contract_digest"]
+        ):
+            raise ValueError(
+                "experiment plan schema fill_contract digest is not canonical"
+            )
+        compile_calls.append("compile")
+        return real_compile()
+
+    monkeypatch.setattr(gen, "controlled_pilot_v1_contract", compile_after_repair)
+
+    assert gen.write_artifacts(check=True) == 1
+    assert compile_calls == []
+    for rel, payload in stale.items():
+        assert (workspace / rel).read_bytes() == payload
+
+    assert gen.write_artifacts(check=False) == 0
+    assert compile_calls == ["compile"]
+    for plan_id in gen.PLAN_IDS:
+        payload = json.loads(
+            (
+                workspace
+                / "specs"
+                / "experiment_plans"
+                / f"{plan_id}.json"
+            ).read_text(encoding="utf-8")
+        )
+        assert payload["fill_contract"] == new_fill
+    schema = json.loads(
+        (workspace / gen.PLAN_SCHEMA_REL).read_text(encoding="utf-8")
+    )
+    assert (
+        schema["properties"]["fill_contract"]["properties"]["contract_digest"][
+            "const"
+        ]
+        == new_fill["contract_digest"]
+    )
 
 
 def test_trader_batch_compares_ready_universe_and_rejects_duplicates() -> None:

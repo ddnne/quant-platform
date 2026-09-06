@@ -12,6 +12,7 @@ import argparse
 import base64
 import hashlib
 import json
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -30,6 +31,7 @@ ROOT = ensure_repo_root()
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from execution.exact_four_binding import controlled_pilot_v1_contract
+from execution.exact_four_binding import load_exact_four_execution_binding
 from data_contracts.coverage import coverage_policy_binding
 from ops.projection_signing import (
     PINNED_OPS_PROJECTION_PRIOR_REGISTRY_DIGEST,
@@ -59,6 +61,12 @@ PLAN_IDS = (
     "exp-fund-hold10-value-mom",
 )
 RESULT_MANIFEST_SCHEMA_REL = Path("specs") / "ready" / "exact_four_result_manifest.schema.json"
+AUTHORITY_SCHEMA_REL = (
+    Path("specs") / "ready" / "exact_four_authority_protocol.schema.json"
+)
+PROTOCOL_PY_REL = (
+    Path("packages") / "product" / "execution" / "exact_four_protocol.py"
+)
 REGISTRY_RAW_TS_REL = (
     Path("platform")
     / "workers"
@@ -113,8 +121,8 @@ def _sign(private_key: Ed25519PrivateKey, body: dict[str, Any]) -> str:
     return "ed25519:" + base64.b64encode(signature).decode("ascii")
 
 
-def render_contract() -> bytes:
-    document = controlled_pilot_v1_contract()
+def render_contract(contract: dict[str, Any] | None = None) -> bytes:
+    document = contract if contract is not None else controlled_pilot_v1_contract()
     return json.dumps(document, indent=2, sort_keys=True, ensure_ascii=True).encode(
         "utf-8"
     ) + b"\n"
@@ -131,8 +139,9 @@ def _fixture_universe(contract: dict[str, Any]) -> ResolvedUniverseMembership:
     return membership
 
 
-def render_fixtures() -> dict[str, bytes]:
-    contract = controlled_pilot_v1_contract()
+def render_fixtures(contract: dict[str, Any] | None = None) -> dict[str, bytes]:
+    if contract is None:
+        contract = controlled_pilot_v1_contract()
     private_key = _fixture_private_key()
     public_b64 = base64.b64encode(private_key.public_key().public_bytes_raw()).decode(
         "ascii"
@@ -597,7 +606,7 @@ def render_fixtures() -> dict[str, bytes]:
     }
 
 
-def render_registry_raw_ts() -> bytes:
+def render_registry_raw_ts(contract: dict[str, Any] | None = None) -> bytes:
     lines = [
         "/** AUTO-GENERATED from specs registry file bytes. DO NOT HAND-EDIT.",
         " * Regenerate: python scripts/generate_controlled_pilot_v1_contract.py",
@@ -632,7 +641,9 @@ def render_registry_raw_ts() -> bytes:
         + " as const;"
     )
     lines.append("")
-    controlled_contract = controlled_pilot_v1_contract()
+    controlled_contract = (
+        contract if contract is not None else controlled_pilot_v1_contract()
+    )
     coverage_rows = {
         str(dataset_id): dict(coverage_policy_binding(str(dataset_id)))
         for dataset_id in controlled_contract["dataset_ids"]
@@ -738,52 +749,191 @@ def plan_schema_matches_fill_contract(contract: dict[str, Any]) -> list[str]:
     return errors
 
 
+_AUTHORITY_FILL_DIGEST_CONST_RE = re.compile(
+    r'("fill_contract_digest": \{\s*"const": ")sha256:[0-9a-f]{64}(")'
+)
+_AUTHORITY_COVERAGE_DIGEST_CONST_RE = re.compile(
+    r'("coverage_policy_digest": \{\s*"const": ")sha256:[0-9a-f]{64}(")'
+)
+
+
+def render_authority_protocol_schema(contract: dict[str, Any]) -> bytes:
+    fill_digest = str(contract["fill_contract_digest"])
+    coverage_digest = str(contract["coverage_policy_digest"])
+    text = (ROOT / AUTHORITY_SCHEMA_REL).read_text(encoding="utf-8")
+    text, fill_n = _AUTHORITY_FILL_DIGEST_CONST_RE.subn(
+        rf"\g<1>{fill_digest}\2", text
+    )
+    text, coverage_n = _AUTHORITY_COVERAGE_DIGEST_CONST_RE.subn(
+        rf"\g<1>{coverage_digest}\2", text
+    )
+    if fill_n != 2 or coverage_n != 1:
+        raise RuntimeError(
+            "authority protocol schema fill/coverage const sites are not canonical: "
+            f"fill={fill_n} coverage={coverage_n}"
+        )
+    defs = json.loads(text)["$defs"]
+    if (
+        defs["planBindingBase"]["properties"]["fill_contract_digest"]["const"]
+        != fill_digest
+        or defs["exactFour"]["properties"]["fill_contract_digest"]["const"]
+        != fill_digest
+        or defs["exactFour"]["properties"]["coverage_policy_digest"]["const"]
+        != coverage_digest
+    ):
+        raise RuntimeError(
+            "authority protocol schema generated consts do not match canonical contract"
+        )
+    return text.encode("utf-8")
+
+
+def render_protocol_schema_pins(
+    *, authority_schema: bytes, result_schema: bytes
+) -> bytes:
+    from execution.exact_four_codec import canonical_authority_digest
+
+    pins = {
+        "PINNED_EXACT_FOUR_AUTHORITY_SCHEMA_DIGEST": canonical_authority_digest(
+            json.loads(authority_schema.decode("utf-8"))
+        ),
+        "PINNED_EXACT_FOUR_AUTHORITY_SCHEMA_RAW_DIGEST": (
+            "sha256:" + hashlib.sha256(authority_schema).hexdigest()
+        ),
+        "PINNED_EXACT_FOUR_RESULT_SCHEMA_DIGEST": canonical_authority_digest(
+            json.loads(result_schema.decode("utf-8"))
+        ),
+        "PINNED_EXACT_FOUR_RESULT_SCHEMA_RAW_DIGEST": (
+            "sha256:" + hashlib.sha256(result_schema).hexdigest()
+        ),
+    }
+    text = (ROOT / PROTOCOL_PY_REL).read_text(encoding="utf-8")
+    for name, digest in pins.items():
+        pattern = re.compile(
+            rf"({re.escape(name)} = \(\n    \")sha256:[0-9a-f]{{64}}(\"\n\))"
+        )
+        text, count = pattern.subn(rf"\g<1>{digest}\2", text, count=1)
+        if count != 1:
+            raise RuntimeError(f"cannot retarget {name} in {PROTOCOL_PY_REL}")
+    return text.encode("utf-8")
+
+
+def canonical_authority_result_schema_errors() -> list[str]:
+    import importlib
+    import sys
+
+    from jsonschema import Draft202012Validator, FormatChecker
+
+    module_name = "execution.exact_four_protocol"
+    if module_name in sys.modules:
+        importlib.reload(sys.modules[module_name])
+    from execution.exact_four_protocol import (
+        load_exact_four_authority_schema,
+        load_exact_four_result_schema,
+    )
+
+    errors: list[str] = []
+    try:
+        authority_schema = load_exact_four_authority_schema()
+    except Exception as exc:
+        errors.append(f"load_exact_four_authority_schema failed: {exc}")
+        authority_schema = None
+    try:
+        load_exact_four_result_schema()
+    except Exception as exc:
+        errors.append(f"load_exact_four_result_schema failed: {exc}")
+    if authority_schema is None:
+        return errors
+    validator = Draft202012Validator(
+        {
+            "$schema": authority_schema.get("$schema"),
+            "$ref": "#/$defs/exactFour",
+            "$defs": authority_schema["$defs"],
+        },
+        format_checker=FormatChecker(),
+    )
+    binding = load_exact_four_execution_binding().to_dict()
+    for item in sorted(
+        validator.iter_errors(binding),
+        key=lambda error: tuple(str(part) for part in error.path),
+    ):
+        location = "$" + "".join(
+            f"[{part}]" if type(part) is int else f".{part}"
+            for part in item.path
+        )
+        errors.append(f"exactFour schema {location}: {item.message}")
+    return errors
+
+
+def _write_generated(artifacts: dict[str, bytes]) -> None:
+    for rel, payload in artifacts.items():
+        path = ROOT / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+
+
+def _generated_drift(artifacts: dict[str, bytes]) -> list[str]:
+    errors: list[str] = []
+    for rel, payload in artifacts.items():
+        path = ROOT / rel
+        try:
+            observed = path.read_bytes()
+        except OSError:
+            errors.append(f"missing {rel}")
+            continue
+        if observed != payload:
+            errors.append(f"drift {rel}")
+    return errors
+
+
+def _fail_generated_check(errors: list[str]) -> int:
+    print("FAIL controlled_pilot_v1 generated artifacts:", file=sys.stderr)
+    for item in errors:
+        print(f" - {item}", file=sys.stderr)
+    print(
+        "Regenerate: python scripts/generate_controlled_pilot_v1_contract.py",
+        file=sys.stderr,
+    )
+    return 1
+
+
 def write_artifacts(*, check: bool) -> int:
     plan_artifacts = {
         str(PLAN_SCHEMA_REL): render_plan_schema(),
         str(RESULT_MANIFEST_SCHEMA_REL): render_result_manifest_schema(),
         **render_plan_fill_contracts(),
     }
-    if not check:
-        for rel, payload in plan_artifacts.items():
-            path = ROOT / rel
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(payload)
-    expected = {
-        **plan_artifacts,
-        str(CONTRACT_REL): render_contract(),
-        str(REGISTRY_RAW_TS_REL): render_registry_raw_ts(),
-        **render_fixtures(),
-    }
     errors: list[str] = []
-    for rel, payload in expected.items():
-        path = ROOT / rel
-        if check:
-            try:
-                observed = path.read_bytes()
-            except OSError:
-                errors.append(f"missing {rel}")
-                continue
-            if observed != payload:
-                errors.append(f"drift {rel}")
-            continue
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(payload)
-    schema_errors = plan_schema_matches_fill_contract(controlled_pilot_v1_contract())
-    errors.extend(schema_errors)
+    if check:
+        errors.extend(_generated_drift(plan_artifacts))
+        if errors:
+            return _fail_generated_check(errors)
+    else:
+        _write_generated(plan_artifacts)
+
+    contract = controlled_pilot_v1_contract()
+    authority_schema = render_authority_protocol_schema(contract)
+    remaining = {
+        str(AUTHORITY_SCHEMA_REL): authority_schema,
+        str(PROTOCOL_PY_REL): render_protocol_schema_pins(
+            authority_schema=authority_schema,
+            result_schema=plan_artifacts[str(RESULT_MANIFEST_SCHEMA_REL)],
+        ),
+        str(CONTRACT_REL): render_contract(contract),
+        str(REGISTRY_RAW_TS_REL): render_registry_raw_ts(contract),
+        **render_fixtures(contract),
+    }
+    if check:
+        errors.extend(_generated_drift(remaining))
+    else:
+        _write_generated(remaining)
+    errors.extend(plan_schema_matches_fill_contract(contract))
+    errors.extend(canonical_authority_result_schema_errors())
     if check and errors:
-        print("FAIL controlled_pilot_v1 generated artifacts:", file=sys.stderr)
-        for item in errors:
-            print(f" - {item}", file=sys.stderr)
-        print(
-            "Regenerate: python scripts/generate_controlled_pilot_v1_contract.py",
-            file=sys.stderr,
-        )
-        return 1
+        return _fail_generated_check(errors)
     if check:
         print("OK controlled_pilot_v1 contract and Python-signed fixtures")
         return 0
-    for rel in expected:
+    for rel in (*plan_artifacts, *remaining):
         print(f"wrote {rel}")
     return 0
 
