@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS personal_history_compact_bars (
     available_at TEXT NOT NULL,
     ingested_at TEXT NOT NULL,
     close REAL NOT NULL,
+    morning_close REAL,
     volume REAL,
     turnover_value REAL,
     adjustment_close REAL,
@@ -321,10 +322,22 @@ def _required_columns_match_production(
         str(info[1]): (str(info[2]), int(info[3]), int(info[5]))
         for info in connection.execute(f"PRAGMA table_info({table})")
     }
-    return all(
-        by_name.get(name) == (declared_type, notnull, pk)
-        for name, declared_type, notnull, pk in required
-    )
+    for name, declared_type, notnull, pk in required:
+        present = by_name.get(name)
+        if present is None:
+            # Additive read compatibility: prior v8 files may omit nullable
+            # morning_close. Every other required column still has to match.
+            if (
+                table == PERSONAL_HISTORY_COMPACT_BARS_TABLE
+                and name == "morning_close"
+                and notnull == 0
+                and pk == 0
+            ):
+                continue
+            return False
+        if present != (declared_type, notnull, pk):
+            return False
+    return True
 
 
 def _has_legacy_equity_facts(connection: sqlite3.Connection) -> bool:

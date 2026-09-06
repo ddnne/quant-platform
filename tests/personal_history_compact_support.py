@@ -177,6 +177,7 @@ def insert_compact_bar(
     morning_adjustment_volume: Any = _UNSET,
     afternoon_adjustment_volume: Any = _UNSET,
     market_cap: float = 1.0,
+    morning_close: Any = _UNSET,
     extra: Mapping[str, Any] | None = None,
 ) -> None:
     stamp = session_close_jst(day)
@@ -187,6 +188,7 @@ def insert_compact_bar(
         "available_at": stamp if available_at is _UNSET else available_at,
         "ingested_at": stamp if ingested_at is _UNSET else ingested_at,
         "close": close,
+        "morning_close": None if morning_close is _UNSET else morning_close,
         "volume": volume,
         "turnover_value": turnover_value,
         "adjustment_close": close if adjustment_close is _UNSET else adjustment_close,

@@ -155,6 +155,7 @@ class _HistoryClient:
                     "Code": code,
                     "Date": day,
                     "Close": 100 + ordinal,
+                    "MC": 50 + ordinal,
                     "AdjustmentClose": 100 + ordinal,
                     "Volume": 1_000 * ordinal,
                     "AdjustmentVolume": 1_000 * ordinal,
@@ -733,6 +734,45 @@ def test_direct_compact_write_is_atomic_with_checkpoint_counts(tmp_path):
     )
     assert first_bar["close"] == 101.0
     assert first_bar["morning_adjustment_close"] == 11.0
+    assert first_bar["morning_close"] == 51.0
+    assert first_bar["morning_close"] != first_bar["close"]
+    assert first_bar["morning_close"] != first_bar["afternoon_adjustment_close"]
+    store.close()
+
+
+def test_hydrator_rejects_old_v8_missing_morning_close_without_mutating(tmp_path):
+    import sqlite3
+
+    from data_contracts.personal_history_compact import (
+        PERSONAL_HISTORY_COMPACT_BARS_CREATE_SQL,
+        PERSONAL_HISTORY_COMPACT_MASTER_CREATE_SQL,
+    )
+    from personal_history_compact_support import stamp_compact_manifest
+
+    db = tmp_path / "old-v8-writer.sqlite"
+    connection = sqlite3.connect(db)
+    stamp_compact_manifest(connection)
+    connection.execute(PERSONAL_HISTORY_COMPACT_MASTER_CREATE_SQL)
+    connection.execute(
+        PERSONAL_HISTORY_COMPACT_BARS_CREATE_SQL.replace(
+            "    morning_close REAL,\n", ""
+        )
+    )
+    connection.commit()
+    connection.close()
+
+    store = SqliteStore(db)
+    with pytest.raises(PersonalHistoryError, match="does not match builder DDL"):
+        PersonalHistoryHydrator(
+            client=_HistoryClient(), store=store, plan=_plan()
+        )
+    columns = {
+        str(row[1])
+        for row in store._conn.execute(
+            "PRAGMA table_info(personal_history_compact_bars)"
+        )
+    }
+    assert "morning_close" not in columns
     store.close()
 
 
@@ -1528,6 +1568,7 @@ class _FloorHistoryClient:
                     "AdjustmentVolume": 1_000 * ordinal,
                     "TurnoverValue": 1_000_000 * ordinal,
                     "MktCap": 10_000_000 * ordinal,
+                    "MC": 50 + ordinal,
                     "MAdjC": 10 + ordinal,
                     "AAdjC": 20 + ordinal,
                     "MVa": 100 * ordinal,

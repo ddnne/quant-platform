@@ -119,6 +119,45 @@ def test_missing_table_or_column_is_invalid() -> None:
     assert _state(missing_column) == "invalid"
 
 
+def test_unrelated_missing_nullable_column_is_invalid() -> None:
+    def build(connection: sqlite3.Connection) -> None:
+        stamp_compact_manifest(connection)
+        connection.execute(
+            PERSONAL_HISTORY_COMPACT_MASTER_CREATE_SQL.replace(
+                "    source_scale_category TEXT,\n", ""
+            )
+        )
+        connection.execute(PERSONAL_HISTORY_COMPACT_BARS_CREATE_SQL)
+
+    assert _state(build) == "invalid"
+
+
+def test_old_v8_missing_morning_close_column_is_compact() -> None:
+    def build(connection: sqlite3.Connection) -> None:
+        stamp_compact_manifest(connection)
+        connection.execute(PERSONAL_HISTORY_COMPACT_MASTER_CREATE_SQL)
+        connection.execute(
+            PERSONAL_HISTORY_COMPACT_BARS_CREATE_SQL.replace(
+                "    morning_close REAL,\n", ""
+            )
+        )
+
+    assert _state(build) == "compact"
+
+
+def test_wrong_type_morning_close_is_invalid() -> None:
+    def build(connection: sqlite3.Connection) -> None:
+        stamp_compact_manifest(connection)
+        connection.execute(PERSONAL_HISTORY_COMPACT_MASTER_CREATE_SQL)
+        connection.execute(
+            PERSONAL_HISTORY_COMPACT_BARS_CREATE_SQL.replace(
+                "morning_close REAL", "morning_close TEXT"
+            )
+        )
+
+    assert _state(build) == "invalid"
+
+
 def test_view_under_compact_name_is_invalid() -> None:
     def build(connection: sqlite3.Connection) -> None:
         stamp_compact_manifest(connection)

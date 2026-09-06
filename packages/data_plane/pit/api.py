@@ -363,6 +363,7 @@ def _canonical_compact_bar_row(row: Mapping[str, Any]) -> dict[str, Any]:
         "high": None,
         "low": None,
         "close": row.get("close"),
+        "morning_close": row.get("morning_close"),
         "volume": row.get("volume"),
         "turnover_value": row.get("turnover_value"),
         "market_cap": row.get("market_cap"),

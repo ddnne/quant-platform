@@ -955,6 +955,7 @@ def _compact_fins(
 
 _BAR_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Close", ("Close", "C")),
+    ("MorningClose", ("MorningClose", "MC")),
     ("AdjustmentClose", ("AdjustmentClose", "AdjClose", "AdjC")),
     ("Volume", ("Volume", "Vo")),
     ("AdjustmentVolume", ("AdjustmentVolume", "AdjVolume", "AdjVo")),
@@ -971,6 +972,7 @@ _BAR_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
 _BAR_STRICTLY_POSITIVE_FIELDS = frozenset(
     {
         "Close",
+        "MorningClose",
         "AdjustmentClose",
         "MorningAdjustmentClose",
         "AfternoonAdjustmentClose",
@@ -1134,6 +1136,7 @@ _MASTER_CONTENT_FIELDS = (
 _BAR_CONTENT_FIELDS = (
     "Code",
     "Close",
+    "MorningClose",
     "Volume",
     "TurnoverValue",
     "AdjustmentClose",
@@ -1188,6 +1191,7 @@ def _stored_bar_content_digest(row: sqlite3.Row) -> str:
         {
             "Code": row["code"],
             "Close": row["close"],
+            "MorningClose": row["morning_close"],
             "Volume": row["volume"],
             "TurnoverValue": row["turnover_value"],
             "AdjustmentClose": row["adjustment_close"],
@@ -2307,12 +2311,13 @@ class PersonalHistoryHydrator:
             sql = """
                 INSERT INTO personal_history_compact_bars (
                     code,date,event_time,available_at,ingested_at,
-                    close,volume,turnover_value,adjustment_close,adjustment_volume,
+                    close,morning_close,volume,turnover_value,
+                    adjustment_close,adjustment_volume,
                     morning_adjustment_close,afternoon_adjustment_close,
                     morning_turnover_value,afternoon_turnover_value,
                     morning_adjustment_volume,afternoon_adjustment_volume,
                     market_cap
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """
             for row in rows:
                 payload = _payload_mapping(row)
@@ -2338,6 +2343,7 @@ class PersonalHistoryHydrator:
                         available_at,
                         ingested_at,
                         payload.get("Close"),
+                        payload.get("MorningClose"),
                         payload.get("Volume"),
                         payload.get("TurnoverValue"),
                         payload.get("AdjustmentClose"),
