@@ -109,6 +109,68 @@ Guard against:
 Fail closed. If a current gate cannot be simplified without live operational
 evidence, document and defer that edge rather than invent a bypass.
 
+## Historical morning-price clarification (2026-09-07)
+
+The AM endpoint is tip-only, but that does **not** mean historical morning
+prices are unavailable. J-Quants Premium daily bars carry raw morning `MC`,
+adjusted morning `MAdjC`, and adjusted afternoon `AAdjC`. Historical Paper
+reconstructs the morning information set from those daily columns; it does not
+claim the complete daily record was acquired or published at 11:30. Original
+publication/ingestion clocks stay unchanged. See the official
+[daily-bar contract](https://jpx-jquants.com/en/spec/eq-bars-daily) and
+[AM endpoint contract](https://jpx-jquants.com/en/spec/eq-bars-daily-am).
+
+The canonical four keep their economic ideas, 2023 benchmark periods, and
+5/10-day holdings. Their versioned fill contract uses historical daily
+reconstruction: MAdjC for signal sizing/adjusted returns, AAdjC for same-day
+PM fills, and raw MC when comparing a price to raw per-share fundamentals.
+Only sealed daily product rows may feed Controlled context prices, features,
+and fills. Draft may use its compact PIT reader. A common session mask must
+not turn the Draft reader into Controlled evidence.
+
+Research comparability and research-internal selection are data-quality
+judgments, not permission to trade or promote. Complete retrospective results
+may be compared under the same timing/price convention; incomplete decisions,
+valuations, or fills remain non-comparable. Neither case is contemporaneous
+AM evidence or Live authority. Multiday holdings still cross nights: a morning
+decision and afternoon fill do not eliminate overnight exposure.
+
+This benchmark does not assert that an 18-year backtest ran, nor constrain all
+research to 2023 or Prime. Longer experiments must report the actually
+available session fields and feature warm-up window for each strategy. The
+daily dataset's advertised start date alone does not prove MC/MAdjC coverage
+for every historical row.
+
+## Next bounded source work: cloud candidate preparation
+
+Do not treat missing keys as the only READY blocker. The existing
+`publishPilotReady` signer validates a candidate but has no production
+candidate-preparation caller. The existing personal snapshot builder produces
+DRAFT data and must not be promoted by adding a signature.
+
+Close this in reviewable implementation units, reusing existing Workers:
+
+1. Add a read-only ingestion adapter that fixes the required Receipt,
+   product-artifact key/digest, manifest, segment and observation identities
+   for one profile/period. Research receives neither ingestion D1 nor Receipt
+   issuance capability.
+2. Reuse Container streaming, temporary-file and cleanup machinery to consume
+   those receipt-bound canonical products into an ephemeral SQLite snapshot.
+   Verify actual bytes and complete segment identities; missing objects,
+   mismatched digests or missing required segments stop candidate generation.
+3. Extract the existing PIT/Receipt closure verifier from its old local-sync
+   handle dependency without duplicating the verifier. Derive dependency
+   scope, B0/B4, physical digest and ReadyManifest from that same snapshot,
+   then connect the existing READY signer.
+4. Add Paper-only Trader batch signing in an existing Worker using the
+   existing closed schema and one-shot policy. Finish signed release evidence
+   separately. A source projection's cursor or PASS is not proof that the
+   Container consumed the complete input set.
+
+Each unit stays NO-GO until its measured evidence exists. No new Worker,
+signing authority, local market-data store, six-UID setup, WebAuthn or external
+anchor is needed for this sequence.
+
 ## Deferred to a future live-order ADR
 
 Not in the active Controlled Pilot dependency graph, default Pilot
