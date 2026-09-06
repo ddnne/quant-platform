@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   dispatchOpsTool,
   OPS_TOOLS,
@@ -18,16 +18,92 @@ import {
   type OpsProjectionEnv,
 } from "./ops_projection";
 import {
-  PINNED_RECEIPT_REGISTRY_RAW,
+  PINNED_RECEIPT_REGISTRY_SCOPE,
+  closedReceiptVerifyRegistry,
   projectedSegmentStatus,
   trustedComplete,
   verifySignedReceiptEnvelope,
   type ClosedObjectStores,
+  type ReceiptVerifyRegistry,
 } from "./ops_projection_policy";
+import pinnedProductionReceiptRegistry from "../../../../packages/data_plane/data_contracts/receipt_verify_public_keys.production.json";
+import pinnedStagingReceiptRegistry from "../../../../packages/data_plane/data_contracts/receipt_verify_public_keys.staging.json";
 import {
   canonicalDigest,
   canonicalJson,
 } from "../../receipt-evidence-authority/src/canonical";
+
+const receiptRegistryDocuments = vi.hoisted(() => {
+  const asDocument = (value: unknown): Record<string, unknown> => {
+    let current: unknown = value;
+    while (
+      current &&
+      typeof current === "object" &&
+      "default" in current &&
+      (current as { default: unknown }).default &&
+      typeof (current as { default: unknown }).default === "object" &&
+      !Array.isArray((current as { default: unknown }).default)
+    ) {
+      current = (current as { default: unknown }).default;
+    }
+    const source = structuredClone(current) as Record<string, unknown>;
+    return {
+      schema_version: source.schema_version,
+      purpose: source.purpose,
+      generation: source.generation,
+      authority_status: source.authority_status,
+      environment: source.environment,
+      authority_instance_digest: source.authority_instance_digest,
+      prior_registry_digest: source.prior_registry_digest,
+      keys: source.keys,
+      registry_digest: source.registry_digest,
+    };
+  };
+  const originals: {
+    production?: Record<string, unknown>;
+    staging?: Record<string, unknown>;
+  } = {};
+  const current: {
+    production?: Record<string, unknown>;
+    staging?: Record<string, unknown>;
+  } = {};
+  return {
+    load(environment: "production" | "staging", actual: unknown): Record<string, unknown> {
+      const document = asDocument(actual);
+      originals[environment] = structuredClone(document);
+      current[environment] = document;
+      return document;
+    },
+    install(environment: "production" | "staging", document: object): void {
+      const target = current[environment];
+      if (!target) throw new Error(`receipt registry mock for ${environment} is missing`);
+      for (const key of Object.keys(target)) delete target[key];
+      Object.assign(target, structuredClone(document));
+    },
+    restore(): void {
+      for (const environment of ["production", "staging"] as const) {
+        const target = current[environment];
+        const original = originals[environment];
+        if (!target || !original) continue;
+        for (const key of Object.keys(target)) delete target[key];
+        Object.assign(target, structuredClone(original));
+      }
+    },
+  };
+});
+
+vi.mock(
+  "../../../../packages/data_plane/data_contracts/receipt_verify_public_keys.production.json",
+  async (importOriginal) => ({
+    default: receiptRegistryDocuments.load("production", await importOriginal()),
+  }),
+);
+vi.mock(
+  "../../../../packages/data_plane/data_contracts/receipt_verify_public_keys.staging.json",
+  async (importOriginal) => ({
+    default: receiptRegistryDocuments.load("staging", await importOriginal()),
+  }),
+);
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ingestionMigrations = join(here, "../migrations");
@@ -52,6 +128,53 @@ async function sha256Prefixed(bytes: Uint8Array): Promise<string> {
   return "sha256:" + Array.from(new Uint8Array(raw), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+async function closedScopedRegistry(
+  keys: ReceiptVerifyRegistry["keys"],
+  options: {
+    environment?: "production" | "staging";
+    authority_status?: "ACTIVE" | "PENDING";
+    generation?: number;
+    authority_instance_digest?: string;
+    prior_registry_digest?: string | null;
+  } = {},
+): Promise<ReceiptVerifyRegistry> {
+  const environment = options.environment ?? "production";
+  const pin = PINNED_RECEIPT_REGISTRY_SCOPE[environment];
+  const body = {
+    schema_version: 3,
+    purpose: "receipt_verification",
+    generation: options.generation ?? pin.generation,
+    authority_status: options.authority_status ?? "ACTIVE",
+    environment,
+    authority_instance_digest: options.authority_instance_digest ?? pin.authority_instance_digest,
+    prior_registry_digest: options.prior_registry_digest === undefined
+      ? "sha256:" + "10".repeat(32)
+      : options.prior_registry_digest,
+    keys,
+  };
+  return {
+    ...body,
+    registry_digest: await canonicalDigest(body),
+  };
+}
+
+async function closedActiveReceiptRegistry(
+  publicKeyRaw: Uint8Array,
+  environment: "production" | "staging" = "production",
+): Promise<ReceiptVerifyRegistry> {
+  const closed = await closedReceiptVerifyRegistry(
+    await closedScopedRegistry([{
+      key_id: "receipt-test-v1",
+      algorithm: "Ed25519",
+      public_key_base64: b64(publicKeyRaw),
+      status: "active",
+    }], { environment }),
+    environment,
+  );
+  if (!closed) throw new Error("test receipt registry is not closed");
+  return closed;
+}
+
 function jqExpectedScope(start = "2026-08-01", end = "2026-08-31") {
   return {
     coverage_mode: "trading_calendar",
@@ -70,7 +193,7 @@ async function canonicalV3Claims(
 ): Promise<Record<string, unknown>> {
   const base = {
     environment: "production",
-    authority_instance_digest: "sha256:" + "11".repeat(32),
+    authority_instance_digest: PINNED_RECEIPT_REGISTRY_SCOPE.production.authority_instance_digest,
     coverage_policy_version: "collection-coverage/v3",
     source: "jquants",
     contract_id: "jquants_premium_core",
@@ -551,7 +674,6 @@ async function envFor(
     version?: { id: string; tag?: string };
     r2OnPut?: (key: string) => void;
     bucket?: R2Bucket;
-    receiptRegistry?: OpsProjectionEnv["RECEIPT_VERIFY_REGISTRY"];
     sourceBeforeQuery?: (sql: string) => void;
   },
 ): Promise<OpsProjectionEnv> {
@@ -570,32 +692,134 @@ async function envFor(
       id: "10000000-0000-4000-8000-000000000001",
       tag: "a".repeat(40),
     },
-    RECEIPT_VERIFY_REGISTRY: hooks?.receiptRegistry,
   };
 }
 
 describe("ops projection cloud publisher", () => {
-  it("selects the exact raw-pinned scoped receipt registry for each environment", async () => {
-    for (const environment of ["production", "staging"] as const) {
-      const raw = new Uint8Array(readFileSync(join(
-        here,
-        `../../../../packages/data_plane/data_contracts/receipt_verify_public_keys.${environment}.json`,
-      )));
-      const pin = PINNED_RECEIPT_REGISTRY_RAW[environment];
-      const registry = pinnedReceiptRegistryForEnvironment(environment);
+  afterEach(() => {
+    receiptRegistryDocuments.restore();
+  });
 
-      expect(raw.byteLength).toBe(pin.registry_raw_size);
-      expect(await sha256Prefixed(raw)).toBe(pin.registry_raw_sha);
+  it("accepts the checked-in production and staging registries as PENDING", async () => {
+    for (const [environment, document] of [
+      ["production", pinnedProductionReceiptRegistry],
+      ["staging", pinnedStagingReceiptRegistry],
+    ] as const) {
+      const pin = PINNED_RECEIPT_REGISTRY_SCOPE[environment];
+      const registry = await closedReceiptVerifyRegistry(document, environment);
       expect(registry).toMatchObject({
         schema_version: 3,
         purpose: "receipt_verification",
         environment,
-        registry_raw_sha: pin.registry_raw_sha,
-        registry_raw_size: pin.registry_raw_size,
+        authority_status: "PENDING",
+        generation: pin.generation,
+        authority_instance_digest: pin.authority_instance_digest,
+        keys: [],
+        registry_digest: document.registry_digest,
       });
+      expect(await pinnedReceiptRegistryForEnvironment(environment)).toEqual(registry);
     }
-    expect(pinnedReceiptRegistryForEnvironment("production")?.authority_instance_digest)
-      .not.toBe(pinnedReceiptRegistryForEnvironment("staging")?.authority_instance_digest);
+    expect(
+      (await pinnedReceiptRegistryForEnvironment("production"))?.authority_instance_digest,
+    ).not.toBe(
+      (await pinnedReceiptRegistryForEnvironment("staging"))?.authority_instance_digest,
+    );
+  });
+
+  it("rejects mismatched env, authority, generation, or copied digest with altered keys", async () => {
+    const production = pinnedProductionReceiptRegistry;
+    const staging = pinnedStagingReceiptRegistry;
+    expect(await closedReceiptVerifyRegistry(production, "staging")).toBeNull();
+    expect(await closedReceiptVerifyRegistry(staging, "production")).toBeNull();
+
+    const wrongAuthority = await closedScopedRegistry([], {
+      authority_status: "PENDING",
+      authority_instance_digest: PINNED_RECEIPT_REGISTRY_SCOPE.staging.authority_instance_digest,
+      prior_registry_digest: production.prior_registry_digest,
+    });
+    expect(await closedReceiptVerifyRegistry(wrongAuthority, "production")).toBeNull();
+
+    const wrongGeneration = await closedScopedRegistry([], {
+      authority_status: "PENDING",
+      generation: 1,
+      prior_registry_digest: null,
+    });
+    expect(await closedReceiptVerifyRegistry(wrongGeneration, "production")).toBeNull();
+
+    const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+    const publicRaw = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
+    expect(await closedReceiptVerifyRegistry({
+      ...production,
+      authority_status: "ACTIVE",
+      keys: [{
+        key_id: "receipt-test-v1",
+        algorithm: "Ed25519",
+        public_key_base64: b64(publicRaw),
+        status: "active",
+      }],
+    }, "production")).toBeNull();
+  });
+
+  it("verifies a valid signed fixture through the same registry validator", async () => {
+    const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+    const raw = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
+    const registry = await closedActiveReceiptRegistry(raw);
+    expect(await closedReceiptVerifyRegistry(registry, "production")).toEqual(registry);
+    const objects = await seedGovernedObjects();
+    const envelope = await signV3Claims(pair, await canonicalV3Claims(objects));
+    expect(await verifySignedReceiptEnvelope(envelope, registry, "production")).not.toBeNull();
+    expect(await exactJqTrustedComplete(objects, envelope, registry, objects.stores)).toBe(true);
+  });
+
+  it("does not let caller env data select an alternate receipt registry", async () => {
+    const source = new DatabaseSync(":memory:");
+    const target = new DatabaseSync(":memory:");
+    applySqlDir(source, ingestionMigrations, "0010_raw_acquisition_status.sql");
+    applySqlDir(target, projectionMigrations);
+    seedBase(source);
+    insertSegment(source, {
+      segment: "2026-08",
+      status: "COMPLETE",
+      start: "2026-08-01",
+      end: "2026-08-31",
+    });
+    const keys = await keyPair();
+    const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+    const raw = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
+    const alternate = await closedActiveReceiptRegistry(raw);
+    const env = {
+      ...(await envFor(source, target, keys)),
+      RECEIPT_VERIFY_REGISTRY: alternate,
+    };
+    const result = await publishOpsProjection(env);
+    expect(result.status).toBe("published");
+    const selected = await pinnedReceiptRegistryForEnvironment("production");
+    expect(selected).toMatchObject({
+      authority_status: "PENDING",
+      keys: [],
+      registry_digest: pinnedProductionReceiptRegistry.registry_digest,
+    });
+    const sealed = JSON.parse(
+      (target.prepare(
+        "SELECT signed_envelope_json FROM ops_projection_generation WHERE generation_id=?",
+      ).get(result.generation_id) as { signed_envelope_json: string }).signed_envelope_json,
+    ) as { envelope: { evidence_digests: { receipt_registry_identity_digest: string } } };
+    const selectedIdentity = await digest({
+      digest: selected?.registry_digest ?? null,
+      generation: selected?.generation ?? null,
+      authority_status: selected?.authority_status ?? "PENDING",
+      environment: selected?.environment ?? "production",
+      authority_instance_digest: selected?.authority_instance_digest ?? null,
+    });
+    const alternateIdentity = await digest({
+      digest: alternate.registry_digest,
+      generation: alternate.generation ?? null,
+      authority_status: alternate.authority_status,
+      environment: alternate.environment,
+      authority_instance_digest: alternate.authority_instance_digest ?? null,
+    });
+    expect(sealed.envelope.evidence_digests.receipt_registry_identity_digest).toBe(selectedIdentity);
+    expect(sealed.envelope.evidence_digests.receipt_registry_identity_digest).not.toBe(alternateIdentity);
   });
 
   it("publishes from real 0001-0010 source schema onto the dedicated projection migration", async () => {
@@ -1198,26 +1422,7 @@ describe("ops projection cloud publisher", () => {
   it("verifies authentic signed JQ/JSDA receipts and rejects tamper plus V2", async () => {
     const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
     const raw = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
-    const registry = {
-      ...PINNED_RECEIPT_REGISTRY_RAW.production,
-      schema_version: 3,
-      purpose: "receipt_verification",
-      generation: 2,
-      prior_registry_digest: "sha256:" + "10".repeat(32),
-      registry_digest: "sha256:" + "20".repeat(32),
-      authority_status: "ACTIVE",
-      environment: "production",
-      authority_instance_digest: "sha256:" + "11".repeat(32),
-      keys: [
-        {
-          key_id: "receipt-test-v1",
-          algorithm: "Ed25519",
-          public_key_base64: b64(raw),
-          status: "active",
-          environment: "production",
-        },
-      ],
-    };
+    const registry = await closedActiveReceiptRegistry(raw);
     const objects = await seedGovernedObjects();
     const jqClaims = await canonicalV3Claims(objects);
     const jsdaClaims = await canonicalV3Claims(objects, {
@@ -1391,29 +1596,7 @@ describe("ops projection cloud publisher", () => {
     seedBase(source);
     const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
     const raw = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
-    const registry = {
-      ...PINNED_RECEIPT_REGISTRY_RAW.production,
-      schema_version: 3,
-      purpose: "receipt_verification",
-      generation: 2,
-      prior_registry_digest: "sha256:" + "10".repeat(32),
-      registry_digest: "sha256:" + "20".repeat(32),
-      authority_status: "ACTIVE" as const,
-      environment: "production",
-      authority_instance_digest: "sha256:" + "11".repeat(32),
-      keys: [
-        {
-          key_id: "receipt-test-v1",
-          algorithm: "Ed25519",
-          public_key_base64: b64(raw),
-          status: "active",
-          environment: "production",
-          not_before: "2026-01-01T00:00:00Z",
-          not_after: "2027-01-01T00:00:00Z",
-          revoked_at: null,
-        },
-      ],
-    };
+    const registry = await closedActiveReceiptRegistry(raw);
     const objectReads: string[] = [];
     const objects = await seedGovernedObjects((store, key) => objectReads.push(`${store}:${key}`));
     const claims = await canonicalV3Claims(objects);
@@ -1489,7 +1672,8 @@ describe("ops projection cloud publisher", () => {
        )`,
     ).run("ab".repeat(32), receiptDigest);
     const keys = await keyPair();
-    const env = await envFor(source, target, keys, { receiptRegistry: registry, bucket: objects.stores.structured, stores: objects.stores } as never);
+    receiptRegistryDocuments.install("production", registry);
+    const env = await envFor(source, target, keys, { bucket: objects.stores.structured, stores: objects.stores } as never);
     expect(await env.STRUCTURED_BUCKET!.get("artifact.jsonl")).toBeTruthy();
     expect(await env.AUTHORITY_EVIDENCE_BUCKET!.get("manifest.json")).toBeTruthy();
     expect(await env.RAW_BUCKET!.get("raw.json")).toBeTruthy();
@@ -1526,24 +1710,7 @@ describe("ops projection cloud publisher", () => {
   it("rejects signed one-day/run-7 claims presented as whole-month/run-99 COMPLETE", async () => {
     const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
     const raw = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
-    const registry = {
-      ...PINNED_RECEIPT_REGISTRY_RAW.production,
-      schema_version: 3,
-      purpose: "receipt_verification",
-      generation: 2,
-      prior_registry_digest: "sha256:" + "10".repeat(32),
-      registry_digest: "sha256:" + "20".repeat(32),
-      authority_status: "ACTIVE" as const,
-      environment: "production",
-      authority_instance_digest: "sha256:" + "11".repeat(32),
-      keys: [{
-        key_id: "receipt-test-v1",
-        algorithm: "Ed25519",
-        public_key_base64: b64(raw),
-        status: "active",
-        environment: "production",
-      }],
-    };
+    const registry = await closedActiveReceiptRegistry(raw);
     const objects = await seedGovernedObjects();
     const claims = await canonicalV3Claims(objects, {
       segment_start: "2026-08-07",

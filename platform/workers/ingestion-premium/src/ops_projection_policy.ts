@@ -2,6 +2,7 @@
 import receiptClaimsSchema from "../../../../packages/data_plane/storage/authorities/receipts/signed_receipt_claims.schema.json";
 import {
   base64ToBytes,
+  bytesToBase64,
   canonicalDigest,
   canonicalJson,
   exactKeys,
@@ -219,18 +220,37 @@ export function requireCanonicalUtc(value: unknown): string | null {
   return canonical === value ? value : null;
 }
 
-export const PINNED_RECEIPT_REGISTRY_RAW = {
+export const PINNED_RECEIPT_REGISTRY_SCOPE = {
   production: {
-    registry_raw_sha:
-      "sha256:c258de1ff4a1d8c917aefe6656f0892a602f8d0de635ca21a4c8d7160d84ab33",
-    registry_raw_size: 464,
+    generation: 2,
+    authority_instance_digest:
+      "sha256:e6d7df1b9000481d15b8987f5ffda7f3a0b0c051a43cf0051d04a38e58e372a6",
   },
   staging: {
-    registry_raw_sha:
-      "sha256:2e5f91fd38d25ab971c674b4d979e4258748cf3db46e52eb445d5352f5dd4d19",
-    registry_raw_size: 461,
+    generation: 2,
+    authority_instance_digest:
+      "sha256:5104b2d3b85ddbbd44fb9e4ddc2689898232c2e6e175727c71c1ce2cb6ec9bff",
   },
 } as const;
+
+const SCOPED_RECEIPT_REGISTRY_FIELDS = [
+  "schema_version",
+  "purpose",
+  "generation",
+  "authority_status",
+  "environment",
+  "authority_instance_digest",
+  "prior_registry_digest",
+  "keys",
+  "registry_digest",
+] as const;
+
+const SCOPED_RECEIPT_REGISTRY_KEY_FIELDS = [
+  "key_id",
+  "algorithm",
+  "public_key_base64",
+  "status",
+] as const;
 
 export type ReceiptVerifyRegistry = {
   schema_version?: number;
@@ -239,8 +259,6 @@ export type ReceiptVerifyRegistry = {
   environment: string;
   authority_instance_digest?: string;
   registry_digest?: string;
-  registry_raw_sha?: string;
-  registry_raw_size?: number;
   generation?: number;
   prior_registry_digest?: string | null;
   keys: Array<{
@@ -254,6 +272,109 @@ export type ReceiptVerifyRegistry = {
     revoked_at?: string | null;
   }>;
 };
+
+function closedEd25519PublicKey(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  if (!/^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/.test(value)) return null;
+  try {
+    const bytes = base64ToBytes(value);
+    if (bytes.byteLength !== 32) return null;
+    return bytesToBase64(bytes) === value ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function closedReceiptVerifyRegistry(
+  document: unknown,
+  expectedEnvironment: string,
+): Promise<ReceiptVerifyRegistry | null> {
+  const pin = PINNED_RECEIPT_REGISTRY_SCOPE[
+    expectedEnvironment as keyof typeof PINNED_RECEIPT_REGISTRY_SCOPE
+  ];
+  if (
+    !pin ||
+    (expectedEnvironment !== "production" && expectedEnvironment !== "staging") ||
+    !isPlainObject(document) ||
+    !exactKeys(document, SCOPED_RECEIPT_REGISTRY_FIELDS)
+  ) return null;
+  if (
+    document.schema_version !== 3 ||
+    document.purpose !== "receipt_verification" ||
+    document.environment !== expectedEnvironment ||
+    document.authority_instance_digest !== pin.authority_instance_digest ||
+    document.generation !== pin.generation ||
+    (document.authority_status !== "ACTIVE" && document.authority_status !== "PENDING") ||
+    !isSha256(document.registry_digest) ||
+    !isSha256(document.prior_registry_digest) ||
+    !Array.isArray(document.keys) ||
+    document.keys.length > 16
+  ) return null;
+
+  const seenIds = new Set<string>();
+  const seenPublicKeys = new Map<string, string>();
+  const closedKeys: ReceiptVerifyRegistry["keys"] = [];
+  let active = 0;
+  let pending = 0;
+  for (const row of document.keys) {
+    if (!isPlainObject(row) || !exactKeys(row, SCOPED_RECEIPT_REGISTRY_KEY_FIELDS)) {
+      return null;
+    }
+    const keyId = row.key_id;
+    if (
+      typeof keyId !== "string" ||
+      keyId !== keyId.trim() ||
+      keyId.length === 0 ||
+      seenIds.has(keyId)
+    ) return null;
+    if (row.algorithm !== "Ed25519") return null;
+    if (row.status !== "active" && row.status !== "pending" && row.status !== "revoked") {
+      return null;
+    }
+    const publicKey = closedEd25519PublicKey(row.public_key_base64);
+    if (!publicKey) return null;
+    const priorStatus = seenPublicKeys.get(publicKey);
+    if (priorStatus !== undefined && (priorStatus !== "revoked" || row.status !== "revoked")) {
+      return null;
+    }
+    seenIds.add(keyId);
+    seenPublicKeys.set(publicKey, row.status);
+    if (row.status === "active") active += 1;
+    else if (row.status === "pending") pending += 1;
+    closedKeys.push({
+      key_id: keyId,
+      algorithm: "Ed25519",
+      public_key_base64: publicKey,
+      status: row.status,
+    });
+  }
+  const expectedActive = document.authority_status === "ACTIVE" ? 1 : 0;
+  if (active !== expectedActive || pending > 1) return null;
+
+  const body = {
+    schema_version: document.schema_version,
+    purpose: document.purpose,
+    generation: document.generation,
+    authority_status: document.authority_status,
+    environment: document.environment,
+    authority_instance_digest: document.authority_instance_digest,
+    prior_registry_digest: document.prior_registry_digest,
+    keys: document.keys,
+  };
+  if (await canonicalDigest(body) !== document.registry_digest) return null;
+
+  return {
+    schema_version: 3,
+    purpose: "receipt_verification",
+    generation: pin.generation,
+    authority_status: document.authority_status,
+    environment: expectedEnvironment,
+    authority_instance_digest: pin.authority_instance_digest,
+    prior_registry_digest: document.prior_registry_digest,
+    registry_digest: document.registry_digest,
+    keys: closedKeys,
+  };
+}
 
 export type ClosedObjectStores = {
   structured?: { get?(key: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null> } | null;
@@ -273,15 +394,11 @@ export async function verifySignedReceiptEnvelope(
   registry: ReceiptVerifyRegistry,
   environment: string,
 ): Promise<SignedReceiptClaimsV3 | null> {
-  if (registry.authority_status !== "ACTIVE") return null;
-  if (registry.environment !== environment) return null;
-  if (!isSha256(registry.authority_instance_digest)) return null;
-  const rawPin = PINNED_RECEIPT_REGISTRY_RAW[environment as "production" | "staging"];
-  if (!rawPin || registry.registry_raw_sha !== rawPin.registry_raw_sha ||
-      registry.registry_raw_size !== rawPin.registry_raw_size) return null;
+  const closed = await closedReceiptVerifyRegistry(registry, environment);
+  if (!closed || closed.authority_status !== "ACTIVE") return null;
   const keyId = envelope.issuer_key_id;
   if (typeof keyId !== "string" || keyId.length === 0) return null;
-  const key = registry.keys.find(
+  const key = closed.keys.find(
     (row) =>
       row.key_id === keyId &&
       row.algorithm === "Ed25519" &&
@@ -290,7 +407,7 @@ export async function verifySignedReceiptEnvelope(
   );
   if (!key) return null;
   if (envelope.environment !== environment) return null;
-  if (envelope.authority_instance_digest !== registry.authority_instance_digest) return null;
+  if (envelope.authority_instance_digest !== closed.authority_instance_digest) return null;
   const bodyBytes = decodeBase64(envelope.signed_body_b64);
   if (!bodyBytes) return null;
   const bodyDigest = await digestBytes(bodyBytes);
