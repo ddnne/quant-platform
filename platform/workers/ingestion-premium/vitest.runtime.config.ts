@@ -1,5 +1,10 @@
-import { cloudflareTest } from "@cloudflare/vitest-plugin";
+import {
+  cloudflareTest,
+  readD1Migrations,
+} from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
+
+const d1Migrations = await readD1Migrations("./migrations");
 
 export default defineConfig({
   plugins: [
@@ -9,6 +14,7 @@ export default defineConfig({
   ],
   test: {
     include: ["runtime/**/*.test.ts"],
+    provide: { premiumD1Migrations: d1Migrations },
     testTimeout: 20_000,
   },
 });

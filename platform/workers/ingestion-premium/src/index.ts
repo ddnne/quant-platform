@@ -12,6 +12,7 @@
  *   POST /v1/run[?dataset=..&from=..&to=..]
  *   GET  /v1/export/d1?table=..&cursor=..&limit=..
  *   GET  /v1/export/changes?after_seq=..&limit=..
+ *   POST /v1/export/receipt-products
  */
 
 import { WorkerEntrypoint } from "cloudflare:workers";

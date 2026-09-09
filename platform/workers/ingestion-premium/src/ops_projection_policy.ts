@@ -10,6 +10,8 @@ import {
   isSha256,
 } from "../../receipt-evidence-authority/src/canonical";
 import type { SignedReceiptClaimsV3 } from "../../receipt-evidence-authority/src/types";
+import pinnedProductionReceiptRegistry from "../../../../packages/data_plane/data_contracts/receipt_verify_public_keys.production.json";
+import pinnedStagingReceiptRegistry from "../../../../packages/data_plane/data_contracts/receipt_verify_public_keys.staging.json";
 import { catalogProjectionRows, datasetById } from "./catalog";
 
 export const COVERAGE_POLICY_VERSION = "collection-coverage/v3";
@@ -491,6 +493,15 @@ export async function verifySignedReceiptEnvelope(
     if (!revoked || issuedAt >= revoked) return null;
   }
   return claims;
+}
+
+export async function pinnedReceiptRegistryForEnvironment(
+  environment: "staging" | "production",
+): Promise<ReceiptVerifyRegistry | null> {
+  const document = environment === "production"
+    ? pinnedProductionReceiptRegistry
+    : pinnedStagingReceiptRegistry;
+  return closedReceiptVerifyRegistry(document, environment);
 }
 
 export async function trustedComplete(

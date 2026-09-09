@@ -5,6 +5,7 @@ import {
   handleExportPaths,
   type ExportEnv,
 } from "./http_export";
+import controlledPilot from "../../../../specs/ready/controlled_pilot_v1.generated.json";
 
 const EXPORT_TOKEN = "premium-test-export-token-do-not-leak";
 
@@ -82,6 +83,28 @@ describe("handleExportPaths ignores query token", () => {
     const { db, prepared } = stubD1();
     const res = await handleExportPaths(
       exportRequest(`/v1/export/changes?token=${EXPORT_TOKEN}`),
+      exportEnv(db, EXPORT_TOKEN),
+    );
+    expect(res).not.toBeNull();
+    await assertClosed(res!, 401, "unauthorized", prepared);
+  });
+
+  it("POST /v1/export/receipt-products with only matching query token is 401", async () => {
+    const { db, prepared } = stubD1();
+    const res = await handleExportPaths(
+      new Request(
+        `https://ingestion-premium.test/v1/export/receipt-products?token=${EXPORT_TOKEN}`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            schema_version: "receipt-product-input-request/v1",
+            profile_id: controlledPilot.profile_id,
+            profile_digest: controlledPilot.profile_digest,
+            dependency_closure_digest: controlledPilot.dependency_closure_digest,
+            segments: [{ dataset: "equities_bars_daily", segment_id: "2026-08" }],
+          }),
+        },
+      ),
       exportEnv(db, EXPORT_TOKEN),
     );
     expect(res).not.toBeNull();
