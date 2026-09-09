@@ -48,11 +48,12 @@ remote apply results only in immutable release evidence.
   Service Binding RPC `GatewayService`. `GATEWAY_TOKEN` is HTTP defense in
   depth if a closed route is attached later; it is not a shared Mass
   credential.
-- **Mass product-lane deploy trigger:** temporarily held. Trigger
-  `b83cc2ee-8a40-4448-b517-80959796eb3e` was paused via the Cloudflare API
-  and read-back verified `2026-09-09T15:04Z`. Original command:
+- **Mass product-lane deploy trigger:** deployment leg held. Trigger
+  `b83cc2ee-8a40-4448-b517-80959796eb3e` had only its deploy command replaced
+  via the Cloudflare API; build and test still run. Read-back verified
+  `2026-09-09T15:04Z`. Original deploy command:
   `npm run deploy --prefix platform/workers/research-mass-eval`. Temporary
-  command:
+  deploy command:
   `python3 -c "raise SystemExit('DEPLOYMENT HOLD: coordinated staging rollout pending; see current_production_runbook.md')"`.
   Authoritative repo-root CI is unchanged. Restore only after staged then
   production Secrets→Gateway→Mass code rollout is accepted. Smoke must not

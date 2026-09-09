@@ -1331,11 +1331,18 @@ def _git(repo: Path, env: dict[str, str], *args: str) -> None:
 def test_real_wrapper_from_package_cwd_rejects_unmerged_before_wrangler(
     tmp_path: Path,
 ) -> None:
+    npm = shutil.which("npm")
+    if npm is None:
+        raise RuntimeError(
+            "npm is required to exercise package-cwd deploy; normal CI requires npm"
+        )
     repo = tmp_path / "repo"
     scripts = repo / "scripts"
     inventory = repo / "specs" / "cloudflare"
+    worker = repo / "platform" / "workers" / "research-mass-eval"
     scripts.mkdir(parents=True)
     inventory.mkdir(parents=True)
+    worker.mkdir(parents=True)
     for name in (
         "cloudflare_binding_manifest.py",
         "finding_ledger_gate.py",
@@ -1346,6 +1353,23 @@ def test_real_wrapper_from_package_cwd_rejects_unmerged_before_wrangler(
     shutil.copy2(
         ROOT / "specs" / "cloudflare" / "active_workers.json",
         inventory / "active_workers.json",
+    )
+    source_package = json.loads(
+        (
+            ROOT / "platform" / "workers" / "research-mass-eval" / "package.json"
+        ).read_text(encoding="utf-8")
+    )
+    (worker / "package.json").write_text(
+        json.dumps(
+            {
+                "name": source_package["name"],
+                "private": True,
+                "scripts": {"deploy": source_package["scripts"]["deploy"]},
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
     )
     git_home = tmp_path / "git-home"
     git_home.mkdir()
@@ -1360,7 +1384,7 @@ def test_real_wrapper_from_package_cwd_rejects_unmerged_before_wrangler(
     _git(repo, git_env, "init", "--initial-branch=unmerged")
     _git(repo, git_env, "config", "user.email", "review@example.invalid")
     _git(repo, git_env, "config", "user.name", "review")
-    _git(repo, git_env, "add", "scripts", "specs")
+    _git(repo, git_env, "add", "scripts", "specs", "platform")
     _git(repo, git_env, "commit", "-m", "unmerged wrapper fixture")
     _git(
         repo,
@@ -1384,21 +1408,18 @@ echo wrangler-sentinel >&2
 exit 99
 """,
     )
-    command = next(
-        command
-        for worker, name, command in _python_package_deploy_commands()
-        if worker == "research-mass-eval" and name == "deploy"
-    )
-    result = _run_package_deploy_command(
-        repo=repo,
-        worker="research-mass-eval",
-        command=command,
+    result = subprocess.run(
+        [npm, "run", "deploy", "--prefix", str(worker)],
+        cwd=repo,
         env={
             "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
             "HOME": str(tmp_path / "empty-home"),
             "LANG": "C",
             "QP_WRANGLER_SENTINEL": str(sentinel),
         },
+        capture_output=True,
+        text=True,
+        check=False,
     )
     output = result.stdout + result.stderr
     assert result.returncode != 0
