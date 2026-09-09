@@ -4,15 +4,14 @@ import { catalogProjectionRows, datasetById } from "./catalog";
 import {
   COVERAGE_POLICY_VERSION,
   aggregateDatasetStatus,
-  closedReceiptVerifyRegistry,
+  pinnedReceiptRegistryForEnvironment,
   projectedCompleteDetailJson,
   projectedSegmentStatus,
-  type ReceiptVerifyRegistry,
 } from "./ops_projection_policy";
 import { produceImmutableB0B4 } from "./snapshot_quality_evidence";
 import { sha256HexFromBytes, sha256HexFromString } from "./sha256";
-import pinnedProductionReceiptRegistry from "../../../../packages/data_plane/data_contracts/receipt_verify_public_keys.production.json";
-import pinnedStagingReceiptRegistry from "../../../../packages/data_plane/data_contracts/receipt_verify_public_keys.staging.json";
+
+export { pinnedReceiptRegistryForEnvironment };
 
 export const OPS_SYNC_FEED = "jquants_records";
 
@@ -258,15 +257,6 @@ async function tableColumns(db: SourceDb, name: string): Promise<Set<string>> {
     `PRAGMA table_info(${name})`,
   );
   return new Set(rows.map((row) => String(row.name)));
-}
-
-export async function pinnedReceiptRegistryForEnvironment(
-  environment: "staging" | "production",
-): Promise<ReceiptVerifyRegistry | null> {
-  const document = environment === "production"
-    ? pinnedProductionReceiptRegistry
-    : pinnedStagingReceiptRegistry;
-  return closedReceiptVerifyRegistry(document, environment);
 }
 
 function latestByKey<T extends Record<string, unknown>>(

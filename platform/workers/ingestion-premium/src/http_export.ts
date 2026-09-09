@@ -1,14 +1,20 @@
 /**
- * HTTP presentation for /v1/export/d1 and /v1/export/changes.
- * DATA_EXPORT_TOKEN via X-Ingestion-Token; not ingest.
+ * HTTP presentation for /v1/export/d1, /v1/export/changes, and
+ * /v1/export/receipt-products. DATA_EXPORT_TOKEN via X-Ingestion-Token; not ingest.
  */
 
 import { json } from "./http_json";
 import { ingestionTokenMatches } from "./ingestion_token";
 import { requireNaturalKeysV2Ready } from "./natural_key_migration";
+import {
+  describeReceiptProductInput,
+  parseReceiptProductInputRequest,
+  readBoundedBody,
+} from "./receipt_product_input";
 
 export type ExportEnv = Pick<Cloudflare.Env, "DB"> & {
   DATA_EXPORT_TOKEN?: string;
+  OPS_PROJECTION_ENVIRONMENT?: string;
 };
 
 export async function handleExportD1(
@@ -112,6 +118,38 @@ export async function handleExportChanges(
   });
 }
 
+export async function handleExportReceiptProducts(
+  env: ExportEnv,
+  request: Request,
+): Promise<Response> {
+  if (request.method !== "POST") {
+    return json({ error: "POST required" }, 405);
+  }
+  if (!(await ingestionTokenMatches(request, env.DATA_EXPORT_TOKEN))) {
+    return json({ error: "unauthorized" }, 401);
+  }
+  const bounded = await readBoundedBody(request);
+  if (!bounded.ok) {
+    return json({ error: bounded.error }, 400);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(
+        bounded.bytes,
+      ),
+    );
+  } catch {
+    return json({ error: "invalid json" }, 400);
+  }
+  const closed = parseReceiptProductInputRequest(parsed);
+  if (!closed.ok) {
+    return json({ error: closed.error }, 400);
+  }
+  const result = await describeReceiptProductInput(env, closed.request);
+  return json(result.body, result.httpStatus);
+}
+
 /** /v1/export/* dispatch. Unknown export paths return null. */
 export async function handleExportPaths(
   request: Request,
@@ -121,6 +159,9 @@ export async function handleExportPaths(
   if (url.pathname === "/v1/export/d1") return handleExportD1(env, request);
   if (url.pathname === "/v1/export/changes") {
     return handleExportChanges(env, request);
+  }
+  if (url.pathname === "/v1/export/receipt-products") {
+    return handleExportReceiptProducts(env, request);
   }
   return null;
 }

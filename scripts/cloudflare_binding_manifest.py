@@ -1790,45 +1790,97 @@ def _clean_merged_sha(*, runner: Any | None = None) -> str:
 _SHA40 = re.compile(r"^[0-9a-f]{40}$")
 
 
-def parse_selected_deployment(payload: object, expected_sha: str) -> dict[str, str]:
-    if not _SHA40.fullmatch(expected_sha):
-        raise ValueError("expected SHA is not a clean merged Git SHA")
+def _load_json_object(payload: object, *, label: str) -> dict[str, Any]:
     document = payload
     if isinstance(payload, str):
         try:
             document = json.loads(payload)
         except json.JSONDecodeError as exc:
-            raise ValueError("deployment observation is not JSON") from exc
+            raise ValueError(f"{label} is not JSON") from exc
     if not isinstance(document, dict):
-        raise ValueError("deployment observation is malformed")
-    result = document.get("result") if isinstance(document.get("result"), dict) else {}
+        raise ValueError(f"{label} is malformed")
+    return document
+
+
+def _status_argv(config: str, environment: str) -> list[str]:
+    argv = ["wrangler", "deployments", "status", "--config", config, "--json"]
+    if environment:
+        argv.extend(["--env", environment])
+    return argv
+
+
+def _version_view_argv(version_id: str, config: str, environment: str) -> list[str]:
+    argv = [
+        "wrangler",
+        "versions",
+        "view",
+        version_id,
+        "--config",
+        config,
+        "--json",
+    ]
+    if environment:
+        argv.extend(["--env", environment])
+    return argv
+
+
+def parse_selected_deployment(payload: object) -> dict[str, str]:
+    document = _load_json_object(payload, label="deployment observation")
     versions = document.get("versions")
-    if versions is None:
-        versions = result.get("versions")
     if not isinstance(versions, list) or len(versions) != 1 or not isinstance(versions[0], dict):
         raise ValueError("deployment must select exactly one version")
     row = versions[0]
     if row.get("percentage") != 100:
         raise ValueError("deployment must route 100 percent to one version")
-    version_id = row.get("version_id") or row.get("id")
-    annotations = row.get("annotations") if isinstance(row.get("annotations"), dict) else {}
-    tag = annotations.get("workers/tag") or row.get("tag")
-    message = annotations.get("workers/message") or row.get("message")
-    if tag != expected_sha or message != expected_sha:
-        raise ValueError("selected version tag/message is not the exact merged SHA")
+    version_id = row.get("version_id")
     if not isinstance(version_id, str) or not version_id:
         raise ValueError("selected version id is missing")
-    deployment_id = document.get("id") or document.get("deployment_id")
-    if isinstance(document.get("result"), dict):
-        deployment_id = deployment_id or document["result"].get("id")
+    deployment_id = document.get("id")
     if not isinstance(deployment_id, str) or not deployment_id:
         raise ValueError("selected deployment id is missing")
     return {
         "deployment_id": deployment_id,
         "version_id": version_id,
-        "tag": expected_sha,
         "traffic_percent": "100",
     }
+
+
+def parse_selected_version(
+    payload: object,
+    *,
+    version_id: str,
+    expected_sha: str,
+) -> None:
+    if not _SHA40.fullmatch(expected_sha):
+        raise ValueError("expected SHA is not a clean merged Git SHA")
+    document = _load_json_object(payload, label="version observation")
+    if document.get("id") != version_id:
+        raise ValueError("version document id does not match selected version")
+    annotations = document.get("annotations")
+    if not isinstance(annotations, dict):
+        raise ValueError("selected version tag/message is not the exact merged SHA")
+    if (
+        annotations.get("workers/tag") != expected_sha
+        or annotations.get("workers/message") != expected_sha
+    ):
+        raise ValueError("selected version tag/message is not the exact merged SHA")
+
+
+def _observe_selected_deployment(
+    *,
+    config: str,
+    environment: str,
+    run: Any,
+) -> dict[str, str]:
+    observed = run(
+        _status_argv(config, environment),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if observed.returncode != 0:
+        raise ValueError("tagged deploy could not observe selected version")
+    return parse_selected_deployment(observed.stdout or "")
 
 
 def deploy_tagged(*, config: str, environment: str, runner: Any | None = None) -> None:
@@ -1851,16 +1903,27 @@ def deploy_tagged(*, config: str, environment: str, runner: Any | None = None) -
     completed = run(argv, check=False)
     if completed.returncode != 0:
         raise ValueError("tagged wrangler deploy failed")
-    observed = run(
-        ["wrangler", "deployments", "status", "--config", config, "--json"]
-        + (["--env", environment] if environment else []),
+    selected = _observe_selected_deployment(
+        config=config, environment=environment, run=run
+    )
+    viewed = run(
+        _version_view_argv(selected["version_id"], config, environment),
         capture_output=True,
         text=True,
         check=False,
     )
-    if observed.returncode != 0:
+    if viewed.returncode != 0:
         raise ValueError("tagged deploy could not observe selected version")
-    parse_selected_deployment(observed.stdout or "", sha)
+    parse_selected_version(
+        viewed.stdout or "",
+        version_id=selected["version_id"],
+        expected_sha=sha,
+    )
+    reread = _observe_selected_deployment(
+        config=config, environment=environment, run=run
+    )
+    if reread != selected:
+        raise ValueError("selected deployment changed during version read")
 
 
 def main(argv: list[str] | None = None) -> int:

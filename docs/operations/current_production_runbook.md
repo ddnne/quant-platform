@@ -24,9 +24,11 @@ remote apply results only in immutable release evidence.
 
 ## Honest holds
 
-- **Cloudflare Access / Zero Trust:** `ingestion-secrets` workers.dev is not
-  Access-protected until a human initializes Zero Trust on the account. Header
-  token remains enabled. Do not treat that HOLD as closed.
+- **Cloudflare Access / Zero Trust:** last recorded HOLD is that
+  `ingestion-secrets` workers.dev is not Access-protected until Zero Trust is
+  initialized; header token remains enabled. Access was **not remeasured** on
+  2026-09-10. Do not treat the HOLD as closed, and do not treat it as a fresh
+  Access observation.
 - **Controlled Pilot:** **NO-GO** until live evidence in
   `docs/phase62_residual_status.md` passes. Green tests do not arm exact-four.
   Runtime still separately enforces signed READY, signed Trader authorization,
@@ -34,8 +36,10 @@ remote apply results only in immutable release evidence.
 - **READY publication path:** signing exists at
   `platform/workers/research-mass-eval/src/ready_publication.ts`, but there is
   no cloud candidate-preparation or orchestration caller/Service Binding.
-  Premium Ops metadata does not bind exact dependency scope, raw retention,
-  receipt products, or validation proofs; those remain a distinct pending
+  Source includes an undeployed read-only `POST /v1/export/receipt-products`
+  descriptor; it does not check profile completeness or physical availability
+  and is not READY. Premium Ops metadata still does not bind exact dependency
+  scope, raw retention, or validation proofs; those remain a distinct pending
   workflow integration. The Trader production signer is absent. The release
   builder is unconditionally PENDING. Wire the existing trust root; do not add
   another authority. Activating keys alone does not close any of these gaps.
