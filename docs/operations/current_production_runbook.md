@@ -48,6 +48,20 @@ remote apply results only in immutable release evidence.
   Service Binding RPC `GatewayService`. `GATEWAY_TOKEN` is HTTP defense in
   depth if a closed route is attached later; it is not a shared Mass
   credential.
+- **Mass product-lane deploy trigger:** deployment leg held. Trigger
+  `b83cc2ee-8a40-4448-b517-80959796eb3e` had only its deploy command replaced
+  via the Cloudflare API; build and test still run. Read-back verified
+  `2026-09-09T15:04Z`. Original deploy command:
+  `npm run deploy --prefix platform/workers/research-mass-eval`. Temporary
+  deploy command:
+  `python3 -c "raise SystemExit('DEPLOYMENT HOLD: coordinated staging rollout pending; see current_production_runbook.md')"`.
+  Authoritative repo-root CI is unchanged. Restore only after staged then
+  production Secrets→Gateway→Mass code rollout is accepted. Smoke must not
+  execute market data or Containers. Global live acceptance is the final
+  check, not a blocker for prerequisite Worker code rollout. This bounded
+  repair does not run D1 migration, JSDA activation, or DLQ mutation.
+- **JSDA cutover follow-ups (open):** shared Premium writer quiescence for D1
+  rollback, and preserving production DLQ delivery. Neither is closed.
 - **Quant Ops legacy agent:** `QuantOpsMcpAgent` remains on deprecated,
   feature-frozen `McpAgent` for un-inventoried legacy `/sse` compatibility.
   Source CI pins `agents` and the lock bytes and measures the complete

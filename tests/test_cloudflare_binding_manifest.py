@@ -5,8 +5,13 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shlex
+import shutil
+import subprocess
+import sys
+from typing import Any
 
 import pytest
 
@@ -1181,3 +1186,382 @@ def test_parse_selected_deployment_requires_exact_sha_and_100_percent() -> None:
     }
     with pytest.raises(ValueError, match="exactly one version"):
         manifest_module.parse_selected_deployment(split, sha)
+
+
+_PACKAGE_DEPLOY_PROBE = """#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+log = Path(os.environ["QP_PACKAGE_DEPLOY_PROBE"])
+records = json.loads(log.read_text(encoding="utf-8")) if log.is_file() else []
+records.append({"script": str(Path(__file__).resolve()), "argv": sys.argv[1:]})
+log.write_text(json.dumps(records), encoding="utf-8")
+if os.environ.get("QP_FAIL_SCRIPT") == Path(__file__).name:
+    raise SystemExit(3)
+"""
+_MUTATION_STUB = """#!/bin/sh
+printf '%s\\n' "$0 $*" >> "${QP_PACKAGE_DEPLOY_MUTATIONS:?}"
+echo "unexpected mutation: $(basename "$0")" >&2
+exit 99
+"""
+_OFFICIAL_ORIGIN = "https://github.com/ddnne/quant-platform.git"
+_DEPLOY_SHA = "a" * 40
+
+
+def _python_package_deploy_commands() -> tuple[tuple[str, str, str], ...]:
+    commands: list[tuple[str, str, str]] = []
+    for worker in manifest_module.ACTIVE_WORKERS:
+        package = json.loads(
+            (manifest_module.WORKER_ROOT / worker / "package.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        for name, command in (package.get("scripts") or {}).items():
+            if isinstance(command, str) and "python3" in command:
+                commands.append((worker, name, command))
+    return tuple(commands)
+
+
+def _write_executable(path: Path, source: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(source, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def _synthetic_package_deploy_repo(tmp_path: Path) -> tuple[Path, Path, Path]:
+    repo = tmp_path / "repo"
+    scripts = repo / "scripts"
+    scripts.mkdir(parents=True)
+    for name in (
+        "activate_jsda_v3_cutover.py",
+        "cloudflare_binding_manifest.py",
+        "predeploy_ops_projection_gate.py",
+    ):
+        (scripts / name).write_text(_PACKAGE_DEPLOY_PROBE, encoding="utf-8")
+    for tool in ("git", "npm", "npx", "wrangler"):
+        _write_executable(tmp_path / "bin" / tool, _MUTATION_STUB)
+    probe_log = tmp_path / "probe.json"
+    mutation_log = tmp_path / "mutations.log"
+    probe_log.write_text("[]", encoding="utf-8")
+    mutation_log.write_text("", encoding="utf-8")
+    return repo, probe_log, mutation_log
+
+
+def _run_package_deploy_command(
+    *,
+    repo: Path,
+    worker: str,
+    command: str,
+    env: dict[str, str],
+) -> subprocess.CompletedProcess[str]:
+    cwd = repo / "platform" / "workers" / worker
+    cwd.mkdir(parents=True, exist_ok=True)
+    return subprocess.run(
+        ["sh", "-c", command],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_package_deploy_commands_resolve_from_worker_cwd(tmp_path: Path) -> None:
+    commands = _python_package_deploy_commands()
+    repo, probe_log, mutation_log = _synthetic_package_deploy_repo(tmp_path)
+    env = {
+        "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}",
+        "HOME": str(tmp_path / "empty-home"),
+        "LANG": "C",
+        "QP_PACKAGE_DEPLOY_PROBE": str(probe_log),
+        "QP_PACKAGE_DEPLOY_MUTATIONS": str(mutation_log),
+    }
+    expected_scripts = (repo / "scripts").resolve()
+    for worker, name, command in commands:
+        probe_log.write_text("[]", encoding="utf-8")
+        mutation_log.write_text("", encoding="utf-8")
+        result = _run_package_deploy_command(
+            repo=repo, worker=worker, command=command, env=env
+        )
+        assert result.returncode == 0, f"{worker}:{name}: {result.stderr}"
+        assert mutation_log.read_text(encoding="utf-8") == ""
+        records = json.loads(probe_log.read_text(encoding="utf-8"))
+        assert records and all(
+            Path(row["script"]).parent == expected_scripts for row in records
+        )
+
+
+def test_ops_predeploy_failure_skips_tagged_deploy_leg(tmp_path: Path) -> None:
+    command = next(
+        command
+        for worker, name, command in _python_package_deploy_commands()
+        if worker == "quant-ops-mcp" and name == "deploy"
+    )
+    repo, probe_log, mutation_log = _synthetic_package_deploy_repo(tmp_path)
+    env = {
+        "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}",
+        "HOME": str(tmp_path / "empty-home"),
+        "LANG": "C",
+        "QP_PACKAGE_DEPLOY_PROBE": str(probe_log),
+        "QP_PACKAGE_DEPLOY_MUTATIONS": str(mutation_log),
+        "QP_FAIL_SCRIPT": "predeploy_ops_projection_gate.py",
+    }
+    result = _run_package_deploy_command(
+        repo=repo, worker="quant-ops-mcp", command=command, env=env
+    )
+    assert result.returncode == 3
+    assert mutation_log.read_text(encoding="utf-8") == ""
+    records = json.loads(probe_log.read_text(encoding="utf-8"))
+    assert [Path(row["script"]).name for row in records] == [
+        "predeploy_ops_projection_gate.py"
+    ]
+
+
+def _git(repo: Path, env: dict[str, str], *args: str) -> None:
+    completed = subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def _host_npm_cli() -> tuple[Path, Path]:
+    """Resolve real node/npm in the parent toolchain before a sterile child env."""
+    node = shutil.which("node")
+    if shutil.which("npm") is None or node is None:
+        raise RuntimeError(
+            "npm is required to exercise package-cwd deploy; normal CI requires npm"
+        )
+    reported = subprocess.run(
+        [node, "-p", "process.execPath"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    real_node = Path((reported.stdout or "").strip()).resolve()
+    real_npm = real_node.parent / "npm"
+    if reported.returncode != 0 or not real_node.is_file() or not real_npm.is_file():
+        raise RuntimeError(
+            "parent node/npm could not be resolved to real executables"
+        )
+    return real_node, real_npm
+
+
+def test_real_wrapper_from_package_cwd_rejects_unmerged_before_wrangler(
+    tmp_path: Path,
+) -> None:
+    node, npm = _host_npm_cli()
+    repo = tmp_path / "repo"
+    scripts = repo / "scripts"
+    inventory = repo / "specs" / "cloudflare"
+    worker = repo / "platform" / "workers" / "research-mass-eval"
+    scripts.mkdir(parents=True)
+    inventory.mkdir(parents=True)
+    worker.mkdir(parents=True)
+    for name in (
+        "cloudflare_binding_manifest.py",
+        "finding_ledger_gate.py",
+        "receipt_authority_pending_gate.py",
+        "receipt_authority_pending_live_acceptance.py",
+    ):
+        shutil.copy2(ROOT / "scripts" / name, scripts / name)
+    shutil.copy2(
+        ROOT / "specs" / "cloudflare" / "active_workers.json",
+        inventory / "active_workers.json",
+    )
+    source_package = json.loads(
+        (
+            ROOT / "platform" / "workers" / "research-mass-eval" / "package.json"
+        ).read_text(encoding="utf-8")
+    )
+    (worker / "package.json").write_text(
+        json.dumps(
+            {
+                "name": source_package["name"],
+                "private": True,
+                "scripts": {"deploy": source_package["scripts"]["deploy"]},
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    git_home = tmp_path / "git-home"
+    git_home.mkdir()
+    git_env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(git_home),
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_ASKPASS": "/usr/bin/false",
+    }
+    _git(repo, git_env, "init", "--initial-branch=unmerged")
+    _git(repo, git_env, "config", "user.email", "review@example.invalid")
+    _git(repo, git_env, "config", "user.name", "review")
+    _git(repo, git_env, "add", "scripts", "specs", "platform")
+    _git(repo, git_env, "commit", "-m", "unmerged wrapper fixture")
+    _git(
+        repo,
+        git_env,
+        "remote",
+        "add",
+        "origin",
+        "https://example.invalid/ddnne/quant-platform.git",
+    )
+    sentinel = tmp_path / "wrangler.log"
+    fake_bin = tmp_path / "bin"
+    _write_executable(
+        fake_bin / "python3",
+        f"#!/bin/sh\nexec {shlex.quote(sys.executable)} \"$@\"\n",
+    )
+    _write_executable(
+        fake_bin / "wrangler",
+        """#!/bin/sh
+printf '%s\\n' "$0 $*" >> "${QP_WRANGLER_SENTINEL:?}"
+echo wrangler-sentinel >&2
+exit 99
+""",
+    )
+    result = subprocess.run(
+        [str(npm), "run", "deploy", "--prefix", str(worker)],
+        cwd=repo,
+        env={
+            "PATH": os.pathsep.join(
+                (str(fake_bin), str(node.parent), os.environ.get("PATH", ""))
+            ),
+            "HOME": str(tmp_path / "empty-home"),
+            "LANG": "C",
+            "QP_WRANGLER_SENTINEL": str(sentinel),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "ModuleNotFoundError" not in output
+    assert "current clean official origin/main" in output
+    assert not sentinel.exists()
+
+
+def _status_payload(sha: str) -> str:
+    return json.dumps(
+        {
+            "id": "dep-1",
+            "versions": [
+                {
+                    "version_id": "ver-1",
+                    "percentage": 100,
+                    "annotations": {
+                        "workers/tag": sha,
+                        "workers/message": sha,
+                    },
+                }
+            ],
+        }
+    )
+
+
+def _provenance_runner(
+    *,
+    origin_url: str,
+    origin_main: str,
+    remote_main: str,
+    allow_wrangler: bool,
+) -> tuple[Any, list[tuple[str, ...]]]:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(command, **kwargs):
+        argv = tuple(command)
+        calls.append(argv)
+        if argv[:1] == ("wrangler",) or argv[:1] == ("npx",):
+            if not allow_wrangler:
+                raise AssertionError(f"wrangler ran before provenance: {argv}")
+            if argv[1:3] == ("deployments", "status"):
+                return subprocess.CompletedProcess(
+                    argv, 0, _status_payload(_DEPLOY_SHA), ""
+                )
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if argv == ("git", "rev-parse", "HEAD"):
+            return subprocess.CompletedProcess(argv, 0, _DEPLOY_SHA + "\n", "")
+        if argv == ("git", "remote", "get-url", "origin"):
+            return subprocess.CompletedProcess(argv, 0, origin_url + "\n", "")
+        if argv == (
+            "git",
+            "rev-parse",
+            "--verify",
+            "refs/remotes/origin/main^{commit}",
+        ):
+            return subprocess.CompletedProcess(argv, 0, origin_main + "\n", "")
+        if argv[:4] == ("git", "ls-remote", "--exit-code", "--refs"):
+            return subprocess.CompletedProcess(
+                argv, 0, f"{remote_main}\trefs/heads/main\n", ""
+            )
+        raise AssertionError(argv)
+
+    return runner, calls
+
+
+@pytest.mark.parametrize(
+    "origin_url,origin_main,remote_main",
+    (
+        ("https://example.invalid/ddnne/quant-platform.git", _DEPLOY_SHA, _DEPLOY_SHA),
+        (_OFFICIAL_ORIGIN, "f" * 40, _DEPLOY_SHA),
+        (_OFFICIAL_ORIGIN, _DEPLOY_SHA, "f" * 40),
+    ),
+)
+def test_deploy_tagged_rejects_unofficial_or_stale_main_before_wrangler(
+    monkeypatch: pytest.MonkeyPatch,
+    origin_url: str,
+    origin_main: str,
+    remote_main: str,
+) -> None:
+    monkeypatch.setattr(
+        "scripts.receipt_authority_pending_gate._require_exact_clean_source",
+        lambda _sha: None,
+    )
+    runner, calls = _provenance_runner(
+        origin_url=origin_url,
+        origin_main=origin_main,
+        remote_main=remote_main,
+        allow_wrangler=False,
+    )
+    with pytest.raises(ValueError, match="current clean official origin/main"):
+        manifest_module.deploy_tagged(
+            config="wrangler.toml", environment="production", runner=runner
+        )
+    assert all(call[:1] != ("wrangler",) for call in calls)
+
+
+def test_deploy_tagged_uses_call_time_subprocess_run_for_official_main(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "scripts.receipt_authority_pending_gate._require_exact_clean_source",
+        lambda _sha: None,
+    )
+    runner, calls = _provenance_runner(
+        origin_url=_OFFICIAL_ORIGIN,
+        origin_main=_DEPLOY_SHA,
+        remote_main=_DEPLOY_SHA,
+        allow_wrangler=True,
+    )
+    monkeypatch.setattr(manifest_module.subprocess, "run", runner)
+    manifest_module.deploy_tagged(config="wrangler.toml", environment="production")
+    assert (
+        "wrangler",
+        "deploy",
+        "--config",
+        "wrangler.toml",
+        "--tag",
+        _DEPLOY_SHA,
+        "--message",
+        _DEPLOY_SHA,
+        "--env",
+        "production",
+    ) in calls
+    assert any(call[:3] == ("git", "ls-remote", "--exit-code") for call in calls)

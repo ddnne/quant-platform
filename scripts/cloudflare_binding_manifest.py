@@ -20,6 +20,8 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 MANIFEST = ROOT / "specs" / "cloudflare" / "active_worker_bindings.json"
 INVENTORY = ROOT / "specs" / "cloudflare" / "active_workers.json"
 WORKER_ROOT = ROOT / "platform" / "workers"
@@ -293,6 +295,14 @@ def _load_toml(path: Path) -> dict[str, Any]:
         return tomllib.load(fh)
 
 
+def _python_from_worker_package(script: str) -> str:
+    """Invoke a repository script from `platform/workers/<worker>` cwd."""
+    relative = Path(
+        os.path.relpath(ROOT / "scripts" / script, WORKER_ROOT / "_worker")
+    ).as_posix()
+    return f"python3 {relative}"
+
+
 _WRANGLER_PACKAGE_SCRIPT_POLICY = {
     "build": (
         'wrangler deploy --dry-run --config=wrangler.toml --env="" '
@@ -300,8 +310,8 @@ _WRANGLER_PACKAGE_SCRIPT_POLICY = {
     ),
     "cf-typegen": 'wrangler types --config=wrangler.toml --env=""',
     "deploy": (
-        "python3 ../../scripts/cloudflare_binding_manifest.py --deploy-tagged "
-        "--config wrangler.toml --env production"
+        f"{_python_from_worker_package('cloudflare_binding_manifest.py')} "
+        "--deploy-tagged --config wrangler.toml --env production"
     ),
     "dev": 'wrangler dev --config=wrangler.toml --env=""',
     "tail": "wrangler tail --config=wrangler.toml --env=production",
@@ -318,11 +328,11 @@ _PINNED_PACKAGE_SCRIPTS = {
     "ingestion-jsda": {
         **_COMMON_PACKAGE_SCRIPTS,
         "deploy": (
-            "python3 ../../../scripts/activate_jsda_v3_cutover.py "
+            f"{_python_from_worker_package('activate_jsda_v3_cutover.py')} "
             "--environment production --activate --yes"
         ),
         "deploy:staging": (
-            "python3 ../../../scripts/activate_jsda_v3_cutover.py "
+            f"{_python_from_worker_package('activate_jsda_v3_cutover.py')} "
             "--environment staging --activate --yes"
         ),
         "deploy:unsafe-dev": "wrangler deploy --config=wrangler.toml --env=\"\"",
@@ -353,9 +363,9 @@ _PINNED_PACKAGE_SCRIPTS = {
     "quant-ops-mcp": {
         **_COMMON_PACKAGE_SCRIPTS,
         "deploy": (
-            "python3 ../../scripts/predeploy_ops_projection_gate.py "
-            "--environment production && python3 ../../scripts/cloudflare_binding_manifest.py "
-            "--deploy-tagged --config wrangler.toml --env production"
+            f"{_python_from_worker_package('predeploy_ops_projection_gate.py')} "
+            "--environment production && "
+            + _WRANGLER_PACKAGE_SCRIPT_POLICY["deploy"]
         ),
         "test": (
             "node --experimental-test-module-mocks --test test/*.test.mjs && "
@@ -1747,10 +1757,19 @@ def _render(manifest: dict[str, Any]) -> str:
     return json.dumps(manifest, indent=2, sort_keys=True) + "\n"
 
 
-def _clean_merged_sha() -> str:
-    from scripts.receipt_authority_pending_gate import _require_exact_clean_source
+def _clean_merged_sha(*, runner: Any | None = None) -> str:
+    # Look up subprocess.run at call time; a bound default would ignore test injection.
+    run = subprocess.run if runner is None else runner
+    from scripts.receipt_authority_pending_gate import (
+        PendingReceiptAuthorityError,
+        _require_exact_clean_source,
+    )
+    from scripts.receipt_authority_pending_live_acceptance import (
+        ReceiptPendingLiveAcceptanceError,
+        _require_official_origin_main,
+    )
 
-    completed = subprocess.run(
+    completed = run(
         ["git", "rev-parse", "HEAD"],
         cwd=str(ROOT),
         capture_output=True,
@@ -1758,7 +1777,13 @@ def _clean_merged_sha() -> str:
         check=False,
     )
     sha = (completed.stdout or "").strip()
-    _require_exact_clean_source(sha)
+    try:
+        _require_exact_clean_source(sha)
+        _require_official_origin_main(sha, runner=run)
+    except (PendingReceiptAuthorityError, ReceiptPendingLiveAcceptanceError) as exc:
+        raise ValueError(
+            "merged SHA is not current clean official origin/main"
+        ) from exc
     return sha
 
 
@@ -1806,8 +1831,9 @@ def parse_selected_deployment(payload: object, expected_sha: str) -> dict[str, s
     }
 
 
-def deploy_tagged(*, config: str, environment: str) -> None:
-    sha = _clean_merged_sha()
+def deploy_tagged(*, config: str, environment: str, runner: Any | None = None) -> None:
+    run = subprocess.run if runner is None else runner
+    sha = _clean_merged_sha(runner=run)
     if not _SHA40.fullmatch(sha):
         raise ValueError("merged SHA is not 40 hex")
     argv = [
@@ -1822,10 +1848,10 @@ def deploy_tagged(*, config: str, environment: str) -> None:
     ]
     if environment:
         argv.extend(["--env", environment])
-    completed = subprocess.run(argv, check=False)
+    completed = run(argv, check=False)
     if completed.returncode != 0:
         raise ValueError("tagged wrangler deploy failed")
-    observed = subprocess.run(
+    observed = run(
         ["wrangler", "deployments", "status", "--config", config, "--json"]
         + (["--env", environment] if environment else []),
         capture_output=True,

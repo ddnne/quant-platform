@@ -28,13 +28,14 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, load_der_public_key
 
-from scripts.receipt_authority_pending_live_acceptance import (
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.receipt_authority_pending_live_acceptance import (  # noqa: E402
     ReceiptPendingLiveAcceptanceError,
     _require_official_origin_main,
 )
-
-
-ROOT = Path(__file__).resolve().parents[1]
 OPS = ROOT / "platform" / "workers" / "quant-ops-mcp"
 WRANGLER = OPS / "node_modules" / ".bin" / "wrangler"
 PROJECTED_CONTENT_TABLES = (
