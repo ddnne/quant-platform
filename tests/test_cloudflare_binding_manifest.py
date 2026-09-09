@@ -1154,38 +1154,106 @@ def test_declared_production_secret_names_are_exact_policy() -> None:
         manifest_module.validate_manifest(drifted)
 
 
-def test_parse_selected_deployment_requires_exact_sha_and_100_percent() -> None:
-    sha = "a" * 40
-    payload = {
-        "id": "dep-1",
-        "versions": [
-            {
-                "version_id": "ver-1",
-                "percentage": 100,
-                "annotations": {
-                    "workers/tag": sha,
-                    "workers/message": sha,
-                },
-            }
-        ],
+def _raw_status_payload(
+    *,
+    deployment_id: str = "a27ab31f-6431-464c-94e5-16b513b0d424",
+    version_id: str = "9d40fa96-e5c6-409e-b7bd-d66a3877afb2",
+    percentage: int = 100,
+    extra_versions: list[dict[str, Any]] | None = None,
+) -> str:
+    versions = [{"version_id": version_id, "percentage": percentage}]
+    if extra_versions:
+        versions.extend(extra_versions)
+    return json.dumps(
+        {
+            "id": deployment_id,
+            "source": "wrangler",
+            "strategy": "percentage",
+            "annotations": {"workers/triggered_by": "secret"},
+            "versions": versions,
+            "created_on": "2026-09-09T15:53:11.56021Z",
+        }
+    )
+
+
+def _version_view_payload(
+    *,
+    version_id: str = "9d40fa96-e5c6-409e-b7bd-d66a3877afb2",
+    sha: str = "a" * 40,
+    annotations: dict[str, str] | None = None,
+) -> str:
+    if annotations is None:
+        annotations = {"workers/tag": sha, "workers/message": sha}
+    return json.dumps(
+        {
+            "id": version_id,
+            "metadata": {"source": "wrangler"},
+            "annotations": annotations,
+        }
+    )
+
+
+def test_parse_selected_deployment_requires_one_100_percent_version() -> None:
+    selected = manifest_module.parse_selected_deployment(_raw_status_payload())
+    assert selected == {
+        "deployment_id": "a27ab31f-6431-464c-94e5-16b513b0d424",
+        "version_id": "9d40fa96-e5c6-409e-b7bd-d66a3877afb2",
+        "traffic_percent": "100",
     }
-    selected = manifest_module.parse_selected_deployment(payload, sha)
-    assert selected["deployment_id"] == "dep-1"
-    assert selected["version_id"] == "ver-1"
-    with pytest.raises(ValueError, match="exact merged SHA"):
-        manifest_module.parse_selected_deployment(payload, "b" * 40)
-    substring = json.dumps(payload) + sha[4:12]
     with pytest.raises(ValueError):
-        manifest_module.parse_selected_deployment("not-json " + sha, sha)
-    split = {
-        "id": "dep-1",
-        "versions": [
-            {"version_id": "ver-1", "percentage": 90, "annotations": {"workers/tag": sha, "workers/message": sha}},
-            {"version_id": "ver-2", "percentage": 10, "annotations": {"workers/tag": sha, "workers/message": sha}},
-        ],
-    }
+        manifest_module.parse_selected_deployment("not-json")
+    with pytest.raises(ValueError, match="100 percent"):
+        manifest_module.parse_selected_deployment(_raw_status_payload(percentage=90))
     with pytest.raises(ValueError, match="exactly one version"):
-        manifest_module.parse_selected_deployment(split, sha)
+        manifest_module.parse_selected_deployment(
+            _raw_status_payload(
+                extra_versions=[{"version_id": "other", "percentage": 0}]
+            )
+        )
+
+
+def test_parse_selected_version_requires_id_and_exact_sha_annotations() -> None:
+    sha = "a" * 40
+    version_id = "9d40fa96-e5c6-409e-b7bd-d66a3877afb2"
+    manifest_module.parse_selected_version(
+        _version_view_payload(version_id=version_id, sha=sha),
+        version_id=version_id,
+        expected_sha=sha,
+    )
+    with pytest.raises(ValueError, match="does not match selected version"):
+        manifest_module.parse_selected_version(
+            _version_view_payload(version_id="other", sha=sha),
+            version_id=version_id,
+            expected_sha=sha,
+        )
+    with pytest.raises(ValueError, match="exact merged SHA"):
+        manifest_module.parse_selected_version(
+            _version_view_payload(
+                version_id=version_id,
+                annotations={"workers/message": sha},
+            ),
+            version_id=version_id,
+            expected_sha=sha,
+        )
+    with pytest.raises(ValueError, match="exact merged SHA"):
+        manifest_module.parse_selected_version(
+            _version_view_payload(version_id=version_id, sha="b" * 40),
+            version_id=version_id,
+            expected_sha=sha,
+        )
+    with pytest.raises(ValueError, match="exact merged SHA"):
+        manifest_module.parse_selected_version(
+            json.dumps(
+                {
+                    "id": version_id,
+                    "tag": sha,
+                    "message": sha,
+                    "annotations": {},
+                }
+            ),
+            version_id=version_id,
+            expected_sha=sha,
+        )
 
 
 _PACKAGE_DEPLOY_PROBE = """#!/usr/bin/env python3
@@ -1448,24 +1516,6 @@ exit 99
     assert not sentinel.exists()
 
 
-def _status_payload(sha: str) -> str:
-    return json.dumps(
-        {
-            "id": "dep-1",
-            "versions": [
-                {
-                    "version_id": "ver-1",
-                    "percentage": 100,
-                    "annotations": {
-                        "workers/tag": sha,
-                        "workers/message": sha,
-                    },
-                }
-            ],
-        }
-    )
-
-
 def _provenance_runner(
     *,
     origin_url: str,
@@ -1483,7 +1533,14 @@ def _provenance_runner(
                 raise AssertionError(f"wrangler ran before provenance: {argv}")
             if argv[1:3] == ("deployments", "status"):
                 return subprocess.CompletedProcess(
-                    argv, 0, _status_payload(_DEPLOY_SHA), ""
+                    argv, 0, _raw_status_payload(), ""
+                )
+            if argv[1:3] == ("versions", "view"):
+                return subprocess.CompletedProcess(
+                    argv,
+                    0,
+                    _version_view_payload(version_id=argv[3], sha=_DEPLOY_SHA),
+                    "",
                 )
             return subprocess.CompletedProcess(argv, 0, "", "")
         if argv == ("git", "rev-parse", "HEAD"):
@@ -1565,3 +1622,194 @@ def test_deploy_tagged_uses_call_time_subprocess_run_for_official_main(
         "production",
     ) in calls
     assert any(call[:3] == ("git", "ls-remote", "--exit-code") for call in calls)
+    wrangler = [call for call in calls if call[:1] == ("wrangler",)]
+    assert wrangler[0][:2] == ("wrangler", "deploy")
+    assert wrangler[1] == (
+        "wrangler",
+        "deployments",
+        "status",
+        "--config",
+        "wrangler.toml",
+        "--json",
+        "--env",
+        "production",
+    )
+    assert wrangler[2] == (
+        "wrangler",
+        "versions",
+        "view",
+        "9d40fa96-e5c6-409e-b7bd-d66a3877afb2",
+        "--config",
+        "wrangler.toml",
+        "--json",
+        "--env",
+        "production",
+    )
+    assert wrangler[3] == wrangler[1]
+
+
+def _readback_runner(
+    *,
+    status_payloads: list[str],
+    version_payload: str | None,
+    version_rc: int = 0,
+    config: str,
+    environment: str,
+) -> tuple[Any, list[tuple[str, ...]]]:
+    calls: list[tuple[str, ...]] = []
+    status_index = 0
+
+    def runner(command, **kwargs):
+        nonlocal status_index
+        argv = tuple(command)
+        calls.append(argv)
+        if argv == ("git", "rev-parse", "HEAD"):
+            return subprocess.CompletedProcess(argv, 0, _DEPLOY_SHA + "\n", "")
+        if argv == ("git", "remote", "get-url", "origin"):
+            return subprocess.CompletedProcess(argv, 0, _OFFICIAL_ORIGIN + "\n", "")
+        if argv == (
+            "git",
+            "rev-parse",
+            "--verify",
+            "refs/remotes/origin/main^{commit}",
+        ):
+            return subprocess.CompletedProcess(argv, 0, _DEPLOY_SHA + "\n", "")
+        if argv[:4] == ("git", "ls-remote", "--exit-code", "--refs"):
+            return subprocess.CompletedProcess(
+                argv, 0, f"{_DEPLOY_SHA}\trefs/heads/main\n", ""
+            )
+        if argv[:1] != ("wrangler",):
+            raise AssertionError(argv)
+        if argv[1] == "deploy":
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        env_tail = ("--env", environment) if environment else ()
+        if argv[1:3] == ("deployments", "status"):
+            assert argv[3:] == ("--config", config, "--json", *env_tail)
+            payload = status_payloads[min(status_index, len(status_payloads) - 1)]
+            status_index += 1
+            return subprocess.CompletedProcess(argv, 0, payload, "")
+        if argv[1:3] == ("versions", "view"):
+            assert argv[4:] == ("--config", config, "--json", *env_tail)
+            return subprocess.CompletedProcess(
+                argv, version_rc, version_payload or "", ""
+            )
+        raise AssertionError(argv)
+
+    return runner, calls
+
+
+def test_deploy_tagged_staging_empty_env_uses_same_config_on_status_and_view(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "scripts.receipt_authority_pending_gate._require_exact_clean_source",
+        lambda _sha: None,
+    )
+    version_id = "9d40fa96-e5c6-409e-b7bd-d66a3877afb2"
+    runner, calls = _readback_runner(
+        status_payloads=[_raw_status_payload()],
+        version_payload=_version_view_payload(
+            version_id=version_id, sha=_DEPLOY_SHA
+        ),
+        config="wrangler.staging.toml",
+        environment="",
+    )
+    manifest_module.deploy_tagged(
+        config="wrangler.staging.toml", environment="", runner=runner
+    )
+    wrangler = [call for call in calls if call[:1] == ("wrangler",)]
+    assert wrangler[0] == (
+        "wrangler",
+        "deploy",
+        "--config",
+        "wrangler.staging.toml",
+        "--tag",
+        _DEPLOY_SHA,
+        "--message",
+        _DEPLOY_SHA,
+    )
+    assert wrangler[1] == (
+        "wrangler",
+        "deployments",
+        "status",
+        "--config",
+        "wrangler.staging.toml",
+        "--json",
+    )
+    assert wrangler[2] == (
+        "wrangler",
+        "versions",
+        "view",
+        version_id,
+        "--config",
+        "wrangler.staging.toml",
+        "--json",
+    )
+    assert wrangler[3] == wrangler[1]
+    assert all("--env" not in call for call in wrangler)
+
+
+@pytest.mark.parametrize(
+    "status_payloads,version_payload,version_rc,match",
+    (
+        (
+            [_raw_status_payload()],
+            _version_view_payload(version_id="other", sha=_DEPLOY_SHA),
+            0,
+            "does not match selected version",
+        ),
+        (
+            [_raw_status_payload()],
+            _version_view_payload(
+                annotations={"workers/message": _DEPLOY_SHA}
+            ),
+            0,
+            "exact merged SHA",
+        ),
+        (
+            [_raw_status_payload()],
+            _version_view_payload(sha="b" * 40),
+            0,
+            "exact merged SHA",
+        ),
+        (
+            [_raw_status_payload()],
+            "",
+            1,
+            "could not observe selected version",
+        ),
+        (
+            [
+                _raw_status_payload(),
+                _raw_status_payload(
+                    deployment_id="switched",
+                ),
+            ],
+            _version_view_payload(sha=_DEPLOY_SHA),
+            0,
+            "changed during version read",
+        ),
+    ),
+)
+def test_deploy_tagged_readback_rejects_mismatch_fetch_failure_and_switch(
+    monkeypatch: pytest.MonkeyPatch,
+    status_payloads: list[str],
+    version_payload: str,
+    version_rc: int,
+    match: str,
+) -> None:
+    monkeypatch.setattr(
+        "scripts.receipt_authority_pending_gate._require_exact_clean_source",
+        lambda _sha: None,
+    )
+    runner, _calls = _readback_runner(
+        status_payloads=status_payloads,
+        version_payload=version_payload,
+        version_rc=version_rc,
+        config="wrangler.toml",
+        environment="production",
+    )
+    with pytest.raises(ValueError, match=match):
+        manifest_module.deploy_tagged(
+            config="wrangler.toml", environment="production", runner=runner
+        )
