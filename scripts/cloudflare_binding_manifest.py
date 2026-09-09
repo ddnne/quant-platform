@@ -293,6 +293,14 @@ def _load_toml(path: Path) -> dict[str, Any]:
         return tomllib.load(fh)
 
 
+def _python_from_worker_package(script: str) -> str:
+    """Invoke a repository script from `platform/workers/<worker>` cwd."""
+    relative = Path(
+        os.path.relpath(ROOT / "scripts" / script, WORKER_ROOT / "_worker")
+    ).as_posix()
+    return f"python3 {relative}"
+
+
 _WRANGLER_PACKAGE_SCRIPT_POLICY = {
     "build": (
         'wrangler deploy --dry-run --config=wrangler.toml --env="" '
@@ -300,8 +308,8 @@ _WRANGLER_PACKAGE_SCRIPT_POLICY = {
     ),
     "cf-typegen": 'wrangler types --config=wrangler.toml --env=""',
     "deploy": (
-        "python3 ../../scripts/cloudflare_binding_manifest.py --deploy-tagged "
-        "--config wrangler.toml --env production"
+        f"{_python_from_worker_package('cloudflare_binding_manifest.py')} "
+        "--deploy-tagged --config wrangler.toml --env production"
     ),
     "dev": 'wrangler dev --config=wrangler.toml --env=""',
     "tail": "wrangler tail --config=wrangler.toml --env=production",
@@ -318,11 +326,11 @@ _PINNED_PACKAGE_SCRIPTS = {
     "ingestion-jsda": {
         **_COMMON_PACKAGE_SCRIPTS,
         "deploy": (
-            "python3 ../../../scripts/activate_jsda_v3_cutover.py "
+            f"{_python_from_worker_package('activate_jsda_v3_cutover.py')} "
             "--environment production --activate --yes"
         ),
         "deploy:staging": (
-            "python3 ../../../scripts/activate_jsda_v3_cutover.py "
+            f"{_python_from_worker_package('activate_jsda_v3_cutover.py')} "
             "--environment staging --activate --yes"
         ),
         "deploy:unsafe-dev": "wrangler deploy --config=wrangler.toml --env=\"\"",
@@ -353,9 +361,9 @@ _PINNED_PACKAGE_SCRIPTS = {
     "quant-ops-mcp": {
         **_COMMON_PACKAGE_SCRIPTS,
         "deploy": (
-            "python3 ../../scripts/predeploy_ops_projection_gate.py "
-            "--environment production && python3 ../../scripts/cloudflare_binding_manifest.py "
-            "--deploy-tagged --config wrangler.toml --env production"
+            f"{_python_from_worker_package('predeploy_ops_projection_gate.py')} "
+            "--environment production && "
+            + _WRANGLER_PACKAGE_SCRIPT_POLICY["deploy"]
         ),
         "test": (
             "node --experimental-test-module-mocks --test test/*.test.mjs && "

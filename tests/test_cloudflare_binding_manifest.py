@@ -5,8 +5,10 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shlex
+import subprocess
 
 import pytest
 
@@ -1181,3 +1183,204 @@ def test_parse_selected_deployment_requires_exact_sha_and_100_percent() -> None:
     }
     with pytest.raises(ValueError, match="exactly one version"):
         manifest_module.parse_selected_deployment(split, sha)
+
+
+_PACKAGE_DEPLOY_PROBE = '''#!/usr/bin/env python3
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+log = Path(os.environ["QP_PACKAGE_DEPLOY_PROBE"])
+name = Path(__file__).name
+records = json.loads(log.read_text(encoding="utf-8")) if log.is_file() else []
+records.append({"script": str(Path(__file__).resolve()), "argv": sys.argv[1:]})
+log.write_text(json.dumps(records), encoding="utf-8")
+if os.environ.get("QP_FAIL_SCRIPT") == name:
+    raise SystemExit(3)
+
+parser = argparse.ArgumentParser()
+if name == "cloudflare_binding_manifest.py":
+    parser.add_argument("--deploy-tagged", action="store_true")
+    parser.add_argument("--config", default="")
+    parser.add_argument("--env", dest="environment", default="")
+    args = parser.parse_args()
+    if (
+        not args.deploy_tagged
+        or args.config != "wrangler.toml"
+        or args.environment != "production"
+    ):
+        raise SystemExit("tagged deploy argument chain was not reached")
+elif name == "predeploy_ops_projection_gate.py":
+    parser.add_argument("--environment", required=True)
+    args = parser.parse_args()
+    if args.environment != "production":
+        raise SystemExit("ops predeploy argument chain was not reached")
+elif name == "activate_jsda_v3_cutover.py":
+    parser.add_argument("--environment", required=True)
+    parser.add_argument("--activate", action="store_true")
+    parser.add_argument("--yes", action="store_true")
+    args = parser.parse_args()
+    if (
+        not args.activate
+        or not args.yes
+        or args.environment not in {"production", "staging"}
+    ):
+        raise SystemExit("jsda cutover argument chain was not reached")
+else:
+    raise SystemExit(f"unexpected probe script: {name}")
+'''
+
+_MUTATION_STUB = """#!/bin/sh
+printf '%s\\n' "$0 $*" >> "${QP_PACKAGE_DEPLOY_MUTATIONS:?}"
+echo "unexpected mutation: $(basename "$0")" >&2
+exit 99
+"""
+
+
+def _python_package_deploy_commands() -> tuple[tuple[str, str, str], ...]:
+    commands: list[tuple[str, str, str]] = []
+    for worker in manifest_module.ACTIVE_WORKERS:
+        package = json.loads(
+            (manifest_module.WORKER_ROOT / worker / "package.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        scripts = package.get("scripts") or {}
+        for name, command in scripts.items():
+            if not isinstance(command, str) or "python3" not in command:
+                continue
+            commands.append((worker, name, command))
+    return tuple(commands)
+
+
+def _write_executable(path: Path, source: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(source, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def _synthetic_package_deploy_repo(tmp_path: Path) -> tuple[Path, Path, Path]:
+    repo = tmp_path / "repo"
+    scripts = repo / "scripts"
+    scripts.mkdir(parents=True)
+    for name in (
+        "activate_jsda_v3_cutover.py",
+        "cloudflare_binding_manifest.py",
+        "predeploy_ops_projection_gate.py",
+    ):
+        (scripts / name).write_text(_PACKAGE_DEPLOY_PROBE, encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    for tool in ("git", "npm", "npx", "wrangler"):
+        _write_executable(fake_bin / tool, _MUTATION_STUB)
+    probe_log = tmp_path / "probe.json"
+    mutation_log = tmp_path / "mutations.log"
+    probe_log.write_text("[]", encoding="utf-8")
+    mutation_log.write_text("", encoding="utf-8")
+    return repo, probe_log, mutation_log
+
+
+def _package_deploy_env(
+    tmp_path: Path, probe_log: Path, mutation_log: Path
+) -> dict[str, str]:
+    return {
+        "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}",
+        "HOME": str(tmp_path / "empty-home"),
+        "LANG": "C",
+        "QP_PACKAGE_DEPLOY_PROBE": str(probe_log),
+        "QP_PACKAGE_DEPLOY_MUTATIONS": str(mutation_log),
+    }
+
+
+def _run_package_deploy_command(
+    *,
+    repo: Path,
+    worker: str,
+    command: str,
+    env: dict[str, str],
+) -> subprocess.CompletedProcess[str]:
+    cwd = repo / "platform" / "workers" / worker
+    cwd.mkdir(parents=True, exist_ok=True)
+    return subprocess.run(
+        ["sh", "-c", command],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_package_deploy_commands_resolve_from_worker_cwd(
+    tmp_path: Path,
+) -> None:
+    commands = _python_package_deploy_commands()
+    assert commands, "expected python package deploy commands"
+    repo, probe_log, mutation_log = _synthetic_package_deploy_repo(tmp_path)
+    env = _package_deploy_env(tmp_path, probe_log, mutation_log)
+    expected_scripts = (repo / "scripts").resolve()
+
+    for worker, name, command in commands:
+        probe_log.write_text("[]", encoding="utf-8")
+        mutation_log.write_text("", encoding="utf-8")
+        result = _run_package_deploy_command(
+            repo=repo, worker=worker, command=command, env=env
+        )
+        assert result.returncode == 0, (
+            f"{worker}:{name} failed: {result.stdout}{result.stderr}"
+        )
+        assert mutation_log.read_text(encoding="utf-8") == ""
+        records = json.loads(probe_log.read_text(encoding="utf-8"))
+        assert records, f"{worker}:{name} did not reach a repository script"
+        for record in records:
+            script = Path(record["script"])
+            assert script.parent == expected_scripts, script
+            assert script.name in {
+                "activate_jsda_v3_cutover.py",
+                "cloudflare_binding_manifest.py",
+                "predeploy_ops_projection_gate.py",
+            }
+
+
+def test_legacy_two_up_deploy_script_path_fails_from_worker_cwd(
+    tmp_path: Path,
+) -> None:
+    repo, probe_log, mutation_log = _synthetic_package_deploy_repo(tmp_path)
+    env = _package_deploy_env(tmp_path, probe_log, mutation_log)
+    result = _run_package_deploy_command(
+        repo=repo,
+        worker="research-mass-eval",
+        command=(
+            "python3 ../../scripts/cloudflare_binding_manifest.py "
+            "--deploy-tagged --config wrangler.toml --env production"
+        ),
+        env=env,
+    )
+    assert result.returncode != 0
+    assert json.loads(probe_log.read_text(encoding="utf-8")) == []
+    assert mutation_log.read_text(encoding="utf-8") == ""
+    assert "can't open file" in result.stderr or "No such file" in result.stderr
+
+
+def test_ops_predeploy_failure_skips_tagged_deploy_leg(tmp_path: Path) -> None:
+    commands = {
+        (worker, name): command
+        for worker, name, command in _python_package_deploy_commands()
+    }
+    command = commands[("quant-ops-mcp", "deploy")]
+    assert "predeploy_ops_projection_gate.py" in command
+    assert " && " in command
+    repo, probe_log, mutation_log = _synthetic_package_deploy_repo(tmp_path)
+    env = _package_deploy_env(tmp_path, probe_log, mutation_log)
+    env["QP_FAIL_SCRIPT"] = "predeploy_ops_projection_gate.py"
+    result = _run_package_deploy_command(
+        repo=repo, worker="quant-ops-mcp", command=command, env=env
+    )
+    assert result.returncode == 3, result.stderr
+    assert mutation_log.read_text(encoding="utf-8") == ""
+    records = json.loads(probe_log.read_text(encoding="utf-8"))
+    assert [Path(record["script"]).name for record in records] == [
+        "predeploy_ops_projection_gate.py"
+    ]
+    assert records[0]["argv"] == ["--environment", "production"]
