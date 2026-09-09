@@ -187,7 +187,7 @@ def test_snapshot_transport_and_expanded_database_caps_are_split() -> None:
 
 
 def _gzip(raw: bytes) -> bytes:
-    return gzip.compress(raw)
+    return gzip.compress(raw, mtime=0)
 
 
 def _sidecar(period: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -742,10 +742,29 @@ def test_unlinks_each_snapshot_before_the_next_hydrate(monkeypatch: pytest.Monke
         return _digest(data)
 
     terminal = job.execute_vol_am_pm_panel_job(spec, opener=opener, uploader=uploader)
-    assert terminal["status"] == "COMPLETED"
+    assert terminal["status"] == "COMPLETED", terminal.get("error")
     assert seen[0][0] == "y2019_selection"
     for _period_id, leftovers in seen[1:]:
         assert leftovers == []
+
+
+def test_gzip_fixture_bytes_are_independent_of_wall_clock() -> None:
+    raw = _sqlite_bytes(codes=["13010"], dates=["2019-01-04", "2019-01-07"])
+    pinned = _gzip(raw)
+    assert pinned == gzip.compress(raw, mtime=0)
+    assert gzip.decompress(pinned) == raw
+    crossed = gzip.compress(raw, mtime=1)
+    later = gzip.compress(raw, mtime=2)
+    assert crossed != later
+    assert gzip.decompress(crossed) == raw
+    assert gzip.decompress(later) == raw
+    assert _digest(crossed) != _digest(later)
+    key = _snapshot_lock("snap", "y2021_full", "2021-01-04", "2021-10-15", crossed, raw)[
+        "snapshot"
+    ]["key"]
+    assert key == _snapshot_lock(
+        "snap", "y2023_full", "2023-01-04", "2023-10-13", later, raw
+    )["snapshot"]["key"]
 
 
 def test_zero_row_member_stays_in_exact_membership(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -781,7 +800,7 @@ def test_zero_row_member_stays_in_exact_membership(monkeypatch: pytest.MonkeyPat
         return _digest(data)
 
     terminal = job.execute_vol_am_pm_panel_job(spec, opener=opener, uploader=uploader)
-    assert terminal["status"] == "COMPLETED"
+    assert terminal["status"] == "COMPLETED", terminal.get("error")
     assert terminal["membership"]["codes"] == ["13010", "72030"]
     period = job.EVALUATION_PERIODS[0]["period_id"]
     panel = json.loads(store[terminal["periods"][period]["panel_key"]])
