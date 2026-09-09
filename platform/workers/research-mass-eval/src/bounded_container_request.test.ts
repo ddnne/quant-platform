@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   containerRequestTimeoutError,
@@ -29,8 +29,13 @@ function stalledBody(): ReadableStream<Uint8Array> {
 
 describe("bounded container requests", () => {
   it("aborts a POST whose cloned body request only rejects on abort", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     let signalled = false;
     let receivedBody = "";
+    let markReady: () => void;
+    const fixtureReady = new Promise<void>((resolve) => {
+      markReady = resolve;
+    });
     const target = {
       fetch: async (request: Request) => {
         expect(request.method).toBe("POST");
@@ -38,11 +43,12 @@ describe("bounded container requests", () => {
         request.signal.addEventListener("abort", () => {
           signalled = true;
         }, { once: true });
+        markReady();
         return await rejectWhenAborted(request.signal);
       },
     };
-    await expect(
-      fetchContainerBytes(
+    try {
+      const pending = fetchContainerBytes(
         target,
         new Request("http://container/v1/controlled-pilot", {
           method: "POST",
@@ -50,10 +56,16 @@ describe("bounded container requests", () => {
           body: "{\"job_id\":\"job\"}",
         }),
         { deadlineMs: 25 },
-      ),
-    ).rejects.toThrow("container request timeout");
-    expect(receivedBody).toBe("{\"job_id\":\"job\"}");
-    expect(signalled).toBe(true);
+      );
+      const expected = expect(pending).rejects.toThrow("container request timeout");
+      await fixtureReady;
+      await vi.advanceTimersByTimeAsync(25);
+      await expected;
+      expect(receivedBody).toBe("{\"job_id\":\"job\"}");
+      expect(signalled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("aborts a fetch that only rejects when the request signal aborts", async () => {
