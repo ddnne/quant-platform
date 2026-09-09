@@ -1328,14 +1328,32 @@ def _git(repo: Path, env: dict[str, str], *args: str) -> None:
     assert completed.returncode == 0, completed.stderr
 
 
-def test_real_wrapper_from_package_cwd_rejects_unmerged_before_wrangler(
-    tmp_path: Path,
-) -> None:
-    npm = shutil.which("npm")
-    if npm is None:
+def _host_npm_cli() -> tuple[Path, Path]:
+    """Resolve real node/npm in the parent toolchain before a sterile child env."""
+    node = shutil.which("node")
+    if shutil.which("npm") is None or node is None:
         raise RuntimeError(
             "npm is required to exercise package-cwd deploy; normal CI requires npm"
         )
+    reported = subprocess.run(
+        [node, "-p", "process.execPath"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    real_node = Path((reported.stdout or "").strip()).resolve()
+    real_npm = real_node.parent / "npm"
+    if reported.returncode != 0 or not real_node.is_file() or not real_npm.is_file():
+        raise RuntimeError(
+            "parent node/npm could not be resolved to real executables"
+        )
+    return real_node, real_npm
+
+
+def test_real_wrapper_from_package_cwd_rejects_unmerged_before_wrangler(
+    tmp_path: Path,
+) -> None:
+    node, npm = _host_npm_cli()
     repo = tmp_path / "repo"
     scripts = repo / "scripts"
     inventory = repo / "specs" / "cloudflare"
@@ -1409,10 +1427,12 @@ exit 99
 """,
     )
     result = subprocess.run(
-        [npm, "run", "deploy", "--prefix", str(worker)],
+        [str(npm), "run", "deploy", "--prefix", str(worker)],
         cwd=repo,
         env={
-            "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+            "PATH": os.pathsep.join(
+                (str(fake_bin), str(node.parent), os.environ.get("PATH", ""))
+            ),
             "HOME": str(tmp_path / "empty-home"),
             "LANG": "C",
             "QP_WRANGLER_SENTINEL": str(sentinel),
