@@ -64,6 +64,7 @@ class FrozenMorningOrder:
     target_weight: float | None
     morning_price: float
     origin: str
+    intent_target_weight: float | None = None
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,7 @@ class FrozenMorningOrderBatch:
     risk_policy_id: str
     max_gross_weight_limit: float | None
     origin: str
+    am_cost_basis: Mapping[str, Any] | None = None
 
     def target_shares(self) -> dict[str, float]:
         return {order.code: order.target_shares for order in self.orders}
@@ -93,12 +95,16 @@ class FrozenMorningOrderBatch:
             "risk_policy_id": self.risk_policy_id,
             "max_gross_weight_limit": self.max_gross_weight_limit,
             "origin": self.origin,
+            "am_cost_basis": (
+                None if self.am_cost_basis is None else dict(self.am_cost_basis)
+            ),
             "orders": [
                 {
                     "code": order.code,
                     "target_shares": order.target_shares,
                     "delta_shares": order.delta_shares,
                     "target_weight": order.target_weight,
+                    "intent_target_weight": order.intent_target_weight,
                     "morning_price": order.morning_price,
                     "origin": order.origin,
                 }

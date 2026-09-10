@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 import pit
@@ -66,17 +68,15 @@ def _uni(db):
 
 
 def _run(db, strategy, **kwargs):
-    return run_backtest(
-        strategy,
-        D0,
-        D3,
-        db_path=db,
-        universe=_uni(db),
-        execution_mode="am_signal_pm_close",
-        price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
-        cost_model=standard_cost(bps=0.0),
-        **kwargs,
-    )
+    params = {
+        "db_path": db,
+        "universe": _uni(db),
+        "execution_mode": "am_signal_pm_close",
+        "price_basis": PERSONAL_RETROSPECTIVE_ADJUSTED,
+        "cost_model": standard_cost(bps=0.0),
+    }
+    params.update(kwargs)
+    return run_backtest(strategy, D0, D3, **params)
 
 
 class Recorder:
@@ -826,6 +826,109 @@ def test_missing_fill_stays_no_fallback_with_gross_cap(tmp_path):
     unfilled = res.metadata["data_quality"]["missing_afternoon_adjustment_close_unfilled"]
     assert unfilled[0]["fallback"] is False
     assert unfilled[0]["fill_substituted"] is False
+    assert res.metrics["selection_eligible"] is False
+
+
+def test_known_am_costs_are_reserved_without_dust_corrections(tmp_path):
+    db = _seed(tmp_path, madjc=100.0, aadjc=100.0)
+    rec = BuyOnce(weight=1.0)
+    res = _run(
+        db,
+        rec,
+        max_gross_weight=1.0,
+        cost_model=standard_cost(bps=10.0),
+    )
+    buys = [trade for trade in _code_trades(res) if trade["side"] == "buy"]
+    sells = [trade for trade in _code_trades(res) if trade["side"] == "sell"]
+    assert len(buys) == 1
+    assert sells == []
+    assert buys[0]["shares"] < 10_000.0
+    assert buys[0]["shares"] == pytest.approx(1_000_000.0 / 100.0 / 1.001)
+    d0 = next(
+        batch
+        for batch in res.metadata["morning_order_batches"]
+        if batch["session_date"] == D0
+    )
+    order = d0["orders"][0]
+    assert order["intent_target_weight"] == pytest.approx(1.0)
+    assert order["target_weight"] == pytest.approx(order["target_shares"] * 100.0 / 1_000_000.0)
+    assert order["target_weight"] < order["intent_target_weight"]
+    assert d0["am_cost_basis"]["pm_prices_used"] is False
+    assert all(event["status"] == "OK" for event in res.metadata["gross_limit_events"])
+    assert res.metrics["selection_eligible"] is True
+    assert res.metrics["comparison_eligible"] is True
+
+
+def test_later_am_correction_uses_am_prices_and_known_cost(tmp_path):
+    db_flat = _seed(
+        tmp_path / "flat",
+        madjc_by_day={D0: 100.0, D1: 300.0, D2: 300.0, D3: 300.0},
+        aadjc_by_day={D0: 100.0, D1: 300.0, D2: 300.0, D3: 300.0},
+    )
+    db_pm = _seed(
+        tmp_path / "pm",
+        madjc_by_day={D0: 100.0, D1: 300.0, D2: 300.0, D3: 300.0},
+        aadjc_by_day={D0: 100.0, D1: 250.0, D2: 250.0, D3: 250.0},
+    )
+    kwargs = dict(max_gross_weight=0.5, cost_model=standard_cost(bps=10.0))
+    flat = _run(db_flat, BuyOnce(weight=1.0), **kwargs)
+    mutated = _run(db_pm, BuyOnce(weight=1.0), **kwargs)
+    assert _batch_targets(flat, D1) == _batch_targets(mutated, D1)
+    d1 = next(
+        batch
+        for batch in flat.metadata["morning_order_batches"]
+        if batch["session_date"] == D1
+    )
+    assert d1["origin"] == "risk_correction"
+    assert d1["am_cost_basis"]["pm_prices_used"] is False
+    assert _code_trades(flat, day=D1)[0]["side"] == "sell"
+
+
+def test_stale_pm_mark_cannot_make_gross_ok(tmp_path):
+    db = _seed(
+        tmp_path,
+        madjc=100.0,
+        aadjc_by_day={D0: 100.0, D2: 110.0, D3: 110.0},
+        adjc=999.0,
+    )
+    res = _run(db, BuyOnce(weight=1.0), max_gross_weight=0.5)
+    d1 = next(
+        event
+        for event in res.metadata["gross_limit_events"]
+        if event["date"] == D1
+    )
+    assert d1["status"] == "INCOMPLETE"
+    assert d1["observed_gross_weight"] is None
+    assert res.metrics["selection_eligible"] is False
+
+
+def test_nonpositive_am_equity_flattens_without_strategy_orders(tmp_path):
+    db = _seed(
+        tmp_path,
+        madjc_by_day={D0: 100.0, D1: 100.0, D2: 100.0, D3: 100.0},
+        aadjc_by_day={D0: 300.0, D1: 100.0, D2: 100.0, D3: 100.0},
+    )
+    rec = BuyOnce(weight=1.0)
+    res = _run(db, rec, max_gross_weight=1.0)
+    assert [ctx.date for ctx in rec.ctxs] == [D0]
+    d0 = _code_trades(res, day=D0)
+    assert len(d0) == 1
+    assert d0[0]["side"] == "buy"
+    d1 = _code_trades(res, day=D1)
+    assert len(d1) == 1
+    assert d1[0]["side"] == "sell"
+    d1_batch = next(
+        batch
+        for batch in res.metadata["morning_order_batches"]
+        if batch["session_date"] == D1
+    )
+    assert d1_batch["origin"] == "risk_correction"
+    assert d1_batch["orders"][0]["target_shares"] == 0.0
+    assert any(
+        hold["reason"] == "nonpositive_decision_equity"
+        for hold in res.metadata["data_quality"]["am_policy_holds"]
+    )
+    json.dumps(res.metadata["gross_limit_events"], allow_nan=False)
     assert res.metrics["selection_eligible"] is False
 
 
