@@ -1904,91 +1904,163 @@ def test_timeout_without_confirmed_supervisor_withholds_terminal() -> None:
     assert manager.status(spec.job_id)["status"] == "STOPPING"
 
 
-def test_terminal_upload_retries_then_shuts_down() -> None:
-    attempts = {"n": 0}
-    terminal = threading.Event()
+class _HeldTimer:
+    def __init__(self, interval, function, args=None, kwargs=None) -> None:
+        self.interval = float(interval)
+        self.function = function
+        self.args = () if args is None else tuple(args)
+        self.kwargs = {} if kwargs is None else dict(kwargs)
+        self.daemon = False
+        self.started = False
+        self.cancelled = False
+        self.fired = False
+
+    def start(self) -> None:
+        self.started = True
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+    def fire(self) -> None:
+        if self.cancelled or self.fired:
+            return
+        self.fired = True
+        self.function(*self.args, **self.kwargs)
+
+
+@pytest.fixture
+def held_retry_scheduler(monkeypatch: pytest.MonkeyPatch) -> list[_HeldTimer]:
+    scheduled: list[_HeldTimer] = []
+
+    def factory(interval, function, args=None, kwargs=None) -> _HeldTimer:
+        timer = _HeldTimer(interval, function, args=args, kwargs=kwargs)
+        scheduled.append(timer)
+        return timer
+
+    monkeypatch.setattr(service.threading, "Timer", factory)
+    return scheduled
+
+
+def _install_isolated_http_guard(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    hits: list[str] = []
+
+    def _forbid(label: str):
+        def _call(*_args, **_kwargs):
+            hits.append(label)
+            pytest.fail(f"isolated test must not use HTTP fallback ({label})")
+
+        return _call
+
+    monkeypatch.setattr(service, "_get_json", _forbid("_get_json"))
+    monkeypatch.setattr(service, "_get_json_at", _forbid("_get_json_at"))
+    monkeypatch.setattr(service.urllib.request, "urlopen", _forbid("urlopen"))
+    return hits
+
+
+def _advance_held_terminal_retries(
+    manager, *, until_attempts: int, attempts: dict[str, int]
+) -> None:
+    remaining = until_attempts - attempts["n"]
+    assert remaining >= 0
+    for _ in range(remaining):
+        before = attempts["n"]
+        timer = manager._retry_timer
+        assert isinstance(timer, _HeldTimer)
+        assert timer.started is True
+        assert timer.cancelled is False
+        assert timer.fired is False
+        timer.fire()
+        assert attempts["n"] == before + 1
+    assert attempts["n"] == until_attempts
+
+
+@pytest.mark.parametrize(
+    ("job_id", "succeed_on", "drive_to", "expect_shutdown", "expect_exhausted"),
+    (
+        ("retry-after-ok", 3, 3, True, False),
+        ("retry-below-cap", None, 3, False, False),
+        ("retry-exhausted", None, 12, True, True),
+        ("retry-last-ok", 12, 12, True, False),
+    ),
+    ids=(
+        "success-after-retry",
+        "below-cap-no-shutdown",
+        "exhaustion-shuts-down",
+        "success-at-last-allowed-attempt",
+    ),
+)
+def test_terminal_publication_retry_state_machine(
+    held_retry_scheduler: list[_HeldTimer],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+    job_id: str,
+    succeed_on: int | None,
+    drive_to: int,
+    expect_shutdown: bool,
+    expect_exhausted: bool,
+) -> None:
+    max_attempts = service.JobManager._MAX_TERMINAL_PUT_ATTEMPTS
+    schedule = service.JobManager._RETRY_SCHEDULE
+    assert max_attempts == 12
+    assert drive_to <= max_attempts
+    if not expect_shutdown:
+        assert drive_to < max_attempts
+
+    http_hits = _install_isolated_http_guard(monkeypatch)
+
+    uploads = {"n": 0, "failed": 0, "succeeded": 0}
+    reads = {"n": 0}
+    shutdowns: list[int] = []
 
     def uploader(key, data, *, spec, content_digest, extra_headers=None):
         del key, data, spec, content_digest, extra_headers
-        attempts["n"] += 1
-        if attempts["n"] < 3:
-            raise RuntimeError("R2 upload returned 503")
-
-    manager = _job_manager(
-        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
-        on_terminal=terminal.set,
-        terminal_uploader=uploader,
-        retry_schedule=(0.01, 0.01),
-        max_job_seconds=30,
-    )
-    try:
-        manager.submit(_job("a" * 64, "retry-terminal"))
-        assert terminal.wait(1)
-        assert attempts["n"] == 3
-        assert manager._retry_timer is None
-        assert manager._pending_terminal is None
-        assert manager._shutdown_notified is True
-    finally:
-        if manager._retry_timer is not None:
-            manager._retry_timer.cancel()
-
-
-def test_terminal_publication_retries_below_cap_without_shutdown() -> None:
-    attempts = {"n": 0}
-    terminal = threading.Event()
-
-    def uploader(key, data, *, spec, content_digest, extra_headers=None):
-        del key, data, spec, content_digest, extra_headers
-        attempts["n"] += 1
-        raise RuntimeError("R2 upload returned 429")
-
-    manager = _job_manager(
-        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
-        on_terminal=terminal.set,
-        terminal_uploader=uploader,
-        retry_schedule=(0.01,),
-        max_job_seconds=30,
-    )
-    try:
-        manager.submit(_job("a" * 64, "retry-below-cap"))
-        deadline = time.monotonic() + 0.2
-        while attempts["n"] < 3 and time.monotonic() < deadline:
-            time.sleep(0.005)
-        assert 2 <= attempts["n"] < manager._MAX_TERMINAL_PUT_ATTEMPTS
-        assert not terminal.is_set()
-        assert manager._shutdown_notified is False
-        assert manager._retry_timer is not None
-        assert manager._pending_terminal is not None
-    finally:
-        if manager._retry_timer is not None:
-            manager._retry_timer.cancel()
-        manager._pending_terminal = None
-        manager._shutdown_notified = True
-
-
-def test_terminal_publication_retry_exhaustion_shuts_down(capsys) -> None:
-    attempts = {"n": 0}
-    terminal = threading.Event()
-
-    def uploader(key, data, *, spec, content_digest, extra_headers=None):
-        del key, data, spec, content_digest, extra_headers
-        attempts["n"] += 1
+        uploads["n"] += 1
+        if succeed_on is not None and uploads["n"] == succeed_on:
+            uploads["succeeded"] += 1
+            return
+        uploads["failed"] += 1
         raise RuntimeError("R2 upload returned 503")
 
+    def reader(item):
+        reads["n"] += 1
+        assert item.job_id == job_id
+        return None
+
+    def on_terminal() -> None:
+        shutdowns.append(1)
+
+    spec = _job("a" * 64, job_id)
     manager = _job_manager(
-        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
-        on_terminal=terminal.set,
+        lambda item: (_ for _ in ()).throw(
+            AssertionError("retry unit test must not start a runner")
+        ),
+        on_terminal=on_terminal,
         terminal_uploader=uploader,
-        retry_schedule=(0.001,),
+        terminal_reader=reader,
         max_job_seconds=30,
     )
     try:
-        manager.submit(_job("a" * 64, "retry-exhausted"))
-        assert terminal.wait(1)
-        assert attempts["n"] == manager._MAX_TERMINAL_PUT_ATTEMPTS
-        assert manager._retry_timer is None
-        assert manager._pending_terminal is None
-        assert manager._shutdown_notified is True
+        manager._begin_terminal_publication(
+            spec, manager._failure_terminal(spec, "runner failed")
+        )
+        assert uploads["n"] == 1
+        _advance_held_terminal_retries(
+            manager, until_attempts=drive_to, attempts=uploads
+        )
+        assert uploads["n"] == drive_to
+        expected_successes = 0 if succeed_on is None else 1
+        expected_failures = drive_to - expected_successes
+        assert uploads["succeeded"] == expected_successes
+        assert uploads["failed"] == expected_failures
+        assert reads["n"] == expected_failures
+        scheduled_count = (
+            expected_failures if expected_failures < max_attempts else max_attempts - 1
+        )
+        expected_delays = [
+            schedule[min(index, len(schedule) - 1)]
+            for index in range(scheduled_count)
+        ]
+        assert [timer.interval for timer in held_retry_scheduler] == expected_delays
         events = [
             json.loads(line)
             for line in capsys.readouterr().out.splitlines()
@@ -1999,43 +2071,38 @@ def test_terminal_publication_retry_exhaustion_shuts_down(capsys) -> None:
             for event in events
             if event.get("event") == "terminal_publication_retry_exhausted"
         ]
-        assert len(exhausted) == 1
-        assert exhausted[0]["job_id"] == "retry-exhausted"
-        assert exhausted[0]["attempts"] == manager._MAX_TERMINAL_PUT_ATTEMPTS
-        assert exhausted[0]["go"] is False
+        if expect_shutdown:
+            assert shutdowns == [1]
+            assert manager._shutdown_notified is True
+            assert manager._retry_timer is None
+            assert manager._pending_terminal is None
+            if expect_exhausted:
+                assert len(exhausted) == 1
+                assert exhausted[0]["job_id"] == job_id
+                assert exhausted[0]["attempts"] == max_attempts
+                assert exhausted[0]["go"] is False
+            else:
+                assert exhausted == []
+        else:
+            pending = manager._retry_timer
+            assert shutdowns == []
+            assert manager._shutdown_notified is False
+            assert isinstance(pending, _HeldTimer)
+            assert pending.started is True
+            assert pending.cancelled is False
+            assert pending.fired is False
+            assert manager._pending_terminal is not None
+            assert manager._pending_terminal[0].job_id == job_id
+            assert manager._accepting is False
+            with pytest.raises(service.JobBusyError):
+                manager.submit(_job("b" * 64, "other"))
+            assert exhausted == []
+        assert http_hits == []
     finally:
         if manager._retry_timer is not None:
             manager._retry_timer.cancel()
-
-
-def test_terminal_publication_succeeds_on_later_retry_below_cap() -> None:
-    attempts = {"n": 0}
-    terminal = threading.Event()
-    limit = service.JobManager._MAX_TERMINAL_PUT_ATTEMPTS
-
-    def uploader(key, data, *, spec, content_digest, extra_headers=None):
-        del key, data, spec, content_digest, extra_headers
-        attempts["n"] += 1
-        if attempts["n"] < limit:
-            raise RuntimeError("R2 upload returned 503")
-
-    manager = _job_manager(
-        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
-        on_terminal=terminal.set,
-        terminal_uploader=uploader,
-        retry_schedule=(0.001,),
-        max_job_seconds=30,
-    )
-    try:
-        manager.submit(_job("a" * 64, "retry-last-ok"))
-        assert terminal.wait(1)
-        assert attempts["n"] == limit
-        assert manager._retry_timer is None
-        assert manager._pending_terminal is None
-        assert manager._shutdown_notified is True
-    finally:
-        if manager._retry_timer is not None:
-            manager._retry_timer.cancel()
+        manager._pending_terminal = None
+        manager._shutdown_notified = True
 
 
 def test_failed_terminal_put_and_get_404_retries_without_shutdown(monkeypatch) -> None:
@@ -2089,8 +2156,13 @@ def test_failed_terminal_put_and_get_404_retries_without_shutdown(monkeypatch) -
             retry_timer.join(timeout=1)
 
 
-def test_unavailable_terminal_upload_does_not_shutdown() -> None:
-    terminal = threading.Event()
+def test_unavailable_terminal_upload_does_not_shutdown(
+    held_retry_scheduler: list[_HeldTimer],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del held_retry_scheduler
+    http_hits = _install_isolated_http_guard(monkeypatch)
+    shutdowns: list[int] = []
 
     def uploader(key, data, *, spec, content_digest, extra_headers=None):
         del key, data, spec, content_digest, extra_headers
@@ -2098,22 +2170,35 @@ def test_unavailable_terminal_upload_does_not_shutdown() -> None:
 
     manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
-        on_terminal=terminal.set,
+        on_terminal=lambda: shutdowns.append(1),
         terminal_uploader=uploader,
-        retry_schedule=(0.05, 0.05),
+        terminal_reader=lambda item: None,
         max_job_seconds=30,
     )
+    worker = None
     try:
         manager.submit(_job("a" * 64, "no-shutdown"))
-        assert not terminal.wait(0.2)
+        worker = manager._worker
+        assert worker is not None
+        worker.join(2)
+        assert not worker.is_alive()
+        assert shutdowns == []
+        assert manager._shutdown_notified is False
+        assert manager._pending_terminal is not None
+        assert isinstance(manager._retry_timer, _HeldTimer)
         assert manager.status("no-shutdown")["status"] == "FAILED"
         with pytest.raises(service.JobBusyError):
             manager.submit(_job("b" * 64, "other"))
+        assert http_hits == []
     finally:
+        pending_worker = manager._worker if worker is None else worker
+        if pending_worker is not None and pending_worker.is_alive():
+            pending_worker.join(2)
         if manager._retry_timer is not None:
             manager._retry_timer.cancel()
         manager._pending_terminal = None
         manager._shutdown_notified = True
+        assert pending_worker is None or not pending_worker.is_alive()
 
 
 def test_matching_existing_terminal_is_accepted() -> None:
@@ -3546,24 +3631,14 @@ def _increment_execution_counter(counter) -> None:
         counter.value += 1
 
 
-def test_controlled_job_manager_restart_executes_once() -> None:
+def test_controlled_job_manager_restart_executes_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
-    store: dict[str, bytes] = {}
+    store = _ControlledCasStore()
     executions = _shared_execution_counter()
     done = threading.Event()
-
-    def upload(key, data, *, spec, content_digest, extra_headers=None):
-        del spec, content_digest, extra_headers
-        body = data if isinstance(data, bytes) else bytes(data)
-        if key in store:
-            raise service.TerminalReadDenied("create-only")
-        store[key] = body
-
-    def reader(item):
-        raw = store.get(item.manifest_key)
-        if raw is None:
-            return None
-        return json.loads(raw.decode("utf-8"))
+    http_hits = _install_isolated_http_guard(monkeypatch)
 
     def runner(item):
         _increment_execution_counter(executions)
@@ -3571,8 +3646,9 @@ def test_controlled_job_manager_restart_executes_once() -> None:
 
     first = _job_manager(
         runner,
-        terminal_uploader=upload,
-        terminal_reader=reader,
+        terminal_uploader=store.upload,
+        terminal_reader=store.reader,
+        object_reader=store.object_reader,
         on_terminal=done.set,
         max_job_seconds=5,
         retry_schedule=(0.01,),
@@ -3582,17 +3658,23 @@ def test_controlled_job_manager_restart_executes_once() -> None:
     second_done = threading.Event()
     second = _job_manager(
         runner,
-        terminal_uploader=upload,
-        terminal_reader=reader,
+        terminal_uploader=store.upload,
+        terminal_reader=store.reader,
+        object_reader=store.object_reader,
         on_terminal=second_done.set,
         max_job_seconds=5,
         retry_schedule=(0.01,),
     )
     recovered = second.submit(spec)
+    existing = store.reader(spec)
     assert executions.value == 1
     assert recovered["status"] == "COMPLETED"
     assert recovered["execution_id"] == spec.execution_id
+    assert existing is not None
+    assert existing["status"] == "COMPLETED"
+    assert existing["execution_id"] == spec.execution_id
     assert second_done.is_set() is False
+    assert http_hits == []
 
 
 
