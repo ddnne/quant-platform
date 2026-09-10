@@ -2,12 +2,12 @@
   "schema": "quant-platform-work-ledger/v1",
   "baseline_sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
   "branch": "fix/am-order-quantity-causality",
-  "updated_at": "2026-09-10T15:24:37Z",
+  "updated_at": "2026-09-10T15:28:36Z",
   "lanes": {
     "source_delivered": {
       "status": "branch_unmerged",
       "scope": "item_2_am_order_quantity_causality",
-      "notes": "Local review follow-up. Unknown AM summaries unproven; dated measured gross required; Python execute payloads accepted by Worker semanticArtifact. Push remains denied. No native CI. Not merged or deployed."
+      "notes": "Local AM-causality unit complete on unmerged branch. Fixture pin test now compares live Python execute output to committed JSON and does not rewrite it. Push remains denied pending explicit user approval. No native CI. Not merged or deployed."
     },
     "staging_deployed": {
       "status": "not_this_branch",
@@ -35,7 +35,15 @@
   },
   "items": {
     "1_fresh_clone_and_ledger": { "status": "this_unit_partial" },
-    "2_am_order_quantity_causality": { "status": "source_on_unmerged_branch" },
+    "2_am_order_quantity_causality": {
+      "status": "source_on_unmerged_branch",
+      "tests": {
+        "python_fixture_regression": "2/2 passed; fixture sha256 a9015caeea31428a6ef87bdbf24c1d56d888e2921e4e8b39a2447d6bdfff79ba unchanged; git diff empty",
+        "worker_controlled_pilot": "src/controlled_pilot.test.ts 47 passed",
+        "note": "Synthetic container packaging only; not a production backtest or live evidence."
+      },
+      "approval": "push_denied_pending_explicit_user_approval"
+    },
     "3_dependency_scope": { "status": "pending" },
     "4_receipt_to_ready_trader": { "status": "pending" },
     "5_ci_deploy_entrypoints": { "status": "pending" },

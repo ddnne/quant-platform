@@ -3432,6 +3432,8 @@ def test_pin_python_execute_payloads_for_worker_acceptance(
 ) -> None:
     from paper_runtime.canonical_json import canonical_json_dumps
 
+    path = ROOT / "tests" / "fixtures" / "controlled_pilot_python_execute_artifacts.json"
+    pinned_text = path.read_text(encoding="utf-8")
     ok_dir = tmp_path / "ok"
     ok_dir.mkdir()
     ok = _run_controlled_container_with_engine_meta(
@@ -3461,14 +3463,12 @@ def test_pin_python_execute_payloads_for_worker_acceptance(
         metrics={"selection_eligible": False},
         aligned_to_worker=True,
     )
-    fixtures = {
+    produced = {
         "ok": _container_worker_payload(ok),
         "breach": _container_worker_payload(breach),
     }
-    path = ROOT / "tests" / "fixtures" / "controlled_pilot_python_execute_artifacts.json"
-    path.write_text(canonical_json_dumps(fixtures) + "\n", encoding="utf-8")
-    pinned = json.loads(path.read_text(encoding="utf-8"))
-    assert pinned["ok"]["papers"][0]["snapshot_id"].startswith("sha256:")
+    assert canonical_json_dumps(produced) + "\n" == pinned_text
+    pinned = json.loads(pinned_text)
     assert pinned["ok"]["selection"]["selected"]
     assert pinned["breach"]["selection"]["rejected"]
     assert pinned["breach"]["selection"]["decision"] == "HOLD"
