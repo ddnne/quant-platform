@@ -1452,12 +1452,19 @@ def test_controlled_pins_same_artifact_and_rejects_replace_mutate_swap(tmp_path)
     assert res.metadata["authentic_am_session_evidence"] is False
     assert res.metadata["price_evidence_mode"] == "historical_daily_reconstruction"
     assert res.metadata["contemporaneous_observation_unproven"] is True
-    assert res.metrics["selection_eligible"] is True
-    assert res.metrics["comparison_eligible"] is True
     assert res.metadata["data_quality"]["production_eligible"] is False
+    assert res.metadata["data_quality"]["pm_quantity_resized"] is False
     assert res.trades
     for trade in res.trades:
         assert trade["price"] == 150.0
+    first_buy = next(trade for trade in res.trades if trade["side"] == "buy")
+    assert first_buy["shares"] == pytest.approx(5_000.0)
+    assert any(
+        event["status"] == "BREACH" and event["resized"] is False
+        for event in res.metadata["gross_limit_events"]
+    )
+    assert res.metrics["selection_eligible"] is False
+    assert res.metrics["comparison_eligible"] is False
 
     with open(db, "ab") as handle:
         handle.write(b"tamper")

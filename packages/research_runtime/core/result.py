@@ -15,6 +15,34 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class GrossLimitObservation:
+    """PM-marked gross versus an AM-frozen limit. Never a quantity rewrite."""
+
+    date: str
+    decision_timestamp: str
+    limit: float
+    observed_gross_weight: float | None
+    observed_equity: float | None
+    observed_gross_notional: float | None
+    status: str
+    resized: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "date": self.date,
+            "decision_timestamp": self.decision_timestamp,
+            "limit": self.limit,
+            "observed_gross_weight": self.observed_gross_weight,
+            "observed_equity": self.observed_equity,
+            "observed_gross_notional": self.observed_gross_notional,
+            "status": self.status,
+            "resized": self.resized,
+            "filled_quantities_changed": False,
+            "correction_timing": "next_observable_am_decision",
+        }
+
+
+@dataclass(frozen=True)
 class BacktestResult:
     """The outcome of one ``run_backtest`` call.
 

@@ -127,10 +127,12 @@ AM_SIGNAL_PM_CLOSE = ExecutionMode(
         "information_cutoff D 11:30 JST (non-price PIT); "
         "operational_usable_by D 12:30 JST does not extend the non-price cutoff; "
         "D signal sees prior PIT-visible full daily rows plus a D synthetic "
-        "morning-only row (adjustment_close=MAdjC); orders fill the same "
-        "session at D afternoon adjustment close (AAdjC); DRAFT personal "
-        "retrospective field-time reconstruction, not an 11:30 publication claim; "
-        "target shares are sized from D morning prices and realized weights "
+        "morning-only row (adjustment_close=MAdjC); a morning OrderBatch is "
+        "frozen from AM-visible context, holdings, intent, policy and AM prices; "
+        "orders fill the same session at D afternoon adjustment close (AAdjC); "
+        "PM consumes the frozen batch for execution and realized-gross measurement "
+        "and does not resize quantities; DRAFT personal retrospective field-time "
+        "reconstruction, not an 11:30 publication claim; realized weights "
         "may drift by the PM close"
     ),
 )

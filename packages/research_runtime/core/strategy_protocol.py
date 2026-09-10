@@ -55,6 +55,59 @@ class Position:
 
 
 @dataclass(frozen=True)
+class FrozenMorningOrder:
+    """One AM-frozen target. PM may execute this quantity; it may not resize it."""
+
+    code: str
+    target_shares: float
+    delta_shares: float
+    target_weight: float | None
+    morning_price: float
+    origin: str
+
+
+@dataclass(frozen=True)
+class FrozenMorningOrderBatch:
+    """Immutable morning order batch. Not an execution authority.
+
+    Derived only from AM-visible context, holdings, intent, policy, and AM
+    prices. PM consumes the already-frozen batch for fills and measurement.
+    """
+
+    decision_timestamp: str
+    session_date: str
+    orders: tuple[FrozenMorningOrder, ...]
+    morning_price_basis: str
+    risk_policy_id: str
+    max_gross_weight_limit: float | None
+    origin: str
+
+    def target_shares(self) -> dict[str, float]:
+        return {order.code: order.target_shares for order in self.orders}
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "decision_timestamp": self.decision_timestamp,
+            "session_date": self.session_date,
+            "morning_price_basis": self.morning_price_basis,
+            "risk_policy_id": self.risk_policy_id,
+            "max_gross_weight_limit": self.max_gross_weight_limit,
+            "origin": self.origin,
+            "orders": [
+                {
+                    "code": order.code,
+                    "target_shares": order.target_shares,
+                    "delta_shares": order.delta_shares,
+                    "target_weight": order.target_weight,
+                    "morning_price": order.morning_price,
+                    "origin": order.origin,
+                }
+                for order in self.orders
+            ],
+        }
+
+
+@dataclass(frozen=True)
 class OrderIntent:
     """A strategy's desired exposure for one code, as a portfolio fraction.
 

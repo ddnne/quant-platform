@@ -62,12 +62,20 @@ from .execution import (
     morning_close_as_of,
 )
 from .metrics import compute_metrics
-from .result import BacktestResult
-from .strategy_protocol import Bar, BarContext, OrderIntent, Position
+from .result import BacktestResult, GrossLimitObservation
+from .strategy_protocol import (
+    Bar,
+    BarContext,
+    FrozenMorningOrder,
+    FrozenMorningOrderBatch,
+    OrderIntent,
+    Position,
+)
 from .universe import ResolvedDailyUniverse, load_master, resolve_injected_universe
 
-# Result metadata. 0.8.0: am_signal_pm_close personal-retrospective DRAFT path.
-CORE_ENGINE_VERSION = "0.8.0"
+# Result metadata. 0.9.0: AM OrderBatch freeze; PM measures, does not resize.
+CORE_ENGINE_VERSION = "0.9.0"
+AM_FROZEN_ORDER_BATCH_POLICY = "am_frozen_order_batch/v1"
 GOVERNED_AM_DATASET_ID = "equities_bars_daily_am"
 
 # J-Quants HolidayDivision: "1" == trading day (exchange open).
@@ -866,70 +874,134 @@ def _requested_gross(intents: Sequence[OrderIntent]) -> float:
     return gross
 
 
-def _resize_targets_for_realized_gross(
-    targets: dict[str, float],
-    *,
-    current_shares: Mapping[str, float],
-    fill_prices: Mapping[str, float],
-    cash: float,
-    cost_model: CostModel,
-    max_gross_weight: float,
-) -> tuple[dict[str, float], float, float]:
-    """Resize uncommitted PM targets so resulting gross <= cap, including costs."""
+def _share_book(shares: Mapping[str, float]) -> dict[str, float]:
+    return {code: qty for code, qty in shares.items() if abs(qty) >= 1e-12}
 
-    def _simulate(candidate: Mapping[str, float]) -> tuple[float, float]:
-        shares = dict(current_shares)
-        sim_cash = float(cash)
-        for code, target_shares in candidate.items():
-            price = fill_prices.get(code)
+
+def _price_map_gross(
+    shares: Mapping[str, float],
+    prices: Mapping[str, float],
+    cash: float,
+) -> tuple[float | None, float, float, list[str]]:
+    """Gross weight from an explicit price map. Missing held marks stay incomplete."""
+
+    missing = [
+        code
+        for code, qty in shares.items()
+        if abs(qty) >= 1e-12 and prices.get(code) is None
+    ]
+    equity = float(cash)
+    gross_notional = 0.0
+    for code, qty in shares.items():
+        if abs(qty) < 1e-12:
+            continue
+        price = prices.get(code)
+        if price is None:
+            continue
+        equity += float(qty) * float(price)
+        gross_notional += abs(float(qty)) * float(price)
+    if missing:
+        return None, equity, gross_notional, missing
+    if equity <= 0.0:
+        return float("inf"), equity, gross_notional, []
+    return gross_notional / equity, equity, gross_notional, []
+
+
+def _marked_gross(
+    shares: Mapping[str, float],
+    marks: Mapping[str, tuple[float, str]],
+    cash: float,
+) -> tuple[float | None, float, float, list[str]]:
+    prices = {code: mark[0] for code, mark in marks.items()}
+    return _price_map_gross(shares, prices, cash)
+
+
+def _freeze_morning_order_batch(
+    *,
+    decision_timestamp: str,
+    session_date: str,
+    current_shares: Mapping[str, float],
+    strategy_targets: Mapping[str, float],
+    strategy_weights: Mapping[str, float],
+    morning_prices: Mapping[str, float],
+    decision_equity: float,
+    price_basis: str,
+    max_gross_weight: float | None,
+) -> FrozenMorningOrderBatch:
+    """Freeze AM quantities. PM prices and fill costs never enter this step."""
+
+    desired = _share_book(current_shares)
+    desired.update(dict(strategy_targets))
+    risk_scaled = False
+    if max_gross_weight is not None and decision_equity > 0.0:
+        notional = 0.0
+        for code, qty in desired.items():
+            if abs(qty) < 1e-12:
+                continue
+            price = morning_prices.get(code)
             if price is None or price <= 0:
                 continue
-            current = shares.get(code, 0.0)
-            delta = target_shares - current
-            if abs(delta) < 1e-12:
-                continue
-            notional = delta * price
-            cost = cost_model.one_way_cost(notional)
-            shares[code] = 0.0 if abs(current + delta) < 1e-12 else current + delta
-            sim_cash -= notional + cost
-        position_value = 0.0
-        gross_notional = 0.0
-        for code, qty in shares.items():
-            if not qty:
-                continue
-            price = fill_prices.get(code)
-            if price is None:
-                continue
-            notional = qty * price
-            position_value += notional
-            gross_notional += abs(notional)
-        equity = sim_cash + position_value
-        if equity <= 0.0:
-            return float("inf"), equity
-        return gross_notional / equity, equity
-
-    requested, _ = _simulate(targets)
-    if requested <= max_gross_weight + 1e-12:
-        return dict(targets), requested, requested
-    if requested <= 0.0:
-        return dict(targets), requested, requested
-    scale = (max_gross_weight / requested) * 0.999
-    resized = dict(targets)
-    realized = requested
-    for _ in range(16):
-        resized = {code: qty * scale for code, qty in targets.items()}
-        realized, _ = _simulate(resized)
-        if realized <= max_gross_weight + 1e-9:
-            return resized, requested, realized
-        if not math.isfinite(realized) or realized <= 0.0:
-            break
-        scale *= (max_gross_weight / realized) * 0.999
-    flattened = {code: 0.0 for code in targets}
-    realized, _ = _simulate(flattened)
-    if realized <= max_gross_weight + 1e-9:
-        return flattened, requested, realized
-    raise ValueError(
-        "realized PM gross exceeds max_gross_weight after deterministic resize"
+            notional += abs(float(qty)) * float(price)
+        am_gross = notional / float(decision_equity)
+        if am_gross > max_gross_weight + 1e-12:
+            desired = {
+                code: qty * (max_gross_weight / am_gross)
+                for code, qty in desired.items()
+            }
+            risk_scaled = True
+    orders: list[FrozenMorningOrder] = []
+    for code in sorted(set(desired) | set(strategy_targets)):
+        target_shares = float(
+            desired[code] if code in desired else strategy_targets[code]
+        )
+        current = float(current_shares.get(code, 0.0))
+        delta = target_shares - current
+        if abs(delta) < 1e-12 and code not in strategy_targets:
+            continue
+        price = morning_prices.get(code)
+        if price is None or price <= 0:
+            continue
+        strategy_target = strategy_targets.get(code)
+        if (
+            strategy_target is not None
+            and not risk_scaled
+        ):
+            origin = "strategy"
+        elif (
+            strategy_target is not None
+            and abs(target_shares - float(strategy_target))
+            <= 1e-9 * max(1.0, abs(float(strategy_target)))
+        ):
+            origin = "strategy"
+        else:
+            origin = "risk_correction"
+        weight = strategy_weights.get(code)
+        if weight is None and decision_equity > 0.0:
+            weight = target_shares * float(price) / float(decision_equity)
+        orders.append(
+            FrozenMorningOrder(
+                code=code,
+                target_shares=target_shares,
+                delta_shares=delta,
+                target_weight=None if weight is None else float(weight),
+                morning_price=float(price),
+                origin=origin,
+            )
+        )
+    if any(order.origin == "risk_correction" for order in orders):
+        batch_origin = "risk_correction"
+    elif orders:
+        batch_origin = "strategy"
+    else:
+        batch_origin = "empty"
+    return FrozenMorningOrderBatch(
+        decision_timestamp=decision_timestamp,
+        session_date=session_date,
+        orders=tuple(orders),
+        morning_price_basis=price_basis,
+        risk_policy_id=AM_FROZEN_ORDER_BATCH_POLICY,
+        max_gross_weight_limit=max_gross_weight,
+        origin=batch_origin,
     )
 
 
@@ -1295,6 +1367,8 @@ def _run_backtest_impl(
     am_incomplete_valuations: list[dict[str, Any]] = []
     am_unfilled_orders: list[dict[str, Any]] = []
     am_missing_session_evidence: list[dict[str, Any]] = []
+    morning_order_batches: list[dict[str, Any]] = []
+    gross_limit_events: list[dict[str, Any]] = []
     requested_gross_obs: list[float] = []
     realized_gross_obs: list[float] = []
     if controlled_hold_reason is not None:
@@ -1541,8 +1615,19 @@ def _run_backtest_impl(
                     price_basis=resolved_price_basis,
                 )
                 decision_equity = _mark_equity(shares, marks, cash)
+        morning_batch: FrozenMorningOrderBatch | None = None
         if skip_am_decision:
             targets = {}
+            if am_pm_mode:
+                morning_batch = FrozenMorningOrderBatch(
+                    decision_timestamp=decision_as_of,
+                    session_date=d,
+                    orders=(),
+                    morning_price_basis=resolved_price_basis,
+                    risk_policy_id=AM_FROZEN_ORDER_BATCH_POLICY,
+                    max_gross_weight_limit=gross_cap,
+                    origin="empty",
+                )
         else:
             prices_d = {c: snap_dec[c]["close"] for c in universe_d}
             bars_d = {c: tuple(snap_dec[c]["bars"]) for c in universe_d}
@@ -1574,33 +1659,32 @@ def _run_backtest_impl(
             intents = strategy.on_bar(ctx)
             requested_gross_obs.append(_requested_gross(intents))
             intents = _apply_gross_cap(intents, gross_cap)
+            strategy_weights = {
+                intent.code: float(intent.target_weight) for intent in intents
+            }
             targets = _resolve_targets(intents, decision_equity, prices_d)
+            if am_pm_mode:
+                morning_batch = _freeze_morning_order_batch(
+                    decision_timestamp=decision_as_of,
+                    session_date=d,
+                    current_shares=shares,
+                    strategy_targets=targets,
+                    strategy_weights=strategy_weights,
+                    morning_prices=morning_prices,
+                    decision_equity=float(decision_equity),
+                    price_basis=resolved_price_basis,
+                    max_gross_weight=gross_cap,
+                )
+                targets = morning_batch.target_shares()
+
+        if morning_batch is not None:
+            morning_order_batches.append(morning_batch.to_dict())
 
         if mode.fill_offset == 1:
             # Non-empty targets replace any carried leftover.
             if targets:
                 pending = {"targets": targets, "decision_date": d}
         else:
-            if am_pm_mode and gross_cap is not None:
-                if not targets:
-                    targets = {
-                        code: qty for code, qty in shares.items() if qty
-                    }
-                else:
-                    for code, qty in shares.items():
-                        if qty and code not in targets:
-                            targets[code] = qty
-                if targets:
-                    targets, requested_pm, realized_pm = _resize_targets_for_realized_gross(
-                        targets,
-                        current_shares=shares,
-                        fill_prices=fill_closes,
-                        cash=cash,
-                        cost_model=cost_model,
-                        max_gross_weight=gross_cap,
-                    )
-                    requested_gross_obs.append(requested_pm)
-                    realized_gross_obs.append(realized_pm)
             shares, cash, leftover = _apply_fills(
                 targets,
                 decision_date=d,
@@ -1626,6 +1710,32 @@ def _run_backtest_impl(
             n_short_financing_gaps += s_gap
             n_leverage_financing_gaps += l_gap
             if am_pm_mode:
+                observed_gross, observed_equity, observed_notional, unpriced_gross = (
+                    _marked_gross(shares, marks, cash)
+                )
+                if observed_gross is not None and math.isfinite(observed_gross):
+                    realized_gross_obs.append(float(observed_gross))
+                if gross_cap is not None:
+                    if unpriced_gross or observed_gross is None:
+                        status = "INCOMPLETE"
+                    elif observed_gross > gross_cap + 1e-12:
+                        status = "BREACH"
+                    else:
+                        status = "OK"
+                    event = GrossLimitObservation(
+                        date=d,
+                        decision_timestamp=decision_as_of,
+                        limit=gross_cap,
+                        observed_gross_weight=(
+                            None
+                            if status == "INCOMPLETE"
+                            else float(observed_gross)
+                        ),
+                        observed_equity=float(observed_equity),
+                        observed_gross_notional=float(observed_notional),
+                        status=status,
+                    )
+                    gross_limit_events.append(event.to_dict())
                 if leftover:
                     held_now = {
                         code for code, qty in shares.items() if qty
@@ -1776,6 +1886,9 @@ def _run_backtest_impl(
         ),
         "starting_capital": starting_capital,
         "max_gross_weight_limit": gross_cap,
+        "am_order_batch_policy": (
+            AM_FROZEN_ORDER_BATCH_POLICY if am_pm_mode else None
+        ),
         "requested_gross_weight": (
             max(requested_gross_obs) if requested_gross_obs else 0.0
         ),
@@ -1784,6 +1897,8 @@ def _run_backtest_impl(
         ),
         "daily_requested_gross_weights": list(requested_gross_obs),
         "daily_realized_gross_weights": list(realized_gross_obs),
+        "morning_order_batches": list(morning_order_batches),
+        "gross_limit_events": list(gross_limit_events),
         "strategy_id": strategy_id,
         "strategy_params": strategy_params,
         "strategy_params_hash": _params_hash(strategy_params),
@@ -1802,13 +1917,10 @@ def _run_backtest_impl(
             "not a claim that the full daily record was published at 11:30"
         )
         metadata["weight_sizing_rule"] = (
-            "target_shares_from_d_morning_prices; "
-            "realized_pm_gross_capped_at_max_gross_weight"
-            if governed_am_pm
-            else (
-                "target_shares_from_d_morning_prices; "
-                "realized_weights_may_drift_by_pm_close"
-            )
+            "frozen_am_order_batch; "
+            "pm_executes_and_measures; "
+            "realized_weights_may_drift_by_pm_close; "
+            "no_pm_quantity_resize"
         )
         provenance = dict(metadata["price_basis_provenance"])
         provenance["signal_fields"] = [
@@ -1820,18 +1932,28 @@ def _run_backtest_impl(
             "historical_daily_reconstruction_not_11:30_publication"
         )
         provenance["weight_sizing"] = (
-            "causal_morning_prices_realized_pm_gross_capped"
-            if governed_am_pm
-            else "causal_morning_prices_pm_fill_may_drift"
+            "causal_morning_frozen_quantity_pm_fill_may_drift"
         )
         metadata["price_basis_provenance"] = provenance
         session_digest = am_session_view_digest(
             include_morning_turnover_history=True
         )
+        gross_breaches = [
+            event
+            for event in gross_limit_events
+            if event.get("status") == "BREACH"
+        ]
+        incomplete_gross = [
+            event
+            for event in gross_limit_events
+            if event.get("status") == "INCOMPLETE"
+        ]
         comparable = (
             not am_skipped_decisions
             and not am_incomplete_valuations
             and not am_unfilled_orders
+            and not gross_breaches
+            and not incomplete_gross
         )
         skipped_dates = [event["date"] for event in am_skipped_decisions]
         incomplete_dates = [event["date"] for event in am_incomplete_valuations]
@@ -1850,8 +1972,14 @@ def _run_backtest_impl(
                 for code in event.get("codes") or ()
             }
         )
+        breach_dates = [event["date"] for event in gross_breaches]
+        incomplete_gross_dates = [event["date"] for event in incomplete_gross]
         non_comparable_session_dates = sorted(
-            set(skipped_dates) | set(incomplete_dates) | set(missing_fill_dates)
+            set(skipped_dates)
+            | set(incomplete_dates)
+            | set(missing_fill_dates)
+            | set(breach_dates)
+            | set(incomplete_gross_dates)
         )
         production_eligible = False
         # Completeness may authorize research comparison/selection. It is not
@@ -1876,6 +2004,10 @@ def _run_backtest_impl(
             "held_missing_morning_adjustment_close": am_skipped_decisions,
             "held_missing_afternoon_adjustment_close": am_incomplete_valuations,
             "missing_afternoon_adjustment_close_unfilled": am_unfilled_orders,
+            "gross_limit_events": list(gross_limit_events),
+            "gross_breach_dates": breach_dates,
+            "incomplete_gross_dates": incomplete_gross_dates,
+            "pm_quantity_resized": False,
         }
         metadata["authentic_am_session_evidence"] = False
         metadata["price_evidence_mode"] = "historical_daily_reconstruction"
@@ -1908,6 +2040,10 @@ def _run_backtest_impl(
         metrics["missing_fill_dates"] = missing_fill_dates
         metrics["missing_fill_codes"] = missing_fill_codes
         metrics["non_comparable_session_dates"] = non_comparable_session_dates
+        metrics["gross_breach_dates"] = breach_dates
+        metrics["incomplete_gross_dates"] = incomplete_gross_dates
+        if gross_breaches:
+            metrics["gross_limit_gate"] = "hold_max_gross_weight_breach"
         if not comparable:
             metrics["data_quality_gate"] = "hard_fail_not_selection_eligible"
 
