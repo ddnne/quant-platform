@@ -7,6 +7,12 @@ from selection.budget_ledger import (
     require_budget_capability,
 )
 from selection.decision import DECISIONS, SelectionDecision
+from selection.engine_artifact_admission import (
+    AM_GROSS_CAP_EVIDENCE_UNPROVEN_REASON,
+    AM_PM_GROSS_CAP_PM_RESIZE_REASON,
+    admit_engine_artifact_for_selection,
+    is_am_gross_cap_pm_resize_artifact,
+)
 from selection.screen import (
     ExperimentBudget,
     OfflineExperimentBudget,
@@ -16,13 +22,17 @@ from selection.screen import (
 
 __all__ = [
     "BudgetExhaustedError",
+    "AM_GROSS_CAP_EVIDENCE_UNPROVEN_REASON",
+    "AM_PM_GROSS_CAP_PM_RESIZE_REASON",
     "DECISIONS",
     "ExperimentBudget",
     "OfflineExperimentBudget",
     "MassResearchDisabledError",
     "ResearchBudgetCapability",
     "SelectionDecision",
+    "admit_engine_artifact_for_selection",
     "early_stop",
+    "is_am_gross_cap_pm_resize_artifact",
     "require_budget_capability",
     "screen_candidates",
 ]

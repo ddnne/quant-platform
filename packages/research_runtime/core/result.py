@@ -10,8 +10,52 @@ metadata — the basis of the reproducibility test.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
+
+
+@dataclass(frozen=True)
+class GrossLimitObservation:
+    """PM-marked gross versus an AM-frozen limit. Never a quantity rewrite."""
+
+    date: str
+    decision_timestamp: str
+    limit: float
+    observed_gross_weight: float | None
+    observed_equity: float | None
+    observed_gross_notional: float | None
+    status: str
+    resized: bool = False
+    undefined_ratio_reason: str | None = None
+    partial_marked_equity: float | None = None
+    partial_marked_gross_notional: float | None = None
+    unpriced_held_codes: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        weight = self.observed_gross_weight
+        if weight is not None and not (
+            isinstance(weight, float) and math.isfinite(weight)
+        ):
+            weight = None
+        payload = {
+            "date": self.date,
+            "decision_timestamp": self.decision_timestamp,
+            "limit": self.limit,
+            "observed_gross_weight": weight,
+            "observed_equity": self.observed_equity,
+            "observed_gross_notional": self.observed_gross_notional,
+            "status": self.status,
+            "resized": self.resized,
+            "undefined_ratio_reason": self.undefined_ratio_reason,
+            "filled_quantities_changed": False,
+            "correction_timing": "next_observable_am_decision",
+        }
+        if self.status == "INCOMPLETE":
+            payload["partial_marked_equity"] = self.partial_marked_equity
+            payload["partial_marked_gross_notional"] = self.partial_marked_gross_notional
+            payload["unpriced_held_codes"] = list(self.unpriced_held_codes)
+        return payload
 
 
 @dataclass(frozen=True)

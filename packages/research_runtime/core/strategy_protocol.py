@@ -18,8 +18,17 @@ cannot fill on day *D* under ``next_close``).
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
+
+
+def encode_am_cost_basis(value: Mapping[str, Any] | None) -> str | None:
+    """Canonical JSON string for AM cost provenance. Nested dicts are not stored."""
+
+    if value is None:
+        return None
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
 @dataclass(frozen=True)
@@ -52,6 +61,67 @@ class Position:
     code: str
     shares: float
     avg_cost: float | None = None
+
+
+@dataclass(frozen=True)
+class FrozenMorningOrder:
+    """One AM-frozen target. PM may execute this quantity; it may not resize it."""
+
+    code: str
+    target_shares: float
+    delta_shares: float
+    target_weight: float | None
+    morning_price: float
+    origin: str
+    intent_target_weight: float | None = None
+
+
+@dataclass(frozen=True)
+class FrozenMorningOrderBatch:
+    """Immutable morning order batch. Not an execution authority.
+
+    Derived only from AM-visible context, holdings, intent, policy, and AM
+    prices. PM consumes the already-frozen batch for fills and measurement.
+    """
+
+    decision_timestamp: str
+    session_date: str
+    orders: tuple[FrozenMorningOrder, ...]
+    morning_price_basis: str
+    risk_policy_id: str
+    max_gross_weight_limit: float | None
+    origin: str
+    am_cost_basis_json: str | None = None
+
+    def target_shares(self) -> dict[str, float]:
+        return {order.code: order.target_shares for order in self.orders}
+
+    def to_dict(self) -> dict[str, Any]:
+        basis = None
+        if self.am_cost_basis_json is not None:
+            loaded = json.loads(self.am_cost_basis_json)
+            basis = loaded if isinstance(loaded, dict) else None
+        return {
+            "decision_timestamp": self.decision_timestamp,
+            "session_date": self.session_date,
+            "morning_price_basis": self.morning_price_basis,
+            "risk_policy_id": self.risk_policy_id,
+            "max_gross_weight_limit": self.max_gross_weight_limit,
+            "origin": self.origin,
+            "am_cost_basis": basis,
+            "orders": [
+                {
+                    "code": order.code,
+                    "target_shares": order.target_shares,
+                    "delta_shares": order.delta_shares,
+                    "target_weight": order.target_weight,
+                    "intent_target_weight": order.intent_target_weight,
+                    "morning_price": order.morning_price,
+                    "origin": order.origin,
+                }
+                for order in self.orders
+            ],
+        }
 
 
 @dataclass(frozen=True)

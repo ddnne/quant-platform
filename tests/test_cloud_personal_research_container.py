@@ -3048,14 +3048,7 @@ def test_controlled_container_runs_canonical_four_with_independent_artifacts(
                     "max_drawdown": -0.0,
                     "num_trades": 1,
                 },
-                metadata={
-                    "max_gross_weight_limit": 0.5,
-                    "requested_gross_weight": 0.5,
-                    "realized_gross_weight": 0.5,
-                    "authentic_am_session_evidence": False,
-                    "price_evidence_mode": "historical_daily_reconstruction",
-                    "contemporaneous_observation_unproven": True,
-                },
+                metadata=_proven_ok_engine_meta(),
             ),
             reproducibility={
                 "data_snapshot_id": snapshot_id,
@@ -3144,6 +3137,367 @@ def test_controlled_container_runs_canonical_four_with_independent_artifacts(
     )
     assert result["knowledge"]["artifact_id"] == result["knowledge"]["digest"]
     assert result["knowledge"]["digest"] == result["knowledge"]["semantic_digest"]
+    assert result["selection"]["rejected"] == []
+    assert result["selection"]["selected"] == [row["plan_id"] for row in papers]
+    assert "am_order_batch_policy" not in papers[0]
+    assert "selection_eligible" not in papers[0]
+
+
+def _proven_ok_engine_meta(**overrides: object) -> dict[str, object]:
+    body: dict[str, object] = {
+        "execution_mode": "am_signal_pm_close",
+        "core_engine_version": "0.9.0",
+        "am_order_batch_policy": "am_frozen_order_batch/v1",
+        "max_gross_weight_limit": 0.5,
+        "requested_gross_weight": 0.5,
+        "realized_gross_weight": 0.5,
+        "authentic_am_session_evidence": False,
+        "price_evidence_mode": "historical_daily_reconstruction",
+        "contemporaneous_observation_unproven": True,
+        "gross_limit_events": [
+            {
+                "date": "2023-01-04",
+                "status": "OK",
+                "limit": 0.5,
+                "observed_gross_weight": 0.5,
+                "resized": False,
+                "filled_quantities_changed": False,
+            }
+        ],
+    }
+    body.update(overrides)
+    return body
+
+
+def _run_controlled_container_with_engine_meta(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    metadata: dict[str, object],
+    *,
+    metrics: dict[str, object] | None = None,
+    aligned_to_worker: bool = False,
+):
+    snapshot = tmp_path / "controlled.sqlite"
+    sha = _sqlite(snapshot)
+    physical_id = f"sha256:{sha}"
+    snapshot_id = "sha256:" + ("ab" * 32)
+    universe = "sha256:" + ("ab" * 32)
+    snapshot_bytes = snapshot.read_bytes()
+    spec_overrides: dict[str, object] = {}
+    if aligned_to_worker:
+        keys = json.loads(
+            (
+                ROOT / "specs" / "ready" / "controlled_pilot_verify_keys.generated.json"
+            ).read_text(encoding="utf-8")
+        )
+        snapshot_id = str(keys["logical_snapshot_id"])
+        physical_id = str(keys["physical_snapshot_id"])
+        universe = str(keys["resolved_universe_digest"])
+        snapshot_bytes = b"controlled-pilot-physical-sqlite"
+        spec_overrides = {
+            "snapshot_id": snapshot_id,
+            "immutable_db_digest": physical_id,
+            "snapshot_key": (
+                "research/controlled_pilot/v1/snapshots/sha256="
+                + physical_id[len("sha256:") :]
+                + ".sqlite"
+            ),
+            "snapshot_size": 32,
+            "resolved_universe_digest": universe,
+            "authorization_digest": (
+                "sha256:36ba29b33d04f68468fb89e6c76ada53d019a156e9ca03ed3df6ef16e1a03b7e"
+            ),
+            "request_digest": keys["request_digest"],
+        }
+
+    def fake_download(key: str, dest: Path, *, expected_hex: str, expected_size: int) -> str:
+        del key, expected_size
+        dest.write_bytes(snapshot_bytes)
+        return expected_hex
+
+    def fake_run(strategy: object, config: object):
+        del strategy, config
+        from strategies.paper import Lifecycle, PaperRunResult
+
+        experiment_id = "e" * 64
+        body = {
+            "total_return_post_cost": 0.0,
+            "max_drawdown": -0.0,
+            "num_trades": 1,
+        }
+        if metrics:
+            body.update(metrics)
+        return PaperRunResult(
+            experiment_id=experiment_id,
+            run_id=experiment_id,
+            lifecycle=Lifecycle.PAPER,
+            backtest=BacktestResult(
+                equity_curve=[{"date": "2023-01-04", "equity": 1.0}],
+                trades=[{"code": "7203"}],
+                metrics=body,
+                metadata=metadata,
+            ),
+            reproducibility={
+                "data_snapshot_id": snapshot_id,
+                "feature_versions": {"momentum_n": "1.0.0"},
+                "feature_definition_hashes": {},
+                "strategy_definition_hash": "sha256:" + ("cd" * 32),
+            },
+        )
+
+    class _Universe:
+        rule_digest = EXACT_FOUR_UNIVERSE_RULE_DIGEST
+        resolved_membership_digest = universe
+        membership_by_date = {"2023-01-04": ("7203",)}
+        membership_proof = "controlled-resolved-universe:" + universe
+
+    class _Handle:
+        def _begin_controlled_batch_reads(self) -> None:
+            return None
+
+        def logical_snapshot_id(self) -> str:
+            return snapshot_id
+
+        def resolve_controlled_universe(self, **_kwargs: object) -> _Universe:
+            return _Universe()
+
+        def _end_controlled_batch_reads(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(service, "_download_controlled_snapshot", fake_download)
+    monkeypatch.setattr(service, "_run_controlled_paper", fake_run)
+    monkeypatch.setattr(service, "_mint_controlled_am_view", lambda *_args: _Handle())
+    if aligned_to_worker:
+        monkeypatch.setattr(service, "verify_sqlite", lambda _path: None)
+    spec_kwargs = {
+        "snapshot_id": snapshot_id,
+        "immutable_db_digest": physical_id,
+        "snapshot_key": (
+            "research/controlled_pilot/v1/snapshots/sha256="
+            + physical_id[len("sha256:") :]
+            + ".sqlite"
+        ),
+        "snapshot_size": len(snapshot_bytes),
+    }
+    spec_kwargs.update(spec_overrides)
+    return service.execute_controlled_pilot_container(
+        _controlled_job_spec(**spec_kwargs)
+    )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "match"),
+    [
+        ({"execution_mode": None}, "execution_mode"),
+        ({"core_engine_version": None}, "unsupported core engine"),
+        ({"core_engine_version": "0.8.0"}, "unsupported core engine"),
+        ({"am_order_batch_policy": None}, "freeze an AM order batch"),
+        ({"max_gross_weight_limit": None}, "missing or malformed"),
+        ({"max_gross_weight_limit": True}, "missing or malformed"),
+        ({"max_gross_weight_limit": "0.5"}, "missing or malformed"),
+        ({"realized_gross_weight": "unmeasured"}, "realized_gross_weight is malformed"),
+        ({"realized_gross_weight": False}, "realized_gross_weight is malformed"),
+        ({"gross_limit_events": None}, "missing gross_limit_events"),
+        ({"gross_limit_events": []}, "missing gross_limit_events"),
+        (
+            {
+                "gross_limit_events": [
+                    {"date": "2023-01-04", "status": "OK"}
+                ]
+            },
+            "resized",
+        ),
+        (
+            {
+                "gross_limit_events": [
+                    {
+                        "date": "not-a-date",
+                        "status": "OK",
+                        "limit": 0.5,
+                        "observed_gross_weight": 0.5,
+                        "resized": False,
+                        "filled_quantities_changed": False,
+                    }
+                ]
+            },
+            "ISO date",
+        ),
+        (
+            {
+                "gross_limit_events": [
+                    {
+                        "date": "2023-01-04",
+                        "status": "OK",
+                        "limit": 0.5,
+                        "resized": False,
+                        "filled_quantities_changed": False,
+                    }
+                ]
+            },
+            "missing measured gross",
+        ),
+    ],
+)
+def test_controlled_container_rejects_missing_or_malformed_gross_proof(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, object],
+    match: str,
+) -> None:
+    meta = _proven_ok_engine_meta()
+    for key, value in overrides.items():
+        if value is None:
+            meta.pop(key, None)
+        else:
+            meta[key] = value
+    with pytest.raises(service.JobInputError, match=match):
+        _run_controlled_container_with_engine_meta(tmp_path, monkeypatch, meta)
+
+
+def test_controlled_container_rejects_policy_only_without_mode_or_events(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with pytest.raises(service.JobInputError, match="execution_mode"):
+        _run_controlled_container_with_engine_meta(
+            tmp_path,
+            monkeypatch,
+            {"am_order_batch_policy": "am_frozen_order_batch/v1"},
+        )
+
+
+def test_controlled_container_holds_measured_pm_gross_breach(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from paper_runtime.canonical_json import canonical_json_digest
+
+    result = _run_controlled_container_with_engine_meta(
+        tmp_path,
+        monkeypatch,
+        _proven_ok_engine_meta(
+            realized_gross_weight=0.75,
+            selection_eligible=False,
+            gross_limit_events=[
+                {
+                    "date": "2023-01-04",
+                    "status": "BREACH",
+                    "limit": 0.5,
+                    "observed_gross_weight": 0.75,
+                    "resized": False,
+                    "filled_quantities_changed": False,
+                }
+            ],
+        ),
+        metrics={"selection_eligible": False},
+    )
+    assert result["ok"] is True
+    assert len(result["papers"]) == 4
+    assert len(result["risks"]) == 4
+    assert len(result["selection"]["decisions"]) == 4
+    assert result["selection"]["decision"] == "HOLD"
+    assert result["selection"]["selected"] == []
+    assert result["selection"]["rejected"] == [row["plan_id"] for row in result["papers"]]
+    for paper in result["papers"]:
+        assert paper["metrics"]["selection_eligible"] is False
+        assert paper["realized_gross_weight"] == 0.75
+        assert paper["reproducibility"]["am_order_batch_policy"] == (
+            "am_frozen_order_batch/v1"
+        )
+        body = dict(paper)
+        digest = body.pop("semantic_digest")
+        assert digest == canonical_json_digest(body)
+        assert "MAX_GROSS_WEIGHT_BREACH" in {
+            code
+            for decision in result["selection"]["decisions"]
+            for code in decision["reason_codes"]
+        }
+
+
+def _container_worker_payload(result: dict[str, object]) -> dict[str, object]:
+    return {
+        "ok": result["ok"],
+        "identity": result["identity"],
+        "ephemeral_cleaned": result["ephemeral_cleaned"],
+        "papers": result["papers"],
+        "risks": result["risks"],
+        "selection": result["selection"],
+        "knowledge": result["knowledge"],
+    }
+
+
+def test_pin_python_execute_payloads_for_worker_acceptance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from paper_runtime.canonical_json import canonical_json_dumps
+
+    path = ROOT / "tests" / "fixtures" / "controlled_pilot_python_execute_artifacts.json"
+    pinned_text = path.read_text(encoding="utf-8")
+    ok_dir = tmp_path / "ok"
+    ok_dir.mkdir()
+    ok = _run_controlled_container_with_engine_meta(
+        ok_dir,
+        monkeypatch,
+        _proven_ok_engine_meta(),
+        aligned_to_worker=True,
+    )
+    breach_dir = tmp_path / "breach"
+    breach_dir.mkdir()
+    breach = _run_controlled_container_with_engine_meta(
+        breach_dir,
+        monkeypatch,
+        _proven_ok_engine_meta(
+            realized_gross_weight=0.75,
+            gross_limit_events=[
+                {
+                    "date": "2023-01-04",
+                    "status": "BREACH",
+                    "limit": 0.5,
+                    "observed_gross_weight": 0.75,
+                    "resized": False,
+                    "filled_quantities_changed": False,
+                }
+            ],
+        ),
+        metrics={"selection_eligible": False},
+        aligned_to_worker=True,
+    )
+    produced = {
+        "ok": _container_worker_payload(ok),
+        "breach": _container_worker_payload(breach),
+    }
+    assert canonical_json_dumps(produced) + "\n" == pinned_text
+    pinned = json.loads(pinned_text)
+    assert pinned["ok"]["selection"]["selected"]
+    assert pinned["breach"]["selection"]["rejected"]
+    assert pinned["breach"]["selection"]["decision"] == "HOLD"
+
+
+def test_controlled_container_holds_incomplete_gross_measurement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = _run_controlled_container_with_engine_meta(
+        tmp_path,
+        monkeypatch,
+        _proven_ok_engine_meta(
+            realized_gross_weight=0.0,
+            gross_limit_events=[
+                {
+                    "date": "2023-01-04",
+                    "status": "INCOMPLETE",
+                    "limit": 0.5,
+                    "observed_gross_weight": None,
+                    "resized": False,
+                    "filled_quantities_changed": False,
+                }
+            ],
+        ),
+    )
+    assert result["ok"] is True
+    assert result["selection"]["selected"] == []
+    assert result["selection"]["rejected"] == [row["plan_id"] for row in result["papers"]]
+    assert result["papers"][0]["metrics"]["selection_eligible"] is False
 
 
 def _controlled_completed_result(item) -> dict:

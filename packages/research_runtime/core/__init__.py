@@ -38,7 +38,12 @@ from .costs import (
     standard_cost,
     stress_cost,
 )
-from .engine import CORE_ENGINE_VERSION, describe_strategy, run_backtest
+from .engine import (
+    AM_FROZEN_ORDER_BATCH_POLICY,
+    CORE_ENGINE_VERSION,
+    describe_strategy,
+    run_backtest,
+)
 from .repo_rates import load_repo_rates_by_date_for_paper
 from .execution import (
     AM_SIGNAL_PM_CLOSE,
@@ -52,7 +57,7 @@ from .execution import (
     operational_usable_by_as_of,
 )
 from .metrics import compute_metrics, max_drawdown
-from .result import BacktestResult
+from .result import BacktestResult, GrossLimitObservation
 from price_basis import (
     PERSONAL_RETROSPECTIVE_ADJUSTED,
     PIT_ADJUSTED,
@@ -64,6 +69,8 @@ from .strategy_protocol import (
     Bar,
     BarContext,
     EquityMaster,
+    FrozenMorningOrder,
+    FrozenMorningOrderBatch,
     OrderIntent,
     Position,
     Strategy,
@@ -74,15 +81,19 @@ __all__ = [
     # entry point + version
     "run_backtest",
     "CORE_ENGINE_VERSION",
+    "AM_FROZEN_ORDER_BATCH_POLICY",
     "describe_strategy",
     # result / metrics
     "BacktestResult",
+    "GrossLimitObservation",
     "compute_metrics",
     "max_drawdown",
     # strategy interface (narrow)
     "Strategy",
     "BarContext",
     "OrderIntent",
+    "FrozenMorningOrder",
+    "FrozenMorningOrderBatch",
     "Bar",
     "Position",
     "EquityMaster",

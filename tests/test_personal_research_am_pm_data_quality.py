@@ -13,6 +13,7 @@ from research.personal_service import (
     PersonalResearchPolicy,
     _candidate_evaluation,
     _paper_evidence,
+    _run_is_selection_eligible,
 )
 from strategies.paper import Lifecycle, PaperRunConfig, PaperRunResult
 
@@ -85,6 +86,9 @@ def _run_evidence(eligible: bool) -> dict:
         "period": {"start": _FOLD[0], "end": _FOLD[1]},
         "cost_bps": 0.0,
         "execution_mode": "am_signal_pm_close",
+        "core_engine_version": "0.9.0",
+        "am_order_batch_policy": "am_frozen_order_batch/v1",
+        "max_gross_weight_limit": 0.5,
         **quality,
         "data_quality": quality,
         "total_return_post_cost": 0.1,
@@ -138,6 +142,33 @@ def evaluate(monkeypatch):
         return candidate
 
     return run
+
+
+def test_old_am_gross_cap_engine_artifact_is_not_selection_eligible() -> None:
+    run = _run_evidence(True)
+    run["core_engine_version"] = "0.8.0"
+    run["max_gross_weight_limit"] = 0.5
+    run.pop("am_order_batch_policy", None)
+    assert _run_is_selection_eligible(run) is False
+
+
+def test_old_am_summary_without_cap_is_unproven_not_selection_eligible() -> None:
+    from selection.engine_artifact_admission import (
+        AM_GROSS_CAP_EVIDENCE_UNPROVEN_REASON,
+        AM_PM_GROSS_CAP_PM_RESIZE_REASON,
+        admit_engine_artifact_for_selection,
+    )
+
+    run = {
+        "execution_mode": "am_signal_pm_close",
+        "selection_eligible": True,
+        "comparison_eligible": True,
+    }
+    assert _run_is_selection_eligible(run) is False
+    admitted, reasons = admit_engine_artifact_for_selection(run)
+    assert admitted is False
+    assert reasons == (AM_GROSS_CAP_EVIDENCE_UNPROVEN_REASON,)
+    assert AM_PM_GROSS_CAP_PM_RESIZE_REASON not in reasons
 
 
 @pytest.mark.parametrize(

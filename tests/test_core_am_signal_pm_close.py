@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 import pit
@@ -66,17 +68,15 @@ def _uni(db):
 
 
 def _run(db, strategy, **kwargs):
-    return run_backtest(
-        strategy,
-        D0,
-        D3,
-        db_path=db,
-        universe=_uni(db),
-        execution_mode="am_signal_pm_close",
-        price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
-        cost_model=standard_cost(bps=0.0),
-        **kwargs,
-    )
+    params = {
+        "db_path": db,
+        "universe": _uni(db),
+        "execution_mode": "am_signal_pm_close",
+        "price_basis": PERSONAL_RETROSPECTIVE_ADJUSTED,
+        "cost_model": standard_cost(bps=0.0),
+    }
+    params.update(kwargs)
+    return run_backtest(strategy, D0, D3, **params)
 
 
 class Recorder:
@@ -641,3 +641,343 @@ def test_strategy_spec_am_missing_morning_prices_match_legacy_fail_closed(
     assert D1 in compact_res.metrics["skipped_decision_dates"]
     assert compact_res.metrics["comparable"] is False
     assert compact_res.metadata["context_bar_lookback_days"] == 0
+
+
+def _batch_targets(result, day: str) -> dict[str, float]:
+    batches = [
+        batch
+        for batch in result.metadata["morning_order_batches"]
+        if batch["session_date"] == day
+    ]
+    assert len(batches) == 1
+    return {
+        order["code"]: order["target_shares"]
+        for order in batches[0]["orders"]
+    }
+
+
+def _code_trades(result, *, day: str | None = None):
+    rows = [
+        trade
+        for trade in result.trades
+        if not str(trade["code"]).startswith("_")
+    ]
+    if day is not None:
+        rows = [trade for trade in rows if trade["fill_date"] == day]
+    return rows
+
+
+@pytest.mark.parametrize("pm_close", [100.0, 160.0, 250.0])
+def test_pm_price_mutation_does_not_change_frozen_am_quantity(tmp_path, pm_close):
+    db_flat = _seed(tmp_path / "flat", madjc=100.0, aadjc=100.0)
+    db_pm = _seed(tmp_path / "pm", madjc=100.0, aadjc=pm_close)
+    rec_flat = BuyOnce(weight=1.0)
+    rec_pm = BuyOnce(weight=1.0)
+    flat = _run(db_flat, rec_flat, max_gross_weight=0.5)
+    mutated = _run(db_pm, rec_pm, max_gross_weight=0.5)
+
+    assert rec_flat.ctxs[0].prices[CODE] == rec_pm.ctxs[0].prices[CODE] == 100.0
+    assert _batch_targets(flat, D0) == _batch_targets(mutated, D0)
+    assert _code_trades(flat, day=D0)[0]["shares"] == pytest.approx(
+        _code_trades(mutated, day=D0)[0]["shares"]
+    )
+    assert _code_trades(flat, day=D0)[0]["shares"] == pytest.approx(5_000.0)
+    assert mutated.metadata["am_order_batch_policy"] == "am_frozen_order_batch/v1"
+    assert mutated.metadata["data_quality"]["pm_quantity_resized"] is False
+    if pm_close > 100.0:
+        assert any(
+            event["status"] == "BREACH" and event["resized"] is False
+            for event in mutated.metadata["gross_limit_events"]
+        )
+        assert mutated.metrics["selection_eligible"] is False
+        assert mutated.metrics["comparison_eligible"] is False
+        assert "realized_pm_gross_capped" not in mutated.metadata["weight_sizing_rule"]
+
+
+def test_holding_day_pm_jump_does_not_create_a_sale(tmp_path):
+    db = _seed(
+        tmp_path,
+        madjc=100.0,
+        aadjc_by_day={D0: 100.0, D1: 300.0, D2: 300.0, D3: 300.0},
+    )
+    res = _run(db, BuyOnce(weight=1.0), max_gross_weight=0.5)
+    assert [trade["side"] for trade in _code_trades(res, day=D0)] == ["buy"]
+    assert _code_trades(res, day=D1) == []
+    assert _batch_targets(res, D1) == {}
+    d1_events = [
+        event
+        for event in res.metadata["gross_limit_events"]
+        if event["date"] == D1
+    ]
+    assert d1_events
+    assert d1_events[0]["status"] == "BREACH"
+    assert d1_events[0]["resized"] is False
+    assert d1_events[0]["filled_quantities_changed"] is False
+    assert d1_events[0]["observed_gross_weight"] > 0.5
+    assert res.metrics["selection_eligible"] is False
+
+
+def test_gross_correction_waits_for_next_am(tmp_path):
+    db = _seed(
+        tmp_path,
+        madjc_by_day={D0: 100.0, D1: 300.0, D2: 300.0, D3: 300.0},
+        aadjc_by_day={D0: 100.0, D1: 300.0, D2: 300.0, D3: 300.0},
+    )
+    res = _run(db, BuyOnce(weight=1.0), max_gross_weight=0.5)
+    assert _code_trades(res, day=D0)[0]["side"] == "buy"
+    assert _code_trades(res, day=D0)[0]["shares"] == pytest.approx(5_000.0)
+    d1 = _code_trades(res, day=D1)
+    assert len(d1) == 1
+    assert d1[0]["side"] == "sell"
+    d1_batch = next(
+        batch
+        for batch in res.metadata["morning_order_batches"]
+        if batch["session_date"] == D1
+    )
+    assert d1_batch["origin"] == "risk_correction"
+    assert {order["origin"] for order in d1_batch["orders"]} == {"risk_correction"}
+    assert d1[0]["shares"] == pytest.approx(d1_batch["orders"][0]["delta_shares"])
+    assert d1_batch["orders"][0]["target_shares"] < 5_000.0
+
+
+def test_retained_holding_and_costs_enter_realized_gross(tmp_path):
+    other = "8697"
+    days = TRADING_DAYS
+    db = seed_db(
+        tmp_path,
+        codes=[CODE, other],
+        prices={
+            CODE: {day: 10.0 for day in days},
+            other: {day: 10.0 for day in days},
+        },
+        adjustment_prices={
+            CODE: {day: 999.0 for day in days},
+            other: {day: 999.0 for day in days},
+        },
+        morning_adjustment_prices={
+            CODE: {day: 100.0 for day in days},
+            other: {day: 100.0 for day in days},
+        },
+        afternoon_adjustment_prices={
+            CODE: {day: 100.0 for day in days},
+            other: {
+                D0: 100.0,
+                D1: 250.0,
+                D2: 250.0,
+                D3: 250.0,
+            },
+        },
+    )
+
+    class BuyBothThenRetargetOne:
+        strategy_id = "partial_target"
+        params: dict = {}
+
+        def on_bar(self, ctx: BarContext) -> list[OrderIntent]:
+            if ctx.date == D0:
+                return [
+                    OrderIntent(code=CODE, target_weight=0.2),
+                    OrderIntent(code=other, target_weight=0.2),
+                ]
+            if ctx.date == D1:
+                return [OrderIntent(code=CODE, target_weight=0.2)]
+            return []
+
+    res = run_backtest(
+        BuyBothThenRetargetOne(),
+        D0,
+        D3,
+        db_path=db,
+        universe=membership_at(
+            morning_close_as_of(D0), db_path=db, codes=(CODE, other)
+        ),
+        execution_mode="am_signal_pm_close",
+        price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+        cost_model=standard_cost(bps=10.0),
+        max_gross_weight=0.5,
+    )
+    d1_trades = _code_trades(res, day=D1)
+    assert other not in {trade["code"] for trade in d1_trades}
+    assert any(trade["cost"] > 0.0 for trade in _code_trades(res))
+    d1_event = next(
+        event
+        for event in res.metadata["gross_limit_events"]
+        if event["date"] == D1
+    )
+    assert d1_event["observed_gross_notional"] is not None
+    assert d1_event["observed_equity"] < (
+        d1_event["observed_gross_notional"] + 1_000_000.0
+    )
+    assert d1_event["status"] == "BREACH"
+    assert d1_event["resized"] is False
+    assert res.metrics["selection_eligible"] is False
+
+
+def test_missing_fill_stays_no_fallback_with_gross_cap(tmp_path):
+    db = _seed(
+        tmp_path,
+        madjc=100.0,
+        aadjc_by_day={D1: 110.0, D2: 110.0, D3: 110.0},
+        adjc=999.0,
+    )
+    res = _run(db, AlwaysLong(), max_gross_weight=0.5)
+    assert all(trade["fill_date"] != D0 for trade in res.trades)
+    assert all(trade["price"] != 999.0 for trade in res.trades)
+    unfilled = res.metadata["data_quality"]["missing_afternoon_adjustment_close_unfilled"]
+    assert unfilled[0]["fallback"] is False
+    assert unfilled[0]["fill_substituted"] is False
+    assert res.metrics["selection_eligible"] is False
+
+
+def test_frozen_am_cost_basis_export_is_detached() -> None:
+    from core.strategy_protocol import FrozenMorningOrderBatch, encode_am_cost_basis
+
+    batch = FrozenMorningOrderBatch(
+        decision_timestamp="2025-04-01T11:30:00+09:00",
+        session_date=D0,
+        orders=(),
+        morning_price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+        risk_policy_id="am_frozen_order_batch/v1",
+        max_gross_weight_limit=1.0,
+        origin="empty",
+        am_cost_basis_json=encode_am_cost_basis(
+            {"pm_prices_used": False, "cost_model": {"name": "standard"}}
+        ),
+    )
+    exported = batch.to_dict()
+    exported["am_cost_basis"]["pm_prices_used"] = True
+    exported["am_cost_basis"]["cost_model"]["name"] = "mutated"
+    again = batch.to_dict()
+    assert again["am_cost_basis"]["pm_prices_used"] is False
+    assert again["am_cost_basis"]["cost_model"]["name"] == "standard"
+
+
+def test_known_am_costs_are_reserved_without_dust_corrections(tmp_path):
+    db = _seed(tmp_path, madjc=100.0, aadjc=100.0)
+    rec = BuyOnce(weight=1.0)
+    res = _run(
+        db,
+        rec,
+        max_gross_weight=1.0,
+        cost_model=standard_cost(bps=10.0),
+    )
+    buys = [trade for trade in _code_trades(res) if trade["side"] == "buy"]
+    sells = [trade for trade in _code_trades(res) if trade["side"] == "sell"]
+    assert len(buys) == 1
+    assert sells == []
+    assert buys[0]["shares"] < 10_000.0
+    assert buys[0]["shares"] == pytest.approx(1_000_000.0 / 100.0 / 1.001)
+    d0 = next(
+        batch
+        for batch in res.metadata["morning_order_batches"]
+        if batch["session_date"] == D0
+    )
+    order = d0["orders"][0]
+    assert order["intent_target_weight"] == pytest.approx(1.0)
+    assert order["target_weight"] == pytest.approx(order["target_shares"] * 100.0 / 1_000_000.0)
+    assert order["target_weight"] < order["intent_target_weight"]
+    assert d0["am_cost_basis"]["pm_prices_used"] is False
+    assert all(event["status"] == "OK" for event in res.metadata["gross_limit_events"])
+    assert res.metrics["selection_eligible"] is True
+    assert res.metrics["comparison_eligible"] is True
+
+
+def test_later_am_correction_uses_am_prices_and_known_cost(tmp_path):
+    db_flat = _seed(
+        tmp_path / "flat",
+        madjc_by_day={D0: 100.0, D1: 300.0, D2: 300.0, D3: 300.0},
+        aadjc_by_day={D0: 100.0, D1: 300.0, D2: 300.0, D3: 300.0},
+    )
+    db_pm = _seed(
+        tmp_path / "pm",
+        madjc_by_day={D0: 100.0, D1: 300.0, D2: 300.0, D3: 300.0},
+        aadjc_by_day={D0: 100.0, D1: 250.0, D2: 250.0, D3: 250.0},
+    )
+    kwargs = dict(max_gross_weight=0.5, cost_model=standard_cost(bps=10.0))
+    flat = _run(db_flat, BuyOnce(weight=1.0), **kwargs)
+    mutated = _run(db_pm, BuyOnce(weight=1.0), **kwargs)
+    assert _batch_targets(flat, D1) == _batch_targets(mutated, D1)
+    d1 = next(
+        batch
+        for batch in flat.metadata["morning_order_batches"]
+        if batch["session_date"] == D1
+    )
+    assert d1["origin"] == "risk_correction"
+    assert d1["am_cost_basis"]["pm_prices_used"] is False
+    assert _code_trades(flat, day=D1)[0]["side"] == "sell"
+
+
+def test_stale_pm_mark_cannot_make_gross_ok(tmp_path):
+    db = _seed(
+        tmp_path,
+        madjc=100.0,
+        aadjc_by_day={D0: 100.0, D2: 110.0, D3: 110.0},
+        adjc=999.0,
+    )
+    res = _run(db, BuyOnce(weight=1.0), max_gross_weight=0.5)
+    d1 = next(
+        event
+        for event in res.metadata["gross_limit_events"]
+        if event["date"] == D1
+    )
+    assert d1["status"] == "INCOMPLETE"
+    assert d1["observed_gross_weight"] is None
+    assert d1["observed_equity"] is None
+    assert d1["observed_gross_notional"] is None
+    assert "partial_marked_equity" in d1
+    assert d1["unpriced_held_codes"]
+    assert res.metrics["selection_eligible"] is False
+
+
+def test_nonpositive_am_equity_flattens_without_strategy_orders(tmp_path):
+    db = _seed(
+        tmp_path,
+        madjc_by_day={D0: 100.0, D1: 100.0, D2: 100.0, D3: 100.0},
+        aadjc_by_day={D0: 300.0, D1: 100.0, D2: 100.0, D3: 100.0},
+    )
+    rec = BuyOnce(weight=1.0)
+    res = _run(db, rec, max_gross_weight=1.0)
+    assert [ctx.date for ctx in rec.ctxs] == [D0]
+    d0 = _code_trades(res, day=D0)
+    assert len(d0) == 1
+    assert d0[0]["side"] == "buy"
+    d1 = _code_trades(res, day=D1)
+    assert len(d1) == 1
+    assert d1[0]["side"] == "sell"
+    d1_batch = next(
+        batch
+        for batch in res.metadata["morning_order_batches"]
+        if batch["session_date"] == D1
+    )
+    assert d1_batch["origin"] == "risk_correction"
+    assert d1_batch["orders"][0]["target_shares"] == 0.0
+    assert any(
+        hold["reason"] == "nonpositive_decision_equity"
+        for hold in res.metadata["data_quality"]["am_policy_holds"]
+    )
+    json.dumps(res.metadata["gross_limit_events"], allow_nan=False)
+    assert res.metrics["selection_eligible"] is False
+
+
+@pytest.mark.parametrize("max_gross_weight", [None, 0.5])
+def test_raw_am_path_remains_rejection_only(tmp_path, max_gross_weight):
+    db = _seed(tmp_path)
+    kwargs = {}
+    if max_gross_weight is not None:
+        kwargs["max_gross_weight"] = max_gross_weight
+    res = run_backtest(
+        BuyOnce(),
+        D0,
+        D3,
+        db_path=db,
+        universe=_uni(db),
+        execution_mode="am_signal_pm_close",
+        price_basis=RAW,
+        cost_model=standard_cost(bps=0.0),
+        **kwargs,
+    )
+    assert res.trades == []
+    assert res.metadata["authentic_am_session_evidence"] is False
+    assert "missing_verified_production_am_capability" in (
+        res.metadata.get("am_session_evidence_reason") or ""
+    )

@@ -1,0 +1,96 @@
+{
+  "schema": "quant-platform-work-ledger/v1",
+  "baseline_sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
+  "branch": "fix/am-order-quantity-causality",
+  "updated_at": "2026-09-10T22:22:00Z",
+  "lanes": {
+    "source_delivered": {
+      "status": "branch_unmerged",
+      "scope": "item_2_am_order_quantity_causality",
+      "notes": "AM-causality source through 0255744b pushed by Codex after fresh explicit user approval. PR #103 is open; native Cloudflare CI is running and must pass on the final PR SHA. Fixture regression compares Python execute output to pinned JSON without rewriting it. Not yet merged or deployed.",
+      "pull_request": "https://github.com/ddnne/quant-platform/pull/103",
+      "implementation_sha": "0255744b74e8b7186940abf93a1ed0be61a033ee"
+    },
+    "staging_deployed": {
+      "status": "not_this_branch",
+      "sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
+      "secrets_version": "6a23dd25-5dc2-422c-bb8f-1d95a6266822",
+      "gateway_version": "795a201c-911c-4cf9-99a6-3d558959e857",
+      "notes": "Secrets/Gateway staging remain at baseline b121 after normal approval. Mass source rollout not done. This branch is not deployed."
+    },
+    "production_deployed": {
+      "status": "hold",
+      "notes": "Production auto-deploy remains HOLD."
+    },
+    "data_activated": {
+      "status": "pending",
+      "notes": "Not part of this unit. No market download."
+    },
+    "ready": {
+      "status": "pending",
+      "notes": "READY null. Successful JQ Cron is not READY."
+    },
+    "pilot_executed": {
+      "status": "pending",
+      "notes": "Exact-four Pilot is not authorized by this unit."
+    }
+  },
+  "items": {
+    "1_fresh_clone_and_ledger": { "status": "this_unit_partial" },
+    "2_am_order_quantity_causality": {
+      "status": "source_on_unmerged_branch",
+      "tests": {
+        "python_fixture_regression": "2/2 passed; fixture sha256 a9015caeea31428a6ef87bdbf24c1d56d888e2921e4e8b39a2447d6bdfff79ba unchanged; git diff empty",
+        "worker_controlled_pilot": "src/controlled_pilot.test.ts 47 passed",
+        "independent_python_regression": "370 passed in 17 files; 28 existing multiprocessing warnings",
+        "independent_worker_regression": "typecheck passed; Node 503 passed; Cloudflare runtime 7 passed (separate invocation)",
+        "note": "Synthetic container packaging only; not a production backtest or live evidence."
+      },
+      "approval": "explicit_user_approval_codex_git_integration_grok_coding",
+      "review": "Independent critical review found no unresolved major issue in the reviewed AM/consumer scope. Global operational gates remain unresolved."
+    },
+    "3_dependency_scope": { "status": "pending" },
+    "4_receipt_to_ready_trader": { "status": "pending" },
+    "5_ci_deploy_entrypoints": { "status": "pending" },
+    "6_shared_d1_receipt_reproof": { "status": "pending" },
+    "7_dead_code_and_docs": { "status": "pending" },
+    "8_rollout_and_research_go": { "status": "pending" },
+    "9_push_remote_and_fresh_clone_verify": { "status": "branch_pushed_pr103_ci_pending_merge_and_fresh_clone" }
+  },
+  "operational_facts": [
+    {
+      "id": "staging_secrets_gateway_20260910",
+      "observed_at": "2026-09-10T13:55:00Z",
+      "sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
+      "secrets_version": "6a23dd25-5dc2-422c-bb8f-1d95a6266822",
+      "gateway_version": "795a201c-911c-4cf9-99a6-3d558959e857",
+      "fact": "Secrets/Gateway staging deployed after normal user approval. Does not deploy this branch or Mass."
+    },
+    {
+      "id": "projection_live_read_20260910T1422Z",
+      "observed_at": "2026-09-10T14:22:00Z",
+      "fact": "Projection STALE; generated 2026-08-21T12:30:49.152421+00:00; active projection generation projgen-ef18b4f86ee946048161d25e2a30a2a8; source cursor 2898983; applied cursor null; B0 UNKNOWN; READY null."
+    },
+    {
+      "id": "jq_run14927_20260910",
+      "observed_at": "2026-09-10T14:17:00Z",
+      "fact": "JQ run14927 on Sep10 23:16-23:17 JST passed 23/23 with 66765 rows. Distinct from READY."
+    }
+  ],
+  "unknowns": [
+    "Affected historic AM+gross-cap engine artifact inventory was not examined; no cloud listing was performed."
+  ],
+  "pending_operations": [
+    {
+      "id": "enumerate_legacy_am_gross_cap_engine_artifacts",
+      "status": "pending",
+      "requires": "cloud evidence",
+      "notes": "Structurally reject AM+gross-cap artifacts that cannot prove am_frozen_order_batch/v1. Do not overwrite or delete historic files."
+    },
+    {
+      "id": "push_am_causality_branch_after_explicit_approval",
+      "status": "completed",
+      "notes": "Fresh explicit user approval assigned Git publication to Codex and coding to Grok. Codex successfully pushed 0255744b and opened PR #103. Prior Grok denial was not bypassed. Production deployment remains separate approval."
+    }
+  ]
+}

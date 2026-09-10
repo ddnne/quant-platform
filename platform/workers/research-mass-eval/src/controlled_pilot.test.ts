@@ -13,6 +13,7 @@ import readyFixture from "../../../../specs/ready/controlled_pilot_ready.generat
 import traderFixture from "../../../../specs/ready/controlled_pilot_trader_batch.generated.json";
 import fixtureKeys from "../../../../specs/ready/controlled_pilot_verify_keys.generated.json";
 import pythonContainerArtifacts from "../../../../specs/ready/controlled_pilot_container_artifacts.generated.json";
+import pythonExecuteArtifacts from "../../../../tests/fixtures/controlled_pilot_python_execute_artifacts.json";
 import {
   CONTROLLED_FILL_CONTRACT_DIGEST,
   CONTROLLED_FILL_EXECUTION_MODE,
@@ -217,19 +218,21 @@ function mockGateway(state: BudgetState): Env["AI_GATEWAY"] {
   };
 }
 
-async function artifacts(logicalId: string) {
+type ContainerArtifactPayload = {
+  ok: true;
+  identity: string;
+  ephemeral_cleaned: true;
+  papers: Record<string, unknown>[];
+  risks: Record<string, unknown>[];
+  selection: Record<string, unknown>;
+  knowledge: Record<string, unknown>;
+};
+
+async function artifacts(logicalId: string, payload: ContainerArtifactPayload = pythonContainerArtifacts as unknown as ContainerArtifactPayload) {
   if (logicalId !== fixtureKeys.logical_snapshot_id) {
     throw new Error("Python Container fixture logical snapshot mismatch");
   }
-  return structuredClone(pythonContainerArtifacts) as unknown as {
-    ok: true;
-    identity: string;
-    ephemeral_cleaned: true;
-    papers: Record<string, unknown>[];
-    risks: Record<string, unknown>[];
-    selection: Record<string, unknown>;
-    knowledge: Record<string, unknown>;
-  };
+  return structuredClone(payload);
 }
 
 function mockContainer(options?: {
@@ -246,6 +249,7 @@ function mockContainer(options?: {
     | "knowledge_missing_id"
     | "knowledge_wrong_digest"
     | "post_digest_injection"
+    | "python_extra_closed_fields"
     | "non_raw_price_basis"
     | "raw_price_basis"
     | "unknown_price_evidence_mode"
@@ -262,6 +266,7 @@ function mockContainer(options?: {
   stall?: ContainerStall;
   scheduled?: string[];
   outbound?: Map<string, unknown>;
+  containerArtifacts?: ContainerArtifactPayload;
 }): Env["PERSONAL_RESEARCH_CONTAINER"] {
   const outbound = options?.outbound ?? new Map<string, unknown>();
   const fetches = options?.fetches ?? { n: 0, post: 0 };
@@ -293,7 +298,7 @@ function mockContainer(options?: {
             if (options?.stall?.body === "post") return stalledBodyResponse(202);
             fetches.post += 1;
             const body = (await request.json()) as { job_id: string; snapshot_id: string };
-            const result = await artifacts(body.snapshot_id);
+            const result = await artifacts(body.snapshot_id, options?.containerArtifacts);
             if (options?.tamper === "reorder") {
               result.papers = [result.papers[1]!, result.papers[0]!, result.papers[2]!, result.papers[3]!];
             }
@@ -320,6 +325,12 @@ function mockContainer(options?: {
             }
             if (options?.tamper === "post_digest_injection") {
               result.papers[0]!.injected_after_closed_schema = true;
+              delete result.papers[0]!.semantic_digest;
+              result.papers[0]!.semantic_digest = await sha256Digest(canonicalJson(result.papers[0]!));
+            }
+            if (options?.tamper === "python_extra_closed_fields") {
+              result.papers[0]!.am_order_batch_policy = "am_frozen_order_batch/v1";
+              result.papers[0]!.selection_eligible = true;
               delete result.papers[0]!.semantic_digest;
               result.papers[0]!.semantic_digest = await sha256Digest(canonicalJson(result.papers[0]!));
             }
@@ -471,6 +482,7 @@ async function seedEnv(options?: {
     | "knowledge_missing_id"
     | "knowledge_wrong_digest"
     | "post_digest_injection"
+    | "python_extra_closed_fields"
     | "non_raw_price_basis"
     | "raw_price_basis"
     | "unknown_price_evidence_mode"
@@ -485,6 +497,7 @@ async function seedEnv(options?: {
   delay?: { complete: boolean };
   forgetFirstStatus?: boolean;
   stall?: ContainerStall;
+  containerArtifacts?: ContainerArtifactPayload;
 }) {
   const mem = new MemR2();
   const snapshot = new TextEncoder().encode("controlled-pilot-physical-sqlite");
@@ -527,6 +540,7 @@ async function seedEnv(options?: {
       stall: options?.stall,
       scheduled,
       outbound,
+      containerArtifacts: options?.containerArtifacts,
     }),
     MASS_EVAL_TOKEN: "secret",
     ENVIRONMENT: "staging",
@@ -745,6 +759,44 @@ describe("controlled cloud execution", () => {
     await ctx.pending;
     const status = await controlledPilotStatus(seeded.env, seeded.request.idempotency_key);
     expect(((await status.json()) as { status: string }).status).toBe("COMPLETED");
+  });
+
+  it("accepts an actual Python execute_controlled_pilot_container OK payload", async () => {
+    const payload = pythonExecuteArtifacts.ok as unknown as ContainerArtifactPayload;
+    const seeded = await seedEnv({ containerArtifacts: payload });
+    const ctx = new WaitCtx();
+    await submitControlledPilot(seeded.env, seeded.request, ctx);
+    await ctx.pending;
+    const status = await controlledPilotStatus(seeded.env, seeded.request.idempotency_key);
+    const body = (await status.json()) as { status: string; manifest: { children: unknown[] } };
+    expect(body.status).toBe("COMPLETED");
+    expect(body.manifest.children).toHaveLength(10);
+    expect(payload.selection.selected).toEqual(expect.arrayContaining([
+      "exp-mdh-hold10-momentum",
+    ]));
+  });
+
+  it("persists a Python-measured PM gross BREACH as HOLD", async () => {
+    const payload = pythonExecuteArtifacts.breach as unknown as ContainerArtifactPayload;
+    const seeded = await seedEnv({ containerArtifacts: payload });
+    const ctx = new WaitCtx();
+    await submitControlledPilot(seeded.env, seeded.request, ctx);
+    await ctx.pending;
+    const status = await controlledPilotStatus(seeded.env, seeded.request.idempotency_key);
+    const body = (await status.json()) as { status: string; manifest: { children: unknown[] } };
+    expect(body.status).toBe("COMPLETED");
+    expect(body.manifest.children).toHaveLength(10);
+    expect(payload.selection.decision).toBe("HOLD");
+    expect(payload.selection.selected).toEqual([]);
+    expect((payload.selection.rejected as string[]).length).toBe(4);
+    const paperRef = body.manifest.children[0] as { key: string };
+    const paper = await seeded.env.STRUCTURED_BUCKET.get(paperRef.key);
+    expect(paper).not.toBeNull();
+    const stored = JSON.parse(
+      new TextDecoder().decode(new Uint8Array(await paper!.arrayBuffer())),
+    ) as { semantic_body: Record<string, unknown> };
+    expect(stored.semantic_body.kind).toBe("paper");
+    expect((stored.semantic_body.metrics as Record<string, unknown>).selection_eligible).toBe(false);
   });
 
   it("replay of an existing SUBMITTED job only repairs its schedule", async () => {
@@ -1248,6 +1300,7 @@ describe("controlled cloud execution", () => {
       "knowledge_missing_id",
       "knowledge_wrong_digest",
       "post_digest_injection",
+      "python_extra_closed_fields",
       "non_raw_price_basis",
       "raw_price_basis",
       "unknown_price_evidence_mode",

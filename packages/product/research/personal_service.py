@@ -45,6 +45,7 @@ from paper_runtime.personal_draft_bind import (
     verify_draft_snapshot,
 )
 from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED
+from selection.engine_artifact_admission import admit_engine_artifact_for_selection
 from strategies.paper import Lifecycle, PaperRunConfig, PaperRunResult
 from strategies.spec import StrategySpec, iter_feature_refs, strategy_spec_digest
 
@@ -1001,6 +1002,13 @@ _DATA_QUALITY_DETAIL_KEYS = (
     "held_missing_afternoon_adjustment_close",
     "missing_afternoon_adjustment_close_unfilled",
     "data_quality_gate",
+    "gross_limit_events",
+    "gross_breach_dates",
+    "incomplete_gross_dates",
+    "undefined_gross_dates",
+    "am_policy_holds",
+    "pm_quantity_resized",
+    "invalidation_reasons",
 )
 
 
@@ -1010,7 +1018,13 @@ def _explicit_quality_flag(source: Mapping[str, Any], name: str) -> bool:
     return source[name] is not False
 
 
-def _paper_run_data_quality(metrics: Mapping[str, Any]) -> dict[str, Any]:
+def _paper_run_data_quality(
+    metrics: Mapping[str, Any],
+    *,
+    metadata: Mapping[str, Any] | None = None,
+    reproducibility: Mapping[str, Any] | None = None,
+    execution_mode: str | None = None,
+) -> dict[str, Any]:
     """Always emit AM/PM eligibility flags; absent metrics stay eligible."""
 
     quality = {
@@ -1020,6 +1034,18 @@ def _paper_run_data_quality(metrics: Mapping[str, Any]) -> dict[str, Any]:
     for key in _DATA_QUALITY_DETAIL_KEYS:
         if key in metrics:
             quality[key] = metrics[key]
+    identity: dict[str, Any] = dict(metrics)
+    if metadata:
+        identity.update(dict(metadata))
+    if reproducibility:
+        identity.update(dict(reproducibility))
+    if execution_mode is not None:
+        identity["execution_mode"] = execution_mode
+    admitted, reasons = admit_engine_artifact_for_selection(identity)
+    if not admitted:
+        quality["selection_eligible"] = False
+        quality["comparison_eligible"] = False
+        quality["invalidation_reasons"] = list(reasons)
     return quality
 
 
@@ -1028,6 +1054,9 @@ def _run_is_selection_eligible(run: Mapping[str, Any]) -> bool:
 
     if not isinstance(run, Mapping):
         return True
+    admitted, _ = admit_engine_artifact_for_selection(run)
+    if not admitted:
+        return False
     if "selection_eligible" in run:
         return run["selection_eligible"] is not False
     quality = run.get("data_quality")
@@ -1065,7 +1094,13 @@ def _paper_evidence(
         trades=result.trades,
         starting_capital=config.starting_capital,
     )
-    data_quality = _paper_run_data_quality(metrics)
+    engine_meta = getattr(result.backtest, "metadata", None) or {}
+    data_quality = _paper_run_data_quality(
+        metrics,
+        metadata=engine_meta,
+        reproducibility=result.reproducibility,
+        execution_mode=config.execution_mode,
+    )
     return (
         {
             "run_id": result.run_id,
@@ -1073,6 +1108,10 @@ def _paper_evidence(
             "period": {"start": config.start, "end": config.end},
             "cost_bps": config.cost_bps,
             "execution_mode": config.execution_mode,
+            "core_engine_version": result.reproducibility.get("core_engine_version"),
+            "max_gross_weight_limit": engine_meta.get("max_gross_weight_limit"),
+            "am_order_batch_policy": engine_meta.get("am_order_batch_policy"),
+            "weight_sizing_rule": engine_meta.get("weight_sizing_rule"),
             "execution_contract": (
                 None if execution_contract is None else dict(execution_contract)
             ),

@@ -189,6 +189,115 @@ class ControlledLeaseConflict(RuntimeError):
     """Durable lease CAS precondition failed."""
 
 
+def _finite_number(value: Any) -> float | None:
+    if type(value) is bool:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return number
+
+
+def _measured_nonneg(value: Any) -> float | None:
+    if type(value) not in (int, float) or type(value) is bool:
+        return None
+    number = _finite_number(value)
+    if number is None or number < 0.0:
+        return None
+    return number
+
+
+def _controlled_require_frozen_am_identity(engine_meta: Mapping[str, Any]) -> None:
+    from core import CORE_ENGINE_VERSION
+    from selection.engine_artifact_admission import (
+        FROZEN_AM_ORDER_BATCH_POLICY,
+        admit_engine_artifact_for_selection,
+    )
+
+    if not isinstance(engine_meta, Mapping):
+        raise JobInputError("controlled engine metadata is missing")
+    if engine_meta.get("execution_mode") != CONTROLLED_FILL_EXECUTION_MODE:
+        raise JobInputError("controlled execution_mode must be am_signal_pm_close")
+    if engine_meta.get("core_engine_version") != CORE_ENGINE_VERSION:
+        raise JobInputError("unsupported core engine identity")
+    if engine_meta.get("am_order_batch_policy") != FROZEN_AM_ORDER_BATCH_POLICY:
+        raise JobInputError("controlled paper must freeze an AM order batch")
+    cap = engine_meta.get("max_gross_weight_limit")
+    if type(cap) is not float:
+        raise JobInputError("controlled gross cap is missing or malformed")
+    applied = _finite_number(cap)
+    if applied is None or abs(applied - 0.5) > 1e-12:
+        raise JobInputError("controlled gross cap was not applied")
+    admitted, reasons = admit_engine_artifact_for_selection(engine_meta)
+    if not admitted:
+        raise JobInputError(
+            "unproven AM+gross-cap engine identity: " + ",".join(reasons)
+        )
+
+
+def _controlled_gross_measurement_ineligible(
+    engine_meta: Mapping[str, Any],
+    metrics: Mapping[str, Any],
+) -> tuple[bool, tuple[str, ...]]:
+    """Dated engine observations only. Missing/malformed proof is rejected."""
+
+    events = engine_meta.get("gross_limit_events")
+    if not isinstance(events, list) or not events:
+        raise JobInputError("controlled paper missing gross_limit_events")
+    statuses: list[str] = []
+    observed_weights: list[float] = []
+    for event in events:
+        if not isinstance(event, Mapping):
+            raise JobInputError("malformed gross_limit_event")
+        _parse_day(event.get("date"), "gross_limit_event.date")
+        status = event.get("status")
+        if status not in {"OK", "BREACH", "INCOMPLETE", "HOLD"}:
+            raise JobInputError("gross_limit_event status is malformed")
+        if event.get("resized") is not False:
+            raise JobInputError("gross_limit_event resized")
+        if event.get("filled_quantities_changed") is not False:
+            raise JobInputError("gross_limit_event changed filled quantities")
+        limit = event.get("limit")
+        if type(limit) is not float or _finite_number(limit) is None:
+            raise JobInputError("gross_limit_event limit is malformed")
+        if abs(float(limit) - 0.5) > 1e-12:
+            raise JobInputError("gross_limit_event limit is not the controlled cap")
+        observed = event.get("observed_gross_weight")
+        measured = _measured_nonneg(observed)
+        if status in {"OK", "BREACH"}:
+            if measured is None:
+                raise JobInputError("gross_limit_event missing measured gross")
+            if status == "OK" and measured > 0.5 + 1e-12:
+                raise JobInputError("OK gross_limit_event exceeds the controlled cap")
+            if status == "BREACH" and measured <= 0.5 + 1e-12:
+                raise JobInputError("BREACH gross_limit_event does not exceed the cap")
+            observed_weights.append(measured)
+        elif observed is not None:
+            raise JobInputError("undefined gross_limit_event must not report a ratio")
+        statuses.append(str(status))
+    realized = _measured_nonneg(engine_meta.get("realized_gross_weight"))
+    if engine_meta.get("realized_gross_weight") is not None and realized is None:
+        raise JobInputError("realized_gross_weight is malformed")
+    if observed_weights:
+        peak = max(observed_weights)
+        if realized is None or abs(realized - peak) > 1e-9:
+            raise JobInputError("realized_gross_weight does not match dated observations")
+    reasons: list[str] = []
+    if "BREACH" in statuses or (realized is not None and realized > 0.5 + 1e-12):
+        reasons.append("MAX_GROSS_WEIGHT_BREACH")
+    if "INCOMPLETE" in statuses:
+        reasons.append("INCOMPLETE_GROSS_MEASUREMENT")
+    if "HOLD" in statuses:
+        reasons.append("UNDEFINED_GROSS_RATIO")
+    if metrics.get("selection_eligible") is False:
+        reasons.append("SELECTION_INELIGIBLE")
+    unique = tuple(dict.fromkeys(reasons))
+    return bool(unique), unique
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
@@ -991,6 +1100,7 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
         papers: list[dict[str, Any]] = []
         audits: list[dict[str, Any]] = []
         decisions: list[dict[str, Any]] = []
+        ineligible_plan_ids: list[str] = []
         risk_agent = RiskAgent()
         plans = tuple(load_experiment_plans())
         resolved_universe = controlled_handle.resolve_controlled_universe(
@@ -1033,13 +1143,13 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
                 ),
             )
             engine_meta = getattr(paper_result.backtest, "metadata", None) or {}
-            applied_cap = engine_meta.get("max_gross_weight_limit")
-            if applied_cap is not None and abs(float(applied_cap) - 0.5) > 1e-12:
-                raise JobInputError("controlled gross cap was not applied")
-            realized_gross = float(engine_meta.get("realized_gross_weight") or 0.0)
-            requested_gross = float(engine_meta.get("requested_gross_weight") or 0.0)
-            if realized_gross > 0.5 + 1e-12:
-                raise JobInputError("realized PM gross exceeds 0.5")
+            _controlled_require_frozen_am_identity(engine_meta)
+            realized_gross = _finite_number(engine_meta.get("realized_gross_weight"))
+            requested_gross = _finite_number(engine_meta.get("requested_gross_weight"))
+            ineligible, ineligible_reasons = _controlled_gross_measurement_ineligible(
+                engine_meta,
+                getattr(paper_result, "metrics", None) or {},
+            )
             if engine_meta.get("authentic_am_session_evidence") is True:
                 raise JobInputError(
                     "historical reconstruction cannot claim authentic AM-session evidence"
@@ -1055,6 +1165,23 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
             binding = CONTROLLED_PLAN_BINDINGS.get(plan.plan_id)
             if binding is None:
                 raise JobInputError("plan is not in the canonical four")
+            metrics = dict(paper_result.metrics)
+            metrics["selection_eligible"] = not ineligible
+            reproduction = {
+                key: paper_result.reproducibility[key]
+                for key in (
+                    "data_snapshot_id",
+                    "feature_versions",
+                    "feature_definition_hashes",
+                    "strategy_definition_hash",
+                    "execution_mode",
+                )
+                if key in paper_result.reproducibility
+            }
+            if engine_meta.get("am_order_batch_policy") is not None:
+                reproduction["am_order_batch_policy"] = engine_meta.get(
+                    "am_order_batch_policy"
+                )
             paper = {
                 "ordinal": ordinal,
                 "plan_id": plan.plan_id,
@@ -1087,24 +1214,14 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
                 "lifecycle": paper_result.lifecycle.value,
                 "experiment_id": paper_result.experiment_id,
                 "run_id": paper_result.run_id,
-                "metrics": dict(paper_result.metrics),
+                "metrics": metrics,
                 "n_equity_points": len(paper_result.equity_curve),
                 "n_trades": len(paper_result.trades),
                 "resolved_universe_digest": resolved_universe_digest,
                 "max_gross_weight_ppm": max_gross_weight_ppm,
                 "requested_gross_weight": requested_gross,
                 "realized_gross_weight": realized_gross,
-                "reproducibility": {
-                    key: paper_result.reproducibility[key]
-                    for key in (
-                        "data_snapshot_id",
-                        "feature_versions",
-                        "feature_definition_hashes",
-                        "strategy_definition_hash",
-                        "execution_mode",
-                    )
-                    if key in paper_result.reproducibility
-                },
+                "reproducibility": reproduction,
             }
             paper["semantic_digest"] = canonical_json_digest(paper)
             if paper["lifecycle"] != "Paper" or not paper["metrics"]:
@@ -1144,11 +1261,18 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
             risk["snapshot_id"] = snapshot_id
             risk["kind"] = "risk"
             risk["semantic_digest"] = canonical_json_digest(risk)
+            reason_codes = ("PENDING_HUMAN_APPROVAL",)
+            if ineligible:
+                ineligible_plan_ids.append(plan.plan_id)
+                reason_codes = ("PENDING_HUMAN_APPROVAL",) + ineligible_reasons
             decision = SelectionDecision(
                 decision="HOLD",
-                reason_codes=("PENDING_HUMAN_APPROVAL",),
+                reason_codes=reason_codes,
                 subject_id=plan.plan_id,
-                evidence={"automatic_promotion": False},
+                evidence={
+                    "automatic_promotion": False,
+                    "selection_eligible": not ineligible,
+                },
             )
             if decision.decision == "PROMOTE":
                 raise JobInputError("automatic promotion is disabled")
@@ -1177,8 +1301,12 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
             "decision": "HOLD",
             "rule": "deterministic_hold_pending_human_approval",
             "automatic_promotion": False,
-            "selected": [row["plan_id"] for row in papers],
-            "rejected": [],
+            "selected": [
+                row["plan_id"]
+                for row in papers
+                if row["plan_id"] not in ineligible_plan_ids
+            ],
+            "rejected": list(ineligible_plan_ids),
             "decisions": decisions,
             "paper_semantic_digests": paper_semantic_digests,
             "risk_semantic_digests": risk_semantic_digests,
