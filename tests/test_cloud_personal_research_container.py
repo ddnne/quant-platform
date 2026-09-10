@@ -3048,16 +3048,7 @@ def test_controlled_container_runs_canonical_four_with_independent_artifacts(
                     "max_drawdown": -0.0,
                     "num_trades": 1,
                 },
-                metadata={
-                    "core_engine_version": "0.9.0",
-                    "am_order_batch_policy": "am_frozen_order_batch/v1",
-                    "max_gross_weight_limit": 0.5,
-                    "requested_gross_weight": 0.5,
-                    "realized_gross_weight": 0.5,
-                    "authentic_am_session_evidence": False,
-                    "price_evidence_mode": "historical_daily_reconstruction",
-                    "contemporaneous_observation_unproven": True,
-                },
+                metadata=_proven_ok_engine_meta(),
             ),
             reproducibility={
                 "data_snapshot_id": snapshot_id,
@@ -3148,6 +3139,60 @@ def test_controlled_container_runs_canonical_four_with_independent_artifacts(
     assert result["knowledge"]["digest"] == result["knowledge"]["semantic_digest"]
     assert result["selection"]["rejected"] == []
     assert result["selection"]["selected"] == [row["plan_id"] for row in papers]
+    _assert_python_papers_match_worker_closed_schema(papers)
+
+
+def _worker_paper_semantic_fields() -> set[str]:
+    import re
+
+    text = (
+        Path(__file__).resolve().parents[1]
+        / "platform"
+        / "workers"
+        / "research-mass-eval"
+        / "src"
+        / "controlled_pilot.ts"
+    ).read_text(encoding="utf-8")
+    start = text.index("const PAPER_SEMANTIC_FIELDS = new Set([")
+    end = text.index("]);", start)
+    fields = set(re.findall(r'"([^"]+)"', text[start:end]))
+    assert "ordinal" in fields
+    assert "am_order_batch_policy" not in fields
+    assert "selection_eligible" not in fields
+    return fields
+
+
+def _assert_python_papers_match_worker_closed_schema(papers: list[dict]) -> None:
+    allowed = _worker_paper_semantic_fields()
+    for paper in papers:
+        keys = set(paper) - {"semantic_digest"}
+        assert keys == allowed, (sorted(keys - allowed), sorted(allowed - keys))
+        assert "am_order_batch_policy" not in paper
+        assert "selection_eligible" not in paper
+
+
+def _proven_ok_engine_meta(**overrides: object) -> dict[str, object]:
+    body: dict[str, object] = {
+        "execution_mode": "am_signal_pm_close",
+        "core_engine_version": "0.9.0",
+        "am_order_batch_policy": "am_frozen_order_batch/v1",
+        "max_gross_weight_limit": 0.5,
+        "requested_gross_weight": 0.5,
+        "realized_gross_weight": 0.5,
+        "authentic_am_session_evidence": False,
+        "price_evidence_mode": "historical_daily_reconstruction",
+        "contemporaneous_observation_unproven": True,
+        "gross_limit_events": [
+            {
+                "date": "2023-01-04",
+                "status": "OK",
+                "limit": 0.5,
+                "observed_gross_weight": 0.5,
+            }
+        ],
+    }
+    body.update(overrides)
+    return body
 
 
 def _run_controlled_container_with_engine_meta(
@@ -3236,23 +3281,45 @@ def _run_controlled_container_with_engine_meta(
     )
 
 
-def test_controlled_container_rejects_unproven_pm_resize_engine(
+@pytest.mark.parametrize(
+    ("overrides", "match"),
+    [
+        ({"execution_mode": None}, "execution_mode"),
+        ({"core_engine_version": None}, "unsupported core engine"),
+        ({"core_engine_version": "0.8.0"}, "unsupported core engine"),
+        ({"am_order_batch_policy": None}, "freeze an AM order batch"),
+        ({"max_gross_weight_limit": None}, "missing or malformed"),
+        ({"max_gross_weight_limit": True}, "missing or malformed"),
+        ({"max_gross_weight_limit": "0.5"}, "missing or malformed"),
+        ({"realized_gross_weight": "unmeasured"}, "realized_gross_weight is malformed"),
+        ({"gross_limit_events": None}, "missing gross_limit_events"),
+        ({"gross_limit_events": []}, "missing gross_limit_events"),
+    ],
+)
+def test_controlled_container_rejects_missing_or_malformed_gross_proof(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, object],
+    match: str,
+) -> None:
+    meta = _proven_ok_engine_meta()
+    for key, value in overrides.items():
+        if value is None:
+            meta.pop(key, None)
+        else:
+            meta[key] = value
+    with pytest.raises(service.JobInputError, match=match):
+        _run_controlled_container_with_engine_meta(tmp_path, monkeypatch, meta)
+
+
+def test_controlled_container_rejects_policy_only_without_mode_or_events(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    with pytest.raises(service.JobInputError, match="unproven AM\\+gross-cap"):
+    with pytest.raises(service.JobInputError, match="execution_mode"):
         _run_controlled_container_with_engine_meta(
             tmp_path,
             monkeypatch,
-            {
-                "execution_mode": "am_signal_pm_close",
-                "core_engine_version": "0.8.0",
-                "max_gross_weight_limit": 0.5,
-                "requested_gross_weight": 0.5,
-                "realized_gross_weight": 0.5,
-                "authentic_am_session_evidence": False,
-                "price_evidence_mode": "historical_daily_reconstruction",
-                "contemporaneous_observation_unproven": True,
-            },
+            {"am_order_batch_policy": "am_frozen_order_batch/v1"},
         )
 
 
@@ -3264,17 +3331,10 @@ def test_controlled_container_holds_measured_pm_gross_breach(
     result = _run_controlled_container_with_engine_meta(
         tmp_path,
         monkeypatch,
-        {
-            "core_engine_version": "0.9.0",
-            "am_order_batch_policy": "am_frozen_order_batch/v1",
-            "max_gross_weight_limit": 0.5,
-            "requested_gross_weight": 0.5,
-            "realized_gross_weight": 0.75,
-            "authentic_am_session_evidence": False,
-            "price_evidence_mode": "historical_daily_reconstruction",
-            "contemporaneous_observation_unproven": True,
-            "selection_eligible": False,
-            "gross_limit_events": [
+        _proven_ok_engine_meta(
+            realized_gross_weight=0.75,
+            selection_eligible=False,
+            gross_limit_events=[
                 {
                     "date": "2023-01-04",
                     "status": "BREACH",
@@ -3283,7 +3343,7 @@ def test_controlled_container_holds_measured_pm_gross_breach(
                     "resized": False,
                 }
             ],
-        },
+        ),
         metrics={"selection_eligible": False},
     )
     assert result["ok"] is True
@@ -3293,9 +3353,13 @@ def test_controlled_container_holds_measured_pm_gross_breach(
     assert result["selection"]["decision"] == "HOLD"
     assert result["selection"]["selected"] == []
     assert result["selection"]["rejected"] == [row["plan_id"] for row in result["papers"]]
+    _assert_python_papers_match_worker_closed_schema(result["papers"])
     for paper in result["papers"]:
-        assert paper["selection_eligible"] is False
+        assert paper["metrics"]["selection_eligible"] is False
         assert paper["realized_gross_weight"] == 0.75
+        assert paper["reproducibility"]["am_order_batch_policy"] == (
+            "am_frozen_order_batch/v1"
+        )
         body = dict(paper)
         digest = body.pop("semantic_digest")
         assert digest == canonical_json_digest(body)

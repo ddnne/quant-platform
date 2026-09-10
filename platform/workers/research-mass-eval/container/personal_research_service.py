@@ -200,43 +200,73 @@ def _finite_number(value: Any) -> float | None:
 
 
 def _controlled_require_frozen_am_identity(engine_meta: Mapping[str, Any]) -> None:
-    from selection.engine_artifact_admission import admit_engine_artifact_for_selection
+    from core import CORE_ENGINE_VERSION
+    from selection.engine_artifact_admission import (
+        FROZEN_AM_ORDER_BATCH_POLICY,
+        admit_engine_artifact_for_selection,
+    )
 
+    if not isinstance(engine_meta, Mapping):
+        raise JobInputError("controlled engine metadata is missing")
+    if engine_meta.get("execution_mode") != CONTROLLED_FILL_EXECUTION_MODE:
+        raise JobInputError("controlled execution_mode must be am_signal_pm_close")
+    if engine_meta.get("core_engine_version") != CORE_ENGINE_VERSION:
+        raise JobInputError("unsupported core engine identity")
+    if engine_meta.get("am_order_batch_policy") != FROZEN_AM_ORDER_BATCH_POLICY:
+        raise JobInputError("controlled paper must freeze an AM order batch")
+    cap = engine_meta.get("max_gross_weight_limit")
+    if type(cap) is not float:
+        raise JobInputError("controlled gross cap is missing or malformed")
+    applied = _finite_number(cap)
+    if applied is None or abs(applied - 0.5) > 1e-12:
+        raise JobInputError("controlled gross cap was not applied")
     admitted, reasons = admit_engine_artifact_for_selection(engine_meta)
     if not admitted:
         raise JobInputError(
             "unproven AM+gross-cap engine identity: " + ",".join(reasons)
         )
-    if engine_meta.get("am_order_batch_policy") != "am_frozen_order_batch/v1":
-        raise JobInputError("controlled paper must freeze an AM order batch")
 
 
 def _controlled_gross_measurement_ineligible(
     engine_meta: Mapping[str, Any],
     metrics: Mapping[str, Any],
 ) -> tuple[bool, tuple[str, ...]]:
-    """Measured PM drift/incomplete marks are HOLD, not a discarded run."""
+    """Dated engine observations only. Missing/malformed proof is rejected."""
 
-    reasons: list[str] = []
-    realized = _finite_number(engine_meta.get("realized_gross_weight"))
-    if realized is not None and realized > 0.5 + 1e-12:
-        reasons.append("MAX_GROSS_WEIGHT_BREACH")
     events = engine_meta.get("gross_limit_events")
-    if isinstance(events, list):
-        statuses = {
-            str(event.get("status") or "")
-            for event in events
-            if isinstance(event, Mapping)
-        }
-        if "BREACH" in statuses:
-            reasons.append("MAX_GROSS_WEIGHT_BREACH")
-        if "INCOMPLETE" in statuses:
-            reasons.append("INCOMPLETE_GROSS_MEASUREMENT")
-        if "HOLD" in statuses:
-            reasons.append("UNDEFINED_GROSS_RATIO")
+    if not isinstance(events, list) or not events:
+        raise JobInputError("controlled paper missing gross_limit_events")
+    statuses: list[str] = []
+    for event in events:
+        if not isinstance(event, Mapping):
+            raise JobInputError("malformed gross_limit_event")
+        date = event.get("date")
+        status = event.get("status")
+        if not isinstance(date, str) or not date:
+            raise JobInputError("gross_limit_event missing date")
+        if status not in {"OK", "BREACH", "INCOMPLETE", "HOLD"}:
+            raise JobInputError("gross_limit_event status is malformed")
+        observed = event.get("observed_gross_weight")
+        if status == "BREACH":
+            if _finite_number(observed) is None:
+                raise JobInputError("BREACH missing observed gross")
+        if status in {"INCOMPLETE", "HOLD"} and observed is not None:
+            if _finite_number(observed) is None:
+                raise JobInputError("gross_limit_event observed gross is malformed")
+        statuses.append(str(status))
+    realized_raw = engine_meta.get("realized_gross_weight")
+    realized = _finite_number(realized_raw)
+    if realized_raw is not None and realized is None:
+        raise JobInputError("realized_gross_weight is malformed")
+    reasons: list[str] = []
+    if "BREACH" in statuses or (realized is not None and realized > 0.5 + 1e-12):
+        reasons.append("MAX_GROSS_WEIGHT_BREACH")
+    if "INCOMPLETE" in statuses:
+        reasons.append("INCOMPLETE_GROSS_MEASUREMENT")
+    if "HOLD" in statuses:
+        reasons.append("UNDEFINED_GROSS_RATIO")
     if metrics.get("selection_eligible") is False:
         reasons.append("SELECTION_INELIGIBLE")
-    # Preserve order uniqueness.
     unique = tuple(dict.fromkeys(reasons))
     return bool(unique), unique
 
@@ -1086,9 +1116,6 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
                 ),
             )
             engine_meta = getattr(paper_result.backtest, "metadata", None) or {}
-            applied_cap = engine_meta.get("max_gross_weight_limit")
-            if applied_cap is not None and abs(float(applied_cap) - 0.5) > 1e-12:
-                raise JobInputError("controlled gross cap was not applied")
             _controlled_require_frozen_am_identity(engine_meta)
             realized_gross = _finite_number(engine_meta.get("realized_gross_weight"))
             requested_gross = _finite_number(engine_meta.get("requested_gross_weight"))
@@ -1111,6 +1138,23 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
             binding = CONTROLLED_PLAN_BINDINGS.get(plan.plan_id)
             if binding is None:
                 raise JobInputError("plan is not in the canonical four")
+            metrics = dict(paper_result.metrics)
+            metrics["selection_eligible"] = not ineligible
+            reproduction = {
+                key: paper_result.reproducibility[key]
+                for key in (
+                    "data_snapshot_id",
+                    "feature_versions",
+                    "feature_definition_hashes",
+                    "strategy_definition_hash",
+                    "execution_mode",
+                )
+                if key in paper_result.reproducibility
+            }
+            if engine_meta.get("am_order_batch_policy") is not None:
+                reproduction["am_order_batch_policy"] = engine_meta.get(
+                    "am_order_batch_policy"
+                )
             paper = {
                 "ordinal": ordinal,
                 "plan_id": plan.plan_id,
@@ -1143,26 +1187,14 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
                 "lifecycle": paper_result.lifecycle.value,
                 "experiment_id": paper_result.experiment_id,
                 "run_id": paper_result.run_id,
-                "metrics": dict(paper_result.metrics),
+                "metrics": metrics,
                 "n_equity_points": len(paper_result.equity_curve),
                 "n_trades": len(paper_result.trades),
                 "resolved_universe_digest": resolved_universe_digest,
                 "max_gross_weight_ppm": max_gross_weight_ppm,
                 "requested_gross_weight": requested_gross,
                 "realized_gross_weight": realized_gross,
-                "am_order_batch_policy": engine_meta.get("am_order_batch_policy"),
-                "selection_eligible": not ineligible,
-                "reproducibility": {
-                    key: paper_result.reproducibility[key]
-                    for key in (
-                        "data_snapshot_id",
-                        "feature_versions",
-                        "feature_definition_hashes",
-                        "strategy_definition_hash",
-                        "execution_mode",
-                    )
-                    if key in paper_result.reproducibility
-                },
+                "reproducibility": reproduction,
             }
             paper["semantic_digest"] = canonical_json_digest(paper)
             if paper["lifecycle"] != "Paper" or not paper["metrics"]:

@@ -246,6 +246,7 @@ function mockContainer(options?: {
     | "knowledge_missing_id"
     | "knowledge_wrong_digest"
     | "post_digest_injection"
+    | "python_extra_closed_fields"
     | "non_raw_price_basis"
     | "raw_price_basis"
     | "unknown_price_evidence_mode"
@@ -320,6 +321,12 @@ function mockContainer(options?: {
             }
             if (options?.tamper === "post_digest_injection") {
               result.papers[0]!.injected_after_closed_schema = true;
+              delete result.papers[0]!.semantic_digest;
+              result.papers[0]!.semantic_digest = await sha256Digest(canonicalJson(result.papers[0]!));
+            }
+            if (options?.tamper === "python_extra_closed_fields") {
+              result.papers[0]!.am_order_batch_policy = "am_frozen_order_batch/v1";
+              result.papers[0]!.selection_eligible = true;
               delete result.papers[0]!.semantic_digest;
               result.papers[0]!.semantic_digest = await sha256Digest(canonicalJson(result.papers[0]!));
             }
@@ -471,6 +478,7 @@ async function seedEnv(options?: {
     | "knowledge_missing_id"
     | "knowledge_wrong_digest"
     | "post_digest_injection"
+    | "python_extra_closed_fields"
     | "non_raw_price_basis"
     | "raw_price_basis"
     | "unknown_price_evidence_mode"
@@ -1248,6 +1256,7 @@ describe("controlled cloud execution", () => {
       "knowledge_missing_id",
       "knowledge_wrong_digest",
       "post_digest_injection",
+      "python_extra_closed_fields",
       "non_raw_price_basis",
       "raw_price_basis",
       "unknown_price_evidence_mode",
