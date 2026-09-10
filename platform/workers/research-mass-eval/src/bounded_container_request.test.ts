@@ -69,21 +69,38 @@ describe("bounded container requests", () => {
   });
 
   it("aborts a fetch that only rejects when the request signal aborts", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     let signalled = false;
+    let heldRequest: Request | undefined;
+    let markReady: () => void;
+    const fixtureReady = new Promise<void>((resolve) => {
+      markReady = resolve;
+    });
     const target = {
       fetch: async (request: Request) => {
+        heldRequest = request;
         request.signal.addEventListener("abort", () => {
           signalled = true;
         }, { once: true });
+        markReady();
         return await rejectWhenAborted(request.signal);
       },
     };
-    const started = Date.now();
-    await expect(
-      fetchContainerBytes(target, new Request("http://container/ready"), { deadlineMs: 25 }),
-    ).rejects.toThrow("container request timeout");
-    expect(signalled).toBe(true);
-    expect(Date.now() - started).toBeLessThan(1_000);
+    try {
+      const pending = fetchContainerBytes(
+        target,
+        new Request("http://container/ready"),
+        { deadlineMs: 25 },
+      );
+      const expected = expect(pending).rejects.toThrow("container request timeout");
+      await fixtureReady;
+      await vi.advanceTimersByTimeAsync(25);
+      await expected;
+      expect(signalled).toBe(true);
+      expect(heldRequest?.signal.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("unblocks a fetch that ignores AbortSignal when the deadline elapses", async () => {

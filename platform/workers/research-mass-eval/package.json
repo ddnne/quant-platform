@@ -10,7 +10,7 @@
     "deploy": "python3 ../../../scripts/cloudflare_binding_manifest.py --deploy-tagged --config wrangler.toml --env production",
     "dev": "wrangler dev --config=wrangler.toml --env=\"\"",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run && vitest run --config vitest.runtime.config.mts",
     "test:runtime": "vitest run --config vitest.runtime.config.mts",
     "build": "wrangler deploy --dry-run --config=wrangler.toml --env=\"\" --outdir .wrangler-dry-run",
     "tail": "wrangler tail --config=wrangler.toml --env=production",

@@ -1,15 +1,19 @@
 {
   "schema": "quant-platform-work-ledger/v1",
   "baseline_sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
-  "branch": "fix/am-order-quantity-causality",
-  "updated_at": "2026-09-10T22:22:00Z",
+  "branch": "fix/mass-canonical-runtime-tests",
+  "updated_at": "2026-09-10T22:37:00Z",
   "lanes": {
     "source_delivered": {
-      "status": "branch_unmerged",
-      "scope": "item_2_am_order_quantity_causality",
-      "notes": "AM-causality source through 0255744b pushed by Codex after fresh explicit user approval. PR #103 is open; native Cloudflare CI is running and must pass on the final PR SHA. Fixture regression compares Python execute output to pinned JSON without rewriting it. Not yet merged or deployed.",
+      "status": "partial_main_and_candidate",
+      "scope": "item_2_merged_item_5_runtime_wiring_candidate",
+      "notes": "PR #103 merged as 71410b36 after native required check on final source SHA 4069b1e8 succeeded. Runtime wiring/test stabilization are a separate candidate based on that main. These are observed stages at updated_at; re-read GitHub before resuming. No code rollout, data activation or READY is implied.",
       "pull_request": "https://github.com/ddnne/quant-platform/pull/103",
-      "implementation_sha": "0255744b74e8b7186940abf93a1ed0be61a033ee"
+      "implementation_sha": "0255744b74e8b7186940abf93a1ed0be61a033ee",
+      "merged_sha": "71410b3603b3a70d07db42d24082c3d04f280b18",
+      "required_check_source_sha": "4069b1e856e7291a3365180d3b13d7fbabbd5c3f",
+      "required_check_app_id": 85455,
+      "required_check_build_id": "54ef4bbd-3aa0-4d53-b23f-8637e7ebe2c6"
     },
     "staging_deployed": {
       "status": "not_this_branch",
@@ -38,26 +42,48 @@
   "items": {
     "1_fresh_clone_and_ledger": { "status": "this_unit_partial" },
     "2_am_order_quantity_causality": {
-      "status": "source_on_unmerged_branch",
+      "status": "source_merged_pr103_not_deployed",
       "tests": {
         "python_fixture_regression": "2/2 passed; fixture sha256 a9015caeea31428a6ef87bdbf24c1d56d888e2921e4e8b39a2447d6bdfff79ba unchanged; git diff empty",
         "worker_controlled_pilot": "src/controlled_pilot.test.ts 47 passed",
         "independent_python_regression": "370 passed in 17 files; 28 existing multiprocessing warnings",
         "independent_worker_regression": "typecheck passed; Node 503 passed; Cloudflare runtime 7 passed (separate invocation)",
+        "native_ci": "3626 Python passed, 4 skipped, 32 warnings; all active Worker lanes and generated drift check succeeded on 4069b1e8",
         "note": "Synthetic container packaging only; not a production backtest or live evidence."
       },
       "approval": "explicit_user_approval_codex_git_integration_grok_coding",
       "review": "Independent critical review found no unresolved major issue in the reviewed AM/consumer scope. Global operational gates remain unresolved."
     },
-    "3_dependency_scope": { "status": "pending" },
+    "3_dependency_scope": {
+      "status": "pending_design_inspected_not_implemented",
+      "next_unit": "Move the product universe SQL/connection/read-clock bridge into the existing DataPlane while preserving the pure product resolver and membership digest; then introduce explicit versioned per-dataset read scopes.",
+      "constraints": [
+        "Keep financial/master initial visible state, including the latest qualifying per-share financial observation; do not reuse a price-only calendar start.",
+        "Split-safe fundamental bars must include the selected statement/disclosure anchor interval and required canonical fields; preserve original publication times and retrospective labels.",
+        "Compiler, candidate builder, READY verifier and runtime must enforce the same declared scope; full-segment receipt reconciliation remains independent and untruncated.",
+        "Preserve old version/hash replay; no silent mutation of feature-definition-metadata/v1 or existing profile digests.",
+        "Use one import boundary gate and immutable day slices, not a family of source-string bans."
+      ]
+    },
     "4_receipt_to_ready_trader": { "status": "pending" },
-    "5_ci_deploy_entrypoints": { "status": "pending" },
+    "5_ci_deploy_entrypoints": {
+      "status": "runtime_wiring_candidate_other_subitems_pending",
+      "candidate_commits": ["dbddc615", "52a7faba"],
+      "verification": "Independent script-policy/CI tests 79 passed; canonical npm test on the pre-rebase base ran Node 501 plus runtime 7 once, then typecheck passed. Independent review found no actionable issue. Rebased final candidate still requires final-SHA native CI.",
+      "test_stabilization": "Actual fetchContainerBytes diagnostic under periodic Node GC: without retained Request 20/20 derived abort notifications missed; with retained Request 0/20 missed. Existing test now retains Request, advances fake timer after fixture readiness and preserves timeout/abort assertions. Production transport unchanged.",
+      "remaining": "Pure Python/Worker/runtime/live test tiers, default network deny and deploy_tagged target/module-byte hardening remain pending. Existing npm advisories and remaining real-time tests were not silently suppressed."
+    },
     "6_shared_d1_receipt_reproof": { "status": "pending" },
     "7_dead_code_and_docs": { "status": "pending" },
     "8_rollout_and_research_go": { "status": "pending" },
-    "9_push_remote_and_fresh_clone_verify": { "status": "branch_pushed_pr103_ci_pending_merge_and_fresh_clone" }
+    "9_push_remote_and_fresh_clone_verify": { "status": "pr103_merged_clean_main_candidate_next_pr_final_fresh_clone_pending" }
   },
   "operational_facts": [
+    {
+      "id": "source_integration_and_deploy_hold_20260911",
+      "observed_at": "2026-09-10T22:36:00Z",
+      "fact": "PR103 merged normally with required app85455 check success; local main equals origin/main 71410b36, clean, unpushed0. Completed source branch removed locally and remotely, commits preserved on main. Read-only trigger check: production Mass deployment HOLD intact; JSDA/Premium/Secrets/Ops/Gateway have no build triggers. No rollout or live research operation performed."
+    },
     {
       "id": "staging_secrets_gateway_20260910",
       "observed_at": "2026-09-10T13:55:00Z",

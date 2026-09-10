@@ -706,24 +706,26 @@ def test_package_script_rejects_wrangler_command_escape(
 
 
 @pytest.mark.parametrize(
-    "script,command",
+    "worker,script,command",
     (
         (
+            "ingestion-jsda",
             "deploy",
             "wran''gler deploy --config=wran''gler.toml --env=production "
             "--name quant-platform-rogue",
         ),
-        ("deploy", "node scripts/deploy-shadow.js"),
-        ("test", "node scripts/deploy-shadow.js"),
-        ("shadow", "node scripts/deploy-shadow.js"),
+        ("ingestion-jsda", "deploy", "node scripts/deploy-shadow.js"),
+        ("ingestion-jsda", "test", "node scripts/deploy-shadow.js"),
+        ("ingestion-jsda", "shadow", "node scripts/deploy-shadow.js"),
+        ("research-mass-eval", "test", "vitest run"),
     ),
 )
 def test_all_package_script_roles_are_independently_pinned(
     monkeypatch: pytest.MonkeyPatch,
+    worker: str,
     script: str,
     command: str,
 ) -> None:
-    worker = "ingestion-jsda"
     package = manifest_module.WORKER_ROOT / worker / "package.json"
     original_read_text = Path.read_text
 
