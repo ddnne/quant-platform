@@ -5,9 +5,13 @@
   "updated_at": "2026-09-10T00:00:00Z",
   "lanes": {
     "source_delivered": {
-      "status": "in_progress",
+      "status": "branch_unmerged",
       "scope": "item_2_am_order_quantity_causality",
-      "notes": "Engine AM OrderBatch freeze plus selection invalidation for 0.8.0 AM+gross-cap PM-resize artifacts."
+      "commits": [
+        "02303b0e",
+        "326b2e94"
+      ],
+      "notes": "Engine AM OrderBatch freeze plus selection invalidation for 0.8.0 AM+gross-cap PM-resize artifacts. Not merged. Does not deploy staging/production."
     },
     "staging_deployed": {
       "status": "not_this_branch",
@@ -37,7 +41,7 @@
       "notes": "Fresh checkout at verified main; this ledger records current lanes only."
     },
     "2_am_order_quantity_causality": {
-      "status": "in_progress"
+      "status": "source_on_unmerged_branch"
     },
     "3_dependency_scope": { "status": "pending" },
     "4_receipt_to_ready_trader": { "status": "pending" },
