@@ -2,12 +2,12 @@
   "schema": "quant-platform-work-ledger/v1",
   "baseline_sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
   "branch": "fix/am-order-quantity-causality",
-  "updated_at": "2026-09-10T14:56:28Z",
+  "updated_at": "2026-09-10T15:11:19Z",
   "lanes": {
     "source_delivered": {
       "status": "branch_unmerged",
       "scope": "item_2_am_order_quantity_causality",
-      "notes": "Local review fixes on the existing AM-causality branch. Push was previously denied and was not retried. Not merged. Does not deploy staging/production or Mass."
+      "notes": "Local review follow-up on the existing AM-causality branch. Push remains denied pending explicit user approval. No native CI run. Not merged. Does not deploy staging/production or Mass."
     },
     "staging_deployed": {
       "status": "not_this_branch",
