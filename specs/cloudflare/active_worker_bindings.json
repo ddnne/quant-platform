@@ -60,7 +60,7 @@
     ],
     "unclassified": "REJECT"
   },
-  "manifest_digest": "sha256:1ef56223c44394a45cbc757aed36f9801e9a6f59e3c5dc8490d78e81d522da84",
+  "manifest_digest": "sha256:dc911dffd24a2618e190fb34d64178e74ac29b67bb61c8120ebf43ad5b21727c",
   "ops_binding_identity_digest": "sha256:881176391253aed791eeca79c264384838fe9f6edfc8f33e48c2353e450cb6e3",
   "schema_version": "cloudflare-active-worker-bindings/v10",
   "test_harness_surfaces": {
@@ -876,7 +876,7 @@
       "deploy": "python3 ../../../scripts/cloudflare_binding_manifest.py --deploy-tagged --config wrangler.toml --env production",
       "dev": "wrangler dev --config=wrangler.toml --env=\"\"",
       "tail": "wrangler tail --config=wrangler.toml --env=production",
-      "test": "vitest run",
+      "test": "vitest run && vitest run --config vitest.runtime.config.mts",
       "test:runtime": "vitest run --config vitest.runtime.config.mts",
       "typecheck": "tsc --noEmit",
       "types": "wrangler types --config=wrangler.toml --env=\"\" --include-runtime false"

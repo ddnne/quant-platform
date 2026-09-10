@@ -396,7 +396,9 @@ _PINNED_PACKAGE_SCRIPTS = {
         "deploy": _WRANGLER_PACKAGE_SCRIPT_POLICY["deploy"],
         "dev": _WRANGLER_PACKAGE_SCRIPT_POLICY["dev"],
         "tail": _WRANGLER_PACKAGE_SCRIPT_POLICY["tail"],
-        "test": "vitest run",
+        "test": (
+            "vitest run && vitest run --config vitest.runtime.config.mts"
+        ),
         "test:runtime": "vitest run --config vitest.runtime.config.mts",
     },
 }
