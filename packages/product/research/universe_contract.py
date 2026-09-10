@@ -11,13 +11,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
 from dataclasses import dataclass
-from datetime import date, timedelta
 from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
-from core.execution import morning_close_as_of
 from data_contracts.membership_runs import (
     MembershipRun,
     RunLengthMembershipMap,
@@ -205,39 +202,6 @@ class ResolvedUniverseMembership:
         }
 
 
-def _calendar_dates(start: str, end: str) -> tuple[str, ...]:
-    cursor = date.fromisoformat(start)
-    stop = date.fromisoformat(end)
-    values: list[str] = []
-    while cursor <= stop:
-        values.append(cursor.isoformat())
-        cursor += timedelta(days=1)
-    return tuple(values)
-
-
-def _map_universe_pit_error(exc: BaseException) -> MassResearchDisabledError:
-    message = str(exc)
-    if "universe has no trading dates" in message:
-        return MassResearchDisabledError("controlled universe has no trading dates")
-    if "universe snapshot is missing" in message:
-        return MassResearchDisabledError(
-            message.replace("universe snapshot is missing", "controlled universe snapshot is missing")
-        )
-    if "universe requires canonical jquants_records" in message:
-        return MassResearchDisabledError(
-            "controlled universe requires the canonical jquants_records schema"
-        )
-    if "universe requires canonical" in message:
-        return MassResearchDisabledError(
-            message.replace("universe requires canonical", "controlled universe requires canonical")
-        )
-    if "universe snapshot query failed" in message:
-        return MassResearchDisabledError(
-            "controlled universe snapshot query failed closed"
-        )
-    return MassResearchDisabledError(str(exc))
-
-
 def resolve_tse_prime_with_fins(
     slices: Sequence[UniverseDaySlice],
     *,
@@ -335,47 +299,6 @@ def resolve_tse_prime_with_fins_evidence(
         "source_complete_claim": False,
     }
     return membership, evidence
-
-
-def _resolve_tse_prime_with_fins_from_pinned_connection(
-    connection: sqlite3.Connection,
-    *,
-    period_start: str,
-    period_end: str,
-    observed_through: str,
-) -> ResolvedUniverseMembership:
-    """Internal Controlled resolver; it cannot reopen a snapshot pathname."""
-
-    from pit.read_clock import (
-        SNAPSHOT_OBSERVATION_LABEL,
-        PitReadClock,
-        install_read_clock,
-    )
-    from pit.universe_pit import _universe_day_slices_from_connection
-
-    as_of_for_day = {
-        day: morning_close_as_of(day)
-        for day in _calendar_dates(period_start, period_end)
-    }
-    proof_clock = PitReadClock(
-        decision_at=morning_close_as_of(period_end),
-        observed_through=observed_through,
-        observation_label=SNAPSHOT_OBSERVATION_LABEL,
-        promotable=True,
-    )
-    with install_read_clock(proof_clock):
-        slices = _universe_day_slices_from_connection(
-            connection,
-            period_start=period_start,
-            period_end=period_end,
-            as_of_for_day=as_of_for_day,
-        )
-    return resolve_tse_prime_with_fins(
-        slices,
-        period_start=period_start,
-        period_end=period_end,
-    )
-
 
 
 __all__ = [

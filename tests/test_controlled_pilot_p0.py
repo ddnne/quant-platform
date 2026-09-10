@@ -1828,8 +1828,13 @@ def test_controlled_batch_uses_one_pinned_connection_for_identity_universe_and_f
     try:
         handle._begin_controlled_batch_reads()
         assert handle.logical_snapshot_id().startswith("sha256:")
-        universe = handle.resolve_controlled_universe(
+        from research.universe_contract import resolve_tse_prime_with_fins
+
+        slices = handle.universe_day_slices(
             period_start=days[0], period_end=days[-1]
+        )
+        universe = resolve_tse_prime_with_fins(
+            slices, period_start=days[0], period_end=days[-1]
         )
         assert universe.codes_for(days[0]) == (code,)
         for _ordinal in range(4):
