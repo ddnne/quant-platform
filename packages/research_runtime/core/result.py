@@ -28,6 +28,9 @@ class GrossLimitObservation:
     status: str
     resized: bool = False
     undefined_ratio_reason: str | None = None
+    partial_marked_equity: float | None = None
+    partial_marked_gross_notional: float | None = None
+    unpriced_held_codes: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         weight = self.observed_gross_weight
@@ -35,7 +38,7 @@ class GrossLimitObservation:
             isinstance(weight, float) and math.isfinite(weight)
         ):
             weight = None
-        return {
+        payload = {
             "date": self.date,
             "decision_timestamp": self.decision_timestamp,
             "limit": self.limit,
@@ -48,6 +51,11 @@ class GrossLimitObservation:
             "filled_quantities_changed": False,
             "correction_timing": "next_observable_am_decision",
         }
+        if self.status == "INCOMPLETE":
+            payload["partial_marked_equity"] = self.partial_marked_equity
+            payload["partial_marked_gross_notional"] = self.partial_marked_gross_notional
+            payload["unpriced_held_codes"] = list(self.unpriced_held_codes)
+        return payload
 
 
 @dataclass(frozen=True)

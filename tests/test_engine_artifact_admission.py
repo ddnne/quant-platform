@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from selection.engine_artifact_admission import (
+    AM_GROSS_CAP_EVIDENCE_UNPROVEN_REASON,
     AM_PM_GROSS_CAP_PM_RESIZE_REASON,
     admit_engine_artifact_for_selection,
     is_am_gross_cap_pm_resize_artifact,
@@ -12,7 +13,7 @@ from selection.engine_artifact_admission import (
 
 
 @pytest.mark.parametrize(
-    ("payload", "affected"),
+    ("payload", "resized", "admitted", "reason"),
     [
         (
             {
@@ -21,6 +22,8 @@ from selection.engine_artifact_admission import (
                 "max_gross_weight_limit": 0.5,
             },
             True,
+            False,
+            AM_PM_GROSS_CAP_PM_RESIZE_REASON,
         ),
         (
             {
@@ -28,13 +31,17 @@ from selection.engine_artifact_admission import (
                 "weight_sizing_rule": "realized_pm_gross_capped_at_max_gross_weight",
             },
             True,
+            False,
+            AM_PM_GROSS_CAP_PM_RESIZE_REASON,
         ),
         (
             {
                 "execution_mode": "am_signal_pm_close",
                 "max_gross_weight_limit": 0.5,
             },
-            True,
+            False,
+            False,
+            AM_GROSS_CAP_EVIDENCE_UNPROVEN_REASON,
         ),
         (
             {
@@ -44,6 +51,8 @@ from selection.engine_artifact_admission import (
                 "max_gross_weight_limit": 0.5,
             },
             False,
+            True,
+            None,
         ),
         (
             {
@@ -51,6 +60,18 @@ from selection.engine_artifact_admission import (
                 "core_engine_version": "0.8.0",
             },
             False,
+            False,
+            AM_GROSS_CAP_EVIDENCE_UNPROVEN_REASON,
+        ),
+        (
+            {
+                "execution_mode": "am_signal_pm_close",
+                "core_engine_version": "0.8.0",
+                "max_gross_weight_limit": None,
+            },
+            False,
+            True,
+            None,
         ),
         (
             {
@@ -59,6 +80,8 @@ from selection.engine_artifact_admission import (
                 "max_gross_weight_limit": 0.5,
             },
             False,
+            True,
+            None,
         ),
         (
             {
@@ -85,6 +108,8 @@ from selection.engine_artifact_admission import (
                 },
             },
             True,
+            False,
+            AM_PM_GROSS_CAP_PM_RESIZE_REASON,
         ),
         (
             {
@@ -100,17 +125,30 @@ from selection.engine_artifact_admission import (
                 },
             },
             False,
+            True,
+            None,
+        ),
+        (
+            {
+                "execution_mode": "am_signal_pm_close",
+                "selection_eligible": True,
+            },
+            False,
+            False,
+            AM_GROSS_CAP_EVIDENCE_UNPROVEN_REASON,
         ),
     ],
 )
-def test_am_gross_cap_pm_resize_invalidation(payload: dict, affected: bool) -> None:
-    assert is_am_gross_cap_pm_resize_artifact(payload) is affected
-    admitted, reasons = admit_engine_artifact_for_selection(payload)
-    assert admitted is (not affected)
-    if affected:
-        assert reasons == (AM_PM_GROSS_CAP_PM_RESIZE_REASON,)
-    else:
+def test_am_gross_cap_pm_resize_invalidation(
+    payload: dict, resized: bool, admitted: bool, reason: str | None
+) -> None:
+    assert is_am_gross_cap_pm_resize_artifact(payload) is resized
+    got_admitted, reasons = admit_engine_artifact_for_selection(payload)
+    assert got_admitted is admitted
+    if reason is None:
         assert reasons == ()
+    else:
+        assert reasons == (reason,)
 
 
 def test_paper_run_result_to_dict_reads_backtest_metadata_not_outer_fields() -> None:

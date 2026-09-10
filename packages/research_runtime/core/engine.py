@@ -70,6 +70,7 @@ from .strategy_protocol import (
     FrozenMorningOrderBatch,
     OrderIntent,
     Position,
+    encode_am_cost_basis,
 )
 from .universe import ResolvedDailyUniverse, load_master, resolve_injected_universe
 
@@ -1046,11 +1047,13 @@ def _flatten_held_morning_batch(
         risk_policy_id=AM_FROZEN_ORDER_BATCH_POLICY,
         max_gross_weight_limit=max_gross_weight,
         origin="risk_correction" if orders else "empty",
-        am_cost_basis={
-            "prices": "am_morning_prices",
-            "pm_prices_used": False,
-            "policy": "flatten_nonpositive_am_equity",
-        },
+        am_cost_basis_json=encode_am_cost_basis(
+            {
+                "prices": "am_morning_prices",
+                "pm_prices_used": False,
+                "policy": "flatten_nonpositive_am_equity",
+            }
+        ),
     )
 
 
@@ -1137,7 +1140,7 @@ def _freeze_morning_order_batch(
         risk_policy_id=AM_FROZEN_ORDER_BATCH_POLICY,
         max_gross_weight_limit=max_gross_weight,
         origin=batch_origin,
-        am_cost_basis=cost_basis,
+        am_cost_basis_json=encode_am_cost_basis(cost_basis),
     )
 
 
@@ -1884,15 +1887,31 @@ def _run_backtest_impl(
                         status = "BREACH"
                     else:
                         status = "OK"
+                    complete = status != "INCOMPLETE"
                     event = GrossLimitObservation(
                         date=d,
                         decision_timestamp=decision_as_of,
                         limit=gross_cap,
-                        observed_gross_weight=finite_gross,
-                        observed_equity=_finite_or_none(observed_equity),
-                        observed_gross_notional=_finite_or_none(observed_notional),
+                        observed_gross_weight=finite_gross if complete else None,
+                        observed_equity=(
+                            _finite_or_none(observed_equity) if complete else None
+                        ),
+                        observed_gross_notional=(
+                            _finite_or_none(observed_notional) if complete else None
+                        ),
                         status=status,
                         undefined_ratio_reason=undefined_reason,
+                        partial_marked_equity=(
+                            _finite_or_none(observed_equity)
+                            if status == "INCOMPLETE"
+                            else None
+                        ),
+                        partial_marked_gross_notional=(
+                            _finite_or_none(observed_notional)
+                            if status == "INCOMPLETE"
+                            else None
+                        ),
+                        unpriced_held_codes=tuple(unpriced_gross),
                     )
                     gross_limit_events.append(event.to_dict())
                 if leftover:

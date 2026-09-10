@@ -18,8 +18,17 @@ cannot fill on day *D* under ``next_close``).
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
+
+
+def encode_am_cost_basis(value: Mapping[str, Any] | None) -> str | None:
+    """Canonical JSON string for AM cost provenance. Nested dicts are not stored."""
+
+    if value is None:
+        return None
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
 @dataclass(frozen=True)
@@ -82,12 +91,16 @@ class FrozenMorningOrderBatch:
     risk_policy_id: str
     max_gross_weight_limit: float | None
     origin: str
-    am_cost_basis: Mapping[str, Any] | None = None
+    am_cost_basis_json: str | None = None
 
     def target_shares(self) -> dict[str, float]:
         return {order.code: order.target_shares for order in self.orders}
 
     def to_dict(self) -> dict[str, Any]:
+        basis = None
+        if self.am_cost_basis_json is not None:
+            loaded = json.loads(self.am_cost_basis_json)
+            basis = loaded if isinstance(loaded, dict) else None
         return {
             "decision_timestamp": self.decision_timestamp,
             "session_date": self.session_date,
@@ -95,9 +108,7 @@ class FrozenMorningOrderBatch:
             "risk_policy_id": self.risk_policy_id,
             "max_gross_weight_limit": self.max_gross_weight_limit,
             "origin": self.origin,
-            "am_cost_basis": (
-                None if self.am_cost_basis is None else dict(self.am_cost_basis)
-            ),
+            "am_cost_basis": basis,
             "orders": [
                 {
                     "code": order.code,

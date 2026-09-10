@@ -829,6 +829,29 @@ def test_missing_fill_stays_no_fallback_with_gross_cap(tmp_path):
     assert res.metrics["selection_eligible"] is False
 
 
+def test_frozen_am_cost_basis_export_is_detached() -> None:
+    from core.strategy_protocol import FrozenMorningOrderBatch, encode_am_cost_basis
+
+    batch = FrozenMorningOrderBatch(
+        decision_timestamp="2025-04-01T11:30:00+09:00",
+        session_date=D0,
+        orders=(),
+        morning_price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+        risk_policy_id="am_frozen_order_batch/v1",
+        max_gross_weight_limit=1.0,
+        origin="empty",
+        am_cost_basis_json=encode_am_cost_basis(
+            {"pm_prices_used": False, "cost_model": {"name": "standard"}}
+        ),
+    )
+    exported = batch.to_dict()
+    exported["am_cost_basis"]["pm_prices_used"] = True
+    exported["am_cost_basis"]["cost_model"]["name"] = "mutated"
+    again = batch.to_dict()
+    assert again["am_cost_basis"]["pm_prices_used"] is False
+    assert again["am_cost_basis"]["cost_model"]["name"] == "standard"
+
+
 def test_known_am_costs_are_reserved_without_dust_corrections(tmp_path):
     db = _seed(tmp_path, madjc=100.0, aadjc=100.0)
     rec = BuyOnce(weight=1.0)
@@ -899,6 +922,10 @@ def test_stale_pm_mark_cannot_make_gross_ok(tmp_path):
     )
     assert d1["status"] == "INCOMPLETE"
     assert d1["observed_gross_weight"] is None
+    assert d1["observed_equity"] is None
+    assert d1["observed_gross_notional"] is None
+    assert "partial_marked_equity" in d1
+    assert d1["unpriced_held_codes"]
     assert res.metrics["selection_eligible"] is False
 
 

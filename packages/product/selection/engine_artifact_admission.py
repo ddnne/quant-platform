@@ -1,17 +1,11 @@
 """Narrow selection/comparison admission for engine artifacts.
 
-This is not a new authority and does not rewrite historic files. It rejects
-AM+gross-cap artifacts whose engine identity still includes the PM quantity
-resizer (core 0.8.0 and any AM+cap payload that cannot prove the frozen
-morning-batch policy). Cloud inventory enumeration is a separate pending
-operation.
+This is not a new authority and does not rewrite historic files.
 
-Supported identity shapes, in order:
-1. ``PaperRunResult.to_dict()`` — engine fields live in ``backtest.metadata``
-2. engine ``BacktestResult.metadata`` (or a wrapper with ``metadata`` that
-   already is that block)
-3. personal-service evidence/summary rows with the engine fields at the top
-   level
+- Known AM + positive cap + old PM-resize identity is invalidated.
+- Explicit ``max_gross_weight_limit: null`` on full engine metadata is uncapped.
+- An AM summary that omits or malforms the cap is UNKNOWN/unproven, not proof
+  that the run was uncapped or that cloud inventory was PM-resized.
 """
 
 from __future__ import annotations
@@ -22,6 +16,7 @@ AM_SIGNAL_PM_CLOSE = "am_signal_pm_close"
 FROZEN_AM_ORDER_BATCH_POLICY = "am_frozen_order_batch/v1"
 PM_RESIZE_CORE_ENGINE_VERSIONS = frozenset({"0.8.0"})
 AM_PM_GROSS_CAP_PM_RESIZE_REASON = "am_pm_gross_cap_pm_resize_engine_invalidated"
+AM_GROSS_CAP_EVIDENCE_UNPROVEN_REASON = "am_gross_cap_evidence_unproven"
 
 
 def _mapping(value: Any) -> Mapping[str, Any] | None:
@@ -60,19 +55,26 @@ def _engine_version(block: Mapping[str, Any]) -> str:
     return _text(block, "core_engine_version")
 
 
-def _gross_cap(block: Mapping[str, Any]) -> float | None:
-    raw = block.get("max_gross_weight_limit")
+def _cap_field(block: Mapping[str, Any]) -> tuple[str, float | None]:
+    """Return (absent|explicit_none|invalid|value, parsed cap)."""
+
+    if "max_gross_weight_limit" in block:
+        raw = block["max_gross_weight_limit"]
+    elif "max_gross_weight" in block:
+        raw = block["max_gross_weight"]
+    else:
+        return "absent", None
     if raw is None:
-        raw = block.get("max_gross_weight")
-    if raw is None:
-        return None
+        return "explicit_none", None
+    if type(raw) is bool:
+        return "invalid", None
     try:
         cap = float(raw)
     except (TypeError, ValueError):
-        return None
-    if not (cap > 0.0):
-        return None
-    return cap
+        return "invalid", None
+    if cap != cap or cap in (float("inf"), float("-inf")) or not (cap > 0.0):
+        return "invalid", None
+    return "value", cap
 
 
 def _weight_sizing(block: Mapping[str, Any]) -> str:
@@ -89,8 +91,14 @@ def _order_batch_policy(block: Mapping[str, Any]) -> str:
     return _text(block, "am_order_batch_policy")
 
 
+def _is_full_engine_metadata(block: Mapping[str, Any]) -> bool:
+    return "core_engine_version" in block and (
+        "max_gross_weight_limit" in block or "execution_mode" in block
+    )
+
+
 def is_am_gross_cap_pm_resize_artifact(payload: Mapping[str, Any]) -> bool:
-    """True when an AM+gross-cap artifact cannot prove frozen-AM-batch semantics."""
+    """True only when AM+positive-cap evidence shows the old PM resizer."""
 
     if not isinstance(payload, Mapping):
         return False
@@ -98,33 +106,49 @@ def is_am_gross_cap_pm_resize_artifact(payload: Mapping[str, Any]) -> bool:
     if _execution_mode(engine) != AM_SIGNAL_PM_CLOSE:
         return False
     sizing = _weight_sizing(engine)
-    cap = _gross_cap(engine)
-    if cap is None and "realized_pm_gross_capped" not in sizing:
+    state, cap = _cap_field(engine)
+    if state != "value" and "realized_pm_gross_capped" not in sizing:
         return False
     version = _engine_version(engine)
-    policy = _order_batch_policy(engine)
     if version in PM_RESIZE_CORE_ENGINE_VERSIONS:
         return True
     if "realized_pm_gross_capped" in sizing:
         return True
-    if policy == FROZEN_AM_ORDER_BATCH_POLICY and version not in (
-        PM_RESIZE_CORE_ENGINE_VERSIONS
-    ):
-        return False
-    return True
+    return False
 
 
 def admit_engine_artifact_for_selection(
     payload: Mapping[str, Any],
 ) -> tuple[bool, tuple[str, ...]]:
-    """Fail closed for PM-resized AM+gross-cap engine artifacts."""
+    """Fail closed for PM-resized or unproven AM gross-cap evidence."""
 
+    if not isinstance(payload, Mapping):
+        return False, (AM_GROSS_CAP_EVIDENCE_UNPROVEN_REASON,)
     if is_am_gross_cap_pm_resize_artifact(payload):
         return False, (AM_PM_GROSS_CAP_PM_RESIZE_REASON,)
+    engine = _engine_metadata(payload)
+    if _execution_mode(engine) != AM_SIGNAL_PM_CLOSE:
+        return True, ()
+    state, cap = _cap_field(engine)
+    if state == "explicit_none" and _is_full_engine_metadata(engine):
+        return True, ()
+    if state == "value":
+        policy = _order_batch_policy(engine)
+        version = _engine_version(engine)
+        if (
+            policy == FROZEN_AM_ORDER_BATCH_POLICY
+            and version
+            and version not in PM_RESIZE_CORE_ENGINE_VERSIONS
+        ):
+            return True, ()
+        return False, (AM_GROSS_CAP_EVIDENCE_UNPROVEN_REASON,)
+    if state in {"absent", "invalid"}:
+        return False, (AM_GROSS_CAP_EVIDENCE_UNPROVEN_REASON,)
     return True, ()
 
 
 __all__ = [
+    "AM_GROSS_CAP_EVIDENCE_UNPROVEN_REASON",
     "AM_PM_GROSS_CAP_PM_RESIZE_REASON",
     "FROZEN_AM_ORDER_BATCH_POLICY",
     "PM_RESIZE_CORE_ENGINE_VERSIONS",
