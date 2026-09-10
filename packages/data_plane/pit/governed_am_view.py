@@ -33,6 +33,16 @@ from .query import (
     normalize_as_of,
     resolve_db_path,
 )
+from .read_clock import (
+    SNAPSHOT_OBSERVATION_LABEL,
+    PitReadClock,
+    install_read_clock,
+)
+from .universe_pit import (
+    UniverseDaySlice,
+    _calendar_dates,
+    _universe_day_slices_from_connection,
+)
 
 GOVERNED_AM_DATASET_ID = "equities_bars_daily_am"
 GOVERNED_DAILY_DATASET_ID = "equities_bars_daily"
@@ -816,25 +826,37 @@ class VerifiedControlledSnapshotHandle:
             path=path,
         )
 
-    def resolve_controlled_universe(
+    def universe_day_slices(
         self,
         *,
         period_start: str,
         period_end: str,
-    ) -> Any:
-        """Resolve PIT membership without exposing or reopening a DB path."""
+    ) -> tuple[UniverseDaySlice, ...]:
+        """Return PIT day slices from this pinned snapshot transaction.
+
+        Canonical morning decision clocks and the installed snapshot
+        observation clock stay on this handle. Callers cannot supply a
+        clock, path, or SQL.
+        """
 
         self._assert_controlled_batch()
-        from research.universe_contract import (
-            _resolve_tse_prime_with_fins_from_pinned_connection,
-        )
-
-        return _resolve_tse_prime_with_fins_from_pinned_connection(
-            self._connection,
-            period_start=period_start,
-            period_end=period_end,
+        as_of_for_day = {
+            day: am_information_cutoff(day)
+            for day in _calendar_dates(period_start, period_end)
+        }
+        proof_clock = PitReadClock(
+            decision_at=am_information_cutoff(period_end),
             observed_through=self._observed_through,
+            observation_label=SNAPSHOT_OBSERVATION_LABEL,
+            promotable=True,
         )
+        with install_read_clock(proof_clock):
+            return _universe_day_slices_from_connection(
+                self._connection,
+                period_start=period_start,
+                period_end=period_end,
+                as_of_for_day=as_of_for_day,
+            )
 
     def am_session_data_view(self) -> "GovernedAmSessionDataView":
         self._assert_open()

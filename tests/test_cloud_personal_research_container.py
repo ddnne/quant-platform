@@ -52,7 +52,13 @@ from research.personal_universe import (
     personal_research_universe_rule_digest,
     personal_universe_selector,
 )
-from research.universe_contract import EXACT_FOUR_UNIVERSE_RULE_DIGEST
+from pit.universe_pit import UniverseDaySlice, UniverseMasterMember
+from research.experiment_plans import PILOT_PERIOD_END, PILOT_PERIOD_START
+from research.universe_contract import (
+    EXACT_FOUR_UNIVERSE_RULE_DIGEST,
+    TSE_PRIME_MARKET_CODE,
+    resolve_tse_prime_with_fins,
+)
 from strategies.paper import Lifecycle, PaperRunResult
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -2948,6 +2954,31 @@ def test_snapshot_build_fails_closed_on_invalid_compact_marker(
     assert [key for key, _ in uploads] == [spec.manifest_key]
 
 
+def _mock_controlled_universe_slices() -> tuple[UniverseDaySlice, ...]:
+    member = UniverseMasterMember(
+        code="7203",
+        market_code=TSE_PRIME_MARKET_CODE,
+        scale_category="1",
+    )
+    return (
+        UniverseDaySlice(
+            decision_date=PILOT_PERIOD_START,
+            as_of=f"{PILOT_PERIOD_START}T11:30:00+09:00",
+            snapshot_date=PILOT_PERIOD_START,
+            members=(member,),
+            fins_codes=frozenset({"7203"}),
+        ),
+    )
+
+
+def _mock_controlled_universe_digest() -> str:
+    return resolve_tse_prime_with_fins(
+        _mock_controlled_universe_slices(),
+        period_start=PILOT_PERIOD_START,
+        period_end=PILOT_PERIOD_END,
+    ).resolved_membership_digest
+
+
 def _controlled_job_spec(**overrides: object) -> dict[str, object]:
     ready_fixture = json.loads(
         Path(service._CONTRACT_PATH)
@@ -2956,7 +2987,7 @@ def _controlled_job_spec(**overrides: object) -> dict[str, object]:
     )
     physical = "sha256:" + ("cd" * 32)
     hex_digest = physical[len("sha256:") :]
-    universe = "sha256:" + ("ab" * 32)
+    universe = _mock_controlled_universe_digest()
     spec: dict[str, object] = {
         "identity": "controlled_pilot_v1",
         "format": "controlled-pilot-job-spec/v1",
@@ -3058,12 +3089,6 @@ def test_controlled_container_runs_canonical_four_with_independent_artifacts(
             },
         )
 
-    class _Universe:
-        rule_digest = EXACT_FOUR_UNIVERSE_RULE_DIGEST
-        resolved_membership_digest = "sha256:" + ("ab" * 32)
-        membership_by_date = {"2023-01-04": ("7203",)}
-        membership_proof = "controlled-resolved-universe:" + ("sha256:" + ("ab" * 32))
-
     handle_events: list[str] = []
 
     class _Handle:
@@ -3073,8 +3098,8 @@ def test_controlled_container_runs_canonical_four_with_independent_artifacts(
         def logical_snapshot_id(self) -> str:
             return snapshot_id
 
-        def resolve_controlled_universe(self, **_kwargs: object) -> _Universe:
-            return _Universe()
+        def universe_day_slices(self, **_kwargs: object) -> tuple[UniverseDaySlice, ...]:
+            return _mock_controlled_universe_slices()
 
         def _end_controlled_batch_reads(self) -> None:
             handle_events.append("end")
@@ -3181,7 +3206,6 @@ def _run_controlled_container_with_engine_meta(
     sha = _sqlite(snapshot)
     physical_id = f"sha256:{sha}"
     snapshot_id = "sha256:" + ("ab" * 32)
-    universe = "sha256:" + ("ab" * 32)
     snapshot_bytes = snapshot.read_bytes()
     spec_overrides: dict[str, object] = {}
     if aligned_to_worker:
@@ -3192,7 +3216,6 @@ def _run_controlled_container_with_engine_meta(
         )
         snapshot_id = str(keys["logical_snapshot_id"])
         physical_id = str(keys["physical_snapshot_id"])
-        universe = str(keys["resolved_universe_digest"])
         snapshot_bytes = b"controlled-pilot-physical-sqlite"
         spec_overrides = {
             "snapshot_id": snapshot_id,
@@ -3203,7 +3226,6 @@ def _run_controlled_container_with_engine_meta(
                 + ".sqlite"
             ),
             "snapshot_size": 32,
-            "resolved_universe_digest": universe,
             "authorization_digest": (
                 "sha256:36ba29b33d04f68468fb89e6c76ada53d019a156e9ca03ed3df6ef16e1a03b7e"
             ),
@@ -3245,12 +3267,6 @@ def _run_controlled_container_with_engine_meta(
             },
         )
 
-    class _Universe:
-        rule_digest = EXACT_FOUR_UNIVERSE_RULE_DIGEST
-        resolved_membership_digest = universe
-        membership_by_date = {"2023-01-04": ("7203",)}
-        membership_proof = "controlled-resolved-universe:" + universe
-
     class _Handle:
         def _begin_controlled_batch_reads(self) -> None:
             return None
@@ -3258,8 +3274,8 @@ def _run_controlled_container_with_engine_meta(
         def logical_snapshot_id(self) -> str:
             return snapshot_id
 
-        def resolve_controlled_universe(self, **_kwargs: object) -> _Universe:
-            return _Universe()
+        def universe_day_slices(self, **_kwargs: object) -> tuple[UniverseDaySlice, ...]:
+            return _mock_controlled_universe_slices()
 
         def _end_controlled_batch_reads(self) -> None:
             return None

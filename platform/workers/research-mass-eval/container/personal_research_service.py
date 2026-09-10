@@ -1077,6 +1077,7 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
         from research.experiment_plans import PILOT_COST_SCENARIO, load_experiment_plans
         from research.universe_contract import (
             EXACT_FOUR_UNIVERSE_RULE_DIGEST,
+            resolve_tse_prime_with_fins,
         )
         from selection.decision import SelectionDecision
         from strategies.paper import Lifecycle, PaperRunConfig
@@ -1103,7 +1104,12 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
         ineligible_plan_ids: list[str] = []
         risk_agent = RiskAgent()
         plans = tuple(load_experiment_plans())
-        resolved_universe = controlled_handle.resolve_controlled_universe(
+        slices = controlled_handle.universe_day_slices(
+            period_start=plans[0].period_start,
+            period_end=plans[0].period_end,
+        )
+        resolved_universe = resolve_tse_prime_with_fins(
+            slices,
             period_start=plans[0].period_start,
             period_end=plans[0].period_end,
         )
