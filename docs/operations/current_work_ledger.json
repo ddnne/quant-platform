@@ -2,33 +2,31 @@
   "schema": "quant-platform-work-ledger/v1",
   "baseline_sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
   "branch": "fix/am-order-quantity-causality",
-  "updated_at": "2026-09-10T00:00:00Z",
+  "updated_at": "2026-09-10T14:56:28Z",
   "lanes": {
     "source_delivered": {
       "status": "branch_unmerged",
       "scope": "item_2_am_order_quantity_causality",
-      "commits": [
-        "02303b0e",
-        "326b2e94"
-      ],
-      "notes": "Engine AM OrderBatch freeze plus selection invalidation for 0.8.0 AM+gross-cap PM-resize artifacts. Not merged. Does not deploy staging/production."
+      "notes": "Local review fixes on the existing AM-causality branch. Push was previously denied and was not retried. Not merged. Does not deploy staging/production or Mass."
     },
     "staging_deployed": {
       "status": "not_this_branch",
       "sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
-      "notes": "Secrets/Gateway staging were successfully deployed after normal user approval on 2026-09-10 13:55Z at b121564feb9ebb9a5613fbb9ab05d5dd90f96105. That deploy does not include this branch or Mass."
+      "secrets_version": "6a23dd25-5dc2-422c-bb8f-1d95a6266822",
+      "gateway_version": "795a201c-911c-4cf9-99a6-3d558959e857",
+      "notes": "Secrets/Gateway staging remain at baseline b121 after normal approval. Mass source rollout not done. This branch is not deployed."
     },
     "production_deployed": {
       "status": "hold",
-      "notes": "Production auto-deploy remains HOLD. Unknown until authoritative CI linkage is implemented."
+      "notes": "Production auto-deploy remains HOLD."
     },
     "data_activated": {
       "status": "pending",
-      "notes": "Not part of this unit."
+      "notes": "Not part of this unit. No market download."
     },
     "ready": {
       "status": "pending",
-      "notes": "READY remains null/unproven. Not part of this unit."
+      "notes": "READY null. Successful JQ Cron is not READY."
     },
     "pilot_executed": {
       "status": "pending",
@@ -36,13 +34,8 @@
     }
   },
   "items": {
-    "1_fresh_clone_and_ledger": {
-      "status": "this_unit_partial",
-      "notes": "Fresh checkout at verified main; this ledger records current lanes only."
-    },
-    "2_am_order_quantity_causality": {
-      "status": "source_on_unmerged_branch"
-    },
+    "1_fresh_clone_and_ledger": { "status": "this_unit_partial" },
+    "2_am_order_quantity_causality": { "status": "source_on_unmerged_branch" },
     "3_dependency_scope": { "status": "pending" },
     "4_receipt_to_ready_trader": { "status": "pending" },
     "5_ci_deploy_entrypoints": { "status": "pending" },
@@ -56,11 +49,22 @@
       "id": "staging_secrets_gateway_20260910",
       "observed_at": "2026-09-10T13:55:00Z",
       "sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
-      "fact": "Secrets/Gateway staging deployed after normal user approval. Does not deploy this future branch or Mass."
+      "secrets_version": "6a23dd25-5dc2-422c-bb8f-1d95a6266822",
+      "gateway_version": "795a201c-911c-4cf9-99a6-3d558959e857",
+      "fact": "Secrets/Gateway staging deployed after normal user approval. Does not deploy this branch or Mass."
+    },
+    {
+      "id": "projection_live_read_20260910T1422Z",
+      "observed_at": "2026-09-10T14:22:00Z",
+      "fact": "Projection STALE; generated 2026-08-21T12:30:49.152421+00:00; active projection generation projgen-ef18b4f86ee946048161d25e2a30a2a8; source cursor 2898983; applied cursor null; B0 UNKNOWN; READY null."
+    },
+    {
+      "id": "jq_run14927_20260910",
+      "observed_at": "2026-09-10T14:17:00Z",
+      "fact": "JQ run14927 on Sep10 23:16-23:17 JST passed 23/23 with 66765 rows. Distinct from READY."
     }
   ],
   "unknowns": [
-    "Live projection remaining STALE/applied cursor null/B0 UNKNOWN/READY null were not re-measured in this unit.",
     "Affected historic AM+gross-cap engine artifact inventory was not examined; no cloud listing was performed."
   ],
   "pending_operations": [
@@ -68,7 +72,12 @@
       "id": "enumerate_legacy_am_gross_cap_engine_artifacts",
       "status": "pending",
       "requires": "cloud evidence",
-      "notes": "Structurally reject AM+gross-cap artifacts that cannot prove am_frozen_order_batch/v1. Do not overwrite or delete historic files. Enumerate actual cloud inventory in a later operation."
+      "notes": "Structurally reject AM+gross-cap artifacts that cannot prove am_frozen_order_batch/v1. Do not overwrite or delete historic files."
+    },
+    {
+      "id": "push_am_causality_branch_after_explicit_approval",
+      "status": "pending",
+      "notes": "Prior Grok auto-approval denied push. Do not retry until the user explicitly approves."
     }
   ]
 }
