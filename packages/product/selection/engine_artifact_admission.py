@@ -5,6 +5,13 @@ AM+gross-cap artifacts whose engine identity still includes the PM quantity
 resizer (core 0.8.0 and any AM+cap payload that cannot prove the frozen
 morning-batch policy). Cloud inventory enumeration is a separate pending
 operation.
+
+Supported identity shapes, in order:
+1. ``PaperRunResult.to_dict()`` — engine fields live in ``backtest.metadata``
+2. engine ``BacktestResult.metadata`` (or a wrapper with ``metadata`` that
+   already is that block)
+3. personal-service evidence/summary rows with the engine fields at the top
+   level
 """
 
 from __future__ import annotations
@@ -17,50 +24,46 @@ PM_RESIZE_CORE_ENGINE_VERSIONS = frozenset({"0.8.0"})
 AM_PM_GROSS_CAP_PM_RESIZE_REASON = "am_pm_gross_cap_pm_resize_engine_invalidated"
 
 
-def _mapping(value: Any) -> Mapping[str, Any]:
-    return value if isinstance(value, Mapping) else {}
+def _mapping(value: Any) -> Mapping[str, Any] | None:
+    return value if isinstance(value, Mapping) else None
 
 
-def _first_present(payload: Mapping[str, Any], *keys: str) -> Any:
-    for key in keys:
-        if key in payload and payload[key] is not None:
-            return payload[key]
-        quality = _mapping(payload.get("data_quality"))
-        if key in quality and quality[key] is not None:
-            return quality[key]
-        metadata = _mapping(payload.get("metadata"))
-        if key in metadata and metadata[key] is not None:
-            return metadata[key]
-        reproduction = _mapping(payload.get("reproducibility"))
-        if key in reproduction and reproduction[key] is not None:
-            return reproduction[key]
-        provenance = _mapping(
-            metadata.get("price_basis_provenance")
-            or reproduction.get("price_basis_provenance")
-        )
-        if key in provenance and provenance[key] is not None:
-            return provenance[key]
-    return None
+def _engine_metadata(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Read the actual engine metadata block; do not search nested fields."""
+
+    backtest = _mapping(payload.get("backtest"))
+    if backtest is not None:
+        nested = _mapping(backtest.get("metadata"))
+        if nested is not None:
+            return nested
+    wrapped = _mapping(payload.get("metadata"))
+    if wrapped is not None and (
+        "core_engine_version" in wrapped
+        or "max_gross_weight_limit" in wrapped
+        or "weight_sizing_rule" in wrapped
+        or "am_order_batch_policy" in wrapped
+    ):
+        return wrapped
+    return payload
 
 
-def _execution_mode(payload: Mapping[str, Any]) -> str:
-    return str(_first_present(payload, "execution_mode") or "")
+def _text(block: Mapping[str, Any], key: str) -> str:
+    value = block.get(key)
+    return "" if value is None else str(value)
 
 
-def _engine_version(payload: Mapping[str, Any]) -> str:
-    runtime = _mapping(_first_present(payload, "runtime_versions"))
-    version = runtime.get("core_engine") or _first_present(
-        payload, "core_engine_version", "core_engine"
-    )
-    return "" if version is None else str(version)
+def _execution_mode(block: Mapping[str, Any]) -> str:
+    return _text(block, "execution_mode")
 
 
-def _gross_cap(payload: Mapping[str, Any]) -> float | None:
-    raw = _first_present(
-        payload,
-        "max_gross_weight_limit",
-        "max_gross_weight",
-    )
+def _engine_version(block: Mapping[str, Any]) -> str:
+    return _text(block, "core_engine_version")
+
+
+def _gross_cap(block: Mapping[str, Any]) -> float | None:
+    raw = block.get("max_gross_weight_limit")
+    if raw is None:
+        raw = block.get("max_gross_weight")
     if raw is None:
         return None
     try:
@@ -72,14 +75,18 @@ def _gross_cap(payload: Mapping[str, Any]) -> float | None:
     return cap
 
 
-def _weight_sizing(payload: Mapping[str, Any]) -> str:
-    return str(
-        _first_present(payload, "weight_sizing_rule", "weight_sizing") or ""
-    )
+def _weight_sizing(block: Mapping[str, Any]) -> str:
+    rule = _text(block, "weight_sizing_rule")
+    if rule:
+        return rule
+    provenance = _mapping(block.get("price_basis_provenance"))
+    if provenance is None:
+        return ""
+    return _text(provenance, "weight_sizing")
 
 
-def _order_batch_policy(payload: Mapping[str, Any]) -> str:
-    return str(_first_present(payload, "am_order_batch_policy") or "")
+def _order_batch_policy(block: Mapping[str, Any]) -> str:
+    return _text(block, "am_order_batch_policy")
 
 
 def is_am_gross_cap_pm_resize_artifact(payload: Mapping[str, Any]) -> bool:
@@ -87,14 +94,15 @@ def is_am_gross_cap_pm_resize_artifact(payload: Mapping[str, Any]) -> bool:
 
     if not isinstance(payload, Mapping):
         return False
-    if _execution_mode(payload) != AM_SIGNAL_PM_CLOSE:
+    engine = _engine_metadata(payload)
+    if _execution_mode(engine) != AM_SIGNAL_PM_CLOSE:
         return False
-    sizing = _weight_sizing(payload)
-    cap = _gross_cap(payload)
+    sizing = _weight_sizing(engine)
+    cap = _gross_cap(engine)
     if cap is None and "realized_pm_gross_capped" not in sizing:
         return False
-    version = _engine_version(payload)
-    policy = _order_batch_policy(payload)
+    version = _engine_version(engine)
+    policy = _order_batch_policy(engine)
     if version in PM_RESIZE_CORE_ENGINE_VERSIONS:
         return True
     if "realized_pm_gross_capped" in sizing:

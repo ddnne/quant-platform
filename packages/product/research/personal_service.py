@@ -1005,6 +1005,8 @@ _DATA_QUALITY_DETAIL_KEYS = (
     "gross_limit_events",
     "gross_breach_dates",
     "incomplete_gross_dates",
+    "undefined_gross_dates",
+    "am_policy_holds",
     "pm_quantity_resized",
     "invalidation_reasons",
 )

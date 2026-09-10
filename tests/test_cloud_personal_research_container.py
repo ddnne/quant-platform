@@ -3049,6 +3049,8 @@ def test_controlled_container_runs_canonical_four_with_independent_artifacts(
                     "num_trades": 1,
                 },
                 metadata={
+                    "core_engine_version": "0.9.0",
+                    "am_order_batch_policy": "am_frozen_order_batch/v1",
                     "max_gross_weight_limit": 0.5,
                     "requested_gross_weight": 0.5,
                     "realized_gross_weight": 0.5,
@@ -3144,6 +3146,164 @@ def test_controlled_container_runs_canonical_four_with_independent_artifacts(
     )
     assert result["knowledge"]["artifact_id"] == result["knowledge"]["digest"]
     assert result["knowledge"]["digest"] == result["knowledge"]["semantic_digest"]
+    assert result["selection"]["rejected"] == []
+    assert result["selection"]["selected"] == [row["plan_id"] for row in papers]
+
+
+def _run_controlled_container_with_engine_meta(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    metadata: dict[str, object],
+    *,
+    metrics: dict[str, object] | None = None,
+):
+    snapshot = tmp_path / "controlled.sqlite"
+    sha = _sqlite(snapshot)
+    physical_id = f"sha256:{sha}"
+    snapshot_id = "sha256:" + ("ab" * 32)
+
+    def fake_download(key: str, dest: Path, *, expected_hex: str, expected_size: int) -> str:
+        del key, expected_size
+        dest.write_bytes(snapshot.read_bytes())
+        return expected_hex
+
+    def fake_run(strategy: object, config: object):
+        del strategy, config
+        from strategies.paper import Lifecycle, PaperRunResult
+
+        experiment_id = "e" * 64
+        body = {
+            "total_return_post_cost": 0.0,
+            "max_drawdown": -0.0,
+            "num_trades": 1,
+        }
+        if metrics:
+            body.update(metrics)
+        return PaperRunResult(
+            experiment_id=experiment_id,
+            run_id=experiment_id,
+            lifecycle=Lifecycle.PAPER,
+            backtest=BacktestResult(
+                equity_curve=[{"date": "2023-01-04", "equity": 1.0}],
+                trades=[{"code": "7203"}],
+                metrics=body,
+                metadata=metadata,
+            ),
+            reproducibility={
+                "data_snapshot_id": snapshot_id,
+                "feature_versions": {"momentum_n": "1.0.0"},
+                "feature_definition_hashes": {},
+                "strategy_definition_hash": "sha256:" + ("cd" * 32),
+            },
+        )
+
+    class _Universe:
+        rule_digest = EXACT_FOUR_UNIVERSE_RULE_DIGEST
+        resolved_membership_digest = "sha256:" + ("ab" * 32)
+        membership_by_date = {"2023-01-04": ("7203",)}
+        membership_proof = "controlled-resolved-universe:" + ("sha256:" + ("ab" * 32))
+
+    class _Handle:
+        def _begin_controlled_batch_reads(self) -> None:
+            return None
+
+        def logical_snapshot_id(self) -> str:
+            return snapshot_id
+
+        def resolve_controlled_universe(self, **_kwargs: object) -> _Universe:
+            return _Universe()
+
+        def _end_controlled_batch_reads(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(service, "_download_controlled_snapshot", fake_download)
+    monkeypatch.setattr(service, "_run_controlled_paper", fake_run)
+    monkeypatch.setattr(service, "_mint_controlled_am_view", lambda *_args: _Handle())
+    return service.execute_controlled_pilot_container(
+        _controlled_job_spec(
+            snapshot_id=snapshot_id,
+            immutable_db_digest=physical_id,
+            snapshot_key=(
+                "research/controlled_pilot/v1/snapshots/sha256="
+                + physical_id[len("sha256:") :]
+                + ".sqlite"
+            ),
+            snapshot_size=snapshot.stat().st_size,
+        )
+    )
+
+
+def test_controlled_container_rejects_unproven_pm_resize_engine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with pytest.raises(service.JobInputError, match="unproven AM\\+gross-cap"):
+        _run_controlled_container_with_engine_meta(
+            tmp_path,
+            monkeypatch,
+            {
+                "execution_mode": "am_signal_pm_close",
+                "core_engine_version": "0.8.0",
+                "max_gross_weight_limit": 0.5,
+                "requested_gross_weight": 0.5,
+                "realized_gross_weight": 0.5,
+                "authentic_am_session_evidence": False,
+                "price_evidence_mode": "historical_daily_reconstruction",
+                "contemporaneous_observation_unproven": True,
+            },
+        )
+
+
+def test_controlled_container_holds_measured_pm_gross_breach(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from paper_runtime.canonical_json import canonical_json_digest
+
+    result = _run_controlled_container_with_engine_meta(
+        tmp_path,
+        monkeypatch,
+        {
+            "core_engine_version": "0.9.0",
+            "am_order_batch_policy": "am_frozen_order_batch/v1",
+            "max_gross_weight_limit": 0.5,
+            "requested_gross_weight": 0.5,
+            "realized_gross_weight": 0.75,
+            "authentic_am_session_evidence": False,
+            "price_evidence_mode": "historical_daily_reconstruction",
+            "contemporaneous_observation_unproven": True,
+            "selection_eligible": False,
+            "gross_limit_events": [
+                {
+                    "date": "2023-01-04",
+                    "status": "BREACH",
+                    "limit": 0.5,
+                    "observed_gross_weight": 0.75,
+                    "resized": False,
+                }
+            ],
+        },
+        metrics={"selection_eligible": False},
+    )
+    assert result["ok"] is True
+    assert len(result["papers"]) == 4
+    assert len(result["risks"]) == 4
+    assert len(result["selection"]["decisions"]) == 4
+    assert result["selection"]["decision"] == "HOLD"
+    assert result["selection"]["selected"] == []
+    assert result["selection"]["rejected"] == [row["plan_id"] for row in result["papers"]]
+    for paper in result["papers"]:
+        assert paper["selection_eligible"] is False
+        assert paper["realized_gross_weight"] == 0.75
+        body = dict(paper)
+        digest = body.pop("semantic_digest")
+        assert digest == canonical_json_digest(body)
+        assert "MAX_GROSS_WEIGHT_BREACH" in {
+            code
+            for decision in result["selection"]["decisions"]
+            for code in decision["reason_codes"]
+        }
 
 
 def _controlled_completed_result(item) -> dict:

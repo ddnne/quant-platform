@@ -189,6 +189,58 @@ class ControlledLeaseConflict(RuntimeError):
     """Durable lease CAS precondition failed."""
 
 
+def _finite_number(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return number
+
+
+def _controlled_require_frozen_am_identity(engine_meta: Mapping[str, Any]) -> None:
+    from selection.engine_artifact_admission import admit_engine_artifact_for_selection
+
+    admitted, reasons = admit_engine_artifact_for_selection(engine_meta)
+    if not admitted:
+        raise JobInputError(
+            "unproven AM+gross-cap engine identity: " + ",".join(reasons)
+        )
+    if engine_meta.get("am_order_batch_policy") != "am_frozen_order_batch/v1":
+        raise JobInputError("controlled paper must freeze an AM order batch")
+
+
+def _controlled_gross_measurement_ineligible(
+    engine_meta: Mapping[str, Any],
+    metrics: Mapping[str, Any],
+) -> tuple[bool, tuple[str, ...]]:
+    """Measured PM drift/incomplete marks are HOLD, not a discarded run."""
+
+    reasons: list[str] = []
+    realized = _finite_number(engine_meta.get("realized_gross_weight"))
+    if realized is not None and realized > 0.5 + 1e-12:
+        reasons.append("MAX_GROSS_WEIGHT_BREACH")
+    events = engine_meta.get("gross_limit_events")
+    if isinstance(events, list):
+        statuses = {
+            str(event.get("status") or "")
+            for event in events
+            if isinstance(event, Mapping)
+        }
+        if "BREACH" in statuses:
+            reasons.append("MAX_GROSS_WEIGHT_BREACH")
+        if "INCOMPLETE" in statuses:
+            reasons.append("INCOMPLETE_GROSS_MEASUREMENT")
+        if "HOLD" in statuses:
+            reasons.append("UNDEFINED_GROSS_RATIO")
+    if metrics.get("selection_eligible") is False:
+        reasons.append("SELECTION_INELIGIBLE")
+    # Preserve order uniqueness.
+    unique = tuple(dict.fromkeys(reasons))
+    return bool(unique), unique
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
@@ -991,6 +1043,7 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
         papers: list[dict[str, Any]] = []
         audits: list[dict[str, Any]] = []
         decisions: list[dict[str, Any]] = []
+        ineligible_plan_ids: list[str] = []
         risk_agent = RiskAgent()
         plans = tuple(load_experiment_plans())
         resolved_universe = controlled_handle.resolve_controlled_universe(
@@ -1036,10 +1089,13 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
             applied_cap = engine_meta.get("max_gross_weight_limit")
             if applied_cap is not None and abs(float(applied_cap) - 0.5) > 1e-12:
                 raise JobInputError("controlled gross cap was not applied")
-            realized_gross = float(engine_meta.get("realized_gross_weight") or 0.0)
-            requested_gross = float(engine_meta.get("requested_gross_weight") or 0.0)
-            if realized_gross > 0.5 + 1e-12:
-                raise JobInputError("realized PM gross exceeds 0.5")
+            _controlled_require_frozen_am_identity(engine_meta)
+            realized_gross = _finite_number(engine_meta.get("realized_gross_weight"))
+            requested_gross = _finite_number(engine_meta.get("requested_gross_weight"))
+            ineligible, ineligible_reasons = _controlled_gross_measurement_ineligible(
+                engine_meta,
+                getattr(paper_result, "metrics", None) or {},
+            )
             if engine_meta.get("authentic_am_session_evidence") is True:
                 raise JobInputError(
                     "historical reconstruction cannot claim authentic AM-session evidence"
@@ -1094,6 +1150,8 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
                 "max_gross_weight_ppm": max_gross_weight_ppm,
                 "requested_gross_weight": requested_gross,
                 "realized_gross_weight": realized_gross,
+                "am_order_batch_policy": engine_meta.get("am_order_batch_policy"),
+                "selection_eligible": not ineligible,
                 "reproducibility": {
                     key: paper_result.reproducibility[key]
                     for key in (
@@ -1144,11 +1202,18 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
             risk["snapshot_id"] = snapshot_id
             risk["kind"] = "risk"
             risk["semantic_digest"] = canonical_json_digest(risk)
+            reason_codes = ("PENDING_HUMAN_APPROVAL",)
+            if ineligible:
+                ineligible_plan_ids.append(plan.plan_id)
+                reason_codes = ("PENDING_HUMAN_APPROVAL",) + ineligible_reasons
             decision = SelectionDecision(
                 decision="HOLD",
-                reason_codes=("PENDING_HUMAN_APPROVAL",),
+                reason_codes=reason_codes,
                 subject_id=plan.plan_id,
-                evidence={"automatic_promotion": False},
+                evidence={
+                    "automatic_promotion": False,
+                    "selection_eligible": not ineligible,
+                },
             )
             if decision.decision == "PROMOTE":
                 raise JobInputError("automatic promotion is disabled")
@@ -1177,8 +1242,12 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
             "decision": "HOLD",
             "rule": "deterministic_hold_pending_human_approval",
             "automatic_promotion": False,
-            "selected": [row["plan_id"] for row in papers],
-            "rejected": [],
+            "selected": [
+                row["plan_id"]
+                for row in papers
+                if row["plan_id"] not in ineligible_plan_ids
+            ],
+            "rejected": list(ineligible_plan_ids),
             "decisions": decisions,
             "paper_semantic_digests": paper_semantic_digests,
             "risk_semantic_digests": risk_semantic_digests,
