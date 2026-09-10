@@ -92,8 +92,9 @@ def _order_batch_policy(block: Mapping[str, Any]) -> str:
 
 
 def _is_full_engine_metadata(block: Mapping[str, Any]) -> bool:
-    return "core_engine_version" in block and (
-        "max_gross_weight_limit" in block or "execution_mode" in block
+    version = block.get("core_engine_version")
+    return isinstance(version, str) and bool(version) and (
+        "max_gross_weight_limit" in block
     )
 
 
@@ -130,8 +131,10 @@ def admit_engine_artifact_for_selection(
     if _execution_mode(engine) != AM_SIGNAL_PM_CLOSE:
         return True, ()
     state, cap = _cap_field(engine)
-    if state == "explicit_none" and _is_full_engine_metadata(engine):
-        return True, ()
+    if state == "explicit_none":
+        if _is_full_engine_metadata(engine):
+            return True, ()
+        return False, (AM_GROSS_CAP_EVIDENCE_UNPROVEN_REASON,)
     if state == "value":
         policy = _order_batch_policy(engine)
         version = _engine_version(engine)
@@ -142,9 +145,7 @@ def admit_engine_artifact_for_selection(
         ):
             return True, ()
         return False, (AM_GROSS_CAP_EVIDENCE_UNPROVEN_REASON,)
-    if state in {"absent", "invalid"}:
-        return False, (AM_GROSS_CAP_EVIDENCE_UNPROVEN_REASON,)
-    return True, ()
+    return False, (AM_GROSS_CAP_EVIDENCE_UNPROVEN_REASON,)
 
 
 __all__ = [

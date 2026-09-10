@@ -3139,36 +3139,8 @@ def test_controlled_container_runs_canonical_four_with_independent_artifacts(
     assert result["knowledge"]["digest"] == result["knowledge"]["semantic_digest"]
     assert result["selection"]["rejected"] == []
     assert result["selection"]["selected"] == [row["plan_id"] for row in papers]
-    _assert_python_papers_match_worker_closed_schema(papers)
-
-
-def _worker_paper_semantic_fields() -> set[str]:
-    import re
-
-    text = (
-        Path(__file__).resolve().parents[1]
-        / "platform"
-        / "workers"
-        / "research-mass-eval"
-        / "src"
-        / "controlled_pilot.ts"
-    ).read_text(encoding="utf-8")
-    start = text.index("const PAPER_SEMANTIC_FIELDS = new Set([")
-    end = text.index("]);", start)
-    fields = set(re.findall(r'"([^"]+)"', text[start:end]))
-    assert "ordinal" in fields
-    assert "am_order_batch_policy" not in fields
-    assert "selection_eligible" not in fields
-    return fields
-
-
-def _assert_python_papers_match_worker_closed_schema(papers: list[dict]) -> None:
-    allowed = _worker_paper_semantic_fields()
-    for paper in papers:
-        keys = set(paper) - {"semantic_digest"}
-        assert keys == allowed, (sorted(keys - allowed), sorted(allowed - keys))
-        assert "am_order_batch_policy" not in paper
-        assert "selection_eligible" not in paper
+    assert "am_order_batch_policy" not in papers[0]
+    assert "selection_eligible" not in papers[0]
 
 
 def _proven_ok_engine_meta(**overrides: object) -> dict[str, object]:
@@ -3188,6 +3160,8 @@ def _proven_ok_engine_meta(**overrides: object) -> dict[str, object]:
                 "status": "OK",
                 "limit": 0.5,
                 "observed_gross_weight": 0.5,
+                "resized": False,
+                "filled_quantities_changed": False,
             }
         ],
     }
@@ -3201,15 +3175,44 @@ def _run_controlled_container_with_engine_meta(
     metadata: dict[str, object],
     *,
     metrics: dict[str, object] | None = None,
+    aligned_to_worker: bool = False,
 ):
     snapshot = tmp_path / "controlled.sqlite"
     sha = _sqlite(snapshot)
     physical_id = f"sha256:{sha}"
     snapshot_id = "sha256:" + ("ab" * 32)
+    universe = "sha256:" + ("ab" * 32)
+    snapshot_bytes = snapshot.read_bytes()
+    spec_overrides: dict[str, object] = {}
+    if aligned_to_worker:
+        keys = json.loads(
+            (
+                ROOT / "specs" / "ready" / "controlled_pilot_verify_keys.generated.json"
+            ).read_text(encoding="utf-8")
+        )
+        snapshot_id = str(keys["logical_snapshot_id"])
+        physical_id = str(keys["physical_snapshot_id"])
+        universe = str(keys["resolved_universe_digest"])
+        snapshot_bytes = b"controlled-pilot-physical-sqlite"
+        spec_overrides = {
+            "snapshot_id": snapshot_id,
+            "immutable_db_digest": physical_id,
+            "snapshot_key": (
+                "research/controlled_pilot/v1/snapshots/sha256="
+                + physical_id[len("sha256:") :]
+                + ".sqlite"
+            ),
+            "snapshot_size": 32,
+            "resolved_universe_digest": universe,
+            "authorization_digest": (
+                "sha256:36ba29b33d04f68468fb89e6c76ada53d019a156e9ca03ed3df6ef16e1a03b7e"
+            ),
+            "request_digest": keys["request_digest"],
+        }
 
     def fake_download(key: str, dest: Path, *, expected_hex: str, expected_size: int) -> str:
         del key, expected_size
-        dest.write_bytes(snapshot.read_bytes())
+        dest.write_bytes(snapshot_bytes)
         return expected_hex
 
     def fake_run(strategy: object, config: object):
@@ -3244,9 +3247,9 @@ def _run_controlled_container_with_engine_meta(
 
     class _Universe:
         rule_digest = EXACT_FOUR_UNIVERSE_RULE_DIGEST
-        resolved_membership_digest = "sha256:" + ("ab" * 32)
+        resolved_membership_digest = universe
         membership_by_date = {"2023-01-04": ("7203",)}
-        membership_proof = "controlled-resolved-universe:" + ("sha256:" + ("ab" * 32))
+        membership_proof = "controlled-resolved-universe:" + universe
 
     class _Handle:
         def _begin_controlled_batch_reads(self) -> None:
@@ -3267,17 +3270,21 @@ def _run_controlled_container_with_engine_meta(
     monkeypatch.setattr(service, "_download_controlled_snapshot", fake_download)
     monkeypatch.setattr(service, "_run_controlled_paper", fake_run)
     monkeypatch.setattr(service, "_mint_controlled_am_view", lambda *_args: _Handle())
+    if aligned_to_worker:
+        monkeypatch.setattr(service, "verify_sqlite", lambda _path: None)
+    spec_kwargs = {
+        "snapshot_id": snapshot_id,
+        "immutable_db_digest": physical_id,
+        "snapshot_key": (
+            "research/controlled_pilot/v1/snapshots/sha256="
+            + physical_id[len("sha256:") :]
+            + ".sqlite"
+        ),
+        "snapshot_size": len(snapshot_bytes),
+    }
+    spec_kwargs.update(spec_overrides)
     return service.execute_controlled_pilot_container(
-        _controlled_job_spec(
-            snapshot_id=snapshot_id,
-            immutable_db_digest=physical_id,
-            snapshot_key=(
-                "research/controlled_pilot/v1/snapshots/sha256="
-                + physical_id[len("sha256:") :]
-                + ".sqlite"
-            ),
-            snapshot_size=snapshot.stat().st_size,
-        )
+        _controlled_job_spec(**spec_kwargs)
     )
 
 
@@ -3292,8 +3299,46 @@ def _run_controlled_container_with_engine_meta(
         ({"max_gross_weight_limit": True}, "missing or malformed"),
         ({"max_gross_weight_limit": "0.5"}, "missing or malformed"),
         ({"realized_gross_weight": "unmeasured"}, "realized_gross_weight is malformed"),
+        ({"realized_gross_weight": False}, "realized_gross_weight is malformed"),
         ({"gross_limit_events": None}, "missing gross_limit_events"),
         ({"gross_limit_events": []}, "missing gross_limit_events"),
+        (
+            {
+                "gross_limit_events": [
+                    {"date": "2023-01-04", "status": "OK"}
+                ]
+            },
+            "resized",
+        ),
+        (
+            {
+                "gross_limit_events": [
+                    {
+                        "date": "not-a-date",
+                        "status": "OK",
+                        "limit": 0.5,
+                        "observed_gross_weight": 0.5,
+                        "resized": False,
+                        "filled_quantities_changed": False,
+                    }
+                ]
+            },
+            "ISO date",
+        ),
+        (
+            {
+                "gross_limit_events": [
+                    {
+                        "date": "2023-01-04",
+                        "status": "OK",
+                        "limit": 0.5,
+                        "resized": False,
+                        "filled_quantities_changed": False,
+                    }
+                ]
+            },
+            "missing measured gross",
+        ),
     ],
 )
 def test_controlled_container_rejects_missing_or_malformed_gross_proof(
@@ -3341,6 +3386,7 @@ def test_controlled_container_holds_measured_pm_gross_breach(
                     "limit": 0.5,
                     "observed_gross_weight": 0.75,
                     "resized": False,
+                    "filled_quantities_changed": False,
                 }
             ],
         ),
@@ -3353,7 +3399,6 @@ def test_controlled_container_holds_measured_pm_gross_breach(
     assert result["selection"]["decision"] == "HOLD"
     assert result["selection"]["selected"] == []
     assert result["selection"]["rejected"] == [row["plan_id"] for row in result["papers"]]
-    _assert_python_papers_match_worker_closed_schema(result["papers"])
     for paper in result["papers"]:
         assert paper["metrics"]["selection_eligible"] is False
         assert paper["realized_gross_weight"] == 0.75
@@ -3368,6 +3413,91 @@ def test_controlled_container_holds_measured_pm_gross_breach(
             for decision in result["selection"]["decisions"]
             for code in decision["reason_codes"]
         }
+
+
+def _container_worker_payload(result: dict[str, object]) -> dict[str, object]:
+    return {
+        "ok": result["ok"],
+        "identity": result["identity"],
+        "ephemeral_cleaned": result["ephemeral_cleaned"],
+        "papers": result["papers"],
+        "risks": result["risks"],
+        "selection": result["selection"],
+        "knowledge": result["knowledge"],
+    }
+
+
+def test_pin_python_execute_payloads_for_worker_acceptance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from paper_runtime.canonical_json import canonical_json_dumps
+
+    ok_dir = tmp_path / "ok"
+    ok_dir.mkdir()
+    ok = _run_controlled_container_with_engine_meta(
+        ok_dir,
+        monkeypatch,
+        _proven_ok_engine_meta(),
+        aligned_to_worker=True,
+    )
+    breach_dir = tmp_path / "breach"
+    breach_dir.mkdir()
+    breach = _run_controlled_container_with_engine_meta(
+        breach_dir,
+        monkeypatch,
+        _proven_ok_engine_meta(
+            realized_gross_weight=0.75,
+            gross_limit_events=[
+                {
+                    "date": "2023-01-04",
+                    "status": "BREACH",
+                    "limit": 0.5,
+                    "observed_gross_weight": 0.75,
+                    "resized": False,
+                    "filled_quantities_changed": False,
+                }
+            ],
+        ),
+        metrics={"selection_eligible": False},
+        aligned_to_worker=True,
+    )
+    fixtures = {
+        "ok": _container_worker_payload(ok),
+        "breach": _container_worker_payload(breach),
+    }
+    path = ROOT / "tests" / "fixtures" / "controlled_pilot_python_execute_artifacts.json"
+    path.write_text(canonical_json_dumps(fixtures) + "\n", encoding="utf-8")
+    pinned = json.loads(path.read_text(encoding="utf-8"))
+    assert pinned["ok"]["papers"][0]["snapshot_id"].startswith("sha256:")
+    assert pinned["ok"]["selection"]["selected"]
+    assert pinned["breach"]["selection"]["rejected"]
+    assert pinned["breach"]["selection"]["decision"] == "HOLD"
+
+
+def test_controlled_container_holds_incomplete_gross_measurement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = _run_controlled_container_with_engine_meta(
+        tmp_path,
+        monkeypatch,
+        _proven_ok_engine_meta(
+            realized_gross_weight=0.0,
+            gross_limit_events=[
+                {
+                    "date": "2023-01-04",
+                    "status": "INCOMPLETE",
+                    "limit": 0.5,
+                    "observed_gross_weight": None,
+                    "resized": False,
+                    "filled_quantities_changed": False,
+                }
+            ],
+        ),
+    )
+    assert result["ok"] is True
+    assert result["selection"]["selected"] == []
+    assert result["selection"]["rejected"] == [row["plan_id"] for row in result["papers"]]
+    assert result["papers"][0]["metrics"]["selection_eligible"] is False
 
 
 def _controlled_completed_result(item) -> dict:

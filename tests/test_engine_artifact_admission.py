@@ -66,6 +66,15 @@ from selection.engine_artifact_admission import (
         (
             {
                 "execution_mode": "am_signal_pm_close",
+                "max_gross_weight_limit": None,
+            },
+            False,
+            False,
+            AM_GROSS_CAP_EVIDENCE_UNPROVEN_REASON,
+        ),
+        (
+            {
+                "execution_mode": "am_signal_pm_close",
                 "core_engine_version": "0.8.0",
                 "max_gross_weight_limit": None,
             },

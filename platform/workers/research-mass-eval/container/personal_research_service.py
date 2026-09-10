@@ -190,11 +190,22 @@ class ControlledLeaseConflict(RuntimeError):
 
 
 def _finite_number(value: Any) -> float | None:
+    if type(value) is bool:
+        return None
     try:
         number = float(value)
     except (TypeError, ValueError):
         return None
     if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return number
+
+
+def _measured_nonneg(value: Any) -> float | None:
+    if type(value) not in (int, float) or type(value) is bool:
+        return None
+    number = _finite_number(value)
+    if number is None or number < 0.0:
         return None
     return number
 
@@ -237,27 +248,43 @@ def _controlled_gross_measurement_ineligible(
     if not isinstance(events, list) or not events:
         raise JobInputError("controlled paper missing gross_limit_events")
     statuses: list[str] = []
+    observed_weights: list[float] = []
     for event in events:
         if not isinstance(event, Mapping):
             raise JobInputError("malformed gross_limit_event")
-        date = event.get("date")
+        _parse_day(event.get("date"), "gross_limit_event.date")
         status = event.get("status")
-        if not isinstance(date, str) or not date:
-            raise JobInputError("gross_limit_event missing date")
         if status not in {"OK", "BREACH", "INCOMPLETE", "HOLD"}:
             raise JobInputError("gross_limit_event status is malformed")
+        if event.get("resized") is not False:
+            raise JobInputError("gross_limit_event resized")
+        if event.get("filled_quantities_changed") is not False:
+            raise JobInputError("gross_limit_event changed filled quantities")
+        limit = event.get("limit")
+        if type(limit) is not float or _finite_number(limit) is None:
+            raise JobInputError("gross_limit_event limit is malformed")
+        if abs(float(limit) - 0.5) > 1e-12:
+            raise JobInputError("gross_limit_event limit is not the controlled cap")
         observed = event.get("observed_gross_weight")
-        if status == "BREACH":
-            if _finite_number(observed) is None:
-                raise JobInputError("BREACH missing observed gross")
-        if status in {"INCOMPLETE", "HOLD"} and observed is not None:
-            if _finite_number(observed) is None:
-                raise JobInputError("gross_limit_event observed gross is malformed")
+        measured = _measured_nonneg(observed)
+        if status in {"OK", "BREACH"}:
+            if measured is None:
+                raise JobInputError("gross_limit_event missing measured gross")
+            if status == "OK" and measured > 0.5 + 1e-12:
+                raise JobInputError("OK gross_limit_event exceeds the controlled cap")
+            if status == "BREACH" and measured <= 0.5 + 1e-12:
+                raise JobInputError("BREACH gross_limit_event does not exceed the cap")
+            observed_weights.append(measured)
+        elif observed is not None:
+            raise JobInputError("undefined gross_limit_event must not report a ratio")
         statuses.append(str(status))
-    realized_raw = engine_meta.get("realized_gross_weight")
-    realized = _finite_number(realized_raw)
-    if realized_raw is not None and realized is None:
+    realized = _measured_nonneg(engine_meta.get("realized_gross_weight"))
+    if engine_meta.get("realized_gross_weight") is not None and realized is None:
         raise JobInputError("realized_gross_weight is malformed")
+    if observed_weights:
+        peak = max(observed_weights)
+        if realized is None or abs(realized - peak) > 1e-9:
+            raise JobInputError("realized_gross_weight does not match dated observations")
     reasons: list[str] = []
     if "BREACH" in statuses or (realized is not None and realized > 0.5 + 1e-12):
         reasons.append("MAX_GROSS_WEIGHT_BREACH")
