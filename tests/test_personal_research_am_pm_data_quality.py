@@ -13,6 +13,7 @@ from research.personal_service import (
     PersonalResearchPolicy,
     _candidate_evaluation,
     _paper_evidence,
+    _run_is_selection_eligible,
 )
 from strategies.paper import Lifecycle, PaperRunConfig, PaperRunResult
 
@@ -138,6 +139,13 @@ def evaluate(monkeypatch):
         return candidate
 
     return run
+
+
+def test_old_am_gross_cap_engine_artifact_is_not_selection_eligible() -> None:
+    run = _run_evidence(True)
+    run["core_engine_version"] = "0.8.0"
+    run["max_gross_weight_limit"] = 0.5
+    assert _run_is_selection_eligible(run) is False
 
 
 @pytest.mark.parametrize(

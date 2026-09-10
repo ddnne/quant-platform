@@ -1,0 +1,70 @@
+{
+  "schema": "quant-platform-work-ledger/v1",
+  "baseline_sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
+  "branch": "fix/am-order-quantity-causality",
+  "updated_at": "2026-09-10T00:00:00Z",
+  "lanes": {
+    "source_delivered": {
+      "status": "in_progress",
+      "scope": "item_2_am_order_quantity_causality",
+      "notes": "Engine AM OrderBatch freeze plus selection invalidation for 0.8.0 AM+gross-cap PM-resize artifacts."
+    },
+    "staging_deployed": {
+      "status": "not_this_branch",
+      "sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
+      "notes": "Secrets/Gateway staging were successfully deployed after normal user approval on 2026-09-10 13:55Z at b121564feb9ebb9a5613fbb9ab05d5dd90f96105. That deploy does not include this branch or Mass."
+    },
+    "production_deployed": {
+      "status": "hold",
+      "notes": "Production auto-deploy remains HOLD. Unknown until authoritative CI linkage is implemented."
+    },
+    "data_activated": {
+      "status": "pending",
+      "notes": "Not part of this unit."
+    },
+    "ready": {
+      "status": "pending",
+      "notes": "READY remains null/unproven. Not part of this unit."
+    },
+    "pilot_executed": {
+      "status": "pending",
+      "notes": "Exact-four Pilot is not authorized by this unit."
+    }
+  },
+  "items": {
+    "1_fresh_clone_and_ledger": {
+      "status": "this_unit_partial",
+      "notes": "Fresh checkout at verified main; this ledger records current lanes only."
+    },
+    "2_am_order_quantity_causality": {
+      "status": "in_progress"
+    },
+    "3_dependency_scope": { "status": "pending" },
+    "4_receipt_to_ready_trader": { "status": "pending" },
+    "5_ci_deploy_entrypoints": { "status": "pending" },
+    "6_shared_d1_receipt_reproof": { "status": "pending" },
+    "7_dead_code_and_docs": { "status": "pending" },
+    "8_rollout_and_research_go": { "status": "pending" },
+    "9_push_remote_and_fresh_clone_verify": { "status": "pending" }
+  },
+  "operational_facts": [
+    {
+      "id": "staging_secrets_gateway_20260910",
+      "observed_at": "2026-09-10T13:55:00Z",
+      "sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
+      "fact": "Secrets/Gateway staging deployed after normal user approval. Does not deploy this future branch or Mass."
+    }
+  ],
+  "unknowns": [
+    "Live projection remaining STALE/applied cursor null/B0 UNKNOWN/READY null were not re-measured in this unit.",
+    "Affected historic AM+gross-cap engine artifact inventory was not examined; no cloud listing was performed."
+  ],
+  "pending_operations": [
+    {
+      "id": "enumerate_legacy_am_gross_cap_engine_artifacts",
+      "status": "pending",
+      "requires": "cloud evidence",
+      "notes": "Structurally reject AM+gross-cap artifacts that cannot prove am_frozen_order_batch/v1. Do not overwrite or delete historic files. Enumerate actual cloud inventory in a later operation."
+    }
+  ]
+}

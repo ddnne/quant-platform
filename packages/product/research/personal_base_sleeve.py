@@ -85,6 +85,10 @@ _AM_PM_QUALITY_DATE_LISTS: Final = (
     "missing_fill_dates",
     "non_comparable_session_dates",
 )
+_AM_PM_OPTIONAL_DATE_LISTS: Final = (
+    "gross_breach_dates",
+    "incomplete_gross_dates",
+)
 _AM_PM_QUALITY_CODE_LISTS: Final = (
     "incomplete_valuation_codes",
     "missing_fill_codes",
@@ -664,6 +668,9 @@ def _copy_am_pm_quality(quality: Mapping[str, Any]) -> dict[str, Any]:
         copied[field] = value
     for field in _AM_PM_QUALITY_DATE_LISTS:
         copied[field] = _iso_date_list(quality.get(field), label=field)
+    for field in _AM_PM_OPTIONAL_DATE_LISTS:
+        if field in quality:
+            copied[field] = _iso_date_list(quality.get(field), label=field)
     for field in _AM_PM_QUALITY_CODE_LISTS:
         value = quality.get(field)
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
@@ -678,6 +685,8 @@ def _copy_am_pm_quality(quality: Mapping[str, Any]) -> dict[str, Any]:
         not copied["skipped_decision_dates"]
         and not copied["incomplete_valuation_dates"]
         and not copied["missing_fill_dates"]
+        and not copied.get("gross_breach_dates")
+        and not copied.get("incomplete_gross_dates")
         and copied["unfilled_order_count"] == 0
         and copied["skipped_decision_count"] == 0
         and copied["incomplete_valuation_count"] == 0
