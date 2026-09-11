@@ -2105,57 +2105,6 @@ def test_terminal_publication_retry_state_machine(
         manager._shutdown_notified = True
 
 
-def test_failed_terminal_put_and_get_404_retries_without_shutdown(monkeypatch) -> None:
-    terminal = threading.Event()
-
-    class _MissingTerminalR2:
-        def __init__(self) -> None:
-            self.puts = 0
-            self.gets = 0
-
-        def urlopen(self, request, timeout=None):
-            del timeout
-            method = request.get_method()
-            url = request.full_url
-            if method == "PUT":
-                self.puts += 1
-                raise urllib.error.HTTPError(
-                    url, 503, "unavailable", Message(), io.BytesIO(b"")
-                )
-            if method == "GET":
-                self.gets += 1
-                raise urllib.error.HTTPError(
-                    url, 404, "not found", Message(), io.BytesIO(b"")
-                )
-            raise AssertionError(method)
-
-    fake = _MissingTerminalR2()
-    monkeypatch.setattr(service.urllib.request, "urlopen", fake.urlopen)
-    manager = _job_manager(
-        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
-        on_terminal=terminal.set,
-        retry_schedule=(0.05, 0.05),
-        max_job_seconds=30,
-    )
-    try:
-        manager.submit(_job("a" * 64, "put-fail-get-404"))
-        assert not terminal.wait(0.2)
-        assert fake.puts >= 1
-        assert fake.gets >= 1
-        assert manager._shutdown_notified is False
-        assert manager._pending_terminal is not None
-        assert manager.status("put-fail-get-404")["status"] == "FAILED"
-    finally:
-        with manager._lock:
-            manager._shutdown_notified = True
-            retry_timer = manager._retry_timer
-            manager._retry_timer = None
-            manager._pending_terminal = None
-        if retry_timer is not None:
-            retry_timer.cancel()
-            retry_timer.join(timeout=1)
-
-
 def test_unavailable_terminal_upload_does_not_shutdown(
     held_retry_scheduler: list[_HeldTimer],
     monkeypatch: pytest.MonkeyPatch,
@@ -2627,50 +2576,84 @@ def test_deterministic_put_then_terminal_get_404_shuts_down_fail_closed(
     assert manager.status(spec.job_id)["status"] == "FAILED"
 
 
-def test_failed_upload_then_terminal_get_404_retries(monkeypatch) -> None:
-    fake = _put_then_get_404(
-        monkeypatch,
-        put_error=lambda url: urllib.error.HTTPError(
-            url, 503, "unavailable", Message(), io.BytesIO(b"")
+@pytest.mark.parametrize(
+    ("job_id", "put_error"),
+    (
+        (
+            "put-fail-get-404",
+            lambda url: urllib.error.HTTPError(
+                url, 503, "unavailable", Message(), io.BytesIO(b"")
+            ),
         ),
-    )
+        (
+            "transport-after-put",
+            lambda url: urllib.error.URLError("connection reset"),
+        ),
+    ),
+    ids=("put-http-503-get-404", "put-urlerror-get-404"),
+)
+def test_failed_terminal_put_and_get_404_retries_without_shutdown(
+    held_retry_scheduler: list[_HeldTimer],
+    monkeypatch: pytest.MonkeyPatch,
+    job_id: str,
+    put_error,
+) -> None:
     terminal = threading.Event()
+    fake = _put_then_get_404(monkeypatch, put_error=put_error)
     manager = _job_manager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         on_terminal=terminal.set,
         retry_schedule=(0.05, 0.05),
         max_job_seconds=30,
     )
-    manager.submit(_job("a" * 64, "missing-after-put"))
-    assert not terminal.wait(0.2)
-    assert fake.puts >= 2
-    assert fake.gets >= 1
-    assert manager._shutdown_notified is False
-    assert manager.status("missing-after-put")["status"] == "FAILED"
-    if manager._retry_timer is not None:
-        manager._retry_timer.cancel()
-
-
-def test_transport_error_then_terminal_get_404_retries(monkeypatch) -> None:
-    fake = _put_then_get_404(
-        monkeypatch,
-        put_error=lambda url: urllib.error.URLError("connection reset"),
-    )
-    terminal = threading.Event()
-    manager = _job_manager(
-        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
-        on_terminal=terminal.set,
-        retry_schedule=(0.05, 0.05),
-        max_job_seconds=30,
-    )
-    manager.submit(_job("a" * 64, "transport-after-put"))
-    assert not terminal.wait(0.2)
-    assert fake.puts >= 2
-    assert fake.gets >= 1
-    assert manager._shutdown_notified is False
-    assert manager.status("transport-after-put")["status"] == "FAILED"
-    if manager._retry_timer is not None:
-        manager._retry_timer.cancel()
+    worker = None
+    try:
+        manager.submit(_job("a" * 64, job_id))
+        worker = manager._worker
+        assert worker is not None
+        worker.join(2)
+        assert not worker.is_alive()
+        assert not terminal.is_set()
+        assert fake.puts == 1
+        assert fake.gets == 1
+        assert manager.status(job_id)["status"] == "FAILED"
+        assert manager._pending_terminal is not None
+        assert manager._accepting is False
+        assert manager._shutdown_notified is False
+        first_retry = manager._retry_timer
+        assert isinstance(first_retry, _HeldTimer)
+        assert first_retry in held_retry_scheduler
+        assert first_retry.started is True
+        assert first_retry.cancelled is False
+        assert first_retry.fired is False
+        first_retry.fire()
+        assert fake.puts == 2
+        assert fake.gets == 2
+        assert not terminal.is_set()
+        assert manager._pending_terminal is not None
+        assert manager._accepting is False
+        assert manager._shutdown_notified is False
+        next_retry = manager._retry_timer
+        assert isinstance(next_retry, _HeldTimer)
+        assert next_retry is not first_retry
+        assert next_retry in held_retry_scheduler
+        assert next_retry.started is True
+        assert next_retry.cancelled is False
+        assert next_retry.fired is False
+        with pytest.raises(service.JobBusyError):
+            manager.submit(_job("b" * 64, "other"))
+    finally:
+        pending_worker = manager._worker if worker is None else worker
+        if pending_worker is not None and pending_worker.is_alive():
+            pending_worker.join(2)
+        with manager._lock:
+            manager._shutdown_notified = True
+            retry_timer = manager._retry_timer
+            manager._retry_timer = None
+            manager._pending_terminal = None
+        if retry_timer is not None:
+            retry_timer.cancel()
+        assert pending_worker is None or not pending_worker.is_alive()
 
 
 def test_child_put_keeps_http_error_for_deterministic_rejection(
