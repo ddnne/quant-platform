@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime
+from io import StringIO
 from typing import Any, Iterable, Iterator, Mapping
 
 
@@ -206,12 +207,138 @@ def product_artifact_body_digest(body: Any) -> str:
     return "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
+def iter_product_artifact_body_rows(body: Any) -> Iterator[dict[str, str]]:
+    """Yield canonical product rows from one signed JSONL artifact body.
+
+    This is exact-generation materialization. It does not read ``jquants_records``
+    and is not a substitute for current-mode SQL reconstruction.
+    """
+
+    if type(body) is not str or not body:
+        raise ValueError("product materialization artifact body must be exact text")
+    if not body.endswith("\n"):
+        raise ValueError("product materialization artifact body must be JSONL")
+    for line in StringIO(body):
+        if not line.endswith("\n") or line == "\n":
+            raise ValueError("product materialization artifact body is not JSONL")
+        try:
+            raw = json.loads(line[:-1])
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "product materialization artifact body is not JSONL"
+            ) from exc
+        yield _canonical_product_row(raw)
+
+
+def product_row_digest(raw: Mapping[str, Any] | Any) -> str:
+    """Digest one canonical product row with the signed JSONL profile."""
+
+    row = _canonical_product_row(raw)
+    encoded = (
+        json.dumps(
+            row,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        + b"\n"
+    )
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _mapping_field(raw: Mapping[str, Any] | Any, name: str) -> Any:
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"full-segment {name} evidence must be a mapping")
+    try:
+        return raw[name]
+    except KeyError as exc:
+        raise ValueError(f"full-segment evidence is missing {name}") from exc
+
+
+def verify_full_segment_product_materialization(
+    closure: Any,
+    *,
+    product: Mapping[str, Any] | Any,
+    run: Mapping[str, Any] | Any,
+    raw_manifest: Mapping[str, Any] | Any,
+    observed_count: int,
+    observed_digest: str,
+    observed_bytes: int,
+) -> None:
+    """Close one full source segment against a verifier-minted receipt.
+
+    Callers supply the observed product independently. READY reconstructs
+    current ``jquants_records`` only. Exact-generation callers hash the signed
+    artifact body. This function does not treat current-only SQL as revision
+    proof.
+    """
+
+    from storage.verified_receipt import VerifiedCollectionClosure
+
+    if type(closure) is not VerifiedCollectionClosure:
+        raise TypeError("full-segment product requires VerifiedCollectionClosure")
+    if type(observed_count) is not int or observed_count < 1:
+        raise ValueError("observed full-segment row count is invalid")
+    if type(observed_digest) is not str or not observed_digest:
+        raise ValueError("observed full-segment digest is invalid")
+    if type(observed_bytes) is not int or observed_bytes < 1:
+        raise ValueError("observed full-segment byte count is invalid")
+    if not isinstance(product, Mapping):
+        raise ValueError("receipt product materialization is missing")
+    if not isinstance(run, Mapping):
+        raise ValueError("authority-bound ingestion run is missing")
+    if not isinstance(raw_manifest, Mapping):
+        raise ValueError("raw retention manifest is missing")
+
+    artifact_body = _mapping_field(product, "artifact_body")
+    if type(artifact_body) is not str or not artifact_body:
+        raise ValueError("product materialization artifact body must be exact text")
+    body_bytes = len(artifact_body.encode("utf-8"))
+    if (
+        closure.status != "SUCCESS"
+        or not closure.pagination_exhausted
+        or not closure.discovery_exhausted
+        or observed_count != closure.structured_row_count
+        or observed_digest != closure.structured_digest
+        or _mapping_field(product, "artifact_digest") != observed_digest
+        or product_artifact_body_digest(artifact_body) != observed_digest
+        or body_bytes != _mapping_field(product, "byte_count")
+        or int(_mapping_field(product, "byte_count")) != observed_bytes
+        or _mapping_field(product, "row_count") != closure.structured_row_count
+        or _mapping_field(product, "raw_manifest_digest")
+        != closure.raw_manifest_digest
+        or _mapping_field(product, "raw_page_count") != closure.raw_page_count
+        or _mapping_field(product, "raw_row_count") != closure.raw_row_count
+        or _mapping_field(run, "id") != closure.run_id
+        or _mapping_field(run, "source") != closure.source
+        or _mapping_field(run, "runtime") != "receipt-evidence-authority"
+        or _mapping_field(run, "status") != "SUCCESS"
+        or _mapping_field(run, "authority_operation_id")
+        != _mapping_field(product, "operation_id")
+        or _mapping_field(raw_manifest, "manifest_key")
+        != _mapping_field(product, "raw_manifest_key")
+        or _mapping_field(raw_manifest, "page_count") != closure.raw_page_count
+        or _mapping_field(raw_manifest, "row_count") != closure.raw_row_count
+        or _mapping_field(raw_manifest, "raw_bytes")
+        != _mapping_field(product, "raw_bytes")
+        or _mapping_field(raw_manifest, "data_digest")
+        != closure.raw_manifest_digest
+    ):
+        raise ValueError(
+            "full-segment product materialization does not close the signed receipt"
+        )
+
+
 __all__ = [
     "PRODUCT_ARTIFACT_FIELDS",
     "PRODUCT_ARTIFACT_SCHEMA",
     "canonical_product_artifact_bytes",
     "iter_observed_segment_product_rows",
+    "iter_product_artifact_body_rows",
     "product_artifact_body_digest",
     "product_artifact_digest",
     "product_artifact_digest_ordered",
+    "product_row_digest",
+    "verify_full_segment_product_materialization",
 ]
