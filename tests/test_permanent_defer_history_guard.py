@@ -1,4 +1,4 @@
-"""Permanent DEFER exclude guard for research history loads (W48 T2 / W68 n=4)."""
+"""Permanent DEFER exclude guard for research history loads."""
 
 from __future__ import annotations
 
@@ -26,9 +26,8 @@ from data_contracts.coverage import coverage_contract_for
 from data_access.adapter import QuantDataAccess
 
 
-def test_permanent_defer_set_is_exactly_four_after_w68():
-    """W68: PD-MX-EARN-TIP / fins_earnings_date removed; n=4 remaining."""
-    assert len(PERMANENT_DEFER_DATASETS) == 4
+def test_permanent_defer_set_membership():
+    """Declared DEFER membership excludes the superseded fins_earnings_date entry."""
     assert PERMANENT_DEFER_DATASETS == frozenset(
         {
             "equities_master",

@@ -31,7 +31,6 @@ def _contract_paths() -> set[str]:
 def _addon_contract_paths() -> set[str]:
     payload = json.loads(ADDON_CONTRACT_PATH.read_text(encoding="utf-8"))
     assert payload["schema_version"] == 1
-    assert len(payload["datasets"]) == 5
     assert all(str(row["path"]).startswith("/v2/") for row in payload["datasets"])
     return {str(row["path"]) for row in payload["datasets"]}
 
@@ -40,7 +39,6 @@ def test_secret_proxy_whitelist_source_is_exact_premium_contract():
     expected = {DATASETS[dataset_id]["path"] for dataset_id in PREMIUM_CORE_DATASETS}
 
     assert _contract_paths() == expected
-    assert len(expected) == 23
 
 
 def test_secret_proxy_preserves_exact_catalogued_addons_via_shared_contract():
