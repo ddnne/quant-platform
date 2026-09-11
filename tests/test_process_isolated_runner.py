@@ -110,6 +110,7 @@ def test_macos_profile_is_deny_first_and_has_no_user_filesystem_allow():
     assert "/private" not in profile
 
 
+@pytest.mark.platform
 def test_macos_backend_executes_true_under_active_os_sandbox():
     backend = MacOSSandboxExecBackend()
     if not backend.is_available() or not Path("/usr/bin/true").exists():
@@ -120,6 +121,7 @@ def test_macos_backend_executes_true_under_active_os_sandbox():
     assert result.os_isolated is True
 
 
+@pytest.mark.platform
 def test_macos_backend_denies_arbitrary_filesystem_read():
     backend = MacOSSandboxExecBackend()
     stat_binary = Path("/usr/bin/stat")
@@ -139,6 +141,7 @@ def test_macos_backend_denies_arbitrary_filesystem_read():
     assert result.os_isolated is True
 
 
+@pytest.mark.platform
 def test_macos_backend_denies_arbitrary_filesystem_write(tmp_path: Path):
     backend = MacOSSandboxExecBackend()
     touch_binary = Path("/usr/bin/touch")
