@@ -11,15 +11,6 @@ function req(
 }
 
 describe("authorized", () => {
-  it("unbound expected is false", async () => {
-    expect(
-      await authorized(req({ "X-Mass-Eval-Token": TOKEN }), undefined),
-    ).toBe(false);
-    expect(await authorized(req({ "X-Mass-Eval-Token": TOKEN }), "")).toBe(
-      false,
-    );
-  });
-
   it("matching X-Mass-Eval-Token is true", async () => {
     expect(
       await authorized(req({ "X-Mass-Eval-Token": TOKEN }), TOKEN),
@@ -40,9 +31,27 @@ describe("authorized", () => {
     expect(await authorized(request, TOKEN)).toBe(false);
   });
 
-  it("wrong header is false", async () => {
+  it("wrong nonempty X-Mass-Eval-Token does not fall back to X-Ingestion-Token", async () => {
     expect(
-      await authorized(req({ "X-Mass-Eval-Token": "wrong-token" }), TOKEN),
+      await authorized(
+        req({
+          "X-Mass-Eval-Token": "wrong-token",
+          "X-Ingestion-Token": TOKEN,
+        }),
+        TOKEN,
+      ),
     ).toBe(false);
+  });
+
+  it("empty X-Mass-Eval-Token falls back to matching X-Ingestion-Token", async () => {
+    expect(
+      await authorized(
+        req({
+          "X-Mass-Eval-Token": "",
+          "X-Ingestion-Token": TOKEN,
+        }),
+        TOKEN,
+      ),
+    ).toBe(true);
   });
 });

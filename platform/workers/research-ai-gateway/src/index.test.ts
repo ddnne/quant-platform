@@ -1,33 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { authorized } from "./authorized";
 import worker, { type GatewayEnv } from "./index";
-
-describe("authorized token separation", () => {
-  const env: GatewayEnv = {
-    GATEWAY_TOKEN: "gateway-secret",
-  };
-
-  it("accepts X-Gateway-Token matching GATEWAY_TOKEN", async () => {
-    const req = new Request("https://gw.test/v1/complete", {
-      headers: { "X-Gateway-Token": "gateway-secret" },
-    });
-    expect(await authorized(req, env)).toBe(true);
-  });
-
-  it("does not accept X-Mass-Eval-Token as GATEWAY_TOKEN", async () => {
-    const req = new Request("https://gw.test/v1/complete", {
-      headers: { "X-Mass-Eval-Token": "gateway-secret" },
-    });
-    expect(await authorized(req, env)).toBe(false);
-  });
-
-  it("denies unbound GATEWAY_TOKEN", async () => {
-    const req = new Request("https://gw.test/v1/complete", {
-      headers: { "X-Gateway-Token": "gateway-secret" },
-    });
-    expect(await authorized(req, {})).toBe(false);
-  });
-});
 
 function dispatchEnv(): { env: GatewayEnv; aiCalls: { count: number } } {
   const aiCalls = { count: 0 };

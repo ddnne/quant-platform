@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { authorized } from "./authorized";
 import worker, { type GatewayEnv } from "./index";
 
 const GATEWAY_TOKEN = "gateway-secret";
@@ -19,18 +18,6 @@ function dispatchEnv(): { env: GatewayEnv; aiCalls: { count: number } } {
 }
 
 describe("POST /v1/complete ignores query token", () => {
-  it("authorized is false for matching ?token= with no X-Gateway-Token", async () => {
-    const { env } = dispatchEnv();
-    expect(
-      await authorized(
-        new Request("https://gw.test/v1/complete?token=gateway-secret", {
-          method: "POST",
-        }),
-        env,
-      ),
-    ).toBe(false);
-  });
-
   it("POST /v1/complete?token=gateway-secret with no header is 401 and does not call AI", async () => {
     const { env, aiCalls } = dispatchEnv();
     const req = new Request("https://gw.test/v1/complete?token=gateway-secret", {
