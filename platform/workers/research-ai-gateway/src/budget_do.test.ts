@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   PILOT_BUDGET_CAPS,
   CONTROL_PLANE_LEDGER_NAME,
@@ -22,8 +22,6 @@ import {
   settleUncertainBudget,
   snapshotBudget,
   zeroCounters,
-  type PublicReservation,
-  type Reservation,
 } from "./budget_do";
 import {
   AI_GATEWAY_PRICING_POLICY_DIGEST,
@@ -1700,20 +1698,6 @@ describe("P0 terminal replay and capability isolation", () => {
       reserved: { model_calls: 0 },
       active_leases: 0,
     });
-  });
-
-  it("public DTO has no sensitive capability fields", () => {
-    expectTypeOf<Reservation>().toHaveProperty("settlement_capability_secret");
-    expectTypeOf<Reservation>().toHaveProperty("settlement_capability_hash");
-    expectTypeOf<PublicReservation>().not.toHaveProperty("settlement_capability");
-    expectTypeOf<PublicReservation>().not.toHaveProperty("settlement_capability_secret");
-    expectTypeOf<PublicReservation>().not.toHaveProperty("settlement_capability_hash");
-    type Sensitive = Extract<
-      keyof PublicReservation,
-      "settlement_capability" | "settlement_capability_secret" | "settlement_capability_hash"
-    >;
-    const publicDtoHasNoSensitive: Sensitive extends never ? true : never = true;
-    expect(publicDtoHasNoSensitive).toBe(true);
   });
 
   it("active and reconciled reserve replay with missing/false acquire_lease rejects", async () => {

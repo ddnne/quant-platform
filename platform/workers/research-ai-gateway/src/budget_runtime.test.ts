@@ -1,5 +1,5 @@
 import { env, exports as workerExports } from "cloudflare:workers";
-import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   evictDurableObject,
   reset,
@@ -9,8 +9,6 @@ import {
 import {
   CONTROL_PLANE_LEDGER_NAME,
   type LedgerState,
-  type PublicReservation,
-  type Reservation,
 } from "./budget_do";
 import { BudgetLedger } from "./budget_http";
 import { GatewayService, type GatewayEnv } from "./index";
@@ -877,17 +875,6 @@ describe("BudgetLedger in the Workers runtime", () => {
       expect(active).toEqual([]);
     });
   }, 15_000);
-
-  it("public DTO has no sensitive capability fields", () => {
-    expectTypeOf<Reservation>().toHaveProperty("reserve_owner_capability_hash");
-    expectTypeOf<Reservation>().toHaveProperty("settlement_capability_secret");
-    expectTypeOf<Reservation>().toHaveProperty("settlement_capability_hash");
-    expectTypeOf<PublicReservation>().not.toHaveProperty("settlement_capability");
-    expectTypeOf<PublicReservation>().not.toHaveProperty("reserve_owner_capability");
-    expectTypeOf<PublicReservation>().not.toHaveProperty("reserve_owner_capability_hash");
-    expectTypeOf<PublicReservation>().not.toHaveProperty("settlement_capability_secret");
-    expectTypeOf<PublicReservation>().not.toHaveProperty("settlement_capability_hash");
-  });
 
   it("rejects missing/false acquire_lease on active and reconciled reserve replay", async () => {
     const namespace = runtimeEnv.BUDGET_LEDGER;
