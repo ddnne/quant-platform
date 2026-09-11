@@ -8,6 +8,8 @@ from typing import Any, Mapping
 
 import pytest
 
+from jsonschema import Draft7Validator, ValidationError
+
 from research import evaluation_ir as ir_module
 from research import evaluation_ir_emit as emit_module
 from research.candidate_policy import job_candidate_grade
@@ -51,10 +53,24 @@ _GRADE_KEYS = ("n_expected", "n_cells", "n_complete", "n_collapsed", "n_broken")
 
 def _load_golden() -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for line in GOLDEN_PATH.read_text(encoding="utf-8").splitlines():
+    for lineno, line in enumerate(
+        GOLDEN_PATH.read_text(encoding="utf-8").splitlines(), start=1
+    ):
         line = line.strip()
-        if line:
-            rows.append(json.loads(line))
+        if not line:
+            continue
+        row = json.loads(line)
+        if not isinstance(row, dict):
+            raise ValueError(
+                f"Evaluation IR golden line {lineno}: row must be an object"
+            )
+        op = row.get("op")
+        if op not in ("roundtrip", "decode"):
+            label = row.get("id", lineno)
+            raise ValueError(f"Evaluation IR golden {label}: unknown op {op!r}")
+        rows.append(row)
+    if not rows:
+        raise ValueError(f"Evaluation IR golden is empty: {GOLDEN_PATH}")
     return rows
 
 
@@ -65,6 +81,15 @@ def _canonical_digest(payload: Mapping[str, Any]) -> str:
 
 def _counts(payload: Mapping[str, Any]) -> dict[str, int]:
     return {key: int(payload[key]) for key in _GRADE_KEYS}
+
+
+@pytest.fixture(scope="module")
+def draft7_validator() -> Draft7Validator:
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    assert isinstance(schema, dict) and schema
+    assert load_evaluation_ir_schema() == schema
+    Draft7Validator.check_schema(schema)
+    return Draft7Validator(schema)
 
 
 def test_canonical_fields_and_version() -> None:
@@ -365,15 +390,21 @@ def test_encode_output_schema_validates() -> None:
 
 
 @pytest.mark.parametrize("row", _load_golden(), ids=lambda row: row["id"])
-def test_golden_rows_schema_validate(row: dict[str, Any]) -> None:
+def test_golden_rows_schema_validate(
+    row: dict[str, Any], draft7_validator: Draft7Validator
+) -> None:
     if row["op"] == "decode":
         payload = row["payload"]
         extra = set(payload) - ALLOWED_FIELDS
         if extra:
+            with pytest.raises(ValidationError):
+                draft7_validator.validate(payload)
             with pytest.raises(ValueError, match="unknown field"):
                 validate_evaluation_ir_schema(payload)
             return
+        draft7_validator.validate(payload)
         validate_evaluation_ir_schema(payload)
         return
     encoded = encode_evaluation_ir(**row["args"])
+    draft7_validator.validate(encoded)
     validate_evaluation_ir_schema(encoded)

@@ -165,104 +165,10 @@ echo "==> python pytest (2 workers, file-scoped scheduling)"
 # the same module across processes.
 "$py" -m pytest -n 2 --dist=loadfile tests/
 
-echo "==> Evaluation IR schema + golden (jsonschema + codec roundtrip)"
-golden="$ROOT/specs/evaluation_ir/golden.jsonl"
-schema="$ROOT/specs/evaluation_ir/schema.json"
-schema_py="$ROOT/packages/product/research/evaluation_ir.py"
-schema_ts="$ROOT/platform/workers/research-mass-eval/src/evaluation_ir.ts"
-allowed_ts="$ROOT/platform/workers/research-mass-eval/src/evaluation_ir_allowed_fields.generated.ts"
-codec_ts="$ROOT/platform/workers/research-mass-eval/src/evaluation_ir_codec.generated.ts"
-codec_py="$ROOT/packages/product/research/evaluation_ir_codec.generated.py"
-types_py="$ROOT/packages/product/research/evaluation_ir_types.generated.py"
-for p in "$golden" "$schema" "$schema_py" "$schema_ts" "$allowed_ts" "$codec_ts" "$codec_py" "$types_py"; do
-  if [[ ! -f "$p" ]]; then
-    echo "Evaluation IR missing golden/schema: $p" >&2
-    exit 1
-  fi
-done
-if [[ ! -s "$golden" ]]; then
-  echo "Evaluation IR golden is empty: $golden" >&2
-  exit 1
-fi
-# Independent jsonschema + Python encode/decode. evaluation_ir.ts is the
-# Worker façade; encode/decode body is generated from schema.json.
-# Python evaluation_ir.py is the façade; encode/decode body is generated.
-# ALLOWED_FIELDS, encode object keys, and Python TypedDicts are generated
-# from schema.json. Types are not a grade policy.
-"$py" -c 'from research.evaluation_ir import assert_evaluation_ir_allowed_fields_ts_frozen, assert_evaluation_ir_codec_ts_frozen, assert_evaluation_ir_codec_py_frozen, assert_evaluation_ir_types_py_frozen, assert_evaluation_ir_encode_keys_match_schema; assert_evaluation_ir_allowed_fields_ts_frozen(); assert_evaluation_ir_codec_ts_frozen(); assert_evaluation_ir_codec_py_frozen(); assert_evaluation_ir_types_py_frozen(); assert_evaluation_ir_encode_keys_match_schema()'
-"$py" -c 'import json
-from pathlib import Path
-import jsonschema
-from jsonschema import Draft7Validator
-from research.evaluation_ir import (
-    decode_evaluation_ir,
-    encode_evaluation_ir,
-    load_evaluation_ir_schema,
-)
 
-schema_path = Path("specs/evaluation_ir/schema.json")
-golden_path = Path("specs/evaluation_ir/golden.jsonl")
-if not schema_path.is_file():
-    raise SystemExit(f"Evaluation IR schema missing: {schema_path}")
-if not golden_path.is_file():
-    raise SystemExit(f"Evaluation IR golden missing: {golden_path}")
-schema = json.loads(schema_path.read_text(encoding="utf-8"))
-if not isinstance(schema, dict) or not schema:
-    raise SystemExit("Evaluation IR schema is empty")
-if load_evaluation_ir_schema() != schema:
-    raise SystemExit("Evaluation IR schema.json drifted from research.evaluation_ir")
-raw = golden_path.read_text(encoding="utf-8")
-if not raw.strip():
-    raise SystemExit(f"Evaluation IR golden is empty: {golden_path}")
-n = 0
-for lineno, line in enumerate(raw.splitlines(), start=1):
-    if not line.strip():
-        continue
-    n += 1
-    try:
-        row = json.loads(line)
-    except json.JSONDecodeError as exc:
-        raise SystemExit(f"Evaluation IR golden line {lineno}: invalid JSON: {exc}") from exc
-    if not isinstance(row, dict):
-        raise SystemExit(f"Evaluation IR golden line {lineno}: row must be an object")
-    label = row.get("id", lineno)
-    op = row.get("op")
-    if op == "roundtrip":
-        encoded = encode_evaluation_ir(**row["args"])
-        jsonschema.validate(instance=encoded, schema=schema, cls=Draft7Validator)
-        decoded = decode_evaluation_ir(encoded)
-        if decoded.to_dict() != encoded:
-            raise SystemExit(f"Evaluation IR golden {label}: encode/decode roundtrip drift")
-        expect = row["expect"]
-        if (
-            encoded["candidate"] is not expect["candidate"]
-            or encoded["failure_reason"] != expect["failure_reason"]
-        ):
-            raise SystemExit(f"Evaluation IR golden {label}: expect drift")
-        continue
-    if op == "decode":
-        payload = row["payload"]
-        schema_ok = True
-        try:
-            jsonschema.validate(instance=payload, schema=schema, cls=Draft7Validator)
-        except jsonschema.ValidationError:
-            schema_ok = False
-        try:
-            decode_evaluation_ir(payload)
-        except (ValueError, TypeError) as exc:
-            needle = str(row.get("expect_error") or "")
-            if needle and needle not in str(exc):
-                raise SystemExit(
-                    f"Evaluation IR golden {label}: unexpected decode error: {exc}"
-                ) from exc
-            continue
-        if not schema_ok:
-            raise SystemExit(f"Evaluation IR golden {label}: decode ignored schema.json")
-        raise SystemExit(f"Evaluation IR golden {label}: expected decode to fail")
-    raise SystemExit(f"Evaluation IR golden {label}: unknown op {op!r}")
-if n == 0:
-    raise SystemExit(f"Evaluation IR golden is empty: {golden_path}")
-'
+# Evaluation IR generated-artifact drift, independent Draft7 schema
+# validation, and codec goldens are owned by tests/test_evaluation_ir.py.
+# The full pytest run above remains required.
 
 verify_worker() {
   local dir="$1" name
