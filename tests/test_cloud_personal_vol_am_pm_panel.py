@@ -21,9 +21,11 @@ from personal_history_compact_support import (
     stamp_compact_manifest,
 )
 from test_cloud_personal_research_container import (
+    SYNTHETIC_CHILD_RUNNER_ERROR,
     _cancel_held_retries_after_worker,
     _join_manager_worker,
     service,
+    synthetic_child_runner_failure,
 )
 import personal_vol_am_pm_panel_job as job
 
@@ -705,7 +707,7 @@ def test_job_manager_409_then_verified_get(
 
     terminal = threading.Event()
     manager = service.JobManager(
-        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        synthetic_child_runner_failure,
         terminal_uploader=uploader,
         terminal_reader=reader,
         retry_schedule=(0.01,),
@@ -721,6 +723,7 @@ def test_job_manager_409_then_verified_get(
         record = manager.status(spec.job_id)
         assert record is not None
         assert record["status"] == "FAILED"
+        assert SYNTHETIC_CHILD_RUNNER_ERROR in record["error"]
         assert record["job_id"] == spec.job_id
         assert record["request_digest"] == spec.request_digest
         assert record["runner_version"] == spec.runner_version
