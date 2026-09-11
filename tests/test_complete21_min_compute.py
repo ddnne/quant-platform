@@ -60,6 +60,8 @@ def test_pit_gate_hides_future_available_at_margin_and_disclosure(tmp_path):
 
     disc_late = _feat("disclosure_flag_fins", db, "2025-04-02", code=CODES[0])
     assert disc_late.value == 1.0
+    assert disc_late.metadata["datasets"] == ["fins_summary"]
+    assert disc_late.metadata["rows_seen"] == 1
 
 
 def test_pit_gate_hides_future_short_ratio_and_margin_alert(tmp_path):
