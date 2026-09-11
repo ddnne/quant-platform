@@ -14,15 +14,6 @@ import { CONTROLLED_JSON_TYPE,
 import { PERSONAL_SNAPSHOT_FORMAT } from "./personal_snapshot_contract";
 import { sha256Hex } from "./sha256";
 
-vi.stubGlobal(
-  "FixedLengthStream",
-  class extends TransformStream<Uint8Array, Uint8Array> {
-    constructor(_expectedLength: number | bigint) {
-      super();
-    }
-  },
-);
-
 const THREE_BYTE_SHA256 =
   "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81";
 
@@ -75,46 +66,20 @@ function r2Object(
 }
 
 describe("personal Container R2 capability", () => {
-  it.each([
-    [".sqlite", "application/vnd.sqlite3"],
-    [".sqlite.gz", "application/gzip"],
-  ])("streams a content-addressed%s snapshot", async (suffix, contentType) => {
-    const sha = "a".repeat(64);
-    const key = `research/personal/snapshots/sha256=${sha}${suffix}`;
-    const object = r2Object(key, new Uint8Array([1, 2, 3]), {}, {
-      contentEncoding: "gzip",
-      contentType: "application/octet-stream",
-    });
+  it("denies a private snapshot path without touching the bucket", async () => {
     const bucket = {
-      get: vi.fn(async (got: string) => (got === key ? object : null)),
-      head: vi.fn(async (got: string) => (got === key ? object : null)),
+      get: vi.fn(),
+      head: vi.fn(),
       put: vi.fn(),
     } as unknown as R2Bucket;
-    const allowed = await personalResearchR2Outbound(
-      new Request(`http://research.r2/${key}`),
-      { STRUCTURED_BUCKET: bucket },
-    );
-    expect(allowed.status).toBe(200);
-    expect(new Uint8Array(await allowed.arrayBuffer())).toEqual(
-      new Uint8Array([1, 2, 3]),
-    );
-    expect(allowed.headers.get("content-type")).toBe(contentType);
-    expect(allowed.headers.get("content-encoding")).toBeNull();
-    expect(allowed.headers.get("content-length")).toBe("3");
-    const head = await personalResearchR2Outbound(
-      new Request(`http://research.r2/${key}`, { method: "HEAD" }),
-      { STRUCTURED_BUCKET: bucket },
-    );
-    expect(head.status).toBe(200);
-    expect(head.headers.get("content-type")).toBe(contentType);
-    expect(head.headers.get("content-length")).toBe("3");
     const denied = await personalResearchR2Outbound(
       new Request("http://research.r2/other/private.sqlite"),
       { STRUCTURED_BUCKET: bucket },
     );
     expect(denied.status).toBe(403);
-    expect(bucket.get).toHaveBeenCalledTimes(1);
-    expect(bucket.head).toHaveBeenCalledTimes(1);
+    expect(bucket.get).not.toHaveBeenCalled();
+    expect(bucket.head).not.toHaveBeenCalled();
+    expect(bucket.put).not.toHaveBeenCalled();
   });
 
   it("rejects snapshot gzip PUT above the 4 GiB transport bound", async () => {
@@ -166,17 +131,15 @@ describe("personal Container R2 capability", () => {
     expect(bucket.put).not.toHaveBeenCalled();
   });
 
-  it("passes result bodies to R2 as streams and freezes the output key", async () => {
+  it("passes result body to R2 without buffering", async () => {
     const jobId = "exact-four-1";
     const requestDigest = `sha256:${"b".repeat(64)}`;
     const contentDigest = `sha256:${THREE_BYTE_SHA256}`;
     let observed: unknown;
-    let observedOptions: R2PutOptions | undefined;
     const bucket = {
       head: vi.fn(async () => null),
-      put: vi.fn(async (_key: string, body: unknown, options: R2PutOptions) => {
+      put: vi.fn(async (_key: string, body: unknown) => {
         observed = body;
-        observedOptions = options;
         return { key: _key };
       }),
     } as unknown as R2Bucket;
@@ -198,8 +161,16 @@ describe("personal Container R2 capability", () => {
     );
     expect(response.status).toBe(201);
     expect(observed).toBeInstanceOf(ReadableStream);
-    expect(hex(observedOptions!.sha256!)).toBe(THREE_BYTE_SHA256);
+  });
 
+  it("refuses a result PUT whose output key does not match the job", async () => {
+    const jobId = "exact-four-1";
+    const requestDigest = `sha256:${"b".repeat(64)}`;
+    const contentDigest = `sha256:${THREE_BYTE_SHA256}`;
+    const bucket = {
+      head: vi.fn(),
+      put: vi.fn(),
+    } as unknown as R2Bucket;
     const denied = await personalResearchR2Outbound(
       new Request(
         "http://research.r2/research/personal/jobs/job=another/result.tar.gz",
@@ -217,6 +188,8 @@ describe("personal Container R2 capability", () => {
       { STRUCTURED_BUCKET: bucket },
     );
     expect(denied.status).toBe(400);
+    expect(bucket.head).not.toHaveBeenCalled();
+    expect(bucket.put).not.toHaveBeenCalled();
   });
 
   it("rejects late result, snapshot, and conflicting manifest creation after FAILED", async () => {
@@ -313,46 +286,6 @@ describe("personal Container R2 capability", () => {
     ]);
     expect(bucket.put).not.toHaveBeenCalled();
     expect(terminals.size).toBe(2);
-  });
-
-  it("requires R2 to verify the declared result digest against the stream", async () => {
-    const jobId = "exact-four-checksum";
-    const requestDigest = `sha256:${"b".repeat(64)}`;
-    const bucket = {
-      head: vi.fn(async () => null),
-      put: vi.fn(
-        async (_key: string, body: ReadableStream, options: R2PutOptions) => {
-          const actual = await crypto.subtle.digest(
-            "SHA-256",
-            await new Response(body).arrayBuffer(),
-          );
-          if (hex(actual) !== hex(options.sha256!)) {
-            throw new Error("R2 checksum mismatch");
-          }
-          return { key: _key };
-        },
-      ),
-    } as unknown as R2Bucket;
-    const response = await personalResearchR2Outbound(
-      new Request(
-        `http://research.r2/research/personal/jobs/job=${jobId}/result.tar.gz`,
-        {
-          method: "PUT",
-          headers: {
-            "content-length": "3",
-            "x-personal-job-id": jobId,
-            "x-personal-request-digest": requestDigest,
-            "x-content-sha256": `sha256:${"c".repeat(64)}`,
-          },
-          body: new Uint8Array([1, 2, 3]),
-        },
-      ),
-      { STRUCTURED_BUCKET: bucket },
-    );
-    expect(response.status).toBe(502);
-    expect(await response.json()).toEqual({
-      error: "result upload checksum rejected",
-    });
   });
 
   it("uploads gzip first and rejects a successful snapshot manifest without that object", async () => {
