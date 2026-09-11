@@ -1,135 +1,33 @@
-# Architecture（概要）
+# 現行アーキテクチャ
 
-> **Live residual SoT (sole):** [phase62_residual_status.md](phase62_residual_status.md)  
-> (COMPLETE counts / raw_n / Mass·READY **NO-GO** / Phase 7 **OFF** — do not invent or embed live status here.)  
-> **Live finding ledger (sole):** [phase633_finding_ledger.md](phase633_finding_ledger.md). Historical review waves were removed from the active tree and remain available in Git history.
-> **Agent nav:** [architecture/llm_nav_map.md](architecture/llm_nav_map.md) · **Layout SoT:** [architecture/repo_layout_migration.md](architecture/repo_layout_migration.md) · **ADR:** [architecture/adr_llm_friendly_refactor.md](architecture/adr_llm_friendly_refactor.md) (**Accepted**)
+通常経路は Cloudflare 上の取得・不変保存・一時計算です。入口の向きは [../README.md](../README.md)、残作業の順は [roadmap.md](roadmap.md)、役割は [../AGENTS.md](../AGENTS.md) です。個人 / Controlled / Mass の分離と歴史的朝値の意味は [architecture/adr_phase632_architecture_simplification.md](architecture/adr_phase632_architecture_simplification.md) です。配置ナビは [architecture/repo_layout_migration.md](architecture/repo_layout_migration.md) と [architecture/llm_nav_map.md](architecture/llm_nav_map.md) を使い、古い文書をライブの正本にしません。
 
-Phase 6.1 時点のデータ完全性、PIT、公開 snapshot、外部 read surface の境界を固定する。
+## クラウド面
 
-## Repository layout
+市場データの通常取得は ingestion Worker が行い、raw と products を R2 へ不変に置き、構造化分を D1 へ書きます。研究の実データ実行は既存の research-mass-eval Worker が Container を使い、R2 由来の一時 SQLite で計算します。利用者マシンに実価格・財務履歴は残しません。ローカルはコードと fixture です。`qp-research` は開発者・復旧互換であり、通常経路ではありません。稼働面の正本は [../specs/cloudflare/active_worker_bindings.json](../specs/cloudflare/active_worker_bindings.json)、D1 移行は [../specs/cloudflare/d1_migration_manifest.json](../specs/cloudflare/d1_migration_manifest.json) です。目録は写しません。個人 DRAFT の API 限界は [../platform/workers/research-mass-eval/README.md](../platform/workers/research-mass-eval/README.md)、秘密の名前だけ [../platform/secrets.example.md](../platform/secrets.example.md) です。
 
-Library code is grouped under `packages/{edge,data_plane,research_runtime,product}` by plane.
-**Import names stay top-level** (`import ingestion`, `import pit`, …). Cloudflare Workers remain
-at `platform/workers/**` (path frozen). See
-[architecture/repo_layout_migration.md](architecture/repo_layout_migration.md) for the mapping
-and packaging policy.
+| 層 | 責務 | 統合先 |
+| --- | --- | --- |
+| data_plane | SQL・貯蔵・時計・PIT。不変スライスを供給する | R2 の raw / products と D1 |
+| research_runtime | 与えられたスライスで計算するだけ | research-mass-eval の Container（一時 SQLite） |
+| product | 経路の組み立てと認可境界 | 既存 Worker 契約。Worker や authority を増やさない |
 
-## 目的
+計算は閉じた DSL に限り、生成 Python も `eval` / `exec` も使いません。Risk は独立です。スコープコンパイラ、財務の compact state、complete-master 所有者は既にあります。未完なのは共有の bar / 財務スコープと、認証済み候補・READY・runtime・Trader の接続です。データベース境界が閉じた、とは言いません。ソース受理はロールアウトを自動にしません。
 
-日本株・開示・債券データを用いた **研究／Paper／FoF** 基盤を構築する。
+## 時刻と PIT
 
-## 正本と実験・CI
+すべての面は明示の `as_of` / `available_at` と正確な版を保存します。PIT は `available_at <= as_of` を含みます。固定 allowlist の日次交差は所属の不変条件であり、PIT 全体ではありません。一般研究と個人 DRAFT をグローバルに Prime へ限定しません。いまの正本 Controlled は凍結した `tse_prime_with_fins`（市場コード `0111`）を保ち、定義とフィルタは [../packages/product/research/universe_contract.py](../packages/product/research/universe_contract.py) にあります。他の研究はそれぞれの版付きユニバース定義を使います。適格ユニバースは版付きプロファイルから取り、カタログを手で写しません。
 
-| 項目 | 方針 |
-|------|------|
-| 正本 | **GitHub リポジトリ 1 本**（コード・契約・logic catalog。公開・非公開は運用で変更可） |
-| 実験の枝分かれ | **Cloudflare**: R2 `quant-structured/research/{eval,mass_eval}/job={id}/` + D1 索引行。local sqlite / `.glm-logs` / wave markdown は SoT ではない |
-| 実験の足し方 | logic spec + `evaluate_*` 関数 + 既存ランナー。**新規 `scripts/run_wNN_*.py` と wave proof 倉庫は禁止**（[ADR](architecture/adr_research_recording.md)） |
-| CI/CD | **Cloudflare**（後続）。**GitHub Actions には載せない** |
+注文は、その朝に利用可能な情報で数量を決め、当日の PM 終値で約定を測ります。AM専用APIは現在の tip を返すため、正本の回顧は日次フィールドを使います。Premium 日次の生の朝値 MC、調整済み朝値 MAdjC、調整済み午後終値 AAdjC は、版付き再構成契約の下で回顧 Paper の正当なソースです。当時 11:30 に同時観測したことそのものではありません。生の取得時刻と公表時刻は残します。中核は AM 数量を `am_frozen_order_batch/v1` で凍結し、PM は約定・PnL・gross breach を測るだけで、事後のリサイズはしません。複数日保有のオーバーナイトリスクは残ります。18 年ランも成績も主張しません。戦略ごとの入手可能性・ウォームアップ・フィールド被覆は、その戦略の証拠で見ます。
 
-## データ取得と境界
+## 信頼と配布
 
-- 外部データ取得は **Ingestion のみ**。エージェントや戦略コードから外部 API へ直接は出ない。
-- **Secrets** は Cloudflare Secrets／環境変数。コード・リポジトリに埋め込まない。
-- データは **`event_time`**（事象の時刻）と **`available_at`**（利用可能になった時刻）を持つ（**PIT** 前提）。
-- 構造化保存では `available_at` は必須（空は拒否）。
-- **構造化データの読み出しは PIT Data API（`pit/`）のみ。** 研究・特徴量・戦略コードは
-  直接 SQLite を開かず、必ず `as_of` を取る `pit.get_*` 経由で読む。これが **fact の
-  唯一の読み出し経路（sole read path for facts）** であり、look-ahead を構造で防ぐ。
-  詳細は [pit_api.md](pit_api.md) を参照。
+Controlled Pilot は `controlled_pilot_v1` の正確に四本です。実行には、その計画に対する正確な ExperimentPlan / StrategySpec / FeatureRef / プロファイル / closure / snapshot、信頼できる全セグメント receipt、B0 / B4、現行の source / export / applied generation、不変 READY、Trader の署名済み実行許可と Budget ゲートが要ります。欠けた証拠は実行を止めます。必須 closure は [../specs/ready/controlled_pilot_v1.generated.json](../specs/ready/controlled_pilot_v1.generated.json) と [../specs/experiment_plans/](../specs/experiment_plans/) が指すソースに従い、そこに無い履歴を必須にしません。汎用 caller JSON や DRAFT への署名は証明になりません。ソース実装は運用起動ではありません。READY 候補の準備から既存署名者、Trader 本番接続までは開いたままです。政策入力は [../specs/policy/controlled_pilot_policy.json](../specs/policy/controlled_pilot_policy.json)、ドリフト確認は [../scripts/verify_controlled_pilot_v1_drift.py](../scripts/verify_controlled_pilot_v1_drift.py) です。
 
-## Coverage V3、Trusted Receipt、READY
+個人 DRAFT の結果は研究用です。同じ規約の下で完備なら比較してよいですが、READY や Live ではありません。Mass は無効で、Pilot の証跡では Mass を有効化できません。凍結リプレイは通常実行ではありません。
 
-> **Not live SoT.** The live MCP projection remains the last observed generation
-> recorded in [phase62_residual_status.md](phase62_residual_status.md). A code
-> contract or a green test does not upgrade that live generation and does not
-> create READY.
+通常配布が除外するのは legacy の `research.offline` / `research.unique_logic` 系だけです。通常の research ルートは入り、origin を検査します。wheel は研究スキーマ全体の自己完結バンドルではなく、schema と `repo_root` は checkout とアプリ資源に依存します。実 Container の smoke は現行消費者の import を確認します。これは方針であり、[operations/current_work_ledger.json](operations/current_work_ledger.json) が受理する前に達成とは言いません。検証入口は [../scripts/verify_source_capability_wheel.py](../scripts/verify_source_capability_wheel.py) です。再生互換ソースは残しますが通常実行ではなく、T01 の replay 階層化は未完です。
 
-`observed_start` / `observed_end` は診断値であり、完全性の証明ではない。
-Coverage はデータセットごとの SourceCapability と有効な policy
-id/version/digest から required domain を導出する。AM、Earnings Calendar、
-Master、JSDA OTC のV3 domain correctionは、旧V2の偽gapを空COMPLETEで埋めない。
+Coverage は契約と receipt からドメインを導きます。空の COMPLETE で無い被覆を埋めません。OpsCurrent は運用の読取モデルであり research READY ではありません。欠測投影を 0 とみなしません。運用ステータスや Cron PASS だけでは READY を証明しません。ソース公開、staging、production、データ有効化、READY、Pilot 実行は別工程です。承認と cancel / HOLD は他の CLI / API で迂回できません。本番 DLQ 本文は読まず、ack も purge もしません。共有 D1 は前方修復であり、ライター再開後の全 DB 復元ではありません。実行可能な運用手順は [operations/current_production_runbook.md](operations/current_production_runbook.md) だけです。文書の閲覧に許可は不要で、ライブ操作だけが現行認可と HOLD に従います。
 
-COMPLETEに使えるreceiptは、governed ingestion transactionが次の順で生成した
-`TRUSTED_COLLECTION`だけである。
-
-`source fetch → immutable raw persist → canonical parse/normalize → structured
-write → exact segment natural-key reread → pagination/discovery exhaustion →
-Ed25519 receipt → transaction commit`
-
-件数、digest、pagination状態、期待empty、table/parser、取得時刻をcallerから
-受け取って署名してはならない。after-the-fact recovery CLIは
-`RECOVERED_RAW_ONLY`またはFAILEDを記録できるだけで、COMPLETEを発行しない。
-receipt claims/parser versionが現行trusted pathと一致しない旧署名は監査履歴に
-残るが、COMPLETE eligibilityを持たない。
-
-- trading-day / calendar / periodic は契約が要求する日・期間・universe の全 segment を必要とする。
-- event-driven は対象windowのquery集合、pagination完走、raw保持、structured
-  reconcileを要求する。zero-eventを許す場合もcaller flagではなく契約とtrusted
-  acquisition evidenceからissuerが導出する。
-- dataset は全 required segment が COMPLETE のときだけ COMPLETE になる。途中の欠落は PARTIAL。
-- READY publication はgeneric/global publisherを持たない。`controlled_pilot_v1` の
-  ExperimentPlan → StrategySpec/FeatureRef → PlanDependencyClosure →
-  ResearchDataProfileで必要なdatasetだけを解決し、signed Ops projectionの
-  per-dataset policy proof、B0/B4、source/export/applied cursorを再検証する。
-  Historical publication profile id `controlled-pilot/exact-four` remains
-  backward-readable; it is not a second active identity.
-- Active paths are only Draft Research, Controlled Pilot (`controlled_pilot_v1`),
-  and disabled Mass. See
-  [architecture/adr_phase632_architecture_simplification.md](architecture/adr_phase632_architecture_simplification.md).
-- PilotとMassは別のnominal capabilityである。Pilot READYはMass schedulerへ渡せず、
-  Mass READY mint/schedulerはPhase 6.3.1でhard-disabledのまま。
-
-Mutable staging DB は研究入力ではない。研究は content-addressed READY SQLite generation を
-`mode=ro&immutable=1` で PIT API から読む。この Phase 6 の境界は変更しない。
-
-## Read service と MCP
-
-read domain は明示的に 2 plane に分離する。
-
-| plane | 状態 | 公開経路 |
-|------|------|----------|
-| `ops_current` | mutable な ingestion / validation / coverage / sync 状態 | Cloudflare remote Ops Read MCP |
-| `research_ready` | 検証済み immutable READY generation | local/dev adapter。Remote は READY backend を pin できるまで未公開 |
-
-ブラウザ ChatGPT / mobile の人向け標準経路は OAuth/Cloudflare Access で保護した
-Streamable HTTP MCP である。`mcp_servers.quant_data` の stdio は offline test と local development
-専用であり、本番の接続方式ではない。Remote Ops は schema-digest固定済みの17 read toolのみを公開し、
-SQL、D1/R2 handle、secret、shell、任意 URL fetch、ingest/delete/publish、feature approve、broker
-を公開しない。詳細は [quant_data_access.md](quant_data_access.md) と
-[`quant-ops-mcp` README](../platform/workers/quant-ops-mcp/README.md) を参照。
-
-## Governed データ源
-
-- **J-Quants**（API V2）
-- **JSDA** 公社債店頭売買参考統計値（公式 archive の 2002-08-02 以降）、東京レポ・レート
-  （JSDA 公表主体の 2012-10-29 以降）、社債の取引情報
-
-> 開示系データは独立した EDINET DB を介さず、**J-Quants の EDINET 系 API**（`/v2/edinet/major-shareholders`, `/v2/edinet/cross-shareholdings`, `/v2/edinet/large-volume-shareholders`, および `/v2/fins/...`）で統合する（カタログ実体: `ingestion/jquants/catalog.py`）。
-
-JSDA の 3 系列は別 dataset id と別 natural key を持ち、ひとつの `jsda` blob へ統合しない。
-公表ラベル日、quote/effective time、`available_at`、`ingested_at` を別々に保持する。公表時刻が
-公式に分からない場合、`available_at` は取得時刻より前へ推測しない。訂正は同じ natural key の
-revision として保存し、訂正公表または取得より前の `as_of` に見せない。
-
-Ingestion は **ローカルランタイム主系**。ランタイムの切替（local / cloudflare）、Fetcher vs
-Registrar 分離（Pattern B）、`available_at` 検証、冪等 upsert、raw/structured 保存の詳細は
-[data_sources.md](data_sources.md) 参照。
-
-## コアエンジンとエージェント
-
-- **コアエンジン（Phase 3 最小実装）**はブラックボックス。エージェント・研究コードは
-  `core.run_backtest` を呼び出して結果を消費するだけで、内部を改変しない。
-- **fact は `pit.get_*` 経由のみ**（`core/` は SQLite/HTTP を直接開かない。`tests/test_core_data_boundary.py`
-  が静的に強制）。戦略には意思決定 `as_of` 時点で既に PIT 読出し済みの狭い `BarContext` のみ渡す。
-  look-ahead は PIT の `available_at <= as_of` と執行定義（`next_close` では D のシグナルは
-  D に約定しない）の 2 重構造で防ぐ。詳細は [core_engine.md](core_engine.md)。
-- 役割エージェント（後続）の例：
-  - マクロ / ファンダ / クオンツ / コンポーザー
-  - ストラテジスト / PM / トレーダー / Risk
-
-## 選抜と規制
-
-- **選抜優先**（戦略・実験の採用・淘汰を中心に回す）。
-- 規制は最小限にとどめ、**PIT** と **境界**（Ingestion のみ外部通信、Secrets 非埋め込み等）は **構造で強制**する。
+CI は実際の Worker / workerd、環境の型検査と dry-run、リモート Container ビルドを回し、ローカル Docker の代用ではありません。native app `85455` 検査は維持します。入口は [../scripts/verify_ci.sh](../scripts/verify_ci.sh)、不変条件の対応は [ci/invariant_test_audit.md](ci/invariant_test_audit.md) と [operations/test_reduction_ledger.json](operations/test_reduction_ledger.json) です。所見は [phase633_finding_ledger.md](phase633_finding_ledger.md)、記録済み残差は [phase62_residual_status.md](phase62_residual_status.md) です。日付付き文書を鮮度として使いません。
