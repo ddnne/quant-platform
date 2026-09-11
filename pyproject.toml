@@ -76,8 +76,9 @@ storage = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q --strict-markers"
 norecursedirs = [".*", "build", "dist"]
 markers = [
     "live: tests that touch a real network endpoint (skipped by default; set QP_LIVE=1)",
+    "toolchain: tests that require actual Node/npm",
 ]

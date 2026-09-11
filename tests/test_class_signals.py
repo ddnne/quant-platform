@@ -269,6 +269,7 @@ def test_event_post_pit_entry_no_lookahead():
     assert m5["look_ahead"] is False
 
 
+@pytest.mark.toolchain
 def test_python_worker_disctime_midnight_invent_is_next_session():
     """Missing DiscTime and invented T00:00:00 / 00:00:00 are next-session in both runtimes.
 
