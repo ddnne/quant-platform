@@ -17,6 +17,7 @@ research-ineligible.
 from __future__ import annotations
 
 import argparse
+import base64
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -36,7 +37,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.cloudflare_binding_manifest import build_manifest  # noqa: E402
+from scripts.cloudflare_binding_manifest import (  # noqa: E402
+    _require_pinned_local_wrangler,
+    build_manifest,
+)
 from scripts.receipt_authority_pending_gate import (  # noqa: E402
     _require_exact_clean_source,
     validate_pending_receipt_authority,
@@ -58,7 +62,29 @@ _ETAG = re.compile(r"[0-9a-f]{64}\Z")
 _SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _NAMESPACE_ID = re.compile(r"[0-9a-f]{32}\Z")
 _MAX_JSON_BYTES = 1_048_576
+_MAX_UPLOAD_BUNDLE_BYTES = 32 * 1024 * 1024
+_MAX_VERSION_JSON_BYTES = 16 * 1024 * 1024
 _API_BASE = "https://api.cloudflare.com/client/v4"
+_ALLOWED_MODULE_CONTENT_TYPES = frozenset({
+    "application/javascript+module",
+    "application/javascript",
+    "application/wasm",
+    "application/octet-stream",
+    "text/plain",
+    "text/x-python",
+    "text/x-python-requirement",
+    "application/source-map",
+})
+_DISPOSITION_NAME = re.compile(
+    r'(?:^|;)\s*name=(?:\"([^\"]*)\"|([^;\s]+))',
+    re.IGNORECASE,
+)
+_DISPOSITION_FILENAME = re.compile(
+    r'(?:^|;)\s*filename=(?:\"([^\"]*)\"|([^;\s]+))',
+    re.IGNORECASE,
+)
+_MODULE_INVENTORY_FIELDS = frozenset({"name", "content_type", "bytes", "digest"})
+_SOURCE_PROVENANCE_FIELDS = frozenset({"main_module", "modules"})
 _OFFICIAL_ORIGIN_URLS = frozenset({
     "https://github.com/ddnne/quant-platform",
     "https://github.com/ddnne/quant-platform.git",
@@ -92,12 +118,17 @@ def _reject_duplicates(pairs: Iterable[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def _load_json(raw: str | bytes, *, label: str) -> Any:
+def _load_json(
+    raw: str | bytes,
+    *,
+    label: str,
+    max_bytes: int = _MAX_JSON_BYTES,
+) -> Any:
     if isinstance(raw, str):
         encoded = raw.encode("utf-8")
     else:
         encoded = raw
-    if len(encoded) > _MAX_JSON_BYTES:
+    if len(encoded) > max_bytes:
         raise ReceiptPendingLiveAcceptanceError(f"{label} exceeded the JSON bound")
     try:
         return json.loads(
@@ -673,45 +704,9 @@ def validate_live_pending_receipt_chain(
         accepted["deployment_created_on"] = deployment_created_on
         accepted["deployment_message"] = message
         accepted["traffic_percent"] = 100
-        provenance = _mapping(
+        provenance = _require_verified_module_inventory(
             source_provenance[role], label=f"{role} source provenance"
         )
-        if set(provenance) != {
-            "live_main_module",
-            "live_main_module_bytes",
-            "live_main_module_digest",
-            "local_main_module",
-            "local_main_module_bytes",
-            "local_main_module_digest",
-        }:
-            raise ReceiptPendingLiveAcceptanceError(
-                f"{role} source provenance fields are not closed"
-            )
-        local_digest = provenance.get("local_main_module_digest")
-        live_digest = provenance.get("live_main_module_digest")
-        local_size = provenance.get("local_main_module_bytes")
-        live_size = provenance.get("live_main_module_bytes")
-        if (
-            type(local_digest) is not str
-            or _SHA256.fullmatch(local_digest) is None
-            or type(live_digest) is not str
-            or _SHA256.fullmatch(live_digest) is None
-            or local_digest != live_digest
-            or type(local_size) is not int
-            or local_size <= 0
-            or type(live_size) is not int
-            or live_size != local_size
-            or type(provenance.get("local_main_module")) is not str
-            or provenance.get("local_main_module") != "index.js"
-            or type(provenance.get("live_main_module")) is not str
-            or (
-                provenance["live_main_module"] != "index.js"
-                and not provenance["live_main_module"].endswith("/index.js")
-            )
-        ):
-            raise ReceiptPendingLiveAcceptanceError(
-                f"{role} live module differs from the clean reviewed source build"
-            )
         accepted["source_provenance"] = {
             **provenance,
             "status": "VERIFIED_EXACT_MODULE_BYTES",
@@ -721,7 +716,7 @@ def validate_live_pending_receipt_chain(
         )
         accepted_workers[role] = accepted
     return {
-        "format": "receipt-authority-pending-live-acceptance/v1",
+        "format": "receipt-authority-pending-live-acceptance/v2",
         "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "environment": selected,
         "account_id": account_id,
@@ -868,6 +863,14 @@ def _wrangler_target(environment: str) -> tuple[str, ...]:
     )
 
 
+def _pinned_wrangler(worker: str) -> str:
+    directory = ROOT / "platform" / "workers" / worker
+    try:
+        return _require_pinned_local_wrangler(directory)
+    except ValueError as exc:
+        raise ReceiptPendingLiveAcceptanceError(str(exc)) from exc
+
+
 def _wrangler_json(
     *,
     worker: str,
@@ -878,12 +881,8 @@ def _wrangler_json(
     runner: Runner,
 ) -> Any:
     directory = ROOT / "platform" / "workers" / worker
-    executable = directory / "node_modules" / ".bin" / "wrangler"
-    if not executable.is_file():
-        raise ReceiptPendingLiveAcceptanceError(
-            f"{worker}: pinned Wrangler is not installed"
-        )
-    command = (str(executable), *arguments, *_wrangler_target(environment))
+    executable = _pinned_wrangler(worker)
+    command = (executable, *arguments, *_wrangler_target(environment))
     with tempfile.TemporaryDirectory(prefix="receipt-wrangler-read-") as temporary:
         environment_vars = _isolated_command_environment(
             Path(temporary), account_id=account_id, api_token=api_token
@@ -938,35 +937,413 @@ def _run_wrangler_read_only(
         )
 
 
-def _safe_main_module(root: Path, relative: str, *, label: str) -> Path:
+def _bytes_identity(raw: bytes, *, label: str) -> tuple[str, int]:
+    if type(raw) is not bytes or not raw:
+        raise ReceiptPendingLiveAcceptanceError(f"{label} module is empty")
+    return "sha256:" + hashlib.sha256(raw).hexdigest(), len(raw)
+
+
+def _safe_module_name(name: str, *, label: str) -> str:
     if (
-        type(relative) is not str
-        or not relative
-        or Path(relative).is_absolute()
-        or ".." in Path(relative).parts
+        type(name) is not str
+        or not name
+        or name in {".", "..", "metadata"}
+        or Path(name).is_absolute()
+        or ".." in Path(name).parts
+        or "\\" in name
+        or "\x00" in name
+        or name.startswith("/")
+        or name.startswith("./")
+    ):
+        raise ReceiptPendingLiveAcceptanceError(f"{label} module name is unsafe")
+    return name
+
+
+def _normalize_content_type(value: str, *, label: str) -> str:
+    if type(value) is not str or not value.strip():
+        raise ReceiptPendingLiveAcceptanceError(
+            f"{label} module content type is missing"
+        )
+    normalized = value.split(";", 1)[0].strip().lower()
+    if normalized not in _ALLOWED_MODULE_CONTENT_TYPES:
+        raise ReceiptPendingLiveAcceptanceError(
+            f"{label} module content type is unsupported"
+        )
+    return normalized
+
+
+def _disposition_param(
+    header: str, pattern: re.Pattern[str], *, label: str
+) -> str | None:
+    matches = list(pattern.finditer(header))
+    if len(matches) > 1:
+        raise ReceiptPendingLiveAcceptanceError(
+            f"{label} disposition parameter is duplicated"
+        )
+    if not matches:
+        return None
+    match = matches[0]
+    return match.group(1) if match.group(1) is not None else match.group(2)
+
+
+def _parse_multipart_headers(block: bytes) -> dict[str, str]:
+    if b"\0" in block:
+        raise ReceiptPendingLiveAcceptanceError(
+            "Worker upload bundle headers are malformed"
+        )
+    try:
+        text = block.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise ReceiptPendingLiveAcceptanceError(
+            "Worker upload bundle headers are malformed"
+        ) from exc
+    headers: dict[str, str] = {}
+    for line in text.split("\r\n"):
+        if not line:
+            continue
+        if ":" not in line:
+            raise ReceiptPendingLiveAcceptanceError(
+                "Worker upload bundle headers are malformed"
+            )
+        key, value = line.split(":", 1)
+        name = key.strip().lower()
+        if not name or name in headers:
+            raise ReceiptPendingLiveAcceptanceError(
+                "Worker upload bundle headers are malformed"
+            )
+        headers[name] = value.strip()
+    return headers
+
+
+def parse_worker_upload_bundle(raw: bytes) -> dict[str, Any]:
+    """Return non-secret module facts from a pinned Wrangler --outfile body."""
+
+    if type(raw) is not bytes or not raw:
+        raise ReceiptPendingLiveAcceptanceError("Worker upload bundle is missing")
+    if len(raw) > _MAX_UPLOAD_BUNDLE_BYTES:
+        raise ReceiptPendingLiveAcceptanceError(
+            "Worker upload bundle exceeded the finite bound"
+        )
+    newline = raw.find(b"\n")
+    if newline < 4:
+        raise ReceiptPendingLiveAcceptanceError(
+            "Worker upload bundle boundary is malformed"
+        )
+    first_line = raw[:newline].rstrip(b"\r")
+    if not first_line.startswith(b"--") or len(first_line) <= 2:
+        raise ReceiptPendingLiveAcceptanceError(
+            "Worker upload bundle boundary is malformed"
+        )
+    boundary = first_line[2:]
+    if not boundary or not all(33 <= byte < 127 and byte != 34 for byte in boundary):
+        raise ReceiptPendingLiveAcceptanceError(
+            "Worker upload bundle boundary is malformed"
+        )
+    delimiter = b"--" + boundary
+    chunks = raw.split(delimiter)
+    if len(chunks) < 3 or chunks[0].strip(b"\r\n"):
+        raise ReceiptPendingLiveAcceptanceError(
+            "Worker upload bundle is not a closed multipart body"
+        )
+    terminator = chunks[-1]
+    if not terminator.startswith(b"--") or terminator.strip(b"\r\n") != b"--":
+        raise ReceiptPendingLiveAcceptanceError(
+            "Worker upload bundle is not a closed multipart body"
+        )
+    metadata_json: bytes | None = None
+    modules: dict[str, dict[str, Any]] = {}
+    for chunk in chunks[1:-1]:
+        payload = chunk
+        if payload.startswith(b"\r\n"):
+            payload = payload[2:]
+        elif payload.startswith(b"\n"):
+            payload = payload[1:]
+        else:
+            raise ReceiptPendingLiveAcceptanceError(
+                "Worker upload bundle part is malformed"
+            )
+        if payload.endswith(b"\r\n"):
+            payload = payload[:-2]
+        elif payload.endswith(b"\n"):
+            payload = payload[:-1]
+        header_end = payload.find(b"\r\n\r\n")
+        separator = 4
+        if header_end < 0:
+            header_end = payload.find(b"\n\n")
+            separator = 2
+        if header_end < 0:
+            raise ReceiptPendingLiveAcceptanceError(
+                "Worker upload bundle part is malformed"
+            )
+        headers = _parse_multipart_headers(payload[:header_end])
+        body = payload[header_end + separator:]
+        disposition = headers.get("content-disposition", "")
+        if not disposition.lower().startswith("form-data"):
+            raise ReceiptPendingLiveAcceptanceError(
+                "Worker upload bundle part is not form-data"
+            )
+        name = _disposition_param(disposition, _DISPOSITION_NAME, label="upload")
+        filename = _disposition_param(
+            disposition, _DISPOSITION_FILENAME, label="upload"
+        )
+        if name is None:
+            raise ReceiptPendingLiveAcceptanceError(
+                "Worker upload bundle part is unnamed"
+            )
+        if name == "metadata":
+            if metadata_json is not None or filename is not None:
+                raise ReceiptPendingLiveAcceptanceError(
+                    "Worker upload metadata part is duplicated or unsafe"
+                )
+            metadata_json = body
+            continue
+        module_name = _safe_module_name(name, label="upload")
+        if filename is not None and _safe_module_name(
+            filename, label="upload"
+        ) != module_name:
+            raise ReceiptPendingLiveAcceptanceError(
+                "Worker upload module filename does not match its part name"
+            )
+        if module_name in modules:
+            raise ReceiptPendingLiveAcceptanceError(
+                "Worker upload module name is duplicated"
+            )
+        content_type = _normalize_content_type(
+            headers.get("content-type", ""), label="upload"
+        )
+        digest, size = _bytes_identity(body, label="upload")
+        modules[module_name] = {
+            "name": module_name,
+            "content_type": content_type,
+            "bytes": size,
+            "digest": digest,
+        }
+    if metadata_json is None:
+        raise ReceiptPendingLiveAcceptanceError(
+            "Worker upload metadata part is missing"
+        )
+    metadata = _mapping(
+        _load_json(
+            metadata_json,
+            label="Worker upload metadata",
+            max_bytes=_MAX_UPLOAD_BUNDLE_BYTES,
+        ),
+        label="Worker upload metadata",
+    )
+    has_main = "main_module" in metadata
+    has_body = "body_part" in metadata
+    if has_main == has_body:
+        raise ReceiptPendingLiveAcceptanceError(
+            "Worker upload must declare exactly one of main_module or body_part"
+        )
+    declared_raw = metadata.get("main_module") if has_main else metadata.get("body_part")
+    if type(declared_raw) is not str or not declared_raw:
+        raise ReceiptPendingLiveAcceptanceError(
+            "Worker upload must declare exactly one of main_module or body_part"
+        )
+    declared = _safe_module_name(declared_raw, label="upload")
+    if declared not in modules:
+        raise ReceiptPendingLiveAcceptanceError(
+            "Worker upload entry module is missing from the multipart inventory"
+        )
+    if not modules:
+        raise ReceiptPendingLiveAcceptanceError("Worker upload module inventory is empty")
+    return {
+        "main_module": declared,
+        "modules": [modules[name] for name in sorted(modules)],
+    }
+
+
+def _require_verified_module_inventory(value: Any, *, label: str) -> dict[str, Any]:
+    document = _mapping(value, label=label)
+    if set(document) != _SOURCE_PROVENANCE_FIELDS:
+        raise ReceiptPendingLiveAcceptanceError(f"{label} fields are not closed")
+    main_module = document.get("main_module")
+    rows = document.get("modules")
+    if type(main_module) is not str:
+        raise ReceiptPendingLiveAcceptanceError(f"{label} main_module is missing")
+    declared = _safe_module_name(main_module, label=label)
+    if type(rows) is not list or not rows:
+        raise ReceiptPendingLiveAcceptanceError(f"{label} module inventory is empty")
+    names: list[str] = []
+    normalized: list[dict[str, Any]] = []
+    for row in rows:
+        if type(row) is not dict or set(row) != _MODULE_INVENTORY_FIELDS:
+            raise ReceiptPendingLiveAcceptanceError(
+                f"{label} module row fields are not closed"
+            )
+        name = _safe_module_name(row["name"], label=label)
+        content_type = _normalize_content_type(
+            row["content_type"], label=label
+        )
+        digest = row["digest"]
+        size = row["bytes"]
+        if (
+            type(digest) is not str
+            or _SHA256.fullmatch(digest) is None
+            or type(size) is not int
+            or size <= 0
+        ):
+            raise ReceiptPendingLiveAcceptanceError(
+                f"{label} module digest or size is malformed"
+            )
+        names.append(name)
+        normalized.append(
+            {
+                "name": name,
+                "content_type": content_type,
+                "bytes": size,
+                "digest": digest,
+            }
+        )
+    if names != sorted(names) or len(names) != len(set(names)):
+        raise ReceiptPendingLiveAcceptanceError(
+            f"{label} module names are unsorted or duplicated"
+        )
+    if declared not in names:
+        raise ReceiptPendingLiveAcceptanceError(
+            f"{label} main_module is missing from the module inventory"
+        )
+    return {"main_module": declared, "modules": normalized}
+
+
+def _live_version_module_inventory(
+    *,
+    account_id: str,
+    worker_name: str,
+    version_id: str,
+    api_token: str,
+    opener: Callable[..., Any] = urlopen,
+) -> dict[str, Any]:
+    if _ACCOUNT_ID.fullmatch(account_id) is None:
+        raise ReceiptPendingLiveAcceptanceError(
+            "Receipt live account id must be exact lowercase hexadecimal"
+        )
+    if type(worker_name) is not str or not worker_name:
+        raise ReceiptPendingLiveAcceptanceError("Worker name is missing")
+    if type(version_id) is not str or _UUID.fullmatch(version_id) is None:
+        raise ReceiptPendingLiveAcceptanceError(
+            "selected version id must be a full UUID"
+        )
+    if version_id in {"latest", "current"} or len(version_id) != 36:
+        raise ReceiptPendingLiveAcceptanceError(
+            "selected version id must be a full UUID"
+        )
+    account = quote(account_id, safe="")
+    worker = quote(worker_name, safe="")
+    version = quote(version_id, safe="")
+    request = Request(
+        (
+            f"{_API_BASE}/accounts/{account}/workers/workers/{worker}"
+            f"/versions/{version}?include=modules"
+        ),
+        method="GET",
+        headers={
+            "accept": "application/json",
+            "authorization": f"Bearer {api_token}",
+        },
+    )
+    try:
+        with opener(request, timeout=30) as response:
+            raw = response.read(_MAX_VERSION_JSON_BYTES + 1)
+    except (HTTPError, URLError, TimeoutError, OSError) as exc:
+        raise ReceiptPendingLiveAcceptanceError(
+            "selected Worker version modules are unavailable"
+        ) from exc
+    envelope = _mapping(
+        _load_json(
+            raw,
+            label="Worker version modules",
+            max_bytes=_MAX_VERSION_JSON_BYTES,
+        ),
+        label="Worker version modules envelope",
+    )
+    if envelope.get("success") is not True or envelope.get("errors") not in ([], None):
+        raise ReceiptPendingLiveAcceptanceError(
+            "selected Worker version modules were unsuccessful"
+        )
+    result = _mapping(envelope.get("result"), label="Worker version modules result")
+    if result.get("id") != version_id:
+        raise ReceiptPendingLiveAcceptanceError(
+            "version document id does not match selected version"
+        )
+    main_module = result.get("main_module")
+    if type(main_module) is not str or not main_module:
+        if type(result.get("body_part")) is str and result.get("body_part"):
+            main_module = result["body_part"]
+        else:
+            raise ReceiptPendingLiveAcceptanceError(
+                "selected version does not declare main_module"
+            )
+    declared = _safe_module_name(main_module, label="selected version")
+    rows = result.get("modules")
+    if type(rows) is not list or not rows:
+        raise ReceiptPendingLiveAcceptanceError(
+            "selected version module inventory is missing"
+        )
+    modules: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if type(row) is not dict:
+            raise ReceiptPendingLiveAcceptanceError(
+                "selected version module row is malformed"
+            )
+        name = _safe_module_name(row.get("name"), label="selected version")
+        if name in modules:
+            raise ReceiptPendingLiveAcceptanceError(
+                "selected version module name is duplicated"
+            )
+        content_type = _normalize_content_type(
+            row.get("content_type") if type(row.get("content_type")) is str else "",
+            label="selected version",
+        )
+        encoded = row.get("content_base64")
+        if type(encoded) is not str or not encoded:
+            raise ReceiptPendingLiveAcceptanceError(
+                "selected version module content is missing"
+            )
+        try:
+            body = base64.b64decode(encoded, validate=True)
+        except (ValueError, TypeError) as exc:
+            raise ReceiptPendingLiveAcceptanceError(
+                "selected version module content is not strict base64"
+            ) from exc
+        digest, size = _bytes_identity(body, label="selected version")
+        modules[name] = {
+            "name": name,
+            "content_type": content_type,
+            "bytes": size,
+            "digest": digest,
+        }
+    if declared not in modules:
+        raise ReceiptPendingLiveAcceptanceError(
+            "selected version main_module is missing from the module inventory"
+        )
+    return {
+        "id": version_id,
+        "main_module": declared,
+        "modules": [modules[name] for name in sorted(modules)],
+    }
+
+
+def _compare_module_inventories(
+    local: Mapping[str, Any],
+    live: Mapping[str, Any],
+    *,
+    label: str,
+) -> dict[str, Any]:
+    local_inventory = _require_verified_module_inventory(local, label=f"{label} local")
+    live_inventory = _require_verified_module_inventory(
+        {"main_module": live["main_module"], "modules": live["modules"]},
+        label=f"{label} live",
+    )
+    if (
+        local_inventory["main_module"] != live_inventory["main_module"]
+        or local_inventory["modules"] != live_inventory["modules"]
     ):
         raise ReceiptPendingLiveAcceptanceError(
-            f"{label} main module path is unsafe"
+            f"{label} live module differs from the clean reviewed source build"
         )
-    candidate = root / relative
-    if candidate.is_symlink() or not candidate.is_file():
-        raise ReceiptPendingLiveAcceptanceError(
-            f"{label} main module is absent or indirect"
-        )
-    resolved_root = root.resolve()
-    resolved = candidate.resolve()
-    if resolved.parent != resolved_root and resolved_root not in resolved.parents:
-        raise ReceiptPendingLiveAcceptanceError(
-            f"{label} main module escaped its temporary root"
-        )
-    return candidate
-
-
-def _module_identity(path: Path) -> tuple[str, int]:
-    raw = path.read_bytes()
-    if not raw:
-        raise ReceiptPendingLiveAcceptanceError("Worker main module is empty")
-    return "sha256:" + hashlib.sha256(raw).hexdigest(), len(raw)
+    return live_inventory
 
 
 def _source_provenance(
@@ -976,20 +1353,19 @@ def _source_provenance(
     environment: str,
     account_id: str,
     api_token: str,
+    version_id: str,
     runner: Runner,
+    opener: Callable[..., Any] = urlopen,
 ) -> dict[str, Any]:
     directory = ROOT / "platform" / "workers" / worker
-    executable = directory / "node_modules" / ".bin" / "wrangler"
-    if not executable.is_file():
+    executable = _pinned_wrangler(worker)
+    if _UUID.fullmatch(version_id) is None:
         raise ReceiptPendingLiveAcceptanceError(
-            f"{worker}: pinned Wrangler is not installed"
+            f"{worker}: selected version id must be a full UUID"
         )
     with tempfile.TemporaryDirectory(prefix="receipt-live-source-") as temporary:
         temporary_root = Path(temporary)
-        local_root = temporary_root / "local"
-        live_root = temporary_root / "live"
-        local_root.mkdir(mode=0o700)
-        live_root.mkdir(mode=0o700)
+        outfile = temporary_root / "worker.bundle"
         # This local build must not see ambient provider credentials or a stored
         # Wrangler OAuth session.  The absolute Wrangler path only needs node
         # discoverable through PATH; all other inherited variables are omitted.
@@ -998,91 +1374,38 @@ def _source_provenance(
         )
         _run_wrangler_read_only(
             (
-                str(executable),
+                executable,
                 "deploy",
                 "--dry-run",
                 *_wrangler_target(environment),
-                "--outdir",
-                str(local_root),
+                "--outfile",
+                str(outfile),
             ),
             cwd=directory,
             runner=runner,
             environment=build_environment,
         )
-        local_files = sorted(
-            path.relative_to(local_root).as_posix()
-            for path in local_root.rglob("*")
-            if path.is_file()
-            and path.name != "README.md"
-            and not path.name.endswith(".map")
-        )
-        if local_files != ["index.js"]:
+        if outfile.is_symlink() or not outfile.is_file():
             raise ReceiptPendingLiveAcceptanceError(
-                f"{worker}: local dry-run module inventory is not closed"
+                f"{worker}: pinned dry-run upload bundle is absent or indirect"
             )
-        local_main = _safe_main_module(local_root, "index.js", label=worker)
-
-        # The dashboard download receives only the Cloudflare account/token and
-        # a fresh config home. It cannot discover the operator's Wrangler OAuth
-        # session or unrelated provider/application secrets from the ambient
-        # process environment.
-        live_environment = _isolated_command_environment(
-            temporary_root / "live-environment",
+        try:
+            local_inventory = parse_worker_upload_bundle(outfile.read_bytes())
+        finally:
+            try:
+                outfile.unlink()
+            except OSError:
+                pass
+        live_inventory = _live_version_module_inventory(
             account_id=account_id,
+            worker_name=worker_name,
+            version_id=version_id,
             api_token=api_token,
+            opener=opener,
         )
-        _run_wrangler_read_only(
-            (
-                str(executable),
-                "init",
-                "--from-dash",
-                worker_name,
-                "--yes",
-                "--no-delegate-c3",
-            ),
-            cwd=live_root,
-            runner=runner,
-            environment=live_environment,
+        return _compare_module_inventories(
+            local_inventory, live_inventory, label=worker
         )
-        downloaded = live_root / worker_name
-        config_path = downloaded / "wrangler.jsonc"
-        if config_path.is_symlink() or not config_path.is_file():
-            raise ReceiptPendingLiveAcceptanceError(
-                f"{worker}: live downloaded config is absent or indirect"
-            )
-        config = _mapping(
-            _load_json(config_path.read_bytes(), label=f"{worker} live config"),
-            label=f"{worker} live config",
-        )
-        live_relative = config.get("main")
-        if type(live_relative) is not str:
-            raise ReceiptPendingLiveAcceptanceError(
-                f"{worker}: live downloaded main module is not declared"
-            )
-        live_main = _safe_main_module(downloaded, live_relative, label=worker)
-        downloaded_files = sorted(
-            path.relative_to(downloaded).as_posix()
-            for path in downloaded.rglob("*")
-            if path.is_file() and path.name != "wrangler.jsonc"
-        )
-        if downloaded_files != [live_relative]:
-            raise ReceiptPendingLiveAcceptanceError(
-                f"{worker}: live module inventory contains undeclared modules"
-            )
-        local_digest, local_size = _module_identity(local_main)
-        live_digest, live_size = _module_identity(live_main)
-        if local_digest != live_digest or local_size != live_size:
-            raise ReceiptPendingLiveAcceptanceError(
-                f"{worker}: live module differs from the clean reviewed source build"
-            )
-        return {
-            "local_main_module": "index.js",
-            "local_main_module_digest": local_digest,
-            "local_main_module_bytes": local_size,
-            "live_main_module": live_relative,
-            "live_main_module_digest": live_digest,
-            "live_main_module_bytes": live_size,
-        }
 
 
 def _api_result(
@@ -1252,13 +1575,23 @@ def collect_live_pending_receipt_chain(
             environment=selected,
             account_id=account_id,
             api_token=api_token,
+            version_id=version_id,
             runner=runner,
+            opener=opener,
         )
         public_during = _live_public_surface(
             worker_name=worker_name,
             account_id=account_id,
             api_token=api_token,
             opener=opener,
+        )
+        version_after = _wrangler_json(
+            worker=worker,
+            environment=selected,
+            arguments=("versions", "view", version_id, "--json"),
+            account_id=account_id,
+            api_token=api_token,
+            runner=runner,
         )
         deployment_after = _wrangler_json(
             worker=worker,
@@ -1271,6 +1604,10 @@ def collect_live_pending_receipt_chain(
         if _canonical_digest(deployments[role]) != _canonical_digest(deployment_after):
             raise ReceiptPendingLiveAcceptanceError(
                 f"{role} deployment changed during source-provenance collection"
+            )
+        if _canonical_digest(versions[role]) != _canonical_digest(version_after):
+            raise ReceiptPendingLiveAcceptanceError(
+                f"{role} selected version changed during source-provenance collection"
             )
         if _canonical_digest(public[role]) != _canonical_digest(public_during):
             raise ReceiptPendingLiveAcceptanceError(
@@ -1290,6 +1627,19 @@ def collect_live_pending_receipt_chain(
             runner=runner,
         )
         worker_name = manifest["workers"][worker][selected]["name"]
+        version_id = _mapping(
+            versions[role], label=f"{role} version"
+        ).get("id")
+        if type(version_id) is not str or _UUID.fullmatch(version_id) is None:
+            raise ReceiptPendingLiveAcceptanceError(f"{role} version id is invalid")
+        final_version = _wrangler_json(
+            worker=worker,
+            environment=selected,
+            arguments=("versions", "view", version_id, "--json"),
+            account_id=account_id,
+            api_token=api_token,
+            runner=runner,
+        )
         final_public = _live_public_surface(
             worker_name=worker_name,
             account_id=account_id,
@@ -1299,6 +1649,10 @@ def collect_live_pending_receipt_chain(
         if _canonical_digest(deployments[role]) != _canonical_digest(final_deployment):
             raise ReceiptPendingLiveAcceptanceError(
                 f"{role} deployment changed during whole-chain acceptance"
+            )
+        if _canonical_digest(versions[role]) != _canonical_digest(final_version):
+            raise ReceiptPendingLiveAcceptanceError(
+                f"{role} selected version changed during whole-chain acceptance"
             )
         if _canonical_digest(public[role]) != _canonical_digest(final_public):
             raise ReceiptPendingLiveAcceptanceError(

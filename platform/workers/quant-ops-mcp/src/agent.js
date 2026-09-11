@@ -17,7 +17,7 @@ import {
 
 export const OPS_TOOL_SCHEMA_META_KEY = "quant-platform/tool-schema-digest";
 export const BINDING_MANIFEST_SCHEMA_VERSION =
-  "cloudflare-active-worker-bindings/v10";
+  "cloudflare-active-worker-bindings/v11";
 export const OPS_BINDING_IDENTITY_DIGEST =
   "sha256:881176391253aed791eeca79c264384838fe9f6edfc8f33e48c2353e450cb6e3";
 

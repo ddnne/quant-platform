@@ -356,32 +356,14 @@ def _active_surfaces(
 
 
 def _validate_source_provenance(value: Any, *, role: str) -> dict[str, Any]:
-    if type(value) is not dict or set(value) != {
-        "live_main_module",
-        "live_main_module_bytes",
-        "live_main_module_digest",
-        "local_main_module",
-        "local_main_module_bytes",
-        "local_main_module_digest",
-    }:
-        raise ReceiptStagingActiveGateError(f"{role} module evidence is not closed")
-    local_digest = value["local_main_module_digest"]
-    live_digest = value["live_main_module_digest"]
-    if (
-        type(local_digest) is not str
-        or type(live_digest) is not str
-        or local_digest != live_digest
-        or _SHA256.fullmatch(local_digest) is None
-        or type(value["local_main_module_bytes"]) is not int
-        or value["local_main_module_bytes"] <= 0
-        or value["live_main_module_bytes"] != value["local_main_module_bytes"]
-        or value["local_main_module"] != "index.js"
-        or not str(value["live_main_module"]).endswith("index.js")
-    ):
+    try:
+        return live._require_verified_module_inventory(  # noqa: SLF001
+            value, label=f"{role} module evidence"
+        )
+    except live.ReceiptPendingLiveAcceptanceError as exc:
         raise ReceiptStagingActiveGateError(
             f"{role} live module differs from reviewed source bytes"
-        )
-    return dict(value)
+        ) from exc
 
 
 def _observer_message(source_sha: str) -> str:
@@ -1240,7 +1222,7 @@ def _validate_staging_active_transition_core(
         "registry_digest": registry["registry_digest"],
     })
     return {
-        "format": "receipt-authority-staging-active-transition/v3",
+        "format": "receipt-authority-staging-active-transition/v4",
         "environment": "staging",
         "source_sha": reviewed_sha,
         "account_id": account_id,
@@ -1789,7 +1771,9 @@ def _collect_staging_active_documents(
             environment="staging",
             account_id=account_id,
             api_token=api_token,
+            version_id=version_id,
             runner=subprocess.run,
+            opener=_pinned_https_opener().open,
         )
         deployment_during = live._wrangler_json(
             worker=worker,

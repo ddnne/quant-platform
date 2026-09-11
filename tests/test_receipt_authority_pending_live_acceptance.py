@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import subprocess
 from pathlib import Path
 from typing import Any
+from urllib.request import Request
 
 import pytest
 
@@ -20,12 +22,19 @@ def _install_fake_pinned_wrangler(
     worker: str = "ingestion-secrets",
 ) -> Path:
     root = tmp_path / "repo"
-    executable = (
-        root / "platform" / "workers" / worker / "node_modules" / ".bin" / "wrangler"
+    directory = root / "platform" / "workers" / worker
+    package = directory / "node_modules" / "wrangler"
+    entry = package / "bin" / "wrangler.js"
+    entry.parent.mkdir(parents=True)
+    entry.write_text("#!/bin/sh\n", encoding="utf-8")
+    entry.chmod(0o755)
+    (package / "package.json").write_text(
+        json.dumps({"name": "wrangler", "version": "4.125.0"}) + "\n",
+        encoding="utf-8",
     )
-    executable.parent.mkdir(parents=True)
-    executable.write_text("#!/bin/sh\n", encoding="utf-8")
-    executable.chmod(0o755)
+    executable = directory / "node_modules" / ".bin" / "wrangler"
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.symlink_to(entry)
     monkeypatch.setattr(live, "ROOT", root)
     return executable
 
@@ -124,12 +133,15 @@ def _documents(environment: str) -> tuple[
         }
         digest = "sha256:" + f"{ordinal:x}" * 64
         source_provenance[role] = {
-            "local_main_module": "index.js",
-            "local_main_module_digest": digest,
-            "local_main_module_bytes": 100 + ordinal,
-            "live_main_module": "src/index.js",
-            "live_main_module_digest": digest,
-            "live_main_module_bytes": 100 + ordinal,
+            "main_module": "index.js",
+            "modules": [
+                {
+                    "name": "index.js",
+                    "content_type": "application/javascript+module",
+                    "bytes": 100 + ordinal,
+                    "digest": digest,
+                }
+            ],
         }
     return deployments, versions, public, source_provenance
 
@@ -148,7 +160,7 @@ def test_exact_live_pending_chain_is_read_only_and_source_bound(
         public_surfaces=public,
         source_provenance=source_provenance,
     )
-    assert result["format"] == "receipt-authority-pending-live-acceptance/v1"
+    assert result["format"] == "receipt-authority-pending-live-acceptance/v2"
     assert result["source_sha"] == SHA
     assert result["account_id"] == ACCOUNT
     assert result["authority_mode"] == "PENDING"
@@ -442,10 +454,10 @@ def test_live_chain_requires_the_closed_premium_operator_entrypoint() -> None:
 
 def test_live_chain_rejects_module_bytes_not_built_from_reviewed_source() -> None:
     deployments, versions, public, source_provenance = _documents("staging")
-    source_provenance["authority"]["live_main_module_digest"] = "sha256:" + "f" * 64
+    source_provenance["authority"]["modules"][0]["digest"] = "sha256:" + "f" * 63
     with pytest.raises(
         live.ReceiptPendingLiveAcceptanceError,
-        match="differs from the clean reviewed source build",
+        match="malformed",
     ):
         live.validate_live_pending_receipt_chain(
             environment="staging",
@@ -551,6 +563,88 @@ def test_public_surface_inventory_is_get_only_and_includes_cron_and_tail() -> No
     )
 
 
+def _upload_bundle(
+    *,
+    main_module: str = "index.js",
+    modules: list[tuple[str, str, bytes]] | None = None,
+    extra_metadata: dict[str, Any] | None = None,
+    boundary: str = "----formdata-test-boundary",
+) -> bytes:
+    if modules is None:
+        modules = [
+            (
+                main_module,
+                "application/javascript+module",
+                b"export default {fetch(){return new Response('pending')}};\n",
+            )
+        ]
+    metadata = {"main_module": main_module, **(extra_metadata or {})}
+    chunks: list[bytes] = []
+
+    def add_part(
+        name: str,
+        body: bytes,
+        content_type: str | None = None,
+        filename: str | None = None,
+    ) -> None:
+        chunks.append(f"--{boundary}\r\n".encode("ascii"))
+        disposition = f'Content-Disposition: form-data; name="{name}"'
+        if filename is not None:
+            disposition += f'; filename="{filename}"'
+        chunks.append(disposition.encode("ascii") + b"\r\n")
+        if content_type is not None:
+            chunks.append(f"Content-Type: {content_type}\r\n".encode("ascii"))
+        chunks.append(b"\r\n")
+        chunks.append(body)
+        chunks.append(b"\r\n")
+
+    add_part("metadata", json.dumps(metadata).encode("utf-8"))
+    for name, content_type, body in modules:
+        add_part(name, body, content_type=content_type, filename=name)
+    chunks.append(f"--{boundary}--\r\n".encode("ascii"))
+    return b"".join(chunks)
+
+
+def _version_modules_envelope(
+    *,
+    version_id: str,
+    main_module: str,
+    modules: list[tuple[str, str, bytes]],
+) -> bytes:
+    return json.dumps(
+        {
+            "success": True,
+            "errors": [],
+            "result": {
+                "id": version_id,
+                "main_module": main_module,
+                "modules": [
+                    {
+                        "name": name,
+                        "content_type": content_type,
+                        "content_base64": base64.b64encode(body).decode("ascii"),
+                    }
+                    for name, content_type, body in modules
+                ],
+            },
+        }
+    ).encode("utf-8")
+
+
+class _FakeResponse:
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+
+    def read(self, _limit: int) -> bytes:
+        return self._payload
+
+    def __enter__(self) -> "_FakeResponse":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+
 @pytest.mark.parametrize("live_matches", [True, False])
 def test_source_provenance_compares_secretless_local_build_to_live_main(
     tmp_path: Path,
@@ -564,50 +658,68 @@ def test_source_provenance_compares_secretless_local_build_to_live_main(
     monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", ACCOUNT)
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "must-not-enter-local-build")
     calls: list[dict[str, Any]] = []
+    http_calls: list[Request] = []
     local_bundle = b"export default {fetch(){return new Response('pending')}};\n"
     live_bundle = local_bundle if live_matches else local_bundle + b"// drift\n"
+    version_id = "6a23dd25-5dc2-422c-bb8f-1d95a6266822"
+    modules_local = [
+        ("index.js", "application/javascript+module", local_bundle)
+    ]
+    modules_live = [
+        ("index.js", "application/javascript+module", live_bundle)
+    ]
 
     def runner(command, **kwargs):
         command = tuple(command)
         calls.append({"command": command, **kwargs})
-        if "deploy" in command:
-            outdir = Path(command[command.index("--outdir") + 1])
-            (outdir / "index.js").write_bytes(local_bundle)
-        elif "init" in command:
-            downloaded = Path(kwargs["cwd"]) / "quant-platform-ingestion-secrets-staging"
-            (downloaded / "src").mkdir(parents=True)
-            (downloaded / "wrangler.jsonc").write_text(
-                json.dumps({"main": "src/index.js"}), encoding="utf-8"
-            )
-            (downloaded / "src" / "index.js").write_bytes(live_bundle)
+        if command[1] == "deploy" and "--outfile" in command:
+            outfile = Path(command[command.index("--outfile") + 1])
+            outfile.parent.mkdir(parents=True, exist_ok=True)
+            outfile.write_bytes(_upload_bundle(modules=modules_local))
+            assert "--experimental-new-config" not in command
+            assert "init" not in command
         else:  # pragma: no cover - keeps the fake closed if the command changes
             raise AssertionError(command)
         return subprocess.CompletedProcess(command, 0, "", "")
 
-    if live_matches:
-        result = live._source_provenance(  # noqa: SLF001
-            worker=worker,
-            worker_name="quant-platform-ingestion-secrets-staging",
-            environment="staging",
-            account_id=ACCOUNT,
-            api_token="read-only-token",
-            runner=runner,
+    def opener(request: Request, timeout: int = 30) -> _FakeResponse:
+        http_calls.append(request)
+        url = request.full_url
+        assert "include=modules" in url
+        assert "latest" not in url
+        assert version_id in url
+        assert ACCOUNT in url
+        assert "quant-platform-ingestion-secrets-staging" in url
+        return _FakeResponse(
+            _version_modules_envelope(
+                version_id=version_id,
+                main_module="index.js",
+                modules=modules_live,
+            )
         )
-        assert result["local_main_module_digest"] == result["live_main_module_digest"]
-        assert result["local_main_module_bytes"] == len(local_bundle)
+
+    kwargs = {
+        "worker": worker,
+        "worker_name": "quant-platform-ingestion-secrets-staging",
+        "environment": "staging",
+        "account_id": ACCOUNT,
+        "api_token": "read-only-token",
+        "version_id": version_id,
+        "runner": runner,
+        "opener": opener,
+    }
+    if live_matches:
+        result = live._source_provenance(**kwargs)  # noqa: SLF001
+        assert result["main_module"] == "index.js"
+        assert result["modules"][0]["bytes"] == len(local_bundle)
+        assert result["modules"][0]["digest"].startswith("sha256:")
     else:
         with pytest.raises(
             live.ReceiptPendingLiveAcceptanceError,
             match="differs from the clean reviewed source build",
         ):
-            live._source_provenance(  # noqa: SLF001
-                worker=worker,
-                worker_name="quant-platform-ingestion-secrets-staging",
-                environment="staging",
-                account_id=ACCOUNT,
-                api_token="read-only-token",
-                runner=runner,
-            )
+            live._source_provenance(**kwargs)  # noqa: SLF001
+    assert len(calls) == 1
     local_environment = calls[0]["env"]
     assert "CLOUDFLARE_API_TOKEN" not in local_environment
     assert "CLOUDFLARE_ACCOUNT_ID" not in local_environment
@@ -617,13 +729,35 @@ def test_source_provenance_compares_secretless_local_build_to_live_main(
     assert Path(local_environment["XDG_CONFIG_HOME"]).name == "isolated-config"
     assert Path(local_environment["WRANGLER_HOME"]).name == "isolated-wrangler"
     assert local_environment["WRANGLER_SEND_METRICS"] == "false"
-    live_environment = calls[1]["env"]
-    assert live_environment["CLOUDFLARE_API_TOKEN"] == "read-only-token"
-    assert live_environment["CLOUDFLARE_ACCOUNT_ID"] == ACCOUNT
-    assert "AWS_SECRET_ACCESS_KEY" not in live_environment
-    assert live_environment["HOME"] != str(Path.home())
-    assert Path(live_environment["HOME"]).name == "isolated-home"
-    assert live_environment["WRANGLER_SEND_METRICS"] == "false"
+    assert len(http_calls) == 1
+    assert http_calls[0].get_header("Authorization") == "Bearer read-only-token"
+    assert all("init" not in call["command"] for call in calls)
+
+
+@pytest.mark.parametrize(
+    ("raw", "match"),
+    (
+        (
+            _upload_bundle().replace(
+                b'name="index.js"',
+                b'name="index.js"; name="other.js"',
+                1,
+            ),
+            "duplicated",
+        ),
+        (
+            _upload_bundle(extra_metadata={"body_part": 123}),
+            "exactly one of main_module or body_part",
+        ),
+        (
+            _upload_bundle(extra_metadata={"body_part": "missing.js"}),
+            "exactly one of main_module or body_part",
+        ),
+    ),
+)
+def test_upload_bundle_rejects_malformed_inventory(raw: bytes, match: str) -> None:
+    with pytest.raises(live.ReceiptPendingLiveAcceptanceError, match=match):
+        live.parse_worker_upload_bundle(raw)
 
 
 def test_wrangler_inventory_receives_only_explicit_cloudflare_credentials(

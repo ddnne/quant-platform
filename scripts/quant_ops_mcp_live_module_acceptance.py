@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Read-only capability-surface acceptance for the live Quant Ops MCP Worker.
 
-The collector brackets the dashboard download with every active Worker's
-deployment and immutable selected-version document.  It compares every live
-runtime/binding surface with the reviewed manifest and the downloaded Quant Ops
-main module with a clean local Wrangler dry-run byte-for-byte.  The reviewed
-local module embeds the binding-manifest schema and digest, so exact byte
-equality also binds the live bundle to the framework RPC/dependency inventory
-without pretending that Cloudflare exposes the npm lockfile itself.
+The collector brackets selected-deployment and immutable version-module reads
+for every active Worker. It compares every live runtime/binding surface with
+the reviewed manifest and the Quant Ops module inventory from the exact
+selected version with a pinned local Wrangler dry-run upload bundle. The
+reviewed local module embeds the binding-manifest schema and digest, so exact
+byte equality also binds the live bundle to the framework RPC/dependency
+inventory without pretending that Cloudflare exposes the npm lockfile itself.
 """
 
 from __future__ import annotations
@@ -20,7 +20,8 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-from typing import Any
+from typing import Any, Callable
+from urllib.request import urlopen
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +36,7 @@ from scripts.receipt_authority_pending_live_acceptance import (  # noqa: E402
     ReceiptPendingLiveAcceptanceError,
     _canonical_digest,
     _require_official_origin_main,
+    _require_verified_module_inventory,
     _source_provenance,
     _validate_version_runtime_surface,
     _wrangler_json,
@@ -48,12 +50,8 @@ _UUID = re.compile(
 )
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _PROVENANCE_FIELDS = {
-    "live_main_module",
-    "live_main_module_bytes",
-    "live_main_module_digest",
-    "local_main_module",
-    "local_main_module_bytes",
-    "local_main_module_digest",
+    "main_module",
+    "modules",
 }
 
 
@@ -161,25 +159,20 @@ def validate_live_quant_ops_module(
                 raise QuantOpsMcpLiveAcceptanceError(
                     f"{worker}: live binding distributes a Quant Ops capability"
                 )
-    if type(source_provenance) is not dict or set(source_provenance) != _PROVENANCE_FIELDS:
+    try:
+        inventory = _require_verified_module_inventory(
+            source_provenance, label="Quant Ops source provenance"
+        )
+    except ReceiptPendingLiveAcceptanceError as exc:
+        raise QuantOpsMcpLiveAcceptanceError(str(exc)) from exc
+    if set(inventory) != _PROVENANCE_FIELDS:
         raise QuantOpsMcpLiveAcceptanceError("module provenance fields are not closed")
-    local_digest = source_provenance["local_main_module_digest"]
-    live_digest = source_provenance["live_main_module_digest"]
-    local_bytes = source_provenance["local_main_module_bytes"]
-    live_bytes = source_provenance["live_main_module_bytes"]
-    live_module = source_provenance["live_main_module"]
-    if (
-        source_provenance["local_main_module"] != "index.js"
-        or type(live_module) is not str
-        or (live_module != "index.js" and not live_module.endswith("/index.js"))
-        or type(local_digest) is not str
-        or _DIGEST.fullmatch(local_digest) is None
-        or live_digest != local_digest
-        or type(local_bytes) is not int
-        or local_bytes <= 0
-        or type(live_bytes) is not int
-        or live_bytes != local_bytes
-    ):
+    main_row = next(
+        row for row in inventory["modules"] if row["name"] == inventory["main_module"]
+    )
+    live_digest = main_row["digest"]
+    live_bytes = main_row["bytes"]
+    if type(live_digest) is not str or _DIGEST.fullmatch(live_digest) is None:
         raise QuantOpsMcpLiveAcceptanceError(
             "live module differs from the clean reviewed source build"
         )
@@ -208,7 +201,7 @@ def validate_live_quant_ops_module(
             ) from exc
     accepted_version = accepted_versions["quant-ops-mcp"]
     return {
-        "format": "quant-ops-mcp-live-module-acceptance/v1",
+        "format": "quant-ops-mcp-live-module-acceptance/v2",
         "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "environment": environment,
         "account_id": account_id,
@@ -222,6 +215,8 @@ def validate_live_quant_ops_module(
         "durable_object_namespace_id": accepted_version[
             "durable_object_namespace_id"
         ],
+        "main_module": inventory["main_module"],
+        "modules": inventory["modules"],
         "module_digest": live_digest,
         "module_bytes": live_bytes,
         "binding_manifest_schema_version": manifest["schema_version"],
@@ -270,6 +265,7 @@ def collect_live_quant_ops_module(
     account_id: str,
     api_token: str,
     runner: Any = subprocess.run,
+    opener: Callable[..., Any] = urlopen,
 ) -> dict[str, Any]:
     if environment not in {"production", "staging"}:
         raise QuantOpsMcpLiveAcceptanceError("environment is invalid")
@@ -311,7 +307,9 @@ def collect_live_quant_ops_module(
             environment=environment,
             account_id=account_id,
             api_token=api_token,
+            version_id=_selected_version(deployments_before[quant_worker]),
             runner=runner,
+            opener=opener,
         )
         for worker in active_workers:
             version_id = _selected_version(deployments_before[worker])
