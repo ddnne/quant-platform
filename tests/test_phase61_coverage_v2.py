@@ -4,14 +4,10 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 import sqlite3
-
-import pytest
 
 from data_contracts import coverage_contract_for
 from storage import (
-    CollectionReceipt,
     evaluate_required_segments,
     evaluate_segment,
     plan_required_segments,
@@ -19,205 +15,12 @@ from storage import (
     record_collection_receipt,
 )
 from storage.coverage_ledger import EXPECTED_EMPTY_WITH_EVIDENCE
-from storage.receipt_crypto import (
-    PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
-    PRODUCTION_RECEIPT_ENVIRONMENT,
-    canonical_evidence_digest,
-)
 from storage.sqlite_store import SqliteStore
 from tests.receipt_test_support import (
-    build_test_signed_digest_fields,
-    canonical_test_authority_extra_digests,
+    build_test_collection_receipt as _receipt,
 )
 
 _REPO = Path(__file__).resolve().parents[1]
-
-
-def _receipt(
-    segment,
-    *,
-    run_id: int = 1,
-    observed: int = 1,
-    raw_rows: int | None = None,
-    structured_rows: int | None = None,
-    pagination_exhausted: bool = True,
-    extra_digests: dict | None = None,
-) -> CollectionReceipt:
-    raw_count = observed if raw_rows is None else raw_rows
-    structured_count = raw_count if structured_rows is None else structured_rows
-    checked_at = f"2025-04-01T00:00:0{run_id}+00:00"
-    raw_digest = "sha256:" + "a" * 64
-    return CollectionReceipt(
-        source=segment.source,
-        dataset=segment.dataset,
-        segment_id=segment.segment_id,
-        segment_start=segment.segment_start,
-        segment_end=segment.segment_end,
-        expected_scope=segment.expected_scope,
-        expected_items=segment.expected_items,
-        observed_items=observed,
-        raw_page_count=1,
-        raw_row_count=raw_count,
-        structured_row_count=structured_count,
-        pagination_exhausted=pagination_exhausted,
-        digests=_signed_digests(
-            dataset=segment.dataset,
-            segment_id=segment.segment_id,
-            source=segment.source,
-            run_id=run_id,
-            raw_digest=raw_digest,
-            raw_count=raw_count,
-            structured_count=structured_count,
-            pagination_exhausted=pagination_exhausted,
-            segment_start=segment.segment_start,
-            segment_end=segment.segment_end,
-            checked_at=checked_at,
-            expected_scope=segment.expected_scope,
-            expected_items=segment.expected_items,
-            observed_items=observed,
-            raw_page_count=1,
-            extra_digests=extra_digests,
-        ),
-        run_id=run_id,
-        status="SUCCESS",
-        error=None,
-        checked_at=checked_at,
-    )
-
-
-_SIGNED_KEY = None
-
-
-@pytest.fixture(autouse=True)
-def _tmp_receipt_registry(receipt_ed25519_keys: SimpleNamespace):
-    """Sign coverage-v2 receipts against the tmp registry, never the repo file."""
-    global _SIGNED_KEY
-    previous = _SIGNED_KEY
-    _SIGNED_KEY = receipt_ed25519_keys.signing_key
-    yield
-    _SIGNED_KEY = previous
-
-
-def _signed_digests(
-    *,
-    dataset,
-    segment_id,
-    source,
-    run_id,
-    raw_digest,
-    raw_count=1,
-    structured_count=1,
-    pagination_exhausted=True,
-    segment_start=None,
-    segment_end=None,
-    checked_at=None,
-    structured_digest=None,
-    source_request_digest=None,
-    raw_manifest_digest=None,
-    structured_generation=None,
-    extra_digests=None,
-    expected_scope=None,
-    expected_items=None,
-    observed_items=None,
-    raw_page_count=1,
-):
-    """Sign with the tmp Ed25519 registry from receipt_ed25519_keys."""
-    assert _SIGNED_KEY is not None
-    sha_empty = "sha256:" + "0" * 64
-    policy = coverage_contract_for(dataset)
-    contract_id = policy.collection_scope
-    receipt_issue_digest = canonical_evidence_digest(
-        {
-            "schema_version": "test-receipt-issue/v1",
-            "source": source,
-            "contract_id": contract_id,
-            "dataset_id": dataset,
-            "segment_id": segment_id,
-            "run_id": run_id,
-        }
-    )
-    artifact_key = f"test/receipt-products/{source}/{dataset}/{segment_id}/artifact"
-    manifest_key = f"test/receipt-products/{source}/{dataset}/{segment_id}/manifest"
-    raw_manifest_key = f"test/receipt-raw/{source}/{dataset}/{segment_id}/manifest"
-    scope = {
-        "environment": PRODUCTION_RECEIPT_ENVIRONMENT,
-        "authority_instance_digest": PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
-        "coverage_policy_version": policy.policy_version,
-        "source": source,
-        "contract_id": contract_id,
-        "dataset": dataset,
-        "segment_id": segment_id,
-        "segment_start": segment_start,
-        "segment_end": segment_end,
-        "expected_scope": dict(expected_scope or {}),
-        "expected_items": expected_items,
-    }
-    structured_digest_value = structured_digest or sha_empty
-    authority_extras = canonical_test_authority_extra_digests(
-        source=source,
-        dataset=dataset,
-        segment_id=segment_id,
-        run_id=run_id,
-        extra_digests=extra_digests,
-    )
-    authority_extras.setdefault(
-        "product_artifact_digest", structured_digest_value
-    )
-    authority_extras.setdefault(
-        "product_manifest_digest",
-        canonical_evidence_digest(
-            {
-                "artifact_key": artifact_key,
-                "artifact_digest": structured_digest_value,
-            }
-        ),
-    )
-    claims = {
-        **scope,
-        "observed_items": raw_count if observed_items is None else observed_items,
-        "raw_page_count": raw_page_count,
-        "raw_digest": raw_digest,
-        "raw_count": raw_count,
-        "structured_count": structured_count,
-        "structured_digest": structured_digest_value,
-        "pagination_exhausted": pagination_exhausted,
-        "discovery_exhausted": pagination_exhausted,
-        "status": "SUCCESS",
-        "error": None,
-        "source_request_digest": source_request_digest or sha_empty,
-        "raw_manifest_digest": raw_manifest_digest or raw_digest,
-        "receipt_issue_digest": receipt_issue_digest,
-        "artifact_key": artifact_key,
-        "artifact_byte_count": max(1, structured_count),
-        "manifest_key": manifest_key,
-        "manifest_byte_count": 1,
-        "raw_manifest_key": raw_manifest_key,
-        "raw_manifest_byte_count": 1,
-        "raw_byte_count": max(1, raw_count),
-        "natural_key_digest": canonical_evidence_digest(
-            {
-                "schema_version": "test-natural-keys/v1",
-                "dataset": dataset,
-                "segment_id": segment_id,
-                "structured_count": structured_count,
-            }
-        ),
-        "structured_generation": (
-            structured_generation if structured_generation is not None else run_id
-        ),
-        "scope_digest": canonical_evidence_digest(scope),
-        "run_id": run_id,
-        "checked_at": checked_at,
-        "extra_digests": authority_extras,
-    }
-    claims["observation_digest"] = canonical_evidence_digest(claims)
-    signed = build_test_signed_digest_fields(
-        signing_key=_SIGNED_KEY,
-        closure_claims=claims,
-    )
-    signed["raw"] = raw_digest
-    return signed
-
 
 
 def _short_event_policy():
@@ -227,7 +30,9 @@ def _short_event_policy():
     )
 
 
-def test_missing_middle_segment_is_partial_even_with_early_and_late_receipts():
+def test_missing_middle_segment_is_partial_even_with_early_and_late_receipts(
+    receipt_ed25519_keys,
+):
     policy = _short_event_policy()
     required = plan_required_segments(policy, "2025-03-31")
     assert [segment.segment_id for segment in required] == [
@@ -237,7 +42,10 @@ def test_missing_middle_segment_is_partial_even_with_early_and_late_receipts():
     status, evaluated = evaluate_required_segments(
         policy,
         required,
-        [_receipt(required[0]), _receipt(required[2], run_id=2)],
+        [
+            _receipt(required[0], signing_key=receipt_ed25519_keys.signing_key),
+            _receipt(required[2], run_id=2, signing_key=receipt_ed25519_keys.signing_key),
+        ],
     )
 
     assert status == "PARTIAL"
@@ -245,7 +53,9 @@ def test_missing_middle_segment_is_partial_even_with_early_and_late_receipts():
     assert evaluated[1][1] is None
 
 
-def test_sticky_complete_cannot_use_transplanted_outer_identity():
+def test_sticky_complete_cannot_use_transplanted_outer_identity(
+    receipt_ed25519_keys,
+):
     from storage.coverage_ledger import _latest_complete_receipt_for_required
 
     policy = _short_event_policy()
@@ -256,7 +66,7 @@ def test_sticky_complete_cannot_use_transplanted_outer_identity():
         segment_start="2025-02-01",
         segment_end="2025-02-28",
     )
-    signed_a = _receipt(required_a)
+    signed_a = _receipt(required_a, signing_key=receipt_ed25519_keys.signing_key)
     transplanted = replace(
         signed_a,
         segment_id=required_b.segment_id,
@@ -268,7 +78,9 @@ def test_sticky_complete_cannot_use_transplanted_outer_identity():
     ) is None
 
 
-def test_policy_bearing_expected_empty_extra_is_not_v3_complete():
+def test_policy_bearing_expected_empty_extra_is_not_v3_complete(
+    receipt_ed25519_keys,
+):
     """Unknown policy-bearing extras cannot extend the v3 signed inventory."""
     for dataset_id in (
         "fins_summary",
@@ -288,13 +100,16 @@ def test_policy_bearing_expected_empty_extra_is_not_v3_complete():
                 required,
                 observed=0,
                 extra_digests={EXPECTED_EMPTY_WITH_EVIDENCE: True},
+                signing_key=receipt_ed25519_keys.signing_key,
             ),
         )
         assert status == "PARTIAL", dataset_id
         assert "digest inventory" in detail["reason"]
 
 
-def test_tip_snapshot_empty_receipt_is_partial_not_complete():
+def test_tip_snapshot_empty_receipt_is_partial_not_complete(
+    receipt_ed25519_keys,
+):
     """Earnings/AM tip snapshots stay PARTIAL on empty observed_items.
 
     Event-zero COMPLETE is only for genuine event_driven historical windows
@@ -320,7 +135,13 @@ def test_tip_snapshot_empty_receipt_is_partial_not_complete():
         assert policy.segment_granularity == grain, dataset_id
         required = plan_required_segments(policy, "2026-08-14")[0]
         status, detail = evaluate_segment(
-            policy, required, _receipt(required, observed=0)
+            policy,
+            required,
+            _receipt(
+                required,
+                observed=0,
+                signing_key=receipt_ed25519_keys.signing_key,
+            ),
         )
         assert status == "PARTIAL", dataset_id
         assert status != "COMPLETE"
@@ -328,7 +149,9 @@ def test_tip_snapshot_empty_receipt_is_partial_not_complete():
         assert "empty" in detail["reason"]
 
 
-def test_earnings_event_driven_empty_is_not_event_zero_complete():
+def test_earnings_event_driven_empty_is_not_event_zero_complete(
+    receipt_ed25519_keys,
+):
     """Earnings is event_driven but tip-snapshot; empty SUCCESS stays PARTIAL."""
     policy = coverage_contract_for("equities_earnings_calendar")
     assert policy.expected_frequency == "event_driven"
@@ -336,7 +159,13 @@ def test_earnings_event_driven_empty_is_not_event_zero_complete():
     required = plan_required_segments(policy, "2026-08-14")[0]
     assert required.expected_items is None
     status, detail = evaluate_segment(
-        policy, required, _receipt(required, observed=0)
+        policy,
+        required,
+        _receipt(
+            required,
+            observed=0,
+            signing_key=receipt_ed25519_keys.signing_key,
+        ),
     )
     assert status == "PARTIAL"
     assert status != "COMPLETE"
@@ -344,7 +173,9 @@ def test_earnings_event_driven_empty_is_not_event_zero_complete():
     assert "empty" in detail["reason"]
 
 
-def test_tip_snapshot_empty_stays_partial_even_if_event_driven():
+def test_tip_snapshot_empty_stays_partial_even_if_event_driven(
+    receipt_ed25519_keys,
+):
     """recent_snapshot AM stays PARTIAL on empty even if labeled event_driven."""
     policy = replace(
         coverage_contract_for("equities_bars_daily_am"),
@@ -353,7 +184,13 @@ def test_tip_snapshot_empty_stays_partial_even_if_event_driven():
     required = plan_required_segments(policy, "2026-08-14")[0]
     assert required.expected_items is None
     status, detail = evaluate_segment(
-        policy, required, _receipt(required, observed=0)
+        policy,
+        required,
+        _receipt(
+            required,
+            observed=0,
+            signing_key=receipt_ed25519_keys.signing_key,
+        ),
     )
     assert status == "PARTIAL"
     assert status != "COMPLETE"
@@ -361,7 +198,9 @@ def test_tip_snapshot_empty_stays_partial_even_if_event_driven():
     assert "empty" in detail["reason"]
 
 
-def test_official_archive_index_empty_receipt_is_partial_not_complete():
+def test_official_archive_index_empty_receipt_is_partial_not_complete(
+    receipt_ed25519_keys,
+):
     policy = coverage_contract_for("jsda_otc_bond_reference_prices")
     assert policy.coverage_mode == "official_archive_index_reconciled"
     assert policy.segment_granularity == "official_archive_index_day"
@@ -372,7 +211,13 @@ def test_official_archive_index_empty_receipt_is_partial_not_complete():
         policy, "2002-08-06", source="jsda", index_text=html,
     )[0]
     status, detail = evaluate_segment(
-        policy, required, _receipt(required, observed=0)
+        policy,
+        required,
+        _receipt(
+            required,
+            observed=0,
+            signing_key=receipt_ed25519_keys.signing_key,
+        ),
     )
     assert status == "PARTIAL"
     assert status != "COMPLETE"
@@ -380,7 +225,9 @@ def test_official_archive_index_empty_receipt_is_partial_not_complete():
     assert "empty" in detail["reason"]
 
 
-def test_archive_index_empty_stays_partial_even_if_event_driven():
+def test_archive_index_empty_stays_partial_even_if_event_driven(
+    receipt_ed25519_keys,
+):
     """official_archive_index never event-zero COMPLETEs, even if event_driven."""
     policy = replace(
         coverage_contract_for("jsda_otc_bond_reference_prices"),
@@ -394,7 +241,13 @@ def test_archive_index_empty_stays_partial_even_if_event_driven():
     )[0]
     assert required.expected_items is None
     status, detail = evaluate_segment(
-        policy, required, _receipt(required, observed=0)
+        policy,
+        required,
+        _receipt(
+            required,
+            observed=0,
+            signing_key=receipt_ed25519_keys.signing_key,
+        ),
     )
     assert status == "PARTIAL"
     assert status != "COMPLETE"
@@ -402,31 +255,46 @@ def test_archive_index_empty_stays_partial_even_if_event_driven():
     assert "empty" in detail["reason"]
 
 
-def test_pagination_incomplete_is_not_complete():
+def test_pagination_incomplete_is_not_complete(receipt_ed25519_keys):
     policy = _short_event_policy()
     required = plan_required_segments(policy, "2025-01-31")[0]
 
     status, detail = evaluate_segment(
-        policy, required, _receipt(required, pagination_exhausted=False)
+        policy,
+        required,
+        _receipt(
+            required,
+            pagination_exhausted=False,
+            signing_key=receipt_ed25519_keys.signing_key,
+        ),
     )
 
     assert status == "PARTIAL"
     assert "receipt closure invalid" in detail["reason"]
 
 
-def test_raw_structured_mismatch_is_not_complete():
+def test_raw_structured_mismatch_is_not_complete(receipt_ed25519_keys):
     policy = _short_event_policy()
     required = plan_required_segments(policy, "2025-01-31")[0]
 
     status, detail = evaluate_segment(
-        policy, required, _receipt(required, observed=3, structured_rows=2)
+        policy,
+        required,
+        _receipt(
+            required,
+            observed=3,
+            structured_rows=2,
+            signing_key=receipt_ed25519_keys.signing_key,
+        ),
     )
 
     assert status == "FAILED"
     assert detail["reason"] == "raw/structured row mismatch"
 
 
-def test_non_event_month_defaults_expected_items_to_one_source_query():
+def test_non_event_month_defaults_expected_items_to_one_source_query(
+    receipt_ed25519_keys,
+):
     """plan_required_segments defaults source_query expected_items=1 when unset.
 
     Explicit expected_items_by_segment still overrides (see next test). A
@@ -440,14 +308,22 @@ def test_non_event_month_defaults_expected_items_to_one_source_query():
     assert required.expected_items == 1
 
     status, detail = evaluate_segment(
-        policy, required, _receipt(required, observed=1)
+        policy,
+        required,
+        _receipt(
+            required,
+            observed=1,
+            signing_key=receipt_ed25519_keys.signing_key,
+        ),
     )
 
     assert status == "COMPLETE"
     assert detail["reason"] == "receipt reconciled"
 
 
-def test_non_event_month_completes_with_independent_matching_query_plan():
+def test_non_event_month_completes_with_independent_matching_query_plan(
+    receipt_ed25519_keys,
+):
     policy = replace(
         coverage_contract_for("equities_bars_daily"),
         history_target_start="2025-01-01",
@@ -459,19 +335,30 @@ def test_non_event_month_completes_with_independent_matching_query_plan():
     )[0]
 
     status, detail = evaluate_segment(
-        policy, required, _receipt(required, observed=31)
+        policy,
+        required,
+        _receipt(
+            required,
+            observed=31,
+            signing_key=receipt_ed25519_keys.signing_key,
+        ),
     )
 
     assert status == "COMPLETE"
     assert detail["event_zero"] is False
 
 
-def test_receipts_are_run_scoped_and_do_not_define_required_inventory(tmp_path):
+def test_receipts_are_run_scoped_and_do_not_define_required_inventory(
+    tmp_path, receipt_ed25519_keys
+):
     path = tmp_path / "coverage-v2.sqlite"
     store = SqliteStore(path)
     policy = _short_event_policy()
     required = plan_required_segments(policy, "2025-01-31")[0]
-    record_collection_receipt(store._conn, _receipt(required))  # noqa: SLF001
+    record_collection_receipt(
+        store._conn,
+        _receipt(required, signing_key=receipt_ed25519_keys.signing_key),
+    )  # noqa: SLF001
     store._conn.commit()  # noqa: SLF001
 
     tables = {
@@ -520,7 +407,9 @@ def test_worker_d1_receipt_migration_has_reconciliation_evidence():
     conn.close()
 
 
-def test_receipt_observed_window_ignores_empty_success_shells():
+def test_receipt_observed_window_ignores_empty_success_shells(
+    receipt_ed25519_keys,
+):
     """R2-only history: empty SUCCESS shells must not move observed_start."""
     from storage.coverage_ledger import (
         _merge_observed_window,
@@ -539,6 +428,7 @@ def test_receipt_observed_window_ignores_empty_success_shells():
         })(),
         raw_rows=100,
         structured_rows=100,
+        signing_key=receipt_ed25519_keys.signing_key,
     )
     empty_shell = _receipt(
         type("S", (), {
@@ -553,6 +443,7 @@ def test_receipt_observed_window_ignores_empty_success_shells():
         observed=0,
         raw_rows=0,
         structured_rows=0,
+        signing_key=receipt_ed25519_keys.signing_key,
     )
     failed = _receipt(
         type("S", (), {
@@ -566,6 +457,7 @@ def test_receipt_observed_window_ignores_empty_success_shells():
         })(),
         raw_rows=50,
         structured_rows=50,
+        signing_key=receipt_ed25519_keys.signing_key,
     )
     failed = replace(failed, status="FAILED")
 
@@ -585,12 +477,17 @@ def test_receipt_observed_window_ignores_empty_success_shells():
     assert str(merged_e).startswith("2026-08-10")
 
 
-def test_receipt_observed_window_ignores_mutated_outer_receipt():
+def test_receipt_observed_window_ignores_mutated_outer_receipt(
+    receipt_ed25519_keys,
+):
     from storage.coverage_ledger import _receipt_observed_window
 
     policy = _short_event_policy()
     required = plan_required_segments(policy, "2025-01-31")[0]
-    mutated = replace(_receipt(required), raw_row_count=999)
+    mutated = replace(
+        _receipt(required, signing_key=receipt_ed25519_keys.signing_key),
+        raw_row_count=999,
+    )
     assert _receipt_observed_window((mutated,)) == (None, None, 0)
 
 

@@ -22,7 +22,7 @@ from storage import (
 )
 from storage.coverage_ledger import plan_required_segments
 from storage.sqlite_store import SqliteStore
-from tests.test_phase61_coverage_v2 import _signed_digests
+from tests.receipt_test_support import signed_test_receipt_digests as _signed_digests
 
 
 def _plan_jq_required(dataset: str, target_end: str):
@@ -123,7 +123,7 @@ def fixture_db_with_coverage_without_receipts(fixture_db_with_schema):
 
 
 @pytest.fixture
-def fixture_db_with_complete_coverage_and_receipts(fixture_db_with_schema):
+def fixture_db_with_complete_coverage_and_receipts(fixture_db_with_schema, receipt_ed25519_keys):
     """Create fixture with COMPLETE coverage and synthetic receipts (should pass coherence)."""
     store = SqliteStore(fixture_db_with_schema)
     conn = store._conn
@@ -153,6 +153,7 @@ def fixture_db_with_complete_coverage_and_receipts(fixture_db_with_schema):
             structured_row_count=1 if segment.expected_items != 0 else 0,
             pagination_exhausted=True,  # Pagination exhausted
             digests=_signed_digests(
+                signing_key=receipt_ed25519_keys.signing_key,
                 dataset=segment.dataset,
                 segment_id=segment.segment_id,
                 source=segment.source,
