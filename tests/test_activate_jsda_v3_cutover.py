@@ -5,6 +5,8 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 from pathlib import Path
+import sqlite3
+import subprocess
 from typing import Any, Mapping
 
 import pytest
@@ -54,6 +56,119 @@ def receipt(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
     )
     cutover._save_receipt(value)
     return value
+
+
+def no_remote_restore_intent(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cutover, "_d1_rows", lambda *_a, **_k: [])
+
+
+class SharedD1:
+    def __init__(self) -> None:
+        self.connection = sqlite3.connect(":memory:")
+        self.connection.row_factory = sqlite3.Row
+        self.connection.executescript(
+            """
+            CREATE TABLE jsda_v3_cutover_control (
+                singleton INTEGER PRIMARY KEY,
+                phase TEXT NOT NULL,
+                activated_at TEXT,
+                activated_source_sha TEXT,
+                cutover_config_digest TEXT,
+                drain_evidence_digest TEXT
+            );
+            INSERT INTO jsda_v3_cutover_control(singleton, phase) VALUES (1, 'bridge');
+            CREATE TABLE jsda_v3_cutover_run (
+                run_id TEXT PRIMARY KEY,
+                environment TEXT,
+                source_sha TEXT,
+                selected_version_id TEXT,
+                selected_deployment_id TEXT,
+                selected_version_tag TEXT,
+                cutover_config_digest TEXT,
+                rollback_bookmark TEXT,
+                owner TEXT,
+                fence TEXT,
+                phase TEXT,
+                evidence_digest TEXT,
+                drain_evidence_digest TEXT,
+                document_json TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE jsda_v3_drain_evidence (
+                drain_evidence_digest TEXT PRIMARY KEY,
+                observed_at TEXT,
+                document_json TEXT
+            );
+            CREATE TABLE premium_writer_rows (
+                id INTEGER PRIMARY KEY,
+                payload TEXT NOT NULL
+            );
+            CREATE TABLE receipt_writer_rows (
+                id INTEGER PRIMARY KEY,
+                payload TEXT NOT NULL
+            );
+            """
+        )
+        self.connection.execute(
+            "INSERT INTO premium_writer_rows(id, payload) VALUES (1, 'before-bookmark')"
+        )
+        self.restore_calls = 0
+
+    def insert_after_bookmark(self) -> None:
+        self.connection.execute(
+            "INSERT INTO premium_writer_rows(id, payload) VALUES (2, 'premium-after')"
+        )
+        self.connection.execute(
+            "INSERT INTO receipt_writer_rows(id, payload) VALUES (1, 'receipt-after')"
+        )
+
+    def payloads(self) -> set[str]:
+        premium = {
+            row[0]
+            for row in self.connection.execute(
+                "SELECT payload FROM premium_writer_rows"
+            )
+        }
+        receipt = {
+            row[0]
+            for row in self.connection.execute(
+                "SELECT payload FROM receipt_writer_rows"
+            )
+        }
+        return premium | receipt
+
+    def restore(self) -> None:
+        self.restore_calls += 1
+        self.connection.execute("DELETE FROM premium_writer_rows WHERE id > 1")
+        self.connection.execute("DELETE FROM receipt_writer_rows")
+
+    def batch(
+        self, _environment: str, statements: Any, **_kwargs: object
+    ) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        for statement in statements:
+            before = self.connection.total_changes
+            cursor = self.connection.execute(
+                statement["sql"], statement.get("params") or []
+            )
+            rows = (
+                [dict(row) for row in cursor.fetchall()] if cursor.description else []
+            )
+            results.append({
+                "success": True,
+                "results": rows,
+                "meta": {"changes": self.connection.total_changes - before},
+            })
+        return results
+
+    def rows(
+        self, _environment: str, sql: str, **kwargs: object
+    ) -> list[dict[str, Any]]:
+        params = list(kwargs.get("params") or [])
+        cursor = self.connection.execute(sql, params)
+        if cursor.description is None:
+            return []
+        return [dict(row) for row in cursor.fetchall()]
 
 
 def exact_live() -> dict[str, Any]:
@@ -143,6 +258,7 @@ def test_activate_captures_bookmark_only_after_intent_stop_stable_drain_and_paus
 ) -> None:
     monkeypatch.setattr(cutover, "STATE_ROOT", tmp_path / "state")
     monkeypatch.setattr(cutover, "_credentials", lambda: ("token", "account"))
+    no_remote_restore_intent(monkeypatch)
     baseline = state("production")
     drained = deepcopy(baseline)
     drained["schedules"] = []
@@ -182,82 +298,91 @@ def test_activate_captures_bookmark_only_after_intent_stop_stable_drain_and_paus
         cutover.activate("staging", yes=True)
 
 
-def test_staging_drill_persists_remote_and_local_undo_before_restore(
+def test_new_receipt_pins_forward_repair_without_changing_config_digest(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     value = receipt(monkeypatch, tmp_path)
-    monkeypatch.setattr(
-        cutover.migration, "time_travel_bookmark",
-        lambda *_a, **_k: {"bookmark": UNDO},
-    )
-    events: list[str] = []
-    monkeypatch.setattr(
-        cutover, "_record_run_document",
-        lambda *_a, **_k: events.append("remote-intent"),
-    )
-
-    def restore(_environment: str, bookmark: str, **_kwargs: object) -> str:
-        events.append(f"restore:{bookmark}")
-        base = cutover._receipt_path("staging", value["run_id"])
-        if bookmark == BASELINE:
-            assert events[0] == "remote-intent"
-            assert base.with_name(f"{base.stem}.staging-intent.json").exists()
-            return UNDO
-        return BASELINE
-
-    monkeypatch.setattr(cutover, "_restore_bookmark", restore)
-    cutover._staging_drill(value, token="token", account="account")
-    assert events[:3] == ["remote-intent", f"restore:{BASELINE}", f"restore:{UNDO}"]
-    assert events[-1] == "remote-intent"
+    assert value["schema_version"] == cutover.RECEIPT_SCHEMA
+    assert value["recovery_policy"] == cutover.RECOVERY_POLICY
+    assert value["config_digest"] == cutover.compiled_cutover_config_digest()
+    assert "rollback_bookmark" in value
 
 
-def test_staging_crash_at_baseline_recovers_from_persisted_undo(
+def test_continue_applies_forward_migration_and_never_restores(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     value = receipt(monkeypatch, tmp_path)
-    cutover._evidence(value, "staging-intent", {"baseline": BASELINE, "undo": UNDO})
+    no_remote_restore_intent(monkeypatch)
+    applied = {"n": 0}
+
+    class StopAfterAdvance(RuntimeError):
+        pass
+
+    live = state()
+    live["queue"]["paused"] = True
+    live["schedules"] = []
+    live["pending_migrations"] = list(MIGRATION_NAMES[10:])
+    exact = deepcopy(live)
+    exact["pending_migrations"] = []
+    exact["applied_migrations"] = list(MIGRATION_NAMES)
+    exact["schema_observations"] = []
+    exact["jobs"] = {key: 0 for key in live["jobs"]}
+    observations = iter([live, exact])
+    monkeypatch.setattr(cutover, "_status", lambda *_a, **_k: {"phase": "queue_paused"})
     monkeypatch.setattr(
-        cutover.migration, "time_travel_bookmark",
-        lambda *_a, **_k: {"bookmark": BASELINE},
+        cutover, "_observe", lambda *_a, **_k: deepcopy(next(observations))
     )
-    restored: list[str] = []
     monkeypatch.setattr(
-        cutover, "_restore_bookmark",
-        lambda _environment, bookmark, **_kwargs: restored.append(bookmark) or BASELINE,
+        cutover.migration, "revalidate_mutation_lease",
+        lambda **_k: {"phase": "acquired", "remote_spawned": 0},
     )
-    monkeypatch.setattr(cutover, "_record_run_document", lambda *_a, **_k: None)
-    cutover._recover_staging_drill(value, token="token", account="account")
-    assert restored == [UNDO]
+    monkeypatch.setattr(
+        cutover.migration, "_wrangler_prefix", lambda *_a, **_k: (["wrangler"], "DB")
+    )
+    monkeypatch.setattr(
+        cutover.migration, "_apply_remote_migrations",
+        lambda **_k: applied.__setitem__("n", applied["n"] + 1),
+    )
+    monkeypatch.setattr(
+        cutover, "_advance",
+        lambda *_a, **_k: (_ for _ in ()).throw(StopAfterAdvance()),
+    )
+    with pytest.raises(StopAfterAdvance):
+        cutover._continue(value, token="token", account="account")
+    assert applied["n"] == 1
 
 
-def test_cutover_refuses_time_travel_drill_until_cron_and_queue_stopped(
+def test_cutover_refuses_migration_until_cron_and_queue_stopped(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     value = receipt(monkeypatch, tmp_path)
+    no_remote_restore_intent(monkeypatch)
     monkeypatch.setattr(cutover, "_status", lambda *_a, **_k: {"phase": "queue_paused"})
     unsafe = state()
     unsafe["schedules"] = [{"cron": "* * * * *"}]
     monkeypatch.setattr(cutover, "_observe", lambda *_a, **_k: unsafe)
-    called = {"drill": 0}
+    applied = {"n": 0}
     monkeypatch.setattr(
-        cutover, "_staging_drill", lambda *_a, **_k: called.__setitem__("drill", 1)
+        cutover.migration, "_apply_remote_migrations",
+        lambda **_k: applied.__setitem__("n", 1),
     )
     with pytest.raises(cutover.JsdaCutoverError, match="stopped Cron and Queue"):
         cutover._continue(value, token="token", account="account")
-    assert called["drill"] == 0
+    assert applied["n"] == 0
 
 
-def test_post_pause_enqueue_race_blocks_activate_resume_and_rollback(
+def test_post_pause_enqueue_race_blocks_activate_and_resume(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(cutover, "STATE_ROOT", tmp_path / "state")
     monkeypatch.setattr(cutover, "_credentials", lambda: ("token", "account"))
+    no_remote_restore_intent(monkeypatch)
     drained = state()
     paused = deepcopy(drained)
     paused["queue"]["paused"] = True
     raced = deepcopy(paused)
     raced["queue"]["backlog"] = 1
-    calls = {"bookmark": 0, "drill": 0}
+    calls = {"bookmark": 0, "apply": 0}
     monkeypatch.setattr(cutover.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(cutover, "_queue_action", lambda *_a, **_k: None)
     monkeypatch.setattr(
@@ -274,17 +399,14 @@ def test_post_pause_enqueue_race_blocks_activate_resume_and_rollback(
     monkeypatch.setattr(cutover, "_status", lambda *_a, **_k: {"phase": "queue_paused"})
     monkeypatch.setattr(cutover, "_observe", lambda *_a, **_k: raced)
     monkeypatch.setattr(
-        cutover, "_staging_drill",
-        lambda *_a, **_k: calls.__setitem__("drill", calls["drill"] + 1),
+        cutover.migration, "_apply_remote_migrations",
+        lambda **_k: calls.__setitem__("apply", calls["apply"] + 1),
     )
     with pytest.raises(cutover.JsdaCutoverError, match="Queue is not empty"):
         cutover._continue(value, token="token", account="account")
-    assert calls["drill"] == 0
+    assert calls["apply"] == 0
 
-    monkeypatch.setattr(cutover, "_load_receipt", lambda *_a, **_k: value)
-    observations = iter([drained, drained, drained, raced])
-    monkeypatch.setattr(cutover, "_observe", lambda *_a, **_k: deepcopy(next(observations)))
-    with pytest.raises(cutover.JsdaCutoverError, match="Queue is not empty"):
+    with pytest.raises(cutover.JsdaCutoverError, match="FORWARD_REPAIR_REQUIRED"):
         cutover.rollback("staging", value["run_id"], yes=True)
     assert calls["bookmark"] == 0
 
@@ -329,8 +451,9 @@ def test_atomic_activation_batches_drain_control_and_run(
 
 
 def test_production_missing_remote_staging_admission_holds_before_bookmark(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    monkeypatch.setattr(cutover, "STATE_ROOT", tmp_path / "state")
     monkeypatch.setattr(cutover, "_credentials", lambda: ("token", "account"))
     monkeypatch.setattr(cutover, "_observe", lambda *_a, **_k: state("production"))
     monkeypatch.setattr(cutover, "_d1_rows", lambda *_a, **_k: [])
@@ -344,124 +467,162 @@ def test_production_missing_remote_staging_admission_holds_before_bookmark(
     assert calls["bookmark"] == 0
 
 
-def test_remote_staging_admission_uses_activated_run_and_live_smoke(
-    monkeypatch: pytest.MonkeyPatch,
+def test_generated_drain_digest_survives_activation_and_admits_staging(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    digest = cutover.compiled_cutover_config_digest()
-    drain = "sha256:" + "d" * 64
-
-    def rows(_environment: str, sql: str, **_kwargs: object):
-        if "jsda_v3_cutover_run" in sql:
-            return [{
-                "source_sha": SHA, "selected_version_tag": SHA,
-                "cutover_config_digest": digest,
-                "drain_evidence_digest": drain, "phase": "activated",
-            }]
-        return [{
-            "phase": "v3_active", "activated_source_sha": SHA,
-            "cutover_config_digest": digest, "drain_evidence_digest": drain,
-        }]
-
-    monkeypatch.setattr(cutover, "_d1_rows", rows)
+    value = receipt(monkeypatch, tmp_path)
+    store = SharedD1()
+    evidence = {"phase": "deployed"}
+    columns = cutover.RUN_COLUMNS.split(",")
+    store.connection.execute(
+        f"INSERT INTO jsda_v3_cutover_run({cutover.RUN_COLUMNS}) "
+        f"VALUES ({','.join('?' for _ in columns)})",
+        [
+            value["run_id"], "staging", value["source_sha"],
+            value["prior_version_id"], value["prior_deployment_id"],
+            value["source_sha"], value["config_digest"],
+            value["rollback_bookmark"], value["lease_owner"],
+            value["lease_fence"], "deployed", cutover._digest(evidence),
+            None, json.dumps(evidence), cutover._utc(),
+        ],
+    )
+    monkeypatch.setattr(cutover, "_d1_batch", store.batch)
+    monkeypatch.setattr(cutover, "_d1_rows", store.rows)
+    cutover._activate_control(value, exact_live(), token="token", account="account")
+    cutover._advance(
+        value, "v3_active", "activated", token="token", account="account"
+    )
+    run = dict(store.connection.execute(
+        "SELECT phase, drain_evidence_digest FROM jsda_v3_cutover_run WHERE run_id=?",
+        [value["run_id"]],
+    ).fetchone())
+    control = dict(store.connection.execute(
+        "SELECT phase, activated_source_sha, drain_evidence_digest "
+        "FROM jsda_v3_cutover_control WHERE singleton=1"
+    ).fetchone())
+    assert run["phase"] == "activated"
+    assert control["phase"] == "v3_active"
+    assert cutover._DIGEST.fullmatch(str(run["drain_evidence_digest"] or ""))
+    assert run["drain_evidence_digest"] == control["drain_evidence_digest"]
     monkeypatch.setattr(cutover, "_observe", lambda *_a, **_k: exact_live())
     cutover._require_staging_admission(SHA, token="token", account="account")
 
 
-def test_rollback_stops_and_drains_before_persisted_undo_and_restore(
+def test_rollback_and_legacy_intent_refuse_before_mutation(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     value = receipt(monkeypatch, tmp_path)
+    store = SharedD1()
+    store.insert_after_bookmark()
+    store.restore()
+    assert store.payloads() == {"before-bookmark"}
+    assert store.restore_calls == 1
+    store.insert_after_bookmark()
     monkeypatch.setattr(cutover, "_credentials", lambda: ("token", "account"))
     monkeypatch.setattr(cutover, "_load_receipt", lambda *_a, **_k: value)
-    initial = state("production")
-    drained = deepcopy(initial)
-    drained["schedules"] = []
-    quiesced = deepcopy(drained)
-    quiesced["queue"]["paused"] = True
-    observations = iter([initial, drained, drained, quiesced])
+    monkeypatch.setattr(cutover, "_d1_batch", store.batch)
+    monkeypatch.setattr(cutover, "_d1_rows", store.rows)
     events: list[str] = []
 
-    def observe(*_args: object, **_kwargs: object) -> dict[str, Any]:
-        events.append("observe")
-        return deepcopy(next(observations))
+    def command(args: Any, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        argv = [str(item) for item in args]
+        if "time-travel" in argv and "restore" in argv:
+            store.restore()
+            events.append("restore")
+        events.append("wrangler")
+        return subprocess.CompletedProcess(argv, 0, "{}", "")
 
-    monkeypatch.setattr(cutover, "_observe", observe)
-    monkeypatch.setattr(cutover, "_set_schedules", lambda *_a, **_k: events.append("cron"))
-    monkeypatch.setattr(cutover, "_queue_action", lambda *_a, **_k: events.append("queue-pause"))
-    monkeypatch.setattr(cutover.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(cutover, "_command", command)
+    monkeypatch.setattr(cutover.cloudflare, "_command", command)
     monkeypatch.setattr(
-        cutover.migration, "time_travel_bookmark",
-        lambda *_a, **_k: events.append("bookmark") or {"bookmark": UNDO},
+        cutover, "_set_schedules", lambda *_a, **_k: events.append("cron")
     )
     monkeypatch.setattr(
-        cutover, "_evidence",
-        lambda _receipt, name, _doc: events.append(f"evidence:{name}"),
+        cutover, "_queue_action", lambda *_a, **_k: events.append("queue")
     )
     monkeypatch.setattr(
-        cutover, "_restore_bookmark", lambda *_a, **_k: events.append("restore") or UNDO
+        cutover.migration, "release_mutation_lease",
+        lambda **_k: events.append("release"),
     )
     monkeypatch.setattr(
-        cutover, "_selected",
-        lambda *_a, **_k: {
-            "version_id": value["prior_version_id"],
-            "deployment_id": value["prior_deployment_id"],
-            "version_tag": value["prior_version_tag"],
-        },
+        cutover.migration, "renew_mutation_lease",
+        lambda **_k: events.append("renew"),
     )
     monkeypatch.setattr(
-        cutover, "_queue", lambda *_a, **_k: {"paused": value["prior_queue_paused"]}
+        cutover.migration, "resume_owned_mutation_lease",
+        lambda **_k: events.append("reacquire"),
     )
     monkeypatch.setattr(
-        cutover.migration, "observe_mutation_lease_authority", lambda **_k: None
+        cutover, "_remove_control_intent", lambda *_a: events.append("remove")
     )
-    monkeypatch.setattr(cutover, "_remove_control_intent", lambda *_a: events.append("remove"))
-    result = cutover.rollback("staging", value["run_id"], yes=True)
-    assert result["status"] == "ROLLED_BACK"
-    assert events.index("bookmark") > events.index("queue-pause")
-    assert events.index("evidence:rollback-intent") < events.index("restore")
-    assert events.index("restore") < events.index("evidence:rollback-undo")
+    with pytest.raises(cutover.JsdaCutoverError, match="FORWARD_REPAIR_REQUIRED"):
+        cutover.rollback("staging", value["run_id"], yes=True)
+    assert events == []
+    assert store.restore_calls == 1
+    assert store.payloads() == {
+        "before-bookmark", "premium-after", "receipt-after",
+    }
+
+    cutover._evidence(value, "rollback-intent", {"target": BASELINE, "undo": UNDO})
+    with pytest.raises(cutover.JsdaCutoverError, match="FORWARD_REPAIR_REQUIRED"):
+        cutover.resume("staging", value["run_id"], yes=True)
+    with pytest.raises(cutover.JsdaCutoverError, match="FORWARD_REPAIR_REQUIRED"):
+        cutover.activate("staging", yes=True)
+    assert events == []
+    assert store.restore_calls == 1
+    intent = cutover._receipt_path("staging", value["run_id"]).with_name(
+        f"{cutover._receipt_path('staging', value['run_id']).stem}.rollback-intent.json"
+    )
+    assert intent.exists()
+    assert store.payloads() == {
+        "before-bookmark", "premium-after", "receipt-after",
+    }
 
 
-def test_rollback_resume_at_target_consumes_existing_intent_without_second_restore(
+def test_remote_restore_pending_blocks_new_activate_before_lease(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(cutover, "STATE_ROOT", tmp_path / "state")
+    monkeypatch.setattr(cutover, "_credentials", lambda: ("token", "account"))
+    pending = json.dumps({
+        "phase": "queue_paused",
+        "staging_drill": "restore_pending",
+        "baseline": BASELINE,
+        "undo": UNDO,
+    })
+
+    def rows(_environment: str, sql: str, **_kwargs: object) -> list[dict[str, Any]]:
+        if "sqlite_master" in sql:
+            return [{"name": "jsda_v3_cutover_run"}]
+        return [{"run_id": "sha256:" + "a" * 64, "document_json": pending}]
+
+    monkeypatch.setattr(cutover, "_d1_rows", rows)
+    events: list[str] = []
+    monkeypatch.setattr(
+        cutover, "_set_schedules", lambda *_a, **_k: events.append("cron")
+    )
+    monkeypatch.setattr(
+        cutover.migration, "acquire_authorized_mutation_lease",
+        lambda **_k: events.append("acquire"),
+    )
+    monkeypatch.setattr(cutover, "_observe", lambda *_a, **_k: state())
+    with pytest.raises(cutover.JsdaCutoverError, match="FORWARD_REPAIR_REQUIRED"):
+        cutover.activate("staging", yes=True)
+    assert events == []
+
+
+def test_check_remains_available_with_unresolved_intent(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     value = receipt(monkeypatch, tmp_path)
-    cutover._evidence(
-        value, "rollback-intent", {"target": BASELINE, "undo": UNDO}
-    )
+    cutover._evidence(value, "rollback-intent", {"target": BASELINE, "undo": UNDO})
     monkeypatch.setattr(cutover, "_credentials", lambda: ("token", "account"))
-    monkeypatch.setattr(cutover, "_load_receipt", lambda *_a, **_k: value)
-    quiesced = state()
-    quiesced["queue"]["paused"] = True
-    monkeypatch.setattr(cutover, "_observe", lambda *_a, **_k: deepcopy(quiesced))
+    live = exact_live()
+    monkeypatch.setattr(cutover, "_observe", lambda *_a, **_k: deepcopy(live))
     monkeypatch.setattr(cutover.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(
-        cutover.migration, "time_travel_bookmark",
-        lambda *_a, **_k: {"bookmark": BASELINE},
-    )
-    restores = {"count": 0}
-    monkeypatch.setattr(
-        cutover, "_restore_bookmark",
-        lambda *_a, **_k: restores.__setitem__("count", restores["count"] + 1),
-    )
-    monkeypatch.setattr(
-        cutover, "_selected",
-        lambda *_a, **_k: {
-            "version_id": value["prior_version_id"],
-            "deployment_id": value["prior_deployment_id"],
-            "version_tag": value["prior_version_tag"],
-        },
-    )
-    monkeypatch.setattr(
-        cutover, "_queue", lambda *_a, **_k: {"paused": value["prior_queue_paused"]}
-    )
-    monkeypatch.setattr(cutover, "_set_schedules", lambda *_a, **_k: None)
-    monkeypatch.setattr(
-        cutover.migration, "observe_mutation_lease_authority", lambda **_k: None
-    )
-    result = cutover.rollback("staging", value["run_id"], yes=True)
-    assert result["status"] == "ROLLED_BACK"
-    assert restores["count"] == 0
+    result = cutover.check("staging")
+    assert result["status"] == "CHECKED"
+    assert result["state"]["cutover_phase"] == "v3_active"
 
 
 def test_normal_deploy_commands_cannot_bypass_operator() -> None:

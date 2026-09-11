@@ -1,24 +1,24 @@
 {
   "schema": "quant-platform-work-ledger/v1",
   "baseline_sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
-  "branch": "feat/canonical-deploy-entrypoint",
-  "updated_at": "2026-09-11T07:53:00Z",
+  "branch": "fix/shared-d1-forward-repair",
+  "updated_at": "2026-09-11T08:21:00Z",
   "lanes": {
     "source_delivered": {
       "status": "partial_main_and_candidate",
-      "scope": "pr103_through_pr110_merged_canonical_deploy_candidate",
-      "notes": "PR103 through110 are merged. PR110 delivers the private receipt-bound complete-master owner, not its activation. Exact source and merged-main native required checks succeeded; a separate new clone verified identical clean main, unpushed0 and42 representative tests. The canonical deployment-entrypoint unit is now a separate unmerged source candidate. Bar/financial scopes and candidate/READY/runtime/Trader integration remain pending. Source integration is not rollout, data activation, READY or Pilot.",
-      "latest_main_sha": "d8945e6a4f937aaf4653449be60ffe9a8225c473",
-      "latest_main_check_completed_at": "2026-09-11T07:20:35Z",
-      "latest_main_evidence": "https://github.com/ddnne/quant-platform/pull/110#issuecomment-5630853127",
-      "pull_request": "https://github.com/ddnne/quant-platform/pull/110",
-      "implementation_sha": "a80be6e1cb4ca13aeba1b14c573ad5c36aeca347",
-      "merged_sha": "d8945e6a4f937aaf4653449be60ffe9a8225c473",
-      "required_check_source_sha": "a80be6e1cb4ca13aeba1b14c573ad5c36aeca347",
+      "scope": "pr103_through_pr111_merged_shared_d1_candidate",
+      "notes": "PR103 through111 are merged, exact-source and main native checks succeeded, and new clones verified clean/equal/unpushed0. Shared-D1 forward repair is the next unmerged candidate. Bar/financial scopes and candidate/READY/runtime/Trader integration remain pending. Source delivery is not rollout, data activation, READY or Pilot.",
+      "latest_main_sha": "d7bbc9e7c017840384f71317283541fb75cf1a1b",
+      "latest_main_check_completed_at": "2026-09-11T08:18:53Z",
+      "latest_main_evidence": "https://github.com/ddnne/quant-platform/pull/111#issuecomment-5631549067",
+      "pull_request": "https://github.com/ddnne/quant-platform/pull/111",
+      "implementation_sha": "53827f764e5dcbadc837a7107e0bff65703ff67c",
+      "merged_sha": "d7bbc9e7c017840384f71317283541fb75cf1a1b",
+      "required_check_source_sha": "53827f764e5dcbadc837a7107e0bff65703ff67c",
       "required_check_app_id": 85455,
-      "required_check_build_id": "b19bf2e1-380e-4e28-895d-86a653fa4b15",
-      "merged_main_check_id": 103182029438,
-      "merged_main_build_id": "e79cb167-3f93-4787-abc7-0c2756db5b40"
+      "required_check_build_id": "d8803c3c-98e1-4c5f-8b4a-8b6971c61752",
+      "merged_main_check_id": 103196598420,
+      "merged_main_build_id": "6a80cfb2-3de2-4ecf-aba5-b7dbdc3364d3"
     },
     "staging_deployed": {
       "status": "not_this_branch",
@@ -105,7 +105,7 @@
     },
     "4_receipt_to_ready_trader": { "status": "pending" },
     "5_ci_deploy_entrypoints": {
-      "status": "runtime_wiring_merged_pr104_other_subitems_pending",
+      "status": "runtime_pr104_and_entrypoint_pr111_merged_test_tiers_pending",
       "implementation_commits": ["dbddc615", "52a7faba"],
       "merge_sha": "d6f05d72fdc5fbbd5bfe47338b01dffd4b89b6c4",
       "required_check_source_sha": "48edcd1fa36c142696b26feaafe48adb18f8471e",
@@ -168,21 +168,38 @@
         "residual": "Existing process tests still emit fork warnings; full test tier/default network isolation work remains open. This repair is not a READY or Pilot permission."
       },
       "canonical_deployment_entrypoint": {
-        "status": "source_reviewed_native_ci_and_merge_pending",
+        "status": "merged_pr111_source_and_main_native_success",
+        "source_sha": "53827f764e5dcbadc837a7107e0bff65703ff67c",
+        "merge_sha": "d7bbc9e7c017840384f71317283541fb75cf1a1b",
+        "accepted_evidence": "https://github.com/ddnne/quant-platform/pull/111#issuecomment-5631549067",
+        "native_acceptance": "Source check103193214451 and main check103196598420/app85455 SUCCESS. Main3677 Python passed/4 skipped/26 warnings; all eight Worker lanes and generated-clean, deploy command true. Fresh clone205 tests/14.52s and drift checks,25MB, clean/equal/unpushed0. Separate Mass deployment stopped at explicit HOLD. Completed source branch/worktree removed; source retained on main.",
         "scope": "Canonical Worker/environment derives tracked config/cwd, one approved project account and exact installed Wrangler package. Dedicated staging has no extra env selector. Existing Ops gate is mandatory on direct invocation; JSDA remains specialized, Secrets/Receipt PENDING, local Mass Container build/deploy rejected. Actual pinned dry-run upload multipart inventory is compared with all modules from the exact selected immutable version, bracketed by deployment and version rereads and original clean merged SHA. No tag-only/dashboard/latest fallback or new authority.",
         "review_fixes": "Grok fixed multipart ambiguity, incomplete non-main-module evidence, explicit evidence schema revisions, authenticated account/config/CI-name conflicts, exact original SHA comparison, version rereads, shared pin validation, actual cwd/credential isolation assertions and the Ops shipped v11 schema marker. Removed obsolete dashboard main-file helpers. Prior public origin/clean-main, specialized admission and production HOLD semantics remain.",
         "verification": "Grok205 synthetic tests passed14.24s, binding/governed drift and diffcheck passed through normal permissions after a transient classifier timeout. After fast-forwarding the unchanged source diff onto main d8945e6a, Codex independently reran all205 cases:205 passed14.51s. Independent final delta review found no residual source blocker, directly checked shared-pin rejection and made wrong-cwd/secret-contamination mutations fail the real isolation assertions. Reviewed source diff remained efb07aa5. No actual auth, dry-run/deploy, migration, Queue operation, market data or Worker runtime acceptance is claimed here; all Worker lanes remain required in exact final-SHA native CI.",
         "source_diff_sha256": "efb07aa5bdf5a662fe4e8088c3e5a267ff16459e1306ce763dac7c6a33bb34a6",
         "residual": "This code is not deployed. Container image rollout, source-to-CI production release linkage, test tiers/default external-network denial, data activation and research gates remain pending."
       },
-      "remaining": "Finish this canonical entrypoint source acceptance, then pure Python/Worker/runtime/live test tiers and default external-network denial. Existing npm advisories and remaining real-time tests were not silently suppressed."
+      "remaining": "Pure Python/Worker/runtime/live test tiers, default external-network denial, Container image rollout and authoritative CI-to-production linkage remain pending. Existing npm advisories and remaining real-time tests were not silently suppressed."
     },
-    "6_shared_d1_receipt_reproof": { "status": "pending" },
+    "6_shared_d1_receipt_reproof": {
+      "status": "shared_d1_reviewed_source_candidate_receipt_checkpoint_pending",
+      "source_diff_sha256": "b9a11a4a1c3d78958cc3e688a4bc031ca93d4b63bcb263a32dadb6efb6726ef2",
+      "scope": "Removed whole shared-D1 restore/drill/recovery and old Worker rollback. Rollback refuses FORWARD_REPAIR_REQUIRED before mutation. Local and remote legacy intents block new activate/resume/continue before lease mutation. Normal forward activation/race/lease guards remain; final transition preserves actual drain digest. Production DLQ consumer declarations removed, main dead-letter route and staging/test fixtures retained. Runtime compiled pin and historical receipts unchanged; new receipts explicitly version forward-only recovery. No writer-fencing framework or new D1 migration.",
+      "verification": "Grok109 tests after PR111 manifest integration; Codex233 tests across12 source/Receipt/deploy modules passed15.27s. Both manifest/governed/controlled drift checks passed. Independent review found a disconnected synthetic DB test; Grok connected the same DB to D1 and both command boundaries with a test-only destructive restore probe, removed dead helper-name assertions, and final re-review accepted the repair. No auth/live Wrangler/deploy/migration/queue/DLQ operation.",
+      "test_replacements": "Four unsafe restore/undo sequencing cases removed. Retained actual forward/race tests and pre-mutation refusals; shared writer state is now connected to the tested boundaries. Hand-built staging PASS replaced by actual SQL-produced run/control/drain evidence passed into admission. Synthetic state is not live-cutover proof.",
+      "residual": "Final-source native CI/merge and rollout remain pending. Refusing unsafe rollback does not automatically repair a concrete incident. Receipt global event-chain checkpoint/O(N²) remains unimplemented. Production HOLD remains."
+    },
     "7_dead_code_and_docs": { "status": "pending" },
     "8_rollout_and_research_go": { "status": "pending" },
-    "9_push_remote_and_fresh_clone_verify": { "status": "pr103_through_pr110_merged_and_fresh_clone_verified_final_project_verification_pending" }
+    "9_push_remote_and_fresh_clone_verify": { "status": "pr103_through_pr111_merged_and_fresh_clone_verified_final_project_verification_pending" }
   },
   "operational_facts": [
+    {
+      "id": "pr111_merged_main_native_and_fresh_clone_20260911",
+      "observed_at": "2026-09-11T08:21:00Z",
+      "fact": "PR111 source53827f76 and merged main d7bbc9e7 native app85455 checks succeeded; identical tree8f4d1c903a1a6e3a7d9acb897fab8a6df41ff955. New clone205 tests and drift checks passed, clean/equal/unpushed0. Completed branch/worktree removed. Main check103196598420/build6a80cfb2 succeeded08:18:53Z:3677 passed/4 skipped/all eight Worker lanes/generated-clean. Separate Mass build24ae7a26 stopped at explicit HOLD after build success. Live metadata around08:10Z remains STALE, generated2026-08-21T12:30:49.152421+00:00, refresh attempt/success false, READYnull; B0/cursor not remeasured in that read. Shared-D1 branch is separate and not yet merged/deployed. No data activation, READY, Pilot or DLQ operation.",
+      "evidence": "https://github.com/ddnne/quant-platform/pull/111#issuecomment-5631549067"
+    },
     {
       "id": "pr110_merged_main_native_and_fresh_clone_20260911",
       "observed_at": "2026-09-11T07:53:00Z",

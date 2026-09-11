@@ -54,7 +54,7 @@ APPLICATION_POLICIES: Mapping[str, Mapping[str, Any]] = {
         "remote_mutation_authority": "OWNER_COMMAND_ONLY",
         "direct_wrangler_apply": "FORBIDDEN",
         "environment_order": ["staging", "production"],
-        "rollback_authority": "CLOUDFLARE_D1_TIME_TRAVEL",
+        "rollback_authority": "FORWARD_REPAIR_REQUIRED",
         "local_whole_file_export_in_cutover": "FORBIDDEN",
         "recovery_cache": {
             "role": "SMALL_CREATE_ONLY_CONTROL_INTENT",
@@ -75,10 +75,11 @@ APPLICATION_POLICIES: Mapping[str, Mapping[str, Any]] = {
             "canonical-live-database-identity",
             "production-backend-time-travel",
             "pre-migration-bookmark-after-writer-and-queue-quiescence",
-            "bookmark-and-undo-persisted-before-migration",
+            "bookmark-is-recovery-reference-not-restore-authority",
             "same-d1-cas-mutation-lease",
             "exact-remote-schema-and-migration-inventory",
             "staging-activation-before-production",
+            "no-shared-d1-time-travel-restore",
         ],
     },
     "quant-ops-projection": {

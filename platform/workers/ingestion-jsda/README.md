@@ -65,10 +65,12 @@ npm run deploy:unsafe-dev
 
 Apply the full pending `quant-ingest` chain through `0023` only through
 `scripts/activate_jsda_v3_cutover.py`. Do not hand-loop SQL or apply a prefix.
-The operator stops writers, drains and pauses the Queue, persists a Time Travel
-bookmark/undo record, migrates under the D1 CAS lease, verifies, and restores
-the exact prior Cron/Queue state. Product Cron/Queue stay fail-closed until
-`v3_active`.
+The operator stops JSDA Cron, drains and pauses the JSDA main Queue, records a
+Time Travel bookmark as recovery-reference evidence, migrates under the D1 CAS
+lease, verifies, and restores the exact prior JSDA Cron/Queue state. It does
+not stop Premium or Receipt writers and does not restore the shared D1.
+`--rollback` refuses with `FORWARD_REPAIR_REQUIRED`. Product Cron/Queue stay
+fail-closed until `v3_active`.
 `npm run deploy` and `npm run deploy:staging` route through
 `scripts/activate_jsda_v3_cutover.py`; direct Wrangler deployment is named
 `deploy:unsafe-dev` and is not a staging/production release path. The operator observes Cloudflare
@@ -77,14 +79,12 @@ state directly. Caller JSON is not authority.
 `drain_evidence_digest` after a real D1 activation. Those facts plus the
 compiled config pin are not cryptographic proof.
 
-Production uses `quant-jsda-ingestion`, `quant-jsda-ingestion-dlq`, and the
-unconsumed terminal quarantine queue `quant-jsda-ingestion-rejects`.
-Staging uses the distinct `quant-jsda-ingestion-staging` and
+Production uses `quant-jsda-ingestion`, keeps `quant-jsda-ingestion-dlq` as the
+main Queue dead-letter route, and keeps the unconsumed terminal quarantine
+queue `quant-jsda-ingestion-rejects`. Production JSDA does not declare a DLQ
+consumer; DLQ content is preserved and is not pulled, acked, or purged by this
+operator. Staging uses the distinct `quant-jsda-ingestion-staging` and
 `quant-jsda-ingestion-dlq-staging` queues plus
 `quant-jsda-ingestion-rejects-staging`, as defined in
-`wrangler.staging.toml`.
-The same Worker consumes `quant-jsda-ingestion-dlq` (staging:
-`quant-jsda-ingestion-dlq-staging`) as a terminal convergence path. D1
-failures retry on the DLQ consumer; after that consumer's retry limit, the
-message moves to the terminal quarantine queue instead of being deleted.
-Messages are never re-enqueued onto the original queue.
+`wrangler.staging.toml`. Staging and the test harness still consume their
+isolated DLQ fixtures. Messages are never re-enqueued onto the original queue.
