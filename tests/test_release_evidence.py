@@ -9,6 +9,8 @@ import pytest
 
 from scripts import finding_ledger_gate
 
+from tests.finding_ledger_test_support import controlled_ledger_document
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "scripts" / "build_release_evidence.py"
@@ -27,9 +29,7 @@ def _closed_test_ledger() -> finding_ledger_gate.FindingLedgerSnapshot:
             encoding="utf-8"
         )
     )
-    for finding in document["findings"]:
-        if finding["severity"] == "P0":
-            finding["status"] = "FIXED"
+    document = controlled_ledger_document(document)
     raw = (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode(
         "utf-8"
     )

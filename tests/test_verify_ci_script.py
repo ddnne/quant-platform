@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.finding_ledger_test_support import controlled_ledger_document
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "verify_ci.sh"
@@ -66,19 +67,9 @@ def _write_test_owned_ledger(fixture_root: Path, *, open_d1: bool) -> None:
     document = json.loads(
         (ROOT / "docs" / "phase633_finding_ledger.json").read_text(encoding="utf-8")
     )
-    document["merge_policy"]["independent_review_unresolved_p0"] = 0
-    for finding in document["findings"]:
-        if finding["severity"] != "P0":
-            continue
-        finding["status"] = "FIXED"
-        finding["evidence"] = "test-owned-closed-evidence"
-    if open_d1:
-        for finding in document["findings"]:
-            if finding["id"] != "D1":
-                continue
-            finding["status"] = "OPEN"
-            finding["closure"] = "test-owned-open-closure"
-            break
+    document = controlled_ledger_document(
+        document, open_p0_ids=("D1",) if open_d1 else ()
+    )
     path = fixture_root / "docs" / "phase633_finding_ledger.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(

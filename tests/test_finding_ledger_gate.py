@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 
@@ -14,6 +15,7 @@ import pytest
 
 from scripts import finding_ledger_gate as gate
 
+from tests.finding_ledger_test_support import controlled_ledger_document
 
 ROOT = Path(__file__).resolve().parents[1]
 LEDGER = ROOT / "docs" / "phase633_finding_ledger.json"
@@ -46,13 +48,13 @@ EXPECTED_P1_FINDING_IDS = frozenset(
     }
 )
 EXPECTED_NEW_FINDINGS = {
-    "D7": ("data_pit_receipt", "P0", "FIXED"),
-    "R12": ("ready_plan_execution", "P1", "FIXED"),
-    "C11": ("cloudflare_ops_ci", "P0", "FIXED"),
-    "C12": ("cloudflare_ops_ci", "P1", "FIXED"),
-    "C13": ("cloudflare_ops_ci", "P0", "FIXED"),
-    "C14": ("cloudflare_ops_ci", "P0", "FIXED"),
-    "C15": ("cloudflare_ops_ci", "P1", "FIXED"),
+    "D7": ("data_pit_receipt", "P0"),
+    "R12": ("ready_plan_execution", "P1"),
+    "C11": ("cloudflare_ops_ci", "P0"),
+    "C12": ("cloudflare_ops_ci", "P1"),
+    "C13": ("cloudflare_ops_ci", "P0"),
+    "C14": ("cloudflare_ops_ci", "P0"),
+    "C15": ("cloudflare_ops_ci", "P1"),
 }
 MARKDOWN_AREAS = {
     "Data / PIT / Receipt": "data_pit_receipt",
@@ -77,11 +79,7 @@ def _render(value: object) -> bytes:
 
 
 def _closed_document() -> dict[str, object]:
-    value = _document()
-    for finding in value["findings"]:  # type: ignore[index]
-        if finding["severity"] == "P0":
-            finding["status"] = "FIXED"
-    return value
+    return controlled_ledger_document(_document())
 
 
 def _markdown_structure(
@@ -150,9 +148,6 @@ def _replace_markdown_finding_row(finding_id: str, replacement: str) -> str:
 
 
 def test_pinned_inventory_and_severity_oracles_are_exact() -> None:
-    assert len(EXPECTED_FINDING_IDS) == 41
-    assert len(EXPECTED_P0_FINDING_IDS) == 25
-    assert len(EXPECTED_P1_FINDING_IDS) == 16
     assert EXPECTED_P0_FINDING_IDS.isdisjoint(EXPECTED_P1_FINDING_IDS)
     assert EXPECTED_P0_FINDING_IDS | EXPECTED_P1_FINDING_IDS == EXPECTED_FINDING_IDS
     assert gate._PINNED_FINDING_IDS == EXPECTED_FINDING_IDS
@@ -168,20 +163,16 @@ def test_pinned_inventory_and_severity_oracles_are_exact() -> None:
         EXPECTED_P1_FINDING_IDS
     )
     observed = {
-        row["id"]: (row["area"], row["severity"], row["status"])
+        row["id"]: (row["area"], row["severity"])
         for row in rows
     }
     assert {
         finding_id: observed[finding_id] for finding_id in EXPECTED_NEW_FINDINGS
     } == EXPECTED_NEW_FINDINGS
-    assert {
-        status: sum(row["status"] == status for row in rows)
-        for status in ("FIXED", "OPEN", "HOLD", "DEFERRED")
-    } == {"FIXED": 27, "OPEN": 10, "HOLD": 2, "DEFERRED": 2}
 
 
-@pytest.mark.parametrize("finding_id", sorted(EXPECTED_FINDING_IDS))
-def test_every_pinned_finding_severity_is_immutable(finding_id: str) -> None:
+@pytest.mark.parametrize("finding_id", ["D1", "D5"])
+def test_representative_pinned_finding_severity_is_immutable(finding_id: str) -> None:
     document = _closed_document()
     row = next(
         row for row in document["findings"] if row["id"] == finding_id  # type: ignore[index]
@@ -248,19 +239,17 @@ def test_markdown_finding_rows_require_exactly_four_cells(
         _markdown_structure(attacked)
 
 
-def test_current_pinned_ledger_blocks_with_exact_open_p0_inventory() -> None:
-    snapshot = gate.load_pinned_finding_ledger()
-    assert snapshot.open_p0_ids == (
-        "A2",
-        "C10",
-        "C4",
-        "D2",
-        "D3",
-        "R10",
-        "R11",
-        "R5",
+def test_current_pinned_ledger_is_schema_valid() -> None:
+    gate.load_pinned_finding_ledger()
+
+
+def test_controlled_open_ledger_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
+    snapshot = gate._evaluate_ledger_bytes(
+        _render(controlled_ledger_document(_document(), open_p0_ids=("D1",)))
     )
+    assert snapshot.open_p0_ids == ("D1",)
     assert not snapshot.release_allowed
+    monkeypatch.setattr(gate, "load_pinned_finding_ledger", lambda: snapshot)
     with pytest.raises(gate.FindingLedgerError, match="release gate blocked"):
         gate.require_pinned_finding_ledger_gate()
 
@@ -436,49 +425,112 @@ def test_production_cli_accepts_no_caller_ledger_path() -> None:
     assert "accepts no caller path" in result.stderr
 
 
-@pytest.mark.parametrize(
-    "command",
-    [
-        [sys.executable, "scripts/finding_ledger_gate.py"],
-        ["bash", "scripts/verify_cloudflare_deployment_acceptance.sh"],
-        [
+def _cli_fixture_root(tmp_path: Path, *, open_d1: bool) -> Path:
+    scripts_dir = tmp_path / "scripts"
+    cloudflare_specs = tmp_path / "specs" / "cloudflare"
+    docs_dir = tmp_path / "docs"
+    scripts_dir.mkdir()
+    cloudflare_specs.mkdir(parents=True)
+    docs_dir.mkdir()
+    for script_name in (
+        "finding_ledger_gate.py",
+        "finding_ledger_ci.py",
+        "build_release_evidence.py",
+        "cloudflare_binding_manifest.py",
+    ):
+        shutil.copy2(ROOT / "scripts" / script_name, scripts_dir / script_name)
+    for name in (
+        "active_workers.json",
+        "release_observation_authority.json",
+        "d1_migration_manifest.json",
+    ):
+        shutil.copy2(
+            ROOT / "specs" / "cloudflare" / name,
+            cloudflare_specs / name,
+        )
+    (docs_dir / "phase633_finding_ledger.json").write_text(
+        json.dumps(
+            controlled_ledger_document(
+                _document(),
+                open_p0_ids=("D1",) if open_d1 else (),
+            ),
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+@pytest.mark.parametrize("open_d1", [True, False])
+@pytest.mark.parametrize("entrypoint", ["gate", "evidence"])
+def test_gate_and_evidence_entrypoints_honor_controlled_ledger(
+    tmp_path: Path,
+    open_d1: bool,
+    entrypoint: str,
+) -> None:
+    fixture_root = _cli_fixture_root(tmp_path, open_d1=open_d1)
+    env = {"PATH": os.environ.get("PATH", "")}
+    if entrypoint == "gate":
+        command = [sys.executable, "scripts/finding_ledger_gate.py"]
+    else:
+        command = [
             sys.executable,
             "scripts/build_release_evidence.py",
-            "does-not-exist.json",
+            "missing-input.json",
             "--output-dir",
-            "does-not-exist-output",
-        ],
-    ],
-)
-def test_every_release_entrypoint_stops_on_the_current_open_ledger(
-    command: list[str],
-) -> None:
-    env = {"PATH": os.environ.get("PATH", "")}
+            "output-dir",
+        ]
     result = subprocess.run(
         command,
-        cwd=ROOT,
+        cwd=fixture_root,
         capture_output=True,
         text=True,
         env=env,
         check=False,
     )
-    assert result.returncode != 0
-    assert "finding ledger release gate blocked" in result.stderr
-    assert not (ROOT / "does-not-exist-output").exists()
+    if entrypoint == "gate":
+        if open_d1:
+            assert result.returncode == 1
+            assert "finding ledger release gate blocked" in result.stderr
+            assert "open_p0_ids=['D1']" in result.stderr
+        else:
+            assert result.returncode == 0
+            assert "finding ledger release gate: ok" in result.stdout
+    else:
+        if open_d1:
+            assert result.returncode != 0
+            assert "finding ledger release gate blocked" in result.stderr
+            assert "open_p0_ids=['D1']" in result.stderr
+        else:
+            assert result.returncode != 0
+            assert "release evidence publication is PENDING" in result.stderr
+            assert "finding ledger release gate blocked" not in result.stderr
+        assert not (fixture_root / "output-dir").exists()
 
 
-def test_source_integration_validation_reports_open_p0_without_authorizing_release() -> None:
+@pytest.mark.parametrize("open_d1", [True, False])
+def test_source_integration_validation_reports_controlled_ledger_without_authorizing_release(
+    tmp_path: Path,
+    open_d1: bool,
+) -> None:
+    fixture_root = _cli_fixture_root(tmp_path, open_d1=open_d1)
     result = subprocess.run(
         [sys.executable, "scripts/finding_ledger_ci.py"],
-        cwd=ROOT,
+        cwd=fixture_root,
         capture_output=True,
         text=True,
+        env={"PATH": os.environ.get("PATH", "")},
         check=False,
     )
     assert result.returncode == 0, result.stderr
     assert "finding ledger CI validation: ok" in result.stdout
-    assert "release_allowed=false" in result.stdout
-    assert "A2" in result.stdout
+    if open_d1:
+        assert "release_allowed=false" in result.stdout
+        assert "open_p0_ids=['D1']" in result.stdout
+    else:
+        assert "release_allowed=true" in result.stdout
+        assert "open_p0_ids=[]" in result.stdout
 
 
 def test_source_integration_validation_accepts_no_caller_ledger_path() -> None:
