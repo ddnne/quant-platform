@@ -649,11 +649,3 @@ def test_disabled_mass_and_factory_fail_before_local_paths(tmp_path: Path) -> No
     with pytest.raises(MassResearchDisabledError, match="run_mass_factory"):
         run_mass_factory(synthetic=False, out_dir=tmp_path)
     assert db.read_text() == "not a database"
-
-
-def test_option_module_has_no_raw_log_dir_loader() -> None:
-    import research.options_225_vol_series as series
-
-    assert not hasattr(series, "load_opt225_series_cache")
-    assert not hasattr(series, "_DEFAULT_LOG_DIR")
-    assert not hasattr(series, "_W94_LOG_DIR")

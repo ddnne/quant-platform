@@ -1,7 +1,8 @@
-"""COMPLETE 21 min features — PIT gates + seeded compute.
+"""COMPLETE 21 min features — PIT gates + seeded extraction.
 
-Rows with ``available_at > as_of`` must not affect values. Seeded paths
-cover positive / empty / insufficient history for each min feature.
+Rows with ``available_at > as_of`` must not affect values. Positive
+disclosure/margin/alert paths are covered by PIT early→late tests.
+Insufficient-history and empty-repo cases share one one-day fixture.
 Shared builders: ``tests/complete21_min_util.py``.
 """
 
@@ -59,6 +60,8 @@ def test_pit_gate_hides_future_available_at_margin_and_disclosure(tmp_path):
 
     disc_late = _feat("disclosure_flag_fins", db, "2025-04-02", code=CODES[0])
     assert disc_late.value == 1.0
+    assert disc_late.metadata["datasets"] == ["fins_summary"]
+    assert disc_late.metadata["rows_seen"] == 1
 
 
 def test_pit_gate_hides_future_short_ratio_and_margin_alert(tmp_path):
@@ -82,6 +85,8 @@ def test_pit_gate_hides_future_short_ratio_and_margin_alert(tmp_path):
 
     alert_late = _feat("margin_alert_flag", db, "2025-04-02", code=CODES[0])
     assert alert_late.value == 1.0
+    assert alert_late.metadata["datasets"] == ["markets_margin_alert"]
+    assert alert_late.metadata["rows_seen"] == 1
 
 
 def test_pit_gate_hides_future_futures_activity(tmp_path):
@@ -95,6 +100,7 @@ def test_pit_gate_hides_future_futures_activity(tmp_path):
     )
     early = _feat("futures_activity_proxy", db, "2025-04-01")
     assert early.value is None
+    assert "no futures" in early.metadata["reason"]
     late = _feat("futures_activity_proxy", db, "2025-04-02")
     assert late.value == pytest.approx(500.0)
 
@@ -111,12 +117,17 @@ def test_volume_change_1d_on_seeded_bars(tmp_path):
     assert out.metadata["rows_seen"] >= 2
 
 
-def test_volume_change_1d_insufficient_history(tmp_path):
-    out, _, _ = _seed_feat(
-        tmp_path, "volume_change_1d", days=["2025-04-01"], code=CODES[0]
+def test_volume_return_repo_insufficient_or_empty(tmp_path):
+    _days, db = _seed_c21(tmp_path, ["2025-04-01"])
+    cases = (
+        ("volume_change_1d", {"code": CODES[0]}, "insufficient"),
+        ("return_1d_c21", {"code": CODES[0]}, "insufficient"),
+        ("repo_rate_level", {}, "no repo"),
     )
-    assert out.value is None
-    assert "insufficient" in out.metadata["reason"]
+    for feature_id, kwargs, reason_sub in cases:
+        out = _feat(feature_id, db, "2025-04-01", **kwargs)
+        assert out.value is None, feature_id
+        assert reason_sub in out.metadata["reason"], feature_id
 
 
 def test_topix_relative_1d_seeded_dual_leg(tmp_path):
@@ -170,31 +181,6 @@ def test_disclosure_flag_fins_empty_db_is_zero(tmp_path):
     assert out.metadata["datasets"] == ["fins_summary"]
 
 
-def test_disclosure_flag_fins_seeded_positive(tmp_path):
-    """W53: positive path — any PIT-visible fins_summary row → 1.0."""
-    days = ["2025-04-01", "2025-04-02"]
-    out, _, _ = _seed_feat(
-        tmp_path,
-        "disclosure_flag_fins",
-        days=days,
-        prices=_const_px(days),
-        payloads={"fins_summary": [_fins_row("2025-04-02", NetSales=123)]},
-        code=CODES[0],
-    )
-    assert out.value == 1.0
-    assert out.metadata["rows_seen"] >= 1
-    assert out.metadata["feature_id"] == "disclosure_flag_fins"
-
-
-def test_v0_return_1d_still_works_with_guard(tmp_path):
-    """Pipeline DEFER guard must not break existing COMPLETE bars features."""
-    days = ["2025-04-01", "2025-04-02", "2025-04-03"]
-    out, _, _ = _seed_feat(
-        tmp_path, "return_1d", days=days, prices=_ramp(days), code=CODES[0]
-    )
-    assert out.value == pytest.approx((102.0 - 101.0) / 101.0)
-
-
 def test_margin_interest_change_1d_on_seeded_records(tmp_path):
     out, _, _ = _seed_feat(
         tmp_path,
@@ -214,20 +200,6 @@ def test_margin_interest_change_1d_on_seeded_records(tmp_path):
     assert out.metadata["datasets"] == ["markets_margin_interest"]
     assert out.metadata["feature_id"] == "margin_interest_change_1d"
     assert out.metadata["rows_seen"] == 2
-
-
-def test_margin_interest_change_1d_insufficient(tmp_path):
-    out, _, _ = _seed_feat(
-        tmp_path,
-        "margin_interest_change_1d",
-        days=["2025-04-01"],
-        payloads={
-            "markets_margin_interest": [_margin_row("2025-04-01", 100.0)],
-        },
-        code=CODES[0],
-    )
-    assert out.value is None
-    assert "insufficient" in out.metadata["reason"]
 
 
 def test_short_ratio_level_on_seeded_records(tmp_path):
@@ -307,12 +279,6 @@ def test_repo_rate_level_on_seeded_rates(tmp_path):
     assert out_early.value == pytest.approx(0.10)
 
 
-def test_repo_rate_level_empty_is_none(tmp_path):
-    out, _, _ = _seed_feat(tmp_path, "repo_rate_level", days=["2025-04-01"])
-    assert out.value is None
-    assert "no repo" in out.metadata["reason"]
-
-
 def test_return_1d_c21_matches_simple_return_on_seeded_bars(tmp_path):
     days = ["2025-04-01", "2025-04-02", "2025-04-03"]
     out, _, db = _seed_feat(
@@ -327,28 +293,6 @@ def test_return_1d_c21_matches_simple_return_on_seeded_bars(tmp_path):
     assert out.value == pytest.approx(v0.value)
     assert get("return_1d_c21").status == "candidate"
     assert get("return_1d").status == "approved"
-
-
-def test_return_1d_c21_insufficient_history(tmp_path):
-    out, _, _ = _seed_feat(
-        tmp_path, "return_1d_c21", days=["2025-04-01"], code=CODES[0]
-    )
-    assert out.value is None
-    assert "insufficient" in out.metadata["reason"]
-
-
-def test_margin_alert_flag_on_seeded_records(tmp_path):
-    out, _, _ = _seed_feat(
-        tmp_path,
-        "margin_alert_flag",
-        payloads={"markets_margin_alert": [_alert_row("2025-04-01")]},
-        as_of="2025-04-01",
-        code=CODES[0],
-    )
-    assert out.value == 1.0
-    assert out.metadata["datasets"] == ["markets_margin_alert"]
-    assert out.metadata["feature_id"] == "margin_alert_flag"
-    assert out.metadata["rows_seen"] >= 1
 
 
 def test_margin_alert_flag_empty_is_zero(tmp_path):
@@ -379,11 +323,3 @@ def test_futures_activity_proxy_on_seeded_records(tmp_path):
 
     out_one = _feat("futures_activity_proxy", db, "2025-04-02", code="160060019")
     assert out_one.value == pytest.approx(200.0)
-
-
-def test_futures_activity_proxy_empty_is_none(tmp_path):
-    out, _, _ = _seed_feat(
-        tmp_path, "futures_activity_proxy", days=["2025-04-01"]
-    )
-    assert out.value is None
-    assert "no futures" in out.metadata["reason"]

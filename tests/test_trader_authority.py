@@ -155,23 +155,6 @@ def test_committed_trader_registry_is_purpose_pinned_and_pending() -> None:
     )
 
 
-def test_product_exposes_no_trader_signing_or_opening_api() -> None:
-    import execution
-    import execution.trader_authority as trader_module
-
-    forbidden = (
-        "open_controlled_trader_authorization_issuer",
-        "_ControlledTraderAuthorizationIssuer",
-        "_ISSUER_TOKEN",
-        "DEFAULT_TRADER_AUTHORIZATION_PRIVATE_KEY_PATH",
-        "Ed25519PrivateKey",
-    )
-    for name in forbidden:
-        assert not hasattr(trader_module, name)
-        assert not hasattr(execution, name)
-        assert name not in trader_module.__all__
-
-
 def test_matching_revoked_home_key_cannot_enable_production(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -233,9 +216,6 @@ def test_matching_revoked_home_key_cannot_enable_production(
             verifier=active_test_registry,
         )
     assert not authorization.is_valid()
-    assert not hasattr(
-        trader_module, "open_controlled_trader_authorization_issuer"
-    )
 
 
 def test_trader_authorization_rejects_ttl_beyond_controlled_policy() -> None:

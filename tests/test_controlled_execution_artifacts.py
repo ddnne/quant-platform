@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import inspect
 import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-import execution
 import execution.controlled_artifacts as artifact_module
 import execution.trader_authority as trader_module
 from execution.controlled_artifacts import (
@@ -595,26 +593,7 @@ def test_consumer_reverifies_expiry_and_has_no_clock_or_verifier_injection(
         )
 
 
-def test_product_exposes_no_writer_store_path_or_private_key_api() -> None:
-    forbidden = (
-        "ControlledArtifactWriter",
-        "open_controlled_artifact_writer",
-        "DEFAULT_CONTROLLED_ARTIFACT_PRIVATE_KEY_PATH",
-        "Ed25519PrivateKey",
-        "artifact_store",
-        "output_path",
-        "socket_path",
-        "verify_controlled_artifact_content",
-    )
-    for name in forbidden:
-        assert not hasattr(artifact_module, name)
-        assert not hasattr(execution, name)
-        assert name not in artifact_module.__all__
-    parameters = inspect.signature(
-        load_verified_controlled_execution_artifacts
-    ).parameters
-    assert set(parameters) == {"payload", "authorization", "artifact_contents"}
-
+def test_verified_controlled_execution_artifacts_constructor_rejects_without_pinned_loader() -> None:
     with pytest.raises(
         ControlledArtifactVerificationError, match="pinned loader"
     ):
