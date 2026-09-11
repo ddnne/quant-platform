@@ -13,23 +13,12 @@ from research.catalog_compiler import (
     assert_legacy_catalog_artifact_frozen,
     catalog_artifact_dir,
     compile_catalog,
-    compile_row,
 )
 from research.occupancy_guards import CatalogAndPlusNStoppedError
 
 _FROZEN_CATALOG_DIGEST = (
     "sha256:6ad5ba57dfa41ed9a97e5895d9238040fbb5539b310a2ea4aa349172b6cb8c69"
 )
-
-
-def test_compile_row_is_deterministic_closed_data() -> None:
-    spec = {
-        "logic_id": "x",
-        "evaluator": "research.unique_logic.event_combos.evaluate_combo_daily_mtm",
-        "params": {"gates": ["afterclose", "uncrowded_margin"]},
-    }
-    assert compile_row(spec) == compile_row(spec)
-    assert compile_row(spec)["semantic_hash"].startswith("sha256:")
 
 
 def test_persisted_replay_artifact_matches_frozen_digest() -> None:

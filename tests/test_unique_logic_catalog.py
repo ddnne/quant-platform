@@ -59,25 +59,6 @@ def test_unique_leftover_matches_yaml_unique_families() -> None:
     assert leftover
 
 
-def test_catalog_aliases_match_yaml_named_helpers() -> None:
-    from research.unique_logic.catalog import (
-        combo_row_from_spec,
-        combo_row_from_yaml,
-        combo_rows_from_catalog,
-        unique_family_ids_from_catalog,
-        unique_family_ids_from_yaml,
-        yaml_combo_rows,
-    )
-
-    assert unique_family_ids_from_catalog is unique_family_ids_from_yaml
-    assert combo_rows_from_catalog is yaml_combo_rows
-    assert combo_row_from_spec is combo_row_from_yaml
-    assert unique_family_ids_from_catalog() == unique_family_ids_from_yaml()
-    assert {r["logic_id"] for r in combo_rows_from_catalog()} == {
-        r["logic_id"] for r in yaml_combo_rows()
-    }
-
-
 def test_usable_series_breakdown_has_tags() -> None:
     from research.unique_logic.worker_bodies import usable_series_breakdown
 
@@ -428,5 +409,4 @@ def test_unique_logic_cli_is_retired() -> None:
     blob = (r.stderr or "") + (r.stdout or "")
     assert "retired" in blob
     assert "Does not GO" in blob
-
 

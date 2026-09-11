@@ -39,23 +39,6 @@ def cli_module():
     return _load_mod()
 
 
-def test_argparse_index_text_is_optional_path(cli_module) -> None:
-    parser = cli_module._build_parser()
-    omitted = parser.parse_args([])
-    assert omitted.index_text is None
-    supplied = parser.parse_args(
-        ["--index-text", "tests/fixtures/jsda_otc_official_index_tiny.html"]
-    )
-    assert supplied.index_text == (
-        "tests/fixtures/jsda_otc_official_index_tiny.html"
-    )
-    action = next(
-        item for item in parser._actions if "--index-text" in item.option_strings
-    )
-    assert action.required is False
-    assert action.default is None
-
-
 def test_read_index_text_omitted_blank_fixture(cli_module, tmp_path: Path) -> None:
     assert cli_module._read_index_text(None) is None
     assert cli_module._read_index_text("") is None

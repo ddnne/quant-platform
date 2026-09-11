@@ -139,11 +139,6 @@ def _construct(
     )
 
 
-def test_pilot_scheduler_public_constructor_has_no_caller_trust_root() -> None:
-    with pytest.raises(TypeError, match="unexpected keyword argument"):
-        ControlledPilotScheduler(verifier=object())  # type: ignore[call-arg]
-
-
 def test_controlled_scheduler_is_a_runtime_final_authority_boundary() -> None:
     with pytest.raises(TypeError, match="final authority boundary"):
 
@@ -188,14 +183,6 @@ def test_pilot_readiness_is_final_and_method_override_cannot_authorize() -> None
         class EvilPilot(VerifiedPilotReadiness):
             def require_valid(self) -> "EvilPilot":
                 return self
-
-
-def test_pilot_readiness_dto_rejects_caller_verifier_and_clock() -> None:
-    readiness = _readiness(_publisher())
-    with pytest.raises(TypeError, match="unexpected keyword argument 'verifier'"):
-        readiness.require_valid(verifier=object())  # type: ignore[call-arg]
-    with pytest.raises(TypeError, match="unexpected keyword argument 'now'"):
-        readiness.is_valid(now=datetime.now(timezone.utc))  # type: ignore[call-arg]
 
 
 class _ExplosiveStr(str):

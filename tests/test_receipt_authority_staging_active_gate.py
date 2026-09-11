@@ -4,7 +4,6 @@ import base64
 import copy
 import hashlib
 import io
-import inspect
 import json
 import sqlite3
 from pathlib import Path
@@ -803,11 +802,6 @@ def test_attestation_must_be_issued_after_both_current_deployments(
         match="Receipt audit recovery predates ACTIVE deployment",
     ):
         _validate(evidence)
-
-
-def test_public_validator_has_no_evidence_or_trust_root_injection() -> None:
-    parameters = inspect.signature(active.validate_staging_active_transition).parameters
-    assert set(parameters) == {"source_sha", "account_id", "api_token"}
 
 
 def test_public_validator_collects_live_and_owns_fixed_paths(

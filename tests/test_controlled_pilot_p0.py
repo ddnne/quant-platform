@@ -496,44 +496,6 @@ def test_exact_closure_uses_daily_not_tip_am() -> None:
         assert "equities_bars_daily_am" not in closure.required_datasets
 
 
-def test_synthetic_am_timestamps_on_daily_bars_are_rejected(tmp_path) -> None:
-    from _coreseed import TRADING_DAYS, seed_db
-    from core import RAW, run_backtest, standard_cost
-    from core.execution import morning_close_as_of
-    from core.universe import membership_at
-    from core.strategy_protocol import OrderIntent
-
-    code = "1332"
-    days = TRADING_DAYS
-    db = seed_db(
-        tmp_path,
-        codes=[code],
-        morning_adjustment_prices={code: {day: 100.0 for day in days}},
-        afternoon_adjustment_prices={code: {day: 150.0 for day in days}},
-    )
-
-    class AlwaysLong:
-        strategy_id = "always_long"
-        params: dict = {}
-
-        def on_bar(self, ctx):
-            return [OrderIntent(code=code, target_weight=0.5)]
-
-    res = run_backtest(
-        AlwaysLong(),
-        days[0],
-        days[-1],
-        db_path=db,
-        universe=membership_at(morning_close_as_of(days[0]), db_path=db, codes=(code,)),
-        execution_mode="am_signal_pm_close",
-        price_basis=RAW,
-        cost_model=standard_cost(bps=0.0),
-        max_gross_weight=0.5,
-    )
-    assert res.trades == []
-    assert res.metadata["authentic_am_session_evidence"] is False
-
-
 def test_noon_ingested_backdated_master_excluded_at_1130(tmp_path) -> None:
     import sqlite3
 

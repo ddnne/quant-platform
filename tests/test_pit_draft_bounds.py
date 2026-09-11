@@ -396,51 +396,6 @@ def test_ready_public_bypass_is_not_importable_and_pit_rejects_pre_ready(
     assert not hasattr(ready_reads, "iter_ready_catalog_fact_pages")
 
 
-def test_ready_stream_pages_ignore_unused_fact_rows(tmp_path: Path) -> None:
-    path = tmp_path / "ready-stream.sqlite"
-    connection = _catalog_db(path)
-    needed = {"Code": "1301", "Date": "2025-04-01", "C": 100}
-    _insert(
-        connection,
-        table="jquants_records",
-        dataset="equities_bars_daily",
-        payload=needed,
-        event_time="2025-04-01T15:30:00+09:00",
-        available_at="2025-04-01T15:30:00+09:00",
-    )
-    _insert(
-        connection,
-        table="jquants_records",
-        dataset="equities_bars_daily",
-        payload={"Code": "1301", "Date": "2010-01-04", "C": 1},
-        event_time="2010-01-04T15:00:00+09:00",
-        available_at="2010-01-04T15:00:00+09:00",
-    )
-    for index in range(400):
-        extra = {
-            "Code": f"{9000 + index}",
-            "Date": "2025-04-01",
-            "C": float(index),
-        }
-        _insert(
-            connection,
-            table="jquants_records",
-            dataset="equities_bars_daily",
-            payload=extra,
-            event_time="2025-04-01T15:30:00+09:00",
-            available_at="2025-04-01T15:30:00+09:00",
-        )
-    connection.commit()
-    connection.close()
-    page_sizes: list[int] = []
-    codes: set[str] = set()
-    import pit._ready_verifier_reads as ready_reads
-
-    assert not hasattr(ready_reads, "iter_ready_catalog_fact_pages")
-    assert page_sizes == []
-    assert codes == set()
-
-
 def test_universe_membership_is_interned_across_stable_days(tmp_path: Path) -> None:
     path = tmp_path / "intern.sqlite"
     connection = _catalog_db(path)

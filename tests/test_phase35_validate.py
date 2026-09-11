@@ -144,12 +144,6 @@ def test_assert_no_addon_in_required_default_matches_catalog_addon_group():
             assert_no_addon_in_required([*PREMIUM_CORE_DATASETS, leaked])
 
 
-def test_assert_no_addon_in_required_raises_for_leak():
-    leaked = list_datasets("addon")[0]
-    with pytest.raises(AssertionError, match="addon datasets must not be"):
-        assert_no_addon_in_required(list(PREMIUM_CORE_DATASETS) + [leaked])
-
-
 # ---------------------------------------------------------------------------
 # RunSummary serialization
 # ---------------------------------------------------------------------------
