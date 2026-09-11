@@ -21,6 +21,7 @@ from tests.research_eval_util import (
     _s1_two_day_map,
     _weekdays,
 )
+from research.complete21 import COMPLETE_21_DATASET_SET
 from research.r2_feature_context import (
     AVAILABLE_AT_REPAIR_POLICY,
     BRIDGE_EXPAND_DATASETS,
@@ -46,9 +47,10 @@ from research.r2_feature_context import (
 
 def test_t1_inventory_covers_complete_21_and_excludes_defer():
     doc = r2_inventory_document()
-    assert doc["complete_21_count"] == 21
-    assert len(doc["complete_21"]) == 21
-    assert doc["permanent_defer_count"] == 4
+    assert doc["local_sot"] is False
+    assert doc["complete_21_count"] == len(doc["complete_21"])
+    assert set(doc["complete_21"]) == COMPLETE_21_DATASET_SET
+    assert doc["permanent_defer_count"] == len(doc["permanent_defer_excluded"])
     assert set(doc["permanent_defer_excluded"]) == PERMANENT_DEFER_DATASETS
     for ds in S1_SIGNAL_HISTORY_DATASETS:
         inv = COMPLETE_21_R2_INVENTORY[ds]
@@ -61,8 +63,7 @@ def test_t1_inventory_covers_complete_21_and_excludes_defer():
 def test_t1_write_inventory_json(tmp_path: Path):
     out = write_r2_inventory_json(tmp_path / "t1_r2_inventory.json")
     loaded = json.loads(out.read_text(encoding="utf-8"))
-    assert loaded["complete_21_count"] == 21
-    assert loaded["local_sot"] is False
+    assert loaded == r2_inventory_document()
 
 
 def test_t2_schema_mapping_has_s1_datasets():
