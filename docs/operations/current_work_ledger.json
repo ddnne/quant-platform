@@ -1,25 +1,25 @@
 {
   "schema": "quant-platform-work-ledger/v1",
   "baseline_sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
-  "branch": "docs/cloud-first-entrypoints",
-  "updated_at": "2026-09-11T23:22:03Z",
+  "branch": "test/runtime-lease-clock",
+  "updated_at": "2026-09-11T23:44:00Z",
   "lanes": {
     "source_delivered": {
       "status": "partial_main_and_followup",
-      "scope": "pr103_through_pr131_merged_entry_docs_reviewed",
-      "notes": "PR130 source/fresh/main accepted. PR131 source/fresh accepted; merged-main native running. Entry-document consolidation is Grok-authored and cross-reviewed; own native gate still pending. No rollout, data, READY, Pilot or HOLD bypass.",
-      "latest_main_sha": "a3e966d1471a5c24198342cceeec87c35ec1edb7",
+      "scope": "pr103_through_pr132_merged_runtime_clock_followup",
+      "notes": "PR131 source/fresh/main accepted. PR132 source/fresh accepted; merged-main native running. A separate PR131 Mass build failed the runtime future-heartbeat fixture before deployment; deterministic reproduction confirms its wall-clock race. The test-only Grok fix is under review/native acceptance, not hidden by later passes. No rollout, data, READY, Pilot or HOLD bypass.",
+      "latest_main_sha": "f7b6f4e97ff074e94ac2fdcb6edd148a81098fb4",
       "latest_main_check_completed_at": null,
-      "latest_main_evidence": "https://github.com/ddnne/quant-platform/pull/131#issuecomment-5641759672",
-      "pull_request": "https://github.com/ddnne/quant-platform/pull/131",
-      "implementation_sha": "60ffd280786f6e1bae403d4b33506700f18c0e5e",
-      "merged_sha": "a3e966d1471a5c24198342cceeec87c35ec1edb7",
-      "required_check_source_sha": "0d9a7c80fd67a2c56c47d50657076881d9033b9b",
+      "latest_main_evidence": "https://github.com/ddnne/quant-platform/pull/132#issuecomment-5641895895",
+      "pull_request": "https://github.com/ddnne/quant-platform/pull/132",
+      "implementation_sha": "a8c04cd2",
+      "merged_sha": "f7b6f4e97ff074e94ac2fdcb6edd148a81098fb4",
+      "required_check_source_sha": "db54138b8fde6d087074addfab9930519e2a53aa",
       "required_check_app_id": 85455,
-      "required_check_build_id": "5781cdea-30d2-4672-9012-eca0e0448e25",
-      "required_check_id": 103452933039,
-      "merged_main_check_id": 103453267274,
-      "merged_main_build_id": "e826f731-2062-46f3-842a-29dd68e97a63",
+      "required_check_build_id": "55b7b141-7df9-4593-90a8-cad5ba1b14f8",
+      "required_check_id": 103457178576,
+      "merged_main_check_id": 103457395652,
+      "merged_main_build_id": "28775448-827f-4363-a02d-2b8ec30e3d01",
       "merged_main_check_status": "in_progress"
     },
     "staging_deployed": {
@@ -107,6 +107,14 @@
     },
     "4_receipt_to_ready_trader": { "status": "pending" },
     "5_ci_deploy_entrypoints": {
+      "r2_runtime_clock_fixture": {
+        "status": "grok_fix_cross_reviewed_native_pending",
+        "reason": "PR131 merged-main separate Mass build5591a0ef/check103453414675 failed21runtimePASS/1FAIL before deployment, not at HOLD. Future heartbeat was constructed at t0+31; after1second of preceding R2 awaits the unchanged production30second-skew predicate legitimately accepts it.",
+        "scope": "Freeze only Date.now in the existing malformed-lease case; restore the spy in afterEach before R2 reset even after assertion failure. Actual workerd R2/CAS, timers, production predicates,7test bodies and10seed cases remain. No test added, removed, skipped or retried to pass; final diff7added/1removed.",
+        "verification": "Grok temporary +2000ms diagnostic reproduced exact future-heartbeat GET200 assertion failure against real R2. Diagnostic removed. Final npm test481Node+22workerd PASS and typecheck PASS using lock-identical existing dependencies; temporary symlink removed. Existing abort-test disconnect and package sourcemap warnings remain. No local Docker/VM/history or live operations.",
+        "review": "Grok grok-4.6-build dc2b06b1-a099-4032-8a49-464ecaf9e4d5 authored code and self-review; CLI31307tokens/1call, not quota/billing. Codex verified actual diff443ae16aec0355e699c17f08195f76c599ef07a124b7514ae3a8a6c5d061174a; independent read-only reviewer accepted the exact diff, preserving10seeds/positive cases and failure cleanup, with no P0/P1/P2 finding. It does not prove elapsed-time expiry.",
+        "residual": "Exact final native CI and normal merge remain required. PR132 separate Mass buildfe5a672b/check103457586638 passed481+22 then stopped at explicit deployment HOLD; that later pass does not resolve the original race. No production lease-policy change or READY/Pilot permission."
+      },
       "status": "runtime_pr104_and_entrypoint_pr111_merged_test_tiers_pending",
       "implementation_commits": ["dbddc615", "52a7faba"],
       "merge_sha": "d6f05d72fdc5fbbd5bfe47338b01dffd4b89b6c4",
@@ -213,17 +221,19 @@
       "status": "test_audit_execution_in_progress",
       "execution_ledger": "docs/operations/test_reduction_ledger.json",
       "replay_distribution_boundary": {
-        "status": "merged_pr131_source_fresh_accepted_main_native_pending",
+        "status": "merged_pr131_source_fresh_main_native_accepted",
+        "main_acceptance": "Merged a3e966d1 app85455/check103455878905/build e826f731 SUCCESS2026-09-11T23:33:07Z; terminal23:33:05.548Z/cursorWzksNDU5MF0/truncated=false.3585offline507.67s+3toolchain9.51s/all8Workers/real remote Containers/generated-clean. https://github.com/ddnne/quant-platform/pull/131#issuecomment-5641871687 .",
         "implementation_sha": "60ffd280",
         "scope": "Exclude research.offline/unique_logic (33 source files) from ordinary wheel and real Container input; source/replay artifacts unchanged. Test ledger T01 owns removal mapping and limits.",
         "review": "Grok grok-4.6-build session3489ebde-adba-4dc0-8b6e-02519906fa58 authored patches/self-reviews; CLI167298tokens/6calls includes an intention-only response, not quota/billing. No coding fallback. Codex found editable-finder contamination; Grok fixed isolated -I -S with selected-interpreter physical dependency paths. Stand-alone wheel schema gap was not hidden: consumer imports move to actual Container, no schema distribution. Independent final52ee9954/integratedd9561676 diffs accepted.",
         "verification": "Integrated313PASS/1deselected43.64s,14 existing fork warnings; actual wheel build/install empty+decoy CWD PASS,13contracts/8route digests and both legacy packages absent/nonimportable. New probe before exclusions failed at real research.offline presence; -I editable fallback then exposed and corrected. Secret/path, lock and diff PASS. No local Docker or authentic market data.",
         "delta": "7files+115/-85, net30 added; one69line checkout monkeypatch test replaced by existing real-wheel/Container gates. Replay sources/digests/calculation tests unchanged. No time/cost saving claimed.",
-        "residual": "Merged-main native acceptance pending. Import smoke is not delayed execution, stand-alone wheel research, READY or fullT01. Replay suite tiering/legacy flat helpers and operational HOLDs remain.",
+        "residual": "Import smoke is not delayed execution, stand-alone wheel research, READY or fullT01. Replay suite tiering/legacy flat helpers and operational HOLDs remain. Separate Mass runtime clock failure is tracked under item5.",
         "acceptance": "Exact0d9a7c80 app85455/check103452933039/build5781cdea SUCCESS2026-09-11T23:17:31Z;3585offline/3toolchain/all8Workers/real remote Container/generated-clean. Merged a3e966d1 at23:19:09Z equals source tree dedd6041. Fresh clone: actual wheel probe and314 selected tests PASS,14 existing fork warnings; secret/clean/equal/unpushed0,34MiB with caches, no authentic history. Branch removed. https://github.com/ddnne/quant-platform/pull/131#issuecomment-5641759672 ."
       },
       "entry_document_consolidation": {
-        "status": "source_committed_cross_reviewed_native_pending",
+        "status": "merged_pr132_source_fresh_accepted_main_native_pending",
+        "acceptance": "Source db54138b app85455/check103457178576/build55b7b141 SUCCESS23:40:13Z;3585offline464.75s+3toolchain11.38s/all8Workers/real remote Containers/generated-clean. Merged f7b6f4e9 equals source tree34a1c0ab; new clone119tests PASS6.92s/contract/secret/clean/equal/unpushed0. Completed branch removed. https://github.com/ddnne/quant-platform/pull/132#issuecomment-5641883183 and https://github.com/ddnne/quant-platform/pull/132#issuecomment-5641895895 . Main native pending, no rollout.",
         "implementation_sha": "a8c04cd2",
         "scope": "README owns orientation/setup/navigation; architecture owns cloud/clock/PIT/trust/distribution boundaries; roadmap owns ordered remaining work. Remove obsolete local-primary/proxy/live-data commands, V2 global gate, Mass entry, future-only Cloudflare CI and fixed live inventories.",
         "review": "Grok grok-4.6-build session1931b82f-0a08-4eba-8ed8-ec9c822c8468 authored4responses/self-reviews; CLI176536 tokens, not quota/billing. Codex independently verified actual source and corrected its own ambiguous live-read authorization instruction. Grok fixed historical AM semantics, DRAFT comparability, exact legacy package names, existing compiler foundations, actual Controlled Prime rule versus broader research, AAdjC afternoon meaning and duplicated policy prose. Minimal patch prefix formatting mechanically normalized without changing Grok wording. Independent final3doc diff91976d6b accepted; main integration preserved reviewed bytes, diff55813169. Grok then separated README remote-only full CI from Mac fixture commands after Codex verified real Container dry-runs; final3doc diff3abedf36.",
@@ -232,7 +242,7 @@
         "residual": "Entry-doc cleanup only; deeper obsolete docs, replay tiering, scope/Receipt/READY/Trader integration, all saved cancellations and rollout/data/Pilot HOLDs remain. No statement that current source or docs prove live state."
       },
       "test_audit": "Baseline main1088c398 static inventory:393 test files plus2 support paths,2983 Python definitions and1115 Worker registrations, not expanded runtime cases. Main-authored candidate body/alternative review identified52 findings across100 files:13 direct-deletion groups covering22 definitions,7 assert reductions,23 consolidations,7 replacements and2 test-tier moves. Two independent critical reviews yielded9 guardrail corrections, incorporated before execution. User subsequently authorized implementation. The original inventory remains a baseline, not a claim that every candidate has been removed. Uncommitted branches are separate. No coverage-count target or bulk deletion.",
-      "execution_summary": "Canonical test ledger owns counts/removal guarantees. PR130 source/fresh/main accepted; PR131 source/fresh accepted, main native pending. Entry-document consolidation removes obsolete local-primary guidance; its own source gate is pending. The10 audit findings including T01/C19 remain partial/pending. No rollout or research GO.",
+      "execution_summary": "Canonical test ledger owns counts/removal guarantees. PR131 source/fresh/main accepted; PR132 source/fresh accepted, main native pending. Entry docs net368lines removed. Item5 tracks a real R2 runtime clock flake, not a product relaxation or test-count change. The10 audit findings including T01/C19 remain partial/pending. No rollout or research GO.",
       "accepted_history": {
         "through_main_sha": "86ce3b5733fdab650753b44e0967f066142c49c9",
         "details": "https://github.com/ddnne/quant-platform/blob/86ce3b5733fdab650753b44e0967f066142c49c9/docs/operations/current_work_ledger.json",
@@ -271,7 +281,7 @@
       "cross_review_protocol": "Grok implements and reviews; Codex independently reviews actual diffs and adjudicates concrete findings against code/behavior. Neither approval replaces tests/native CI. No blanket restoration of name/shape tests or unanimous-approval requirement."
     },
     "8_rollout_and_research_go": { "status": "pending" },
-    "9_push_remote_and_fresh_clone_verify": {"status":"pr131_source_fresh_accepted_main_native_pending_entry_docs_final_native_pending"}
+    "9_push_remote_and_fresh_clone_verify": {"status":"pr132_source_fresh_accepted_main_native_pending_runtime_clock_native_pending"}
   },
   "operational_facts": [
     {"id":"projection_sync_ops_live_read_20260911T1802Z","observed_at":"2026-09-11T18:02:25Z","fact":"Read-only quant-mcp projection/B0/sync/Ops: projection STALE, generated2026-08-21T12:30:49.152421+00:00, active generationprojgen-ef18b4f86ee946048161d25e2a30a2a8, refresh_attempt=false/refresh_success=false, age1834295s. ops_projection/v3 is not proof of CoverageV3 semantics. B0UNKNOWN; source change cursor2899647, applied_feed_cursor=null and all23 applied/ready_pinned cursors null. JQrun14963 PASS at2026-09-12T02:16:05+09:00; Ops aggregate22COMPLETE/4PARTIAL and raw31008/28790 acquired/complete are not newly reconciled READY eligibility. Source/export activity is not current apply. Separate READY snapshot and full tool/schema parity not remeasured. No DLQ/deployment/data activation/Pilot operation."},
