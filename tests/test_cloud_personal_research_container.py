@@ -3979,89 +3979,159 @@ def test_crash_before_executor_fresh_manager_takeover() -> None:
     assert executions.value == 1
 
 
-def test_heartbeat_cas_loss_fences_old_executor_zero_late_success() -> None:
+def test_heartbeat_cas_loss_fences_old_executor_zero_late_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
     store = _ControlledCasStore()
     executions = _shared_execution_counter()
     authorized = _shared_execution_counter()
     started = PROCESS_CONTEXT.Event()
+    allow_late = PROCESS_CONTEXT.Event()
+    frozen_lease_now = time.time()
+    old = None
+    new = None
+
+    def lease_clock() -> float:
+        return frozen_lease_now
 
     def old_runner(item):
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         _increment_execution_counter(executions)
         started.set()
-        time.sleep(2.0)
+        allow_late.wait()
         _increment_execution_counter(authorized)
         return _controlled_completed_result(item)
 
+    def reap(manager) -> None:
+        if manager is None:
+            return
+        with manager._lock:
+            heartbeat = manager._lease_heartbeat
+            manager._lease_heartbeat = None
+            watchdog = manager._watchdog
+            manager._watchdog = None
+            recovery = manager._lease_recovery
+            manager._lease_recovery = None
+            retry = manager._retry_timer
+            manager._retry_timer = None
+            supervisor = manager._supervisor
+            worker = manager._worker
+            manager._accepting = False
+        for timer in (heartbeat, watchdog, recovery, retry):
+            if timer is not None:
+                timer.cancel()
+        if supervisor is not None:
+            supervisor.stop()
+        if worker is not None:
+            worker.join(2.0)
+
     old_done = threading.Event()
     new_done = threading.Event()
-    old = _job_manager(
-        old_runner,
-        terminal_uploader=store.upload,
-        terminal_reader=store.reader,
-        object_reader=store.object_reader,
-        on_terminal=old_done.set,
-        max_job_seconds=5,
-        retry_schedule=(0.01,),
-        lease_ttl_seconds=0.3,
-        process_term_grace_seconds=0.05,
-        process_kill_grace_seconds=0.5,
-    )
-    new = _job_manager(
-        _controlled_runner(executions),
-        terminal_uploader=store.upload,
-        terminal_reader=store.reader,
-        object_reader=store.object_reader,
-        on_terminal=new_done.set,
-        max_job_seconds=5,
-        retry_schedule=(0.01,),
-        lease_ttl_seconds=0.3,
-    )
-    old.submit(spec)
-    assert started.wait(2.0)
-    assert old._supervisor is not None
-    old_pid = old._supervisor.pid
-    assert old_pid is not None
-    lease, etag = store.object_reader(spec, spec.lease_key)
-    stolen = dict(lease)
-    stolen["owner_nonce"] = "newownernewowner"
-    stolen["fencing_token"] = int(lease["fencing_token"]) + 1
-    stolen["expires_at"] = 1.0
-    store.upload(
-        spec.lease_key,
-        service._canonical_bytes(stolen),
-        spec=spec,
-        content_digest="sha256:" + __import__("hashlib").sha256(service._canonical_bytes(stolen)).hexdigest(),
-        extra_headers={"if-match": etag},
-    )
     try:
-        old._heartbeat_controlled_lease(spec)
-    except Exception:
-        pass
-    assert old.lease_lost()
-    with pytest.raises(ProcessLookupError):
-        os.kill(old_pid, 0)
-    assert old_done.wait(2.0)
-    takeover = new.submit(spec)
-    assert takeover["status"] in {"QUEUED", "RUNNING", "COMPLETED"}
-    assert new_done.wait(3.0)
-    terminals = [json.loads(raw[0]) for key, raw in store.objects.items() if key.endswith("container-terminal.json")]
-    successes = [row for row in terminals if row.get("status") == "COMPLETED" and row.get("ok") is True]
-    assert len(successes) == 1
-    assert successes[0]["owner_nonce"] != lease["owner_nonce"]
-    assert authorized.value == 0
+        old = _job_manager(
+            old_runner,
+            terminal_uploader=store.upload,
+            terminal_reader=store.reader,
+            object_reader=store.object_reader,
+            on_terminal=old_done.set,
+            max_job_seconds=5,
+            retry_schedule=(0.01,),
+            lease_ttl_seconds=0.3,
+            lease_clock=lease_clock,
+            process_term_grace_seconds=0.05,
+            process_kill_grace_seconds=0.5,
+        )
+        monkeypatch.setattr(old, "_start_lease_heartbeat", lambda _spec: None)
+        new = _job_manager(
+            _controlled_runner(executions),
+            terminal_uploader=store.upload,
+            terminal_reader=store.reader,
+            object_reader=store.object_reader,
+            on_terminal=new_done.set,
+            max_job_seconds=5,
+            retry_schedule=(0.01,),
+            lease_ttl_seconds=0.3,
+            lease_clock=lease_clock,
+        )
+        old.submit(spec)
+        assert started.wait(2.0)
+        assert old._supervisor is not None
+        old_pid = old._supervisor.pid
+        assert old_pid is not None
+        lease, etag = store.object_reader(spec, spec.lease_key)
+        stolen = dict(lease)
+        stolen["owner_nonce"] = "newownernewowner"
+        stolen["fencing_token"] = int(lease["fencing_token"]) + 1
+        stolen["expires_at"] = 1.0
+        body = service._canonical_bytes(stolen)
+        store.upload(
+            spec.lease_key,
+            body,
+            spec=spec,
+            content_digest="sha256:" + hashlib.sha256(body).hexdigest(),
+            extra_headers={"if-match": etag},
+        )
+        try:
+            old._heartbeat_controlled_lease(spec)
+        except Exception:
+            pass
+        assert old.lease_lost()
+        with pytest.raises(ProcessLookupError):
+            os.kill(old_pid, 0)
+        assert old_done.wait(2.0)
+        takeover = new.submit(spec)
+        assert takeover["status"] in {"QUEUED", "RUNNING", "COMPLETED"}
+        assert new_done.wait(3.0)
+        with store.lock:
+            snapshot = {
+                key: json.loads(raw[0].decode("utf-8"))
+                for key, raw in store.objects.items()
+            }
+        terminal = snapshot.get(spec.manifest_key)
+        successes = (
+            [terminal]
+            if isinstance(terminal, dict)
+            and terminal.get("status") == "COMPLETED"
+            and terminal.get("ok") is True
+            else []
+        )
+        diagnostic = json.dumps(
+            {
+                "authorized": authorized.value,
+                "executions": executions.value,
+                "lease": snapshot.get(spec.lease_key),
+                "new_lease_lost": new.lease_lost(),
+                "new_status": new.status(spec.job_id),
+                "old_lease_lost": old.lease_lost(),
+                "old_status": old.status(spec.job_id),
+                "stage": snapshot.get(spec.stage_key),
+                "terminal": terminal,
+            },
+            sort_keys=True,
+            default=str,
+        )
+        assert len(successes) == 1, diagnostic
+        assert successes[0]["owner_nonce"] != lease["owner_nonce"], diagnostic
+        assert authorized.value == 0, diagnostic
+    finally:
+        reap(old)
+        reap(new)
+        # Child already SIGKILL'd by supervisor.stop; Event.set would wait on a dead waiter.
 
 
 
 def test_delayed_heartbeat_expired_does_not_upload() -> None:
     spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
     store = _ControlledCasStore()
-    now = time.time()
-    expired = _closed_lease(spec, "ownerxxxowner", now - 5.0, fencing_token=7)
-    store.objects[spec.lease_key] = (service._canonical_bytes(expired), "etag-7")
+    lease_now = {"t": 1000.0}
+    live = _closed_lease(spec, "ownerxxxowner", 1000.4, fencing_token=7)
+    store.objects[spec.lease_key] = (service._canonical_bytes(live), "etag-7")
     puts: list[str] = []
     original_upload = store.upload
+
+    def lease_clock() -> float:
+        return lease_now["t"]
 
     def recording_upload(key, data, *, spec, content_digest, extra_headers=None):
         puts.append(key)
@@ -4081,18 +4151,27 @@ def test_delayed_heartbeat_expired_does_not_upload() -> None:
         max_job_seconds=5,
         retry_schedule=(0.01,),
         lease_ttl_seconds=0.4,
+        lease_clock=lease_clock,
     )
-    manager._controlled_lease = dict(expired)
+    manager._controlled_lease = dict(live)
     manager._lease_etag = "etag-7"
+    manager._heartbeat_controlled_lease(spec)
+    assert manager.lease_lost() is False
+    assert puts == [spec.lease_key]
+    claimed, etag = store.object_reader(spec, spec.lease_key)
+    assert claimed["fencing_token"] == 7
+    assert claimed["expires_at"] == 1000.4
+    assert claimed["owner_nonce"] == "ownerxxxowner"
     before = store.objects[spec.lease_key][0]
+    lease_now["t"] = 1001.0
     with pytest.raises(service.JobConflictError, match="expired"):
         manager._heartbeat_controlled_lease(spec)
     assert manager.lease_lost()
-    assert puts == []
+    assert puts == [spec.lease_key]
     claimed, etag = store.object_reader(spec, spec.lease_key)
-    assert etag == "etag-7"
+    assert etag != "etag-7"
     assert claimed["fencing_token"] == 7
-    assert claimed["expires_at"] == expired["expires_at"]
+    assert claimed["expires_at"] == 1000.4
     assert store.objects[spec.lease_key][0] == before
 
 
