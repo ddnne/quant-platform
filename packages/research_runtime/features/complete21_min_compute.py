@@ -12,7 +12,6 @@ from typing import Any
 from .complete21_min_parsers import (
     _as_float_or_none,
     _latest_fins_eps_bps,
-    _latest_fins_per_share_observation,
     _latest_short_ratio_row,
     _parse_close_rows,
     _parse_futures_volume_rows,
@@ -338,13 +337,12 @@ def _disclosure_flag_fins(ctx) -> FeatureOutput:
         _DISC_DATASETS, context="feature disclosure_flag_fins"
     )
     code = ctx.get_input("code")
-    res = ctx.get_jquants_records(dataset="fins_summary", code=code)
-    n = (
-        len(res.rows)
-        if res is not None and getattr(res, "rows", None) is not None
-        else 0
+    state = ctx.get_financial_state(
+        dataset="fins_summary",
+        code=code,
+        initial_visible_state="all_visible_existence_and_count",
     )
-    value, meta = disclosure_flag_from_count(n)
+    value, meta = disclosure_flag_from_count(state.visible_row_count)
     meta = {**meta, "code": code, "datasets": list(_DISC_DATASETS)}
     return FeatureOutput(value=value, metadata=meta)
 
@@ -632,9 +630,12 @@ def _retrospective_split_safe_fundamental_value_score(ctx) -> FeatureOutput:
             metadata={"code": code, "reason": "raw close missing or zero"},
         )
 
-    fins_res = ctx.get_jquants_records(dataset="fins_summary", code=code)
-    fins_rows = list(fins_res.rows) if fins_res is not None and fins_res.rows else []
-    observation = _latest_fins_per_share_observation(fins_rows)
+    state = ctx.get_financial_state(
+        dataset="fins_summary",
+        code=code,
+        initial_visible_state="latest_qualifying_bps_preferred_else_eps",
+    )
+    observation = state.observation
     if observation is None:
         return FeatureOutput(
             value=None,

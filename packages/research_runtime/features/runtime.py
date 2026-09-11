@@ -198,10 +198,10 @@ class FeatureContext:
     """Read-only PIT-scoped context handed to a feature's ``compute``.
 
     The ``get_equity_bars_daily`` / ``get_equity_master`` /
-    ``get_market_calendar`` shortcuts already inject ``as_of`` and the
-    runtime-owned database scope. Feature inputs are available only through
-    :meth:`get_input`. There is no database-path attribute, connection
-    handle, HTTP client, or wall clock.
+    ``get_market_calendar`` / ``get_financial_state`` shortcuts already inject
+    ``as_of`` and the runtime-owned database scope. Feature inputs are
+    available only through :meth:`get_input`. There is no database-path
+    attribute, connection handle, HTTP client, or wall clock.
     """
 
     as_of: str
@@ -293,6 +293,32 @@ class FeatureContext:
         )
         return self._read("jquants_records", {"dataset": eligible, **kwargs})
 
+    def get_financial_state(
+        self,
+        *,
+        dataset: str,
+        code: str,
+        initial_visible_state: str,
+        **kwargs: Any,
+    ):
+        """Compact PIT financial catalog state with trusted scope injected.
+
+        Dispatches through DataPlane. Reserved ``as_of`` / ``db_path`` are
+        rejected before I/O. Permanent DEFER datasets fail closed first.
+        """
+        eligible = require_feature_dataset(
+            dataset, context="FeatureContext.get_financial_state"
+        )
+        return self._read(
+            "financial_state",
+            {
+                "dataset": eligible,
+                "code": code,
+                "initial_visible_state": initial_visible_state,
+                **kwargs,
+            },
+        )
+
     def get_jsda_repo_rates(self, **kwargs: Any):
         """PIT JSDA Tokyo repo rates with the context's trusted scope injected.
 
@@ -368,6 +394,7 @@ def _compute(
             "equity_master": pit.get_equity_master,
             "market_calendar": pit.get_market_calendar,
             "jquants_records": pit.get_jquants_records,
+            "financial_state": pit.get_financial_state,
             "jsda_repo_rates": pit.get_jsda_repo_rates,
         }
         try:

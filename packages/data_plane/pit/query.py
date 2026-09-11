@@ -532,6 +532,167 @@ def _decode_row(row: sqlite3.Row) -> dict[str, Any]:
     return d
 
 
+@contextmanager
+def _owned_pinned_transaction(db_path: Any) -> Iterator[sqlite3.Connection]:
+    """Pin one READY-gated read transaction. Does not yield to product code."""
+
+    conn = _scoped_read_connection(db_path)
+    close_connection = conn is None
+    if conn is None:
+        conn = connect_readonly(db_path)
+    try:
+        # Pin revision discovery and the fact read to one SQLite snapshot.
+        # Without an explicit read transaction, a concurrent amendment could
+        # archive the visible primary row after the empty-revision check and
+        # before the SELECT, producing a mixed-generation result.
+        # Ownership lookup stays inside the try so a newly opened handle is
+        # still closed if that check fails.
+        external_transaction = _uses_external_read_transaction(db_path)
+        if not external_transaction:
+            conn.execute("BEGIN")
+        yield conn
+    finally:
+        try:
+            if not locals().get("external_transaction", False):
+                conn.rollback()
+        finally:
+            if close_connection:
+                conn.close()
+
+
+def _iter_query_rows(
+    conn: sqlite3.Connection,
+    *,
+    as_of: str,
+    table: str,
+    dataset_id: str | None = None,
+    extra_where: Optional[str] = None,
+    params: Optional[list[Any]] = None,
+    order_by: Optional[str] = None,
+    keyset_after: Optional[tuple[tuple[str, ...], tuple[Any, ...]]] = None,
+    limit: Optional[int] = None,
+) -> Iterator[sqlite3.Row]:
+    """Stream PIT-gated rows from an already owned pinned transaction.
+
+    Does not open a path, accept SQL/reader callbacks, or return a Connection.
+    The caller owns transaction lifetime and the resolved decision clock.
+    """
+    compact_keys = PERSONAL_HISTORY_COMPACT_NATURAL_KEYS.get(table)
+    keyset_sql: str | None = None
+    keyset_bound: list[Any] = []
+    if keyset_after is not None:
+        columns, values = keyset_after
+        if not columns or len(columns) != len(values):
+            raise ValueError("keyset columns and values must have equal length")
+        branches: list[str] = []
+        for index, column in enumerate(columns):
+            comparisons = [f"{prior} = ?" for prior in columns[:index]]
+            comparisons.append(f"{column} > ?")
+            branches.append("(" + " AND ".join(comparisons) + ")")
+            keyset_bound.extend(values[: index + 1])
+        keyset_sql = "(" + " OR ".join(branches) + ")"
+    if limit is not None and (not isinstance(limit, int) or limit < 1):
+        raise ValueError("limit must be a positive integer")
+    from .cooperative_deadline import check_deadline
+    from .read_clock import resolve_read_clock
+
+    check_deadline()
+    where = ["available_at IS NOT NULL", "available_at <= ?"]
+    bound: list[Any] = [as_of]
+    timed_tables = (
+        compact_keys is not None
+        or table in REVISION_TABLES
+        or table in NATURAL_KEYS
+    )
+    if timed_tables:
+        clock = resolve_read_clock(as_of, conn=conn)
+        calendar_prepublished = False
+        if dataset_id is not None and (
+            table == "jquants_records"
+            or (
+                table == "jquants_market_calendar"
+                and dataset_id == "markets_calendar"
+            )
+        ):
+            try:
+                calendar_prepublished = (
+                    contract_for(dataset_id).available_at_policy
+                    == "calendar_prepublished"
+                )
+            except KeyError:
+                # Unknown catalog partitions retain the strict event-time
+                # wall; only the governed contract can opt into a
+                # prepublished calendar.
+                calendar_prepublished = False
+        where.append("event_time IS NOT NULL")
+        if not calendar_prepublished:
+            where.append("event_time <= ?")
+            bound.append(clock.decision_at)
+        where.extend(["ingested_at IS NOT NULL", "ingested_at <= ?"])
+        bound.append(clock.observed_through)
+    if extra_where:
+        where.append(f"({extra_where})")
+    if params:
+        bound.extend(params)
+    revision_table = REVISION_TABLES.get(table)
+    has_revision_rows = False
+    if revision_table is not None:
+        has_revision_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (revision_table,),
+        ).fetchone() is not None
+        if has_revision_table:
+            # Personal DRAFT databases normally have the revision schema
+            # but no amendments.  Avoid paying for a UNION + window rank
+            # on every feature read until a revision actually exists.
+            has_revision_rows = conn.execute(
+                f"SELECT 1 FROM {revision_table} LIMIT 1"
+            ).fetchone() is not None
+
+    if compact_keys:
+        partition_by = ",".join(compact_keys)
+        sql = (
+            "WITH pit_visible AS (SELECT * FROM "
+            f"{table} WHERE " + " AND ".join(where) + "), pit_ranked AS ("
+            "SELECT *, ROW_NUMBER() OVER ("
+            f"PARTITION BY {partition_by} "
+            "ORDER BY available_at DESC, ingested_at DESC"
+            ") AS _pit_rank FROM pit_visible) "
+            "SELECT * FROM pit_ranked WHERE _pit_rank = 1"
+        )
+    elif has_revision_rows:
+        key_cols = NATURAL_KEYS[table]
+        partition_by = ",".join(key_cols)
+        sql = (
+            "WITH pit_versions AS ("
+            f"SELECT *, 1 AS _pit_current FROM {table} UNION ALL "
+            f"SELECT *, 0 AS _pit_current FROM {revision_table}"
+            "), pit_visible AS ("
+            "SELECT * FROM pit_versions WHERE " + " AND ".join(where)
+            + "), pit_ranked AS ("
+            "SELECT *, ROW_NUMBER() OVER ("
+            f"PARTITION BY {partition_by} "
+            "ORDER BY available_at DESC, ingested_at DESC, _pit_current DESC"
+            ") AS _pit_rank FROM pit_visible) "
+            "SELECT * FROM pit_ranked WHERE _pit_rank = 1"
+        )
+    else:
+        # Compatibility with databases created before revision tables were
+        # introduced. Opening them once through SqliteStore installs the
+        # history schema for all subsequent reads.
+        sql = f"SELECT * FROM {table} WHERE " + " AND ".join(where)
+    if keyset_sql:
+        sql += f" AND {keyset_sql}"
+        bound.extend(keyset_bound)
+    if order_by:
+        sql += f" ORDER BY {order_by}"
+    if limit is not None:
+        sql += " LIMIT ?"
+        bound.append(limit)
+    cursor = conn.execute(sql, bound)
+    yield from cursor
+
+
 def run_query(
     db_path: Any,
     *,
@@ -559,141 +720,24 @@ def run_query(
     without materializing the complete result set.
 
     The connection is opened read-only and closed in a ``finally`` so a query
-    error never leaks a writer-capable handle.
+    error never leaks a writer-capable handle. Rows are decoded from the
+    shared streaming helper into the legacy list result.
     """
-    compact_keys = PERSONAL_HISTORY_COMPACT_NATURAL_KEYS.get(table)
-    keyset_sql: str | None = None
-    keyset_bound: list[Any] = []
-    if keyset_after is not None:
-        columns, values = keyset_after
-        if not columns or len(columns) != len(values):
-            raise ValueError("keyset columns and values must have equal length")
-        branches: list[str] = []
-        for index, column in enumerate(columns):
-            comparisons = [f"{prior} = ?" for prior in columns[:index]]
-            comparisons.append(f"{column} > ?")
-            branches.append("(" + " AND ".join(comparisons) + ")")
-            keyset_bound.extend(values[: index + 1])
-        keyset_sql = "(" + " OR ".join(branches) + ")"
-    if limit is not None and (not isinstance(limit, int) or limit < 1):
-        raise ValueError("limit must be a positive integer")
-    conn = _scoped_read_connection(db_path)
-    close_connection = conn is None
-    if conn is None:
-        conn = connect_readonly(db_path)
-    try:
-        # Pin revision discovery and the fact read to one SQLite snapshot.
-        # Without an explicit read transaction, a concurrent amendment could
-        # archive the visible primary row after the empty-revision check and
-        # before the SELECT, producing a mixed-generation result.
-        external_transaction = _uses_external_read_transaction(db_path)
-        if not external_transaction:
-            conn.execute("BEGIN")
-        from .cooperative_deadline import check_deadline
-        from .read_clock import resolve_read_clock
-
-        check_deadline()
-        where = ["available_at IS NOT NULL", "available_at <= ?"]
-        bound: list[Any] = [as_of]
-        timed_tables = (
-            compact_keys is not None
-            or table in REVISION_TABLES
-            or table in NATURAL_KEYS
-        )
-        if timed_tables:
-            clock = resolve_read_clock(as_of, conn=conn)
-            calendar_prepublished = False
-            if dataset_id is not None and (
-                table == "jquants_records"
-                or (
-                    table == "jquants_market_calendar"
-                    and dataset_id == "markets_calendar"
-                )
-            ):
-                try:
-                    calendar_prepublished = (
-                        contract_for(dataset_id).available_at_policy
-                        == "calendar_prepublished"
-                    )
-                except KeyError:
-                    # Unknown catalog partitions retain the strict event-time
-                    # wall; only the governed contract can opt into a
-                    # prepublished calendar.
-                    calendar_prepublished = False
-            where.append("event_time IS NOT NULL")
-            if not calendar_prepublished:
-                where.append("event_time <= ?")
-                bound.append(clock.decision_at)
-            where.extend(["ingested_at IS NOT NULL", "ingested_at <= ?"])
-            bound.append(clock.observed_through)
-        if extra_where:
-            where.append(f"({extra_where})")
-        if params:
-            bound.extend(params)
-        revision_table = REVISION_TABLES.get(table)
-        has_revision_rows = False
-        if revision_table is not None:
-            has_revision_table = conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-                (revision_table,),
-            ).fetchone() is not None
-            if has_revision_table:
-                # Personal DRAFT databases normally have the revision schema
-                # but no amendments.  Avoid paying for a UNION + window rank
-                # on every feature read until a revision actually exists.
-                has_revision_rows = conn.execute(
-                    f"SELECT 1 FROM {revision_table} LIMIT 1"
-                ).fetchone() is not None
-
-        if compact_keys:
-            partition_by = ",".join(compact_keys)
-            sql = (
-                "WITH pit_visible AS (SELECT * FROM "
-                f"{table} WHERE " + " AND ".join(where) + "), pit_ranked AS ("
-                "SELECT *, ROW_NUMBER() OVER ("
-                f"PARTITION BY {partition_by} "
-                "ORDER BY available_at DESC, ingested_at DESC"
-                ") AS _pit_rank FROM pit_visible) "
-                "SELECT * FROM pit_ranked WHERE _pit_rank = 1"
+    with _owned_pinned_transaction(db_path) as conn:
+        return [
+            _decode_row(row)
+            for row in _iter_query_rows(
+                conn,
+                as_of=as_of,
+                table=table,
+                dataset_id=dataset_id,
+                extra_where=extra_where,
+                params=params,
+                order_by=order_by,
+                keyset_after=keyset_after,
+                limit=limit,
             )
-        elif has_revision_rows:
-            key_cols = NATURAL_KEYS[table]
-            partition_by = ",".join(key_cols)
-            sql = (
-                "WITH pit_versions AS ("
-                f"SELECT *, 1 AS _pit_current FROM {table} UNION ALL "
-                f"SELECT *, 0 AS _pit_current FROM {revision_table}"
-                "), pit_visible AS ("
-                "SELECT * FROM pit_versions WHERE " + " AND ".join(where)
-                + "), pit_ranked AS ("
-                "SELECT *, ROW_NUMBER() OVER ("
-                f"PARTITION BY {partition_by} "
-                "ORDER BY available_at DESC, ingested_at DESC, _pit_current DESC"
-                ") AS _pit_rank FROM pit_visible) "
-                "SELECT * FROM pit_ranked WHERE _pit_rank = 1"
-            )
-        else:
-            # Compatibility with databases created before revision tables were
-            # introduced. Opening them once through SqliteStore installs the
-            # history schema for all subsequent reads.
-            sql = f"SELECT * FROM {table} WHERE " + " AND ".join(where)
-        if keyset_sql:
-            sql += f" AND {keyset_sql}"
-            bound.extend(keyset_bound)
-        if order_by:
-            sql += f" ORDER BY {order_by}"
-        if limit is not None:
-            sql += " LIMIT ?"
-            bound.append(limit)
-        cur = conn.execute(sql, bound)
-        return [_decode_row(r) for r in cur.fetchall()]
-    finally:
-        try:
-            if not locals().get("external_transaction", False):
-                conn.rollback()
-        finally:
-            if close_connection:
-                conn.close()
+        ]
 
 
 def _probe_standalone_typed_adjustment_candidates(
