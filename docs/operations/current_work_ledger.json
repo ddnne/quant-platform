@@ -1,13 +1,13 @@
 {
   "schema": "quant-platform-work-ledger/v1",
   "baseline_sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
-  "branch": "fix/terminal-retry-test-isolation",
-  "updated_at": "2026-09-10T23:28:25Z",
+  "branch": "fix/terminal-http-fixture-synchronization",
+  "updated_at": "2026-09-11T00:03:10Z",
   "lanes": {
     "source_delivered": {
       "status": "partial_main_and_candidate",
-      "scope": "items_2_3a_5_runtime_wiring_merged_terminal_fixture_isolation_candidate",
-      "notes": "PR #103 merged as 71410b36, #104 as d6f05d72 and #105 as 36b02bb4 after native required checks on their exact final source SHAs. A post-merge d6f05d72 CI failure exposed an unmocked HTTP path in terminal retry tests; the separate tests-only isolation candidate addresses it. These are observed stages at updated_at; re-read GitHub before resuming. No code rollout, data activation or READY is implied.",
+      "scope": "items_2_3a_5_runtime_wiring_and_terminal_isolation_merged_http_fixture_followup_candidate",
+      "notes": "PR #103 merged as 71410b36, #104 as d6f05d72, #105 as 36b02bb4 and #106 as a2552e5a after native required checks on their exact final source SHAs. PR106 removed unmocked HTTP from retry fixtures. Its merged-main check then exposed a separate remaining 0.2-second wait race in the actual mocked PUT503/GET404 integration; the small synchronization/consolidation follow-up addresses that family. These are observed stages at updated_at; re-read GitHub before resuming. No code rollout, data activation or READY is implied.",
       "pull_request": "https://github.com/ddnne/quant-platform/pull/103",
       "implementation_sha": "0255744b74e8b7186940abf93a1ed0be61a033ee",
       "merged_sha": "71410b3603b3a70d07db42d24082c3d04f280b18",
@@ -84,21 +84,39 @@
       "verification": "Independent script-policy/CI tests 79 passed; final rebased canonical npm test ran Node 503 plus runtime 7 and typecheck passed. Independent critical review found no actionable issue. Native CI on 48edcd1f succeeded: Python 3627 passed, 4 skipped, 32 warnings, with all active Worker lanes and generated drift checks.",
       "test_stabilization": "Actual fetchContainerBytes diagnostic under periodic Node GC: without retained Request 20/20 derived abort notifications missed; with retained Request 0/20 missed. Existing test now retains Request, advances fake timer after fixture readiness and preserves timeout/abort assertions. Production transport unchanged.",
       "terminal_fixture_isolation": {
-        "status": "locally_verified_native_ci_and_merge_pending",
+        "status": "source_merged_pr106_http_adapter_followup_pending",
+        "merge_sha": "a2552e5a5472a2f9cd096fcb3fc502e6857a140d",
+        "required_check_source_sha": "ad6cd4480f625ab45da4363fec4215c53eb88d22",
+        "required_check_app_id": 85455,
+        "required_check_build_id": "46a1a982-6cf1-44f5-a534-905f2bdf7e45",
         "implementation_commit": "eb7d5d7b2fab6b1cf972cb4e6f33b3f2f0c349b5",
         "reason": "Post-merge d6f05d72 native build 6daa3f53-ca65-4a7c-ad93-6915332eb075 failed at terminal.wait(1). Failed PUTs in the fixture fell through to actual GET because terminal_reader was absent. Independent exact-test interception observed 12 GET attempts to research.r2. A normal python -m pytest module probe observed 123 passing tests but 35 unmocked HTTP attempts; its diagnostic gate correctly returned failure. No actual HTTP was allowed by the probe.",
         "scope": "Tests only: four overlapping wall-clock retry tests consolidated into four parameterized real state-transition cases with held timers; complete fake terminal/object readers and existing fake CAS reuse. No production transport, retry cap, policy or golden artifact changed. Broader test tiering/default network deny remains open.",
         "verification": "Independent full container module: 123 passed, 21 existing multiprocessing warnings, 7.91 seconds; diagnostic urllib interception observed zero unmocked HTTP attempts versus 35 before the patch. This is a module-level probe, not a claim that global network denial is complete. Separate Controlled/AM/universe/import-boundary regression: 119 passed. Binding-manifest drift, secret/path scan, finding-ledger validation and git diff --check passed. Existing golden fixture sha256 a9015caeea31428a6ef87bdbf24c1d56d888e2921e4e8b39a2447d6bdfff79ba unchanged.",
         "review": "Independent critical review identified a worker-completion race and an unbounded held-timer test driver. Grok fixed both; independent delta review confirmed resolution with no further actionable finding. Codex owns commit/push/PR/CI/merge; native acceptance and final fresh-clone check remain pending at this checkpoint."
       },
-      "remaining": "Pure Python/Worker/runtime/live test tiers, default network deny and deploy_tagged target/module-byte hardening remain pending. Existing npm advisories and remaining real-time tests were not silently suppressed."
+      "http_adapter_followup": {
+        "status": "locally_verified_native_ci_and_merge_pending",
+        "implementation_commit": "2d1252ef190916bc3f4c3d1ebecec63797e6d2cd",
+        "reason": "Main a2552e5a build0c587976-740d-4994-949d-cac15a4db359 failed: 3626 passed, 1 failed, 4 skipped, 28 warnings. The mocked PUT503/GET404 test inspected counts after a 0.2-second negative wait before the worker reached its first PUT. Two sibling tests used the same wait and one duplicated the HTTP503 case.",
+        "scope": "Tests only: preserve real submit/worker and real adapter logic with mocked HTTP503 or URLError plus GET404; join the actual worker, manually drive held retries and consolidate three overlapping cases into two. No production timeout/cap, behavior, dependency or golden change.",
+        "evidence": "https://github.com/ddnne/quant-platform/pull/106#issuecomment-5627152215",
+        "verification": "Independent diagnostic injected 0.35 seconds of actual JobManager worker-start latency: the old a255 test reproduced fake.puts==0 failure, while both new HTTP503/URLError cases passed (2 passed, 1.21 seconds), with zero unmocked HTTP attempts. Separate full container plus Controlled/AM/universe/import regression: 241 passed, 21 existing multiprocessing warnings, zero unmocked HTTP attempts, 12.09 seconds. Grok also ran the full container module: 122 passed versus123 before consolidation. Binding manifest, secret/path scan, finding ledger and diff checks passed; golden fixture hash unchanged. Test-file diff:70 insertions,87 deletions; production code unchanged.",
+        "review": "Independent critical review reported no actionable finding in synchronization, teardown, adapter semantics or production separation. All source/test coding by Grok, verification/publication by Codex. Native CI and normal merge remain pending at this checkpoint."
+      },
+      "remaining": "Pure Python/Worker/runtime/live test tiers, default network deny and deploy_tagged target/module-byte hardening remain pending. Reviewed next deployment contract: https://github.com/ddnne/quant-platform/pull/106#issuecomment-5626930735. Existing npm advisories and remaining real-time tests were not silently suppressed."
     },
     "6_shared_d1_receipt_reproof": { "status": "pending" },
     "7_dead_code_and_docs": { "status": "pending" },
     "8_rollout_and_research_go": { "status": "pending" },
-    "9_push_remote_and_fresh_clone_verify": { "status": "pr103_pr104_pr105_merged_terminal_test_candidate_final_fresh_clone_pending" }
+    "9_push_remote_and_fresh_clone_verify": { "status": "pr103_through_pr106_merged_http_fixture_followup_pending_final_main_verification_incomplete" }
   },
   "operational_facts": [
+    {
+      "id": "pr106_merge_fresh_clone_and_main_failure_20260911",
+      "observed_at": "2026-09-11T00:00:05Z",
+      "fact": "PR106 exact final source ad6cd448 passed native app85455 CI: 3627 Python passed, 4 skipped, 28 warnings and all active Worker lanes. Merged normally as a2552e5a. Independent fresh GitHub clone after merge passed 242 representative tests, 21 existing multiprocessing warnings and zero unmocked HTTP attempts; generated manifest/registry/contracts/D1 manifest, secret/path and clean Git checks passed. The later merged-main native check failed on the separate HTTP-adapter fixture race; source acceptance is not being substituted for merged-main acceptance. Completed PR106 branch/worktree removed after ancestry verification; approximately25MB of regenerable files removed."
+    },
     {
       "id": "main36_ci_and_mass_hold_20260911",
       "observed_at": "2026-09-10T23:27:00Z",
