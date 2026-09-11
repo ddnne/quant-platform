@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
+
 from data_access import QuantDataAccess, QuantReadDomainService
 from data_access.service import _coverage_projection_missing_reason
 from mcp_servers.quant_data.server import QuantDataMCPServer
@@ -156,7 +158,17 @@ def test_coverage_projection_missing_reason_echoes_stored_policy_not_v2():
     )
 
 
-def test_ops_coverage_echoes_stored_policy_version_not_frozen_v2(tmp_path):
+@pytest.mark.parametrize(
+    "policy_version",
+    (
+        "collection-coverage/v2",
+        "collection-coverage/v3-unpublished",
+    ),
+    ids=("known-v2", "unpublished-v3"),
+)
+def test_ops_coverage_echoes_stored_policy_version_not_frozen_v2(
+    tmp_path, policy_version: str
+):
     db_path = tmp_path / "current.sqlite"
     conn = sqlite3.connect(db_path)
     conn.executescript(
@@ -169,15 +181,24 @@ def test_ops_coverage_echoes_stored_policy_version_not_frozen_v2(tmp_path):
             dataset TEXT, segment_id TEXT, segment_start TEXT, status TEXT,
             policy_version TEXT
         );
-        INSERT INTO dataset_coverage VALUES
-            ('equities_bars_daily', 'PARTIAL', 'collection-coverage/v2',
-             'governed'),
-            ('jsda_tokyo_repo_rates', 'COMPLETE', 'collection-coverage/v2',
-             'governed');
-        INSERT INTO coverage_segments VALUES
-            ('equities_bars_daily', '2025-01', '2025-01-01', 'PARTIAL',
-             'collection-coverage/v2');
         """
+    )
+    conn.executemany(
+        "INSERT INTO dataset_coverage VALUES (?, ?, ?, ?)",
+        (
+            ("equities_bars_daily", "PARTIAL", policy_version, "governed"),
+            ("jsda_tokyo_repo_rates", "COMPLETE", policy_version, "governed"),
+        ),
+    )
+    conn.execute(
+        "INSERT INTO coverage_segments VALUES (?, ?, ?, ?, ?)",
+        (
+            "equities_bars_daily",
+            "2025-01",
+            "2025-01-01",
+            "PARTIAL",
+            policy_version,
+        ),
     )
     conn.commit()
     conn.close()
@@ -187,31 +208,36 @@ def test_ops_coverage_echoes_stored_policy_version_not_frozen_v2(tmp_path):
         "dataset_coverage", {"dataset": "equities_bars_daily"}
     )
     assert coverage["status"] == "PARTIAL"
-    assert coverage["coverage"]["policy_version"] == "collection-coverage/v2"
-    assert "Coverage V2" not in str(coverage)
-    assert "collection-coverage/v3" not in str(coverage)
+    assert coverage["coverage"]["status"] == "PARTIAL"
+    assert coverage["coverage"]["policy_version"] == policy_version
 
     complete = service.call_tool(
         "dataset_coverage", {"dataset": "jsda_tokyo_repo_rates"}
     )
     assert complete["status"] == "COMPLETE"
-    assert complete["coverage"]["policy_version"] == "collection-coverage/v2"
+    assert complete["coverage"]["policy_version"] == policy_version
 
     gaps = service.call_tool("coverage_gaps")
     by_dataset = {row["dataset"]: row for row in gaps["gaps"]}
     assert "jsda_tokyo_repo_rates" not in by_dataset
     bars = by_dataset["equities_bars_daily"]
     assert bars["status"] == "PARTIAL"
-    assert bars["policy_version"] == "collection-coverage/v2"
+    assert bars["policy_version"] == policy_version
     missing = by_dataset["jsda_otc_bond_reference_prices"]
     assert missing["status"] == "UNKNOWN"
     assert missing["reason"] == "Coverage projection has not been populated"
-    assert "Coverage V2" not in missing["reason"]
+    assert missing.get("policy_version") in (None, "")
+    for dataset, row in by_dataset.items():
+        if dataset == "equities_bars_daily":
+            continue
+        assert row["status"] == "UNKNOWN"
+        assert row["reason"] == "Coverage projection has not been populated"
 
     segments = service.call_tool(
         "coverage_segments", {"dataset": "equities_bars_daily"}
     )
-    assert segments["segments"][0]["policy_version"] == "collection-coverage/v2"
+    assert segments["segments"][0]["status"] == "PARTIAL"
+    assert segments["segments"][0]["policy_version"] == policy_version
 
 
 def test_research_calls_are_delegated_and_labeled_immutable():

@@ -225,6 +225,13 @@
         "change": "Grok-authored11 test definition removals, plus redundant output assertions and internal spies, across11 test files:11 insertions/181 deletions. Retained known SHA vectors for each independent wrapper, actual status/body/cache/no-store, raw page and manifest saves, retry ranges/caps and MCP content-type matrix. No product source, dependency, auth, runtime harness or binding edits.",
         "verification": "Codex npm test and typecheck succeeded for all6 affected Workers:JSDA42 Node+62 workerd; Premium183+7; Secrets6+38+1 Service Binding harness; Gateway187+2 harness; Mass501+7; Ops59+11+1. Total1107 actual cases; all6 tsc checks passed. Existing Vite, experimental module-mock and SDK sourcemap warnings remain. Independent static review accepted diff12069a89b4e5f5fcca0c15819c04e9e442700ac19e9ba953a34e9b60709c83d1 with no actionable issue.",
         "dependency_reuse": "To avoid extra disk copies, six temporary node_modules links reused existing installs. Every locked package version/integrity in JSDA/Premium/Secrets/Gateway matched the Mass lock graph (161 entries); Mass/Ops lockfiles matched the reused checkout exactly. Temporary links removed afterward; shared installs preserved. This local verification is not fresh npm-ci/native final-SHA acceptance. No authentic market data or local Container backtest."
+      },
+      "ops_test_consolidation": {
+        "status": "locally_verified_native_pending",
+        "audit_ids": ["C18", "C23"],
+        "change": "Grok merged duplicate stored-policy fixtures into one parameterized actual SQLite + QuantReadDomainService test, not a full MCP facade test. Known/unknown policies, PARTIAL/COMPLETE, complete exclusion from gaps, missing UNKNOWN and SQL NULL transfer remain. Removed one redundant test file. Cursor matrix becomes five meaningful cases, including both cursors NULL. Three files72 insertions/110 deletions.",
+        "review_correction": "Independent review rejected dropping (None,None,lag0): moving CURRENT comparison ahead of NULL guards falsely accepts None==None. Grok restored that row. Codex in-memory faulty-order mutation passed all4 draft rows but fails exactly the restored row in the5-case table; no mutation saved. Review also corrected the claimed boundary from MCP facade to shared read service.",
+        "verification": "Normal3 related modules16 passed/0.46s after correction. Independent final delta review accepted diff57a2075d1877d1a259df18c9a043d8ba42adab36e134097103fa5607e20a744c with no further code finding. Original audit C18 equivalence reasoning is narrowed by this demonstrated counterexample."
       }
     },
     "8_rollout_and_research_go": { "status": "pending" },
