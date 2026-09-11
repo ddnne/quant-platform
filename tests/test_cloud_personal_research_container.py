@@ -80,6 +80,13 @@ SPEC.loader.exec_module(service)
 
 PROCESS_CONTEXT = multiprocessing.get_context("fork")
 
+SYNTHETIC_CHILD_RUNNER_ERROR = "synthetic child runner failed without I/O"
+
+
+def synthetic_child_runner_failure(spec):
+    del spec
+    raise RuntimeError(SYNTHETIC_CHILD_RUNNER_ERROR)
+
 
 def _job_manager(runner, **kwargs):
     return service.JobManager(runner, process_context=PROCESS_CONTEXT, **kwargs)
@@ -1968,6 +1975,10 @@ def _join_manager_worker(manager, *, timeout: float = 2):
 def _cancel_held_retries_after_worker(manager, worker) -> None:
     pending_worker = manager._worker if worker is None else worker
     if pending_worker is not None and pending_worker.is_alive():
+        with manager._lock:
+            supervisor = manager._supervisor
+        if supervisor is not None:
+            supervisor.stop()
         pending_worker.join(2)
     with manager._lock:
         manager._shutdown_notified = True
@@ -1994,7 +2005,10 @@ def _assert_held_failed_terminal_retries_without_shutdown(
         assert not shutdown.is_set()
         assert adapter.puts == 1
         assert adapter.gets == 1
-        assert manager.status(job_id)["status"] == "FAILED"
+        record = manager.status(job_id)
+        assert record is not None
+        assert record["status"] == "FAILED"
+        assert SYNTHETIC_CHILD_RUNNER_ERROR in record["error"]
         assert manager._pending_terminal is not None
         assert manager._accepting is False
         assert manager._shutdown_notified is False
@@ -2170,51 +2184,6 @@ def test_terminal_publication_retry_state_machine(
             manager._retry_timer.cancel()
         manager._pending_terminal = None
         manager._shutdown_notified = True
-
-
-def test_unavailable_terminal_upload_does_not_shutdown(
-    held_retry_scheduler: list[_HeldTimer],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    del held_retry_scheduler
-    http_hits = _install_isolated_http_guard(monkeypatch)
-    shutdowns: list[int] = []
-
-    def uploader(key, data, *, spec, content_digest, extra_headers=None):
-        del key, data, spec, content_digest, extra_headers
-        raise RuntimeError("R2 upload returned 503")
-
-    manager = _job_manager(
-        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
-        on_terminal=lambda: shutdowns.append(1),
-        terminal_uploader=uploader,
-        terminal_reader=lambda item: None,
-        max_job_seconds=30,
-    )
-    worker = None
-    try:
-        manager.submit(_job("a" * 64, "no-shutdown"))
-        worker = manager._worker
-        assert worker is not None
-        worker.join(2)
-        assert not worker.is_alive()
-        assert shutdowns == []
-        assert manager._shutdown_notified is False
-        assert manager._pending_terminal is not None
-        assert isinstance(manager._retry_timer, _HeldTimer)
-        assert manager.status("no-shutdown")["status"] == "FAILED"
-        with pytest.raises(service.JobBusyError):
-            manager.submit(_job("b" * 64, "other"))
-        assert http_hits == []
-    finally:
-        pending_worker = manager._worker if worker is None else worker
-        if pending_worker is not None and pending_worker.is_alive():
-            pending_worker.join(2)
-        if manager._retry_timer is not None:
-            manager._retry_timer.cancel()
-        manager._pending_terminal = None
-        manager._shutdown_notified = True
-        assert pending_worker is None or not pending_worker.is_alive()
 
 
 def test_matching_existing_terminal_is_accepted() -> None:
@@ -2667,8 +2636,8 @@ def test_failed_terminal_put_and_get_404_retries_without_shutdown(
 ) -> None:
     terminal = threading.Event()
     fake = _put_then_get_404(monkeypatch, put_error=put_error)
-    manager = _job_manager(
-        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+    manager = service.JobManager(
+        synthetic_child_runner_failure,
         on_terminal=terminal.set,
         retry_schedule=(0.05, 0.05),
         max_job_seconds=30,

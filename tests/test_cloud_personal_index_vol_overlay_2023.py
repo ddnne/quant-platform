@@ -27,6 +27,7 @@ from test_cloud_personal_research_container import (
     _job,
     held_retry_scheduler,
     service,
+    synthetic_child_runner_failure,
 )
 from test_personal_base_sleeve_am_pm import DATES as AM_DATES
 from test_personal_base_sleeve_am_pm import _build as _build_am_sleeve
@@ -851,7 +852,7 @@ def test_am_family_failed_put_then_terminal_get_404_retries_without_shutdown(
     fake = _am_family_put_then_get_404(monkeypatch, spec, put_error=put_error)
     terminal = threading.Event()
     manager = service.JobManager(
-        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
+        synthetic_child_runner_failure,
         on_terminal=terminal.set,
         retry_schedule=(0.05, 0.05),
         max_job_seconds=30,
