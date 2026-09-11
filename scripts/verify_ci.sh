@@ -173,6 +173,8 @@ echo "==> python pytest (2 workers, file-scoped scheduling)"
 verify_worker() {
   local dir="$1" name
   name="$(basename "$dir")"
+  # Isolate target npm/npx from connected Builds WRANGLER_CI_OVERRIDE_NAME.
+  unset WRANGLER_CI_OVERRIDE_NAME
   if [[ ! -d "$dir" ]]; then
     echo "worker $name: missing directory ($dir)" >&2
     exit 1

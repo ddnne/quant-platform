@@ -928,57 +928,220 @@ def test_test_harness_config_rejects_hidden_named_environment(
         )
 
 
-def test_authoritative_ci_dry_runs_test_harness_configs() -> None:
-    ci = (manifest_module.ROOT / "scripts" / "verify_ci.sh").read_text(
-        encoding="utf-8"
+_CI_STUB = r"""
+import json, os, sys
+from pathlib import Path
+def fail(msg):
+    raise SystemExit(f"unknown ci stub call: {msg}")
+def record(argv):
+    cwd = Path.cwd()
+    key = cwd.name if (cwd / "package.json").is_file() else f"root-{os.getpid()}"
+    env = {k: os.environ.get(k) for k in (
+        "WRANGLER_CI_OVERRIDE_NAME", "WORKERS_CI",
+        "WRANGLER_CI_MATCH_TAG", "CLOUDFLARE_ENV")}
+    path = Path(os.environ["CI_STUB_LOG_DIR"]) / f"{key}.jsonl"
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"command": argv, "cwd": str(cwd), "environment": env}) + "\n")
+tool, args = Path(sys.argv[0]).name, sys.argv[1:]
+record([tool, *args])
+GATES = {
+    "finding_ledger_ci.py", "verify_secret_paths.py",
+    "generate_jquants_acquisition_registry.py", "verify_governed_js_drift.py",
+    "verify_controlled_pilot_v1_drift.py", "cloudflare_d1_migration_manifest.py",
+}
+if tool in ("python", "python3", "python3.11"):
+    if args[:1] in (["-"], ["-c"]):
+        os.execv(sys.executable, [sys.executable, *args])
+    if args[:2] == ["-m", "pytest"]:
+        raise SystemExit(0)
+    if not args:
+        fail(args)
+    name, rest = Path(args[0]).name, args[1:]
+    if name == "cloudflare_binding_manifest.py":
+        if rest == ["--print-worker-paths"]:
+            root = Path.cwd()
+            sys.stdout.write(
+                f"{root / 'workers' / 'ci-typed'}\n{root / 'workers' / 'ci-plain'}\n"
+            )
+            raise SystemExit(0)
+        if rest:
+            fail(args)
+        raise SystemExit(0)
+    if name == "verify_generated_worker_env.py":
+        if rest == ["--list-environments"]:
+            sys.stdout.write("base\nproduction\nstaging\n")
+            raise SystemExit(0)
+        needed = {
+            "--worker", "--environment", "--generated-types",
+            "--assertion", "--tsconfig",
+        }
+        if needed <= set(rest):
+            raise SystemExit(0)
+        fail(args)
+    if name == "verify_source_capability_wheel.py" and "--uv" in rest and "--python" in rest:
+        raise SystemExit(0)
+    if name in GATES and not rest:
+        raise SystemExit(0)
+    fail(args)
+if tool == "uv":
+    if args == ["--version"]:
+        sys.stdout.write("uv 0.11.26\n")
+        raise SystemExit(0)
+    if args[:5] == ["sync", "--frozen", "--extra", "dev", "--python"] and len(args) == 6:
+        raise SystemExit(0)
+    fail(args)
+if tool == "npm":
+    if args in (["ci"], ["test"], ["run", "typecheck"], ["run", "types", "--", "--check"]):
+        raise SystemExit(0)
+    fail(args)
+if tool == "npx":
+    if args[:1] != ["--no-install"]:
+        fail(args)
+    body = args[1:]
+    if body[:2] == ["wrangler", "deploy"]:
+        if "--dry-run" not in body:
+            fail("deploy missing --dry-run")
+        if os.environ.get("CI_STUB_FAIL_PRODUCTION") == Path.cwd().name and "--env=production" in body:
+            raise SystemExit(1)
+        raise SystemExit(0)
+    if body[:2] == ["wrangler", "types"]:
+        raise SystemExit(0)
+    if body[:2] == ["tsc", "--project"] and len(body) == 3:
+        raise SystemExit(0)
+    fail(args)
+if tool == "git":
+    if args in (
+        ["diff", "--quiet"], ["diff", "--cached", "--quiet"],
+        ["ls-files", "--others", "--exclude-standard"],
+    ):
+        raise SystemExit(0)
+    fail(args)
+fail(tool)
+"""
+
+
+@pytest.mark.parametrize("fail_production", [None, "ci-typed"])
+def test_authoritative_ci_dry_runs_test_harness_configs(
+    tmp_path: Path, fail_production
+) -> None:
+    (tmp_path / "scripts").mkdir()
+    for name in ("verify_ci.sh", "ci_bounded_jobs.sh"):
+        shutil.copy(ROOT / "scripts" / name, tmp_path / "scripts" / name)
+    for name in ("ci-typed", "ci-plain"):
+        worker = tmp_path / "workers" / name
+        worker.mkdir(parents=True)
+        pkg = {"name": name}
+        if name == "ci-typed":
+            pkg["scripts"] = {"types": "wrangler types --include-runtime=false"}
+        (worker / "package.json").write_text(json.dumps(pkg), encoding="utf-8")
+        (worker / "package-lock.json").write_text("{}", encoding="utf-8")
+        (worker / "wrangler.toml").write_text(f'name = "{name}-cfg"\n', encoding="utf-8")
+        (worker / "wrangler.staging.toml").write_text(
+            f'name = "{name}-stg"\n', encoding="utf-8"
+        )
+        if name == "ci-typed":
+            (worker / "wrangler.test.toml").write_text(
+                f'name = "{name}-test"\n', encoding="utf-8"
+            )
+    log_dir = tmp_path / "stub-logs"
+    bin_dir = tmp_path / "bin"
+    log_dir.mkdir()
+    bin_dir.mkdir()
+    stub = bin_dir / "_stub.py"
+    stub.write_text(f"#!{sys.executable}\n" + _CI_STUB, encoding="utf-8")
+    stub.chmod(0o755)
+    stub_abs = stub.resolve()
+    for name in ("python", "python3", "python3.11", "uv", "npm", "npx", "git", "pipx"):
+        (bin_dir / name).symlink_to(stub_abs)
+    venv_py = tmp_path / ".venv" / "bin" / "python"
+    venv_py.parent.mkdir(parents=True)
+    venv_py.symlink_to(stub_abs)
+    env = os.environ.copy()
+    env["PATH"] = str(bin_dir.resolve()) + os.pathsep + env.get("PATH", "")
+    env.update({
+        "CI_STUB_LOG_DIR": str(log_dir),
+        "WRANGLER_CI_OVERRIDE_NAME": "aggregator-fixture",
+        "WORKERS_CI": "1",
+        "WRANGLER_CI_MATCH_TAG": "keep-fixture",
+        "CLOUDFLARE_ENV": "poisoned",
+    })
+    if fail_production:
+        env["CI_STUB_FAIL_PRODUCTION"] = fail_production
+    else:
+        env.pop("CI_STUB_FAIL_PRODUCTION", None)
+    proc = subprocess.run(
+        ["bash", str(tmp_path / "scripts" / "verify_ci.sh")],
+        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30,
     )
-    assert "wrangler deploy --dry-run --config=wrangler.test.toml" in ci
-    assert "--config=wrangler.toml --env=\"\"" in ci
-    assert "--config=wrangler.toml --env=production" in ci
-    assert "unset CLOUDFLARE_ENV" in ci
-    logical_lines = ci.replace("\\\n", " ").splitlines()
-    wrangler_invocations = [
-        line.strip()
-        for line in logical_lines
-        if "npx --no-install wrangler " in line and not line.lstrip().startswith("#")
+    recs = [
+        json.loads(line)
+        for path in sorted(log_dir.glob("*.jsonl"))
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line
     ]
-    assert wrangler_invocations
-    parsed_invocations = []
-    for command in wrangler_invocations:
-        payload = command.split("npx --no-install wrangler ", 1)[1].rstrip(")")
-        parsed_invocations.append(shlex.split(payload))
-    assert parsed_invocations == [
-        ["deploy", "--dry-run", "--config=wrangler.toml", "--env="],
-        [
-            "deploy",
-            "--dry-run",
-            "--config=wrangler.toml",
-            "--env=production",
-        ],
-        ["deploy", "--dry-run", "--config=wrangler.staging.toml"],
-        ["deploy", "--dry-run", "--config=wrangler.test.toml", "--env="],
-        ["types", "--config=wrangler.toml", "--env="],
-        [
-            "types",
-            "$base_types",
-            "--config=wrangler.toml",
-            "--env=",
-            "--include-runtime=false",
-        ],
-        [
-            "types",
-            "$production_types",
-            "--config=wrangler.toml",
-            "--env=production",
-            "--include-runtime=false",
-        ],
-        [
-            "types",
-            "$staging_types",
-            "--config=wrangler.staging.toml",
-            "--include-runtime=false",
-        ],
+
+    def norm(cmd):
+        if cmd[:4] == ["npx", "--no-install", "wrangler", "types"] and len(cmd) > 4 and not cmd[4].startswith("-"):
+            return cmd[:4] + [Path(cmd[4]).name] + cmd[5:]
+        if cmd[:4] == ["npx", "--no-install", "tsc", "--project"] and len(cmd) == 5:
+            return cmd[:4] + [Path(cmd[4]).name]
+        return cmd
+
+    def worker_cmds(name):
+        want = (tmp_path / "workers" / name).resolve()
+        return [norm(r["command"]) for r in recs if Path(r["cwd"]).resolve() == want]
+
+    def wr(*parts):
+        return ["npx", "--no-install", "wrangler", *parts]
+
+    deploys = [
+        wr("deploy", "--dry-run", "--config=wrangler.toml", "--env="),
+        wr("deploy", "--dry-run", "--config=wrangler.toml", "--env=production"),
+        wr("deploy", "--dry-run", "--config=wrangler.staging.toml"),
     ]
+    generated = [
+        wr("types", "base.d.ts", "--config=wrangler.toml", "--env=", "--include-runtime=false"),
+        wr("types", "production.d.ts", "--config=wrangler.toml", "--env=production", "--include-runtime=false"),
+        wr("types", "staging.d.ts", "--config=wrangler.staging.toml", "--include-runtime=false"),
+    ]
+    tsc = [
+        ["npx", "--no-install", "tsc", "--project", f"{item}.tsconfig.json"]
+        for item in ("base", "production", "staging")
+    ]
+    prefix = [["npm", "ci"], ["npm", "test"], ["npm", "run", "typecheck"]]
+    typed_full = (
+        prefix + deploys
+        + [wr("deploy", "--dry-run", "--config=wrangler.test.toml", "--env=")]
+        + [["npm", "run", "types", "--", "--check"]]
+        + generated + tsc
+    )
+    plain_full = (
+        prefix + deploys
+        + [wr("types", "--config=wrangler.toml", "--env=")]
+        + generated + tsc
+    )
+    for rec in recs:
+        e = rec["environment"]
+        assert e["CLOUDFLARE_ENV"] is None
+        cmd = rec["command"]
+        if cmd[0] in ("npm", "npx") and cmd[1:] != ["ci"]:
+            assert e["WRANGLER_CI_OVERRIDE_NAME"] is None
+            assert e["WORKERS_CI"] == "1"
+            assert e["WRANGLER_CI_MATCH_TAG"] == "keep-fixture"
+        if cmd[0] in ("uv", "git") or cmd[:2] == ["npm", "ci"]:
+            assert e["WRANGLER_CI_OVERRIDE_NAME"] == "aggregator-fixture"
+    git_recs = [r for r in recs if r["command"][0] == "git"]
+    if fail_production:
+        assert proc.returncode == 1, proc.stderr
+        assert "unknown ci stub call" not in proc.stderr + proc.stdout
+        assert worker_cmds("ci-typed") == prefix + deploys[:2]
+        assert worker_cmds("ci-plain") == plain_full
+        assert git_recs == []
+        return
+    assert proc.returncode == 0, proc.stderr
+    assert worker_cmds("ci-typed") == typed_full
+    assert worker_cmds("ci-plain") == plain_full
+    assert git_recs
 
 
 def test_manifest_is_fail_closed_for_toolchain_drift() -> None:
