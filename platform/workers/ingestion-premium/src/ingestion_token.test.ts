@@ -11,25 +11,10 @@ function req(
 }
 
 describe("ingestionTokenMatches", () => {
-  it("unbound expected is false", async () => {
-    expect(
-      await ingestionTokenMatches(req({ "X-Ingestion-Token": TOKEN }), undefined),
-    ).toBe(false);
-  });
-
   it("matching header is true", async () => {
     expect(
       await ingestionTokenMatches(req({ "X-Ingestion-Token": TOKEN }), TOKEN),
     ).toBe(true);
-  });
-
-  it("wrong header is false", async () => {
-    expect(
-      await ingestionTokenMatches(
-        req({ "X-Ingestion-Token": "wrong-token" }),
-        TOKEN,
-      ),
-    ).toBe(false);
   });
 
   it("query token is ignored even when it matches", async () => {

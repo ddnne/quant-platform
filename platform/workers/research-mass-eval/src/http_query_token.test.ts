@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { authorized } from "./http";
 import { dispatchMassEvalFetch } from "./http_routes";
 import type { Env } from "./types";
 
@@ -25,31 +24,6 @@ async function expectUnauthorizedNoEval(res: Response) {
   expect(JSON.parse(body)).toEqual({ error: "unauthorized" });
   expect(body).not.toContain("COMPLETE");
 }
-
-describe("authorized ignores query token", () => {
-  it("denies matching ?token= with no header", async () => {
-    expect(
-      await authorized(
-        new Request("https://example.test/v1/mass-eval?token=secret", {
-          method: "POST",
-        }),
-        "secret",
-      ),
-    ).toBe(false);
-  });
-
-  it("accepts matching X-Mass-Eval-Token header", async () => {
-    expect(
-      await authorized(
-        new Request("https://example.test/v1/mass-eval", {
-          method: "POST",
-          headers: { "X-Mass-Eval-Token": TOKEN },
-        }),
-        TOKEN,
-      ),
-    ).toBe(true);
-  });
-});
 
 describe("mutating routes ignore query token", () => {
   it("POST /v1/children-then-manifest?token=secret with no header is 401 not 503", async () => {

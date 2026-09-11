@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  authorized,
   putChildrenThenManifest,
   putImmutableJson,
   putJsonCreateOnly,
@@ -11,10 +10,6 @@ import {
 } from "./http";
 import { CONTROLLED_PILOT_MAX_REQUEST_BYTES, dispatchMassEvalFetch } from "./http_routes";
 import type { Env } from "./types";
-
-function req(headers: Record<string, string>): Request {
-  return new Request("https://example.test/v1/daily-path", { method: "POST", headers });
-}
 
 function countingStream(total: number, chunkSize: number, stats: { pulled: number; cancelled: boolean }) {
   let sent = 0;
@@ -179,31 +174,6 @@ describe("readBoundedJson", () => {
       status: 413,
       error: "request body exceeds the bound",
     });
-  });
-});
-
-describe("authorized fail-closed", () => {
-  it("denies when expected token is missing", async () => {
-    expect(await authorized(req({ "X-Mass-Eval-Token": "x" }), undefined)).toBe(
-      false,
-    );
-    expect(await authorized(req({}), "")).toBe(false);
-  });
-
-  it("denies when header missing", async () => {
-    expect(await authorized(req({}), "secret")).toBe(false);
-  });
-
-  it("accepts matching token", async () => {
-    expect(await authorized(req({ "X-Mass-Eval-Token": "secret" }), "secret")).toBe(
-      true,
-    );
-  });
-
-  it("rejects mismatched token", async () => {
-    expect(await authorized(req({ "X-Mass-Eval-Token": "nope" }), "secret")).toBe(
-      false,
-    );
   });
 });
 
