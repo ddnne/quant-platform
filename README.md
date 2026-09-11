@@ -233,15 +233,21 @@ packages/
 ## セットアップとテスト
 
 ```bash
-# Python 3.11 環境を用意（例: uv）
-uv venv --python 3.11 .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+# Python 3.11+。CI と同じ lock に従って開発依存を用意する。
+uv sync --frozen --extra dev
 
-# テスト（API 鍵不要・オフラインで green）
-python -m pytest tests/ -q
-# G0 smoke (no tests.test_smoke module)
-python -m pytest tests/ -q -k "plane_import or mass_research or gateway_fail or publish_guard"
+# Node/npm や Worker の npm install に依存しない Python 試験
+.venv/bin/python -m pytest tests/ -m "not toolchain and not live"
+
+# Node/npm を使うクロスランタイム・package 入口試験（CI では必須）
+.venv/bin/python -m pytest tests/ -m "toolchain and not live"
 ```
+
+全体の必須 CI は `scripts/verify_ci.sh`。Python の両グループと全 active
+Worker の試験・型検査・dry-run を実行します。上の Python 選択だけでは
+Worker runtime や live acceptance の検証にはなりません。非 live の Python
+試験には SQLite・OS・子プロセスの統合試験も含み、全通信を遮断する仕組みは
+まだ未完です。`live` は別途明示的な設定と許可が必要です。
 
 ## Phase 1 の取得（ローカル）
 
