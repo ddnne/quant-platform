@@ -1365,24 +1365,3 @@ def test_unsigned_pilot_ready_json_is_rejected(
         ]
     )
     assert rc == 1
-
-
-@pytest.mark.live
-def test_sync_live_requires_worker_url(tmp_path, sync_module):
-    """Live smoke. Skipped unless ``QP_LIVE=1`` and a worker URL is set.
-
-    Run with:
-      QP_LIVE=1 INGESTION_PREMIUM_URL=https://... INGESTION_PROXY_TOKEN=... \\
-        .venv/bin/python -m pytest tests/test_phase35_sync_script.py::test_sync_live_requires_worker_url
-    """
-    if not os.environ.get("QP_LIVE"):
-        pytest.skip("set QP_LIVE=1 to run live sync smoke")
-    url = os.environ.get("INGESTION_PREMIUM_URL")
-    if not url:
-        pytest.skip("INGESTION_PREMIUM_URL not set")
-    rc = sync_module.main([
-        "--db", str(tmp_path / "live.sqlite"),
-        "--url", url,
-        "--table", "jquants_market_calendar",
-    ])
-    assert rc == 0

@@ -26,6 +26,7 @@ dev = [
     "pytest-xdist>=3.8",
     "openpyxl>=3.1",
     "xlrd>=2.0.2",
+    "pytest-socket==0.8.1",
 ]
 
 [tool.setuptools.packages.find]
@@ -76,9 +77,10 @@ storage = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --strict-markers"
+addopts = "-q --strict-markers --disable-socket --allow-unix-socket"
 norecursedirs = [".*", "build", "dist"]
 markers = [
-    "live: tests that touch a real network endpoint (skipped by default; set QP_LIVE=1)",
+    "live: reserved marker for operator-gated live deployment acceptance; CI excludes it. QP_LIVE alone does not enable network",
     "toolchain: tests that require actual Node/npm",
+    "platform: opt-in real-host OS integration; skipped unless --run-platform",
 ]

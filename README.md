@@ -237,17 +237,27 @@ packages/
 uv sync --frozen --extra dev
 
 # Node/npm や Worker の npm install に依存しない Python 試験
-.venv/bin/python -m pytest tests/ -m "not toolchain and not live"
+.venv/bin/python -m pytest tests/ -m "not toolchain and not live and not platform"
 
 # Node/npm を使うクロスランタイム・package 入口試験（CI では必須）
-.venv/bin/python -m pytest tests/ -m "toolchain and not live"
+.venv/bin/python -m pytest tests/ -m "toolchain and not live and not platform"
+
+# macOS 実ホスト統合の例。-m platform は選択、--run-platform は実行許可。
+# 選択だけ（許可なし）では skip される。許可があれば -m なしの広い選択にも含められる。
+.venv/bin/python -m pytest tests/ -m platform --run-platform
 ```
 
 全体の必須 CI は `scripts/verify_ci.sh`。Python の両グループと全 active
 Worker の試験・型検査・dry-run を実行します。上の Python 選択だけでは
-Worker runtime や live acceptance の検証にはなりません。非 live の Python
-試験には SQLite・OS・子プロセスの統合試験も含み、全通信を遮断する仕組みは
-まだ未完です。`live` は別途明示的な設定と許可が必要です。
+Worker runtime や live acceptance の検証にはなりません。必須の Python
+試験は純粋な unit だけではなく、SQLite・IPC・子プロセスの統合も含みます。
+既定の pytest-socket は試験実行中の通常の Python ネットワークソケット生成と
+getaddrinfo/gethostbyname を遮断します。全 DNS API ではありません。
+collection/import、別プロセス exec、native/Node/Worker ランタイムは対象外です。
+Unix ソケットは許可します。全プロトコル隔離や速度・件数の改善は約束しません。
+`live` は予約マーカーで、CI の両グループから除外しますが collection skip はしません。
+既存の手動 live acceptance と HOLD はそのままです。QP_LIVE だけではネットワークは開きません。
+`--run-platform` は platform 試験の実行許可、`-m` は選択です。選択だけでは skip されます。
 
 通常の wheel と Cloudflare Container 入力から `research.offline` と `research.unique_logic` を除外します。チェックアウトには replay 互換ソースと不変成果物を残します。research は自動では有効になりません。wheel 検証は除外と data authority のみを確認し、Personal/Controlled の import 経路は実際の Container で確認します。standalone wheel での research 実行は新たにサポートしません。
 
