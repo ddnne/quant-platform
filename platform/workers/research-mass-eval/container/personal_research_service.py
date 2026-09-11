@@ -2652,6 +2652,7 @@ class JobManager:
         object_reader: Callable[..., tuple[dict[str, Any] | None, str]] | None = None,
         retry_schedule: Sequence[float] | None = None,
         clock: Callable[[], float] | None = None,
+        lease_clock: Callable[[], float] | None = None,
         work_root: Path | None = None,
         lease_ttl_seconds: float | None = None,
         process_start_grace_seconds: float = SUPERVISOR_START_GRACE_SECONDS,
@@ -2669,6 +2670,7 @@ class JobManager:
         self._object_reader = object_reader
         self._retry_schedule = tuple(retry_schedule or self._RETRY_SCHEDULE)
         self._clock = clock or time.monotonic
+        self._lease_clock = lease_clock
         self._work_root = work_root
         self._lock = threading.Lock()
         self._jobs: dict[str, dict[str, Any]] = {}
@@ -2772,6 +2774,12 @@ class JobManager:
             return float(self._lease_ttl_seconds)
         return float(_CONTROLLED_CONTRACT.get("lease_ttl_seconds") or 1800)
 
+    def _lease_now(self) -> float:
+        clock = self._lease_clock
+        if clock is None:
+            return datetime.now(UTC).timestamp()
+        return float(clock())
+
     def lease_lost(self) -> bool:
         return self._lease_lost.is_set()
 
@@ -2837,7 +2845,7 @@ class JobManager:
 
     def _schedule_lease_recovery_locked(self, spec: ControlledPilotJobSpec) -> None:
         existing, _etag = self._read_object(spec, spec.lease_key)
-        now = datetime.now(UTC).timestamp()
+        now = self._lease_now()
         delay = 0.05
         if isinstance(existing, dict):
             try:
@@ -3022,7 +3030,7 @@ class JobManager:
     def _claim_controlled_lease(self, spec: ControlledPilotJobSpec) -> str:
         owner = secrets.token_hex(16)
         for _attempt in range(4):
-            now = datetime.now(UTC).timestamp()
+            now = self._lease_now()
             existing, etag = self._read_object(spec, spec.lease_key)
             if existing is None:
                 lease = self._closed_lease_document(spec, owner, 1, now)
@@ -3157,7 +3165,7 @@ class JobManager:
         if existing.get("fencing_token") != current.get("fencing_token"):
             self._mark_lease_lost()
             raise JobConflictError("controlled lease fencing token lost")
-        now = datetime.now(UTC).timestamp()
+        now = self._lease_now()
         if existing.get("status") != "CLAIMED":
             self._mark_lease_lost()
             raise JobConflictError("controlled lease expired")

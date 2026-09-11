@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from data_contracts.read_scopes import DatasetReadScope, VisibleObservationCount
 from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED, RAW
 
 from .registry import register
@@ -288,6 +289,15 @@ RetrospectiveSplitAdjustedMomentumN: FeatureDefinition = register(
         ),
         compute=_retrospective_split_adjusted_momentum_n,
         dataset_dependencies=("equities_bars_daily",),
+        read_scopes=(
+            DatasetReadScope(
+                dataset_id="equities_bars_daily",
+                observation_count=VisibleObservationCount.named_integer_input_plus(
+                    "n", add=1
+                ),
+                fields=("adjustment_close", "date"),
+            ),
+        ),
         tags=("price", "daily", "momentum", "retrospective", "personal"),
         intended_role="signal",
         status="approved",

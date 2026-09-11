@@ -13,6 +13,11 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from data_contracts.read_scopes import (
+    DatasetReadScope,
+    normalize_dataset_read_scopes,
+    referenced_read_scope_inputs,
+)
 from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED, PriceBasis
 
 # Lifecycle / role vocabularies. ``Literal`` keeps the values statically
@@ -94,6 +99,10 @@ class FeatureDefinition:
       promotion tier: ``"candidate"`` (unvetted), ``"shadow"`` (logged but
       not used), ``"approved"`` (default for shipped features), ``"retired"``
       (kept for audit; do not consume in new code).
+    * ``read_scopes`` is the optional closed per-dataset read contract.
+      Empty means legacy/unscoped. A later Controlled compiler requires a
+      scope for every ``dataset_dependencies`` entry. v1 metadata digests
+      omit it.
     """
 
     id: str
@@ -106,6 +115,7 @@ class FeatureDefinition:
     tags: tuple[str, ...] = ()
     status: FeatureStatus = "candidate"
     price_basis: PriceBasis | None = None
+    read_scopes: tuple[DatasetReadScope, ...] = ()
 
     def __post_init__(self) -> None:
         """Enforce governance vocabularies at runtime, not only in typing."""
@@ -144,3 +154,28 @@ class FeatureDefinition:
         if len(normalized) != len(set(normalized)):
             raise ValueError("dataset_dependencies cannot contain duplicates")
         object.__setattr__(self, "dataset_dependencies", normalized)
+        scopes = normalize_dataset_read_scopes(self.read_scopes)
+        undeclared = tuple(
+            scope.dataset_id
+            for scope in scopes
+            if scope.dataset_id not in normalized
+        )
+        if undeclared:
+            raise ValueError(
+                "read_scopes datasets must be among dataset_dependencies: "
+                f"{list(undeclared)}"
+            )
+        declared_inputs = set(self.inputs.required_kwargs) | set(
+            self.inputs.optional_kwargs
+        )
+        unknown_inputs = [
+            name
+            for name in referenced_read_scope_inputs(scopes)
+            if name not in declared_inputs
+        ]
+        if unknown_inputs:
+            raise ValueError(
+                "read_scopes reference unknown feature inputs: "
+                f"{unknown_inputs}"
+            )
+        object.__setattr__(self, "read_scopes", scopes)

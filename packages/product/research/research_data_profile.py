@@ -37,6 +37,10 @@ from data_contracts import (
     coverage_v3_dataset_ids,
     source_capability_contract_or_none,
 )
+from data_contracts.read_scopes import (
+    DatasetReadScope,
+    require_complete_feature_read_scopes,
+)
 from qp_paths import repo_root
 from research.evaluation_ir import EVALUATION_IR_VERSION
 from strategies.spec import FeatureRef, STRATEGY_SPEC_VERSION, StrategySpec
@@ -44,9 +48,11 @@ from strategies.spec import FeatureRef, STRATEGY_SPEC_VERSION, StrategySpec
 PROFILE_VERSION: str = "research-data-profile/v1"
 PROFILE_VERSION_V1: str = PROFILE_VERSION
 PROFILE_VERSION_V2: str = "research-data-profile/v2"
+PROFILE_VERSION_V3: str = "research-data-profile/v3"
 SUPPORTED_PROFILE_VERSIONS: frozenset[str] = frozenset(
-    {PROFILE_VERSION_V1, PROFILE_VERSION_V2}
+    {PROFILE_VERSION_V1, PROFILE_VERSION_V2, PROFILE_VERSION_V3}
 )
+_PLAN_BOUND_PROFILE_VERSIONS = frozenset({PROFILE_VERSION_V2, PROFILE_VERSION_V3})
 CORE_PROFILE_ID: str = "core"
 CORE_PROFILE_REL: Path = Path("specs") / "research_profiles" / "core_v1.json"
 REQUIRED_COVERAGE_MODE_OFFICIAL: str = "official"
@@ -298,7 +304,7 @@ class ResearchDataProfile:
             "permitted_universe": list(self.permitted_universe),
             "excluded_datasets_and_reasons": dict(self.excluded_datasets_and_reasons),
         }
-        if self.profile_version == PROFILE_VERSION_V2:
+        if self.profile_version in _PLAN_BOUND_PROFILE_VERSIONS:
             body.update(
                 {
                     "plan_id": self.plan_id,
@@ -358,11 +364,11 @@ class ResearchDataProfile:
                 f"unsupported profile_version {profile_version!r}; "
                 f"expected one of {sorted(SUPPORTED_PROFILE_VERSIONS)}"
             )
-        if profile_version == PROFILE_VERSION_V2:
+        if profile_version in _PLAN_BOUND_PROFILE_VERSIONS:
             missing_v2 = sorted(optional_v2_fields - set(payload))
             if missing_v2:
                 raise ResearchDataProfileError(
-                    f"ResearchDataProfile v2 missing field(s): {missing_v2}"
+                    f"ResearchDataProfile {profile_version} missing field(s): {missing_v2}"
                 )
             plan_id = _require_str(payload.get("plan_id"), "plan_id")
             plan_digest = _require_sha256(payload.get("plan_digest"), "plan_digest")
@@ -424,13 +430,16 @@ class ResearchDataProfile:
 
         # resolve_deps fail-closed on missing Deps / omitted listed datasets.
         required_datasets = resolve_deps(payload)
-        if profile_version == PROFILE_VERSION_V2:
+        if profile_version == PROFILE_VERSION_V3:
+            feature_dependencies = _require_scoped_feature_deps(feature_dependencies)
+        if profile_version in _PLAN_BOUND_PROFILE_VERSIONS:
             dataset_scopes = _require_dataset_scopes(
                 payload.get("dataset_scopes"),
                 required_datasets=required_datasets,
                 period_start=period_start,
                 period_end=period_end,
                 required_lookback=required_lookback,
+                profile_version=profile_version,
             )
             expected_policy = coverage_policy_set_binding(list(required_datasets))
             if (
@@ -440,8 +449,12 @@ class ResearchDataProfile:
                 != expected_policy["policy_digest"]
             ):
                 raise ResearchDataProfileError(
-                    "ResearchDataProfile v2 coverage policy-set version/digest "
-                    "does not match required_datasets"
+                    f"ResearchDataProfile {profile_version} coverage policy-set "
+                    "version/digest does not match required_datasets"
+                )
+            if profile_version == PROFILE_VERSION_V3:
+                _bind_profile_feature_requirements(
+                    feature_dependencies, dataset_scopes
                 )
         else:
             dataset_scopes = ()
@@ -464,7 +477,7 @@ class ResearchDataProfile:
             ),
             "excluded_datasets_and_reasons": dict(excluded),
         }
-        if profile_version == PROFILE_VERSION_V2:
+        if profile_version in _PLAN_BOUND_PROFILE_VERSIONS:
             body.update(
                 {
                     "plan_id": plan_id,
@@ -547,24 +560,43 @@ def contract_versions_for_datasets(
 
 
 def profile_from_dependency_closure(closure: Any) -> ResearchDataProfile:
-    """Materialize the exact v2 data profile bound to one plan closure."""
-    from research.dependency_closure import PlanDependencyClosure
+    """Materialize the exact plan-bound data profile for one closure version."""
+    from research.dependency_closure import (
+        PLAN_DEPENDENCY_CLOSURE_VERSION_V1,
+        PLAN_DEPENDENCY_CLOSURE_VERSION_V2,
+        PlanDependencyClosure,
+    )
 
     if not isinstance(closure, PlanDependencyClosure):
-        raise ResearchDataProfileError("PlanDependencyClosure v1 required")
-    feature_dependencies = [
-        {
+        raise ResearchDataProfileError("PlanDependencyClosure required")
+    if closure.version == PLAN_DEPENDENCY_CLOSURE_VERSION_V1:
+        profile_version = PROFILE_VERSION_V2
+    elif closure.version == PLAN_DEPENDENCY_CLOSURE_VERSION_V2:
+        profile_version = PROFILE_VERSION_V3
+    else:
+        raise ResearchDataProfileError(
+            f"unsupported closure version {closure.version!r}"
+        )
+    feature_dependencies = []
+    for dependency in closure.feature_dependencies:
+        item = {
             "id": dependency.feature_id,
             "version": dependency.feature_version,
             "params": dict(dependency.params),
             "definition_digest": dependency.definition_digest,
             "dataset_dependencies": list(dependency.dataset_dependencies),
         }
-        for dependency in closure.feature_dependencies
-    ]
+        if profile_version == PROFILE_VERSION_V3:
+            item["ordinal"] = dependency.ordinal
+            item["metadata_version"] = dependency.metadata_version
+            item["resolved_read_scopes"] = [
+                scope.canonical_mapping()
+                for scope in dependency.resolved_read_scopes
+            ]
+        feature_dependencies.append(item)
     payload = {
         "profile_id": f"{closure.research_data_profile_id}:{closure.plan_id}",
-        "profile_version": PROFILE_VERSION_V2,
+        "profile_version": profile_version,
         "purpose": (
             "Exact transitive data profile compiled from "
             f"PlanDependencyClosure {closure.plan_id}"
@@ -682,9 +714,18 @@ def _require_dataset_scopes(
     period_start: str,
     period_end: str,
     required_lookback: int,
+    profile_version: str = PROFILE_VERSION_V2,
 ) -> tuple[dict[str, Any], ...]:
     if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
         raise ResearchDataProfileError("dataset_scopes must be an array")
+    if profile_version == PROFILE_VERSION_V3:
+        return _require_dataset_scopes_v3(
+            raw,
+            required_datasets=required_datasets,
+            period_start=period_start,
+            period_end=period_end,
+            required_lookback=required_lookback,
+        )
     normalized: list[dict[str, Any]] = []
     expected_fields = {
         "dataset_id",
@@ -734,6 +775,97 @@ def _require_dataset_scopes(
     return tuple(normalized)
 
 
+def _require_dataset_scopes_v3(
+    raw: Sequence[Any],
+    *,
+    required_datasets: tuple[str, ...],
+    period_start: str,
+    period_end: str,
+    required_lookback: int,
+) -> tuple[dict[str, Any], ...]:
+    from research.dependency_closure import (
+        DatasetDependencyScope,
+        DatasetReadRequirement,
+        PlanDependencyClosureError,
+    )
+
+    scopes: list[DatasetDependencyScope] = []
+    allowed = {
+        "dataset_id",
+        "period_start",
+        "period_end",
+        "required_lookback_trading_days",
+        "requirements",
+    }
+    for index, item in enumerate(raw):
+        if not isinstance(item, Mapping):
+            raise ResearchDataProfileError(
+                f"dataset_scopes[{index}] must be an object"
+            )
+        extra = sorted(str(key) for key in item if key not in allowed)
+        if extra:
+            raise ResearchDataProfileError(
+                f"dataset_scopes[{index}] has unsupported fields: {extra}"
+            )
+        requirements_raw = item.get("requirements")
+        if not isinstance(requirements_raw, Sequence) or isinstance(
+            requirements_raw, (str, bytes)
+        ):
+            raise ResearchDataProfileError(
+                f"dataset_scopes[{index}].requirements must be an array"
+            )
+        lookback = item.get("required_lookback_trading_days")
+        if (
+            isinstance(lookback, bool)
+            or not isinstance(lookback, int)
+            or lookback < 0
+        ):
+            raise ResearchDataProfileError(
+                "dataset_scope lookback must be a non-negative integer"
+            )
+        try:
+            scope = DatasetDependencyScope(
+                dataset_id=_require_str(
+                    item.get("dataset_id"), "dataset_scope.dataset_id"
+                ),
+                period_start=_require_iso_date(
+                    item.get("period_start"), "dataset_scope.period_start"
+                ),
+                period_end=_require_iso_date(
+                    item.get("period_end"), "dataset_scope.period_end"
+                ),
+                required_lookback_trading_days=lookback,
+                requirements=tuple(
+                    DatasetReadRequirement.from_mapping(requirement)
+                    for requirement in requirements_raw
+                ),
+            )
+        except (PlanDependencyClosureError, ValueError) as exc:
+            raise ResearchDataProfileError(
+                f"dataset_scopes[{index}] is malformed: {exc}"
+            ) from exc
+        if scope.period_start != period_start or scope.period_end != period_end:
+            raise ResearchDataProfileError(
+                "dataset_scope period must match profile period"
+            )
+        if not scope.requirements:
+            raise ResearchDataProfileError(
+                f"dataset_scopes[{index}] requires per-consumer requirements"
+            )
+        scopes.append(scope)
+    scopes.sort(key=lambda item: item.dataset_id)
+    if tuple(scope.dataset_id for scope in scopes) != required_datasets:
+        raise ResearchDataProfileError(
+            "dataset_scopes must exactly match required_datasets"
+        )
+    if max(
+        (scope.required_lookback_trading_days for scope in scopes),
+        default=0,
+    ) != required_lookback:
+        raise ResearchDataProfileError("profile lookback summary mismatch")
+    return tuple(scope.to_dict() for scope in scopes)
+
+
 def _require_contract_versions(raw: Any) -> dict[str, str]:
     if not isinstance(raw, Mapping) or not raw:
         raise ResearchDataProfileError("contract_versions must be a non-empty object")
@@ -754,6 +886,20 @@ def _require_contract_versions(raw: Any) -> dict[str, str]:
     return out
 
 
+_SCOPED_FEATURE_DEP_KEYS = frozenset(
+    {
+        "id",
+        "version",
+        "params",
+        "definition_digest",
+        "dataset_dependencies",
+        "ordinal",
+        "metadata_version",
+        "resolved_read_scopes",
+    }
+)
+
+
 def _require_feature_deps(raw: Any) -> tuple[dict[str, Any], ...]:
     if raw is None or not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
         raise ResearchDataProfileError("feature_dependencies must be an array")
@@ -761,6 +907,98 @@ def _require_feature_deps(raw: Any) -> tuple[dict[str, Any], ...]:
     for index, item in enumerate(raw):
         out.append(_normalize_feature_dep(item, f"feature_dependencies[{index}]"))
     return tuple(out)
+
+
+def _require_scoped_feature_deps(
+    deps: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, Any], ...]:
+    from features.registry import FEATURE_DEFINITION_METADATA_V2
+
+    out: list[dict[str, Any]] = []
+    for index, item in enumerate(deps):
+        extra = sorted(str(key) for key in item if key not in _SCOPED_FEATURE_DEP_KEYS)
+        if extra:
+            raise ResearchDataProfileError(
+                f"feature_dependencies[{index}] has unsupported fields: {extra}"
+            )
+        missing = sorted(_SCOPED_FEATURE_DEP_KEYS.difference(item))
+        if missing:
+            raise ResearchDataProfileError(
+                f"feature_dependencies[{index}] missing field(s): {missing}"
+            )
+        if item.get("metadata_version") != FEATURE_DEFINITION_METADATA_V2:
+            raise ResearchDataProfileError(
+                "scope-enabled feature metadata requires feature-definition-metadata/v2"
+            )
+        raw_scopes = item.get("resolved_read_scopes")
+        if not isinstance(raw_scopes, Sequence) or isinstance(raw_scopes, (str, bytes)):
+            raise ResearchDataProfileError(
+                f"feature_dependencies[{index}].resolved_read_scopes must be an array"
+            )
+        try:
+            scopes = tuple(DatasetReadScope.from_mapping(scope) for scope in raw_scopes)
+            require_complete_feature_read_scopes(
+                item.get("dataset_dependencies") or (), scopes
+            )
+        except ValueError as exc:
+            raise ResearchDataProfileError(
+                f"feature_dependencies[{index}] resolved read scopes are malformed: {exc}"
+            ) from exc
+        payload = dict(item)
+        payload["resolved_read_scopes"] = [scope.canonical_mapping() for scope in scopes]
+        out.append(payload)
+    return tuple(out)
+
+
+def _bind_profile_feature_requirements(
+    feature_dependencies: Sequence[Mapping[str, Any]],
+    dataset_scopes: Sequence[Mapping[str, Any]],
+) -> None:
+    from research.dependency_closure import (
+        DatasetDependencyScope,
+        DatasetReadRequirement,
+        PlanDependencyClosureError,
+        ResolvedFeatureDependency,
+        validate_scoped_feature_binding,
+    )
+
+    try:
+        features = tuple(
+            ResolvedFeatureDependency(
+                ordinal=item["ordinal"],
+                feature_id=str(item["id"]),
+                feature_version=str(item["version"]),
+                params=item.get("params") or {},
+                definition_digest=str(item["definition_digest"]),
+                dataset_dependencies=tuple(item.get("dataset_dependencies") or ()),
+                metadata_version=str(item["metadata_version"]),
+                resolved_read_scopes=tuple(
+                    DatasetReadScope.from_mapping(scope)
+                    for scope in item["resolved_read_scopes"]
+                ),
+            )
+            for item in feature_dependencies
+        )
+        scopes = tuple(
+            DatasetDependencyScope(
+                dataset_id=str(item["dataset_id"]),
+                period_start=str(item["period_start"]),
+                period_end=str(item["period_end"]),
+                required_lookback_trading_days=int(
+                    item["required_lookback_trading_days"]
+                ),
+                requirements=tuple(
+                    DatasetReadRequirement.from_mapping(requirement)
+                    for requirement in item["requirements"]
+                ),
+            )
+            for item in dataset_scopes
+        )
+        validate_scoped_feature_binding(features, scopes)
+    except (PlanDependencyClosureError, ValueError, TypeError, KeyError) as exc:
+        raise ResearchDataProfileError(
+            f"scope-enabled profile feature binding is inconsistent: {exc}"
+        ) from exc
 
 
 def _require_strategy_deps(raw: Any) -> tuple[dict[str, Any], ...]:
@@ -950,6 +1188,7 @@ __all__ = [
     "PROFILE_VERSION",
     "PROFILE_VERSION_V1",
     "PROFILE_VERSION_V2",
+    "PROFILE_VERSION_V3",
     "REQUIRED_COVERAGE_MODE_OFFICIAL",
     "ResearchDataProfile",
     "ResearchDataProfileError",

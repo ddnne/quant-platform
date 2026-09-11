@@ -178,6 +178,56 @@ def test_feature_context_jquants_records_allows_complete_dataset():
     assert calls[-1][0] == "equity_bars_daily"
 
 
+def test_feature_context_financial_state_guard_and_dispatch():
+    calls: list[tuple[str, dict]] = []
+
+    def _reader(resource, kwargs):
+        calls.append((resource, dict(kwargs)))
+        return SimpleNamespace(visible_row_count=0, observation=None)
+
+    ctx = FeatureContext(
+        as_of="2026-08-01T15:30:00+09:00",
+        _input_values={},
+        _pit_reader=_reader,
+    )
+    with pytest.raises(PermanentDeferHistoryError, match="PD-D4-BARS-AM"):
+        ctx.get_financial_state(
+            dataset="equities_bars_daily_am",
+            code="8697",
+            initial_visible_state="all_visible_existence_and_count",
+        )
+    with pytest.raises(TypeError, match="runtime-scoped"):
+        ctx.get_financial_state(
+            dataset="fins_summary",
+            code="8697",
+            initial_visible_state="all_visible_existence_and_count",
+            as_of="2026-08-01T15:30:00+09:00",
+        )
+    with pytest.raises(TypeError, match="runtime-scoped"):
+        ctx.get_financial_state(
+            dataset="fins_summary",
+            code="8697",
+            initial_visible_state="all_visible_existence_and_count",
+            db_path="other.sqlite",
+        )
+    assert calls == []
+    ctx.get_financial_state(
+        dataset="fins_summary",
+        code="8697",
+        initial_visible_state="all_visible_existence_and_count",
+    )
+    assert calls == [
+        (
+            "financial_state",
+            {
+                "dataset": "fins_summary",
+                "code": "8697",
+                "initial_visible_state": "all_visible_existence_and_count",
+            },
+        )
+    ]
+
+
 def test_feature_context_jsda_repo_rates_guard_and_read():
     calls: list[tuple[str, dict]] = []
 

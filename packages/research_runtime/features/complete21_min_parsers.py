@@ -1,6 +1,8 @@
 """COMPLETE-21 min feature row parsers.
 
-Payload / bar / catalog row extraction only. No PIT reads, no registry.
+Bar / margin / futures / legacy EPS-BPS extraction. Catalog payload and
+latest per-share financial observation live in ``pit.financial_observations``
+and are imported here as compatibility aliases. No PIT reads, no registry.
 Permanent DEFER is enforced by compute before these parsers run.
 """
 
@@ -8,6 +10,12 @@ from __future__ import annotations
 
 import json
 from typing import Any, Mapping
+
+from pit.financial_observations import (
+    _as_float_or_none,
+    catalog_row_payload as _row_payload,
+    latest_fins_per_share_observation as _latest_fins_per_share_observation,
+)
 
 
 def _parse_volume_rows(rows: list[dict[str, Any]]) -> list[tuple[str, float]]:
@@ -51,31 +59,6 @@ def _parse_close_rows(rows: list[dict[str, Any]]) -> list[tuple[str, float]]:
             continue
     out.sort(key=lambda x: x[0])
     return out
-
-
-def _row_payload(row: dict[str, Any]) -> dict[str, Any]:
-    """Best-effort payload dict from a jquants_records (or flattened) row."""
-    p = row.get("payload")
-    if isinstance(p, dict):
-        return p
-    if isinstance(p, str) and p:
-        try:
-            loaded = json.loads(p)
-            if isinstance(loaded, dict):
-                return loaded
-        except (TypeError, ValueError, json.JSONDecodeError):
-            pass
-    raw = row.get("raw_payload")
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str) and raw:
-        try:
-            loaded = json.loads(raw)
-            if isinstance(loaded, dict):
-                return loaded
-        except (TypeError, ValueError, json.JSONDecodeError):
-            pass
-    return {}
 
 
 def _parse_margin_interest_rows(
@@ -163,19 +146,14 @@ def _parse_futures_volume_rows(
     return out
 
 
-def _as_float_or_none(x: Any) -> float | None:
-    if x is None or x == "":
-        return None
-    try:
-        return float(x)
-    except (TypeError, ValueError):
-        return None
-
-
 def _latest_fins_eps_bps(
     rows: list[dict[str, Any]],
 ) -> tuple[float | None, float | None, dict[str, Any]]:
-    """Walk PIT-visible fins_summary rows; take latest non-empty EPS/BPS."""
+    """Walk PIT-visible fins_summary rows; take latest non-empty EPS/BPS.
+
+    Independent older contract. Do not reuse
+    ``pit.financial_observations.latest_fins_per_share_observation``.
+    """
     eps: float | None = None
     bps: float | None = None
     disc_date: str | None = None
@@ -206,83 +184,6 @@ def _latest_fins_eps_bps(
                 or disc_date
             )
     return eps, bps, {"fins_rows": n, "disc_date": disc_date}
-
-
-def _latest_fins_per_share_observation(
-    rows: list[dict[str, Any]],
-) -> dict[str, Any] | None:
-    """Select the exact BPS/EPS observation and its own split-safety anchor.
-
-    The legacy parser intentionally remains untouched.  This stricter helper
-    binds the chosen per-share value to the row that supplied it, preferring
-    BPS as the established value-feature contract does.  Statement period
-    end is preferred; disclosure date is the explicit fallback.
-    """
-    latest_bps: dict[str, Any] | None = None
-    latest_eps: dict[str, Any] | None = None
-    parsed_rows = 0
-    for row in rows or []:
-        payload = _row_payload(row)
-        if not payload:
-            continue
-        parsed_rows += 1
-        bps = _as_float_or_none(
-            payload.get("BPS")
-            if payload.get("BPS") is not None
-            else payload.get("bps")
-        )
-        eps = _as_float_or_none(
-            payload.get("EPS")
-            if payload.get("EPS") is not None
-            else payload.get("eps")
-        )
-        period_end = next(
-            (
-                str(payload.get(key))[:10]
-                for key in (
-                    "CurrentPeriodEndDate",
-                    "CurPerEn",
-                    "CurrentFiscalYearEndDate",
-                    "CurFYEn",
-                    "FiscalYearEndDate",
-                    "PeriodEndDate",
-                    "period_end",
-                )
-                if payload.get(key)
-            ),
-            None,
-        )
-        disclosure_date = next(
-            (
-                str(payload.get(key))[:10]
-                for key in (
-                    "DisclosedDate",
-                    "DiscDate",
-                    "disclosed_date",
-                    "disc_date",
-                )
-                if payload.get(key)
-            ),
-            None,
-        )
-        anchor = period_end or disclosure_date
-        common = {
-            "statement_period_end": period_end,
-            "disclosure_date": disclosure_date,
-            "split_safety_anchor": anchor,
-            "split_safety_anchor_source": (
-                "statement_period_end" if period_end else "disclosure_date"
-            ),
-            "fins_rows": parsed_rows,
-        }
-        if bps is not None:
-            latest_bps = {**common, "mode": "bps_over_price", "bps": bps}
-        if eps is not None:
-            latest_eps = {**common, "mode": "eps_over_price", "eps": eps}
-    selected = latest_bps or latest_eps
-    if selected is None:
-        return None
-    return {**selected, "fins_rows": parsed_rows}
 
 
 def _retrospective_split_safety(

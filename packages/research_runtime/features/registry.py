@@ -16,6 +16,11 @@ import hashlib
 import json
 from typing import Iterable
 
+from data_contracts.read_scopes import (
+    feature_read_scopes_payload,
+    require_complete_feature_read_scopes,
+)
+
 from .types import (
     FeatureDefinition,
     FeatureInput,
@@ -27,6 +32,15 @@ from .types import (
 
 # Internal module-level registry. Built-in features register here at import.
 _FEATURES: dict[tuple[str, str], FeatureDefinition] = {}
+
+FEATURE_DEFINITION_METADATA_V1 = "feature-definition-metadata/v1"
+FEATURE_DEFINITION_METADATA_V2 = "feature-definition-metadata/v2"
+_METADATA_VERSION_ALIASES = {
+    "v1": FEATURE_DEFINITION_METADATA_V1,
+    "v2": FEATURE_DEFINITION_METADATA_V2,
+    FEATURE_DEFINITION_METADATA_V1: FEATURE_DEFINITION_METADATA_V1,
+    FEATURE_DEFINITION_METADATA_V2: FEATURE_DEFINITION_METADATA_V2,
+}
 
 
 class FeatureGovernanceError(PermissionError):
@@ -48,18 +62,22 @@ def register(feature: FeatureDefinition) -> FeatureDefinition:
     return feature
 
 
-def feature_definition_digest(feature: FeatureDefinition) -> str:
-    """Digest the immutable, JSON-safe portion of a feature definition.
+def _canonical_feature_metadata_digest(payload: dict[str, object]) -> str:
+    raw = json.dumps(
+        payload,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
 
-    The callable itself is versioned by ``FeatureVersion`` and remains outside
-    this metadata digest.  Dependency closure uses this digest together with an
-    exact ``(id, version)`` lookup, so changing declared datasets invalidates a
-    previously compiled closure without relying on registry insertion order.
-    """
-    if not isinstance(feature, FeatureDefinition):
-        raise TypeError("FeatureDefinition required")
-    payload = {
-        "contract": "feature-definition-metadata/v1",
+
+def _feature_definition_metadata_payload(
+    feature: FeatureDefinition, *, contract: str
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "contract": contract,
         "id": feature.id,
         "version": str(feature.version),
         "inputs": {
@@ -74,14 +92,41 @@ def feature_definition_digest(feature: FeatureDefinition) -> str:
         "status": feature.status,
         "price_basis": feature.price_basis,
     }
-    raw = json.dumps(
-        payload,
-        ensure_ascii=True,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(raw).hexdigest()
+    if contract == FEATURE_DEFINITION_METADATA_V2:
+        require_complete_feature_read_scopes(
+            feature.dataset_dependencies, feature.read_scopes
+        )
+        payload["read_scopes"] = feature_read_scopes_payload(feature.read_scopes)
+    return payload
+
+
+def feature_definition_digest(
+    feature: FeatureDefinition,
+    *,
+    metadata_version: str = FEATURE_DEFINITION_METADATA_V1,
+) -> str:
+    """Digest the immutable, JSON-safe portion of a feature definition.
+
+    The callable itself is versioned by ``FeatureVersion`` and remains outside
+    this metadata digest.  Dependency closure uses this digest together with an
+    exact ``(id, version)`` lookup, so changing declared datasets invalidates a
+    previously compiled closure without relying on registry insertion order.
+
+    Default ``feature-definition-metadata/v1`` bytes omit read scopes so
+    existing replay hashes stay stable. Pass ``v2`` for the scope-enabled
+    digest; unscoped definitions are rejected.
+    """
+    if not isinstance(feature, FeatureDefinition):
+        raise TypeError("FeatureDefinition required")
+    try:
+        contract = _METADATA_VERSION_ALIASES[metadata_version]
+    except KeyError as exc:
+        raise ValueError(
+            f"unsupported feature metadata version: {metadata_version!r}"
+        ) from exc
+    return _canonical_feature_metadata_digest(
+        _feature_definition_metadata_payload(feature, contract=contract)
+    )
 
 
 def get(feature_id: str, version: str | None = None) -> FeatureDefinition:
@@ -173,6 +218,8 @@ __all__ = [
     "IntendedRole",
     "FeatureStatus",
     "FeatureGovernanceError",
+    "FEATURE_DEFINITION_METADATA_V1",
+    "FEATURE_DEFINITION_METADATA_V2",
     "feature_definition_digest",
     "register",
     "get",

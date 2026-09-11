@@ -19,6 +19,7 @@ Tables (see :mod:`storage.schema`):
 * :func:`get_market_calendar`    -> ``jquants_market_calendar`` plus the
   ``markets_calendar`` partition of ``jquants_records``
 * :func:`get_jquants_records`    -> ``jquants_records`` (generic, by ``dataset``)
+* :func:`get_financial_state`    -> compact ``fins_summary`` catalog state
 * :func:`get_jsda_bond_trades`   -> ``jsda_bond_trades``
 * :func:`get_jsda_repo_rates`    -> ``jsda_repo_rates``
 """
@@ -53,9 +54,16 @@ from ingestion.jquants.normalize import (
 from storage.schema import CATALOG_CODE_SQL
 
 from .errors import InvalidDataset, PitError
+from .financial_observations import (
+    FinancialCatalogState,
+    _OwnedFinancialSelection,
+    _owned_selection_from_raw_rows,
+)
 from .models import PIT_API_VERSION, PitResult
 from .query import (
     _NOT_GIVEN,
+    _iter_query_rows,
+    _owned_pinned_transaction,
     _probe_standalone_typed_adjustment_candidates,
     _scoped_read_connection,
     connect_readonly,
@@ -64,11 +72,13 @@ from .query import (
 )
 
 __all__ = [
+    "FinancialCatalogState",
     "get_equity_master",
     "get_equity_bars_daily",
     "first_invalid_adjusted_close",
     "get_market_calendar",
     "get_jquants_records",
+    "get_financial_state",
     "get_jsda_bond_trades",
     "get_jsda_repo_rates",
     "PitResult",
@@ -1018,6 +1028,72 @@ def get_jquants_records(
         dataset=dataset_value,
         extra_metadata=page_metadata,
     )
+
+
+def _owned_financial_selection(
+    as_of: Any = _NOT_GIVEN,
+    *,
+    dataset: Any = _NOT_GIVEN,
+    code: str,
+    initial_visible_state: str,
+    db_path: Any = None,
+) -> _OwnedFinancialSelection:
+    """PIT/READY-gated owned selection: compute state plus provenance."""
+
+    as_of_iso = normalize_as_of(as_of)
+    if dataset is None or dataset is _NOT_GIVEN or (
+        isinstance(dataset, str) and not dataset.strip()
+    ):
+        raise InvalidDataset(
+            "dataset is required for get_financial_state"
+        )
+    dataset_value = str(dataset).strip()
+    if dataset_value != "fins_summary":
+        raise InvalidDataset(
+            "get_financial_state supports dataset 'fins_summary' only"
+        )
+    if not isinstance(code, str) or not code.strip():
+        raise ValueError("code is required for get_financial_state")
+    extra_where = " AND ".join(("dataset = ?", f"{_CATALOG_CODE_SQL} = ?"))
+    with _owned_pinned_transaction(db_path) as conn:
+        raw_rows = _iter_query_rows(
+            conn,
+            as_of=as_of_iso,
+            table="jquants_records",
+            dataset_id=dataset_value,
+            extra_where=extra_where,
+            params=[dataset_value, code],
+            order_by=", ".join(_JQUANTS_PAGE_ORDER),
+        )
+        return _owned_selection_from_raw_rows(
+            raw_rows,
+            dataset=dataset_value,
+            code=code,
+            initial_visible_state=initial_visible_state,
+        )
+
+
+def get_financial_state(
+    as_of: Any = _NOT_GIVEN,
+    *,
+    dataset: Any = _NOT_GIVEN,
+    code: str,
+    initial_visible_state: str,
+    db_path: Any = None,
+) -> FinancialCatalogState:
+    """PIT/READY-gated compact ``fins_summary`` state for compute.
+
+    Uses the caller's explicit ``as_of`` (no AM rounding). Reads initial
+    catalog history without a price-warmup cutoff. No raw-row array. Owner
+    provenance stays on the private owned-selection result.
+    """
+    return _owned_financial_selection(
+        as_of,
+        dataset=dataset,
+        code=code,
+        initial_visible_state=initial_visible_state,
+        db_path=db_path,
+    ).state
 
 
 def get_jsda_bond_trades(
