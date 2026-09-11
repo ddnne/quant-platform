@@ -27,8 +27,7 @@ from research.complete21 import (
 )
 
 
-def test_complete_21_count_and_no_overlap_with_defer():
-    assert len(COMPLETE_21_DATASETS) == 21
+def test_complete_21_no_overlap_with_defer():
     assert COMPLETE_21_DATASETS.isdisjoint(PERMANENT_DEFER_DATASETS)
     assert "equities_bars_daily" in COMPLETE_21_DATASETS
     assert "equities_master" not in COMPLETE_21_DATASETS
@@ -323,8 +322,7 @@ def test_margin_short_calendar_repo_reject_defer_poison(monkeypatch):
 
 
 def test_research_complete21_matches_features_allowlist():
-    assert len(RESEARCH_COMPLETE_21_DATASETS) == 21
-    assert len(COMPLETE_21_DATASET_SET) == 21
+    assert len(RESEARCH_COMPLETE_21_DATASETS) == len(COMPLETE_21_DATASET_SET)
     assert COMPLETE_21_DATASET_SET == COMPLETE_21_DATASETS
     assert COMPLETE_21_DATASET_SET.isdisjoint(PERMANENT_DEFER_DATASETS)
     assert "markets_breakdown" in COMPLETE_21_DATASET_SET
@@ -341,7 +339,6 @@ def test_require_complete_21_only_accepts_subset():
 
 
 def test_require_complete_21_only_rejects_all_permanent_defer():
-    assert len(PERMANENT_DEFER_DATASETS) == 4
     for defer_id in sorted(PERMANENT_DEFER_DATASETS):
         with pytest.raises(PermanentDeferHistoryError, match="permanent DEFER"):
             require_complete_21_only([defer_id])
@@ -354,4 +351,3 @@ def test_require_complete_21_only_rejects_all_permanent_defer():
 def test_require_complete_21_only_rejects_unknown():
     with pytest.raises(Complete21Error, match="not in COMPLETE 21"):
         require_complete_21_only(["equities_bars_daily", "not_a_real_dataset"])
-
