@@ -286,10 +286,6 @@ async function seedClosedInputs(
   mem.seed(personalOptionSidecarTerminalKey(REQUEST.sidecar_producer_job_id), terminal);
 }
 
-const noMass = async () => {
-  throw new Error("mass path must not run");
-};
-
 describe("closed personal vol AM/PM panel-build request", () => {
   it("accepts only the three immutable snapshot job ids", () => {
     expect(parsePersonalVolAmPmPanelBuildRequest(REQUEST)).toEqual({
@@ -565,7 +561,7 @@ describe("POST /v1/personal-vol-am-pm-panel-build", () => {
         STRUCTURED_BUCKET: {} as R2Bucket,
         PERSONAL_RESEARCH_CONTAINER: {} as Env["PERSONAL_RESEARCH_CONTAINER"],
       } as Env,
-      { runMassEval: noMass, runDailyPath: noMass, submitPersonalVolAmPmPanelBuild: submit },
+      { submitPersonalVolAmPmPanelBuild: submit },
     );
     expect(response.status).toBe(401);
     expect(submit).not.toHaveBeenCalled();
@@ -594,8 +590,6 @@ describe("POST /v1/personal-vol-am-pm-panel-build", () => {
           }),
           env,
           {
-            runMassEval: noMass,
-            runDailyPath: noMass,
             submitPersonalVolAmPmPanelBuild: submit,
             personalVolAmPmPanelBuildStatus: status,
           },
@@ -609,7 +603,7 @@ describe("POST /v1/personal-vol-am-pm-panel-build", () => {
         { headers },
       ),
       env,
-      { runMassEval: noMass, runDailyPath: noMass, personalVolAmPmPanelBuildStatus: status },
+      { personalVolAmPmPanelBuildStatus: status },
     );
     expect(status).toHaveBeenCalledWith(env, "vol-panel-one");
   });

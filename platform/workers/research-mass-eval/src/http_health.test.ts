@@ -2,14 +2,7 @@ import { describe, expect, it } from "vitest";
 import { dispatchMassEvalFetch } from "./http_routes";
 import type { Env } from "./types";
 
-const noopHandlers = {
-  runMassEval: async () => {
-    throw new Error("mass-eval must not run");
-  },
-  runDailyPath: async () => {
-    throw new Error("daily-path must not run");
-  },
-};
+const noopHandlers = {};
 
 function denyByDefaultEnv(): Env {
   return {
