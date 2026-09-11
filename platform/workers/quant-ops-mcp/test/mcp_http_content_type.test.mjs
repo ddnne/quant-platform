@@ -25,12 +25,6 @@ function assertHttp415NotJsonRpc(body) {
   assert.equal(typeof body.error, "string");
 }
 
-test("POST /mcp missing Content-Type is 415 not JSON-RPC", async () => {
-  const res = await postMcp();
-  assert.equal(res.status, 415);
-  assertHttp415NotJsonRpc(await res.json());
-});
-
 test("POST /mcp without application/json Content-Type is 415 not JSON-RPC", async () => {
   const cases = [
     {},

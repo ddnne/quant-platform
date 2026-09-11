@@ -218,6 +218,13 @@
         "audit_ids": ["D01", "D05", "D06", "D07", "D08", "D09", "D11", "D13"],
         "change": "Grok-authored12 test definition deletions across11 files,194 lines removed, no production changes. Removed exact AM duplicate, compiler self-comparison, add-on subset, argparse/signature/obsolete-name checks, duplicate alias proof, English phrase pin and a402-row fixture that never read the DB. Unused compile_row/inspect imports removed. Actual AM/PIT, frozen replay digest, public CLI forwarding, live evidence owner, handle lifecycle and stored Coverage policy tests remain.",
         "verification": "Codex affected11 modules plus3 retained bounded-read modules:220 passed in7.81s. Independent static review found no actionable issue or deletion-caused unused import, accepted diff8b3d5749fae9f2001623c4dbcc5601ca09e8df6dcb345087bfd45a6cde93c26a. No duration-savings estimate, full-suite claim or weakened production gate."
+      },
+      "direct_worker_test_deletions": {
+        "status": "locally_verified_native_pending",
+        "audit_ids": ["D02", "D03", "D04", "D10", "D12", "A01", "A02"],
+        "change": "Grok-authored11 test definition removals, plus redundant output assertions and internal spies, across11 test files:11 insertions/181 deletions. Retained known SHA vectors for each independent wrapper, actual status/body/cache/no-store, raw page and manifest saves, retry ranges/caps and MCP content-type matrix. No product source, dependency, auth, runtime harness or binding edits.",
+        "verification": "Codex npm test and typecheck succeeded for all6 affected Workers:JSDA42 Node+62 workerd; Premium183+7; Secrets6+38+1 Service Binding harness; Gateway187+2 harness; Mass501+7; Ops59+11+1. Total1107 actual cases; all6 tsc checks passed. Existing Vite, experimental module-mock and SDK sourcemap warnings remain. Independent static review accepted diff12069a89b4e5f5fcca0c15819c04e9e442700ac19e9ba953a34e9b60709c83d1 with no actionable issue.",
+        "dependency_reuse": "To avoid extra disk copies, six temporary node_modules links reused existing installs. Every locked package version/integrity in JSDA/Premium/Secrets/Gateway matched the Mass lock graph (161 entries); Mass/Ops lockfiles matched the reused checkout exactly. Temporary links removed afterward; shared installs preserved. This local verification is not fresh npm-ci/native final-SHA acceptance. No authentic market data or local Container backtest."
       }
     },
     "8_rollout_and_research_go": { "status": "pending" },

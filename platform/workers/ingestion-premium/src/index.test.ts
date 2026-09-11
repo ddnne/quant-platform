@@ -412,18 +412,6 @@ describe("ingestion-premium raw acquisition status", () => {
   });
 });
 
-describe("ingestion-premium raw-page retain source pin", () => {
-  it("keeps every raw page, a rawPrefix manifest, and ingest/export tokens only", () => {
-    const src = readFileSync(join(here, "index.ts"), "utf8");
-    expect(src).toContain('page-${String(page.number).padStart(6, "0")}.json');
-    expect(src).toContain("`${rawPrefix}/manifest.json`");
-    expect(src).not.toContain("data_truncated");
-    expect(src).toContain("INGESTION_RUN_TOKEN");
-    expect(src).toContain("DATA_EXPORT_TOKEN");
-    expect(src).not.toContain("INGESTION_PROXY_TOKEN");
-  });
-});
-
 describe("ingestion-premium coverage-segment plan", () => {
   const originalFetch = globalThis.fetch;
 
@@ -810,4 +798,3 @@ describe("ingestion-premium equities_master SCD2 universe evidence", () => {
     );
   });
 });
-
