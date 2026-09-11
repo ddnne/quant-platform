@@ -6,6 +6,7 @@ import io
 import json
 import sqlite3
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -19,7 +20,11 @@ from personal_history_compact_support import (
     insert_compact_bar,
     stamp_compact_manifest,
 )
-from test_cloud_personal_research_container import service
+from test_cloud_personal_research_container import (
+    _cancel_held_retries_after_worker,
+    _join_manager_worker,
+    service,
+)
 import personal_vol_am_pm_panel_job as job
 
 
@@ -653,7 +658,9 @@ def test_compact_v7_reads_compact_bars_without_source_predicate(
         connection.close()
 
 
-def test_job_manager_409_then_verified_get(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_job_manager_409_then_verified_get(
+    monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
     dates = [f"2019-01-{index:02d}" for index in range(4, 8)]
     store: dict[str, bytes] = {}
     manifest = _input_manifest(store, dates)
@@ -680,7 +687,6 @@ def test_job_manager_409_then_verified_get(monkeypatch: pytest.MonkeyPatch) -> N
         "go": False,
         "not_a_pass": True,
     }
-    body = service._canonical_bytes(existing)
     puts = 0
     gets = 0
 
@@ -697,20 +703,52 @@ def test_job_manager_409_then_verified_get(monkeypatch: pytest.MonkeyPatch) -> N
         assert item.headers()["x-vol-panel-job-id"] == spec.job_id
         return existing
 
+    terminal = threading.Event()
     manager = service.JobManager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
         terminal_uploader=uploader,
         terminal_reader=reader,
         retry_schedule=(0.01,),
+        on_terminal=terminal.set,
     )
-    manager.submit(spec)
-    deadline = time.monotonic() + 1
-    while manager.status(spec.job_id)["status"] != "FAILED" and time.monotonic() < deadline:
-        time.sleep(0.005)
-    assert manager.status(spec.job_id)["status"] == "FAILED"
-    assert puts >= 1
-    assert gets >= 1
-    assert body
+    worker = None
+    try:
+        manager.submit(spec)
+        worker = _join_manager_worker(manager)
+        assert terminal.is_set()
+        assert puts == 1
+        assert gets == 1
+        record = manager.status(spec.job_id)
+        assert record is not None
+        assert record["status"] == "FAILED"
+        assert record["job_id"] == spec.job_id
+        assert record["request_digest"] == spec.request_digest
+        assert record["runner_version"] == spec.runner_version
+        assert record["cohort_id"] == spec.cohort_id
+        assert existing["job_id"] == spec.job_id
+        assert existing["request_digest"] == spec.request_digest
+        assert existing["runner_version"] == spec.runner_version
+        assert existing["cohort_id"] == spec.cohort_id
+        assert manager._shutdown_notified is True
+        assert manager._retry_timer is None
+        assert manager._pending_terminal is None
+        events = [
+            json.loads(line)
+            for line in capsys.readouterr().out.splitlines()
+            if line.startswith("{")
+        ]
+        assert [
+            event
+            for event in events
+            if event.get("event") == "terminal_publication_conflict"
+        ] == []
+        assert [
+            event
+            for event in events
+            if event.get("event") == "terminal_publication_retry_exhausted"
+        ] == []
+    finally:
+        _cancel_held_retries_after_worker(manager, worker)
 
 
 def test_unlinks_each_snapshot_before_the_next_hydrate(monkeypatch: pytest.MonkeyPatch) -> None:

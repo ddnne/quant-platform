@@ -22,8 +22,10 @@ from research.personal_index_vol_overlay import (
 from research.personal_base_sleeve import PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA
 
 from test_cloud_personal_research_container import (
+    _assert_held_failed_terminal_retries_without_shutdown,
     _base_sleeve_document,
     _job,
+    held_retry_scheduler,
     service,
 )
 from test_personal_base_sleeve_am_pm import DATES as AM_DATES
@@ -819,50 +821,34 @@ def test_am_family_deterministic_put_then_get_404_shuts_down_fail_closed(
 
 
 @pytest.mark.parametrize("smile", (False, True))
-def test_am_family_failed_upload_then_terminal_get_404_retries(
-    monkeypatch, smile: bool
-) -> None:
-    spec = _am_family_spec(
-        job_id="am-smile-missing" if smile else "am-overlay-missing",
-        smile=smile,
-    )
-    fake = _am_family_put_then_get_404(
-        monkeypatch,
-        spec,
-        put_error=lambda url: urllib.error.HTTPError(
-            url, 503, "unavailable", Message(), io.BytesIO(b"")
+@pytest.mark.parametrize(
+    ("error_id", "put_error"),
+    (
+        (
+            "missing",
+            lambda url: urllib.error.HTTPError(
+                url, 503, "unavailable", Message(), io.BytesIO(b"")
+            ),
         ),
-    )
-    terminal = threading.Event()
-    manager = service.JobManager(
-        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
-        on_terminal=terminal.set,
-        retry_schedule=(0.05, 0.05),
-        max_job_seconds=30,
-    )
-    manager.submit(spec)
-    assert not terminal.wait(0.2)
-    assert fake.puts >= 2
-    assert fake.gets >= 1
-    assert manager._shutdown_notified is False
-    assert manager.status(spec.job_id)["status"] == "FAILED"
-    if manager._retry_timer is not None:
-        manager._retry_timer.cancel()
-
-
-@pytest.mark.parametrize("smile", (False, True))
-def test_am_family_transport_error_then_terminal_get_404_retries(
-    monkeypatch, smile: bool
+        (
+            "transport",
+            lambda url: urllib.error.URLError("connection reset"),
+        ),
+    ),
+    ids=("put-http-503-get-404", "put-urlerror-get-404"),
+)
+def test_am_family_failed_put_then_terminal_get_404_retries_without_shutdown(
+    held_retry_scheduler,
+    monkeypatch,
+    smile: bool,
+    error_id: str,
+    put_error,
 ) -> None:
     spec = _am_family_spec(
-        job_id="am-smile-transport" if smile else "am-overlay-transport",
+        job_id=f"am-{'smile' if smile else 'overlay'}-{error_id}",
         smile=smile,
     )
-    fake = _am_family_put_then_get_404(
-        monkeypatch,
-        spec,
-        put_error=lambda url: urllib.error.URLError("connection reset"),
-    )
+    fake = _am_family_put_then_get_404(monkeypatch, spec, put_error=put_error)
     terminal = threading.Event()
     manager = service.JobManager(
         lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
@@ -871,10 +857,11 @@ def test_am_family_transport_error_then_terminal_get_404_retries(
         max_job_seconds=30,
     )
     manager.submit(spec)
-    assert not terminal.wait(0.2)
-    assert fake.puts >= 2
-    assert fake.gets >= 1
-    assert manager._shutdown_notified is False
-    assert manager.status(spec.job_id)["status"] == "FAILED"
-    if manager._retry_timer is not None:
-        manager._retry_timer.cancel()
+    _assert_held_failed_terminal_retries_without_shutdown(
+        manager,
+        held_retry_scheduler=held_retry_scheduler,
+        adapter=fake,
+        job_id=spec.job_id,
+        other_spec=_job("b" * 64, "other"),
+        shutdown=terminal,
+    )
