@@ -1,25 +1,25 @@
 {
   "schema": "quant-platform-work-ledger/v1",
   "baseline_sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
-  "branch": "refactor/retire-python-mass-orchestration",
-  "updated_at": "2026-09-11T21:38:00Z",
+  "branch": "test/consolidate-premium-export-admission",
+  "updated_at": "2026-09-11T22:03:00Z",
   "lanes": {
     "source_delivered": {
       "status": "partial_main_and_followup",
-      "scope": "pr103_through_pr127_merged_python_retirement_native_pending",
-      "notes": "PR127 final source native accepted and normal merge/fresh GitHub clone verified. Separate merged-main native remains running. Non-required Mass deployment intentionally stopped at its existing HOLD; no retries, rollout, data, READY or Pilot authorization. Previous accepted main126 evidence remains in immutable history.",
-      "latest_main_sha": "86ce3b5733fdab650753b44e0967f066142c49c9",
+      "scope": "pr103_through_pr128_merged_c06_native_pending",
+      "notes": "PR127 source/fresh/main accepted. PR128 final source native and fresh GitHub main accepted; separate merged-main native running. C06 public export-admission consolidation locally verified/reviewed, own final native pending. No rollout/data/READY/Pilot acceptance or HOLD bypass.",
+      "latest_main_sha": "d6910e1744a8d0ec9b5d527c5502b013efa38de0",
       "latest_main_check_completed_at": null,
-      "latest_main_evidence": "https://github.com/ddnne/quant-platform/pull/127#issuecomment-5640909200",
-      "pull_request": "https://github.com/ddnne/quant-platform/pull/127",
-      "implementation_sha": "585fa6f0a1684b9b0ee6a20ecb53b1ae53650603",
-      "merged_sha": "86ce3b5733fdab650753b44e0967f066142c49c9",
-      "required_check_source_sha": "19e4001d2ebeb69fb54d10cb8df4e81fa7124df4",
+      "latest_main_evidence": "https://github.com/ddnne/quant-platform/pull/128#issuecomment-5641139936",
+      "pull_request": "https://github.com/ddnne/quant-platform/pull/128",
+      "implementation_sha": "2a29f765b08221b7bc599789bcdab65159f7e554",
+      "merged_sha": "d6910e1744a8d0ec9b5d527c5502b013efa38de0",
+      "required_check_source_sha": "68cfe4d8bc1f0035df8d759debf6d5d9cabf542b",
       "required_check_app_id": 85455,
-      "required_check_build_id": "9f234e00-9bb3-4956-b008-bbe8d6d3fac1",
-      "required_check_id": 103428793718,
-      "merged_main_check_id": 103429210428,
-      "merged_main_build_id": "3cb21bea-fdc2-42ae-b873-13843bf1d870",
+      "required_check_build_id": "3e8cde41-24aa-41b8-bf66-60f046122096",
+      "required_check_id": 103435695302,
+      "merged_main_check_id": 103435958580,
+      "merged_main_build_id": "b5f5a38c-5555-41d3-ba2e-6f8f0e326a4c",
       "merged_main_check_status": "in_progress"
     },
     "staging_deployed": {
@@ -212,14 +212,14 @@
       "status": "test_audit_execution_in_progress",
       "execution_ledger": "docs/operations/test_reduction_ledger.json",
       "test_audit": "Baseline main1088c398 static inventory:393 test files plus2 support paths,2983 Python definitions and1115 Worker registrations, not expanded runtime cases. Main-authored candidate body/alternative review identified52 findings across100 files:13 direct-deletion groups covering22 definitions,7 assert reductions,23 consolidations,7 replacements and2 test-tier moves. Two independent critical reviews yielded9 guardrail corrections, incorporated before execution. User subsequently authorized implementation. The original inventory remains a baseline, not a claim that every candidate has been removed. Uncommitted branches are separate. No coverage-count target or bulk deletion.",
-      "execution_summary": "Original audit:40/52 implemented,12 pending/partial/held. C19 now partially implemented, not completed. Current test ledger owns finding-level removals, retained guarantees and reviews. Product retirement removes permanently disabled Worker execution and Python unreachable orchestration; normal-install/replay cleanup remains. Test counts/LOC are not acceptance targets; source, fresh/main CI and rollout remain separate.",
+      "execution_summary": "The test ledger owns canonical finding counts, removals, retained guarantees and review details. C19 remains partial. PR127/128 retire disabled Worker execution and unreachable Python orchestration; normal-install/replay work remains. C06 consolidates public export admission. Counts/LOC are not acceptance targets; source, fresh/main CI and rollout remain separate.",
       "accepted_history": {
         "through_main_sha": "86ce3b5733fdab650753b44e0967f066142c49c9",
         "details": "https://github.com/ddnne/quant-platform/blob/86ce3b5733fdab650753b44e0967f066142c49c9/docs/operations/current_work_ledger.json",
         "scope": "Accepted PR113-126 detailed implementations, review adjudications, tests and native evidence remain in this immutable Git version and PR comments. They are not duplicated as active work. PR125 source-log limitation remains recorded there; successful main logs do not repair missing source-run output."
       },
       "retired_mass_route_cleanup": {
-        "status": "merged_pr127_source_and_fresh_accepted_main_native_pending",
+        "status": "merged_pr127_source_fresh_main_native_accepted",
         "implementation_sha": "585fa6f0a1684b9b0ee6a20ecb53b1ae53650603",
         "integration_cleanup": "29467e4f",
         "scope": "Attachment7 partial: remove permanently disabled Mass/daily-path handlers and proposal execution imports from active Worker. Authenticated3API tombstones retain405/401/403. Personal/Controlled/children paths,exports,ctx and actual Personal eval/panels kernels remain. Python offline/unique_logic install and replay cleanup remain pending.",
@@ -227,13 +227,14 @@
         "verification": "After PR126 merge:481Node14.44s/22workerd924ms/product typecheck;41Python1.02s/secret PASS. Final two-line unused-token cleanup:retained query test PASS304ms. Real entrypoint3cases individually PASS733ms. Matching-lock links removed, no authentic market data/local container. Product tsc excludes runtime tests. R2 fault diagnostics and dependency sourcemap warnings remain visible.",
         "delta": "17source/testfiles+123/-916,net793 removed:product net525,tests net268.13 Node definitions removed plus one retained encode test renamed;3 real runtime cases added. No speed/case-count target.",
         "bundle": "Same in-memory esbuild experiment before PR126 integration:815723->701680 bytes. Final integrated701643 bytes; eval_orchestrate,daily_path,path_broken,parse_request,propose_thesis output0bytes, activePersonalVol/Eval remain. Not Wrangler upload size, deployed-code or cost proof. No new permanent test/toolchain dependency.",
-        "acceptance": "PR127 source19e4001d app85455/check103428793718/build9f234e00 SUCCESS21:30:40.170Z; merged86ce3b57/source treea725a5c4 equal. Fresh481Node/22workerd/typecheck+41Python/secret/clean/equal/unpushed0; branch removed. Main check103429210428/build3cb21bea running. Non-required Mass deploy explicitly HOLD. Source https://github.com/ddnne/quant-platform/pull/127#issuecomment-5640877567 ; fresh https://github.com/ddnne/quant-platform/pull/127#issuecomment-5640909200 . T01/C19 and all operational HOLDs remain."
+        "acceptance": "PR127 source/fresh/main accepted; merged86ce3b57 native app85455/check103432931201/build3cb21bea SUCCESS21:46:59.567Z. Terminal logs3587offline/3skip+3toolchain/all8Worker lanes/named-env/typegen/remote Container dry-runs/generated-clean. Evidence https://github.com/ddnne/quant-platform/pull/127#issuecomment-5641023108 . Completed branch removed; no rollout; T01/C19 and operational HOLDs remain."
       },
       "python_mass_orchestration_retirement": {
-        "status": "implemented_reviewed_local_final_native_pending",
+        "status": "merged_pr128_source_fresh_accepted_main_native_pending",
         "source_commit": "2a29f765b08221b7bc599789bcdab65159f7e554",
         "test_commit": "5cfc8ded9a1343ca3ab5efacb743123fe594687b",
-        "scope": "Six unconditional-refusal entrypoints keep exact signatures/defaults/errors. Remove unreachable data reads, staging, cache, fanout and artifact writes plus unused imports. Shared Personal/Controlled kernels, normalizer/period reexports, hashes, versions and closed deploy port remain. Four product files net650 lines removed; test file49 removed. Finding C19 in execution ledger owns detailed review and deletion mapping; remaining catalog/install and broader C19 work are not complete."
+        "scope": "Six unconditional-refusal entrypoints keep exact signatures/defaults/errors. Remove unreachable data reads, staging, cache, fanout and artifact writes plus unused imports. Shared Personal/Controlled kernels, normalizer/period reexports, hashes, versions and closed deploy port remain. Four product files net650 lines removed; test file49 removed. Finding C19 in execution ledger owns detailed review and deletion mapping; remaining catalog/install and broader C19 work are not complete.",
+        "acceptance": "PR128 source68cfe4d8 check103435695302/build3e8cde41 SUCCESS21:58:28.822Z:3585offline/3skip+3toolchain/all8Worker lanes,generated-clean. Normal merged6910e17 shares tree21af1d8f. Fresh192Python11.59s/secret/clean/equal/unpushed0; completed branch removed. Main buildb5f5a38c running. NonrequiredMass buildceb510ab stopped at explicit existing HOLD22:00:27.630Z; no retry. Source https://github.com/ddnne/quant-platform/pull/128#issuecomment-5641113642 ; fresh https://github.com/ddnne/quant-platform/pull/128#issuecomment-5641139936 ."
       },
       "review_corrections": "Kept both-NULL cursor case after a mutation exposed false CURRENT; retained terminal conflict audit after always-accept mutation; avoided duplicate Gateway type guard; preserved existing-str-path refusal while removing signed setup. Prefer realistic failures over counts. C09's expected-versus-observed call-site counterexample is now an explicit prerequisite, not an excuse to keep all large fixtures.",
       "local_preservation": "Unverified Receipt runtime draft stash4cfe6d0d and C09 draft stash75f5dffc are local-only, excluded from acceptance. Temporary Gateway/Mass dependency links removed; original installed dependencies preserved. No authentic market history downloaded. C15 optional context re-read was cancelled and was not retried; final patch was authored from already supplied source without file access. One incorrect draft using nonexistent direct metadata attributes was rejected before application; only the corrected metadata-dict patch was accepted.",
@@ -250,7 +251,7 @@
       "cross_review_protocol": "Grok implements and reviews; Codex independently reviews actual diffs and adjudicates concrete findings against code/behavior. Neither approval replaces tests/native CI. No blanket restoration of name/shape tests or unanimous-approval requirement."
     },
     "8_rollout_and_research_go": { "status": "pending" },
-    "9_push_remote_and_fresh_clone_verify": { "status": "pr127_source_and_fresh_accepted_main_native_pending_python_retirement_native_pending_final_project_verification_pending" }
+    "9_push_remote_and_fresh_clone_verify": {"status":"pr128_source_fresh_accepted_main_native_pending_c06_final_native_pending_overall_verification_pending"}
   },
   "operational_facts": [
     {"id":"projection_sync_ops_live_read_20260911T1802Z","observed_at":"2026-09-11T18:02:25Z","fact":"Read-only quant-mcp projection/B0/sync/Ops: projection STALE, generated2026-08-21T12:30:49.152421+00:00, active generationprojgen-ef18b4f86ee946048161d25e2a30a2a8, refresh_attempt=false/refresh_success=false, age1834295s. ops_projection/v3 is not proof of CoverageV3 semantics. B0UNKNOWN; source change cursor2899647, applied_feed_cursor=null and all23 applied/ready_pinned cursors null. JQrun14963 PASS at2026-09-12T02:16:05+09:00; Ops aggregate22COMPLETE/4PARTIAL and raw31008/28790 acquired/complete are not newly reconciled READY eligibility. Source/export activity is not current apply. Separate READY snapshot and full tool/schema parity not remeasured. No DLQ/deployment/data activation/Pilot operation."},
