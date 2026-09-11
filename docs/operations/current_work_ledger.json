@@ -1,13 +1,13 @@
 {
   "schema": "quant-platform-work-ledger/v1",
   "baseline_sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
-  "branch": "fix/terminal-http-fixture-synchronization",
-  "updated_at": "2026-09-11T00:28:00Z",
+  "branch": "fix/terminal-state-test-deduplication",
+  "updated_at": "2026-09-11T01:11:00Z",
   "lanes": {
     "source_delivered": {
       "status": "partial_main_and_candidate",
-      "scope": "items_2_3a_5_runtime_wiring_and_terminal_isolation_merged_http_fixture_followup_candidate",
-      "notes": "PR #103 merged as 71410b36, #104 as d6f05d72, #105 as 36b02bb4 and #106 as a2552e5a after native required checks on their exact final source SHAs. PR106 removed unmocked HTTP from retry fixtures. Its merged-main check exposed a separate 0.2-second wait race; PR107's first native check then exposed a VolPanel test that mistook FAILED for publication completion. PR107 now synchronizes the same lifecycle across container, VolPanel and Overlay/Smile fixtures. These are observed stages at updated_at; re-read GitHub before resuming. No code rollout, data activation or READY is implied.",
+      "scope": "items_2_3a_5_runtime_wiring_and_terminal_synchronization_merged_spawn_fixture_candidate",
+      "notes": "PR103 through107 merged after native required checks on their exact final source SHAs. PR107 source0f34e800 passed all lanes and merged as5a25bded; its separate main check then failed in a redundant fork-backed unavailable-upload test whose worker remained alive after bounded joins. The current candidate consolidates that duplicated policy case and makes seven retained terminal fixtures execute an importable synthetic runner under default spawn, with failure-only bounded cleanup. Exact child-stall cause remains unproven; no production defect absence or final-main acceptance is inferred. Re-read GitHub before resuming. Source delivery remains distinct from rollout, data activation and READY.",
       "pull_request": "https://github.com/ddnne/quant-platform/pull/103",
       "implementation_sha": "0255744b74e8b7186940abf93a1ed0be61a033ee",
       "merged_sha": "71410b3603b3a70d07db42d24082c3d04f280b18",
@@ -84,7 +84,7 @@
       "verification": "Independent script-policy/CI tests 79 passed; final rebased canonical npm test ran Node 503 plus runtime 7 and typecheck passed. Independent critical review found no actionable issue. Native CI on 48edcd1f succeeded: Python 3627 passed, 4 skipped, 32 warnings, with all active Worker lanes and generated drift checks.",
       "test_stabilization": "Actual fetchContainerBytes diagnostic under periodic Node GC: without retained Request 20/20 derived abort notifications missed; with retained Request 0/20 missed. Existing test now retains Request, advances fake timer after fixture readiness and preserves timeout/abort assertions. Production transport unchanged.",
       "terminal_fixture_isolation": {
-        "status": "source_merged_pr106_http_adapter_followup_pending",
+        "status": "source_merged_pr106_http_adapter_followup_merged_pr107",
         "merge_sha": "a2552e5a5472a2f9cd096fcb3fc502e6857a140d",
         "required_check_source_sha": "ad6cd4480f625ab45da4363fec4215c53eb88d22",
         "required_check_app_id": 85455,
@@ -96,7 +96,11 @@
         "review": "Independent critical review identified a worker-completion race and an unbounded held-timer test driver. Grok fixed both; independent delta review confirmed resolution with no further actionable finding. PR106 subsequently passed native source CI, merged, and passed representative fresh-clone verification; the later merged-main HTTP-adapter failure is tracked separately below."
       },
       "http_adapter_followup": {
-        "status": "locally_verified_native_ci_and_merge_pending",
+        "status": "source_merged_pr107_main_fixture_failure_followup_pending",
+        "merge_sha": "5a25bdeddc7097395a709314f5b51358e066ccda",
+        "required_check_source_sha": "0f34e800b6443c9f90a1d46b5f43d7f40fd141ca",
+        "required_check_app_id": 85455,
+        "required_check_build_id": "ee1e4dd6-b579-4c50-9d75-bc7aea1645b0",
         "implementation_commits": ["2d1252ef190916bc3f4c3d1ebecec63797e6d2cd", "d7dd2d42bb2b9c7e12cf52285e93f9dc0597991a"],
         "reason": "Main a2552e5a build0c587976-740d-4994-949d-cac15a4db359 failed: 3626 passed, 1 failed, 4 skipped, 28 warnings. The mocked PUT503/GET404 test inspected counts after a 0.2-second negative wait before the worker reached its first PUT. PR107 source7189f571 build937c62c9-4f87-403d-a9d3-11c00ecea34d then failed: 3625 passed, 1 failed, 4 skipped, 27 warnings. VolPanel's 409-then-verified-GET fixture treated FAILED as publication completion and inspected PUT count too early. The product legitimately records FAILED before publishing its terminal evidence.",
         "scope": "Tests only: preserve real submit/worker and actual adapter logic. A shared existing-module helper joins the worker, drives held retries, asserts exact PUT/GET counts, pending state and closed admission, then performs bounded cleanup. Container's three overlapping HTTP503/URLError cases become two; Overlay/Smile retain all four family-by-error variants without negative wall-clock waits. VolPanel joins actual publication and distinguishes verified existing-terminal acceptance from conflict/exhaustion audit events. No production timeout/cap, behavior, dependency or golden change.",
@@ -105,14 +109,30 @@
         "review": "Independent critical reviewer reproduced a false pass when _matching_terminal was forced false: conflict shutdown satisfied the original new assertions. Grok added existing audit-event discrimination and removed a tautological body assertion. Reviewer repeated the mutation under real pytest/capsys and confirmed expected failure at terminal_publication_conflict, with no further actionable finding. All source/test coding by Grok; independent verification/publication by Codex. Native CI on the next exact final source and normal merge remain pending at this checkpoint.",
         "followup_evidence": "https://github.com/ddnne/quant-platform/pull/107#issuecomment-5627357707"
       },
+      "spawn_fixture_followup": {
+        "status": "locally_verified_native_ci_and_merge_pending",
+        "implementation_commit": "4a7d07c86b2fc3b08ed6fa1b564a92d61d631686",
+        "reason": "Merged-main5a25 build417cbefd-18eb-4d60-912f-60cdc3798ec1 failed:3625 passed,1 failed,4 skipped,27 warnings,611.50s. test_unavailable_terminal_upload_does_not_shutdown forced fork through _job_manager and held the watchdog; its worker remained alive after join2s and another join2s during teardown. Exact child-stall reason is not proven. A separate review also found some sibling default-spawn fixtures used unpicklable local lambdas, so a startup failure could substitute for intended child execution.",
+        "scope": "Tests only: remove the redundant45-line unavailable-upload policy case, reuse one importable no-I/O synthetic failure runner under default spawn in seven existing Container/Overlay/Smile/VolPanel cases, assert its intended error, and stop an unexpectedly live supervisor outside the manager lock during failure-only cleanup. Existing product supervisor, timeout values, process-group/spawn/watchdog/cancel/lease tests and golden artifacts remain unchanged. Three test files,23 insertions and50 deletions; no new cases/modules/frameworks.",
+        "coverage_replacement": "Removed upload-failure/not-shutdown/pending/closed-admission/HTTP-isolation assertions remain in test_terminal_publication_retry_state_machine below-cap-no-shutdown and the shared held-retry HTTP503/GET404 or URLError/GET404 cases. FAILED through a real publication worker remains checked; the seven updated cases now additionally require the actual child-runner error rather than a pickle/startup error. Process supervision has independent retained tests.",
+        "verification": "Independent final regression:282 passed,18 existing multiprocessing warnings,zero unmocked urllib attempts,16.64s. Deliberately substituting an unpicklable runner made both HTTP cases fail the new intended-child-error assertion, with zero unmocked HTTP. A verification-only cleanup control failed against old5a but passed against the new helper, checking stop outside lock, bounded join, no stop for ended workers and preservation of the primary test failure. This does not itself prove OS-level stop correctness; existing supervisor tests remain. Binding manifest, secret/path and diff checks passed; golden sha256 a9015caeea31428a6ef87bdbf24c1d56d888e2921e4e8b39a2447d6bdfff79ba unchanged.",
+        "review": "Independent critical review confirmed no unique invariant lost by deletion, identified failure-only supervisor cleanup gap, then verified Grok's fix with no additional actionable finding. Coding by Grok; direction, independent verification and Git publication by Codex.",
+        "residual": "Other process-specific tests still use explicit fork; some unrelated local-lambda fixtures still exercise startup failure. Broader test tiering/default network denial remains open. No claim that all process-fixture risk is eliminated or that a passing source CI implies READY/Pilot GO.",
+        "evidence": "https://github.com/ddnne/quant-platform/pull/107#issuecomment-5627736144"
+      },
       "remaining": "Pure Python/Worker/runtime/live test tiers, default network deny and deploy_tagged target/module-byte hardening remain pending. Reviewed next deployment contract: https://github.com/ddnne/quant-platform/pull/106#issuecomment-5626930735. Existing npm advisories and remaining real-time tests were not silently suppressed."
     },
     "6_shared_d1_receipt_reproof": { "status": "pending" },
     "7_dead_code_and_docs": { "status": "pending" },
     "8_rollout_and_research_go": { "status": "pending" },
-    "9_push_remote_and_fresh_clone_verify": { "status": "pr103_through_pr106_merged_http_fixture_followup_pending_final_main_verification_incomplete" }
+    "9_push_remote_and_fresh_clone_verify": { "status": "pr103_through_pr107_merged_spawn_fixture_followup_pending_final_main_verification_incomplete" }
   },
   "operational_facts": [
+    {
+      "id": "pr107_merge_fresh_clone_and_main_failure_20260911",
+      "observed_at": "2026-09-11T01:11:00Z",
+      "fact": "PR107 exact source0f34e800 passed nativeapp85455 build ee1e4dd6:3626 Python passed,4 skipped,27 warnings and all eight Worker lanes including Mass503+runtime7. Merged normally as5a25bded at00:42:41Z. Its tree equals reviewed source tree632a5c777f0d637ab6a314849183a1d946ab0470. A new independent GitHub clone passed283 representative tests with21 warnings and zero unmocked urllib attempts in12.35s; all listed generated/secret/drift checks passed. Both main copies were clean/equal/unpushed0, openPR0 and remoteheadsonlymain. Completed PR107 branch/worktree removed after ancestry verification, approximately23MB. Subsequent main build417cbefd failed as tracked above; prior source success is not substituted for final-main acceptance. Live metadata at00:44-00:45UTC: selected Worker versions unchanged, JQ14937 passed23/23 with62541 rows, source cursor2899224, applied cursor null; projection remains stale, B0unknown and READYnull. Production Mass trigger retains explicit HOLD. No deployment, data activation or DLQ operation performed."
+    },
     {
       "id": "pr106_merge_fresh_clone_and_main_failure_20260911",
       "observed_at": "2026-09-11T00:00:05Z",
