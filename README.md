@@ -1,303 +1,51 @@
-# quant-platform
+# Quant Platform
 
-日本株・開示・債券データを用いた量化研究／Paper／FoF 基盤。  
-正本は GitHub リポジトリ 1 本（公開・非公開は運用で変更可）。
+日本株・開示・債券のリサーチと Paper を、単一利用者向けに Cloudflare 上で進めるリポジトリです。通常の市場データ取得・保存・実データ研究はクラウドが本体です。ファンド・オブ・ファンズ、実ブローカー、実注文、自動昇格はありません。Mass は無効です。新しい Worker、authority、UID、WebAuthn、外部アンカーは増やしません。
 
-## 個人利用の推奨入口
+実装と一次自己レビューは Grok、計画・独立レビュー・テスト・Git・CI・マージは Codex です。役割は [AGENTS.md](AGENTS.md) に従います。時刻・PIT・保存・信頼境界は [docs/architecture.md](docs/architecture.md)、残作業の順は [docs/roadmap.md](docs/roadmap.md) です。古いフェーズ成功表は Git と ADR に残し、ここには現行経路だけを書きます。
 
-通常の戦略検証には、署名付きREADYやMass Researchを待たず、Cloudflare の
-`POST /v1/personal-snapshot-build`（および status）と
-`POST /v1/personal-research-batch` を使います。R2 が正本、D1 は小さなジョブ状態、
-Container 上の SQLite はジョブ寿命の ephemeral コピーです。永続ローカルの市場・価格・
-財務履歴は通常経路ではなく、開発者／復旧用の正確な opt-in だけです。ローカル SQLite を
-gzip して手で upload する手順は使いません。curl 例は
-[platform/workers/research-mass-eval/README.md](platform/workers/research-mass-eval/README.md)
-を正とします。
+## 三つの経路
 
-個人研究は Prime に限定されません。既定ユニバースは PIT `topix_all` で、
-`topix_core30` / `topix_large70` / `topix_mid400` / `topix_small1` /
-`topix_small2` / `topix_small` / `topix100` / `topix500` も執行判定カットオフで
-PIT 解決し、財務と交差します。既定 AM cohort は 11:30 の情報と当日 PM close を使います。
+個人 DRAFT と Controlled Pilot は別物です。Mass はどちらでもありません。
 
-スナップショットは compact v8、1 つの連続オブジェクト、最大 7,000 inclusive calendar days です。
-圧縮 R2/HTTP は 4GiB 以下、展開 SQLite / builder は 5GiB 以下です。1 つの `standard-4`
-Container は snapshot/quality 準備を 1 回共有し、最大 4 つの strategy 子プロセスを走らせます。
-batch は最大 8 つの cohort/universe ジョブです。1 Container = 1 strategy ではありません。
+**個人 DRAFT**は既存の `POST /v1/personal-snapshot-build` と `POST /v1/personal-research-batch` です。Controlled READY は不要ですが、現行のデプロイ品質や実行認可の代用ではありません。結果は研究用であり、同じ規約の下で完備なら比較に使えます。可変で短命な成果は観測されうる一方、管理されないことがあります。DRAFT の完備は、信頼できる Controlled の COMPLETE / READY / 昇格ではありません。状態・上限・認証は [platform/workers/research-mass-eval/README.md](platform/workers/research-mass-eval/README.md) を正本にします。保存中の cancel / HOLD があるあいだ、ここから実行を指示しません。
 
-既定では4つの小さなclosed `StrategySpec`を評価し、4期間のvalidationと取引費用stressだけで
-`HOLD`候補を決めます。最後の12か月は再利用可能な参考値で、選択条件には使いません。
-結果はcontent-addressed JSON/Markdownへ保存されます。
+**Controlled Pilot**はプロファイルに拘束された `controlled_pilot_v1` の正確に四本です。個人 DRAFT の四候補コホートとは別です。必要な証拠と未接続箇所は [docs/architecture.md](docs/architecture.md) です。計画と政策の入力は [specs/policy/controlled_pilot_policy.json](specs/policy/controlled_pilot_policy.json)、[specs/ready/controlled_pilot_v1.generated.json](specs/ready/controlled_pilot_v1.generated.json)、[specs/experiment_plans/](specs/experiment_plans/) です。版やダイジェストは写しません。ドリフト確認は [scripts/verify_controlled_pilot_v1_drift.py](scripts/verify_controlled_pilot_v1_drift.py) です。
 
-分析前には、管理対象スナップショットなら最新validation/watermark、日次ユニバースの価格行99.5%以上、
-選択ユニバースと財務データの交差95%以上、RAW価格の分割・併合らしい不連続を確認します。
-不連続候補をvalidationまたはcost stressで実際に売買した戦略だけを`REJECT`し、ユニバース全体に
-通常の分割が1件あるだけでは全分析を停止しません（未売買銘柄による順位への小さな影響は
-除去せず、レポートへ明示します）。
-これらは観測スナップショットの`OBSERVED`な健全性確認であり、上流データの完全性を署名証明するもの
-ではありません。分析不能時は全候補を`SKIPPED`にしてexit 2、予期しない候補エラーはexit 1、
-正常に評価できた場合（全件`REJECT`を含む）はexit 0です。自動昇格・発注・broker接続・
-LLM呼び出しは行いません。
+**Mass**は無効です。Pilot の証跡では Mass を有効化できません。追加戦略やカタログ拡張はありません。凍結リプレイは通常実行ではありません。
 
-`qp-research` は開発者／復旧用の互換入口だけです。永続ローカル市場データは既定で無効で、
-環境変数 `QP_ALLOW_LOCAL_MARKET_DATA` が正確に `1` のときだけローカル SQLite を開きます。
-実データ `data/structured/ingestion.sqlite` を開くローカル実行例は載せません。オフライン確認は
-リポジトリの合成／fixture テストだけです。
+## 読む場所
 
-これは個人用Paper経路です。下記のControlled Pilot / Mass / Live authority群とは分離され、
-それらをGOにするものではありません。
+配置は [docs/architecture/repo_layout_migration.md](docs/architecture/repo_layout_migration.md) と [docs/architecture/llm_nav_map.md](docs/architecture/llm_nav_map.md)、経路の分離は [docs/architecture/adr_phase632_architecture_simplification.md](docs/architecture/adr_phase632_architecture_simplification.md) です。
 
-## 現状（Phase 6.2 code-complete / Phase 7 NO-GO until live ready）
+作業の受理、保存中の cancel / HOLD、最後に読んだ計測は [docs/operations/current_work_ledger.json](docs/operations/current_work_ledger.json) です。ライブ照会の代わりにはしません。所見と昇格ゲートは [docs/phase633_finding_ledger.md](docs/phase633_finding_ledger.md) と [docs/phase633_finding_ledger.json](docs/phase633_finding_ledger.json) です。記録済み live GO 残差は [docs/phase62_residual_status.md](docs/phase62_residual_status.md) に残りますが、日付付き文書から鮮度を主張しません。
 
-**Phase 1（Ingestion）＋ Phase 2（PIT Data API）＋ Phase 3（コアエンジン最小）＋
-Phase 3.5（CF J-Quants Premium 閉路の実装）＋ Phase 4（特徴量 Registry）＋
-Phase 5（Paper 縦通し）＋ Phase 6（F0 hardening・役割 agent・StrategySpec）＋
-Phase 6.1（Coverage V2・remote Ops Read MCP・governed JSDA）＋
-Phase 6.2（inventory tools・projection publish・minimal Phase7 stubs）が実装済みの状態です。**
+リポジトリ文書を読むのに許可は不要です。ライブ運用の実行だけが現行認可と HOLD に従い、手順は [docs/operations/current_production_runbook.md](docs/operations/current_production_runbook.md) にだけあります。コマンドはここへ貼りません。
 
-**Phase 6.2 は code-complete ですが live NO-GO**: 長期 JQ/JSDA backfill → Coverage V2 COMPLETE、
-production READY≥1、CF cron-wired auto projection が未完了です。Phase 7 mass research は
-READY + 実 Coverage V2 COMPLETE まで GO できません。詳細は
-[docs/phase62_residual_status.md](docs/phase62_residual_status.md) を参照。
+稼働面は [specs/cloudflare/active_worker_bindings.json](specs/cloudflare/active_worker_bindings.json)、D1 移行は [specs/cloudflare/d1_migration_manifest.json](specs/cloudflare/d1_migration_manifest.json) です。件数や目録は写しません。不変条件の対応は [docs/ci/invariant_test_audit.md](docs/ci/invariant_test_audit.md) と [docs/operations/test_reduction_ledger.json](docs/operations/test_reduction_ledger.json) です。秘密は名前だけ [platform/secrets.example.md](platform/secrets.example.md) を見ます。
 
-並行 lane（H/I/J/K + 本 L）は offline green を merge 条件とします。いかなる lane も
-receipts なしに `PHASE62_FULL_DONE` / live `COMPLETE` / production `READY` を名乗らないこと。
+## 開発者セットアップとテスト
 
-Phase 1 — 2 データソースの取得・正規化・格納が動きます:
-
-- **J-Quants** API V2 — カタログ全量（`ingestion/jquants/catalog.py` の `DATASETS`）:
-  銘柄マスター・日足（含む AM）・財務（summary / details / dividend / earnings-date）・
-  決算カレンダー・市場カレンダー・投資部門・指数（TOPIX / 一般）・デリバティブ
-  （日経225オプション / 先物 / オプション）・市場系（信用・空売り・ブレイクダウン）・
-  **EDINET 系**（大株主・持ち合い・大量保有）・分足・Tick（trades）・TDnet 系（list / files / bulk）。
-- **JSDA** 公社債店頭売買参考統計値（2002-08-02 以降の公式 archive）、東京レポ・レート、
-  社債の取引情報。3 系列は別 dataset id、raw、receipt、revision history を持つ。
-
-Phase 2 — 構造化データの **読み出し経路として PIT Data API（`pit/`）** を実装。
-全読み出しは `as_of` 必須・`available_at <= as_of` で look-ahead を防止・読み取り専用
-（`mode=ro`）。**直接 SQLite での研究読み出しは禁止**（[docs/pit_api.md](docs/pit_api.md)）。
-
-Phase 3 — **コアエンジン最小（`core/`）**。ブラックボックスのバックテストエンジン。
-fact は `pit.get_*` 経由のみ（`core/` は SQLite/HTTP を直接開かない）、戦略には意思決定 `as_of`
-時点の狭い `BarContext` のみを渡す。`next_close`/`same_day_close` 執行・標準/ストレス費用・
-再現性メタデータ付き。詳細は [docs/core_engine.md](docs/core_engine.md)。
-
-Phase 3.5 — **Cloudflare 上の J-Quants Premium core 閉路の実装**。Worker
-`quant-platform-ingestion-premium` は、デプロイ後に cron で 23 データセットを取得し、R2 raw + D1
-structured に保存・per-dataset の pass/fail 検証を行う。**閉路の対象は Premium core 23 だけ**:
-addon（分足・Tick・TDnet）は Phase 1 でカタログされているが Phase 3.5 のスケジュール対象外。
-ローカルは認証済み Wrangler で private D1 export を取得・同期し、`pit.get_*` で読む。
-公開 ingestion Worker URL は不要で、`/v1/export/d1` は既存クライアント移行中の互換経路に限定する。
-検証は per-job の pass/fail に加えて、
-[docs/phase35_validation_matrix.md](docs/phase35_validation_matrix.md) のカタログ
-（C1–C12, M*, B*, A*, K*, E*, F*, I*, D*, S*, N*, X*）を daily / weekly の 2 階層で実行する。
-Cloudflare リソース作成・migration・同一 secret 値の binding・deploy が完了して初めて本番閉路が有効になる。
-2026-08-11 JST 時点で `quant-ingest`、`quant-raw`、`quant-structured` を作成し、migration、
-既存の 2 secret binding、Worker + Cron deploy、`/health` とページ export を確認済み。
-詳細は [docs/phase35_cf_ingest.md](docs/phase35_cf_ingest.md)。
-
-Phase 4 — **特徴量 Registry（`features/`）**。PIT 経由のみの versioned 特徴量セット。
-`as_of` 必須・`features/` は `pit.get_*` 以外の fact 経路を使わない（静的テストで強制）。
-`return_1d`, `momentum_n`, `volatility_n` を同梱。詳細は [docs/features.md](docs/features.md)。
-
-Phase 5 — **Paper 縦通し（`strategies/paper/`）**。`PaperRunConfig` → feature-driven 戦略 →
-`core.run_backtest` → `PaperRunResult` → `JsonPaperStore` を接続する。結果は再現性 metadata と
-trades を含み、既定で `data/paper/<strategy_id>/<run_id>.json` に保存する。外部 API は
-ingestion-only で、戦略は DB／PIT／HTTP／secrets に直接触れない。詳細は
-[docs/paper.md](docs/paper.md)。
-
-Phase 6 — **full-code hardening + 役割 agent（`agents/`）+ StrategySpec
-（`strategies/spec/`）**。Premium core 23 の canonical data contract、contract-driven
-`event_time` / `available_at` / natural key、revision change feed、validated local snapshot
-manifest、parallel-safe SQLite WAL paper index、stale valuation mark と explicit RAW price
-basis、feature approval governance を固定した。8 役割は structured message のみを交換し、
-StrategySpec は whitelist interpreter により approved feature の `ctx.feature` 呼び出しだけへ
-変換される。Paper 後に独立 risk audit を保存する。詳細は
-[docs/agents.md](docs/agents.md)。
-
-Phase 6.1 — **Coverage V2 + remote Ops Read MCP + governed JSDA**。min/max 行境界を完全性の
-根拠にせず、required segment と collection receipt（raw/structured reconcile、pagination 完走、
-digest）で dataset COMPLETE を判定する。READY は governed JQ/JSDA 全件の Coverage V2 proof を
-必須とする。PIT paging は SQL keyset + `LIMIT page_size+1` であり、adapter は全件 load 後に
-slice しない。ブラウザ ChatGPT / mobile は Cloudflare Access/OAuth の Streamable HTTP
-**Ops Read MCP** を使い、local stdio MCP は offline/dev adapter に限定する。Remote Research は
-Cloudflare 上で immutable READY generation を pin できるまで公開しない。運用手順は
-[docs/operations/current_production_runbook.md](docs/operations/current_production_runbook.md)、接続境界は
-[docs/quant_data_access.md](docs/quant_data_access.md)。
-
-> 開示系（EDINET 由来の大株主・持ち合い・大量保有）は独立した EDINET DB ではなく、**J-Quants の EDINET 系 API**（`/v2/edinet/major-shareholders`、`/v2/edinet/cross-shareholdings`、`/v2/edinet/large-volume-shareholders`、および `/v2/fins/...`）で統合する方針。Phase 1 では J-Quants 上記エンドポイント + JSDA が対象。
-
-ランタイムは **local 主系**（`LocalHttpClient` / httpx）。Cloudflare は Phase 3.5 から取得閉路も担う（Premium core）。詳細は [docs/data_sources.md](docs/data_sources.md)。
-
-**Phase 7（選抜・Knowledge・AI Gateway）は NO-GO**（production READY + Coverage V2
-COMPLETE まで）。研究の次は propose→occupancy 閉ループであり Mass / GO ではない。
-Phase 6.1 の framework 完了と、credential を使う production backfill / READY / deploy
-の運用完了は区別する。
-
-詳細は [docs/architecture.md](docs/architecture.md) と [docs/roadmap.md](docs/roadmap.md) を参照してください。
-
-## ディレクトリの見方（layout migration 後）
-
-ライブラリコードは **plane 別** に `packages/*` へ物理配置しています。  
-**Python の import 名は従来どおり**（`import ingestion` / `import pit` 等）。setuptools multi-root
-（`where = packages/{edge,data_plane,research_runtime,product}`）で解決します。  
-詳細・履歴: [docs/architecture/repo_layout_migration.md](docs/architecture/repo_layout_migration.md)。
-
-### トップレベル
-
-| パス | 役割 |
-|------|------|
-| `packages/` | ライブラリ本体（下表の 4 plane） |
-| `platform/` | Cloudflare Workers（**path 固定** — wrangler / deploy / 多数の runbook が依存） |
-| `scripts/` | 運用・開発 CLI（ingestion / sync / validation / Paper / ops） |
-| `tests/` | オフライン pytest（`testpaths = ["tests"]`） |
-| `docs/` | アーキテクチャ・phase runbook |
-| `data/` | ローカル raw/structured/paper/reports（**gitignore**・移動しない） |
-| `qp_paths.py` | `repo_root()` — パッケージ深さに依存しないリポジトリ根解決 |
-| `conftest.py` | pytest: root + `packages/*` を path に載せ、FakeHttpClient を提供 |
-| `pyproject.toml` | packaging / editable install |
-
-### `packages/` 地図（import 名は括弧内 = ディスク上の leaf 名）
-
-```
-packages/
-├── edge/                    # CF 隣接 Python + local MCP
-│   ├── cf_platform/         # (import cf_platform) Premium 検証・natural_key SoT mirror
-│   └── mcp_servers/         # (import mcp_servers) local stdio quant_data MCP
-├── data_plane/              # contracts → ingest → store → PIT read → ops meta
-│   ├── data_contracts/      # JSON 契約・coverage・identity
-│   ├── ingestion/           # J-Quants / JSDA fetch + normalize
-│   ├── storage/             # SQLite schema / receipts / coverage ledger
-│   ├── pit/                 # PIT Data API（fact の sole read path）
-│   ├── data_access/         # Ops + research read adapter
-│   └── ops/                 # Backfill planner, projection meta
-├── research_runtime/        # 計算スタック（外部ネットワークなし）
-│   ├── core/                # ブラックボックス backtest engine
-│   ├── features/            # versioned feature registry (PIT-only)
-│   ├── strategies/          # Paper runner / StrategySpec
-│   ├── paper_runtime/       # READY policy, snapshots, fingerprints
-│   ├── risk/                # immutable risk audit store
-│   └── price_basis/         # (import price_basis) 共有 price-basis helper
-└── product/                 # オーケストレーション / プロダクト面
-    ├── agents/              # 8 役割 agent + paper pipeline
-    ├── research/            # occupancy_audit / catalog / readiness
-    ├── selection/           # budget ledger / screen / decision
-    ├── execution/           # authorized paper execution
-    ├── knowledge/           # immutable knowledge artifacts
-    ├── gateway/             # AI gateway stubs (fail-closed)
-    └── fof/                 # FoF 層プレースホルダ
-```
-
-### 凍結・非移動
-
-| パス | 理由 |
-|------|------|
-| `platform/workers/**` | wrangler.toml / migrations / `npx wrangler -c` と runbook の path 契約 |
-| `data/**` | ローカル secrets 隣接・SQLite・receipts（gitignore domain） |
-
-歴史的ドキュメントにトップレベル `ingestion/` 等の記述が残っていても、実装の正本は上記 `packages/*` です。
-
-## LLM 向けナビゲーション地図
-
-エージェント／LLM がリポジトリを編集するときの **入口** です（Mass / READY / Phase7 は **NO-GO / OFF**）。
-
-| 順番 | 読むもの | 理由 |
-|------|----------|------|
-| 1 | この README | 製品オリエンテーション + `packages/*` 地図 |
-| 2 | [docs/architecture/llm_nav_map.md](docs/architecture/llm_nav_map.md) | タスク別ルーティング・禁止事項・import 方針 |
-| 3 | [docs/phase62_residual_status.md](docs/phase62_residual_status.md) | **live residual 唯一の SoT**（COMPLETE / Mass NO-GO） |
-| 4 | [docs/architecture.md](docs/architecture.md) | PIT sole read / Coverage V2 / MCP 境界 |
-| 5 | タスク 1 本の domain doc | `pit_api` / `core_engine` / `agents` 等（nav map 参照） |
-
-**Hard rules（要約）:**
-
-- residual 以外の `phase62*_status` / `final_report` は **historical**（バナー付き）。GO 判定に使わない。
-- import 名は **leaf のまま**（`import pit`）。`quant_platform.*`（Batch Z）は **DEFER**。
-- `platform/workers/**` と `data/**` は **移動禁止**。
-- fact は `pit.get_*` のみ。市場 HTTP は `ingestion` のみ。
-- 詳細な plane 依存 allow-list と例外（`data_access` / `paper_runtime` 等）は ADR:
-  [docs/architecture/adr_llm_friendly_refactor.md](docs/architecture/adr_llm_friendly_refactor.md)
-  （**Accepted (Grok 2026-08-12)**）。
-
-静的ガード: `tests/test_plane_import_boundaries.py`（＋既存 `test_*_boundary*.py`）。
-
-## 開発言語・ツール
-
-- **Python 3.11+**（`pyproject.toml` で `requires-python = ">=3.11"`）
-- HTTP は **httpx**（local ランタイム）
-- ランタイム・デプロイは後続で **Cloudflare**（Workers / Workflows / Secrets 等）を想定
-- CI/CD は Cloudflare 側で行う方針（GitHub Actions には載せない）
-- 実験の枝分かれは後続で Cloudflare Artifacts を想定
-
-確定は後続 Phase で更新します。
-
-## セットアップとテスト
+checkout した開発者向けです。通常利用者の実行手順ではなく、実市場のローカル取得や Docker 起動は書きません。`qp-research` は開発者・復旧互換であり、通常経路ではありません。配布と CI の境界は [docs/architecture.md](docs/architecture.md) です。
 
 ```bash
-# Python 3.11+。CI と同じ lock に従って開発依存を用意する。
+# ロックどおり開発 extra を同期する
 uv sync --frozen --extra dev
 
-# Node/npm や Worker の npm install に依存しない Python 試験
+# 通常スイート。toolchain / live / platform を除く
 .venv/bin/python -m pytest tests/ -m "not toolchain and not live and not platform"
 
-# Node/npm を使うクロスランタイム・package 入口試験（CI では必須）
+# toolchain。live と platform は除く
 .venv/bin/python -m pytest tests/ -m "toolchain and not live and not platform"
 
-# macOS 実ホスト統合の例。-m platform は選択、--run-platform は実行許可。
-# 選択だけ（許可なし）では skip される。許可があれば -m なしの広い選択にも含められる。
+# platform マーカーだけを選び、--run-platform でオプトインする
 .venv/bin/python -m pytest tests/ -m platform --run-platform
 ```
 
-全体の必須 CI は `scripts/verify_ci.sh`。Python の両グループと全 active
-Worker の試験・型検査・dry-run を実行します。上の Python 選択だけでは
-Worker runtime や live acceptance の検証にはなりません。必須の Python
-試験は純粋な unit だけではなく、SQLite・IPC・子プロセスの統合も含みます。
-既定の pytest-socket は試験実行中の通常の Python ネットワークソケット生成と
-getaddrinfo/gethostbyname を遮断します。全 DNS API ではありません。
-collection/import、別プロセス exec、native/Node/Worker ランタイムは対象外です。
-Unix ソケットは許可します。全プロトコル隔離や速度・件数の改善は約束しません。
-`live` は予約マーカーで、CI の両グループから除外しますが collection skip はしません。
-既存の手動 live acceptance と HOLD はそのままです。QP_LIVE だけではネットワークは開きません。
-`--run-platform` は platform 試験の実行許可、`-m` は選択です。選択だけでは skip されます。
-
-通常の wheel と Cloudflare Container 入力から `research.offline` と `research.unique_logic` を除外します。チェックアウトには replay 互換ソースと不変成果物を残します。research は自動では有効になりません。wheel 検証は除外と data authority のみを確認し、Personal/Controlled の import 経路は実際の Container で確認します。standalone wheel での research 実行は新たにサポートしません。
-
-## Phase 1 の取得（ローカル）
+Cloudflare Builds 上のランナー専用です。Mac で実行する指示ではありません。実 Wrangler dry-run と Container イメージビルドを含みます。
 
 ```bash
-# JSDA のみ（鍵不要）
-python scripts/run_ingestion_once.py --source jsda --runtime local
-
-# 2 ソースすべて（J-Quants の鍵は CF proxy 既定、未設定時は環境変数）
-python scripts/run_ingestion_once.py --source all
-
-# Cloudflare ランタイムは Phase 1 では取得しない（exit 2）
-python scripts/run_ingestion_once.py --source all --runtime cloudflare
+scripts/verify_ci.sh
 ```
 
-終了コード: `0`=取得/登録あり, `1`=予期せぬエラー, `2`=何も実行せず（CF ランタイム or 全ソース skip）。
-
-## Secrets
-
-API キー等はコードに埋め込まない。名前の一覧のみ [platform/secrets.example.md](platform/secrets.example.md) を参照。  
-`JQUANTS_API_KEY` の **正本は Cloudflare Secret**（Worker が保持）。ローカルは **CF proxy を既定で利用**（環境変数 `INGESTION_PROXY_URL`/`INGESTION_PROXY_TOKEN` または `~/.config/quant-platform/ingestion_proxy_{url,token}` を設定すると有効。proxy 未設定時のみ環境変数 `JQUANTS_API_KEY` の直接利用にフォールバック）。
-
-## 運用完了の定義 (Ops completion)
-
-Phase 3.5 の **運用完了** には以下の両方が必要:
-
-- **Cron `failed=0`** — `quant-platform-ingestion-premium` の `/health` が
-  `last_run.status ∈ {pass, partial-pass}` を報告し、`failed` 件数が 0 であること。
-- **Live B0 strict pass** — 同じ DB で `QP_LIVE=1 python3 scripts/run_phase35_validation.py
-  --db data/structured/ingestion.sqlite --tier daily` が exit 0 となること
-  （LIVE_GATES: master ≳ 3,000 / bars issuers ≳ 3,000 / latest-day rows ≳ 3,000）。
-
-**Phase 3.5 ops complete** は検証レポートが緑であることを追加要件とします:
-
-- **Validation report (weekly 緑)** — `python3 scripts/run_phase35_validation.py
-  --db <DB> --tier weekly` が exit 0 (default `--require-implemented` for weekly).
-  レポートは `data/reports/validation_*.json` に恒久化されるので事後監査が可能。
-
-**フレームワーク完了 ≠ データ品質完了**。検証マトリクスのコード・カタログ・docs が揃っていても、
-本番 cron が `failed=0` で回り、かつ live B0 strict が通って初めて運用完了と呼べる。
-詳しくは [docs/phase35_validation_matrix.md](docs/phase35_validation_matrix.md) の
-"Live strict gates" 節を参照。
+既定の pytest-socket は、テスト実行中の通常 Python ソケット生成と `getaddrinfo` / `gethostbyname` を拒みます。Unix IPC は許します。すべての DNS を止めるわけではなく、コレクションや import、exec した子、native / Node / Worker までは覆いません。`-m platform` は該当テストだけを選び、`--run-platform` がオプトインです。`live` は CI から除外しますが収集スキップではなく、`QP_LIVE` だけではネットワークは開きません。非 live スイートは SQLite とプロセス統合を含みます。件数・壁時計・費用は保証しません。
