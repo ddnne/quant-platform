@@ -1,25 +1,25 @@
 {
   "schema": "quant-platform-work-ledger/v1",
   "baseline_sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
-  "branch": "refactor/numeric-contract-test-cases",
-  "updated_at": "2026-09-11T18:54:00Z",
+  "branch": "refactor/mcp-http-contract-tests",
+  "updated_at": "2026-09-11T18:59:00Z",
   "lanes": {
     "source_delivered": {
       "status": "partial_main_and_followup",
-      "scope": "pr103_through_pr120_merged_pr121_native_pending_c12_c10_reviewed",
-      "notes": "PR103 through120 source merged normally after exact-source native success. PR120 source7787536f/check103369683501/build985ae8f8 and merged83d5fab1/check103375308123/builda2a1950c both SUCCESS; main stopped18:27:26.449Z. Same tree29fcb137, fresh89-test clone clean/equal/unpushed0. Evidence https://github.com/ddnne/quant-platform/pull/120#issuecomment-5638978705 . PR121 source1f38 pushed: one full native passed, another failed the old JQ timing oracle. Grok fixba6bc297 is reviewed/verified and pushed in final55277339; new native build88661b16 running. C12 test consolidation c085391c and documentation6825aaf3 are reviewed/verified/pushed, but not yet accepted into main. C10 numeric test consolidation81ca24e5 is separately reviewed/verified; final push/native/main acceptance pending. No rollout/data/READY/Pilot permission.",
-      "latest_main_sha": "83d5fab18266719385a8e39cd601b299fe6232c5",
-      "latest_main_check_completed_at": "2026-09-11T18:27:26.449Z",
-      "latest_main_evidence": "https://github.com/ddnne/quant-platform/pull/120#issuecomment-5638978705",
-      "pull_request": "https://github.com/ddnne/quant-platform/pull/120",
-      "implementation_sha": "7787536fe067beb1b4ca306da708583740aa4bc1",
-      "merged_sha": "83d5fab18266719385a8e39cd601b299fe6232c5",
-      "required_check_source_sha": "7787536fe067beb1b4ca306da708583740aa4bc1",
+      "scope": "pr103_through_pr121_merged_pr122_c12_c10_native_pending",
+      "notes": "PR103 through121 source merged normally after exact-source native success. PR121 final55277339/check103383910368/build88661b16 SUCCESS18:55:26.446Z. Earlier source1f38 mixed success/failure was not waived; Grok fixed the observed JQ timing oracle inba6bc297. Merge182c35d5 has identical tree72158abc, separate25MB source-only fresh clone clean/equal/unpushed0,96 retained testsPASS11.62s plus secret/path scan. Merged-main check103384133083/build22dc55ae is separately pending. C12c085391c and C1081ca24e5 are reviewed/verified/pushed and combined as independent commits in PR122 to avoid repeated sequential full CI. Final combined-source native/merge remain pending. No product rollout/data/READY/Pilot approval.",
+      "latest_main_sha": "182c35d50e09c3de40748df29c59daf6b67468f4",
+      "latest_main_check_completed_at": null,
+      "latest_main_evidence": "https://github.com/ddnne/quant-platform/pull/121#issuecomment-5639284190",
+      "pull_request": "https://github.com/ddnne/quant-platform/pull/121",
+      "implementation_sha": "5527733976f23812860b75509a76c32fad6e5ff4",
+      "merged_sha": "182c35d50e09c3de40748df29c59daf6b67468f4",
+      "required_check_source_sha": "5527733976f23812860b75509a76c32fad6e5ff4",
       "required_check_app_id": 85455,
-      "required_check_build_id": "985ae8f8-e50b-4219-b9b4-c5041e15eb8d",
-      "merged_main_check_id": 103375308123,
-      "merged_main_build_id": "a2a1950c-a16e-4e62-b1f9-3ca5888e8162",
-      "required_check_id": 103369683501
+      "required_check_build_id": "88661b16-f35a-45e5-9722-c104d3e49f76",
+      "merged_main_check_id": 103384133083,
+      "merged_main_build_id": "22dc55ae-42d9-49be-b099-3a674584ffdc",
+      "required_check_id": 103383910368
     },
     "staging_deployed": {
       "status": "not_this_branch",
@@ -211,7 +211,7 @@
       "status": "test_audit_execution_in_progress",
       "execution_ledger": "docs/operations/test_reduction_ledger.json",
       "test_audit": "Baseline main1088c398 static inventory:393 test files plus2 support paths,2983 Python definitions and1115 Worker registrations, not expanded runtime cases. Main-authored candidate body/alternative review identified52 findings across100 files:13 direct-deletion groups covering22 definitions,7 assert reductions,23 consolidations,7 replacements and2 test-tier moves. Two independent critical reviews yielded9 guardrail corrections, incorporated before execution. User subsequently authorized implementation. The original inventory remains a baseline, not a claim that every candidate has been removed. Uncommitted branches are separate. No coverage-count target or bulk deletion.",
-      "execution_summary": "36 of52 original findings implemented plus CI-A01/A02/R06-F01;16 remain, including partially implemented A06 and held C09. Test/support-only delta54471b5e..62672a0c:69 files,+1500/-2412, net912 lines removed. Including CI script:70 files,+1503/-2509, net1006 removed. R01/R02/R03 added104 lines for actual D1/R2 evidence; C17 removes104 repeated implementation/contract assertions. Neither count nor LOC is an acceptance target. Grok codes/self-reviews; Codex independently adjudicates, verifies and handles Git. CI-A03 (PR120) and CI-A04/CI-A05 (PR121 pending) are additional findings outside the original52; original36 implemented/16 remaining after C12/C10. The cumulative LOC figure above is explicitly historical through62672, before CI-A03/net165 and CI-A04/net24 source/test additions. C12 removes41 lines across3 test files, with2 duplicate files removed; no test-count target. PR121 JQ timing repair adds29 lines for a demonstrated flaky oracle. C10 removes15 lines across2 testfiles; both old115 and revised103 focused cases took1.07s, so no speedup is claimed.",
+      "execution_summary": "36 of52 original findings implemented plus CI-A01/A02/R06-F01;16 remain, including partially implemented A06 and held C09. Test/support-only delta54471b5e..62672a0c:69 files,+1500/-2412, net912 lines removed. Including CI script:70 files,+1503/-2509, net1006 removed. R01/R02/R03 added104 lines for actual D1/R2 evidence; C17 removes104 repeated implementation/contract assertions. Neither count nor LOC is an acceptance target. Grok codes/self-reviews; Codex independently adjudicates, verifies and handles Git. CI-A03 (PR120) and CI-A04/CI-A05 (PR121 source accepted; main native pending) are additional findings outside the original52; original36 implemented/16 remaining after C12/C10. The cumulative LOC figure above is explicitly historical through62672, before CI-A03/net165 and CI-A04/net24 source/test additions. C12 removes41 lines across3 test files, with2 duplicate files removed; no test-count target. PR121 JQ timing repair adds29 lines for a demonstrated flaky oracle. C10 removes15 lines across2 testfiles; both old115 and revised103 focused cases took1.07s, so no speedup is claimed.",
       "prior_verification_record": "https://github.com/ddnne/quant-platform/blob/3c4de760b04c49887738c7a449aad56b7a991fcb/docs/operations/current_work_ledger.json",
       "pr113_acceptance": "https://github.com/ddnne/quant-platform/pull/113#issuecomment-5635941240",
       "pr113_native": "Exact3c4de760 app85455/check103296673132/build6549736f succeeded14:21:46Z:Python3631 passed/4 skipped/22 warnings/493.23s, all active Worker lanes and generated-clean. Merged80e1110c has the same tree. A new remote clone passed164 retained tests/13.01s, clean/equal/unpushed0 and secret/path scan. Merged-main native check103302171536/build2a696cb7 succeeded14:38:09Z; follow-up evidence is in PR113 comment5636124244.",
@@ -252,7 +252,7 @@
       }
     },
     "8_rollout_and_research_go": { "status": "pending" },
-    "9_push_remote_and_fresh_clone_verify": { "status": "pr120_accepted_pr121_final_native_pending_c12_c10_reviewed_final_project_verification_pending" }
+    "9_push_remote_and_fresh_clone_verify": { "status": "pr121_source_accepted_main_native_pending_pr122_combined_audit_pending_final_project_verification_pending" }
   },
   "operational_facts": [
     {"id":"projection_sync_ops_live_read_20260911T1802Z","observed_at":"2026-09-11T18:02:25Z","fact":"Read-only quant-mcp projection/B0/sync/Ops: projection STALE, generated2026-08-21T12:30:49.152421+00:00, active generationprojgen-ef18b4f86ee946048161d25e2a30a2a8, refresh_attempt=false/refresh_success=false, age1834295s. ops_projection/v3 is not proof of CoverageV3 semantics. B0UNKNOWN; source change cursor2899647, applied_feed_cursor=null and all23 applied/ready_pinned cursors null. JQrun14963 PASS at2026-09-12T02:16:05+09:00; Ops aggregate22COMPLETE/4PARTIAL and raw31008/28790 acquired/complete are not newly reconciled READY eligibility. Source/export activity is not current apply. Separate READY snapshot and full tool/schema parity not remeasured. No DLQ/deployment/data activation/Pilot operation."},

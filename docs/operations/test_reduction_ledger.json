@@ -2,7 +2,7 @@
   "baseline_sha": "1088c398048c578bc4430121b705ff1378440577",
   "execution_base_sha": "54471b5ea228ac0d2eb63d27f08696db42ccac7d",
   "scope": "All tracked tests statically inventoried; candidate bodies and retained alternatives reviewed. Not a mutation proof of every test path. Selectors identify baseline definitions and may now refer to deleted tests.",
-  "status": "partial_implementation_pr121_pending_c12_c10_reviewed",
+  "status": "partial_implementation_pr121_source_accepted_pr122_c12_c10_native_pending",
   "counts": {
     "baseline_findings": 52,
     "implemented_findings": 36,
