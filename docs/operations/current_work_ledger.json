@@ -1,24 +1,24 @@
 {
   "schema": "quant-platform-work-ledger/v1",
   "baseline_sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
-  "branch": "fix/shared-d1-forward-repair",
-  "updated_at": "2026-09-11T08:21:00Z",
+  "branch": "feat/receipt-event-checkpoint",
+  "updated_at": "2026-09-11T10:27:00Z",
   "lanes": {
     "source_delivered": {
       "status": "partial_main_and_candidate",
-      "scope": "pr103_through_pr111_merged_shared_d1_candidate",
-      "notes": "PR103 through111 are merged, exact-source and main native checks succeeded, and new clones verified clean/equal/unpushed0. Shared-D1 forward repair is the next unmerged candidate. Bar/financial scopes and candidate/READY/runtime/Trader integration remain pending. Source delivery is not rollout, data activation, READY or Pilot.",
-      "latest_main_sha": "d7bbc9e7c017840384f71317283541fb75cf1a1b",
-      "latest_main_check_completed_at": "2026-09-11T08:18:53Z",
-      "latest_main_evidence": "https://github.com/ddnne/quant-platform/pull/111#issuecomment-5631549067",
-      "pull_request": "https://github.com/ddnne/quant-platform/pull/111",
-      "implementation_sha": "53827f764e5dcbadc837a7107e0bff65703ff67c",
-      "merged_sha": "d7bbc9e7c017840384f71317283541fb75cf1a1b",
-      "required_check_source_sha": "53827f764e5dcbadc837a7107e0bff65703ff67c",
+      "scope": "pr103_through_pr112_merged_receipt_checkpoint_candidate",
+      "notes": "PR103 through112 are merged, exact-source and main native checks succeeded, and new clones verified clean/equal/unpushed0. Receipt checkpoint is a separate unmerged candidate under review. Bar/financial scopes and candidate/READY/runtime/Trader integration remain pending. Source delivery is not rollout, data activation, READY or Pilot.",
+      "latest_main_sha": "1088c398048c578bc4430121b705ff1378440577",
+      "latest_main_check_completed_at": "2026-09-11T08:51:57Z",
+      "latest_main_evidence": "https://github.com/ddnne/quant-platform/pull/112#issuecomment-5631941308",
+      "pull_request": "https://github.com/ddnne/quant-platform/pull/112",
+      "implementation_sha": "84d1856f49f709025f312d2e39f95253a107afa3",
+      "merged_sha": "1088c398048c578bc4430121b705ff1378440577",
+      "required_check_source_sha": "84d1856f49f709025f312d2e39f95253a107afa3",
       "required_check_app_id": 85455,
-      "required_check_build_id": "d8803c3c-98e1-4c5f-8b4a-8b6971c61752",
-      "merged_main_check_id": 103196598420,
-      "merged_main_build_id": "6a80cfb2-3de2-4ecf-aba5-b7dbdc3364d3"
+      "required_check_build_id": "51fe96bd-7ee2-4664-8000-390b4dfeffe2",
+      "merged_main_check_id": 103205184570,
+      "merged_main_build_id": "29813d44-6b48-4eca-b88a-5b833d1ac0d2"
     },
     "staging_deployed": {
       "status": "not_this_branch",
@@ -182,16 +182,25 @@
       "remaining": "Pure Python/Worker/runtime/live test tiers, default external-network denial, Container image rollout and authoritative CI-to-production linkage remain pending. Existing npm advisories and remaining real-time tests were not silently suppressed."
     },
     "6_shared_d1_receipt_reproof": {
-      "status": "shared_d1_reviewed_source_candidate_receipt_checkpoint_pending",
+      "status": "shared_d1_merged_pr112_receipt_checkpoint_candidate",
       "source_diff_sha256": "b9a11a4a1c3d78958cc3e688a4bc031ca93d4b63bcb263a32dadb6efb6726ef2",
       "scope": "Removed whole shared-D1 restore/drill/recovery and old Worker rollback. Rollback refuses FORWARD_REPAIR_REQUIRED before mutation. Local and remote legacy intents block new activate/resume/continue before lease mutation. Normal forward activation/race/lease guards remain; final transition preserves actual drain digest. Production DLQ consumer declarations removed, main dead-letter route and staging/test fixtures retained. Runtime compiled pin and historical receipts unchanged; new receipts explicitly version forward-only recovery. No writer-fencing framework or new D1 migration.",
       "verification": "Grok109 tests after PR111 manifest integration; Codex233 tests across12 source/Receipt/deploy modules passed15.27s. Both manifest/governed/controlled drift checks passed. Independent review found a disconnected synthetic DB test; Grok connected the same DB to D1 and both command boundaries with a test-only destructive restore probe, removed dead helper-name assertions, and final re-review accepted the repair. No auth/live Wrangler/deploy/migration/queue/DLQ operation.",
       "test_replacements": "Four unsafe restore/undo sequencing cases removed. Retained actual forward/race tests and pre-mutation refusals; shared writer state is now connected to the tested boundaries. Hand-built staging PASS replaced by actual SQL-produced run/control/drain evidence passed into admission. Synthetic state is not live-cutover proof.",
-      "residual": "Final-source native CI/merge and rollout remain pending. Refusing unsafe rollback does not automatically repair a concrete incident. Receipt global event-chain checkpoint/O(N²) remains unimplemented. Production HOLD remains."
+      "shared_d1_acceptance": "PR112 source84d1856f and merged1088c398 share tree1a73612dd5e9c29556d3448082809092fcac75c5. Required app85455 source check103201415520/build51fe96bd succeeded08:37:28Z; merged-main check103205184570/build29813d44 succeeded08:51:57Z:3679 Python passed/4 skipped, all active Worker lanes and generated-clean passed. New independent clone reran233 representative tests in15.81s, clean/equal/unpushed0. Completed source branch and worktree removed after preservation. Evidence: https://github.com/ddnne/quant-platform/pull/112#issuecomment-5631941308",
+      "receipt_checkpoint": {
+        "status": "reviewed_source_candidate_native_ci_pending",
+        "scope": "Existing DO only: transactional event head, own-operation verification and bounded background pinned-prefix audit. Preserve existing hashes, key policy, PENDING activation and signing/reconciliation boundaries. No new authority or namespace.",
+        "review": "Independent source re-review at10:09:34Z accepted authority_do SHA2569a2d2bbe and event_checkpoint86bb828c: stored-vs-candidate contention, sticky failure transactions, synchronous final RPC eligibility and persisted due-time guard. Artificial production I/O/test clock/hash-holding hooks were removed. Final narrow test review accepted SHA256b4ded32f: bootstrap HOLD/page/deadline/snapshot and periodic restart/snapshot now each share one callback, removing the two1-second inter-RPC dependencies without dropping assertions. No concrete remaining source blocker was identified.",
+        "verification": "Final Grok workerd63 passed/3 files in5.29s and typecheck0; Codex independently reran the frozen candidate63 workerd tests in5.37s and typecheck0. Unchanged binding/schema sources had81 affected Python tests pass in4.05s; generated binding/secret-path/diff checks passed. Five repetitions of the three alarm/bootstrap cases passed before the final test-only deadline correction; they are not reported as final-hash repetitions. No scoped-owner Python rerun, full local CI, deployment or live issuance.",
+        "limitations": "Forced lost-CAS/distinct candidate timestamps and the outer post-await interception are source-reviewed, not forced in runtime. The actual request-path event-hash count was compared with40 additional unrelated events; no old full-history mutation run is claimed. No extra production await or test-only authority was retained to manufacture coverage.",
+        "residual": "Exact-SHA native CI, merge/new-clone acceptance, then separately accept live bootstrap/audit after permitted rollout. Periodic full-prefix audits remain O(total history); ordinary requests are independent only of unrelated event history, not their own recovery-attempt count."
+      },
+      "residual": "Shared-D1 source is merged but not rolled out; refusing unsafe rollback does not automatically repair a concrete incident. Receipt checkpoint remains an unmerged candidate, not operational acceptance. Production HOLD remains."
     },
     "7_dead_code_and_docs": { "status": "pending" },
     "8_rollout_and_research_go": { "status": "pending" },
-    "9_push_remote_and_fresh_clone_verify": { "status": "pr103_through_pr111_merged_and_fresh_clone_verified_final_project_verification_pending" }
+    "9_push_remote_and_fresh_clone_verify": { "status": "pr103_through_pr112_merged_and_fresh_clone_verified_final_project_verification_pending" }
   },
   "operational_facts": [
     {

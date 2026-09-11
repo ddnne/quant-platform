@@ -534,6 +534,9 @@ DURABLE_OBJECT_RPC_POLICY: dict[str, dict[str, tuple[str, ...]]] = {
 DURABLE_OBJECT_RESERVED_SPECIAL_POLICY: dict[
     str, dict[str, tuple[bool, bool]]
 ] = {
+    "receipt-evidence-authority": {
+        "ReceiptEvidenceAuthority": (False, True),
+    },
     "research-ai-gateway": {
         "BudgetLedger": (True, True),
     },

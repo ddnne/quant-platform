@@ -23,11 +23,15 @@ describe("Receipt authority manifest-bound RPC inventory", () => {
     expect(serviceMethods.filter((name) => name !== "fetch").sort()).toEqual(
       [...service.rpc_methods].sort(),
     );
+    const durableMethods = Reflect.ownKeys(ReceiptEvidenceAuthority.prototype)
+      .map(String)
+      .filter((name) => name !== "constructor");
+    expect(durable.fetch_reserved_special).toBe(false);
+    expect(durable.alarm_reserved_special).toBe(true);
+    expect(durableMethods.includes("fetch")).toBe(false);
+    expect(durableMethods.includes("alarm")).toBe(true);
     expect(
-      Reflect.ownKeys(ReceiptEvidenceAuthority.prototype)
-        .map(String)
-        .filter((name) => name !== "constructor")
-        .sort(),
+      durableMethods.filter((name) => name !== "alarm").sort(),
     ).toEqual([...durable.rpc_methods].sort());
   });
 });
