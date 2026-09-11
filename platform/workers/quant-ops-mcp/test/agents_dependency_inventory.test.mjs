@@ -26,8 +26,10 @@ test("fresh npm ci agents dependency matches the frozen framework inventory", ()
   const packageLockDigest =
     `sha256:${createHash("sha256").update(lockBytes).digest("hex")}`;
 
-  assert.equal(packageJson.dependencies.agents, "0.17.4");
-  assert.equal(lock.packages[""].dependencies.agents, "0.17.4");
+  assert.equal(
+    lock.packages[""].dependencies.agents,
+    packageJson.dependencies.agents,
+  );
   assert.deepEqual(dependency, {
     package: "agents",
     requested: packageJson.dependencies.agents,

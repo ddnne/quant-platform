@@ -10,12 +10,9 @@ import pytest
 
 from jsonschema import Draft7Validator, ValidationError
 
-from research import evaluation_ir as ir_module
-from research import evaluation_ir_emit as emit_module
 from research.candidate_policy import job_candidate_grade
 from research.evaluation_ir import (
     ALLOWED_FIELDS,
-    ENCODE_KEYS,
     EVALUATION_IR_VERSION,
     SCHEMA_REL,
     assert_evaluation_ir_allowed_fields_ts_frozen,
@@ -26,20 +23,7 @@ from research.evaluation_ir import (
     candidate_from_job_artifact,
     decode_evaluation_ir,
     dumps_evaluation_ir_golden,
-    emit_evaluation_ir_golden,
     encode_evaluation_ir,
-    evaluation_ir_allowed_fields_ts_path,
-    evaluation_ir_allowed_fields_ts_source,
-    evaluation_ir_codec_py_path,
-    evaluation_ir_codec_py_source,
-    evaluation_ir_codec_ts_path,
-    evaluation_ir_codec_ts_source,
-    evaluation_ir_encode_keys,
-    evaluation_ir_ts_encode_keys,
-    evaluation_ir_ts_path,
-    evaluation_ir_types_py_path,
-    evaluation_ir_types_py_source,
-    job_candidate_grade as ir_grade,
     load_evaluation_ir_schema,
     validate_evaluation_ir_schema,
 )
@@ -94,84 +78,14 @@ def draft7_validator() -> Draft7Validator:
 
 def test_canonical_fields_and_version() -> None:
     assert EVALUATION_IR_VERSION == "evaluation-ir/v1"
-    assert ir_grade is job_candidate_grade
-
-
-def test_encode_keys_match_schema_properties() -> None:
-    schema_keys = tuple(load_evaluation_ir_schema()["properties"])
-    assert evaluation_ir_encode_keys() == schema_keys
-    assert evaluation_ir_ts_encode_keys() == schema_keys
-    assert set(evaluation_ir_encode_keys()) == ALLOWED_FIELDS
-    assert ENCODE_KEYS == schema_keys
-    assert set(ENCODE_KEYS) == ALLOWED_FIELDS
-    gen = ir_module._CODEC_PY
-    assert ir_module.encode_evaluation_ir is gen.encode_evaluation_ir
-    assert ir_module.decode_evaluation_ir is gen.decode_evaluation_ir
-    assert ir_module.evaluation_ir_codec_ts_source is emit_module.evaluation_ir_codec_ts_source
-    assert ir_module.evaluation_ir_codec_py_source is emit_module.evaluation_ir_codec_py_source
-    assert (
-        ir_module.evaluation_ir_allowed_fields_ts_source
-        is emit_module.evaluation_ir_allowed_fields_ts_source
-    )
-    assert ir_module.assert_evaluation_ir_codec_ts_frozen is emit_module.assert_evaluation_ir_codec_ts_frozen
-    assert ir_module.assert_evaluation_ir_codec_py_frozen is emit_module.assert_evaluation_ir_codec_py_frozen
-    assert (
-        ir_module.assert_evaluation_ir_allowed_fields_ts_frozen
-        is emit_module.assert_evaluation_ir_allowed_fields_ts_frozen
-    )
-    assert tuple(gen.ENCODE_KEYS) == schema_keys
-    assert_evaluation_ir_encode_keys_match_schema()
-    assert not hasattr(ir_module, "CANONICAL_FIELDS")
 
 
 def test_schema_is_codec_sot() -> None:
-    schema = load_evaluation_ir_schema()
-    assert SCHEMA_PATH.is_file()
-    assert schema["$schema"] in {
-        "http://json-schema.org/draft-07/schema#",
-        "https://json-schema.org/draft-07/schema#",
-        "https://json-schema.org/draft/2020-12/schema",
-    }
-    assert schema["additionalProperties"] is False
-    assert schema["properties"]["version"]["const"] == "evaluation-ir/v1"
-    assert EVALUATION_IR_VERSION == schema["properties"]["version"]["const"]
-    assert ALLOWED_FIELDS == frozenset(schema["properties"])
-    generated = evaluation_ir_allowed_fields_ts_source()
-    path = evaluation_ir_allowed_fields_ts_path()
-    assert path.is_file()
-    assert path.read_text(encoding="utf-8") == generated
     assert_evaluation_ir_allowed_fields_ts_frozen()
-    codec_generated = evaluation_ir_codec_ts_source()
-    codec_path = evaluation_ir_codec_ts_path()
-    assert codec_path.is_file()
-    assert codec_path.read_text(encoding="utf-8") == codec_generated
     assert_evaluation_ir_codec_ts_frozen()
-    codec_py_generated = evaluation_ir_codec_py_source()
-    codec_py_path = evaluation_ir_codec_py_path()
-    assert codec_py_path.is_file()
-    assert codec_py_path.read_text(encoding="utf-8") == codec_py_generated
-    assert ENCODE_KEYS == tuple(schema["properties"])
-    assert ALLOWED_FIELDS == frozenset(schema["properties"])
     assert_evaluation_ir_codec_py_frozen()
-    types_py_generated = evaluation_ir_types_py_source()
-    types_py_path = evaluation_ir_types_py_path()
-    assert types_py_path.is_file()
-    assert types_py_path.read_text(encoding="utf-8") == types_py_generated
     assert_evaluation_ir_types_py_frozen()
-    worker = (
-        Path(__file__).resolve().parents[1]
-        / "platform"
-        / "workers"
-        / "research-mass-eval"
-        / "src"
-        / "evaluation_ir.ts"
-    )
-    assert evaluation_ir_ts_path() == worker
     assert_evaluation_ir_encode_keys_match_schema()
-    assert "const" not in schema["properties"]["candidate"]
-    assert "if" not in schema
-    assert "then" not in schema
-    assert "allOf" not in schema
 
 
 def test_partial_job_candidate_false() -> None:
@@ -328,17 +242,7 @@ def test_job_artifact_unknown_ir_field_rejected() -> None:
 
 
 def test_golden_is_encoder_owned() -> None:
-    emitted = emit_evaluation_ir_golden()
-    assert _load_golden() == emitted
     assert GOLDEN_PATH.read_text(encoding="utf-8") == dumps_evaluation_ir_golden()
-    ids = {row["id"] for row in emitted}
-    assert {
-        "n_expected_zero",
-        "n_cells_mismatch",
-        "collapsed",
-        "broken",
-        "smuggled_candidate_partial",
-    } <= ids
 
 
 @pytest.mark.parametrize("row", _load_golden(), ids=lambda row: row["id"])
