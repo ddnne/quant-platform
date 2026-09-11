@@ -6,6 +6,7 @@ unchanged. No READY / Mass / GO. Permanent DEFER is enforced in compute.
 
 from __future__ import annotations
 
+from data_contracts.read_scopes import DatasetReadScope, VisibleObservationCount
 from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED, RAW
 
 from .complete21_min_compute import (
@@ -96,6 +97,12 @@ DisclosureFlagFins: FeatureDefinition = register(
         ),
         compute=_disclosure_flag_fins,
         dataset_dependencies=_DISC_DATASETS,
+        read_scopes=(
+            DatasetReadScope(
+                dataset_id="fins_summary",
+                initial_visible_state="all_visible_existence_and_count",
+            ),
+        ),
         tags=("disclosure", "fins", "flag", "complete21"),
         intended_role="signal",
         status="approved",
@@ -325,6 +332,20 @@ RetrospectiveSplitSafeFundamentalValueScore: FeatureDefinition = register(
         ),
         compute=_retrospective_split_safe_fundamental_value_score,
         dataset_dependencies=_FUND_VALUE_DATASETS,
+        read_scopes=(
+            DatasetReadScope(
+                dataset_id="equities_bars_daily",
+                observation_count=VisibleObservationCount.literal(1),
+                split_safety_anchor_interval=True,
+                fields=("adjustment_close", "close", "date"),
+                optional_fields=("adjustment_volume", "volume"),
+            ),
+            DatasetReadScope(
+                dataset_id="fins_summary",
+                initial_visible_state="latest_qualifying_bps_preferred_else_eps",
+                fields=("payload", "raw_payload"),
+            ),
+        ),
         tags=("fundamentals", "value", "split-safe", "retrospective", "personal"),
         intended_role="signal",
         status="approved",

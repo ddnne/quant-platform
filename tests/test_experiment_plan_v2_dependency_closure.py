@@ -387,3 +387,24 @@ def test_builtin_feature_dataset_dependencies_are_immutable_and_digested() -> No
     assert digest.startswith("sha256:") and len(digest) == 71
     with pytest.raises(FrozenInstanceError):
         definition.dataset_dependencies = ("fins_summary",)  # type: ignore[misc]
+
+
+def test_canonical_four_plan_feature_v1_digests_match_main_baseline() -> None:
+    baseline = {
+        "retrospective_split_adjusted_momentum_n": (
+            "sha256:f53d272fe08fbe589221650c9fe96a787a281c898364657037d21e7ce3433cb9"
+        ),
+        "disclosure_flag_fins": (
+            "sha256:bb72244189e975151c6477e377027ee6b9911f9a9df8685ffd2cd4448987d07e"
+        ),
+        "retrospective_split_safe_fundamental_value_score": (
+            "sha256:1cb7ac7fdd2401a54bd83bd4b2f4a1e6d9e8b3ab8362aa301239a6a7edd953b6"
+        ),
+    }
+    for feature_id, expected in baseline.items():
+        definition = features.get(feature_id, version="1.0.0")
+        assert definition.read_scopes
+        assert features.feature_definition_digest(definition) == expected
+        assert features.feature_definition_digest(
+            definition, metadata_version="v1"
+        ) == expected

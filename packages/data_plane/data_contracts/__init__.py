@@ -55,6 +55,11 @@ from .source_capability import (
     source_capability_contract_for,
     source_capability_contract_or_none,
 )
+from .read_scopes import (
+    DatasetReadScope,
+    VisibleObservationCount,
+    resolve_dataset_read_scopes,
+)
 from .permanent_defer import (
     MASTER_COVERAGE_POLICY,
     MASTER_JQ_SCOPE,
@@ -140,4 +145,7 @@ __all__ = [
     "required_domain_subset_official",
     "source_capability_contract_for",
     "source_capability_contract_or_none",
+    "DatasetReadScope",
+    "VisibleObservationCount",
+    "resolve_dataset_read_scopes",
 ]
