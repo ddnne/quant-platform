@@ -39,8 +39,8 @@ from storage.coverage_ledger import CollectionReceipt
 from storage.schema import CATALOG_CODE_SQL
 from ops.receipt_product import (
     iter_observed_segment_product_rows,
-    product_artifact_body_digest,
     product_artifact_digest_ordered,
+    verify_full_segment_product_materialization,
 )
 from storage.verified_receipt import require_verified_collection_closure
 
@@ -905,42 +905,17 @@ def _verify_publication_on_authenticated_mirror(
                             )
                         )
                     )
-                    if (
-                        closure.status != "SUCCESS"
-                        or not closure.pagination_exhausted
-                        or not closure.discovery_exhausted
-                        or observed_count != closure.structured_row_count
-                        or observed_product_digest != closure.structured_digest
-                        or product["artifact_digest"] != observed_product_digest
-                        or product_artifact_body_digest(product["artifact_body"])
-                        != observed_product_digest
-                        or len(product["artifact_body"].encode("utf-8"))
-                        != product["byte_count"]
-                        or int(product["byte_count"]) != observed_bytes
-                        or product["row_count"] != closure.structured_row_count
-                        or product["raw_manifest_digest"]
-                        != closure.raw_manifest_digest
-                        or product["raw_page_count"] != closure.raw_page_count
-                        or product["raw_row_count"] != closure.raw_row_count
-                        or len(run_rows) != 1
-                        or run_rows[0]["id"] != closure.run_id
-                        or run_rows[0]["source"] != closure.source
-                        or run_rows[0]["runtime"] != "receipt-evidence-authority"
-                        or run_rows[0]["status"] != "SUCCESS"
-                        or run_rows[0]["authority_operation_id"]
-                        != product["operation_id"]
-                        or len(raw_manifests) != 1
-                        or raw_manifests[0]["manifest_key"]
-                        != product["raw_manifest_key"]
-                        or raw_manifests[0]["page_count"]
-                        != closure.raw_page_count
-                        or raw_manifests[0]["row_count"]
-                        != closure.raw_row_count
-                        or raw_manifests[0]["raw_bytes"] != product["raw_bytes"]
-                        or raw_manifests[0]["data_digest"]
-                        != closure.raw_manifest_digest
-                    ):
-                        continue
+                    verify_full_segment_product_materialization(
+                        closure,
+                        product=product,
+                        run=run_rows[0] if len(run_rows) == 1 else None,
+                        raw_manifest=(
+                            raw_manifests[0] if len(raw_manifests) == 1 else None
+                        ),
+                        observed_count=observed_count,
+                        observed_digest=observed_product_digest,
+                        observed_bytes=observed_bytes,
+                    )
                 except Exception:
                     continue
                 verified_segments[dataset_id].append(

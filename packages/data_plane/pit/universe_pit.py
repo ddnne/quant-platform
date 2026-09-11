@@ -2,8 +2,10 @@
 
 Activation is ``max(event_time, available_at)`` with ``available_at``,
 ``event_time``, and ``ingested_at`` all ``<= as_of``.
-Latest complete master snapshot wins, so a delisted code disappears. Product
-policy (scale vs Prime, fins intersection) stays outside this module.
+The latest PIT-visible snapshot-date wins, so a delisted code disappears from
+a later visible snapshot. This DRAFT/replay selector does not prove that a
+snapshot is complete. Product policy (scale vs Prime, fins intersection) stays
+outside this module.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Protocol, Sequence
 
 from data_contracts.identity import natural_key as contract_natural_key
 from data_contracts.personal_history_compact import (
@@ -190,6 +192,11 @@ class _Event:
     code: str = ""
     market_code: str = ""
     scale_category: str = ""
+    event_time_text: str = ""
+    available_at_text: str = ""
+    ingested_at_text: str = ""
+    payload_text: str = ""
+    raw_payload_text: str = ""
 
 
 def _event_from_row(
@@ -232,6 +239,11 @@ def _event_from_row(
         )
     elif dataset == "fins_summary":
         code = _pick(payload, "Code", "code")
+    payload_text = raw.get("payload")
+    raw_payload_text = raw.get("raw_payload")
+    event_time_text = raw.get("event_time")
+    available_at_text = raw.get("available_at")
+    ingested_at_text = raw.get("ingested_at")
     return _Event(
         activation=max(event_time, available),
         dataset=dataset,
@@ -245,6 +257,11 @@ def _event_from_row(
         code=code,
         market_code=market_code,
         scale_category=scale_category,
+        event_time_text=event_time_text if type(event_time_text) is str else "",
+        available_at_text=available_at_text if type(available_at_text) is str else "",
+        ingested_at_text=ingested_at_text if type(ingested_at_text) is str else "",
+        payload_text=payload_text if type(payload_text) is str else "",
+        raw_payload_text=raw_payload_text if type(raw_payload_text) is str else "",
     )
 
 
@@ -376,6 +393,7 @@ def _iter_master_events(
     first_as_of: str,
     last_as_of: str,
     observed_through: str,
+    product_fields: bool = False,
 ):
     insertion = 0
     window_sql, window_params = _master_window(
@@ -392,6 +410,10 @@ def _iter_master_events(
     ingested_sql = " AND ingested_at IS NOT NULL AND ingested_at <= ?"
     ingested_params: tuple[str, ...] = (observed_through,)
     if compact:
+        if product_fields:
+            raise PitError(
+                "complete master does not read compact personal history"
+            )
         rows = conn.execute(
             "SELECT snapshot_date,code,event_time,available_at,ingested_at,"
             "market_code,scale_category,source_scale_category "
@@ -408,20 +430,23 @@ def _iter_master_events(
             yield _event_from_compact_master(dict(raw), insertion=insertion)
             insertion += 1
         return
+    extra = ",raw_payload" if product_fields else ""
     selects: list[str] = []
     params: list[Any] = []
     for table in ("jquants_records", "jquants_records_revisions"):
         if not _table_columns(conn, table):
             continue
+        if product_fields and "raw_payload" not in _table_columns(conn, table):
+            raise PitError(f"universe requires canonical {table} schema")
         selects.append(
             (
                 "SELECT source,dataset,natural_key,event_time,available_at,"
-                "ingested_at,payload FROM {table} WHERE source='jquants' "
+                "ingested_at,payload{extra} FROM {table} WHERE source='jquants' "
                 "AND dataset=? AND available_at IS NOT NULL AND event_time IS NOT NULL "
                 "AND available_at <= ? AND event_time <= ?"
                 + ingested_sql
                 + " AND ({window})"
-            ).format(table=table, window=window_sql)
+            ).format(table=table, extra=extra, window=window_sql)
         )
         params.extend(("equities_master", last_as_of, last_as_of, *ingested_params, *window_params))
     if not selects:
@@ -444,17 +469,74 @@ def _compact_flag_from_connection(conn: sqlite3.Connection) -> bool:
     return state == "compact"
 
 
+class _CompleteMembershipResolver(Protocol):
+    """Private complete-master membership gate. Not a caller completeness flag."""
+
+    def resolve(
+        self,
+        *,
+        decision_date: str,
+        as_of: datetime,
+        current_snapshot: str,
+        current_members: Mapping[_VersionIdentity, _Event],
+        master_latest: Mapping[_VersionIdentity, _Event],
+        intern: dict[tuple[str, str, str], UniverseMasterMember],
+    ) -> tuple[UniverseMasterMember, ...]:
+        ...
+
+
+def _interned_master_members(
+    events: Iterable[_Event],
+    *,
+    snapshot_date: str,
+    intern: dict[tuple[str, str, str], UniverseMasterMember],
+) -> tuple[UniverseMasterMember, ...]:
+    members: list[UniverseMasterMember] = []
+    seen: set[str] = set()
+    for event in events:
+        if not event.code or event.code in seen:
+            raise PitError(
+                f"equities_master snapshot {snapshot_date} has invalid code identity"
+            )
+        seen.add(event.code)
+        identity = (event.code, event.market_code, event.scale_category)
+        held = intern.get(identity)
+        if held is None:
+            held = UniverseMasterMember(
+                code=event.code,
+                market_code=event.market_code,
+                scale_category=event.scale_category,
+            )
+            intern[identity] = held
+        members.append(held)
+    members.sort(key=lambda item: item.code)
+    return tuple(members)
+
+
+def _newer_visible_version(event: _Event, previous: _Event | None) -> bool:
+    if previous is None:
+        return True
+    return (event.available, event.ingested) > (
+        previous.available,
+        previous.ingested,
+    )
+
+
 def _universe_day_slices_from_connection(
     conn: sqlite3.Connection,
     *,
     period_start: str,
     period_end: str,
     as_of_for_day: Mapping[str, str],
+    complete_membership: _CompleteMembershipResolver | None = None,
+    product_fields: bool = False,
 ) -> tuple[UniverseDaySlice, ...]:
     """Resolve universe slices on an already-open verifier or READY connection.
 
     This is not a public opener. Callers that only have a path must use
     :func:`resolve_universe_day_slices`, which READY-gates the file.
+    Observed membership is not a completeness proof. The optional private
+    complete-membership resolver is not a caller-selectable READY bypass.
     """
 
     requested = _calendar_dates(period_start, period_end)
@@ -519,6 +601,7 @@ def _universe_day_slices_from_connection(
                 first_as_of=first_as_of,
                 last_as_of=last_as_of,
                 observed_through=observed_through,
+                product_fields=product_fields,
             )
         )
         calendar_by_day: dict[str, dict[_VersionIdentity, _Event]] = {}
@@ -593,11 +676,7 @@ def _universe_day_slices_from_connection(
         def activate_master(event: _Event) -> None:
             nonlocal current_snapshot, members_dirty
             previous = master_latest.get(event.identity)
-            version = (event.available, event.ingested)
-            if previous is not None and version <= (
-                previous.available,
-                previous.ingested,
-            ):
+            if not _newer_visible_version(event, previous):
                 return
             members_dirty = True
             if previous is not None and previous.snapshot_date == current_snapshot:
@@ -648,32 +727,22 @@ def _universe_day_slices_from_connection(
                 interned_fins = None
             if interned_fins is None:
                 interned_fins = frozenset(eligible_fins)
-            if members_dirty or interned_members is None:
-                members: list[UniverseMasterMember] = []
-                seen: set[str] = set()
-                for event in current_members.values():
-                    if not event.code or event.code in seen:
-                        raise PitError(
-                            f"equities_master snapshot {current_snapshot} "
-                            "has invalid code identity"
-                        )
-                    seen.add(event.code)
-                    identity = (
-                        event.code,
-                        event.market_code,
-                        event.scale_category,
-                    )
-                    held = member_intern.get(identity)
-                    if held is None:
-                        held = UniverseMasterMember(
-                            code=event.code,
-                            market_code=event.market_code,
-                            scale_category=event.scale_category,
-                        )
-                        member_intern[identity] = held
-                    members.append(held)
-                members.sort(key=lambda item: item.code)
-                interned_members = tuple(members)
+            if complete_membership is not None:
+                interned_members = complete_membership.resolve(
+                    decision_date=day,
+                    as_of=as_of,
+                    current_snapshot=current_snapshot,
+                    current_members=current_members,
+                    master_latest=master_latest,
+                    intern=member_intern,
+                )
+                members_dirty = False
+            elif members_dirty or interned_members is None:
+                interned_members = _interned_master_members(
+                    current_members.values(),
+                    snapshot_date=current_snapshot,
+                    intern=member_intern,
+                )
                 members_dirty = False
             slices.append(
                 UniverseDaySlice(
