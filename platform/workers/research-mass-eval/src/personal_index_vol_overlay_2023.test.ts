@@ -585,15 +585,13 @@ describe("fixed personal index-vol overlay admission", () => {
   });
 });
 
-const noMass = async () => { throw new Error("mass path must not run"); };
-
 describe("personal index-vol overlay routes", () => {
   it("authenticates before parsing and dispatch", async () => {
     const submit = vi.fn();
     const response = await dispatchMassEvalFetch(
       new Request("https://example.test/v1/personal-index-vol-overlay-2023", { method: "POST", body: "{}" }),
       { MASS_EVAL_TOKEN: "secret", STRUCTURED_BUCKET: {} as R2Bucket, PERSONAL_RESEARCH_CONTAINER: {} as Env["PERSONAL_RESEARCH_CONTAINER"] } as Env,
-      { runMassEval: noMass, runDailyPath: noMass, submitPersonalIndexVolOverlay2023: submit },
+      { submitPersonalIndexVolOverlay2023: submit },
     );
     expect(response.status).toBe(401);
     expect(submit).not.toHaveBeenCalled();
@@ -608,13 +606,13 @@ describe("personal index-vol overlay routes", () => {
     expect((await dispatchMassEvalFetch(
       new Request("https://example.test/v1/personal-index-vol-overlay-2023", { method: "POST", headers, body: JSON.stringify(request) }),
       env,
-      { runMassEval: noMass, runDailyPath: noMass, submitPersonalIndexVolOverlay2023: submit, personalIndexVolOverlay2023Status: status },
+      { submitPersonalIndexVolOverlay2023: submit, personalIndexVolOverlay2023Status: status },
     )).status).toBe(202);
     expect(submit).toHaveBeenCalledWith(env, request);
     await dispatchMassEvalFetch(
       new Request("https://example.test/v1/personal-index-vol-overlay-2023/jobs/overlay-route", { headers }),
       env,
-      { runMassEval: noMass, runDailyPath: noMass, personalIndexVolOverlay2023Status: status },
+      { personalIndexVolOverlay2023Status: status },
     );
     expect(status).toHaveBeenCalledWith(env, "overlay-route");
   });

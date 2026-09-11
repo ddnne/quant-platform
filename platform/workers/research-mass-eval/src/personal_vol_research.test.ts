@@ -494,10 +494,6 @@ describe("ratio-only series routing", () => {
   });
 });
 
-const noopMass = async () => {
-  throw new Error("mass evaluator must not run");
-};
-
 describe("POST /v1/personal-vol-research", () => {
   it("authenticates before dispatch", async () => {
     let calls = 0;
@@ -511,8 +507,6 @@ describe("POST /v1/personal-vol-research", () => {
         STRUCTURED_BUCKET: {} as R2Bucket,
       } as Env,
       {
-        runMassEval: noopMass,
-        runDailyPath: noopMass,
         runPersonalVolResearch: async () => {
           calls += 1;
           return {};
@@ -545,8 +539,6 @@ describe("POST /v1/personal-vol-research", () => {
         CONTINUOUS_PAPER: "UNARMED",
       } as Env,
       {
-        runMassEval: noopMass,
-        runDailyPath: noopMass,
         runPersonalVolResearch: async (_env, request) => {
           received = request;
           return {

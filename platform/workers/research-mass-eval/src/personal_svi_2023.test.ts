@@ -421,10 +421,6 @@ describe("fixed personal SVI 2023 admission", () => {
   });
 });
 
-const noMass = async () => {
-  throw new Error("mass path must not run");
-};
-
 describe("POST /v1/personal-svi-2023", () => {
   it("authenticates before parsing or dispatch", async () => {
     const submit = vi.fn();
@@ -439,8 +435,6 @@ describe("POST /v1/personal-svi-2023", () => {
         PERSONAL_RESEARCH_CONTAINER: {} as Env["PERSONAL_RESEARCH_CONTAINER"],
       } as Env,
       {
-        runMassEval: noMass,
-        runDailyPath: noMass,
         submitPersonalSvi2023: submit,
       },
     );
@@ -468,8 +462,6 @@ describe("POST /v1/personal-svi-2023", () => {
         READY_DECLARED: "false",
       } as Env,
       {
-        runMassEval: noMass,
-        runDailyPath: noMass,
         submitPersonalSvi2023: submit,
       },
     );

@@ -1053,12 +1053,6 @@ describe("POST /v1/personal-option-sidecar-produce", () => {
         PERSONAL_RESEARCH_CONTAINER: {} as Env["PERSONAL_RESEARCH_CONTAINER"],
       } as Env,
       {
-        runMassEval: async () => {
-          throw new Error("mass path must not run");
-        },
-        runDailyPath: async () => {
-          throw new Error("mass path must not run");
-        },
         submitPersonalOptionSidecarProduce: submit,
       },
     );
