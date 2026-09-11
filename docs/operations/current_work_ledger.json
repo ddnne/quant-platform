@@ -2,7 +2,7 @@
   "schema": "quant-platform-work-ledger/v1",
   "baseline_sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
   "branch": "feat/receipt-event-checkpoint",
-  "updated_at": "2026-09-11T11:26:15Z",
+  "updated_at": "2026-09-11T12:14:00Z",
   "lanes": {
     "source_delivered": {
       "status": "partial_main_and_candidate",
@@ -203,6 +203,8 @@
     },
     "7_dead_code_and_docs": {
       "status": "test_audit_execution_in_progress",
+      "execution_ledger": "docs/operations/test_reduction_ledger.json",
+      "execution_summary": "First execution tranche implements17 of52 original findings plus additionalCI-A01/A02. Test code net410 lines removed,28 fewer static definitions, one duplicate test file removed; parameterized runtime case counts are different and are not an optimization target. All18 final affected/retained Python modules369 passed/14 existing fork warnings/16.72s. All6 affected Worker test/typecheck commands passed1107 cases. Each logical patch was authored by Grok, applied/verified by Codex and independently critically reviewed. Runtime-only mutation checks exposed and corrected one over-deletion. No product code changes in this tranche. Remaining35 conditional findings are explicitly pending in the portable ledger; not blanket-approved deletions. PR113 remains Draft and native final-SHA acceptance/Receipt concurrency regressions are separate from this test-reduction completion.",
       "test_audit": "Baseline main1088c398 static inventory:393 test files plus2 support paths,2983 Python definitions and1115 Worker registrations, not expanded runtime cases. Main-authored candidate body/alternative review identified52 findings across100 files:13 direct-deletion groups covering22 definitions,7 assert reductions,23 consolidations,7 replacements and2 test-tier moves. Two independent critical reviews yielded9 guardrail corrections, incorporated before execution. User subsequently authorized implementation. The original inventory remains a baseline, not a claim that every candidate has been removed. Uncommitted branches are separate. No coverage-count target or bulk deletion.",
       "terminal_publication_test_reduction": {
         "status": "locally_verified_native_pending",
