@@ -217,16 +217,16 @@ def test_planner_required_count_is_not_32_months():
     assert mig["official_evidence"]["history_endpoint"] == "/v2/equities/bars/daily"
 
 
-def test_empty_receipt_is_partial_not_event_zero_complete():
+def test_empty_receipt_is_partial_not_event_zero_complete(receipt_ed25519_keys):
     """recent_snapshot AM never COMPLETEs from a trusted empty SUCCESS receipt."""
-    from tests.test_phase61_coverage_v2 import _receipt
+    from tests.receipt_test_support import build_test_collection_receipt as _receipt
 
     policy = coverage_contract_for(DATASET)
     assert policy.history_mode == "recent_snapshot"
     assert policy.coverage_mode == "recent_snapshot"
     required = plan_required_segments(policy, "2026-08-14")[0]
     status, detail = evaluate_segment(
-        policy, required, _receipt(required, observed=0)
+        policy, required, _receipt(required, signing_key=receipt_ed25519_keys.signing_key, observed=0)
     )
     assert status == "PARTIAL"
     assert status != "COMPLETE"

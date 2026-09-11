@@ -3,6 +3,7 @@ import {
   applyD1Migrations,
   evictDurableObject,
   reset,
+  runDurableObjectAlarm,
   runInDurableObject,
 } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, inject, it } from "vitest";
@@ -16,6 +17,14 @@ import type {
 } from "../../ingestion-secrets/src/jquants_acquisition_types";
 import { canonicalDigest, canonicalJson, sha256Digest } from "../src/canonical";
 import { ReceiptEvidenceAuthority } from "../src/authority_do";
+import {
+  EVENT_AUDIT_MAX_RETRIES,
+  EVENT_AUDIT_PAGE_SIZE,
+  EVENT_AUDIT_PERIODIC_MS,
+  EVENT_AUDIT_RETRY_COOLDOWN_MS,
+  hashAuthorityEvent,
+  readAuditProgress,
+} from "../src/event_checkpoint";
 import { authorityInstanceDigest } from "../src/authority_instance";
 import { requirePersistedDerivedClaims } from "../src/claims_validation";
 import { canonicalReceiptExpectedScope } from "../src/receipt_evidence";
@@ -39,6 +48,7 @@ import type {
   ReceiptAuthorityEnv,
   ReceiptEvidenceAuthorityRpc,
   ReceiptIssueRequestV1,
+  ReceiptIssueResultV1,
   UnsignedReceiptClaimsV3,
 } from "../src/types";
 
@@ -349,6 +359,103 @@ function decodeBase64(value: string): Uint8Array {
   return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
 }
 
+const SYNTHETIC_OPERATION_ID = `sha256:${"ab".repeat(32)}`;
+const originalSubtleDigest = crypto.subtle.digest.bind(crypto.subtle);
+const AUDIT_HOLD_DEADLINE_MS = 120_000;
+
+function bindAuditHoldDeadline(
+  storage: DurableObjectStorage,
+  deadline: number,
+): void {
+  storage.sql.exec(
+    "UPDATE authority_event_audit SET next_alarm_at=? WHERE singleton=1",
+    deadline,
+  );
+}
+
+function decodeDigestPayload(data: BufferSource): string {
+  const bytes = data instanceof ArrayBuffer
+    ? new Uint8Array(data)
+    : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  return new TextDecoder().decode(bytes);
+}
+
+function isAuthorityEventDigestPayload(text: string): boolean {
+  return text.includes("receipt-authority-event/v1");
+}
+
+async function fireAlarm(
+  stub: ReturnType<typeof runtimeEnv.RECEIPT_EVIDENCE_AUTHORITY_DO.getByName>,
+): Promise<void> {
+  await runInDurableObject(stub, async (_instance, state) => {
+    await state.storage.setAlarm(Date.now());
+  });
+  await runDurableObjectAlarm(stub);
+}
+
+async function runDueAudit(
+  stub: ReturnType<typeof runtimeEnv.RECEIPT_EVIDENCE_AUTHORITY_DO.getByName>,
+): Promise<void> {
+  await runInDurableObject(stub, async (_instance, state) => {
+    state.storage.sql.exec(
+      "UPDATE authority_event_audit SET next_alarm_at=0 WHERE singleton=1",
+    );
+    await state.storage.setAlarm(Date.now());
+  });
+  await runDurableObjectAlarm(stub);
+}
+
+async function seedSyntheticEventChain(
+  storage: DurableObjectStorage,
+  count: number,
+  startSequence = 1,
+  prior: string | null = null,
+): Promise<{ lastDigest: string | null; lastSequence: number }> {
+  const now = new Date().toISOString();
+  storage.sql.exec(
+    `INSERT OR IGNORE INTO authority_operations
+     (operation_id,request_digest,acquisition_nonce,state,created_at,updated_at)
+     VALUES (?,?,'00','COLLECTING',?,?)`,
+    SYNTHETIC_OPERATION_ID,
+    SYNTHETIC_OPERATION_ID,
+    now,
+    now,
+  );
+  let priorDigest = prior;
+  let lastSequence = startSequence - 1;
+  for (
+    let sequence = startSequence;
+    sequence < startSequence + count;
+    sequence += 1
+  ) {
+    const payload = `sha256:${sequence.toString(16).padStart(64, "0")}`;
+    const observedAt = new Date(Date.UTC(2026, 0, 1, 0, 0, sequence)).toISOString();
+    const eventDigest = await hashAuthorityEvent({
+      sequence,
+      operation_id: SYNTHETIC_OPERATION_ID,
+      event_type: "SYNTHETIC_CHAIN",
+      payload_digest: payload,
+      prior_event_digest: priorDigest,
+      observed_at: observedAt,
+    });
+    storage.sql.exec(
+      `INSERT INTO authority_events
+       (sequence,operation_id,event_type,payload_digest,prior_event_digest,
+        event_digest,observed_at) VALUES (?,?,?,?,?,?,?)`,
+      sequence,
+      SYNTHETIC_OPERATION_ID,
+      "SYNTHETIC_CHAIN",
+      payload,
+      priorDigest,
+      eventDigest,
+      observedAt,
+    );
+    priorDigest = eventDigest;
+    lastSequence = sequence;
+  }
+  return { lastDigest: priorDigest, lastSequence };
+}
+
 async function activateRegisteredTestKey(): Promise<{
   stub: ReturnType<typeof runtimeEnv.RECEIPT_EVIDENCE_AUTHORITY_DO.getByName>;
   registration: Awaited<ReturnType<ReceiptEvidenceAuthority["public_key_registration"]>>;
@@ -496,15 +603,17 @@ beforeEach(async () => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  crypto.subtle.digest = originalSubtleDigest;
 });
 
 describe("Receipt Evidence Authority in workerd", () => {
   it("exposes only five public Durable Object RPC methods", async () => {
+    const methods = Reflect.ownKeys(ReceiptEvidenceAuthority.prototype)
+      .map(String)
+      .filter((name) => name !== "constructor");
+    expect(methods.includes("alarm")).toBe(true);
     expect(
-      Reflect.ownKeys(ReceiptEvidenceAuthority.prototype)
-        .map(String)
-        .filter((name) => name !== "constructor")
-        .sort(),
+      methods.filter((name) => name !== "alarm").sort(),
     ).toEqual([
       "begin_audit_recovery_canary",
       "issue_for_segment",
@@ -1366,6 +1475,20 @@ describe("Receipt Evidence Authority in workerd", () => {
         "SELECT COUNT(*) AS count FROM authority_events",
       ).one().count
     )).toBe(4);
+    expect(await runInDurableObject(stub, (_instance, state) =>
+      readAuditProgress(state.storage)?.issuance_state
+    )).toBe("FAILED");
+    await evictDurableObject(stub);
+    await expect(runInDurableObject(
+      stub,
+      (instance) => instance.issue_for_segment({
+        ...request,
+        request_nonce: "d".repeat(64),
+      }),
+    )).rejects.toThrow("event-chain integrity failure");
+    expect(await runInDurableObject(stub, (_instance, state) =>
+      readAuditProgress(state.storage)?.issuance_state
+    )).toBe("FAILED");
   });
 
   it("shares canonical environment/resource authority digests with verifiers", async () => {
@@ -2727,5 +2850,520 @@ describe("Receipt Evidence Authority in workerd", () => {
       expected_contract_digest: contract,
       raw_object_key: htmlKey,
     }))).rejects.toThrow(/not exhausted/);
+  });
+
+  it("accepts concurrent same-request issue without closing issuance", async () => {
+    installAuthorityAcquisition();
+    const { stub } = await activateRegisteredTestKey();
+    const concurrentRequest = {
+      ...request,
+      request_nonce: "9".repeat(64),
+    };
+    const [first, second] = await Promise.all([
+      stub.issue_for_segment(concurrentRequest),
+      stub.issue_for_segment(concurrentRequest),
+    ]);
+    expect(first.operation_id).toBe(second.operation_id);
+    expect(first.receipt_digest).toBe(second.receipt_digest);
+    expect([first.replayed, second.replayed].sort()).toEqual([false, true]);
+    const observed = await runInDurableObject(stub, async (_instance, state) => ({
+      issuance: readAuditProgress(state.storage)?.issuance_state,
+      started: state.storage.sql.exec<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM authority_events
+          WHERE event_type='COLLECTION_STARTED'`,
+      ).one().n,
+      events: state.storage.sql.exec<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM authority_events",
+      ).one().count,
+    }));
+    expect(observed.issuance).toBe("PERMITTED");
+    expect(observed.started).toBe(1);
+    expect(observed.events).toBe(5);
+    await evictDurableObject(stub);
+    expect(await runInDurableObject(stub, (_instance, state) =>
+      readAuditProgress(state.storage)?.issuance_state
+    )).toBe("PERMITTED");
+  });
+
+  it("accepts concurrent recover of one open capture without closing issuance", async () => {
+    installAuthorityAcquisition();
+    const { stub } = await activateRegisteredTestKey();
+    const faultRequest = {
+      ...request,
+      request_nonce: "8".repeat(64),
+    };
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec(
+        `CREATE TRIGGER reject_test_event
+         BEFORE INSERT ON authority_events
+         WHEN NEW.event_type = 'CAPTURE_COMMITTED'
+         BEGIN
+           SELECT RAISE(ABORT, 'injected capture event failure');
+         END`,
+      );
+    });
+    await expect(runInDurableObject(
+      stub,
+      (instance) => instance.issue_for_segment(faultRequest),
+    )).rejects.toThrow("injected capture event failure");
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec("DROP TRIGGER reject_test_event");
+    });
+    installSinglePageUpstream();
+    installAuthorityAcquisition();
+    const recoverRequest = {
+      ...faultRequest,
+      operation: "recover_issue" as const,
+    };
+    const settled = await Promise.allSettled([
+      stub.recover_issue(recoverRequest),
+      stub.recover_issue(recoverRequest),
+    ]);
+    const issuance = await runInDurableObject(stub, (_instance, state) =>
+      readAuditProgress(state.storage)?.issuance_state
+    );
+    expect(issuance).toBe("PERMITTED");
+    expect(settled.some((row) =>
+      row.status === "rejected" &&
+      String(row.reason).includes("event-chain integrity failure")
+    )).toBe(false);
+    const fulfilled = settled.filter(
+      (row): row is PromiseFulfilledResult<ReceiptIssueResultV1> =>
+        row.status === "fulfilled",
+    );
+    expect(fulfilled.length).toBeGreaterThan(0);
+    const attempts = await runInDurableObject(stub, async (_instance, state) =>
+      state.storage.sql.exec<{ attempt_id: string; state: string }>(
+        `SELECT attempt_id,state FROM authority_capture_attempts
+          WHERE operation_id=? ORDER BY attempt_ordinal`,
+        fulfilled[0].value.operation_id,
+      ).toArray()
+    );
+    expect(attempts[0]?.state).toBe("ABANDONED");
+    expect(attempts.some((attempt) => attempt.state !== "ABANDONED")).toBe(true);
+    await evictDurableObject(stub);
+    expect(await runInDurableObject(stub, (_instance, state) =>
+      readAuditProgress(state.storage)?.issuance_state
+    )).toBe("PERMITTED");
+  });
+
+  it("does not recover after a persisted event-chain integrity failure", async () => {
+    installAuthorityAcquisition();
+    const { stub } = await activateRegisteredTestKey();
+    const interruptedRequest = {
+      ...request,
+      request_nonce: "7".repeat(64),
+    };
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec(
+        `CREATE TRIGGER reject_test_event
+         BEFORE INSERT ON authority_events
+         WHEN NEW.event_type = 'CAPTURE_COMMITTED'
+         BEGIN
+           SELECT RAISE(ABORT, 'injected capture event failure');
+         END`,
+      );
+    });
+    await expect(runInDurableObject(
+      stub,
+      (instance) => instance.issue_for_segment(interruptedRequest),
+    )).rejects.toThrow("injected capture event failure");
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec("DROP TRIGGER reject_test_event");
+      state.storage.sql.exec(
+        `UPDATE authority_event_audit
+            SET issuance_state='FAILED',status='FAILED',
+                failure_reason='receipt authority event chain is corrupt',
+                next_alarm_at=NULL,updated_at=?
+          WHERE singleton=1`,
+        new Date().toISOString(),
+      );
+    });
+    await expect(runInDurableObject(
+      stub,
+      (instance) => instance.recover_issue({
+        ...interruptedRequest,
+        operation: "recover_issue",
+      }),
+    )).rejects.toThrow("event-chain integrity failure");
+    expect(await runInDurableObject(stub, (_instance, state) =>
+      readAuditProgress(state.storage)?.issuance_state
+    )).toBe("FAILED");
+  });
+
+  it("advances idle empty alarms once and does not reschedule in the past", async () => {
+    const stub = runtimeEnv.RECEIPT_EVIDENCE_AUTHORITY_DO.getByName(
+      "receipt:checkpoint-empty",
+    );
+    await runInDurableObject(stub, async (instance) => {
+      const internal = instance as unknown as { env: ReceiptAuthorityEnv };
+      internal.env.AUTHORITY_MODE = "PENDING";
+      internal.env.ACTIVATED_KEY_ID = undefined;
+      await instance.public_key_registration();
+    });
+    const before = await runInDurableObject(stub, async (_instance, state) => ({
+      progress: readAuditProgress(state.storage),
+      alarm: await state.storage.getAlarm(),
+    }));
+    expect(before.progress?.status).toBe("EMPTY_INITIALIZED");
+    expect(before.progress?.issuance_state).toBe("PERMITTED");
+    expect(before.alarm).toBe(before.progress?.next_alarm_at);
+    expect(before.alarm).toBeGreaterThan(Date.now());
+    await evictDurableObject(stub);
+    const afterRestart = await runInDurableObject(
+      stub,
+      async (_instance, state) => ({
+        progress: readAuditProgress(state.storage),
+        alarm: await state.storage.getAlarm(),
+      }),
+    );
+    expect(afterRestart.progress?.next_alarm_at).toBe(before.progress?.next_alarm_at);
+    expect(afterRestart.alarm).toBeGreaterThan(Date.now());
+    expect(afterRestart.alarm).toBe(afterRestart.progress?.next_alarm_at);
+    const preservedDeadline = before.progress!.next_alarm_at!;
+
+    await fireAlarm(stub);
+    const early = await runInDurableObject(stub, async (_instance, state) => ({
+      progress: readAuditProgress(state.storage),
+      alarm: await state.storage.getAlarm(),
+      events: state.storage.sql.exec<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM authority_events",
+      ).one().count,
+    }));
+    expect(early.progress?.status).toBe("EMPTY_INITIALIZED");
+    expect(early.events).toBe(0);
+    expect(early.progress?.next_alarm_at).toBe(preservedDeadline);
+    expect(early.alarm).toBe(preservedDeadline);
+
+    await runDueAudit(stub);
+    const due = await runInDurableObject(stub, async (_instance, state) => ({
+      progress: readAuditProgress(state.storage),
+      alarm: await state.storage.getAlarm(),
+    }));
+    expect(due.progress?.status).toBe("EMPTY_INITIALIZED");
+    expect(due.alarm).toBe(due.progress?.next_alarm_at);
+    expect(due.progress?.next_alarm_at).toBeGreaterThan(
+      Date.now() + EVENT_AUDIT_PERIODIC_MS - 5_000,
+    );
+    expect(due.progress?.next_alarm_at).not.toBe(preservedDeadline);
+  });
+
+  it("audits a pinned prefix in bounded pages and restarts from sequence 0 periodically", async () => {
+    const stub = runtimeEnv.RECEIPT_EVIDENCE_AUTHORITY_DO.getByName(
+      "receipt:checkpoint-pages",
+    );
+    await runInDurableObject(stub, async (instance, state) => {
+      const internal = instance as unknown as { env: ReceiptAuthorityEnv };
+      internal.env.AUTHORITY_MODE = "PENDING";
+      internal.env.ACTIVATED_KEY_ID = undefined;
+      await instance.public_key_registration();
+      const seeded = await seedSyntheticEventChain(
+        state.storage,
+        EVENT_AUDIT_PAGE_SIZE + 2,
+      );
+      const now = new Date().toISOString();
+      state.storage.sql.exec(
+        `UPDATE authority_event_head
+            SET sequence=?,event_digest=?,updated_at=? WHERE singleton=1`,
+        seeded.lastSequence,
+        seeded.lastDigest,
+        now,
+      );
+    });
+
+    const firstPage = await runInDurableObject(stub, async (instance, state) => {
+      await state.storage.deleteAlarm();
+      state.storage.sql.exec(
+        "UPDATE authority_event_audit SET next_alarm_at=0 WHERE singleton=1",
+      );
+      await instance.alarm();
+      const holdUntil = Date.now() + AUDIT_HOLD_DEADLINE_MS;
+      bindAuditHoldDeadline(state.storage, holdUntil);
+      await state.storage.deleteAlarm();
+      return { progress: readAuditProgress(state.storage), holdUntil };
+    });
+    expect(firstPage.progress?.status).toBe("IN_PROGRESS");
+    expect(firstPage.progress?.cursor_sequence).toBe(EVENT_AUDIT_PAGE_SIZE);
+    expect(firstPage.progress?.last_audit_page_event_rows).toBe(
+      EVENT_AUDIT_PAGE_SIZE,
+    );
+    expect(firstPage.progress?.last_audit_page_event_hashes).toBe(
+      EVENT_AUDIT_PAGE_SIZE,
+    );
+    expect(firstPage.progress?.audited_sequence).toBe(0);
+    expect(firstPage.progress?.next_alarm_at).toBe(firstPage.holdUntil);
+    const pinnedTarget = firstPage.progress!.pinned_target_sequence;
+
+    await fireAlarm(stub);
+    const earlyInProgress = await runInDurableObject(stub, (_instance, state) =>
+      readAuditProgress(state.storage)
+    );
+    expect(earlyInProgress?.status).toBe("IN_PROGRESS");
+    expect(earlyInProgress?.cursor_sequence).toBe(EVENT_AUDIT_PAGE_SIZE);
+    expect(earlyInProgress?.pinned_target_sequence).toBe(pinnedTarget);
+    expect(earlyInProgress?.next_alarm_at).toBe(firstPage.holdUntil);
+
+    await runInDurableObject(stub, async (_instance, state) => {
+      const extra = await seedSyntheticEventChain(
+        state.storage,
+        2,
+        pinnedTarget + 1,
+        firstPage.progress!.pinned_target_digest,
+      );
+      const now = new Date().toISOString();
+      state.storage.sql.exec(
+        `UPDATE authority_event_head
+            SET sequence=?,event_digest=?,updated_at=? WHERE singleton=1`,
+        extra.lastSequence,
+        extra.lastDigest,
+        now,
+      );
+    });
+    await runDueAudit(stub);
+    const completed = await runInDurableObject(stub, (_instance, state) =>
+      readAuditProgress(state.storage)
+    );
+    expect(completed?.status).toBe("AUDITED");
+    expect(completed?.cursor_sequence).toBe(pinnedTarget);
+    expect(completed?.audited_sequence).toBe(pinnedTarget);
+    expect(completed?.pinned_target_sequence).toBe(pinnedTarget);
+    expect(completed?.audited_digest).toBe(completed?.pinned_target_digest);
+    expect(completed?.last_audit_page_event_rows).toBe(2);
+    expect(completed?.last_audit_page_event_hashes).toBe(2);
+
+    const restarted = await runInDurableObject(stub, async (instance, state) => {
+      await state.storage.deleteAlarm();
+      state.storage.sql.exec(
+        "UPDATE authority_event_audit SET next_alarm_at=0 WHERE singleton=1",
+      );
+      await instance.alarm();
+      const holdUntil = Date.now() + AUDIT_HOLD_DEADLINE_MS;
+      bindAuditHoldDeadline(state.storage, holdUntil);
+      await state.storage.deleteAlarm();
+      return readAuditProgress(state.storage);
+    });
+    expect(restarted?.status).toBe("IN_PROGRESS");
+    expect(restarted?.cursor_sequence).toBe(EVENT_AUDIT_PAGE_SIZE);
+    expect(restarted?.pinned_target_sequence).toBe(pinnedTarget + 2);
+    expect(restarted?.audited_sequence).toBe(pinnedTarget);
+  });
+
+  it("fail-closes when a completed cursor digest does not match the pinned target", async () => {
+    const stub = runtimeEnv.RECEIPT_EVIDENCE_AUTHORITY_DO.getByName(
+      "receipt:checkpoint-digest",
+    );
+    await runInDurableObject(stub, async (instance, state) => {
+      const internal = instance as unknown as { env: ReceiptAuthorityEnv };
+      internal.env.AUTHORITY_MODE = "PENDING";
+      internal.env.ACTIVATED_KEY_ID = undefined;
+      await instance.public_key_registration();
+      const seeded = await seedSyntheticEventChain(state.storage, 2);
+      state.storage.sql.exec(
+        `UPDATE authority_event_audit
+            SET status='IN_PROGRESS',pinned_target_sequence=?,pinned_target_digest=?,
+                cursor_sequence=0,cursor_digest=NULL,next_alarm_at=0
+          WHERE singleton=1`,
+        seeded.lastSequence,
+        "sha256:" + "ef".repeat(32),
+      );
+    });
+    await runDueAudit(stub);
+    const progress = await runInDurableObject(stub, (_instance, state) =>
+      readAuditProgress(state.storage)
+    );
+    expect(progress?.issuance_state).toBe("FAILED");
+    expect(progress?.status).toBe("FAILED");
+    expect(progress?.cursor_sequence).toBe(0);
+  });
+
+  it("holds audit work in cooldown after bounded operational retries without resetting the cursor", async () => {
+    const stub = runtimeEnv.RECEIPT_EVIDENCE_AUTHORITY_DO.getByName(
+      "receipt:checkpoint-retry",
+    );
+    await runInDurableObject(stub, async (instance, state) => {
+      const internal = instance as unknown as { env: ReceiptAuthorityEnv };
+      internal.env.AUTHORITY_MODE = "PENDING";
+      internal.env.ACTIVATED_KEY_ID = undefined;
+      await instance.public_key_registration();
+      state.storage.sql.exec(
+        `UPDATE authority_event_audit
+            SET status='IN_PROGRESS',pinned_target_sequence=1,
+                pinned_target_digest=?,cursor_sequence=0,cursor_digest=NULL,
+                retry_count=?,next_alarm_at=0
+          WHERE singleton=1`,
+        "sha256:" + "aa".repeat(32),
+        EVENT_AUDIT_MAX_RETRIES - 1,
+      );
+      state.storage.sql.exec("DROP TABLE authority_events");
+    });
+    await runDueAudit(stub);
+    const progress = await runInDurableObject(stub, (_instance, state) =>
+      readAuditProgress(state.storage)
+    );
+    expect(progress?.issuance_state).toBe("PERMITTED");
+    expect(progress?.status).toBe("RETRY_COOLDOWN");
+    expect(progress?.cursor_sequence).toBe(0);
+    expect(progress?.retry_count).toBe(0);
+    expect(progress?.last_error).toBeTruthy();
+    const cooldownDeadline = progress!.next_alarm_at!;
+    expect(cooldownDeadline).toBeGreaterThan(
+      Date.now() + EVENT_AUDIT_RETRY_COOLDOWN_MS - 5_000,
+    );
+    await fireAlarm(stub);
+    const early = await runInDurableObject(stub, (_instance, state) =>
+      readAuditProgress(state.storage)
+    );
+    expect(early?.status).toBe("RETRY_COOLDOWN");
+    expect(early?.cursor_sequence).toBe(0);
+    expect(early?.next_alarm_at).toBe(cooldownDeadline);
+  });
+
+  it("holds legacy bootstrap until a pinned prefix is validated in pages", async () => {
+    const stub = runtimeEnv.RECEIPT_EVIDENCE_AUTHORITY_DO.getByName(
+      "receipt:checkpoint-bootstrap",
+    );
+    await runInDurableObject(stub, async (instance, state) => {
+      const internal = instance as unknown as { env: ReceiptAuthorityEnv };
+      internal.env.AUTHORITY_MODE = "PENDING";
+      internal.env.ACTIVATED_KEY_ID = undefined;
+      await instance.public_key_registration();
+      await seedSyntheticEventChain(state.storage, EVENT_AUDIT_PAGE_SIZE + 1);
+      state.storage.sql.exec("DELETE FROM authority_event_head");
+      state.storage.sql.exec("DELETE FROM authority_event_audit");
+      await state.storage.deleteAlarm();
+    });
+    await evictDurableObject(stub);
+    const mid = await runInDurableObject(stub, async (instance, state) => {
+      const internal = instance as unknown as { env: ReceiptAuthorityEnv };
+      internal.env.AUTHORITY_MODE = "ACTIVE";
+      internal.env.ACTIVATED_KEY_ID = "receipt-production-not-activated";
+      await expect(instance.issue_for_segment({
+        ...request,
+        request_nonce: "6".repeat(64),
+      })).rejects.toThrow("held for event-chain bootstrap");
+      await state.storage.deleteAlarm();
+      const held = readAuditProgress(state.storage);
+      if (
+        held?.issuance_state !== "HOLD" ||
+        held.pinned_target_sequence !== EVENT_AUDIT_PAGE_SIZE + 1
+      ) {
+        throw new Error("legacy bootstrap pin was not held after eviction");
+      }
+      if (held.cursor_sequence === 0) {
+        state.storage.sql.exec(
+          "UPDATE authority_event_audit SET next_alarm_at=0 WHERE singleton=1",
+        );
+        await instance.alarm();
+      }
+      const holdUntil = Date.now() + AUDIT_HOLD_DEADLINE_MS;
+      bindAuditHoldDeadline(state.storage, holdUntil);
+      await state.storage.deleteAlarm();
+      return { progress: readAuditProgress(state.storage), holdUntil };
+    });
+    expect(mid.progress?.issuance_state).toBe("HOLD");
+    expect(mid.progress?.status).toBe("IN_PROGRESS");
+    expect(mid.progress?.cursor_sequence).toBe(EVENT_AUDIT_PAGE_SIZE);
+    expect(mid.progress?.next_alarm_at).toBe(mid.holdUntil);
+    const midCursor = mid.progress!.cursor_sequence;
+    await evictDurableObject(stub);
+    const repaired = await runInDurableObject(stub, async (_instance, state) => ({
+      progress: readAuditProgress(state.storage),
+      alarm: await state.storage.getAlarm(),
+    }));
+    expect(repaired.progress?.cursor_sequence).toBe(midCursor);
+    expect(repaired.progress?.issuance_state).toBe("HOLD");
+    expect(repaired.progress?.next_alarm_at).toBe(mid.holdUntil);
+    expect(repaired.alarm).toBe(mid.holdUntil);
+
+    await runDueAudit(stub);
+    const done = await runInDurableObject(stub, async (_instance, state) => ({
+      progress: readAuditProgress(state.storage),
+      head: state.storage.sql.exec<{ sequence: number }>(
+        "SELECT sequence FROM authority_event_head WHERE singleton=1",
+      ).toArray()[0],
+    }));
+    expect(done.progress?.issuance_state).toBe("PERMITTED");
+    expect(done.progress?.status).toBe("AUDITED");
+    expect(done.progress?.audited_sequence).toBe(EVENT_AUDIT_PAGE_SIZE + 1);
+    expect(done.progress?.last_audit_page_event_rows).toBeLessThanOrEqual(
+      EVENT_AUDIT_PAGE_SIZE,
+    );
+    expect(done.head?.sequence).toBe(EVENT_AUDIT_PAGE_SIZE + 1);
+  });
+
+  it("issues one more operation without a global audit page after unrelated history", async () => {
+    installAuthorityAcquisition();
+    const { stub } = await activateRegisteredTestKey();
+    const smallRequest = { ...request, request_nonce: "4".repeat(64) };
+    const largeRequest = { ...request, request_nonce: "5".repeat(64) };
+    let eventDigests = 0;
+    crypto.subtle.digest = async (algorithm, data) => {
+      if (isAuthorityEventDigestPayload(decodeDigestPayload(data))) {
+        eventDigests += 1;
+      }
+      return originalSubtleDigest(algorithm, data);
+    };
+    const small = await stub.issue_for_segment(smallRequest);
+    const smallDigests = eventDigests;
+    expect(small.state).toBe("FINALIZED");
+
+    await runInDurableObject(stub, async (_instance, state) => {
+      const current = state.storage.sql.exec<{
+        sequence: number;
+        event_digest: string;
+      }>(
+        "SELECT sequence,event_digest FROM authority_events ORDER BY sequence DESC LIMIT 1",
+      ).one();
+      const seeded = await seedSyntheticEventChain(
+        state.storage,
+        40,
+        current.sequence + 1,
+        current.event_digest,
+      );
+      const now = new Date().toISOString();
+      state.storage.sql.exec(
+        `UPDATE authority_event_head
+            SET sequence=?,event_digest=?,updated_at=? WHERE singleton=1`,
+        seeded.lastSequence,
+        seeded.lastDigest,
+        now,
+      );
+      state.storage.sql.exec(
+        `UPDATE authority_event_audit
+            SET status='AUDITED',pinned_target_sequence=?,pinned_target_digest=?,
+                cursor_sequence=?,cursor_digest=?,audited_sequence=?,
+                audited_digest=?,last_audit_page_event_rows=0,
+                last_audit_page_event_hashes=0,updated_at=?
+          WHERE singleton=1`,
+        seeded.lastSequence,
+        seeded.lastDigest,
+        seeded.lastSequence,
+        seeded.lastDigest,
+        seeded.lastSequence,
+        seeded.lastDigest,
+        now,
+      );
+    });
+    eventDigests = 0;
+    const issued = await stub.issue_for_segment(largeRequest);
+    const largeDigests = eventDigests;
+    expect(issued.state).toBe("FINALIZED");
+    const after = await runInDurableObject(stub, async (_instance, state) => ({
+      total: state.storage.sql.exec<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM authority_events",
+      ).one().count,
+      owned: state.storage.sql.exec<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM authority_events WHERE operation_id=?",
+        issued.operation_id,
+      ).one().count,
+      progress: readAuditProgress(state.storage),
+    }));
+    expect(after.owned).toBe(5);
+    expect(after.total).toBe(50);
+    expect(largeDigests).toBeGreaterThan(0);
+    expect(smallDigests).toBeGreaterThan(0);
+    expect(largeDigests).toBeLessThanOrEqual(smallDigests + 8);
+    expect(after.progress?.status).toBe("AUDITED");
+    expect(after.progress?.audited_sequence).toBe(45);
   });
 });

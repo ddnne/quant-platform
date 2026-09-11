@@ -5,6 +5,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from data_contracts.coverage import all_coverage_contracts, coverage_policy_binding
 from scripts.export_ops_projection import sync_dataset_state
 from storage.sqlite_store import SqliteStore
@@ -85,24 +87,35 @@ def _target() -> sqlite3.Connection:
     return conn
 
 
-def test_null_applied_cursor_is_never_current() -> None:
-    for exported in (None, 0, 10):
-        for lag in (None, 0, 1):
-            assert sync_dataset_state(
-                exported=exported,
-                applied=None,
-                lag=lag,
-                change_log_rows=1,
-            ) != "CURRENT"
-
-
-def test_equal_non_null_cursors_are_current() -> None:
+@pytest.mark.parametrize(
+    ("exported", "applied", "lag", "expected"),
+    (
+        (0, None, 0, "EXPORT_CURRENT_APPLY_UNPINNED"),
+        (None, None, 0, "EXPORT_CURSOR_NULL"),
+        (10, 10, 0, "CURRENT"),
+        (0, 0, 0, "CURRENT"),
+        (10, 0, 1, "LAGGING"),
+    ),
+    ids=(
+        "missing-applied-otherwise-current",
+        "missing-exported-and-applied",
+        "equal-nonzero",
+        "equal-zero",
+        "applied-behind",
+    ),
+)
+def test_sync_dataset_state_from_cursors(
+    exported: int | None,
+    applied: int | None,
+    lag: int | None,
+    expected: str,
+) -> None:
     assert sync_dataset_state(
-        exported=10, applied=10, lag=0, change_log_rows=1
-    ) == "CURRENT"
-    assert sync_dataset_state(
-        exported=0, applied=0, lag=0, change_log_rows=1
-    ) == "CURRENT"
+        exported=exported,
+        applied=applied,
+        lag=lag,
+        change_log_rows=1,
+    ) == expected
 
 
 def test_source_export_applied_cursors_are_projected_without_coercion(

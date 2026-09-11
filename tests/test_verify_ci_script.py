@@ -11,8 +11,13 @@ import json
 import os
 import shutil
 import subprocess
+import shlex
+import sys
 from pathlib import Path
 
+import pytest
+
+from tests.finding_ledger_test_support import controlled_ledger_document
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "verify_ci.sh"
@@ -21,7 +26,6 @@ BOUNDED_JOBS = ROOT / "scripts" / "ci_bounded_jobs.sh"
 DEPLOYMENT_ACCEPTANCE = (
     ROOT / "scripts" / "verify_cloudflare_deployment_acceptance.sh"
 )
-SECRET_INVENTORY = ROOT / "scripts" / "verify_cloudflare_secret_inventory.py"
 ACTIVE_WORKERS = (
     "ingestion-jsda",
     "ingestion-premium",
@@ -59,6 +63,56 @@ def _acceptance_fixture(tmp_path: Path) -> Path:
     return fixture_root
 
 
+def _write_test_owned_ledger(fixture_root: Path, *, open_d1: bool) -> None:
+    document = json.loads(
+        (ROOT / "docs" / "phase633_finding_ledger.json").read_text(encoding="utf-8")
+    )
+    document = controlled_ledger_document(
+        document, open_p0_ids=("D1",) if open_d1 else ()
+    )
+    path = fixture_root / "docs" / "phase633_finding_ledger.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(document, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _gate_acceptance_fixture(tmp_path: Path, *, open_d1: bool) -> Path:
+    fixture_root = _acceptance_fixture(tmp_path)
+    scripts = fixture_root / "scripts"
+    shutil.copy2(
+        ROOT / "scripts" / "finding_ledger_gate.py",
+        scripts / "finding_ledger_gate.py",
+    )
+    _write_test_owned_ledger(fixture_root, open_d1=open_d1)
+    _write_executable(
+        scripts / "verify_ci.sh",
+        """#!/bin/sh
+echo 'verify_ci executed' >&2
+exit 96
+""",
+    )
+    return fixture_root
+
+
+def _scrubbing_python_wrapper(fake_bin: Path) -> None:
+    quoted = shlex.quote(sys.executable)
+    source = f"""#!/bin/sh
+if env | grep -q '^CLOUDFLARE_'; then
+  echo 'cloudflare credential leaked to finding gate' >&2
+  exit 97
+fi
+if [ -n "${{UNRELATED_SECRET:-}}" ]; then
+  echo 'ambient environment leaked to finding gate' >&2
+  exit 98
+fi
+exec {quoted} "$@"
+"""
+    _write_executable(fake_bin / "python3.11", source)
+    _write_executable(fake_bin / "python3", source)
+
+
 def test_authoritative_ci_entrypoints_are_executable_shell() -> None:
     for path in (SCRIPT, WRAPPER, DEPLOYMENT_ACCEPTANCE, BOUNDED_JOBS):
         assert path.is_file()
@@ -79,52 +133,42 @@ def test_all_active_workers_have_locked_required_scripts() -> None:
         assert "--include-runtime false" in scripts["types"]
 
 
-def test_deployment_acceptance_stops_at_the_open_finding_ledger_first() -> None:
-    assert SECRET_INVENTORY.is_file()
-    assert os.access(SECRET_INVENTORY, os.X_OK)
-    result = subprocess.run(
-        [str(DEPLOYMENT_ACCEPTANCE)],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        env={"PATH": os.environ.get("PATH", "")},
-        check=False,
-    )
-    assert result.returncode != 0
-    assert "finding ledger release gate blocked" in result.stderr
-    assert "CLOUDFLARE_API_TOKEN is required" not in result.stderr
-
-
-def test_deployment_acceptance_scrubs_credentials_before_first_repo_python(
+@pytest.mark.parametrize(
+    ("open_d1", "with_credentials"),
+    (
+        (True, False),
+        (True, True),
+        (False, False),
+    ),
+    ids=(
+        "open-no-credentials",
+        "open-synthetic-credentials",
+        "closed-no-credentials",
+    ),
+)
+def test_deployment_acceptance_finding_ledger_gate_runs_before_credentials(
     tmp_path: Path,
+    open_d1: bool,
+    with_credentials: bool,
 ) -> None:
-    fixture_root = _acceptance_fixture(tmp_path)
+    fixture_root = _gate_acceptance_fixture(tmp_path, open_d1=open_d1)
     fake_bin = tmp_path / "bin"
-    _write_executable(
-        fake_bin / "python3.11",
-        """#!/bin/sh
-if env | grep -q '^CLOUDFLARE_'; then
-  echo 'cloudflare credential leaked to finding gate' >&2
-  exit 97
-fi
-if [ -n "${UNRELATED_SECRET:-}" ]; then
-  echo 'ambient environment leaked to finding gate' >&2
-  exit 98
-fi
-echo 'finding ledger release gate blocked' >&2
-exit 1
-""",
-    )
+    _scrubbing_python_wrapper(fake_bin)
     environment = {
         "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
         "LANG": "C",
-        "HOME": "/ambient/oauth-home-must-not-pass",
-        "CLOUDFLARE_API_TOKEN": "captured-test-token",
-        "CLOUDFLARE_ACCOUNT_ID": "captured-test-account",
-        "CLOUDFLARE_API_KEY": "legacy-key-must-not-pass",
-        "CLOUDFLARE_EMAIL": "legacy-email-must-not-pass",
-        "UNRELATED_SECRET": "must-not-pass",
     }
+    if with_credentials:
+        environment.update(
+            {
+                "HOME": "/ambient/oauth-home-must-not-pass",
+                "CLOUDFLARE_API_TOKEN": "captured-test-token",
+                "CLOUDFLARE_ACCOUNT_ID": "captured-test-account",
+                "CLOUDFLARE_API_KEY": "legacy-key-must-not-pass",
+                "CLOUDFLARE_EMAIL": "legacy-email-must-not-pass",
+                "UNRELATED_SECRET": "must-not-pass",
+            }
+        )
     result = subprocess.run(
         [str(fixture_root / "scripts" / DEPLOYMENT_ACCEPTANCE.name)],
         cwd=fixture_root,
@@ -133,9 +177,18 @@ exit 1
         env=environment,
         check=False,
     )
-    assert result.returncode == 1, result.stderr
-    assert "finding ledger release gate blocked" in result.stderr
+    combined = result.stdout + result.stderr
+    assert "verify_ci executed" not in combined
     assert "leaked" not in result.stderr
+    assert result.returncode != 0
+    if open_d1:
+        assert "finding ledger release gate blocked" in result.stderr
+        assert "D1" in result.stderr
+        assert "CLOUDFLARE_API_TOKEN is required" not in result.stderr
+    else:
+        assert "finding ledger release gate: ok" in result.stdout
+        assert "finding ledger release gate blocked" not in result.stderr
+        assert "CLOUDFLARE_API_TOKEN is required" in result.stderr
 
 
 def test_pending_acceptance_gives_credentials_only_to_live_commands(

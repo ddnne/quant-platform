@@ -37,6 +37,181 @@ from storage.receipt_crypto import (
 )
 
 
+def build_test_collection_receipt(
+    segment,
+    *,
+    signing_key,
+    run_id: int = 1,
+    observed: int = 1,
+    raw_rows: int | None = None,
+    structured_rows: int | None = None,
+    pagination_exhausted: bool = True,
+    extra_digests: dict | None = None,
+) -> CollectionReceipt:
+    raw_count = observed if raw_rows is None else raw_rows
+    structured_count = raw_count if structured_rows is None else structured_rows
+    checked_at = f"2025-04-01T00:00:0{run_id}+00:00"
+    raw_digest = "sha256:" + "a" * 64
+    return CollectionReceipt(
+        source=segment.source,
+        dataset=segment.dataset,
+        segment_id=segment.segment_id,
+        segment_start=segment.segment_start,
+        segment_end=segment.segment_end,
+        expected_scope=segment.expected_scope,
+        expected_items=segment.expected_items,
+        observed_items=observed,
+        raw_page_count=1,
+        raw_row_count=raw_count,
+        structured_row_count=structured_count,
+        pagination_exhausted=pagination_exhausted,
+        digests=signed_test_receipt_digests(
+            signing_key=signing_key,
+            dataset=segment.dataset,
+            segment_id=segment.segment_id,
+            source=segment.source,
+            run_id=run_id,
+            raw_digest=raw_digest,
+            raw_count=raw_count,
+            structured_count=structured_count,
+            pagination_exhausted=pagination_exhausted,
+            segment_start=segment.segment_start,
+            segment_end=segment.segment_end,
+            checked_at=checked_at,
+            expected_scope=segment.expected_scope,
+            expected_items=segment.expected_items,
+            observed_items=observed,
+            raw_page_count=1,
+            extra_digests=extra_digests,
+        ),
+        run_id=run_id,
+        status="SUCCESS",
+        error=None,
+        checked_at=checked_at,
+    )
+
+
+def signed_test_receipt_digests(
+    *,
+    signing_key,
+    dataset,
+    segment_id,
+    source,
+    run_id,
+    raw_digest,
+    raw_count=1,
+    structured_count=1,
+    pagination_exhausted=True,
+    segment_start=None,
+    segment_end=None,
+    checked_at=None,
+    structured_digest=None,
+    source_request_digest=None,
+    raw_manifest_digest=None,
+    structured_generation=None,
+    extra_digests=None,
+    expected_scope=None,
+    expected_items=None,
+    observed_items=None,
+    raw_page_count=1,
+):
+    """Sign with an explicitly injected ephemeral test Ed25519 key."""
+    sha_empty = "sha256:" + "0" * 64
+    policy = coverage_contract_for(dataset)
+    contract_id = policy.collection_scope
+    receipt_issue_digest = canonical_evidence_digest(
+        {
+            "schema_version": "test-receipt-issue/v1",
+            "source": source,
+            "contract_id": contract_id,
+            "dataset_id": dataset,
+            "segment_id": segment_id,
+            "run_id": run_id,
+        }
+    )
+    artifact_key = f"test/receipt-products/{source}/{dataset}/{segment_id}/artifact"
+    manifest_key = f"test/receipt-products/{source}/{dataset}/{segment_id}/manifest"
+    raw_manifest_key = f"test/receipt-raw/{source}/{dataset}/{segment_id}/manifest"
+    scope = {
+        "environment": PRODUCTION_RECEIPT_ENVIRONMENT,
+        "authority_instance_digest": PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
+        "coverage_policy_version": policy.policy_version,
+        "source": source,
+        "contract_id": contract_id,
+        "dataset": dataset,
+        "segment_id": segment_id,
+        "segment_start": segment_start,
+        "segment_end": segment_end,
+        "expected_scope": dict(expected_scope or {}),
+        "expected_items": expected_items,
+    }
+    structured_digest_value = structured_digest or sha_empty
+    authority_extras = canonical_test_authority_extra_digests(
+        source=source,
+        dataset=dataset,
+        segment_id=segment_id,
+        run_id=run_id,
+        extra_digests=extra_digests,
+    )
+    authority_extras.setdefault(
+        "product_artifact_digest", structured_digest_value
+    )
+    authority_extras.setdefault(
+        "product_manifest_digest",
+        canonical_evidence_digest(
+            {
+                "artifact_key": artifact_key,
+                "artifact_digest": structured_digest_value,
+            }
+        ),
+    )
+    claims = {
+        **scope,
+        "observed_items": raw_count if observed_items is None else observed_items,
+        "raw_page_count": raw_page_count,
+        "raw_digest": raw_digest,
+        "raw_count": raw_count,
+        "structured_count": structured_count,
+        "structured_digest": structured_digest_value,
+        "pagination_exhausted": pagination_exhausted,
+        "discovery_exhausted": pagination_exhausted,
+        "status": "SUCCESS",
+        "error": None,
+        "source_request_digest": source_request_digest or sha_empty,
+        "raw_manifest_digest": raw_manifest_digest or raw_digest,
+        "receipt_issue_digest": receipt_issue_digest,
+        "artifact_key": artifact_key,
+        "artifact_byte_count": max(1, structured_count),
+        "manifest_key": manifest_key,
+        "manifest_byte_count": 1,
+        "raw_manifest_key": raw_manifest_key,
+        "raw_manifest_byte_count": 1,
+        "raw_byte_count": max(1, raw_count),
+        "natural_key_digest": canonical_evidence_digest(
+            {
+                "schema_version": "test-natural-keys/v1",
+                "dataset": dataset,
+                "segment_id": segment_id,
+                "structured_count": structured_count,
+            }
+        ),
+        "structured_generation": (
+            structured_generation if structured_generation is not None else run_id
+        ),
+        "scope_digest": canonical_evidence_digest(scope),
+        "run_id": run_id,
+        "checked_at": checked_at,
+        "extra_digests": authority_extras,
+    }
+    claims["observation_digest"] = canonical_evidence_digest(claims)
+    signed = build_test_signed_digest_fields(
+        signing_key=signing_key,
+        closure_claims=claims,
+    )
+    signed["raw"] = raw_digest
+    return signed
+
+
 _TEST_EVIDENCE_SEAL = object()
 _TEST_EVIDENCE: WeakSet[Any] = WeakSet()
 _JQUANTS_ACQUISITION_EXTRA_DIGESTS = (

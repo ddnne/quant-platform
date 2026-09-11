@@ -190,9 +190,9 @@ def test_capability_validates_against_v3_loader_when_present() -> None:
     assert domain.collection_window_grain == "collection_cutoff_snapshot"
 
 
-def test_empty_event_driven_receipt_is_partial_not_complete() -> None:
+def test_empty_event_driven_receipt_is_partial_not_complete(receipt_ed25519_keys) -> None:
     """Tip-snapshot earnings stays PARTIAL on empty even though event_driven."""
-    from tests.test_phase61_coverage_v2 import _receipt
+    from tests.receipt_test_support import build_test_collection_receipt as _receipt
 
     policy = coverage_contract_for(DATASET)
     assert policy.expected_frequency == "event_driven"
@@ -201,7 +201,7 @@ def test_empty_event_driven_receipt_is_partial_not_complete() -> None:
     required = plan_required_segments(policy, V2_TARGET_END)[0]
     assert required.expected_items is None
     status, detail = evaluate_segment(
-        policy, required, _receipt(required, observed=0)
+        policy, required, _receipt(required, signing_key=receipt_ed25519_keys.signing_key, observed=0)
     )
     assert status == "PARTIAL"
     assert status != "COMPLETE"

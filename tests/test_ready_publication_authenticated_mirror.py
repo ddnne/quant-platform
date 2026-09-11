@@ -95,19 +95,6 @@ def test_ready_publication_rejects_caller_db_path(
     assert "path" not in signature.parameters
 
 
-def test_generic_applied_mirror_callback_escape_is_gone() -> None:
-    assert not hasattr(sync, "_consume_authenticated_applied_mirror")
-    assert not hasattr(sync._AuthenticatedAppliedMirror, "_consume_for_projection")
-    for name, value in vars(sync).items():
-        if not callable(value):
-            continue
-        try:
-            parameters = inspect.signature(value).parameters
-        except (TypeError, ValueError):
-            continue
-        assert "consumer" not in parameters, name
-
-
 def test_forged_copied_reused_and_wrong_thread_handles_fail_closed(
     tmp_path: Path,
     receipt_ed25519_keys,

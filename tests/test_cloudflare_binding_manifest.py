@@ -171,6 +171,8 @@ def test_all_named_entrypoints_and_governed_dos_have_exact_rpc_inventories() -> 
     ] == [{
         "name": "ReceiptEvidenceAuthority",
         "handlers": ["class"],
+        "fetch_reserved_special": False,
+        "alarm_reserved_special": True,
         "rpc_methods": [
             "begin_audit_recovery_canary",
             "issue_for_segment",

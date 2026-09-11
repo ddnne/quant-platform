@@ -179,26 +179,6 @@ def synced_cf_d1_db(
     return SimpleNamespace(db=db, rc=rc, calls=calls, rows=cf_d1_export_rows)
 
 
-@pytest.fixture(autouse=True)
-def _configure_receipt_verifier_fixtures(
-    monkeypatch: pytest.MonkeyPatch, receipt_ed25519_keys: SimpleNamespace
-) -> None:
-    """Bind only tests-owned receipt keys and keep readiness fail-closed.
-
-    Product receipt crypto is verify-only. Bind the tmp Ed25519 helper used by
-    snapshot/coherence tests that import
-    ``tests.test_phase61_coverage_v2._signed_digests`` without that module's
-    autouse fixture.
-    """
-    monkeypatch.setenv("QUANT_READINESS_DISABLE_HOST_PEM", "1")
-    import tests.test_phase61_coverage_v2 as phase61
-
-    previous = phase61._SIGNED_KEY
-    phase61._SIGNED_KEY = receipt_ed25519_keys.signing_key
-    yield
-    phase61._SIGNED_KEY = previous
-
-
 @pytest.fixture
 def receipt_ed25519_keys(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

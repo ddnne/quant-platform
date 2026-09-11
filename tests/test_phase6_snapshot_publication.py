@@ -114,7 +114,7 @@ def _seed_control(conn, datasets: tuple[str, ...], today: str) -> int:
     return int(run_id)
 
 
-def _seed_publishable_db(path) -> tuple[str, ...]:
+def _seed_publishable_db(path, *, signing_key) -> tuple[str, ...]:
     store = SqliteStore(path)
     conn = store._conn  # noqa: SLF001
     today = datetime.now(timezone.utc).date().isoformat()
@@ -175,10 +175,7 @@ def _seed_publishable_db(path) -> tuple[str, ...]:
         _SignedReceiptAuthority,
         _reconcile_collection_evidence,
     )
-    from tests import test_phase61_coverage_v2 as phase61
-
-    assert phase61._SIGNED_KEY is not None  # noqa: SLF001
-    authority = _SignedReceiptAuthority(signing_key=phase61._SIGNED_KEY)  # noqa: SLF001
+    authority = _SignedReceiptAuthority(signing_key=signing_key)
     for policy in policies:
         # Tip snapshots stay PARTIAL on empty receipts; event-zero COMPLETE
         # is only for genuine event_driven historical windows.
@@ -345,13 +342,13 @@ def test_publish_gate_rejects_partial_coverage_and_exposes_no_ready(tmp_path):
 
 
 def test_ready_rejects_missing_middle_segment_and_writes_no_artifact(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, receipt_ed25519_keys
 ):
     monkeypatch.setattr(
         snapshot_module, "all_coverage_contracts", _jquants_coverage_contracts
     )
     path = tmp_path / "middle-gap.sqlite"
-    required = _seed_publishable_db(path)
+    required = _seed_publishable_db(path, signing_key=receipt_ed25519_keys.signing_key)
     conn = sqlite3.connect(path)
     victim = conn.execute(
         "SELECT segment_id FROM collection_receipts "
@@ -386,13 +383,13 @@ def test_ready_rejects_missing_middle_segment_and_writes_no_artifact(
 
 
 def test_ready_publication_is_atomic_content_addressed_and_read_only(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, receipt_ed25519_keys
 ):
     monkeypatch.setattr(
         snapshot_module, "all_coverage_contracts", _jquants_coverage_contracts
     )
     path = tmp_path / "staging.sqlite"
-    required = _seed_publishable_db(path)
+    required = _seed_publishable_db(path, signing_key=receipt_ed25519_keys.signing_key)
     snapshot_dir = tmp_path / "snapshots"
 
     ready = publish_ready_snapshot_fixture(
@@ -474,20 +471,20 @@ def test_ready_publication_is_atomic_content_addressed_and_read_only(
 
 
 def test_latest_pointer_cannot_roll_back_to_an_older_valid_generation(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, receipt_ed25519_keys
 ):
     monkeypatch.setattr(
         snapshot_module, "all_coverage_contracts", _jquants_coverage_contracts
     )
     snapshot_dir = tmp_path / "snapshots"
     first_db = tmp_path / "first.sqlite"
-    required = _seed_publishable_db(first_db)
+    required = _seed_publishable_db(first_db, signing_key=receipt_ed25519_keys.signing_key)
     first = publish_ready_snapshot_fixture(
         first_db, snapshot_dir, required_datasets=required
     )
 
     second_db = tmp_path / "second.sqlite"
-    _seed_publishable_db(second_db)
+    _seed_publishable_db(second_db, signing_key=receipt_ed25519_keys.signing_key)
     with sqlite3.connect(second_db) as conn:
         conn.execute(
             "CREATE TABLE ingestion_change_log (change_seq INTEGER NOT NULL)"
@@ -534,13 +531,13 @@ def test_latest_pointer_cannot_roll_back_to_an_older_valid_generation(
 
 
 def test_pointer_finalization_failure_quarantines_rejected_evidence(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, receipt_ed25519_keys
 ):
     monkeypatch.setattr(
         snapshot_module, "all_coverage_contracts", _jquants_coverage_contracts
     )
     path = tmp_path / "finalization.sqlite"
-    required = _seed_publishable_db(path)
+    required = _seed_publishable_db(path, signing_key=receipt_ed25519_keys.signing_key)
     snapshot_dir = tmp_path / "snapshots"
     write_json = snapshot_module._atomic_json
 
@@ -603,10 +600,10 @@ def _offline_current_profile_evidence() -> dict[str, dict[str, object]]:
 
 
 def test_profile_bound_publisher_fails_closed_on_stale_profile_evidence(
-    tmp_path,
+    tmp_path, receipt_ed25519_keys,
 ):
     path = tmp_path / "profile-gap.sqlite"
-    _seed_publishable_db(path)
+    _seed_publishable_db(path, signing_key=receipt_ed25519_keys.signing_key)
     profile = load_core_profile()
     snapshot_dir = tmp_path / "snapshots"
 
@@ -626,7 +623,7 @@ def test_profile_bound_publisher_fails_closed_on_stale_profile_evidence(
 
 
 def test_legacy_core_fixture_cannot_mint_verified_readiness(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, receipt_ed25519_keys
 ):
     """Exercise the real closed path with explicit offline V3 capability fixtures."""
     monkeypatch.setattr(
@@ -635,7 +632,7 @@ def test_legacy_core_fixture_cannot_mint_verified_readiness(
         lambda _dataset_id: object(),
     )
     path = tmp_path / "profile-ready.sqlite"
-    _seed_publishable_db(path)
+    _seed_publishable_db(path, signing_key=receipt_ed25519_keys.signing_key)
     profile = load_core_profile()
     conn = sqlite3.connect(path)
     run = conn.execute(

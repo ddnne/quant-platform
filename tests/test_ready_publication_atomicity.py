@@ -306,13 +306,13 @@ def _replace_fixture_with_coherent_exact_four_artifact(ready, binding):
 
 
 def test_rejected_pointer_finalization_removes_already_minted_sidecar(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, receipt_ed25519_keys
 ) -> None:
     monkeypatch.setattr(
         snapshot_module, "all_coverage_contracts", _jquants_coverage_contracts
     )
     staging = tmp_path / "atomic-sidecar.sqlite"
-    required = _seed_publishable_db(staging)
+    required = _seed_publishable_db(staging, signing_key=receipt_ed25519_keys.signing_key)
     snapshot_dir = tmp_path / "snapshots"
     minted_sidecars: list[Path] = []
 
@@ -372,13 +372,13 @@ def test_rejected_pointer_finalization_removes_already_minted_sidecar(
 
 
 def test_production_reader_binds_nested_ready_manifest_and_artifact_bytes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, receipt_ed25519_keys
 ) -> None:
     monkeypatch.setattr(
         snapshot_module, "all_coverage_contracts", _jquants_coverage_contracts
     )
     staging = tmp_path / "production-reader.sqlite"
-    required = _seed_publishable_db(staging)
+    required = _seed_publishable_db(staging, signing_key=receipt_ed25519_keys.signing_key)
     snapshot_dir = tmp_path / "snapshots"
     ready = publish_ready_snapshot_fixture(
         staging,
@@ -629,13 +629,13 @@ def test_fixture_gate_cannot_publish_a_production_scope(tmp_path: Path) -> None:
 
 
 def test_publication_marker_post_replace_failure_is_not_discoverable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, receipt_ed25519_keys
 ) -> None:
     monkeypatch.setattr(
         snapshot_module, "all_coverage_contracts", _jquants_coverage_contracts
     )
     staging = tmp_path / "marker-post-replace.sqlite"
-    required = _seed_publishable_db(staging)
+    required = _seed_publishable_db(staging, signing_key=receipt_ed25519_keys.signing_key)
     snapshot_dir = tmp_path / "snapshots"
     write_json = snapshot_module._atomic_json
 
@@ -665,13 +665,13 @@ def test_publication_marker_post_replace_failure_is_not_discoverable(
 
 
 def test_manifest_post_replace_failure_quarantines_all_immutable_evidence(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, receipt_ed25519_keys
 ) -> None:
     monkeypatch.setattr(
         snapshot_module, "all_coverage_contracts", _jquants_coverage_contracts
     )
     staging = tmp_path / "manifest-post-replace.sqlite"
-    required = _seed_publishable_db(staging)
+    required = _seed_publishable_db(staging, signing_key=receipt_ed25519_keys.signing_key)
     snapshot_dir = tmp_path / "snapshots"
     write_json = snapshot_module._atomic_json
 
@@ -704,13 +704,13 @@ def test_manifest_post_replace_failure_quarantines_all_immutable_evidence(
 
 
 def test_database_publication_failure_aborts_before_readiness_is_minted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, receipt_ed25519_keys
 ) -> None:
     monkeypatch.setattr(
         snapshot_module, "all_coverage_contracts", _jquants_coverage_contracts
     )
     staging = tmp_path / "database-publication-failure.sqlite"
-    required = _seed_publishable_db(staging)
+    required = _seed_publishable_db(staging, signing_key=receipt_ed25519_keys.signing_key)
     snapshot_dir = tmp_path / "snapshots"
     minted_sidecars: list[Path] = []
 

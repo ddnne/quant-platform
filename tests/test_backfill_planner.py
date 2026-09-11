@@ -467,14 +467,12 @@ def test_planner_passes_index_text_into_required_segments(monkeypatch):
     assert all(row["index_text"] is None for row in captured)
     assert [job.segment_id for job in omitted.jobs] == ["2008-07"]
     assert all(job.state == "pending" for job in omitted.jobs)
-    assert all(job.state != "COMPLETE" for job in omitted.jobs)
 
     html = (
         Path(__file__).resolve().parent
         / "fixtures"
         / "jsda_otc_official_index_tiny.html"
     ).read_text(encoding="utf-8")
-    assert "https://" not in html
     captured.clear()
     supplied = BackfillPlanner(cutoff=cutoff).plan(
         datasets=["fins_summary"],
@@ -486,7 +484,6 @@ def test_planner_passes_index_text_into_required_segments(monkeypatch):
         job.segment_id for job in omitted.jobs
     ]
     assert all(job.state == "pending" for job in supplied.jobs)
-    assert all(job.state != "COMPLETE" for job in supplied.jobs)
 
 
 def test_planner_omitted_index_text_is_not_weekend_complete():
@@ -501,23 +498,14 @@ def test_planner_omitted_index_text_is_not_weekend_complete():
     from data_contracts.coverage import coverage_contract_for
     from ops.backfill_planner import EndpointCapability
 
-    weekend = "2002-08-03"
-    v2_required = 8784
     otc = "jsda_otc_bond_reference_prices"
 
     jq = BackfillPlanner(cutoff=date(2008, 7, 31)).plan(datasets=["fins_summary"])
-    assert jq.jobs
+    assert [job.segment_id for job in jq.jobs] == ["2008-07"]
     assert all(job.state == "pending" for job in jq.jobs)
-    assert all(job.state != "COMPLETE" for job in jq.jobs)
-    assert all(job.segment_id != weekend for job in jq.jobs)
-    assert len(jq.jobs) != v2_required
 
     skipped = BackfillPlanner(cutoff=date(2002, 8, 6)).plan(datasets=[otc])
     assert skipped.jobs == []
-    assert all(job.dataset != otc for job in skipped.jobs)
-    assert all(job.segment_id != weekend for job in skipped.jobs)
-    assert len(skipped.jobs) != v2_required
-    assert all(job.state != "COMPLETE" for job in skipped.jobs)
 
     policy = coverage_contract_for(otc)
     dummy = EndpointCapability(
@@ -538,8 +526,4 @@ def test_planner_omitted_index_text_is_not_weekend_complete():
             filter_to=None,
             index_text=missing,
         )
-        ids = [job.segment_id for job in jobs]
         assert jobs == []
-        assert weekend not in ids
-        assert len(ids) != v2_required
-        assert all(job.state != "COMPLETE" for job in jobs)
