@@ -230,12 +230,12 @@ def test_controlled_scheduler_rejects_offline_caller_budget_overrides(
         OfflineExperimentBudget(max_model_calls=15),
     )
     with pytest.raises(MassResearchDisabledError, match="no local budget"):
-        _construct(tmp_path, budget=local)
+        ControlledPilotScheduler(expected_environment="staging", budget=local)
 
 
-def test_construct_fails_without_plan(tmp_path: Path) -> None:
+def test_construct_fails_without_plan() -> None:
     with pytest.raises(MassResearchDisabledError, match="ExperimentPlan"):
-        _construct(tmp_path, plan=None)
+        ControlledPilotScheduler(expected_environment="staging", plan=None)
 
 
 def test_experiment_plan_has_no_prepublication_snapshot_field(
