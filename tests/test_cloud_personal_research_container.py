@@ -1957,6 +1957,73 @@ def _install_isolated_http_guard(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return hits
 
 
+def _join_manager_worker(manager, *, timeout: float = 2):
+    worker = manager._worker
+    assert worker is not None
+    worker.join(timeout)
+    assert not worker.is_alive()
+    return worker
+
+
+def _cancel_held_retries_after_worker(manager, worker) -> None:
+    pending_worker = manager._worker if worker is None else worker
+    if pending_worker is not None and pending_worker.is_alive():
+        pending_worker.join(2)
+    with manager._lock:
+        manager._shutdown_notified = True
+        retry_timer = manager._retry_timer
+        manager._retry_timer = None
+        manager._pending_terminal = None
+    if retry_timer is not None:
+        retry_timer.cancel()
+    assert pending_worker is None or not pending_worker.is_alive()
+
+
+def _assert_held_failed_terminal_retries_without_shutdown(
+    manager,
+    *,
+    held_retry_scheduler: list[_HeldTimer],
+    adapter,
+    job_id: str,
+    other_spec,
+    shutdown: threading.Event,
+) -> None:
+    worker = None
+    try:
+        worker = _join_manager_worker(manager)
+        assert not shutdown.is_set()
+        assert adapter.puts == 1
+        assert adapter.gets == 1
+        assert manager.status(job_id)["status"] == "FAILED"
+        assert manager._pending_terminal is not None
+        assert manager._accepting is False
+        assert manager._shutdown_notified is False
+        first_retry = manager._retry_timer
+        assert isinstance(first_retry, _HeldTimer)
+        assert first_retry in held_retry_scheduler
+        assert first_retry.started is True
+        assert first_retry.cancelled is False
+        assert first_retry.fired is False
+        first_retry.fire()
+        assert adapter.puts == 2
+        assert adapter.gets == 2
+        assert not shutdown.is_set()
+        assert manager._pending_terminal is not None
+        assert manager._accepting is False
+        assert manager._shutdown_notified is False
+        next_retry = manager._retry_timer
+        assert isinstance(next_retry, _HeldTimer)
+        assert next_retry is not first_retry
+        assert next_retry in held_retry_scheduler
+        assert next_retry.started is True
+        assert next_retry.cancelled is False
+        assert next_retry.fired is False
+        with pytest.raises(service.JobBusyError):
+            manager.submit(other_spec)
+    finally:
+        _cancel_held_retries_after_worker(manager, worker)
+
+
 def _advance_held_terminal_retries(
     manager, *, until_attempts: int, attempts: dict[str, int]
 ) -> None:
@@ -2606,54 +2673,15 @@ def test_failed_terminal_put_and_get_404_retries_without_shutdown(
         retry_schedule=(0.05, 0.05),
         max_job_seconds=30,
     )
-    worker = None
-    try:
-        manager.submit(_job("a" * 64, job_id))
-        worker = manager._worker
-        assert worker is not None
-        worker.join(2)
-        assert not worker.is_alive()
-        assert not terminal.is_set()
-        assert fake.puts == 1
-        assert fake.gets == 1
-        assert manager.status(job_id)["status"] == "FAILED"
-        assert manager._pending_terminal is not None
-        assert manager._accepting is False
-        assert manager._shutdown_notified is False
-        first_retry = manager._retry_timer
-        assert isinstance(first_retry, _HeldTimer)
-        assert first_retry in held_retry_scheduler
-        assert first_retry.started is True
-        assert first_retry.cancelled is False
-        assert first_retry.fired is False
-        first_retry.fire()
-        assert fake.puts == 2
-        assert fake.gets == 2
-        assert not terminal.is_set()
-        assert manager._pending_terminal is not None
-        assert manager._accepting is False
-        assert manager._shutdown_notified is False
-        next_retry = manager._retry_timer
-        assert isinstance(next_retry, _HeldTimer)
-        assert next_retry is not first_retry
-        assert next_retry in held_retry_scheduler
-        assert next_retry.started is True
-        assert next_retry.cancelled is False
-        assert next_retry.fired is False
-        with pytest.raises(service.JobBusyError):
-            manager.submit(_job("b" * 64, "other"))
-    finally:
-        pending_worker = manager._worker if worker is None else worker
-        if pending_worker is not None and pending_worker.is_alive():
-            pending_worker.join(2)
-        with manager._lock:
-            manager._shutdown_notified = True
-            retry_timer = manager._retry_timer
-            manager._retry_timer = None
-            manager._pending_terminal = None
-        if retry_timer is not None:
-            retry_timer.cancel()
-        assert pending_worker is None or not pending_worker.is_alive()
+    manager.submit(_job("a" * 64, job_id))
+    _assert_held_failed_terminal_retries_without_shutdown(
+        manager,
+        held_retry_scheduler=held_retry_scheduler,
+        adapter=fake,
+        job_id=job_id,
+        other_spec=_job("b" * 64, "other"),
+        shutdown=terminal,
+    )
 
 
 def test_child_put_keeps_http_error_for_deterministic_rejection(
