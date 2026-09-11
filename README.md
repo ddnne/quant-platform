@@ -40,8 +40,11 @@ uv sync --frozen --extra dev
 
 # platform マーカーだけを選び、--run-platform でオプトインする
 .venv/bin/python -m pytest tests/ -m platform --run-platform
+```
 
-# CI 相当の検証入口
+Cloudflare Builds 上のランナー専用です。Mac で実行する指示ではありません。実 Wrangler dry-run と Container イメージビルドを含みます。
+
+```bash
 scripts/verify_ci.sh
 ```
 
