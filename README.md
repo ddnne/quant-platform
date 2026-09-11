@@ -249,6 +249,8 @@ Worker runtime や live acceptance の検証にはなりません。非 live の
 試験には SQLite・OS・子プロセスの統合試験も含み、全通信を遮断する仕組みは
 まだ未完です。`live` は別途明示的な設定と許可が必要です。
 
+通常の wheel と Cloudflare Container 入力から `research.offline` と `research.unique_logic` を除外します。チェックアウトには replay 互換ソースと不変成果物を残します。research は自動では有効になりません。wheel 検証は除外と data authority のみを確認し、Personal/Controlled の import 経路は実際の Container で確認します。standalone wheel での research 実行は新たにサポートしません。
+
 ## Phase 1 の取得（ローカル）
 
 ```bash

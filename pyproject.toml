@@ -59,7 +59,7 @@ include = [
 ]
 # Note: do NOT use "data*" — it would exclude data_contracts / data_access.
 # Local data plane lives at repo-root data/ and is outside packages.find where=.
-exclude = ["tests*", "scripts*", "docs*", "platform*"]
+exclude = ["tests*", "scripts*", "docs*", "platform*", "research.offline", "research.offline.*", "research.unique_logic", "research.unique_logic.*"]
 
 [tool.setuptools]
 py-modules = ["qp_paths", "qp_ofd_continuity"]

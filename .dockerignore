@@ -27,3 +27,7 @@ artifacts/**
 .env.*
 **/.env
 **/.env.*
+packages/product/research/offline
+packages/product/research/offline/**
+packages/product/research/unique_logic
+packages/product/research/unique_logic/**
