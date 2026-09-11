@@ -4,6 +4,6 @@ export default defineConfig({
   test: {
     include: ["src/authorized.test.ts", "src/http_json.test.ts"],
     environment: "node",
-    setupFiles: ["./src/test-setup.ts"],
+    setupFiles: ["../../worker_support/test_node_crypto.ts"],
   },
 });
