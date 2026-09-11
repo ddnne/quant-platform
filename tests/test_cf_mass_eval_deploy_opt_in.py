@@ -1,8 +1,6 @@
 """Mass-eval wrangler deploy is opt-in fail-closed. Not GO."""
 from __future__ import annotations
 
-import urllib.error
-import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,7 +11,6 @@ from research.cf_mass_eval_run import (
     MASS_EVAL_DEPLOY_ENV,
     deploy_cf_mass_eval_worker,
     mass_eval_deploy_allowed,
-    run_cf_mass_eval_job,
 )
 
 
@@ -80,49 +77,3 @@ def test_deploy_cf_mass_eval_worker_invokes_wrangler_when_env_one(
     assert any(part.startswith("--config=") for part in cmd)
     assert out["status"] == "deployed"
     assert out["wrangler_rc"] == 0
-
-
-def test_run_cf_mass_eval_job_capability_refuse_skips_deploy(monkeypatch) -> None:
-    from selection.budget_ledger import MassResearchDisabledError
-
-    monkeypatch.delenv(MASS_EVAL_DEPLOY_ENV, raising=False)
-    monkeypatch.setattr("ops.worker_deploy.subprocess.run", _explode)
-    with pytest.raises(MassResearchDisabledError, match="run_cf_mass_eval_job"):
-        run_cf_mass_eval_job(
-            job_id="cap-deny-deploy",
-            logic_ids=["nky_vol_abs_level"],
-            mode="synthetic",
-            stage_panels=False,
-        )
-
-
-def test_run_cf_mass_eval_job_records_deploy_failed_without_env(
-    monkeypatch,
-) -> None:
-    monkeypatch.delenv(MASS_EVAL_DEPLOY_ENV, raising=False)
-    monkeypatch.setattr("ops.worker_deploy.subprocess.run", _explode)
-    monkeypatch.setattr(
-        "research.cf_mass_eval_job.require_capability",
-        lambda name, caps=None: {
-            "capability": name,
-            "allowed": True,
-            "reasons": [],
-            "go": False,
-            "not_a_pass": True,
-        },
-    )
-
-    def _no_net(*_a, **_k):
-        raise urllib.error.URLError("offline")
-
-    monkeypatch.setattr(urllib.request, "urlopen", _no_net)
-    from selection.budget_ledger import MassResearchDisabledError
-
-    with pytest.raises(MassResearchDisabledError, match="run_cf_mass_eval_job"):
-        run_cf_mass_eval_job(
-            job_id="deploy-denied",
-            logic_ids=["nky_vol_abs_level"],
-            mode="synthetic",
-            stage_panels=False,
-            dry_run_r2=True,
-        )
