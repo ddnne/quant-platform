@@ -35,6 +35,7 @@ import {
   writeEventHead,
   writeIntegrityFailure,
 } from "./event_checkpoint";
+import { issueIdentity, requireReceiptRequest } from "./receipt_request_identity";
 import type {
   ReceiptAuthorityEnv,
   ReceiptAuthorityIssuedRecord,
@@ -47,6 +48,7 @@ import type {
   ReceiptIssueResultV1,
   ReceiptPublicKeyRegistrationV1,
   ReceiptRecoveryRequestV1,
+  ReceiptRequestV1,
   SignedReceiptClaimsV3,
   SignedReceiptEnvelopeV3,
   UnsignedReceiptClaimsV3,
@@ -201,6 +203,7 @@ function rowToSnapshot(
 
 export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv> {
   #keyPromise: Promise<KeyMaterial> | null = null;
+  #activeGovernedOperations = new Map<string, Promise<ReceiptIssueResultV1>>();
 
   constructor(ctx: DurableObjectState, env: ReceiptAuthorityEnv) {
     super(ctx, env);
@@ -1505,32 +1508,54 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
     };
   }
 
+  async #executeGovernedReceipt(
+    request: ReceiptRequestV1,
+  ): Promise<ReceiptIssueResultV1> {
+    this.#requireIssuanceEligible();
+    const operationKey = canonicalJson(issueIdentity(requireReceiptRequest(request)));
+    const active = this.#activeGovernedOperations.get(operationKey);
+    if (active !== undefined) {
+      const result = await active;
+      this.#requireIssuanceEligible();
+      return { ...result, replayed: true };
+    }
+    let finish!: (result: ReceiptIssueResultV1) => void;
+    let fail!: (error: unknown) => void;
+    const shared = new Promise<ReceiptIssueResultV1>((resolve, reject) => {
+      finish = resolve;
+      fail = reject;
+    });
+    shared.catch(() => {});
+    this.#activeGovernedOperations.set(operationKey, shared);
+    try {
+      const result = await executeReceiptRequest(
+        this.env,
+        request,
+        this.#internalAuthority(),
+      );
+      this.#requireIssuanceEligible();
+      finish(result);
+      return result;
+    } catch (error) {
+      fail(error);
+      throw error;
+    } finally {
+      this.#activeGovernedOperations.delete(operationKey);
+    }
+  }
+
   async issue_for_segment(
     request: ReceiptIssueRequestV1,
   ): Promise<ReceiptIssueResultV1> {
     await this.#repairEventAuditAlarm();
-    this.#requireIssuanceEligible();
-    const result = await executeReceiptRequest(
-      this.env,
-      request,
-      this.#internalAuthority(),
-    );
-    this.#requireIssuanceEligible();
-    return result;
+    return this.#executeGovernedReceipt(request);
   }
 
   async recover_issue(
     request: ReceiptRecoveryRequestV1,
   ): Promise<ReceiptIssueResultV1> {
     await this.#repairEventAuditAlarm();
-    this.#requireIssuanceEligible();
-    const result = await executeReceiptRequest(
-      this.env,
-      request,
-      this.#internalAuthority(),
-    );
-    this.#requireIssuanceEligible();
-    return result;
+    return this.#executeGovernedReceipt(request);
   }
 
   async alarm(): Promise<void> {
