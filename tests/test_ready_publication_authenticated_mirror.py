@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import inspect
 import sqlite3
 import threading
 from pathlib import Path
@@ -80,9 +79,21 @@ def test_governed_mirror_without_personal_history_manifest_uses_exported_at(
 
 def test_ready_publication_rejects_caller_db_path(
     tmp_path: Path,
-    receipt_ed25519_keys,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    db_path, binding = _seed_exact_pit_scope(tmp_path, receipt_ed25519_keys)
+    db_path = tmp_path / "caller.sqlite"
+    binding = object()
+    db_path.touch()
+
+    def _trap_connect(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("sqlite3.connect must not open a caller path")
+
+    def _trap_open(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("Path.open must not open a caller path")
+
+    monkeypatch.setattr(sqlite3, "connect", _trap_connect)
+    monkeypatch.setattr(Path, "open", _trap_open)
+
     service = ReadyPublicationService()
     with pytest.raises(TypeError, match="filesystem path"):
         service.request_verified_publication(db_path, binding)
@@ -90,9 +101,6 @@ def test_ready_publication_rejects_caller_db_path(
         service.request_verified_publication(str(db_path), binding)
     with pytest.raises(TypeError, match="filesystem path"):
         verify_controlled_publication_evidence(db_path, binding)
-    signature = inspect.signature(service.request_verified_publication)
-    assert "db_path" not in signature.parameters
-    assert "path" not in signature.parameters
 
 
 def test_forged_copied_reused_and_wrong_thread_handles_fail_closed(
