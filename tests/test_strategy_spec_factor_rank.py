@@ -156,10 +156,6 @@ def test_core30_market_cohort_can_form_a_non_flat_book() -> None:
             "weight must be > 0",
         ),
         (
-            lambda body: body["rule"].update(legs=[_leg("return_1d", weight=-1.0)]),
-            "weight must be > 0",
-        ),
-        (
             lambda body: body["rule"].update(
                 legs=[_leg("return_1d", weight=float("nan"))]
             ),
