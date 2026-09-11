@@ -259,6 +259,8 @@ Unix ソケットは許可します。全プロトコル隔離や速度・件数
 既存の手動 live acceptance と HOLD はそのままです。QP_LIVE だけではネットワークは開きません。
 `--run-platform` は platform 試験の実行許可、`-m` は選択です。選択だけでは skip されます。
 
+通常の wheel と Cloudflare Container 入力から `research.offline` と `research.unique_logic` を除外します。チェックアウトには replay 互換ソースと不変成果物を残します。research は自動では有効になりません。wheel 検証は除外と data authority のみを確認し、Personal/Controlled の import 経路は実際の Container で確認します。standalone wheel での research 実行は新たにサポートしません。
+
 ## Phase 1 の取得（ローカル）
 
 ```bash

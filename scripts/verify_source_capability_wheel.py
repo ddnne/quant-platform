@@ -72,9 +72,87 @@ def _require_under(path: Path, parent: Path, *, label: str) -> None:
         raise AssertionError(f"{label} escaped installed wheel: {path}") from exc
 
 
-def _installed_probe(expected_prefix: Path) -> dict[str, Any]:
+def _selected_interpreter_lib_dirs(python: Path, *, cwd: Path) -> list[str]:
+    # Query the selected --python with site enabled. Through Python 3.13, python -S
+    # skips site.py so a venv's pyvenv.cfg prefix is not applied and sysconfig can
+    # report the base interpreter purelib/platlib. Python 3.14 changed that
+    # initialization; keep querying the selected interpreter rather than assuming -S.
+    output = _run(
+        [
+            str(python),
+            "-I",
+            "-c",
+            (
+                "import json, sysconfig\n"
+                "from pathlib import Path\n"
+                "seen = []\n"
+                "paths = sysconfig.get_paths()\n"
+                "for key in ('purelib', 'platlib'):\n"
+                "    raw = paths.get(key) or ''\n"
+                "    path = Path(raw)\n"
+                "    if not path.is_dir():\n"
+                "        continue\n"
+                "    resolved = str(path.resolve())\n"
+                "    if resolved not in seen:\n"
+                "        seen.append(resolved)\n"
+                "print(json.dumps(seen))\n"
+            ),
+        ],
+        cwd=cwd,
+        capture=True,
+    )
+    dirs = json.loads(output)
+    if not isinstance(dirs, list) or not all(isinstance(item, str) for item in dirs):
+        raise AssertionError("selected interpreter lib dirs must be a JSON string list")
+    return dirs
+
+
+def _installed_research_probe(expected_prefix: Path) -> dict[str, Any]:
+    import importlib
+    import importlib.util
+
     installed_root = expected_prefix.resolve()
-    sys.path.insert(0, str(installed_root))
+    excluded_packages = ["research.offline", "research.unique_logic"]
+    for name in excluded_packages:
+        package_dir = installed_root.joinpath(*name.split("."))
+        if package_dir.exists():
+            raise AssertionError(f"excluded research package present in wheel: {name}")
+        if importlib.util.find_spec(name) is not None:
+            raise AssertionError(f"excluded research package importable from wheel: {name}")
+
+    module = importlib.import_module("research")
+    origin = getattr(module, "__file__", None)
+    if origin is None:
+        raise AssertionError("research has no file origin")
+    _require_under(Path(origin).resolve(), installed_root, label="research")
+    pkg_path = getattr(module, "__path__", None)
+    if not pkg_path:
+        raise AssertionError("research has no package path")
+    for loc in pkg_path:
+        _require_under(Path(loc).resolve(), installed_root, label="research")
+
+    return {
+        "probed_modules": ["research"],
+        "excluded_packages": list(excluded_packages),
+    }
+
+
+def _installed_probe(
+    expected_prefix: Path, *, third_party_paths: list[Path] | None = None
+) -> dict[str, Any]:
+    installed_root = expected_prefix.resolve()
+    third_party: list[str] = []
+    seen = {str(installed_root)}
+    for raw in third_party_paths or []:
+        path = Path(raw).resolve()
+        key = str(path)
+        if key in seen:
+            continue
+        if not path.is_dir():
+            raise AssertionError(f"third-party lib dir missing: {path}")
+        seen.add(key)
+        third_party.append(key)
+    sys.path[:0] = [str(installed_root), *third_party]
 
     import data_contracts
     import data_contracts.canonical as canonical_module
@@ -267,6 +345,7 @@ def _installed_probe(expected_prefix: Path) -> dict[str, Any]:
     if frozenset(route_digests) != ACTIVE_ROUTES:
         raise AssertionError("installed acquisition registry active routes drift")
 
+    research_probe = _installed_research_probe(expected_prefix)
     return {
         "package_root": str(package_root),
         "authority_dir": str(authority_dir),
@@ -275,6 +354,8 @@ def _installed_probe(expected_prefix: Path) -> dict[str, Any]:
         "registry_digest": registry_digest,
         "canonical_source_digest": canonical_source_digest,
         "route_digests": route_digests,
+        "probed_modules": research_probe["probed_modules"],
+        "excluded_packages": research_probe["excluded_packages"],
     }
 
 
@@ -326,15 +407,19 @@ def _copy_tracked_source(destination: Path) -> None:
 def _probe_subprocess(
     *, installed_python: Path, cwd: Path, expected_prefix: Path
 ) -> dict[str, Any]:
+    command = [
+        str(installed_python),
+        "-I",
+        "-S",
+        str(Path(__file__).resolve()),
+        "--probe-installed",
+        "--expected-prefix",
+        str(expected_prefix),
+    ]
+    for lib_dir in _selected_interpreter_lib_dirs(installed_python, cwd=cwd):
+        command.extend(["--third-party-path", lib_dir])
     output = _run(
-        [
-            str(installed_python),
-            "-I",
-            str(Path(__file__).resolve()),
-            "--probe-installed",
-            "--expected-prefix",
-            str(expected_prefix),
-        ],
+        command,
         cwd=cwd,
         capture=True,
     )
@@ -436,11 +521,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--python", type=Path)
     parser.add_argument("--probe-installed", action="store_true")
     parser.add_argument("--expected-prefix", type=Path)
+    parser.add_argument("--third-party-path", action="append", default=None, type=Path)
     args = parser.parse_args(argv)
     if args.probe_installed:
         if args.expected_prefix is None:
             parser.error("--probe-installed requires --expected-prefix")
-        print(json.dumps(_installed_probe(args.expected_prefix), sort_keys=True))
+        print(
+            json.dumps(
+                _installed_probe(
+                    args.expected_prefix,
+                    third_party_paths=args.third_party_path or [],
+                ),
+                sort_keys=True,
+            )
+        )
         return 0
     if args.uv is None or args.python is None:
         parser.error("wheel verification requires --uv and --python")
