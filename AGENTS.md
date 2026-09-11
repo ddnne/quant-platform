@@ -1,6 +1,7 @@
 # Development responsibilities
 
 - Grok is the default coding implementer (including fixes and test changes). Codex may implement when Grok is unavailable or rate-limited; report the fallback.
+- Grok also performs a primary review of its changes. Codex independently reviews the actual diff and evaluates findings against code and behavior; record accepted fixes and evidence-backed rejections. Cross-review does not require automatic agreement or replace tests and exact-source native CI.
 - Codex owns task direction, investigation, review, verification, commits, pushes, PRs, required CI and merges. The user approved this division on 2026-09-11; apply it to subsequent development too.
 - Subagents are for independent critical review only. They report findings and evidence, do not edit files, and do not spawn agents. The main agent evaluates and resolves findings.
 - Keep logical changes reviewable and push completed work units. Preserve native Cloudflare required checks on the exact final source SHA; never bypass them. Remove completed branches after confirming merge and preservation of their work.

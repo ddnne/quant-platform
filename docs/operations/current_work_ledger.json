@@ -1,15 +1,15 @@
 {
   "schema": "quant-platform-work-ledger/v1",
   "baseline_sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
-  "branch": "refactor/test-audit-behavioral-boundaries",
-  "updated_at": "2026-09-11T15:37:00Z",
+  "branch": "refactor/test-audit-budget-http",
+  "updated_at": "2026-09-11T16:09:00Z",
   "lanes": {
     "source_delivered": {
       "status": "partial_main_and_followup",
-      "scope": "pr103_through_pr115_merged_test_audit_followup",
-      "notes": "PR103 through115 source is merged. PR115 exact-source native CI and fresh remote clone verified acceptance. A06 partial and C15 test-only reductions are locally verified and require final-source native CI. C09 draft remains held after cancelled edit. Bar/financial scopes and READY/runtime/Trader integration remain pending; source delivery is not rollout or research permission.",
+      "scope": "pr103_through_pr115_merged_test_audit_followups_pending",
+      "notes": "PR103 through115 source is merged and exact-source/merged-main native checks plus fresh clones verified. PR116 A06 partial/C15 follows; Grok cross-review added disclosure evidence fix99dd4ce5, so final99dd native is pending. C07 Gateway consolidation is locally/cross-review verified and stacked on99dd, requiring its own final-source native check and merge after PR116. Source delivery is not staging/production rollout, data activation, READY or Pilot permission.",
       "latest_main_sha": "b4f760aecaf29c25641558bcafc45103e28e659a",
-      "latest_main_check_completed_at": null,
+      "latest_main_check_completed_at": "2026-09-11T15:37:36Z",
       "latest_main_evidence": "https://github.com/ddnne/quant-platform/pull/115#issuecomment-5636731889",
       "pull_request": "https://github.com/ddnne/quant-platform/pull/115",
       "implementation_sha": "9e92ea9419b863d827e656c172a687bdfc3986b3",
@@ -17,7 +17,7 @@
       "required_check_source_sha": "9e92ea9419b863d827e656c172a687bdfc3986b3",
       "required_check_app_id": 85455,
       "required_check_build_id": "1522dc95-ee0b-4299-a7fa-80533e18b055",
-      "merged_main_check_id": 103317323296,
+      "merged_main_check_id": 103322092798,
       "merged_main_build_id": "54758630-746a-4326-bbd6-04cea313c44b",
       "required_check_id": 103316671493
     },
@@ -207,21 +207,24 @@
       "status": "test_audit_execution_in_progress",
       "execution_ledger": "docs/operations/test_reduction_ledger.json",
       "test_audit": "Baseline main1088c398 static inventory:393 test files plus2 support paths,2983 Python definitions and1115 Worker registrations, not expanded runtime cases. Main-authored candidate body/alternative review identified52 findings across100 files:13 direct-deletion groups covering22 definitions,7 assert reductions,23 consolidations,7 replacements and2 test-tier moves. Two independent critical reviews yielded9 guardrail corrections, incorporated before execution. User subsequently authorized implementation. The original inventory remains a baseline, not a claim that every candidate has been removed. Uncommitted branches are separate. No coverage-count target or bulk deletion.",
-      "execution_summary": "28 of52 original findings implemented plus CI-A01/A02/R06-F01;24 remain, including partially implemented A06 and held C09. Test/support-only delta54471b5e..155f1d77:56 files,+849/-1512, net663 lines removed. Including CI script:57 files,+852/-1609, net757 removed. Counts/LOC describe the diff, not acceptance targets. Grok authored code/test changes; Codex directed, reviewed, verified and handled Git. No product behavior/schema/golden changes.",
+      "execution_summary": "29 of52 original findings implemented plus CI-A01/A02/R06-F01;23 remain, including partially implemented A06 and held C09. Test/support-only delta54471b5e..ad0f1552:62 files,+1088/-1962, net874 lines removed. Including CI script:63 files,+1091/-2059, net968 removed. Counts/LOC describe the diff, not acceptance targets. Grok authored code/test changes and now also performs primary reviews; Codex independently evaluates findings, verifies behavior and handles Git. No product behavior/schema/golden changes.",
       "prior_verification_record": "https://github.com/ddnne/quant-platform/blob/3c4de760b04c49887738c7a449aad56b7a991fcb/docs/operations/current_work_ledger.json",
       "pr113_acceptance": "https://github.com/ddnne/quant-platform/pull/113#issuecomment-5635941240",
       "pr113_native": "Exact3c4de760 app85455/check103296673132/build6549736f succeeded14:21:46Z:Python3631 passed/4 skipped/22 warnings/493.23s, all active Worker lanes and generated-clean. Merged80e1110c has the same tree. A new remote clone passed164 retained tests/13.01s, clean/equal/unpushed0 and secret/path scan. Merged-main native check103302171536/build2a696cb7 succeeded14:38:09Z; follow-up evidence is in PR113 comment5636124244.",
       "followup": {
         "audit_ids": [
           "A06 (partial)",
-          "C15"
+          "C15",
+          "C07"
         ],
         "commits": [
           "12fe179b",
-          "155f1d77"
+          "155f1d77",
+          "99dd4ce5",
+          "ad0f1552"
         ],
-        "verification": "Final14 related Python modules176 passed27.12s and secret/path/diff checks passed. Independent A06 review08a8fa05 accepted direct rejection and import-before-freeze preservation; C15 review885b2dd5 accepted after moving unique futures reason and alert dataset/positive-count assertions. Pure numeric helpers and actual PIT/extraction routes remain.",
-        "pending": "Final-source native CI, normal PR merge and fresh remote clone. No source merge implies production, READY or Pilot permission."
+        "verification": "A06/C15 final related12 Python modules132 passed28.35s, including actual DTO delegation, capability denial, deployment-port refusal, signed artifacts and PIT feature computation. Grok found and authored restoration of disclosure positive row-count/source evidence; Codex accepted the numerical oracle. C07 full Gateway185 tests/15 files2.06s plus2 real multi-Worker harness cases919ms and typecheck passed. Codex independent diff42f92fed and fresh Grok reviews across all six old files found no actionable C07 loss.",
+        "pending": "PR116 final99dd native CI, then normal merge/fresh clone. Stacked C07 final source requires its own native CI, normal merge and fresh clone. Earlier11c8 CI success is historical and not reused as99dd approval. All rollout/data/READY/Pilot HOLDs remain."
       },
       "review_corrections": "Kept both-NULL cursor case after a mutation exposed false CURRENT; retained terminal conflict audit after always-accept mutation; avoided duplicate Gateway type guard; preserved existing-str-path refusal while removing signed setup. Prefer realistic failures over counts. C09's expected-versus-observed call-site counterexample is now an explicit prerequisite, not an excuse to keep all large fixtures.",
       "local_preservation": "Unverified Receipt runtime draft stash4cfe6d0d and C09 draft stash75f5dffc are local-only, excluded from acceptance. Temporary Gateway/Mass dependency links removed; original installed dependencies preserved. No authentic market history downloaded. C15 optional context re-read was cancelled and was not retried; final patch was authored from already supplied source without file access. One incorrect draft using nonexistent direct metadata attributes was rejected before application; only the corrected metadata-dict patch was accepted.",
@@ -229,8 +232,14 @@
       "pr114_native": "Exact12ba1efe native app85455/check103306844819/buildfcf878c4 succeeded14:52:02Z:Python3621 passed/4 skipped/22 warnings/538.20s and all required Worker/type/dry-run/container/generated-clean gates. Normal merge edaf1423 at14:52:29Z has same treeb5f8a4d2. Fresh remote clone clean/equal/unpushed0/secret scan,78 retained tests passed/2.76s. Merged-main check103312190031/build3a8ef1c5 succeeded15:07:51Z; PR114 comment5636507563.",
       "held_c09": "Grok key/oracle correction was cancelled at2026-09-11T14:55:29Z. Draft3 files remain only in stash75f5dffc; original tests restored, C09 not counted as implemented. Four draft cases failed due top-level expected/observed/missing keys (actual names end in _rows). Independent review found20-only fixtures lose expected-versus-observed allowance wiring detection. After user approval replace PASS with38/40,9 full days,allowance2 and correct keys. Do not bypass cancellation.",
       "pr115_acceptance": "https://github.com/ddnne/quant-platform/pull/115#issuecomment-5636731889",
-      "pr115_native": "Exact9e92ea94 native app85455/check103316671493/build1522dc95 succeeded15:21:16Z:Python3621 passed/4 skipped/22 warnings and all required Worker/type/dry-run/container/generated-clean gates. Normal merge b4f760ae at15:23:09Z has same treeabb41356. Fresh remote clone clean/equal/unpushed0/secret scan,112 retained tests passed/9.81s. Merged-main follow-up still running at15:37 checkpoint. C22 Draft7/malformed-golden diagnostics and C08 two real multi-Worker cases retained. Completed branch removed by repository after merge.",
-      "timing_correction": "T01 full-catalog4 tests reran in0.17s in isolation, versus a prior35.32s full-suite observation. No stable35-second saving claimed. No replay tier move performed; scope and maintenance, not count/timing targets, govern next selection."
+      "pr115_native": "Exact9e92ea94 native app85455/check103316671493/build1522dc95 succeeded15:21:16Z:Python3621 passed/4 skipped/22 warnings and all required Worker/type/dry-run/container/generated-clean gates. Normal merge b4f760ae at15:23:09Z has same treeabb41356. Fresh remote clone clean/equal/unpushed0/secret scan,112 retained tests passed/9.81s. Merged-main check103322092798/build54758630 succeeded15:37:36Z; PR115 comment5636889573. C22 Draft7/malformed-golden diagnostics and C08 two real multi-Worker cases retained. Completed branch removed by repository after merge.",
+      "timing_correction": "T01 full-catalog4 tests reran in0.17s in isolation, versus a prior35.32s full-suite observation. No stable35-second saving claimed. No replay tier move performed; scope and maintenance, not count/timing targets, govern next selection.",
+      "cross_review": {
+        "protocol": "Grok implements and reviews; Codex independently reviews actual diffs and adjudicates concrete findings against code/behavior. Neither approval replaces tests/native CI. No blanket restoration of name/shape tests or unanimous-approval requirement.",
+        "accepted": "Grok C15 positive disclosure rows_seen/datasets gap restored in99dd4ce5; actual PIT fixture has one visible fins row and two margin rows, so the check distinguishes a real evidence/source-accounting bug.",
+        "adjudicated": "Grok A06 initial review lacked production/test context: strong PaperExecutionService is offline DRAFT, not live; retained DTO execution tests detect wrong re-aliasing. Actual Mass invocation injected-network denial and environment/closed deployment-port tests remain. The retired verifier module is empty and signed publication admission tests remain. Retired backup/options names or arbitrary future kwargs are not proof of I/O/authority; actual backend/time-travel, PIT, signature and unexpected now/verifier refusal remain. No universal no-network/no-file proof is claimed; A06 remains partial. After seeing these production and retained-test excerpts, Grok retracted all six initial A06 findings; the limitation to partial A06 remains.",
+        "usage": "Persisted CLI usage confirms grok-4.6-build used95151 total tokens across A06/C15-initial/C07 coding sessions; reasoning is already included in output tokens. This is not an account-quota or billing reconciliation."
+      }
     },
     "8_rollout_and_research_go": { "status": "pending" },
     "9_push_remote_and_fresh_clone_verify": { "status": "pr103_through_pr115_merged_and_fresh_clone_verified_followup_and_final_project_verification_pending" }
