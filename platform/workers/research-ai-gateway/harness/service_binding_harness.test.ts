@@ -31,7 +31,24 @@ afterAll(async () => {
   await server.close();
 });
 
-describe("Mass to Gateway typed Service Binding", () => {
+describe("Gateway HTTP and Mass Service Binding", () => {
+  it("boots the production module shape and keeps HTTP completion closed", async () => {
+    const health = await server.fetch("/health");
+    expect(health.status).toBe(200);
+    await expect(health.json()).resolves.toMatchObject({
+      ok: true,
+      service: "quant-platform-research-ai-gateway",
+    });
+
+    const denied = await server.fetch("/v1/complete", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(denied.status).toBe(401);
+    await expect(denied.json()).resolves.toEqual({ error: "unauthorized" });
+  });
+
   it("calls the named RPC entrypoint without a shared bearer token", async () => {
     const mass = server.getWorker<{ AI_GATEWAY: GatewayBinding }>(
       "quant-platform-research-mass-eval-test",
