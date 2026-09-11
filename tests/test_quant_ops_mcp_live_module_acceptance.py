@@ -27,14 +27,26 @@ def _deployment() -> dict[str, object]:
     }
 
 
+WASM_DIGEST = "sha256:" + "e" * 64
+
+
 def _provenance() -> dict[str, object]:
     return {
-        "local_main_module": "index.js",
-        "local_main_module_digest": DIGEST,
-        "local_main_module_bytes": 123,
-        "live_main_module": "download/index.js",
-        "live_main_module_digest": DIGEST,
-        "live_main_module_bytes": 123,
+        "main_module": "index.js",
+        "modules": [
+            {
+                "name": "index.js",
+                "content_type": "application/javascript+module",
+                "bytes": 123,
+                "digest": DIGEST,
+            },
+            {
+                "name": "z.wasm",
+                "content_type": "application/wasm",
+                "bytes": 8,
+                "digest": WASM_DIGEST,
+            },
+        ],
     }
 
 
@@ -111,9 +123,12 @@ def test_exact_module_acceptance_binds_manifest_and_agents_dependency() -> None:
         source_provenance=_provenance(),
     )
     assert result["status"] == "VERIFIED_EXACT_MODULE_BYTES"
+    assert result["format"] == "quant-ops-mcp-live-module-acceptance/v2"
     assert result["module_digest"] == DIGEST
+    assert result["main_module"] == "index.js"
+    assert result["modules"] == _provenance()["modules"]
     assert result["binding_manifest_schema_version"] == (
-        "cloudflare-active-worker-bindings/v10"
+        "cloudflare-active-worker-bindings/v11"
     )
     assert result["binding_manifest_digest"].startswith("sha256:")
     assert result["agents_dependency"]["resolved_version"] == "0.17.4"
@@ -140,7 +155,7 @@ def test_exact_module_acceptance_binds_manifest_and_agents_dependency() -> None:
         ("deployment-race", "changed during"),
         ("version-race", "selected version changed"),
         ("split-traffic", "exactly one version"),
-        ("module-substitution", "differs from"),
+        ("module-substitution", "malformed"),
         ("extra-provenance", "fields are not closed"),
         ("missing-active-worker", "every active Worker exactly"),
         ("binding-drift", "live binding.*drifted"),
@@ -174,7 +189,7 @@ def test_exact_module_acceptance_rejects_race_or_caller_substitution(
             "created_on"
         ] = "2026-08-28T00:00:01Z"
     elif mutation == "module-substitution":
-        provenance["live_main_module_digest"] = "sha256:" + "d" * 64
+        provenance["modules"][1]["digest"] = "sha256:" + "d" * 63
     elif mutation == "extra-provenance":
         provenance["caller_manifest_digest"] = DIGEST
     elif mutation == "missing-active-worker":

@@ -13,10 +13,11 @@ import json
 import os
 import re
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
 import subprocess
-from typing import Any
+from typing import Any, Mapping
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -249,6 +250,7 @@ TOOLCHAIN = {
     "vitest": "4.1.11",
     "@cloudflare/vitest-plugin": "1.0.0",
 }
+PROJECT_ACCOUNT_ID = "11233bca08d134a9b738eaa46b9751d9"
 
 # Names are policy. Values remain exclusively in Cloudflare Secrets.
 PRODUCTION_SECRET_NAMES: dict[str, tuple[str, ...]] = {
@@ -303,16 +305,19 @@ def _python_from_worker_package(script: str) -> str:
     return f"python3 {relative}"
 
 
+def _generic_tagged_deploy_command(worker: str) -> str:
+    return (
+        f"{_python_from_worker_package('cloudflare_binding_manifest.py')} "
+        f"--deploy-tagged --worker {worker} --env production"
+    )
+
+
 _WRANGLER_PACKAGE_SCRIPT_POLICY = {
     "build": (
         'wrangler deploy --dry-run --config=wrangler.toml --env="" '
         "--outdir .wrangler-dry-run"
     ),
     "cf-typegen": 'wrangler types --config=wrangler.toml --env=""',
-    "deploy": (
-        f"{_python_from_worker_package('cloudflare_binding_manifest.py')} "
-        "--deploy-tagged --config wrangler.toml --env production"
-    ),
     "dev": 'wrangler dev --config=wrangler.toml --env=""',
     "tail": "wrangler tail --config=wrangler.toml --env=production",
     "types": (
@@ -345,7 +350,7 @@ _PINNED_PACKAGE_SCRIPTS = {
     "ingestion-premium": {
         **_COMMON_PACKAGE_SCRIPTS,
         "cf-typegen": _WRANGLER_PACKAGE_SCRIPT_POLICY["cf-typegen"],
-        "deploy": _WRANGLER_PACKAGE_SCRIPT_POLICY["deploy"],
+        "deploy": _generic_tagged_deploy_command("ingestion-premium"),
         "test": (
             "vitest run --config vitest.config.ts && "
             "vitest run --config vitest.runtime.config.ts"
@@ -365,7 +370,7 @@ _PINNED_PACKAGE_SCRIPTS = {
         "deploy": (
             f"{_python_from_worker_package('predeploy_ops_projection_gate.py')} "
             "--environment production && "
-            + _WRANGLER_PACKAGE_SCRIPT_POLICY["deploy"]
+            + _generic_tagged_deploy_command("quant-ops-mcp")
         ),
         "test": (
             "node --experimental-test-module-mocks --test test/*.test.mjs && "
@@ -385,7 +390,7 @@ _PINNED_PACKAGE_SCRIPTS = {
     },
     "research-ai-gateway": {
         **_COMMON_PACKAGE_SCRIPTS,
-        "deploy": _WRANGLER_PACKAGE_SCRIPT_POLICY["deploy"],
+        "deploy": _generic_tagged_deploy_command("research-ai-gateway"),
         "test": (
             "vitest run --config vitest.config.ts && "
             "vitest run --config vitest.harness.config.ts"
@@ -393,7 +398,7 @@ _PINNED_PACKAGE_SCRIPTS = {
     },
     "research-mass-eval": {
         **_COMMON_PACKAGE_SCRIPTS,
-        "deploy": _WRANGLER_PACKAGE_SCRIPT_POLICY["deploy"],
+        "deploy": _generic_tagged_deploy_command("research-mass-eval"),
         "dev": _WRANGLER_PACKAGE_SCRIPT_POLICY["dev"],
         "tail": _WRANGLER_PACKAGE_SCRIPT_POLICY["tail"],
         "test": (
@@ -626,7 +631,7 @@ FRAMEWORK_DURABLE_OBJECT_POLICY: dict[str, dict[str, dict[str, Any]]] = {
 }
 
 
-BINDING_MANIFEST_SCHEMA_VERSION = "cloudflare-active-worker-bindings/v10"
+BINDING_MANIFEST_SCHEMA_VERSION = "cloudflare-active-worker-bindings/v11"
 
 _OPS_D1_IDENTITY: dict[str, tuple[tuple[str, str, str, str, str], ...]] = {
     "base": (
@@ -1178,6 +1183,7 @@ def build_manifest() -> dict[str, Any]:
     body = {
         "schema_version": BINDING_MANIFEST_SCHEMA_VERSION,
         "active_workers": list(ACTIVE_WORKERS),
+        "project_account_id": PROJECT_ACCOUNT_ID,
         "config_key_policy": CONFIG_KEY_POLICY,
         "ops_binding_identity_digest": quant_ops_binding_identity_digest(workers),
         "test_harness_surfaces": test_harness_surfaces,
@@ -1198,6 +1204,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         "config_key_policy",
         "manifest_digest",
         "ops_binding_identity_digest",
+        "project_account_id",
         "schema_version",
         "test_harness_surfaces",
         "toolchain_policy",
@@ -1207,6 +1214,8 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         raise ValueError("binding manifest fields are not closed")
     if manifest["schema_version"] != BINDING_MANIFEST_SCHEMA_VERSION:
         raise ValueError("binding manifest schema_version drift")
+    if manifest["project_account_id"] != PROJECT_ACCOUNT_ID:
+        raise ValueError("binding manifest project account id drift")
     if DEFAULT_FETCH_RESERVED_SPECIAL_POLICY != frozenset(ACTIVE_WORKERS):
         raise ValueError("default fetch reserved-special policy drift")
     if manifest["config_key_policy"] != CONFIG_KEY_POLICY:
@@ -1804,26 +1813,59 @@ def _load_json_object(payload: object, *, label: str) -> dict[str, Any]:
     return document
 
 
-def _status_argv(config: str, environment: str) -> list[str]:
-    argv = ["wrangler", "deployments", "status", "--config", config, "--json"]
-    if environment:
-        argv.extend(["--env", environment])
-    return argv
+_SUPPORTED_DEPLOY_ENVIRONMENTS = frozenset({"production", "staging"})
+_ACCOUNT_ID = re.compile(r"^[0-9a-f]{32}$")
+_UUID = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
 
 
-def _version_view_argv(version_id: str, config: str, environment: str) -> list[str]:
-    argv = [
-        "wrangler",
+def _generic_wrapper_workers() -> frozenset[str]:
+    marker = _python_from_worker_package("cloudflare_binding_manifest.py")
+    return frozenset(
+        worker
+        for worker, scripts in _PINNED_PACKAGE_SCRIPTS.items()
+        if marker in scripts.get("deploy", "")
+        and "--deploy-tagged" in scripts.get("deploy", "")
+    )
+
+
+def _status_argv(
+    executable: str, config: str, environment_args: tuple[str, ...]
+) -> list[str]:
+    return [
+        executable,
+        "deployments",
+        "status",
+        "--config",
+        config,
+        "--json",
+        *environment_args,
+    ]
+
+
+def _version_view_argv(
+    executable: str,
+    version_id: str,
+    config: str,
+    environment_args: tuple[str, ...],
+) -> list[str]:
+    return [
+        executable,
         "versions",
         "view",
         version_id,
         "--config",
         config,
         "--json",
+        *environment_args,
     ]
-    if environment:
-        argv.extend(["--env", environment])
-    return argv
+
+
+def _wrangler_selector_args(environment: str) -> tuple[str, ...]:
+    if environment == "staging":
+        return ("--config", "wrangler.staging.toml")
+    return ("--config", "wrangler.toml", "--env", "production")
 
 
 def parse_selected_deployment(payload: object) -> dict[str, str]:
@@ -1868,64 +1910,492 @@ def parse_selected_version(
         raise ValueError("selected version tag/message is not the exact merged SHA")
 
 
+def _observe_selected_version(
+    *,
+    executable: str,
+    version_id: str,
+    config: str,
+    environment_args: tuple[str, ...],
+    directory: Path,
+    run: Any,
+    command_env: Mapping[str, str] | None,
+    expected_sha: str,
+) -> dict[str, Any]:
+    viewed = _run_pinned(
+        run,
+        _version_view_argv(executable, version_id, config, environment_args),
+        cwd=directory,
+        command_env=command_env,
+        timeout=120,
+    )
+    if viewed.returncode != 0:
+        raise ValueError("tagged deploy could not observe selected version")
+    parse_selected_version(
+        viewed.stdout or "",
+        version_id=version_id,
+        expected_sha=expected_sha,
+    )
+    return _load_json_object(viewed.stdout or "", label="version observation")
+
+
 def _observe_selected_deployment(
     *,
+    executable: str,
     config: str,
-    environment: str,
+    environment_args: tuple[str, ...],
+    directory: Path,
     run: Any,
+    command_env: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     observed = run(
-        _status_argv(config, environment),
+        _status_argv(executable, config, environment_args),
+        cwd=str(directory),
         capture_output=True,
         text=True,
         check=False,
+        **({"env": dict(command_env)} if command_env is not None else {}),
     )
     if observed.returncode != 0:
         raise ValueError("tagged deploy could not observe selected version")
     return parse_selected_deployment(observed.stdout or "")
 
 
-def deploy_tagged(*, config: str, environment: str, runner: Any | None = None) -> None:
+def _canonical_deploy_target(
+    *,
+    worker: str,
+    environment: str,
+    environ: Mapping[str, str],
+) -> dict[str, Any]:
+    if worker not in ACTIVE_WORKERS:
+        raise ValueError("canonical deploy target is unknown or inactive")
+    if environment not in _SUPPORTED_DEPLOY_ENVIRONMENTS:
+        raise ValueError("canonical deploy environment is unsupported")
+    if worker not in _generic_wrapper_workers():
+        raise ValueError(
+            f"{worker}: generic tagged deploy is not the specialized or PENDING entrypoint"
+        )
+    directory = WORKER_ROOT / worker
+    if directory.is_symlink() or not directory.is_dir():
+        raise ValueError(f"{worker}: worker directory is absent or indirect")
+    config_name = (
+        "wrangler.staging.toml" if environment == "staging" else "wrangler.toml"
+    )
+    config_path = directory / config_name
+    if (
+        config_path.is_symlink()
+        or not config_path.is_file()
+        or config_path.resolve().parent != directory.resolve()
+    ):
+        raise ValueError(f"{worker}: tracked Wrangler config is absent or indirect")
+    data = _load_toml(config_path)
+    if environment == "staging":
+        section = data
+        worker_name = data.get("name")
+        environment_args: tuple[str, ...] = ()
+        if data.get("env") is not None:
+            raise ValueError(
+                f"{worker}: dedicated staging config must not contain named envs"
+            )
+    else:
+        try:
+            section = data["env"]["production"]
+        except (KeyError, TypeError) as exc:
+            raise ValueError(f"{worker}: missing [env.production]") from exc
+        if not isinstance(section, dict):
+            raise ValueError(f"{worker}: env.production must be a table")
+        inherited = data.get("name")
+        worker_name = section.get("name", inherited)
+        if "name" not in section and isinstance(inherited, str) and inherited:
+            worker_name = f"{inherited}-production"
+        environment_args = ("--env", "production")
+    containers = section.get("containers")
+    if containers is None and environment != "staging":
+        containers = data.get("containers")
+    if containers:
+        raise ValueError(
+            f"{worker}: local generic deploy is prohibited while a Container image is declared"
+        )
+    if not isinstance(worker_name, str) or not worker_name:
+        raise ValueError(f"{worker}: Worker name is missing")
+    if (
+        "WRANGLER_CI_OVERRIDE_NAME" in environ
+        and environ.get("WRANGLER_CI_OVERRIDE_NAME") != worker_name
+    ):
+        raise ValueError(
+            "WRANGLER_CI_OVERRIDE_NAME conflicts with the canonical Worker name"
+        )
+    if "account_id" in section:
+        config_account = section.get("account_id")
+    elif "account_id" in data:
+        config_account = data.get("account_id")
+    else:
+        config_account = None
+    if config_account is not None and config_account != PROJECT_ACCOUNT_ID:
+        raise ValueError(
+            "tracked Wrangler account_id does not match the approved project account"
+        )
+    for override_name in ("CLOUDFLARE_ACCOUNT_ID", "CF_ACCOUNT_ID"):
+        if override_name in environ and environ.get(override_name) != PROJECT_ACCOUNT_ID:
+            raise ValueError(
+                "authenticated account does not match the approved project account"
+            )
+    package_path = directory / "package.json"
+    if package_path.is_symlink() or not package_path.is_file():
+        raise ValueError(f"{worker}: package.json is absent or indirect")
+    try:
+        package = json.loads(package_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{worker}: package.json is unreadable") from exc
+    pin = (package.get("devDependencies") or {}).get("wrangler") if isinstance(
+        package, dict
+    ) else None
+    if pin != TOOLCHAIN["wrangler"]:
+        raise ValueError(f"{worker}: Wrangler pin is not the exact toolchain version")
+    deploy_command = _PINNED_PACKAGE_SCRIPTS.get(worker, {}).get("deploy", "")
+    return {
+        "worker": worker,
+        "environment": environment,
+        "directory": directory,
+        "config_name": config_name,
+        "config_path": config_path,
+        "environment_args": environment_args,
+        "worker_name": worker_name,
+        "executable": directory / "node_modules" / ".bin" / "wrangler",
+        "requires_ops_gate": "predeploy_ops_projection_gate.py" in deploy_command,
+        "account_id": PROJECT_ACCOUNT_ID,
+    }
+
+
+def _run_pinned(
+    run: Any,
+    argv: list[str],
+    *,
+    cwd: Path,
+    command_env: Mapping[str, str] | None = None,
+    timeout: int | None = None,
+) -> subprocess.CompletedProcess[str]:
+    kwargs: dict[str, Any] = {
+        "cwd": str(cwd),
+        "capture_output": True,
+        "text": True,
+        "check": False,
+    }
+    if command_env is not None:
+        kwargs["env"] = dict(command_env)
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    return run(argv, **kwargs)
+
+
+def _parse_bearer_token(payload: str) -> str:
+    try:
+        document = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise ValueError("pinned Wrangler auth token output is malformed") from exc
+    if not isinstance(document, dict):
+        raise ValueError("pinned Wrangler auth token output is malformed")
+    kind = document.get("type")
+    if kind == "api_key":
+        raise ValueError("Cloudflare API keys are not a supported bearer credential")
+    if kind not in {"api_token", "oauth"}:
+        raise ValueError("pinned Wrangler auth token type is unsupported")
+    token = document.get("token")
+    if not isinstance(token, str) or not token:
+        raise ValueError("pinned Wrangler auth token is missing")
+    return token
+
+
+def _require_authenticated_account(
+    *,
+    target: dict[str, Any],
+    executable: str,
+    run: Any,
+    environ: Mapping[str, str],
+    isolated_env: Mapping[str, str],
+) -> str:
+    account_id = target["account_id"]
+    if _ACCOUNT_ID.fullmatch(account_id) is None:
+        raise ValueError("approved project account id is malformed")
+    configured = (environ.get("CLOUDFLARE_ACCOUNT_ID") or "").strip()
+    if configured and configured != account_id:
+        raise ValueError("authenticated account does not match the approved project account")
+    if (environ.get("CLOUDFLARE_API_KEY") or "").strip():
+        raise ValueError("Cloudflare API keys are not a supported bearer credential")
+    token = (environ.get("CLOUDFLARE_API_TOKEN") or "").strip()
+    if not token:
+        completed = _run_pinned(
+            run,
+            [executable, "auth", "token", "--json"],
+            cwd=target["directory"],
+            command_env=dict(environ),
+            timeout=30,
+        )
+        if completed.returncode != 0:
+            raise ValueError("canonical deploy could not establish a bearer credential")
+        token = _parse_bearer_token(completed.stdout or "")
+    whoami = _run_pinned(
+        run,
+        [executable, "whoami", "--json"],
+        cwd=target["directory"],
+        command_env={**dict(isolated_env), "CLOUDFLARE_API_TOKEN": token, "CLOUDFLARE_ACCOUNT_ID": account_id},
+        timeout=30,
+    )
+    if whoami.returncode != 0:
+        raise ValueError("canonical deploy could not verify the authenticated account")
+    try:
+        document = json.loads(whoami.stdout or "")
+    except json.JSONDecodeError as exc:
+        raise ValueError("pinned Wrangler whoami output is malformed") from exc
+    if not isinstance(document, dict) or document.get("loggedIn") is not True:
+        raise ValueError("canonical deploy could not verify the authenticated account")
+    accounts = document.get("accounts")
+    if not isinstance(accounts, list) or not accounts:
+        raise ValueError("authenticated account list is empty or ambiguous")
+    ids = [
+        row.get("id")
+        for row in accounts
+        if isinstance(row, dict)
+    ]
+    if account_id not in ids:
+        raise ValueError("authenticated account does not match the approved project account")
+    return token
+
+
+def _require_pinned_local_wrangler(directory: Path) -> str:
+    """Require the worker-local package entrypoint, not an unrelated binary."""
+
+    worker = directory.name
+    executable = directory / "node_modules" / ".bin" / "wrangler"
+    package_entrypoint = directory / "node_modules" / "wrangler" / "bin" / "wrangler.js"
+    package_json = directory / "node_modules" / "wrangler" / "package.json"
+    try:
+        resolved = executable.resolve(strict=True)
+        expected = package_entrypoint.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError(f"{worker}: pinned Wrangler is not installed") from exc
+    if not executable.is_file() or resolved != expected:
+        raise ValueError(f"{worker}: pinned Wrangler is not the package entrypoint")
+    try:
+        installed = json.loads(package_json.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError(f"{worker}: pinned Wrangler package is unreadable") from exc
+    version = installed.get("version") if isinstance(installed, dict) else None
+    if version != TOOLCHAIN["wrangler"]:
+        raise ValueError(f"{worker}: installed Wrangler pin is not exact")
+    return str(executable)
+
+
+def _require_pinned_executable(target: dict[str, Any], *, run: Any | None = None) -> str:
+    del run
+    return _require_pinned_local_wrangler(target["directory"])
+
+
+def deploy_tagged(
+    *,
+    worker: str,
+    environment: str,
+    runner: Any | None = None,
+    opener: Any | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    from scripts.predeploy_ops_projection_gate import (
+        PredeployGateError,
+        require_sealed_active_generation,
+    )
+    from scripts.receipt_authority_pending_live_acceptance import (
+        ReceiptPendingLiveAcceptanceError,
+        _compare_module_inventories,
+        _isolated_command_environment,
+        _live_version_module_inventory,
+        _require_verified_module_inventory,
+        parse_worker_upload_bundle,
+    )
+    from urllib.request import urlopen
+
     run = subprocess.run if runner is None else runner
+    transport = urlopen if opener is None else opener
+    process_env = os.environ if environ is None else environ
+    target = _canonical_deploy_target(
+        worker=worker, environment=environment, environ=process_env
+    )
     sha = _clean_merged_sha(runner=run)
     if not _SHA40.fullmatch(sha):
         raise ValueError("merged SHA is not 40 hex")
-    argv = [
-        "wrangler",
-        "deploy",
-        "--config",
-        config,
-        "--tag",
-        sha,
-        "--message",
-        sha,
-    ]
-    if environment:
-        argv.extend(["--env", environment])
-    completed = run(argv, check=False)
-    if completed.returncode != 0:
-        raise ValueError("tagged wrangler deploy failed")
-    selected = _observe_selected_deployment(
-        config=config, environment=environment, run=run
-    )
-    viewed = run(
-        _version_view_argv(selected["version_id"], config, environment),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if viewed.returncode != 0:
-        raise ValueError("tagged deploy could not observe selected version")
-    parse_selected_version(
-        viewed.stdout or "",
-        version_id=selected["version_id"],
-        expected_sha=sha,
-    )
-    reread = _observe_selected_deployment(
-        config=config, environment=environment, run=run
-    )
-    if reread != selected:
-        raise ValueError("selected deployment changed during version read")
+    executable = _require_pinned_executable(target)
+    with tempfile.TemporaryDirectory(prefix="quant-canonical-deploy-") as temporary:
+        isolated_root = Path(temporary)
+        token: str | None = None
+        try:
+            build_env = _isolated_command_environment(isolated_root / "build-environment")
+            credential_env = _isolated_command_environment(
+                isolated_root / "credential-environment"
+            )
+            token = _require_authenticated_account(
+                target=target,
+                executable=executable,
+                run=run,
+                environ=process_env,
+                isolated_env=credential_env,
+            )
+            mutate_env = _isolated_command_environment(
+                isolated_root / "mutate-environment",
+                account_id=target["account_id"],
+                api_token=token,
+            )
+            if target["requires_ops_gate"]:
+                previous_token = os.environ.get("CLOUDFLARE_API_TOKEN")
+                previous_account = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+                os.environ["CLOUDFLARE_API_TOKEN"] = token
+                os.environ["CLOUDFLARE_ACCOUNT_ID"] = target["account_id"]
+                try:
+                    require_sealed_active_generation(
+                        environment, intended_source_sha=sha
+                    )
+                except PredeployGateError as exc:
+                    raise ValueError(
+                        f"{worker}: ops projection predeploy gate failed"
+                    ) from exc
+                finally:
+                    if previous_token is None:
+                        os.environ.pop("CLOUDFLARE_API_TOKEN", None)
+                    else:
+                        os.environ["CLOUDFLARE_API_TOKEN"] = previous_token
+                    if previous_account is None:
+                        os.environ.pop("CLOUDFLARE_ACCOUNT_ID", None)
+                    else:
+                        os.environ["CLOUDFLARE_ACCOUNT_ID"] = previous_account
+            outfile = isolated_root / "worker.bundle"
+            dry_run = _run_pinned(
+                run,
+                [
+                    executable,
+                    "deploy",
+                    "--dry-run",
+                    * _wrangler_selector_args(environment),
+                    "--outfile",
+                    str(outfile),
+                ],
+                cwd=target["directory"],
+                command_env=build_env,
+                timeout=120,
+            )
+            if dry_run.returncode != 0 or outfile.is_symlink() or not outfile.is_file():
+                raise ValueError("tagged deploy local upload inventory failed")
+            try:
+                local_inventory = parse_worker_upload_bundle(outfile.read_bytes())
+            finally:
+                try:
+                    outfile.unlink()
+                except OSError:
+                    pass
+            deploy = _run_pinned(
+                run,
+                [
+                    executable,
+                    "deploy",
+                    "--config",
+                    target["config_name"],
+                    "--tag",
+                    sha,
+                    "--message",
+                    sha,
+                    *target["environment_args"],
+                ],
+                cwd=target["directory"],
+                command_env=mutate_env,
+                timeout=120,
+            )
+            if deploy.returncode != 0:
+                raise ValueError("tagged wrangler deploy failed")
+            selected = _observe_selected_deployment(
+                executable=executable,
+                config=target["config_name"],
+                environment_args=target["environment_args"],
+                directory=target["directory"],
+                run=run,
+                command_env=mutate_env,
+            )
+            if _UUID.fullmatch(selected["version_id"]) is None:
+                raise ValueError("selected version id must be a full UUID")
+            version_document = _observe_selected_version(
+                executable=executable,
+                version_id=selected["version_id"],
+                config=target["config_name"],
+                environment_args=target["environment_args"],
+                directory=target["directory"],
+                run=run,
+                command_env=mutate_env,
+                expected_sha=sha,
+            )
+            live_inventory = _live_version_module_inventory(
+                account_id=target["account_id"],
+                worker_name=target["worker_name"],
+                version_id=selected["version_id"],
+                api_token=token,
+                opener=transport,
+            )
+            inventory = _compare_module_inventories(
+                local_inventory, live_inventory, label=worker
+            )
+            reread = _observe_selected_deployment(
+                executable=executable,
+                config=target["config_name"],
+                environment_args=target["environment_args"],
+                directory=target["directory"],
+                run=run,
+                command_env=mutate_env,
+            )
+            if reread != selected:
+                raise ValueError("selected deployment changed during version read")
+            version_reread = _observe_selected_version(
+                executable=executable,
+                version_id=selected["version_id"],
+                config=target["config_name"],
+                environment_args=target["environment_args"],
+                directory=target["directory"],
+                run=run,
+                command_env=mutate_env,
+                expected_sha=sha,
+            )
+            modules_reread = _live_version_module_inventory(
+                account_id=target["account_id"],
+                worker_name=target["worker_name"],
+                version_id=selected["version_id"],
+                api_token=token,
+                opener=transport,
+            )
+            reread_inventory = _require_verified_module_inventory(
+                {
+                    "main_module": modules_reread["main_module"],
+                    "modules": modules_reread["modules"],
+                },
+                label=f"{worker} version reread",
+            )
+            if (
+                modules_reread.get("id") != selected["version_id"]
+                or reread_inventory != inventory
+                or _canonical_digest(version_document) != _canonical_digest(version_reread)
+            ):
+                raise ValueError("selected version changed during module read")
+        except ReceiptPendingLiveAcceptanceError as exc:
+            raise ValueError(str(exc)) from exc
+        finally:
+            token = None
+    if _clean_merged_sha(runner=run) != sha:
+        raise ValueError("merged SHA changed during tagged deploy")
+    facts = {
+        "result": "VERIFIED_EXACT_MODULE_BYTES",
+        "worker": worker,
+        "environment": environment,
+        "account_id": target["account_id"],
+        "source_sha": sha,
+        "deployment_id": selected["deployment_id"],
+        "version_id": selected["version_id"],
+        "main_module": inventory["main_module"],
+        "modules": inventory["modules"],
+    }
+    print(json.dumps(facts, sort_keys=True, separators=(",", ":")))
+    return facts
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1937,11 +2407,16 @@ def main(argv: list[str] | None = None) -> int:
         help="print canonical active Worker paths, one per line",
     )
     parser.add_argument("--deploy-tagged", action="store_true")
-    parser.add_argument("--config", default="wrangler.toml")
+    parser.add_argument("--worker")
+    parser.add_argument("--config")
     parser.add_argument("--env", dest="environment", default="production")
     args = parser.parse_args(argv)
     if args.deploy_tagged:
-        deploy_tagged(config=args.config, environment=args.environment)
+        if args.config is not None:
+            parser.error("canonical deploy does not accept a caller config")
+        if not args.worker:
+            parser.error("--worker is required for --deploy-tagged")
+        deploy_tagged(worker=args.worker, environment=args.environment)
         return 0
     if args.write and args.print_worker_paths:
         parser.error("--write and --print-worker-paths are mutually exclusive")

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import copy
+import hashlib
 import importlib.util
 import json
 import os
@@ -12,6 +14,7 @@ import shutil
 import subprocess
 import sys
 from typing import Any
+from urllib.request import Request
 
 import pytest
 
@@ -1427,13 +1430,14 @@ def test_real_wrapper_from_package_cwd_rejects_unmerged_before_wrangler(
     repo = tmp_path / "repo"
     scripts = repo / "scripts"
     inventory = repo / "specs" / "cloudflare"
-    worker = repo / "platform" / "workers" / "research-mass-eval"
+    worker = repo / "platform" / "workers" / "ingestion-premium"
     scripts.mkdir(parents=True)
     inventory.mkdir(parents=True)
     worker.mkdir(parents=True)
     for name in (
         "cloudflare_binding_manifest.py",
         "finding_ledger_gate.py",
+        "predeploy_ops_projection_gate.py",
         "receipt_authority_pending_gate.py",
         "receipt_authority_pending_live_acceptance.py",
     ):
@@ -1442,9 +1446,13 @@ def test_real_wrapper_from_package_cwd_rejects_unmerged_before_wrangler(
         ROOT / "specs" / "cloudflare" / "active_workers.json",
         inventory / "active_workers.json",
     )
+    shutil.copy2(
+        ROOT / "platform" / "workers" / "ingestion-premium" / "wrangler.toml",
+        worker / "wrangler.toml",
+    )
     source_package = json.loads(
         (
-            ROOT / "platform" / "workers" / "research-mass-eval" / "package.json"
+            ROOT / "platform" / "workers" / "ingestion-premium" / "package.json"
         ).read_text(encoding="utf-8")
     )
     (worker / "package.json").write_text(
@@ -1452,6 +1460,7 @@ def test_real_wrapper_from_package_cwd_rejects_unmerged_before_wrangler(
             {
                 "name": source_package["name"],
                 "private": True,
+                "devDependencies": {"wrangler": "4.125.0"},
                 "scripts": {"deploy": source_package["scripts"]["deploy"]},
             },
             indent=2,
@@ -1518,51 +1527,291 @@ exit 99
     assert not sentinel.exists()
 
 
-def _provenance_runner(
+_ACCOUNT = manifest_module.PROJECT_ACCOUNT_ID
+_TOKEN = "synthetic-bearer-token"
+_VERSION_ID = "9d40fa96-e5c6-409e-b7bd-d66a3877afb2"
+_MODULE_BODY = b"export default {fetch(){return new Response('ok')}};\n"
+_LATEST_BODY = _MODULE_BODY + b"// latest-upload\n"
+
+
+def _module_digest(body: bytes) -> str:
+    return "sha256:" + hashlib.sha256(body).hexdigest()
+
+
+def _upload_bundle(*, body: bytes = _MODULE_BODY) -> bytes:
+    metadata = {"main_module": "index.js"}
+    boundary = "----formdata-test-boundary"
+    return b"".join(
+        (
+            f"--{boundary}\r\n".encode("ascii"),
+            b'Content-Disposition: form-data; name="metadata"\r\n\r\n',
+            json.dumps(metadata).encode("utf-8"),
+            b"\r\n",
+            f"--{boundary}\r\n".encode("ascii"),
+            (
+                b'Content-Disposition: form-data; name="index.js"; '
+                b'filename="index.js"\r\n'
+                b"Content-Type: application/javascript+module\r\n\r\n"
+            ),
+            body,
+            b"\r\n",
+            f"--{boundary}--\r\n".encode("ascii"),
+        )
+    )
+
+
+def _version_modules_envelope(*, version_id: str, body: bytes) -> bytes:
+    return json.dumps(
+        {
+            "success": True,
+            "errors": [],
+            "result": {
+                "id": version_id,
+                "main_module": "index.js",
+                "modules": [
+                    {
+                        "name": "index.js",
+                        "content_type": "application/javascript+module",
+                        "content_base64": base64.b64encode(body).decode("ascii"),
+                    }
+                ],
+            },
+        }
+    ).encode("utf-8")
+
+
+class _FakeHttp:
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+
+    def read(self, _limit: int) -> bytes:
+        return self._payload
+
+    def __enter__(self) -> "_FakeHttp":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+
+def _write_fake_pinned_wrangler(
+    root: Path, *, version: str = "4.125.0", entrypoint: bool = True
+) -> Path:
+    package = root / "node_modules" / "wrangler"
+    bin_dir = package / "bin"
+    bin_dir.mkdir(parents=True)
+    entry = bin_dir / "wrangler.js"
+    entry.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    entry.chmod(0o755)
+    (package / "package.json").write_text(
+        json.dumps({"name": "wrangler", "version": version}) + "\n",
+        encoding="utf-8",
+    )
+    shim = root / "node_modules" / ".bin" / "wrangler"
+    shim.parent.mkdir(parents=True, exist_ok=True)
+    if entrypoint:
+        shim.symlink_to(entry)
+    else:
+        shim.write_text("#!/bin/sh\nprintf '4.125.0\\n'\n", encoding="utf-8")
+        shim.chmod(0o755)
+    return shim
+
+
+def _git_ok(
+    argv: tuple[str, ...], *, sha: str = _DEPLOY_SHA
+) -> subprocess.CompletedProcess[str] | None:
+    if argv == ("git", "rev-parse", "HEAD"):
+        return subprocess.CompletedProcess(argv, 0, sha + "\n", "")
+    if argv == ("git", "remote", "get-url", "origin"):
+        return subprocess.CompletedProcess(argv, 0, _OFFICIAL_ORIGIN + "\n", "")
+    if argv == (
+        "git",
+        "rev-parse",
+        "--verify",
+        "refs/remotes/origin/main^{commit}",
+    ):
+        return subprocess.CompletedProcess(argv, 0, sha + "\n", "")
+    if argv[:4] == ("git", "ls-remote", "--exit-code", "--refs"):
+        return subprocess.CompletedProcess(argv, 0, f"{sha}\trefs/heads/main\n", "")
+    return None
+
+
+def _canonical_runner(
     *,
-    origin_url: str,
-    origin_main: str,
-    remote_main: str,
-    allow_wrangler: bool,
-) -> tuple[Any, list[tuple[str, ...]]]:
-    calls: list[tuple[str, ...]] = []
+    executable: str,
+    body: bytes = _MODULE_BODY,
+    live_body: bytes | None = None,
+    latest_body: bytes = _LATEST_BODY,
+    status_payloads: list[str] | None = None,
+    version_payloads: list[str] | None = None,
+    whoami_account: str | None = None,
+    final_sha: str | None = None,
+) -> Any:
+    status_index = 0
+    version_index = 0
+    git_heads = 0
+    live_body = body if live_body is None else live_body
+    statuses = status_payloads or [_raw_status_payload()]
+    versions = version_payloads or [_version_view_payload(sha=_DEPLOY_SHA)]
+    account = whoami_account or _ACCOUNT
+    urls: list[str] = []
+    calls: list[dict[str, Any]] = []
 
     def runner(command, **kwargs):
+        nonlocal status_index, version_index, git_heads
         argv = tuple(command)
-        calls.append(argv)
-        if argv[:1] == ("wrangler",) or argv[:1] == ("npx",):
-            if not allow_wrangler:
-                raise AssertionError(f"wrangler ran before provenance: {argv}")
-            if argv[1:3] == ("deployments", "status"):
-                return subprocess.CompletedProcess(
-                    argv, 0, _raw_status_payload(), ""
-                )
-            if argv[1:3] == ("versions", "view"):
-                return subprocess.CompletedProcess(
-                    argv,
-                    0,
-                    _version_view_payload(version_id=argv[3], sha=_DEPLOY_SHA),
-                    "",
-                )
-            return subprocess.CompletedProcess(argv, 0, "", "")
+        calls.append({"argv": argv, "kwargs": dict(kwargs)})
         if argv == ("git", "rev-parse", "HEAD"):
-            return subprocess.CompletedProcess(argv, 0, _DEPLOY_SHA + "\n", "")
-        if argv == ("git", "remote", "get-url", "origin"):
-            return subprocess.CompletedProcess(argv, 0, origin_url + "\n", "")
-        if argv == (
-            "git",
-            "rev-parse",
-            "--verify",
-            "refs/remotes/origin/main^{commit}",
-        ):
-            return subprocess.CompletedProcess(argv, 0, origin_main + "\n", "")
-        if argv[:4] == ("git", "ls-remote", "--exit-code", "--refs"):
+            git_heads += 1
+        git = _git_ok(
+            argv,
+            sha=final_sha if final_sha is not None and git_heads >= 2 else _DEPLOY_SHA,
+        )
+        if git is not None:
+            return git
+        if argv and argv[0] != executable:
+            raise AssertionError(argv)
+        if argv[1:3] == ("auth", "token"):
             return subprocess.CompletedProcess(
-                argv, 0, f"{remote_main}\trefs/heads/main\n", ""
+                argv, 0, json.dumps({"type": "api_token", "token": _TOKEN}), ""
             )
+        if argv[1] == "whoami":
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps(
+                    {"loggedIn": True, "accounts": [{"id": account, "name": "quant"}]}
+                ),
+                "",
+            )
+        if argv[1] == "deploy" and "--dry-run" in argv:
+            Path(argv[argv.index("--outfile") + 1]).write_bytes(_upload_bundle(body=body))
+            assert "--experimental-new-config" not in argv
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if argv[1] == "deploy":
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if argv[1:3] == ("deployments", "status"):
+            payload = statuses[min(status_index, len(statuses) - 1)]
+            status_index += 1
+            return subprocess.CompletedProcess(argv, 0, payload, "")
+        if argv[1:3] == ("versions", "view"):
+            payload = versions[min(version_index, len(versions) - 1)]
+            version_index += 1
+            return subprocess.CompletedProcess(argv, 0, payload, "")
         raise AssertionError(argv)
 
-    return runner, calls
+    def opener(request: Request, timeout: int = 30) -> _FakeHttp:
+        url = request.full_url
+        urls.append(url)
+        payload_body = latest_body if "latest" in url else live_body
+        if _VERSION_ID in url:
+            payload_body = live_body
+        return _FakeHttp(
+            _version_modules_envelope(version_id=_VERSION_ID, body=payload_body)
+        )
+
+    runner.opener = opener  # type: ignore[attr-defined]
+    runner.calls = calls  # type: ignore[attr-defined]
+    runner.urls = urls  # type: ignore[attr-defined]
+    return runner
+
+
+def _prepare_pin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    layout = tmp_path / "pin-layout"
+    shim = _write_fake_pinned_wrangler(layout)
+    original = manifest_module._require_pinned_local_wrangler
+    monkeypatch.setattr(
+        manifest_module,
+        "_require_pinned_local_wrangler",
+        lambda _directory: original(layout),
+    )
+    return str(shim)
+
+
+def _official_main(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "scripts.receipt_authority_pending_gate._require_exact_clean_source",
+        lambda _sha: None,
+    )
+
+
+_SENTINEL_SECRET = "fake-sentinel-secret-must-not-leak"
+
+
+def _wrangler_argvs(runner: Any, executable: str) -> list[tuple[str, ...]]:
+    return [
+        row["argv"]
+        for row in runner.calls
+        if row["argv"] and row["argv"][0] == executable
+    ]
+
+
+def _assert_canonical_child_isolation(
+    runner: Any,
+    *,
+    worker: str,
+    executable: str,
+    config: str,
+    environment_args: tuple[str, ...],
+) -> None:
+    worker_cwd = str(manifest_module.WORKER_ROOT / worker)
+    wrangler = [
+        row for row in runner.calls if row["argv"] and row["argv"][0] == executable
+    ]
+    dry_run = next(
+        row
+        for row in wrangler
+        if row["argv"][1] == "deploy" and "--dry-run" in row["argv"]
+    )
+    mutate = next(
+        row
+        for row in wrangler
+        if row["argv"][1] == "deploy" and "--dry-run" not in row["argv"]
+    )
+    authenticated = [
+        row
+        for row in wrangler
+        if row["argv"][1] in {"whoami", "deploy"}
+        or row["argv"][1:3] in {("deployments", "status"), ("versions", "view")}
+    ]
+    for row in wrangler:
+        assert row["kwargs"].get("cwd") == worker_cwd
+    assert dry_run["argv"][dry_run["argv"].index("--config") + 1] == config
+    mutate_args = mutate["argv"]
+    assert mutate_args[mutate_args.index("--config") + 1] == config
+    if environment_args:
+        assert mutate_args[-len(environment_args) :] == environment_args
+    else:
+        assert "--env" not in mutate_args
+    build_env = dry_run["kwargs"]["env"]
+    assert "CLOUDFLARE_API_TOKEN" not in build_env
+    assert "CLOUDFLARE_ACCOUNT_ID" not in build_env
+    assert _SENTINEL_SECRET not in build_env.values()
+    assert "AWS_SECRET_ACCESS_KEY" not in build_env
+    for row in authenticated:
+        if row is dry_run:
+            continue
+        env = row["kwargs"]["env"]
+        assert env["CLOUDFLARE_ACCOUNT_ID"] == _ACCOUNT
+        assert env["CLOUDFLARE_API_TOKEN"] == _TOKEN
+        assert _SENTINEL_SECRET not in env.values()
+        assert "AWS_SECRET_ACCESS_KEY" not in env
+
+
+def test_pinned_wrangler_requires_package_entrypoint_and_installed_version(
+    tmp_path: Path,
+) -> None:
+    layout = tmp_path / "good"
+    _write_fake_pinned_wrangler(layout)
+    assert manifest_module._require_pinned_local_wrangler(layout).endswith("wrangler")
+    wrong = tmp_path / "wrong"
+    _write_fake_pinned_wrangler(wrong, entrypoint=False)
+    with pytest.raises(ValueError, match="package entrypoint"):
+        manifest_module._require_pinned_local_wrangler(wrong)
+    drifted = tmp_path / "drifted"
+    _write_fake_pinned_wrangler(drifted, version="4.0.0")
+    with pytest.raises(ValueError, match="installed Wrangler pin is not exact"):
+        manifest_module._require_pinned_local_wrangler(drifted)
 
 
 @pytest.mark.parametrize(
@@ -1579,239 +1828,322 @@ def test_deploy_tagged_rejects_unofficial_or_stale_main_before_wrangler(
     origin_main: str,
     remote_main: str,
 ) -> None:
-    monkeypatch.setattr(
-        "scripts.receipt_authority_pending_gate._require_exact_clean_source",
-        lambda _sha: None,
-    )
-    runner, calls = _provenance_runner(
-        origin_url=origin_url,
-        origin_main=origin_main,
-        remote_main=remote_main,
-        allow_wrangler=False,
-    )
-    with pytest.raises(ValueError, match="current clean official origin/main"):
-        manifest_module.deploy_tagged(
-            config="wrangler.toml", environment="production", runner=runner
-        )
-    assert all(call[:1] != ("wrangler",) for call in calls)
-
-
-def test_deploy_tagged_uses_call_time_subprocess_run_for_official_main(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "scripts.receipt_authority_pending_gate._require_exact_clean_source",
-        lambda _sha: None,
-    )
-    runner, calls = _provenance_runner(
-        origin_url=_OFFICIAL_ORIGIN,
-        origin_main=_DEPLOY_SHA,
-        remote_main=_DEPLOY_SHA,
-        allow_wrangler=True,
-    )
-    monkeypatch.setattr(manifest_module.subprocess, "run", runner)
-    manifest_module.deploy_tagged(config="wrangler.toml", environment="production")
-    assert (
-        "wrangler",
-        "deploy",
-        "--config",
-        "wrangler.toml",
-        "--tag",
-        _DEPLOY_SHA,
-        "--message",
-        _DEPLOY_SHA,
-        "--env",
-        "production",
-    ) in calls
-    assert any(call[:3] == ("git", "ls-remote", "--exit-code") for call in calls)
-    wrangler = [call for call in calls if call[:1] == ("wrangler",)]
-    assert wrangler[0][:2] == ("wrangler", "deploy")
-    assert wrangler[1] == (
-        "wrangler",
-        "deployments",
-        "status",
-        "--config",
-        "wrangler.toml",
-        "--json",
-        "--env",
-        "production",
-    )
-    assert wrangler[2] == (
-        "wrangler",
-        "versions",
-        "view",
-        "9d40fa96-e5c6-409e-b7bd-d66a3877afb2",
-        "--config",
-        "wrangler.toml",
-        "--json",
-        "--env",
-        "production",
-    )
-    assert wrangler[3] == wrangler[1]
-
-
-def _readback_runner(
-    *,
-    status_payloads: list[str],
-    version_payload: str | None,
-    version_rc: int = 0,
-    config: str,
-    environment: str,
-) -> tuple[Any, list[tuple[str, ...]]]:
+    _official_main(monkeypatch)
     calls: list[tuple[str, ...]] = []
-    status_index = 0
 
-    def runner(command, **kwargs):
-        nonlocal status_index
+    def runner(command, **_kwargs):
         argv = tuple(command)
         calls.append(argv)
         if argv == ("git", "rev-parse", "HEAD"):
             return subprocess.CompletedProcess(argv, 0, _DEPLOY_SHA + "\n", "")
         if argv == ("git", "remote", "get-url", "origin"):
-            return subprocess.CompletedProcess(argv, 0, _OFFICIAL_ORIGIN + "\n", "")
+            return subprocess.CompletedProcess(argv, 0, origin_url + "\n", "")
         if argv == (
             "git",
             "rev-parse",
             "--verify",
             "refs/remotes/origin/main^{commit}",
         ):
-            return subprocess.CompletedProcess(argv, 0, _DEPLOY_SHA + "\n", "")
+            return subprocess.CompletedProcess(argv, 0, origin_main + "\n", "")
         if argv[:4] == ("git", "ls-remote", "--exit-code", "--refs"):
             return subprocess.CompletedProcess(
-                argv, 0, f"{_DEPLOY_SHA}\trefs/heads/main\n", ""
+                argv, 0, f"{remote_main}\trefs/heads/main\n", ""
             )
-        if argv[:1] != ("wrangler",):
-            raise AssertionError(argv)
-        if argv[1] == "deploy":
-            return subprocess.CompletedProcess(argv, 0, "", "")
-        env_tail = ("--env", environment) if environment else ()
-        if argv[1:3] == ("deployments", "status"):
-            assert argv[3:] == ("--config", config, "--json", *env_tail)
-            payload = status_payloads[min(status_index, len(status_payloads) - 1)]
-            status_index += 1
-            return subprocess.CompletedProcess(argv, 0, payload, "")
-        if argv[1:3] == ("versions", "view"):
-            assert argv[4:] == ("--config", config, "--json", *env_tail)
-            return subprocess.CompletedProcess(
-                argv, version_rc, version_payload or "", ""
-            )
-        raise AssertionError(argv)
+        raise AssertionError(f"wrangler ran before provenance: {argv}")
 
-    return runner, calls
+    with pytest.raises(ValueError, match="current clean official origin/main"):
+        manifest_module.deploy_tagged(
+            worker="ingestion-premium",
+            environment="production",
+            runner=runner,
+            environ={"CLOUDFLARE_API_TOKEN": _TOKEN},
+        )
+    assert all("deploy" not in call for call in calls)
 
 
-def test_deploy_tagged_staging_empty_env_uses_same_config_on_status_and_view(
+def test_deploy_tagged_production_uses_pinned_executable_cwd_and_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _official_main(monkeypatch)
+    executable = _prepare_pin(tmp_path, monkeypatch)
+    runner = _canonical_runner(executable=executable)
+    result = manifest_module.deploy_tagged(
+        worker="ingestion-premium",
+        environment="production",
+        runner=runner,
+        opener=runner.opener,
+        environ={
+            "CLOUDFLARE_API_TOKEN": _TOKEN,
+            "PATH": os.environ.get("PATH", ""),
+            "AWS_SECRET_ACCESS_KEY": _SENTINEL_SECRET,
+        },
+    )
+    _assert_canonical_child_isolation(
+        runner,
+        worker="ingestion-premium",
+        executable=executable,
+        config="wrangler.toml",
+        environment_args=("--env", "production"),
+    )
+    wrangler = _wrangler_argvs(runner, executable)
+    view = [call for call in wrangler if call[1:3] == ("versions", "view")]
+    assert len(view) == 2
+    assert all(_VERSION_ID in url and "latest" not in url for url in runner.urls)
+    assert result["modules"][0]["digest"] == _module_digest(_MODULE_BODY)
+    assert '"result":"VERIFIED_EXACT_MODULE_BYTES"' in capsys.readouterr().out
+
+
+def test_deploy_tagged_staging_omits_env_selector(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        "scripts.receipt_authority_pending_gate._require_exact_clean_source",
-        lambda _sha: None,
-    )
-    version_id = "9d40fa96-e5c6-409e-b7bd-d66a3877afb2"
-    runner, calls = _readback_runner(
-        status_payloads=[_raw_status_payload()],
-        version_payload=_version_view_payload(
-            version_id=version_id, sha=_DEPLOY_SHA
-        ),
-        config="wrangler.staging.toml",
-        environment="",
-    )
+    _official_main(monkeypatch)
+    executable = _prepare_pin(tmp_path, monkeypatch)
+    runner = _canonical_runner(executable=executable)
     manifest_module.deploy_tagged(
-        config="wrangler.staging.toml", environment="", runner=runner
+        worker="ingestion-premium",
+        environment="staging",
+        runner=runner,
+        opener=runner.opener,
+        environ={"CLOUDFLARE_API_TOKEN": _TOKEN, "PATH": os.environ.get("PATH", "")},
     )
-    wrangler = [call for call in calls if call[:1] == ("wrangler",)]
-    assert wrangler[0] == (
-        "wrangler",
-        "deploy",
-        "--config",
-        "wrangler.staging.toml",
-        "--tag",
-        _DEPLOY_SHA,
-        "--message",
-        _DEPLOY_SHA,
+    wrangler = _wrangler_argvs(runner, executable)
+    deploy = next(
+        call for call in wrangler if call[1] == "deploy" and "--dry-run" not in call
     )
-    assert wrangler[1] == (
-        "wrangler",
-        "deployments",
-        "status",
-        "--config",
-        "wrangler.staging.toml",
-        "--json",
+    assert "wrangler.staging.toml" in deploy
+    assert "--env" not in deploy
+    assert all(
+        "--env" not in call
+        for call in wrangler
+        if call[1:3] == ("deployments", "status")
     )
-    assert wrangler[2] == (
-        "wrangler",
-        "versions",
-        "view",
-        version_id,
-        "--config",
-        "wrangler.staging.toml",
-        "--json",
-    )
-    assert wrangler[3] == wrangler[1]
-    assert all("--env" not in call for call in wrangler)
 
 
 @pytest.mark.parametrize(
-    "status_payloads,version_payload,version_rc,match",
+    "worker,match",
+    (
+        ("ingestion-jsda", "specialized or PENDING"),
+        ("ingestion-secrets", "specialized or PENDING"),
+        ("research-mass-eval", "Container image"),
+    ),
+)
+def test_deploy_tagged_rejects_specialized_pending_and_mass_before_mutation(
+    worker: str,
+    match: str,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def runner(command, **_kwargs):
+        calls.append(tuple(command))
+        raise AssertionError(command)
+
+    with pytest.raises(ValueError, match=match):
+        manifest_module.deploy_tagged(
+            worker=worker,
+            environment="production",
+            runner=runner,
+            environ={"CLOUDFLARE_API_TOKEN": _TOKEN},
+        )
+    assert calls == []
+
+
+def test_deploy_tagged_requires_quant_ops_gate_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts.predeploy_ops_projection_gate import PredeployGateError
+
+    _official_main(monkeypatch)
+    executable = _prepare_pin(tmp_path, monkeypatch)
+    invoked = {"gate": 0}
+
+    def gate(environment: str, **_kwargs: object) -> dict[str, object]:
+        invoked["gate"] += 1
+        raise PredeployGateError("projection is not SEALED")
+
+    monkeypatch.setattr(
+        "scripts.predeploy_ops_projection_gate.require_sealed_active_generation",
+        gate,
+    )
+    runner = _canonical_runner(executable=executable)
+    with pytest.raises(ValueError, match="ops projection predeploy gate failed"):
+        manifest_module.deploy_tagged(
+            worker="quant-ops-mcp",
+            environment="production",
+            runner=runner,
+            opener=runner.opener,
+            environ={"CLOUDFLARE_API_TOKEN": _TOKEN, "PATH": os.environ.get("PATH", "")},
+        )
+    assert invoked["gate"] == 1
+    assert not any(
+        call[1] == "deploy" and "--dry-run" not in call
+        for call in _wrangler_argvs(runner, executable)
+    )
+
+
+@pytest.mark.parametrize(
+    "environ,match",
     (
         (
-            [_raw_status_payload()],
-            _version_view_payload(version_id="other", sha=_DEPLOY_SHA),
-            0,
-            "does not match selected version",
+            {"CLOUDFLARE_API_TOKEN": _TOKEN, "CLOUDFLARE_ACCOUNT_ID": "0" * 32},
+            "approved project account",
         ),
         (
-            [_raw_status_payload()],
-            _version_view_payload(
-                annotations={"workers/message": _DEPLOY_SHA}
-            ),
-            0,
-            "exact merged SHA",
+            {"CLOUDFLARE_API_TOKEN": _TOKEN, "CF_ACCOUNT_ID": "0" * 32},
+            "approved project account",
         ),
         (
-            [_raw_status_payload()],
-            _version_view_payload(sha="b" * 40),
-            0,
-            "exact merged SHA",
-        ),
-        (
-            [_raw_status_payload()],
-            "",
-            1,
-            "could not observe selected version",
-        ),
-        (
-            [
-                _raw_status_payload(),
-                _raw_status_payload(
-                    deployment_id="switched",
-                ),
-            ],
-            _version_view_payload(sha=_DEPLOY_SHA),
-            0,
-            "changed during version read",
+            {
+                "CLOUDFLARE_API_TOKEN": _TOKEN,
+                "WRANGLER_CI_OVERRIDE_NAME": "quant-platform-rogue",
+            },
+            "WRANGLER_CI_OVERRIDE_NAME",
         ),
     ),
 )
-def test_deploy_tagged_readback_rejects_mismatch_fetch_failure_and_switch(
-    monkeypatch: pytest.MonkeyPatch,
-    status_payloads: list[str],
-    version_payload: str,
-    version_rc: int,
+def test_deploy_tagged_rejects_wrong_account_or_name_override(
+    environ: dict[str, str],
     match: str,
 ) -> None:
-    monkeypatch.setattr(
-        "scripts.receipt_authority_pending_gate._require_exact_clean_source",
-        lambda _sha: None,
-    )
-    runner, _calls = _readback_runner(
-        status_payloads=status_payloads,
-        version_payload=version_payload,
-        version_rc=version_rc,
-        config="wrangler.toml",
-        environment="production",
-    )
+    def runner(command, **_kwargs):
+        raise AssertionError(command)
+
     with pytest.raises(ValueError, match=match):
         manifest_module.deploy_tagged(
-            config="wrangler.toml", environment="production", runner=runner
+            worker="ingestion-premium",
+            environment="production",
+            runner=runner,
+            environ=environ,
         )
+
+
+def test_deploy_tagged_rejects_conflicting_tracked_account_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = manifest_module._load_toml
+
+    def load_toml(path: Path) -> dict[str, Any]:
+        data = original(path)
+        data["account_id"] = "0" * 32
+        return data
+
+    monkeypatch.setattr(manifest_module, "_load_toml", load_toml)
+
+    def runner(command, **_kwargs):
+        raise AssertionError(command)
+
+    with pytest.raises(ValueError, match="approved project account"):
+        manifest_module.deploy_tagged(
+            worker="ingestion-premium",
+            environment="production",
+            runner=runner,
+            environ={"CLOUDFLARE_API_TOKEN": _TOKEN},
+        )
+
+
+def test_deploy_tagged_rejects_module_mismatch_and_latest_confusion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _official_main(monkeypatch)
+    executable = _prepare_pin(tmp_path, monkeypatch)
+    runner = _canonical_runner(executable=executable, live_body=_LATEST_BODY)
+    with pytest.raises(ValueError, match="differs from the clean reviewed source build"):
+        manifest_module.deploy_tagged(
+            worker="ingestion-premium",
+            environment="production",
+            runner=runner,
+            opener=runner.opener,
+            environ={"CLOUDFLARE_API_TOKEN": _TOKEN, "PATH": os.environ.get("PATH", "")},
+        )
+    assert all("latest" not in url for url in runner.urls)
+
+
+def test_deploy_tagged_rejects_selected_deployment_and_version_provenance_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _official_main(monkeypatch)
+    executable = _prepare_pin(tmp_path, monkeypatch)
+    runner = _canonical_runner(
+        executable=executable,
+        status_payloads=[
+            _raw_status_payload(),
+            _raw_status_payload(deployment_id="switched"),
+        ],
+    )
+    with pytest.raises(ValueError, match="changed during version read"):
+        manifest_module.deploy_tagged(
+            worker="ingestion-premium",
+            environment="production",
+            runner=runner,
+            opener=runner.opener,
+            environ={"CLOUDFLARE_API_TOKEN": _TOKEN, "PATH": os.environ.get("PATH", "")},
+        )
+    runner = _canonical_runner(
+        executable=executable,
+        version_payloads=[
+            _version_view_payload(sha=_DEPLOY_SHA),
+            _version_view_payload(
+                sha=_DEPLOY_SHA,
+                annotations={
+                    "workers/tag": _DEPLOY_SHA,
+                    "workers/message": _DEPLOY_SHA,
+                    "workers/triggered_by": "other",
+                },
+            ),
+        ],
+    )
+    with pytest.raises(ValueError, match="selected version changed during module read"):
+        manifest_module.deploy_tagged(
+            worker="ingestion-premium",
+            environment="production",
+            runner=runner,
+            opener=runner.opener,
+            environ={"CLOUDFLARE_API_TOKEN": _TOKEN, "PATH": os.environ.get("PATH", "")},
+        )
+
+
+def test_deploy_tagged_rechecks_source_and_redacts_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _official_main(monkeypatch)
+    executable = _prepare_pin(tmp_path, monkeypatch)
+    runner = _canonical_runner(executable=executable, final_sha="b" * 40)
+    with pytest.raises(ValueError, match="merged SHA changed during tagged deploy"):
+        manifest_module.deploy_tagged(
+            worker="ingestion-premium",
+            environment="production",
+            runner=runner,
+            opener=runner.opener,
+            environ={"CLOUDFLARE_API_TOKEN": _TOKEN, "PATH": os.environ.get("PATH", "")},
+        )
+
+    def runner_fail(command, **_kwargs):
+        argv = tuple(command)
+        git = _git_ok(argv)
+        if git is not None:
+            return git
+        if argv and argv[0] == executable and argv[1:3] == ("auth", "token"):
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps({"type": "oauth", "token": "super-secret-oauth-token"}),
+                "",
+            )
+        if argv and argv[0] == executable and argv[1] == "whoami":
+            return subprocess.CompletedProcess(argv, 1, "", "auth failed")
+        raise AssertionError(argv)
+
+    with pytest.raises(ValueError) as excinfo:
+        manifest_module.deploy_tagged(
+            worker="ingestion-premium",
+            environment="production",
+            runner=runner_fail,
+            environ={"PATH": os.environ.get("PATH", "")},
+        )
+    assert "super-secret-oauth-token" not in str(excinfo.value)

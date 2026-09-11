@@ -321,12 +321,15 @@ def _chain_documents(
         }
         digest = "sha256:" + f"{ordinal:x}" * 64
         provenance[role] = {
-            "local_main_module": "index.js",
-            "local_main_module_digest": digest,
-            "local_main_module_bytes": 100 + ordinal,
-            "live_main_module": "src/index.js",
-            "live_main_module_digest": digest,
-            "live_main_module_bytes": 100 + ordinal,
+            "main_module": "index.js",
+            "modules": [
+                {
+                    "name": "index.js",
+                    "content_type": "application/javascript+module",
+                    "bytes": 100 + ordinal,
+                    "digest": digest,
+                }
+            ],
         }
     return deployments, versions, public, provenance
 
@@ -653,7 +656,7 @@ def test_exact_audit_only_transition_uses_real_signature_and_separate_digests(
 ) -> None:
     evidence = _evidence(tmp_path)
     result = _validate(evidence)
-    assert result["format"] == "receipt-authority-staging-active-transition/v3"
+    assert result["format"] == "receipt-authority-staging-active-transition/v4"
     assert result["authority_mode"] == "ACTIVE"
     assert result["eligibility"] == "AUDIT_ONLY"
     assert result["research_eligible"] is False
