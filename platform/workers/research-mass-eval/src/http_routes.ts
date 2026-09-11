@@ -1,21 +1,14 @@
 /// <reference types="@cloudflare/workers-types" />
 
-import {
-  netsOnlyGate,
-  researchCapabilities,
-  requireCapability,
-} from "./capabilities";
+import { researchCapabilities } from "./capabilities";
 import {
   authorized,
-  freezePayload,
   isObject,
   json,
   putChildrenThenManifest,
   readBoundedJson,
   readBoundedRequestBytes,
 } from "./http";
-import { parseRequest } from "./parse_request";
-import { runProposeThesis } from "./propose_thesis";
 import {
   PERSONAL_RESEARCH_MAX_CONCURRENT_JOBS,
   isPersonalResearchJobId,
@@ -64,7 +57,7 @@ import {
   personalOptionSidecarJobIdFromPath,
   type PersonalOptionSidecarProduceRequest,
 } from "./personal_option_sidecar_producer_contract";
-import type { Env, MassEvalJobResult, MassEvalRequest } from "./types";
+import type { Env } from "./types";
 import {
   controlledPilotStatus,
   submitControlledPilot,
@@ -74,11 +67,6 @@ import { CONTROLLED_PILOT_KEY_PREFIX } from "./controlled_pilot_contract";
 export const CONTROLLED_PILOT_MAX_REQUEST_BYTES = 8 * 1024;
 
 export type MassEvalFetchHandlers = {
-  runMassEval: (env: Env, req: MassEvalRequest) => Promise<MassEvalJobResult>;
-  runDailyPath: (
-    env: Env,
-    req: MassEvalRequest,
-  ) => Promise<Record<string, unknown>>;
   submitPersonalResearch?: (
     env: Env,
     request: PersonalResearchRequest,
@@ -603,172 +591,29 @@ export async function dispatchMassEvalFetch(
     });
   }
 
-  if (url.pathname === "/v1/mass-eval") {
+  if (
+    url.pathname === "/v1/mass-eval" ||
+    url.pathname === "/v1/daily-path" ||
+    url.pathname === "/v1/propose-thesis"
+  ) {
     if (request.method !== "POST") {
       return json({ error: "POST required" }, 405);
     }
     if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
       return json({ error: "unauthorized" }, 401);
     }
-    const massCaps = researchCapabilities(env);
-    const massGate = requireCapability("mass_screen", massCaps);
-    if (!massGate.allowed) {
-      return json(
-        {
-          ok: false,
-          error: "capability_missing",
-          capability: "mass_screen",
-          reasons: massGate.reasons,
-          go: false,
-          not_a_pass: true,
-        },
-        403,
-      );
-    }
-    if (!env.STRUCTURED_BUCKET) {
-      return json({ error: "STRUCTURED_BUCKET not bound" }, 500);
-    }
-
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      return json({ error: "invalid JSON body" }, 400);
-    }
-
-    const parsed = parseRequest(body);
-    if (!parsed.ok) {
-      return json({ error: parsed.error }, 400);
-    }
-    const netsGate = netsOnlyGate(parsed.value.mode, env, massGate.allowed);
-    if (!netsGate.allowed) {
-      return json(
-        {
-          ok: false,
-          error: "nets_only_denied",
-          capability: "mass_screen",
-          reasons: netsGate.reasons,
-          go: false,
-          not_a_pass: true,
-        },
-        403,
-      );
-    }
-
-    try {
-      const result = await handlers.runMassEval(env, parsed.value);
-      return json({
-        ok: true,
-        ...result,
-      });
-    } catch (e) {
-      const code = (e as { code?: string }).code;
-      if (code === "artifact_conflict") {
-        return json(
-          {
-            ok: false,
-            error: "artifact_conflict",
-            job_id: parsed.value.job_id,
-            go: false,
-            not_a_pass: true,
-          },
-          409,
-        );
-      }
-      const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-      return json(
-        {
-          ok: false,
-          error: "mass_eval_failed",
-          detail: msg,
-          freezes: freezePayload(env),
-        },
-        500,
-      );
-    }
-  }
-
-  if (url.pathname === "/v1/daily-path") {
-    if (request.method !== "POST") {
-      return json({ error: "POST required" }, 405);
-    }
-    if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
-      return json({ error: "unauthorized" }, 401);
-    }
-    const pathCaps = researchCapabilities(env);
-    const pathGate = requireCapability("mass_screen", pathCaps);
-    if (!pathGate.allowed) {
-      return json(
-        {
-          ok: false,
-          error: "capability_missing",
-          capability: "mass_screen",
-          reasons: pathGate.reasons,
-          go: false,
-          not_a_pass: true,
-        },
-        403,
-      );
-    }
-    if (!env.STRUCTURED_BUCKET) {
-      return json({ error: "STRUCTURED_BUCKET not bound" }, 500);
-    }
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      return json({ error: "invalid JSON body" }, 400);
-    }
-    const parsed = parseRequest(body);
-    if (!parsed.ok) {
-      return json({ error: parsed.error }, 400);
-    }
-    const netsGate = netsOnlyGate(parsed.value.mode, env, pathGate.allowed);
-    if (!netsGate.allowed) {
-      return json(
-        {
-          ok: false,
-          error: "nets_only_denied",
-          capability: "mass_screen",
-          reasons: netsGate.reasons,
-          go: false,
-          not_a_pass: true,
-        },
-        403,
-      );
-    }
-    parsed.value.eval_kind = "daily_path";
-    if ((body as { write_artifacts?: boolean }).write_artifacts !== true) {
-      parsed.value.write_artifacts = false;
-    }
-    try {
-      const result = await handlers.runDailyPath(env, parsed.value);
-      if (result.artifact_conflict === true) {
-        return json(
-          {
-            ok: false,
-            error: "artifact_conflict",
-            job_id: parsed.value.job_id,
-            r2_keys: result.r2_keys,
-            go: false,
-            not_a_pass: true,
-          },
-          409,
-        );
-      }
-      return json({ ok: true, ...result });
-    } catch (e) {
-      const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-      return json(
-        {
-          ok: false,
-          error: "daily_path_failed",
-          detail: msg,
-          freezes: freezePayload(env),
-        },
-        500,
-      );
-    }
+    return json(
+      {
+        ok: false,
+        error: "capability_missing",
+        capability:
+          url.pathname === "/v1/propose-thesis" ? "generation" : "mass_screen",
+        reasons: researchCapabilities(env).reasons,
+        go: false,
+        not_a_pass: true,
+      },
+      403,
+    );
   }
 
   if (url.pathname === "/v1/children-then-manifest") {
@@ -860,68 +705,6 @@ export async function dispatchMassEvalFetch(
       },
       status,
     );
-  }
-
-  if (url.pathname === "/v1/propose-thesis") {
-    if (request.method !== "POST") {
-      return json({ error: "POST required" }, 405);
-    }
-    if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
-      return json({ error: "unauthorized" }, 401);
-    }
-    const genCaps = researchCapabilities(env);
-    const genGate = requireCapability("generation", genCaps);
-    if (!genGate.allowed) {
-      return json(
-        {
-          ok: false,
-          error: "capability_missing",
-          capability: "generation",
-          reasons: genGate.reasons,
-          go: false,
-          not_a_pass: true,
-        },
-        403,
-      );
-    }
-    let body: unknown = {};
-    const text = await request.text();
-    if (text.trim()) {
-      try {
-        body = JSON.parse(text);
-      } catch {
-        return json({ error: "invalid JSON body" }, 400);
-      }
-    }
-    if (text.trim() && !isObject(body)) {
-      return json({ error: "body must be JSON object" }, 400);
-    }
-    const obj = isObject(body) ? body : {};
-    try {
-      const result = await runProposeThesis(env, obj);
-      // llm_failed is fail-closed success-of-contract (HTTP 200, ok:false).
-      const status =
-        result.error === "window_tweak_only_forbidden" ||
-        result.error === "job_id required for write_artifacts" ||
-        result.error === "STRUCTURED_BUCKET not bound"
-          ? 400
-          : 200;
-      return json(result, status);
-    } catch (e) {
-      const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-      return json(
-        {
-          ok: false,
-          error: "propose_thesis_failed",
-          detail: msg,
-          auto_inject: false,
-          go: false,
-          not_a_pass: true,
-          freezes: freezePayload(env),
-        },
-        500,
-      );
-    }
   }
 
   return json({ error: "not found", path: url.pathname }, 404);

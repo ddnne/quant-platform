@@ -22,11 +22,6 @@ function env(): Env {
   } as Env;
 }
 
-const massHandlers = {
-  runMassEval: vi.fn(),
-  runDailyPath: vi.fn(),
-};
-
 describe("personal research HTTP route", () => {
   it("is token gated before parsing or Container dispatch", async () => {
     const submit = vi.fn();
@@ -36,7 +31,7 @@ describe("personal research HTTP route", () => {
         body: JSON.stringify(BODY),
       }),
       env(),
-      { ...massHandlers, submitPersonalResearch: submit },
+      { submitPersonalResearch: submit },
     );
     expect(response.status).toBe(401);
     expect(submit).not.toHaveBeenCalled();
@@ -54,7 +49,7 @@ describe("personal research HTTP route", () => {
         body: JSON.stringify(BODY),
       }),
       env(),
-      { ...massHandlers, submitPersonalResearch: submit },
+      { submitPersonalResearch: submit },
     );
     expect(response.status).toBe(202);
     expect(submit).toHaveBeenCalledWith(
@@ -80,7 +75,7 @@ describe("personal research HTTP route", () => {
         body: JSON.stringify(body),
       }),
       env(),
-      { ...massHandlers, submitPersonalResearch: submit },
+      { submitPersonalResearch: submit },
     );
     expect(response.status).toBe(202);
     expect(submit).toHaveBeenCalledWith(
@@ -103,7 +98,7 @@ describe("personal snapshot and batch HTTP routes", () => {
         }),
       }),
       env(),
-      { ...massHandlers, submitPersonalSnapshotBuild: submit },
+      { submitPersonalSnapshotBuild: submit },
     );
     expect(response.status).toBe(401);
     expect(submit).not.toHaveBeenCalled();
@@ -123,7 +118,7 @@ describe("personal snapshot and batch HTTP routes", () => {
         body: oversized,
       }),
       env(),
-      { ...massHandlers, submitPersonalSnapshotBuild: submit },
+      { submitPersonalSnapshotBuild: submit },
     );
     expect(tooBig.status).toBe(413);
     const chunked = await dispatchMassEvalFetch(
@@ -144,7 +139,7 @@ describe("personal snapshot and batch HTTP routes", () => {
         },
       } as unknown as Request,
       env(),
-      { ...massHandlers, submitPersonalSnapshotBuild: submit },
+      { submitPersonalSnapshotBuild: submit },
     );
     expect(chunked.status).toBe(400);
     expect(submit).not.toHaveBeenCalled();
@@ -168,7 +163,7 @@ describe("personal snapshot and batch HTTP routes", () => {
         body,
       }),
       env(),
-      { ...massHandlers, submitPersonalResearchJobs: submit },
+      { submitPersonalResearchJobs: submit },
     );
     expect(response.status).toBe(400);
     expect(submit).not.toHaveBeenCalled();

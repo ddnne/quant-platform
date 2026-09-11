@@ -184,7 +184,7 @@ describe("Evaluation IR golden vectors", () => {
     expect(() => decodeEvaluationIR(forged)).toThrow(/job_candidate_grade/);
   });
 
-  it("encode candidate is jobCandidateGrade; daily-path payload uses IR candidate", () => {
+  it("encode candidate is jobCandidateGrade", () => {
     const complete = {
       n_expected: 4,
       n_cells: 4,
@@ -199,16 +199,6 @@ describe("Evaluation IR golden vectors", () => {
     expect(encodeEvaluationIR(partial).candidate).toBe(
       jobCandidateGrade(partial),
     );
-    // index.ts runDailyPath: candidate_grade = encodeEvaluationIR(...).candidate
-    const src = readFileSync(
-      join(dirname(fileURLToPath(import.meta.url)), "index.ts"),
-      "utf8",
-    );
-    const daily = src.slice(src.indexOf("async function runDailyPath"));
-    expect(daily).toContain("encodeEvaluationIR");
-    expect(daily).toContain("candidate_grade: evaluation_ir.candidate");
-    expect(daily).not.toMatch(/candidate_grade:\s*jobCandidateGrade/);
-    expect(src).toMatch(/screen_kind: "period_net"[\s\S]*candidate_grade: false/);
   });
 
   it("loads every encoder-owned golden.jsonl row from src/", () => {

@@ -973,8 +973,6 @@ describe("POST /v1/personal-vol-am-pm-research", () => {
         STRUCTURED_BUCKET: {} as R2Bucket,
       } as Env,
       {
-        runMassEval: noopMass,
-        runDailyPath: noopMass,
         runPersonalVolResearch: async () => {
           v2Calls += 1;
           return {};
@@ -1012,8 +1010,6 @@ describe("POST /v1/personal-vol-am-pm-research", () => {
         READY_DECLARED: "false",
       } as Env,
       {
-        runMassEval: noopMass,
-        runDailyPath: noopMass,
         runPersonalVolResearch: noopMass,
         runPersonalVolAmPmResearch: async (_env, request) => {
           received = request;
