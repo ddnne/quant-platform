@@ -54,6 +54,7 @@ def test_canonical_json_matches_shared_ecmascript_number_vectors() -> None:
     assert canonical_json([0.45, 0.11, -0.45, 0.045]) == "[0.45,0.11,-0.45,0.045]"
 
 
+@pytest.mark.toolchain
 def test_python_and_worker_share_canonical_identity_and_availability_semantics():
     document = json.loads(CONTRACT.read_text(encoding="utf-8"))
     by_id = {item["dataset_id"]: item for item in document["datasets"]}

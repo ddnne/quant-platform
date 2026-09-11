@@ -116,14 +116,21 @@ if [[ "${#WORKERS[@]}" -eq 0 ]]; then
   echo "active Worker inventory is empty" >&2
   exit 1
 fi
+echo "==> Cloudflare canonical D1 migration manifest"
+"$py" scripts/cloudflare_d1_migration_manifest.py
+
+echo "==> python pytest (2 workers, file-scoped scheduling)"
+# Workers Builds has a bounded build window. Keep complete tests/ collection
+# while using the two build CPUs; file-scoped scheduling avoids splitting tests
+# from the same module across processes. Documented offline selection excludes
+# tests that require actual Node/npm.
+"$py" -m pytest -n 2 --dist=loadfile -m "not toolchain and not live" tests/
+
 if ! command -v npm >/dev/null 2>&1; then
   echo "npm not found" >&2
   exit 1
 fi
 
-# Python integration tests exercise the repository-pinned Wrangler boundary.
-# Install every active Worker's locked graph before pytest, once, and reuse it
-# for the bounded Worker runtime/typecheck/dry-run lanes below.
 ci_log_dir="$(mktemp -d "${TMPDIR:-/tmp}/quant-platform-ci.XXXXXX")"
 trap 'rm -rf -- "$ci_log_dir"' EXIT
 
@@ -156,14 +163,8 @@ if ! bash "$ROOT/scripts/ci_bounded_jobs.sh" 2 "$ci_log_dir" "install-" \
   exit 1
 fi
 
-echo "==> Cloudflare canonical D1 migration manifest"
-"$py" scripts/cloudflare_d1_migration_manifest.py
-
-echo "==> python pytest (2 workers, file-scoped scheduling)"
-# Workers Builds has a bounded build window. Keep complete test coverage while
-# using the two build CPUs; file-scoped scheduling avoids splitting tests from
-# the same module across processes.
-"$py" -m pytest -n 2 --dist=loadfile tests/
+echo "==> python pytest toolchain (2 workers, file-scoped scheduling)"
+"$py" -m pytest -n 2 --dist=loadfile -m "toolchain and not live" tests/
 
 
 # Evaluation IR generated-artifact drift, independent Draft7 schema

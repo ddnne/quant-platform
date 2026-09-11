@@ -935,13 +935,16 @@ def fail(msg):
     raise SystemExit(f"unknown ci stub call: {msg}")
 def record(argv):
     cwd = Path.cwd()
-    key = cwd.name if (cwd / "package.json").is_file() else f"root-{os.getpid()}"
     env = {k: os.environ.get(k) for k in (
         "WRANGLER_CI_OVERRIDE_NAME", "WORKERS_CI",
         "WRANGLER_CI_MATCH_TAG", "CLOUDFLARE_ENV")}
-    path = Path(os.environ["CI_STUB_LOG_DIR"]) / f"{key}.jsonl"
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps({"command": argv, "cwd": str(cwd), "environment": env}) + "\n")
+    path = Path(os.environ["CI_STUB_LOG_DIR"]) / "commands.jsonl"
+    payload = (json.dumps({"command": argv, "cwd": str(cwd), "environment": env}) + "\n").encode()
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    try:
+        os.write(fd, payload)
+    finally:
+        os.close(fd)
 tool, args = Path(sys.argv[0]).name, sys.argv[1:]
 record([tool, *args])
 GATES = {
@@ -1075,8 +1078,7 @@ def test_authoritative_ci_dry_runs_test_harness_configs(
     )
     recs = [
         json.loads(line)
-        for path in sorted(log_dir.glob("*.jsonl"))
-        for line in path.read_text(encoding="utf-8").splitlines()
+        for line in (log_dir / "commands.jsonl").read_text(encoding="utf-8").splitlines()
         if line
     ]
 
@@ -1130,6 +1132,23 @@ def test_authoritative_ci_dry_runs_test_harness_configs(
             assert e["WRANGLER_CI_MATCH_TAG"] == "keep-fixture"
         if cmd[0] in ("uv", "git") or cmd[:2] == ["npm", "ci"]:
             assert e["WRANGLER_CI_OVERRIDE_NAME"] == "aggregator-fixture"
+    commands = [r["command"] for r in recs]
+    offline_pytest = [
+        "python", "-m", "pytest", "-n", "2", "--dist=loadfile",
+        "-m", "not toolchain and not live", "tests/",
+    ]
+    toolchain_pytest = [
+        "python", "-m", "pytest", "-n", "2", "--dist=loadfile",
+        "-m", "toolchain and not live", "tests/",
+    ]
+    pytest_invocations = [
+        cmd for cmd in commands if cmd[:3] == ["python", "-m", "pytest"]
+    ]
+    assert pytest_invocations == [offline_pytest, toolchain_pytest]
+    npm_ci = [i for i, cmd in enumerate(commands) if cmd == ["npm", "ci"]]
+    assert len(npm_ci) == 2
+    assert commands.index(offline_pytest) < min(npm_ci)
+    assert max(npm_ci) < commands.index(toolchain_pytest)
     git_recs = [r for r in recs if r["command"][0] == "git"]
     if fail_production:
         assert proc.returncode == 1, proc.stderr
@@ -1616,6 +1635,7 @@ def _host_npm_cli() -> tuple[Path, Path]:
     return real_node, real_npm
 
 
+@pytest.mark.toolchain
 def test_real_wrapper_from_package_cwd_rejects_unmerged_before_wrangler(
     tmp_path: Path,
 ) -> None:
