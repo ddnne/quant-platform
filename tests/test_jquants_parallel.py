@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pytest
@@ -103,36 +104,68 @@ def test_expand_jobs_no_range_single():
 
 
 def test_thread_safe_rate_limiter_spacing():
-    """Under concurrency, min interval is respected globally."""
-    times: list[float] = []
-    lock = threading.Lock()
-    rl = RateLimiter(0.05)
+    """Concurrent acquires share one global reservation schedule.
 
-    def worker():
-        for _ in range(3):
-            rl.acquire()
-            with lock:
-                times.append(time.monotonic())
+    Returned waits are reserved slot offsets, not vendor HTTP arrival
+    times. A stalled worker after acquire returns can delay the actual
+    request; this does not claim physical min-spacing of HTTP sends.
+    Sleep runs outside the reservation lock, so later callers can reserve
+    while earlier ones are still sleeping.
+    """
+    sleep_durations: list[float] = []
+    rec_lock = threading.Lock()
+    n_waiting = 0
+    all_waiting = threading.Event()
+    release = threading.Event()
 
-    threads = [threading.Thread(target=worker) for _ in range(4)]
-    t0 = time.monotonic()
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    times.sort()
-    # 12 acquires with 0.05s spacing → at least ~0.55s wall if serial slots
-    assert times[-1] - times[0] >= 0.05 * (len(times) - 1) * 0.85  # slack
-    # gaps between consecutive reserved times should be ~min_interval
-    gaps = [times[i + 1] - times[i] for i in range(len(times) - 1)]
-    assert min(gaps) >= 0.03  # allow scheduler jitter
+    def sleep(duration: float) -> None:
+        nonlocal n_waiting
+        with rec_lock:
+            sleep_durations.append(duration)
+            n_waiting += 1
+            if n_waiting >= 3:
+                all_waiting.set()
+        if not release.wait(timeout=5.0):
+            raise TimeoutError("sleeping acquire was not released")
+
+    rl = RateLimiter(0.05, clock=lambda: 0.0, sleep=sleep)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [pool.submit(rl.acquire) for _ in range(4)]
+        try:
+            entered = all_waiting.wait(timeout=5.0)
+        finally:
+            release.set()
+        assert entered, "deadlock: waiting acquires never entered sleep"
+        waits = [fut.result(timeout=5.0) for fut in futures]
+
+    assert sorted(waits) == pytest.approx([0.0, 0.05, 0.10, 0.15])
+    assert sorted(sleep_durations) == pytest.approx([0.05, 0.10, 0.15])
+    # Reuse is okay: clock is still 0 and the release Event is already set.
+    assert rl.acquire() == pytest.approx(0.20)
+    assert sleep_durations[-1] == pytest.approx(0.20)
 
 
 def test_run_parallel_faster_than_serial_with_rtt():
-    """With RTT simulation, parallel wall time < serial estimate."""
-    http = _FakeHttp()
-    http.delay = 0.05
-    # No rate limit so only RTT matters for the comparison.
+    """max_workers=4 overlaps HTTP gets; barrier is a deadlock guard.
+
+    Serial execution cannot fill a 4-party barrier. This is not a wall-time
+    oracle. Vendor params, client fetch, and the fake response path stay
+    unchanged. Overlap is concurrent get invocation, not physical HTTP
+    arrival spacing under RateLimiter.
+    """
+
+    class _BarrierHttp(_FakeHttp):
+        def __init__(self) -> None:
+            super().__init__()
+            self.delay = 0.0
+            self._barrier = threading.Barrier(4)
+
+        def get(self, url: str, *, headers=None, params=None, **kw):
+            self._barrier.wait(timeout=5.0)
+            return super().get(url, headers=headers, params=params, **kw)
+
+    http = _BarrierHttp()
     client = JQuantsClient(http, api_key="", rate_limiter=RateLimiter(0.0))
     jobs = [
         FetchJob("equities_bars_daily", {"from": "2020-01-01", "to": "2020-01-31"}),
@@ -140,13 +173,9 @@ def test_run_parallel_faster_than_serial_with_rtt():
         FetchJob("markets_calendar", {"from": "2020-01-01", "to": "2020-01-31"}),
         FetchJob("markets_calendar", {"from": "2020-02-01", "to": "2020-02-28"}),
     ]
-    t0 = time.monotonic()
     results = run_parallel(client, jobs, max_workers=4)
-    wall = time.monotonic() - t0
     assert all(r.ok for r in results)
     assert len(http.calls) == 4
-    # Serial would be ~4 * 0.05 = 0.20s; parallel should be clearly under that.
-    assert wall < 0.15
 
 
 def test_run_datasets_parallel_and_summary():
