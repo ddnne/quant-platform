@@ -2,7 +2,7 @@
   "schema": "quant-platform-work-ledger/v1",
   "baseline_sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
   "branch": "feat/receipt-event-checkpoint",
-  "updated_at": "2026-09-11T12:14:00Z",
+  "updated_at": "2026-09-11T12:36:54Z",
   "lanes": {
     "source_delivered": {
       "status": "partial_main_and_candidate",
@@ -204,7 +204,7 @@
     "7_dead_code_and_docs": {
       "status": "test_audit_execution_in_progress",
       "execution_ledger": "docs/operations/test_reduction_ledger.json",
-      "execution_summary": "First execution tranche implements17 of52 original findings plus additionalCI-A01/A02. Test code net410 lines removed,28 fewer static definitions, one duplicate test file removed; parameterized runtime case counts are different and are not an optimization target. All18 final affected/retained Python modules369 passed/14 existing fork warnings/16.72s. All6 affected Worker test/typecheck commands passed1107 cases. Each logical patch was authored by Grok, applied/verified by Codex and independently critically reviewed. Runtime-only mutation checks exposed and corrected one over-deletion. No product code changes in this tranche. Remaining35 conditional findings are explicitly pending in the portable ledger; not blanket-approved deletions. PR113 remains Draft and native final-SHA acceptance/Receipt concurrency regressions are separate from this test-reduction completion.",
+      "execution_summary": "Implemented 20 of 52 original findings plus CI-A01/A02. Test code: 285 lines added, 734 removed, net449 removed; 32 fewer static definitions and one duplicate test file removed. Final23 affected/retained Python modules:479 passed,14 existing fork warnings,21.80s. All6 affected Worker test/typecheck commands previously passed1107 cases; Worker code is unchanged since that verification. Exact c502a8e0 native check succeeded with full Python3670 passed/4 skipped and all active Worker lanes. Subsequent A03/C03/R06 and ledger changes need their own final-SHA check. Grok authored all test changes; Codex applied, verified and handled Git; independent critical reviewers accepted each logical patch. Runtime-only mutation exposed and corrected one over-deletion. No product changes in this tranche. Original32 conditional findings plus newly identified R06-F01 follow-up remain pending. PR113 remains Draft; Receipt acquisition concurrency regressions and rollout/READY/Pilot are separate gates.",
       "test_audit": "Baseline main1088c398 static inventory:393 test files plus2 support paths,2983 Python definitions and1115 Worker registrations, not expanded runtime cases. Main-authored candidate body/alternative review identified52 findings across100 files:13 direct-deletion groups covering22 definitions,7 assert reductions,23 consolidations,7 replacements and2 test-tier moves. Two independent critical reviews yielded9 guardrail corrections, incorporated before execution. User subsequently authorized implementation. The original inventory remains a baseline, not a claim that every candidate has been removed. Uncommitted branches are separate. No coverage-count target or bulk deletion.",
       "terminal_publication_test_reduction": {
         "status": "locally_verified_native_pending",
@@ -227,6 +227,33 @@
         "change": "Grok-authored11 test definition removals, plus redundant output assertions and internal spies, across11 test files:11 insertions/181 deletions. Retained known SHA vectors for each independent wrapper, actual status/body/cache/no-store, raw page and manifest saves, retry ranges/caps and MCP content-type matrix. No product source, dependency, auth, runtime harness or binding edits.",
         "verification": "Codex npm test and typecheck succeeded for all6 affected Workers:JSDA42 Node+62 workerd; Premium183+7; Secrets6+38+1 Service Binding harness; Gateway187+2 harness; Mass501+7; Ops59+11+1. Total1107 actual cases; all6 tsc checks passed. Existing Vite, experimental module-mock and SDK sourcemap warnings remain. Independent static review accepted diff12069a89b4e5f5fcca0c15819c04e9e442700ac19e9ba953a34e9b60709c83d1 with no actionable issue.",
         "dependency_reuse": "To avoid extra disk copies, six temporary node_modules links reused existing installs. Every locked package version/integrity in JSDA/Premium/Secrets/Gateway matched the Mass lock graph (161 entries); Mass/Ops lockfiles matched the reused checkout exactly. Temporary links removed afterward; shared installs preserved. This local verification is not fresh npm-ci/native final-SHA acceptance. No authentic market data or local Container backtest."
+      },
+      "second_test_reduction_tranche": {
+        "status": "locally_verified_new_native_required",
+        "audit_ids": [
+          "A03",
+          "C03",
+          "R06"
+        ],
+        "commits": [
+          "0294896f",
+          "4d388d5d",
+          "15f27d0a"
+        ],
+        "change": "Removed redundant historical counts, fixture self-checks and empty-list assertions; retained exact official publication dates and public CLI forwarding. Extended D07 to the refresh CLI argparse duplicate, without claiming C02 reader consolidation. Collapsed repeated scheduler refusal branches; real budget/artifact rejection, None/lookalike/unissued-service rejection and Mass stop remain. Replaced release acceptance current-OPEN dependency and fake error output with copied real shell/gate and controlled OPEN/CLOSED ledger.",
+        "verification": "A03/C03:55 passed in2.00s; independent accepted diff03f0bdf8331b73d8b3aaf08b347affc3ddc3ec617827d6b36c76a5e7903a1c9d. R06 plus finding tests:88 passed in6.66s; independent accepted diff56a91221fb8d77a3150a95aad54dc638f42f77eba0d89d50e189ae9a582f8871. Final combined23-module run479 passed/14 existing warnings/21.80s. No claimed speedup or flake-rate measurement.",
+        "boundaries": "A03 directly asserts zero coverage_segments and collection_receipts, not raw-table zero; review corrected that description. R06 uses only synthetic credentials and forbids downstream verify_ci execution; pending-mode test unchanged. Three related real-state-dependent functions in test_finding_ledger_gate.py are recorded as pending R06-F01, not closed by this patch.",
+        "next": "Continue original conditional findings with explicit retained guarantees; prioritize C21 fixture-scoped receipt keys, R06-F01 controlled-state release probes and R07 actual observed_through behavior. Do not drop multi-writer/runtime coverage before a real structural replacement."
+      },
+      "native_ci_after_first_tranche": {
+        "source_sha": "c502a8e0fa609235e2a801c9d2dfa51dba067698",
+        "check_id": 103261006299,
+        "app_id": 85455,
+        "check_name": "Workers Builds: quant-platform-ci-aggregate-staging",
+        "build_id": "803e374c-bcea-4bc6-85a3-6f6904e19447",
+        "completed_at": "2026-09-11T12:25:49Z",
+        "conclusion": "success",
+        "observed": "Full Python3670 passed/4 skipped/22 warnings/398.91s; all active Worker lanes passed, including Receipt63 runtime cases. This is exact-source evidence for c502a8e0 only, not acceptance of subsequent commits, merge, deployment or live evidence."
       },
       "ops_test_consolidation": {
         "status": "locally_verified_native_pending",
