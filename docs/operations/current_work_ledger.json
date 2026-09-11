@@ -1,24 +1,24 @@
 {
   "schema": "quant-platform-work-ledger/v1",
   "baseline_sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
-  "branch": "feat/receipt-event-checkpoint",
-  "updated_at": "2026-09-11T14:09:00Z",
+  "branch": "refactor/test-audit-boundaries",
+  "updated_at": "2026-09-11T14:33:42Z",
   "lanes": {
     "source_delivered": {
-      "status": "partial_main_and_candidate",
-      "scope": "pr103_through_pr112_merged_receipt_checkpoint_candidate",
-      "notes": "PR103 through112 are merged, exact-source and main native checks succeeded, and new clones verified clean/equal/unpushed0. Receipt checkpoint is a separate unmerged candidate under review. Bar/financial scopes and candidate/READY/runtime/Trader integration remain pending. Source delivery is not rollout, data activation, READY or Pilot.",
-      "latest_main_sha": "1088c398048c578bc4430121b705ff1378440577",
-      "latest_main_check_completed_at": "2026-09-11T08:51:57Z",
-      "latest_main_evidence": "https://github.com/ddnne/quant-platform/pull/112#issuecomment-5631941308",
-      "pull_request": "https://github.com/ddnne/quant-platform/pull/112",
-      "implementation_sha": "84d1856f49f709025f312d2e39f95253a107afa3",
-      "merged_sha": "1088c398048c578bc4430121b705ff1378440577",
-      "required_check_source_sha": "84d1856f49f709025f312d2e39f95253a107afa3",
+      "status": "partial_main_and_followup",
+      "scope": "pr103_through_pr113_merged_test_audit_followup",
+      "notes": "PR103 through113 source is merged. PR113 exact-source native CI and a new remote clone verified acceptance. Test-only follow-up A05/C11/C20 still needs final-SHA native CI. Bar/financial scopes and READY/runtime/Trader integration remain pending. Source delivery is not rollout or research permission.",
+      "latest_main_sha": "80e1110c5555bb1b6f52db5c10deee8e2c4982c1",
+      "latest_main_check_completed_at": null,
+      "latest_main_evidence": "https://github.com/ddnne/quant-platform/pull/113#issuecomment-5635941240",
+      "pull_request": "https://github.com/ddnne/quant-platform/pull/113",
+      "implementation_sha": "3c4de760b04c49887738c7a449aad56b7a991fcb",
+      "merged_sha": "80e1110c5555bb1b6f52db5c10deee8e2c4982c1",
+      "required_check_source_sha": "3c4de760b04c49887738c7a449aad56b7a991fcb",
       "required_check_app_id": 85455,
-      "required_check_build_id": "51fe96bd-7ee2-4664-8000-390b4dfeffe2",
-      "merged_main_check_id": 103205184570,
-      "merged_main_build_id": "29813d44-6b48-4eca-b88a-5b833d1ac0d2"
+      "required_check_build_id": "6549736f-26a0-44fe-870f-4f3071eefdba",
+      "merged_main_check_id": 103296901977,
+      "merged_main_build_id": "2a696cb7-a4b9-4dcb-9ce1-4732e1548aee"
     },
     "staging_deployed": {
       "status": "not_this_branch",
@@ -182,14 +182,14 @@
       "remaining": "Pure Python/Worker/runtime/live test tiers, default external-network denial, Container image rollout and authoritative CI-to-production linkage remain pending. Existing npm advisories and remaining real-time tests were not silently suppressed."
     },
     "6_shared_d1_receipt_reproof": {
-      "status": "shared_d1_merged_pr112_receipt_checkpoint_candidate",
+      "status": "shared_d1_and_receipt_source_merged_pr113_not_rolled_out",
       "source_diff_sha256": "b9a11a4a1c3d78958cc3e688a4bc031ca93d4b63bcb263a32dadb6efb6726ef2",
       "scope": "Removed whole shared-D1 restore/drill/recovery and old Worker rollback. Rollback refuses FORWARD_REPAIR_REQUIRED before mutation. Local and remote legacy intents block new activate/resume/continue before lease mutation. Normal forward activation/race/lease guards remain; final transition preserves actual drain digest. Production DLQ consumer declarations removed, main dead-letter route and staging/test fixtures retained. Runtime compiled pin and historical receipts unchanged; new receipts explicitly version forward-only recovery. No writer-fencing framework or new D1 migration.",
       "verification": "Grok109 tests after PR111 manifest integration; Codex233 tests across12 source/Receipt/deploy modules passed15.27s. Both manifest/governed/controlled drift checks passed. Independent review found a disconnected synthetic DB test; Grok connected the same DB to D1 and both command boundaries with a test-only destructive restore probe, removed dead helper-name assertions, and final re-review accepted the repair. No auth/live Wrangler/deploy/migration/queue/DLQ operation.",
       "test_replacements": "Four unsafe restore/undo sequencing cases removed. Retained actual forward/race tests and pre-mutation refusals; shared writer state is now connected to the tested boundaries. Hand-built staging PASS replaced by actual SQL-produced run/control/drain evidence passed into admission. Synthetic state is not live-cutover proof.",
       "shared_d1_acceptance": "PR112 source84d1856f and merged1088c398 share tree1a73612dd5e9c29556d3448082809092fcac75c5. Required app85455 source check103201415520/build51fe96bd succeeded08:37:28Z; merged-main check103205184570/build29813d44 succeeded08:51:57Z:3679 Python passed/4 skipped, all active Worker lanes and generated-clean passed. New independent clone reran233 representative tests in15.81s, clean/equal/unpushed0. Completed source branch and worktree removed after preservation. Evidence: https://github.com/ddnne/quant-platform/pull/112#issuecomment-5631941308",
       "receipt_checkpoint": {
-        "status": "pr113_committed_source_reviewed_final_sha_ci_pending",
+        "status": "pr113_source_merged_not_rolled_out",
         "deferred_test_draft": {"preservation":"local_git_stash","object":"4cfe6d0d9a68429164e8153882b94d232c59147a","path":"platform/workers/receipt-evidence-authority/runtime/authority.runtime.test.ts","accepted":false,"remote_published":false,"note":"Preserved separately without retrying the cancelled edit; excluded from PR source and final native acceptance. Do not drop the stash or claim no local draft remains."},
         "scope": "Existing DO only: transactional event head, own-operation verification and bounded background pinned-prefix audit. Preserve existing hashes, key policy, PENDING activation and signing/reconciliation boundaries. No new authority or namespace.",
         "review": "Independent source re-review at10:09:34Z accepted authority_do SHA2569a2d2bbe and event_checkpoint86bb828c: stored-vs-candidate contention, sticky failure transactions, synchronous final RPC eligibility and persisted due-time guard. Artificial production I/O/test clock/hash-holding hooks were removed. Final narrow test review accepted SHA256b4ded32f: bootstrap HOLD/page/deadline/snapshot and periodic restart/snapshot now each share one callback, removing the two1-second inter-RPC dependencies without dropping assertions. No concrete remaining source blocker was identified.",
@@ -198,90 +198,37 @@
         "native_ci_failure": "Source5f05c73b failed required app85455/check103233136063/buildcf5a1bd4-d7ab-4cd4-9a04-c2e866063184 at2026-09-11T10:37:04Z. Python3679 passed/4 skipped/26 warnings in407.57s; Receipt62 passed/1 failed: concurrent same-request issue wrote differing immutable R2 manifests into one OPEN capture attempt. The stronger test exposed duplicate acquisition, not an R2 immutability defect. Independent review confirmed fresh session/time/chain metadata differs per acquisition. Local63-pass evidence does not supersede this native failure. No merge, old-SHA retry, rollout or research permission.",
         "single_flight_checkpoint": "Preserved Grok source coalesces the whole execute pipeline per validated canonical operation across issue/recover. A joiner receives replayed:true on success or the same error without recapture; finally clears coordination, and positive returns recheck current eligibility. Different operation identities retain progress and durable recovery remains authoritative. No new authority, namespace, key or production I/O hook. Main and independent static review accepted diffec7bcbc9b042fc8d29d70e0a55cedb40167ae189905a52ea6f6ddc2d261b0804/sourcef3c0c38044d7cb195c67f0f8aa70de65343c2d62d2b1203e0a41bb2f1d7b1585. Codex ran existing Receipt workerd suite63 passed/3 files in5.04s and typecheck0 at11:25Z; test source was unchanged. This is not deterministic new overlap/failure-path regression evidence or final native acceptance.",
         "execution_hold": "The optional authority_do.ts joiner-error recheck was cancelled at11:23:50Z and remains unapplied; independent review found no positive-result gap on the rejection branch. A Grok use_tool edit converting the independent-operation runtime test was separately cancelled at13:28Z and was not applied. Clarification for that test edit is pending; do not bypass either cancellation. Distinct C21/R07/finding-ledger test audit implementation is authorized. Scoped-owner Python execution and deployment HOLDs remain intact.",
-        "residual": "Uncommitted Receipt runtime draft is excluded from integration:2 positive same-DO-callback overlap cases passed and the disabled-join compiled mutation failed both, but3 additional cross-context cases hit a workerd callback-destruction error. The cancelled independent-operation conversion remains unapplied. Independent critical review of committed bd4000a4 source found no concrete P0/source blocker: existing concurrent issue, partial-raw failure/recovery and persisted FAILED checks remain; unfinished optional draft coverage is not itself a merge gate. Source hashf3c0c380 is unchanged by subsequent Python audit commits. Pushed3f5f7c81 has exact-SHA native success (app85455/check103268185881/build06da03c2-bc0e-45a9-9351-18e52c99f37a,12:51:01Z). Final audit SHA native success and fresh-clone acceptance are still required; source integration does not authorize rollout, keys, READY or Pilot."
+        "residual": "PR113 source merged at80e1110c after exact3c4de760 native success (app85455/check103296673132/build6549736f,14:21:46Z). Independent review found no concrete source blocker. New remote clone verified tree72a6b6af, HEAD==origin/main, clean, unpushed0 and164 retained tests passed/13.01s. Optional runtime draft remains only in the recorded stash; cancelled edits were not retried. Merged-main native verification was still running at this checkpoint. Mass production build stopped at configured DEPLOYMENT HOLD (buildd4fb1479). No rollout, key/bootstrap, READY or Pilot approval."
       },
-      "residual": "Shared-D1 source is merged but not rolled out; refusing unsafe rollback does not automatically repair a concrete incident. Receipt checkpoint remains an unmerged candidate, not operational acceptance. Production HOLD remains."
+      "residual": "Shared-D1 and Receipt source are merged, not rolled out. Refusing unsafe rollback does not automatically repair an incident. Production HOLD remains."
     },
     "7_dead_code_and_docs": {
       "status": "test_audit_execution_in_progress",
       "execution_ledger": "docs/operations/test_reduction_ledger.json",
-      "execution_summary": "Implemented22 of52 original findings plus CI-A01/A02 and R06-F01;30 original consolidation/tier prerequisites remain explicit. Committed test/support delta54471b5e..81b8b1be:42 files,740 lines added,1151 removed, net411 removed; metrics describe the diff, not acceptance targets. Unverified Receipt runtime draft is excluded. Grok authored all test changes; Codex applied, verified and handled Git; independent reviewers accepted each logical patch. Existing exact3f5f7c81 native success covers earlier tranches. Latest C21/R07 full Python3670 passed/1 skipped/22 existing warnings/285.90s locally; subsequent R06-F01 focused78 passed/9.64s. The final combined source still requires native CI. Source merge is distinct from rollout/READY/Pilot, which remain HOLD.",
       "test_audit": "Baseline main1088c398 static inventory:393 test files plus2 support paths,2983 Python definitions and1115 Worker registrations, not expanded runtime cases. Main-authored candidate body/alternative review identified52 findings across100 files:13 direct-deletion groups covering22 definitions,7 assert reductions,23 consolidations,7 replacements and2 test-tier moves. Two independent critical reviews yielded9 guardrail corrections, incorporated before execution. User subsequently authorized implementation. The original inventory remains a baseline, not a claim that every candidate has been removed. Uncommitted branches are separate. No coverage-count target or bulk deletion.",
-      "terminal_publication_test_reduction": {
-        "status": "locally_verified_native_pending",
-        "audit_ids": ["CI-A01", "CI-A02"],
-        "reason": "PR113 exact54471b5e native check103247917847/app85455/builda76bacc7 failed Python test_matching_existing_terminal_is_accepted at terminal.wait(1):3678 passed/1 failed/4 skipped,382.94s. Receipt Worker lane was not reached, so that build cannot verify Receipt concurrency repair.",
-        "change": "Grok-authored test-only patch applied by Codex: four process-start/wait(1) definitions become one parameterized real publication boundary test with the same four injected/HTTP-adapter by matching/conflicting cases. Real _put/_get_json remain; one PUT/GET/callback, conflict audit distinction and closed admission/pending/retry are checked. Process/default-spawn/HTTP failure tests remain. No timeout increase or production change. One test file92 insertions/100 deletions.",
-        "verification": "Old four cases locally4 passed/0.80s; replacement4 passed/0.53s, single runs only, not a speedup or flake-rate estimate. Full Container and VolPanel modules135 passed/14 existing fork warnings/9.30s. Independent static review found no actionable issue; file15975d65250c664854895e14c19e49751d6685049bb5a50b70af422f68503b94 and diffb43ff31332847e4777b2a1b73bfec2b5ee6084d19a6667da38ab2b18cf63f773 unchanged. An initial invocation named a nonexistent supervisor file and collected no tests; it is not counted as verification.",
-        "remaining": "Exact-final-SHA native CI still required. Broader52 audit candidates, Receipt acquisition-boundary runtime regressions and existing fork-dependent tests remain separate. No merge, rollout, READY or Pilot acceptance.",
-        "mutation_check": "Runtime-only always-accept identity matcher mutation fails the new injected conflict case at the missing conflict audit, confirming detection of foreign-result acceptance; no file mutation saved. First attempt patched a separately imported namespace module and did not affect pytest, so its pass is not counted as mutation evidence. Corrected bare-module import produced the intended failure."
-      },
-      "direct_python_test_deletions": {
-        "status": "locally_verified_native_pending",
-        "audit_ids": ["D01", "D05", "D06", "D07", "D08", "D09", "D11", "D13"],
-        "change": "Grok-authored12 test definition deletions across11 files,194 lines removed, no production changes. Removed exact AM duplicate, compiler self-comparison, add-on subset, argparse/signature/obsolete-name checks, duplicate alias proof, English phrase pin and a402-row fixture that never read the DB. Unused compile_row/inspect imports removed. Actual AM/PIT, frozen replay digest, public CLI forwarding, live evidence owner, handle lifecycle and stored Coverage policy tests remain.",
-        "verification": "Codex affected11 modules plus3 retained bounded-read modules:220 passed in7.81s. Independent static review found no actionable issue or deletion-caused unused import, accepted diff8b3d5749fae9f2001623c4dbcc5601ca09e8df6dcb345087bfd45a6cde93c26a. No duration-savings estimate, full-suite claim or weakened production gate."
-      },
-      "direct_worker_test_deletions": {
-        "status": "locally_verified_native_pending",
-        "audit_ids": ["D02", "D03", "D04", "D10", "D12", "A01", "A02"],
-        "change": "Grok-authored11 test definition removals, plus redundant output assertions and internal spies, across11 test files:11 insertions/181 deletions. Retained known SHA vectors for each independent wrapper, actual status/body/cache/no-store, raw page and manifest saves, retry ranges/caps and MCP content-type matrix. No product source, dependency, auth, runtime harness or binding edits.",
-        "verification": "Codex npm test and typecheck succeeded for all6 affected Workers:JSDA42 Node+62 workerd; Premium183+7; Secrets6+38+1 Service Binding harness; Gateway187+2 harness; Mass501+7; Ops59+11+1. Total1107 actual cases; all6 tsc checks passed. Existing Vite, experimental module-mock and SDK sourcemap warnings remain. Independent static review accepted diff12069a89b4e5f5fcca0c15819c04e9e442700ac19e9ba953a34e9b60709c83d1 with no actionable issue.",
-        "dependency_reuse": "To avoid extra disk copies, six temporary node_modules links reused existing installs. Every locked package version/integrity in JSDA/Premium/Secrets/Gateway matched the Mass lock graph (161 entries); Mass/Ops lockfiles matched the reused checkout exactly. Temporary links removed afterward; shared installs preserved. This local verification is not fresh npm-ci/native final-SHA acceptance. No authentic market data or local Container backtest."
-      },
-      "second_test_reduction_tranche": {
-        "status": "locally_verified_new_native_required",
+      "execution_summary": "25 of52 original findings implemented plus CI-A01/A02/R06-F01;27 explicit consolidation/tier prerequisites remain. Committed test/support delta54471b5e..4d32f127:45 files,+776/-1282 lines, net506 removed. Counts/LOC describe the diff, not acceptance targets. Grok authored test changes; Codex reviewed/applied/verified and handled Git. No product code changes in these reductions.",
+      "prior_verification_record": "https://github.com/ddnne/quant-platform/blob/3c4de760b04c49887738c7a449aad56b7a991fcb/docs/operations/current_work_ledger.json",
+      "pr113_acceptance": "https://github.com/ddnne/quant-platform/pull/113#issuecomment-5635941240",
+      "pr113_native": "Exact3c4de760 app85455/check103296673132/build6549736f succeeded14:21:46Z:Python3631 passed/4 skipped/22 warnings/493.23s, all active Worker lanes and generated-clean. Merged80e1110c has the same tree. A new remote clone passed164 retained tests/13.01s, clean/equal/unpushed0 and secret/path scan.",
+      "followup": {
         "audit_ids": [
-          "A03",
-          "C03",
-          "R06"
+          "C11",
+          "A05",
+          "C20"
         ],
         "commits": [
-          "0294896f",
-          "4d388d5d",
-          "15f27d0a"
+          "cfd6e419",
+          "0c393459",
+          "4d32f127"
         ],
-        "change": "Removed redundant historical counts, fixture self-checks and empty-list assertions; retained exact official publication dates and public CLI forwarding. Extended D07 to the refresh CLI argparse duplicate, without claiming C02 reader consolidation. Collapsed repeated scheduler refusal branches; real budget/artifact rejection, None/lookalike/unissued-service rejection and Mass stop remain. Replaced release acceptance current-OPEN dependency and fake error output with copied real shell/gate and controlled OPEN/CLOSED ledger.",
-        "verification": "A03/C03:55 passed in2.00s; independent accepted diff03f0bdf8331b73d8b3aaf08b347affc3ddc3ec617827d6b36c76a5e7903a1c9d. R06 plus finding tests:88 passed in6.66s; independent accepted diff56a91221fb8d77a3150a95aad54dc638f42f77eba0d89d50e189ae9a582f8871. Final combined23-module run479 passed/14 existing warnings/21.80s. No claimed speedup or flake-rate measurement.",
-        "boundaries": "A03 directly asserts zero coverage_segments and collection_receipts, not raw-table zero; review corrected that description. R06 uses only synthetic credentials and forbids downstream verify_ci execution; pending-mode test unchanged. R06-F01 was pending at this second-tranche checkpoint and is resolved by the third tranche below.",
-        "next": "The third tranche completed C21, R07 and R06-F01. Continue the remaining30 original findings only with explicit retained guarantees; do not drop multi-writer/runtime coverage before a real structural replacement."
+        "verification": "C11:43 related Python tests passed/1.06s and independent review. A05:Gateway185+2 harness cases/typecheck passed; existing product type guard rejects in-memory public-secret exposure with TS2322. No duplicate type file retained. C20:135 related Python tests passed/14.34s; review's existing-str-path counterexample fixed with an empty file, not signed DB setup.",
+        "pending": "Final follow-up source native CI, PR merge and fresh-clone acceptance. Production, READY and Pilot remain separately held."
       },
-      "third_test_reduction_tranche": {
-        "status": "locally_verified_final_native_pending",
-        "audit_ids": [
-          "C21",
-          "R07",
-          "R06-F01"
-        ],
-        "commits": [
-          "46af4222",
-          "bd4000a4",
-          "81b8b1be"
-        ],
-        "change": "Receipt key and registry fixtures now have explicit consumers, with signed helpers moved out of test modules and no cross-test global key mutation. Removed74-line future-row probe that stopped at argument rejection, retaining actual authenticated publication and UTC/JST cutoff checks. Real release CLI OPEN/CLOSED scenarios use isolated controlled ledgers, not the repository's current P0 counts.",
-        "verification": "C21 direct6 modules59 passed/153.95s and unrelated setup-plan no longer includes receipt keys. R07 retained3 tests passed/0.66s. Full Python at bd4000a4:3670 passed/1 skipped/22 warnings/285.90s with2 file-scoped workers. R06-F01 after that full run:78 passed/9.64s. Independent critical reviews accepted all three changes; final exact-SHA native CI still required. Platform-specific skip counts are not compared as coverage.",
-        "source_acceptance_boundary": "Independent review found no concrete merge-blocking source defect in committed Receipt single-flight. Extra uncommitted runtime experiments remain excluded and the cancelled edit is not retried. No production source, key, binding, authority, deployment or research activation change in these test cleanup commits."
-      },
-      "native_ci_after_first_tranche": {
-        "source_sha": "c502a8e0fa609235e2a801c9d2dfa51dba067698",
-        "check_id": 103261006299,
-        "app_id": 85455,
-        "check_name": "Workers Builds: quant-platform-ci-aggregate-staging",
-        "build_id": "803e374c-bcea-4bc6-85a3-6f6904e19447",
-        "completed_at": "2026-09-11T12:25:49Z",
-        "conclusion": "success",
-        "observed": "Full Python3670 passed/4 skipped/22 warnings/398.91s; all active Worker lanes passed, including Receipt63 runtime cases. This is exact-source evidence for c502a8e0 only, not acceptance of subsequent commits, merge, deployment or live evidence."
-      },
-      "ops_test_consolidation": {
-        "status": "locally_verified_native_pending",
-        "audit_ids": ["C18", "C23"],
-        "change": "Grok merged duplicate stored-policy fixtures into one parameterized actual SQLite + QuantReadDomainService test, not a full MCP facade test. Known/unknown policies, PARTIAL/COMPLETE, complete exclusion from gaps, missing UNKNOWN and SQL NULL transfer remain. Removed one redundant test file. Cursor matrix becomes five meaningful cases, including both cursors NULL. Three files72 insertions/110 deletions.",
-        "review_correction": "Independent review rejected dropping (None,None,lag0): moving CURRENT comparison ahead of NULL guards falsely accepts None==None. Grok restored that row. Codex in-memory faulty-order mutation passed all4 draft rows but fails exactly the restored row in the5-case table; no mutation saved. Review also corrected the claimed boundary from MCP facade to shared read service.",
-        "verification": "Normal3 related modules16 passed/0.46s after correction. Independent final delta review accepted diff57a2075d1877d1a259df18c9a043d8ba42adab36e134097103fa5607e20a744c with no further code finding. Original audit C18 equivalence reasoning is narrowed by this demonstrated counterexample."
-      }
+      "review_corrections": "Kept both-NULL cursor case after a mutation exposed false CURRENT; retained terminal conflict audit after always-accept mutation; avoided duplicate Gateway type guard; preserved existing-str-path refusal while removing signed setup. Prefer realistic failures over counts.",
+      "local_preservation": "Optional Receipt runtime draft remains only in local stash4cfe6d0d, excluded from source acceptance. Temporary Gateway/Mass dependency links removed; existing installs preserved. No authentic market data downloaded."
     },
     "8_rollout_and_research_go": { "status": "pending" },
-    "9_push_remote_and_fresh_clone_verify": { "status": "pr103_through_pr112_merged_and_fresh_clone_verified_final_project_verification_pending" }
+    "9_push_remote_and_fresh_clone_verify": { "status": "pr103_through_pr113_merged_and_fresh_clone_verified_followup_and_final_project_verification_pending" }
   },
   "operational_facts": [
     {
