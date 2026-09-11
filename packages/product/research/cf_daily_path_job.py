@@ -3,33 +3,23 @@ from __future__ import annotations
 
 import json
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from uuid import uuid4
 
 from qp_paths import repo_root
 from research.cf_mass_eval_job import (
-    CF_BAR_NATIVE_LOGIC_IDS,
-    CF_MASS_EVAL_WAVE,
     DEFAULT_MASS_EVAL_MODE,
     DEFAULT_MAX_CODES,
     DEFAULT_MAX_DAYS,
     DEFAULT_ONE_WAY,
-    DEFAULT_REAL_MULTIYEAR_PERIODS,
     DEFAULT_WORKER_URL,
-    PANELS_CACHE_PREFIX,
     CfMassEvalError,
-    build_cf_mass_eval_job_spec,
     invoke_cf_mass_eval_worker,
-    normalize_period_row,
-    panels_cache_id,
     refuse_missing_capability,
-    resolve_or_stage_panels,
 )
 
-from research.evaluation_ir import encode_evaluation_ir
-from research.eval_registry import PROTOCOL_DAILY_PATH, is_daily_path_complete_cell
+from research.eval_registry import PROTOCOL_DAILY_PATH
 from research.freezes import MASS_RESEARCH
 from research.unique_logic.constants import CF_EVENT_DAILY_PATH_IDS as _CF_EVENT_SET
 
@@ -91,220 +81,9 @@ def run_cf_daily_path_fanout(
     write_artifacts: bool = False,
     git_sha: str | None = None,
 ) -> dict[str, Any]:
-    from research.eval_tracks import infer_eval_track
     from research.mass_disabled import refuse_mass_host_entrypoint
 
     refuse_mass_host_entrypoint("run_cf_daily_path_fanout")
-    t0 = time.perf_counter()
-    jid = str(job_id or f"eval-cf-dp-{uuid4().hex[:10]}")
-    track = track or infer_eval_track(max_codes=max_codes)
-    ids = list(logic_ids) if logic_ids is not None else list(CF_BAR_NATIVE_LOGIC_IDS)
-    if len(ids) < 1:
-        raise CfMassEvalError("logic_ids required")
-    period_rows = [
-        normalize_period_row(p)
-        for p in (periods or DEFAULT_REAL_MULTIYEAR_PERIODS)
-    ]
-    if panels_prefix and mode == "r2_panels":
-        cid = panels_cache_id(
-            period_rows,
-            max_codes=max_codes,
-            max_days=max_days,
-            track=track,
-        )
-        expected = f"{PANELS_CACHE_PREFIX}/{cid}/panels"
-        got = str(panels_prefix).rstrip("/")
-        if got != expected:
-            raise CfMassEvalError(
-                "panels_prefix must match track×periods×codes cache "
-                f"expected={expected} got={got}"
-            )
-    refused = refuse_missing_capability("mass_screen")
-    if refused is not None:
-        return refused
-    stage_meta: dict[str, Any] | None = None
-    if panels_prefix:
-        stage_meta = {
-            "reused": True,
-            "stage_sec": 0.0,
-            "panels_prefix": panels_prefix,
-            "note": "explicit panels_prefix",
-        }
-    elif skip_stage:
-        panels_prefix = f"research/mass_eval/job={jid}/panels"
-        stage_meta = {
-            "reused": True,
-            "stage_sec": 0.0,
-            "panels_prefix": panels_prefix,
-            "note": "skip_stage job-scoped prefix",
-        }
-    elif mode == "r2_panels":
-        stage_meta = resolve_or_stage_panels(
-            job_id=jid,
-            periods=period_rows,
-            max_codes=max_codes,
-            max_days=max_days,
-            staging_dir=staging_dir,
-            track=track,
-        )
-        if int(stage_meta.get("n_ok") or 0) <= 0:
-            raise CfMassEvalError(
-                "r2_panels staging produced 0 ok panels for daily_path fan-out"
-            )
-        panels_prefix = str(stage_meta.get("panels_prefix") or panels_prefix)
-    else:
-        panels_prefix = panels_prefix or f"research/mass_eval/job={jid}/panels"
-
-    t_fan0 = time.perf_counter()
-    per_logic: list[dict[str, Any]] = []
-    cells: list[dict[str, Any]] = []
-    errors: list[dict[str, Any]] = []
-
-    def _one(lid: str) -> dict[str, Any]:
-        t_i = time.perf_counter()
-        spec = build_cf_mass_eval_job_spec(
-            job_id=f"{jid}__{lid}",
-            logic_ids=[lid],
-            periods=period_rows,
-            max_codes=max_codes,
-            max_days=max_days,
-            one_way_cost=one_way_cost,
-            seed=seed,
-            mode=mode,
-            panels_prefix=panels_prefix,
-            drop_unique_unsupported=False,
-        )
-        spec["eval_kind"] = "daily_path"
-        spec["write_artifacts"] = bool(write_artifacts)
-        resp = invoke_cf_daily_path(
-            spec, worker_url=worker_url, timeout=timeout, http_post=http_post
-        )
-        elapsed = time.perf_counter() - t_i
-        logic_cells = list(resp.get("cells") or [])
-        n_ok = sum(1 for c in logic_cells if is_daily_path_complete_cell(c))
-        return {
-            "logic_id": lid,
-            "wall_sec": round(elapsed, 3),
-            "n_cells": len(logic_cells),
-            "n_complete": n_ok,
-            "ok": bool(resp.get("ok", True)) and n_ok > 0,
-            "cells": logic_cells,
-            "error": resp.get("error") or resp.get("detail"),
-        }
-
-    n_workers = max(1, min(int(max_workers), len(ids)))
-    with ThreadPoolExecutor(max_workers=n_workers) as pool:
-        futs = {pool.submit(_one, lid): lid for lid in ids}
-        for fut in as_completed(futs):
-            lid = futs[fut]
-            try:
-                row = fut.result()
-            except Exception as exc:  # noqa: BLE001 — isolate failure disclosed
-                errors.append({"logic_id": lid, "error": str(exc)})
-                per_logic.append(
-                    {
-                        "logic_id": lid,
-                        "ok": False,
-                        "wall_sec": None,
-                        "error": str(exc),
-                    }
-                )
-                continue
-            per_logic.append({k: v for k, v in row.items() if k != "cells"})
-            cells.extend(row.get("cells") or [])
-            if row.get("error") and not row.get("ok"):
-                errors.append({"logic_id": lid, "error": row.get("error")})
-
-    fan_sec = time.perf_counter() - t_fan0
-    walls = [float(p["wall_sec"]) for p in per_logic if p.get("wall_sec") is not None]
-    longest = max(walls) if walls else None
-    n_ok_logic = sum(1 for p in per_logic if p.get("ok"))
-    out_dir = ROOT / "data" / "ops" / "research_eval"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    table_path = out_dir / f"{jid}_cells.json"
-    table_path.write_text(
-        json.dumps(cells, indent=2, default=str) + "\n", encoding="utf-8"
-    )
-    from research.combo_basket import (
-        primary_sleeve_and_meta_cells,
-        summarize_basket_trends,
-    )
-    from research.unique_logic.worker_bodies import mean_occupancy_by_logic
-
-    basket_cells = primary_sleeve_and_meta_cells(cells)
-    basket_summary = summarize_basket_trends(basket_cells, job_id=jid)
-    basket_summary["not_a_pass"] = True
-    basket_summary["go"] = False
-    evaluation_ir = encode_evaluation_ir(
-        n_expected=len(ids) * len(period_rows),
-        n_cells=len(cells),
-        n_complete=sum(1 for c in cells if is_daily_path_complete_cell(c)),
-        n_collapsed=sum(
-            1
-            for c in cells
-            if "path_collapsed" in str(c.get("path_fallback") or "")
-            or str(c.get("skip_reason") or "").startswith("unique_unsupported")
-        ),
-        n_broken=sum(
-            1
-            for c in cells
-            if c.get("path_fallback") == "path_broken"
-            or c.get("eval_path") == "path_broken"
-        ),
-    )
-    pack = {
-        "version": FANOUT_VERSION,
-        "wave": CF_MASS_EVAL_WAVE,
-        "job_id": jid,
-        "protocol": PROTOCOL_DAILY_PATH,
-        "eval_kind": "daily_path",
-        "parallel_model": "cf_isolate_fanout_one_logic",
-        "mode": mode,
-        "n_logics": len(ids),
-        "logic_ids": ids,
-        "n_periods": len(period_rows),
-        "period_ids": [p.get("period_id") for p in period_rows],
-        "n_cells": len(cells),
-        "n_daily_path_complete": sum(
-            1 for c in cells if is_daily_path_complete_cell(c)
-        ),
-        "n_logic_ok": n_ok_logic,
-        "n_errors": len(errors),
-        "errors": errors,
-        "per_logic": per_logic,
-        "fanout_workers": n_workers,
-        "stage_panels": stage_meta,
-        "panels_prefix": panels_prefix,
-        "stage_sec": (
-            0.0
-            if not stage_meta
-            else float(stage_meta.get("stage_sec") or stage_meta.get("wall_time_sec") or 0.0)
-        ),
-        "stage_reused": bool((stage_meta or {}).get("reused")),
-        "stage_cache_id": (stage_meta or {}).get("cache_id"),
-        "eval_track": track or (stage_meta or {}).get("eval_track"),
-        "fanout_sec": round(fan_sec, 3),
-        "longest_isolate_sec": round(longest, 3) if longest is not None else None,
-        "wall_sec": round(time.perf_counter() - t0, 3),
-        "table_path": str(table_path),
-        "git_sha": git_sha,
-        "factory_version": FANOUT_VERSION,
-        "promote_as_main": False,
-        "go": False,
-        "not_a_pass": True,
-        "mass_research": MASS_RESEARCH,
-        "survived": False,
-        # Grade authority is job_candidate_grade via encode; do not grade twice.
-        "candidate_grade": evaluation_ir["candidate"],
-        "evaluation_ir": evaluation_ir,
-        "period_net_dd_only_pass_forbidden": True,
-        "notes": "CF isolate fan-out daily_path_DD. Not a promotion.",
-        "baskets": basket_summary,
-        "n_basket_cells": len(basket_cells),
-        "write_artifacts": bool(write_artifacts),
-        "occupancy_by_logic": mean_occupancy_by_logic(cells),
-    }
-    return pack
 
 
 def sleeve_durability_logic_ids() -> list[str]:

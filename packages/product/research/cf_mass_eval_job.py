@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
-import os
-import time
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from uuid import uuid4
@@ -22,7 +19,6 @@ from research.cf_mass_eval_stage import (
     RESEARCH_ARTIFACT_BUCKET,
     RESEARCH_ARTIFACT_PREFIX,
     normalize_period_row,
-    stage_real_panels_to_r2,
 )
 from research.eval_windows import DEFAULT_REAL_MULTIYEAR_PERIODS
 from research.freezes import CONTINUOUS_PAPER, MASS_RESEARCH, PHASE7
@@ -218,76 +214,10 @@ def resolve_or_stage_panels(
     artifact_put: Callable[..., Any] | None = None,
     artifact_get: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
-    """Reuse track×periods×codes×days panel cache, or stage once. Never head-N."""
+    """Retired Mass panel cache/stage entry. Refuses; does not stage or reuse panels."""
     from research.mass_disabled import refuse_mass_host_entrypoint
 
     refuse_mass_host_entrypoint("resolve_or_stage_panels")
-    from research.eval_tracks import eval_track, infer_eval_track
-    from research.eval_universe import select_eval_universe
-
-    t0 = time.perf_counter()
-    period_rows = [
-        normalize_period_row(p)
-        for p in (periods or DEFAULT_REAL_MULTIYEAR_PERIODS)
-    ]
-    tid = str(track or infer_eval_track(max_codes=max_codes))
-    tspec = eval_track(tid)
-    cid = panels_cache_id(
-        period_rows, max_codes=max_codes, max_days=max_days, track=tid
-    )
-    meta_key = f"{PANELS_CACHE_PREFIX}/{cid}/meta.json"
-    prefix = f"{PANELS_CACHE_PREFIX}/{cid}/panels"
-
-    if not force_stage:
-        existing = try_r2_get_json(meta_key, getter=artifact_get)
-        if existing and int(existing.get("n_ok") or 0) > 0:
-            existing["reused"] = True
-            existing["force_stage"] = False
-            existing["stage_sec"] = 0.0
-            existing["cache_id"] = cid
-            existing["meta_key"] = meta_key
-            return existing
-    selected_codes = select_eval_universe(max_codes=int(max_codes))
-    staged = stage_real_panels_to_r2(
-        job_id,
-        period_rows,
-        codes=selected_codes,
-        max_codes=max_codes,
-        max_days=max_days,
-        staging_dir=staging_dir,
-        panels_prefix=prefix,
-    )
-    stage_sec = round(time.perf_counter() - t0, 3)
-    meta = {
-        "cache_id": cid,
-        "meta_key": meta_key,
-        "panels_prefix": prefix,
-        "n_ok": int(staged.get("n_ok") or 0),
-        "n_periods": int(staged.get("n_periods") or 0),
-        "max_codes": int(max_codes),
-        "max_days": int(max_days),
-        "universe_select": tspec["universe_select"],
-        "eval_track": tid,
-        "n_selected_codes": len(selected_codes),
-        "selected_codes": list(selected_codes),
-        "period_ids": [p.get("period_id") for p in period_rows],
-        "reused": False,
-        "force_stage": bool(force_stage),
-        "stage_sec": stage_sec,
-        "job_id_staged": str(job_id),
-    }
-    try:
-        if artifact_put is None:
-            raise RuntimeError("closed artifact put port is required")
-        artifact_put(
-            RESEARCH_ARTIFACT_BUCKET,
-            meta_key,
-            json.dumps(meta, indent=2, default=str).encode("utf-8"),
-        )
-    except Exception:
-        meta["meta_put_error"] = True
-    meta["stage"] = {k: staged.get(k) for k in ("n_ok", "n_missing", "dataset")}
-    return meta
 
 
 def build_cf_mass_eval_job_spec(

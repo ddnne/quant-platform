@@ -1,23 +1,15 @@
-"""COMPLETE-backed r2_panels staging. Universe is select_eval_universe — never head-N."""
+"""Retired Mass r2_panels staging entrypoints plus shared period normalizer and COMPLETE constants.
+
+build_real_period_panel and stage_real_panels_to_r2 refuse via
+refuse_mass_host_entrypoint. They do not stage panels. Universe policy
+for remaining constants remains liq_large default (100), never head-N.
+"""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from data_contracts.permanent_defer import PERMANENT_DEFER_DATASETS
-from research.cf_mass_eval_thicken import (
-    _build_thicken_sidecars,
-    attach_nky_proxy,
-    attach_opt225_regime,
-)
-from pit.personal_research_view import PersonalResearchDataView
-from research.eval_loaders import (
-    bars_rich_to_close_panel,
-    load_bars_from_sqlite_rich,
-)
-from research.eval_universe import select_eval_universe
-from research.eval_windows import DEFAULT_REAL_MULTIYEAR_PERIODS
 from research.complete21 import COMPLETE_21_DATASETS
 
 
@@ -84,76 +76,6 @@ def build_real_period_panel(
     from research.mass_disabled import refuse_mass_host_entrypoint
 
     refuse_mass_host_entrypoint("build_real_period_panel")
-    if not isinstance(view, PersonalResearchDataView):
-        raise TypeError("eval sqlite loaders require PersonalResearchDataView")
-    p = normalize_period_row(period)
-    pid = str(p["period_id"])
-    pool = (
-        None
-        if codes is None
-        else [str(c).strip() for c in codes if str(c).strip()]
-    )
-    selected = select_eval_universe(max_codes=int(max_codes), pool=pool)
-    start = str(p.get("period_start") or "")[:10]
-    end = str(p.get("period_end") or "")[:10]
-    if not start or not end:
-        raise ValueError("as_of is required (PIT has no latest default)")
-    rich = load_bars_from_sqlite_rich(
-        view,
-        codes=selected,
-        period_start=start,
-        period_end=end,
-        max_days=int(max_days),
-        decision_date=end,
-    )
-    close = bars_rich_to_close_panel(rich)
-    bars_json: dict[str, list[list[Any]]] = {
-        code: [[d, float(px)] for d, px in pairs]
-        for code, pairs in close.items()
-        if pairs
-    }
-    adv_by_code: dict[str, float] = {}
-    for code, pairs in (rich or {}).items():
-        vals: list[float] = []
-        for _d, rec in pairs:
-            va = rec.get("Va") if isinstance(rec, dict) else None
-            try:
-                if va is not None:
-                    vals.append(float(va))
-                    continue
-            except (TypeError, ValueError):
-                pass
-            try:
-                vo = rec.get("Vo") if isinstance(rec, dict) else None
-                px = rec.get("close") if isinstance(rec, dict) else None
-                if vo is not None and px is not None:
-                    vals.append(float(vo) * float(px))
-            except (TypeError, ValueError):
-                continue
-        if vals:
-            adv_by_code[str(code)] = sum(vals) / len(vals)
-    nky_meta = attach_nky_proxy(bars_json, p, view)
-    opt225_meta = attach_opt225_regime(view)
-    thicken_meta = _build_thicken_sidecars(p, codes=selected, view=view)
-
-    n_days = max(
-        (len(v) for k, v in bars_json.items() if not str(k).startswith("__")),
-        default=0,
-    )
-    n_eq = sum(1 for k in bars_json if not str(k).startswith("__"))
-    return {
-        **p,
-        "status": "ok" if n_eq > 0 else "empty_bars",
-        "bars": bars_json,
-        "adv_by_code": adv_by_code,
-        "dataset": PRIMARY_BARS_DATASET,
-        "source": "personal_research_data_view",
-        "n_codes": n_eq,
-        "n_days": n_days,
-        **nky_meta,
-        **opt225_meta,
-        **thicken_meta,
-    }
 
 
 def stage_real_panels_to_r2(
@@ -169,62 +91,9 @@ def stage_real_panels_to_r2(
     panels_prefix: str | None = None,
     view: Any | None = None,
 ) -> dict[str, Any]:
-    from research.cf_mass_eval_job import CF_MASS_EVAL_WAVE
     from research.mass_disabled import refuse_mass_host_entrypoint
 
     refuse_mass_host_entrypoint("stage_real_panels_to_r2")
-    wave = CF_MASS_EVAL_WAVE
-    jid = str(job_id).strip() or "unknown"
-    period_list = [
-        normalize_period_row(p)
-        for p in (periods or DEFAULT_REAL_MULTIYEAR_PERIODS)
-    ]
-    prefix = panels_prefix or f"{RESEARCH_ARTIFACT_PREFIX}/job={jid}/panels"
-    if r2_put is None:
-        raise RuntimeError("closed artifact put port is required")
-    put_fn = r2_put
-    panels: list[dict[str, Any]] = []
-    puts: list[dict[str, Any]] = []
-    for raw in period_list:
-        panel = build_real_period_panel(
-            raw,
-            codes=codes,
-            max_codes=max_codes,
-            max_days=max_days,
-            view=view,
-        )
-        key = f"{prefix}/{panel['period_id']}.json"
-        body = json.dumps(panel, indent=2, default=str).encode("utf-8")
-        meta = put_fn(RESEARCH_ARTIFACT_BUCKET, key, body)
-        puts.append(dict(meta) if isinstance(meta, Mapping) else {"key": key})
-        panels.append(
-            {
-                "period_id": panel.get("period_id"),
-                "year": panel.get("year"),
-                "period_start": panel.get("period_start"),
-                "period_end": panel.get("period_end"),
-                "status": panel.get("status"),
-                "n_codes": panel.get("n_codes"),
-                "n_days": panel.get("n_days"),
-                "source": panel.get("source"),
-                "dataset": panel.get("dataset"),
-                "r2_key": key,
-            }
-        )
-    n_ok = sum(1 for p in panels if p.get("status") == "ok")
-    return {
-        "job_id": jid,
-        "panels_prefix": prefix,
-        "bucket": RESEARCH_ARTIFACT_BUCKET,
-        "n_periods": len(panels),
-        "n_ok": n_ok,
-        "n_missing": len(panels) - n_ok,
-        "panels": panels,
-        "puts": puts,
-        "dataset": PRIMARY_BARS_DATASET,
-        "wave": wave,
-        "dry_run": bool(dry_run),
-    }
 
 
 __all__ = [
