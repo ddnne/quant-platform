@@ -54,6 +54,56 @@ beforeEach(async () => {
   await applyD1Migrations(env.QUOTA_DB, quotaMigrations);
 });
 
+import { DurableDailyQuota, QuotaExceeded } from "../src/quota.js";
+
+describe("durable daily quota D1 outcomes", () => {
+  it("races five unit charges against limit 3 and isolates subject, client, and UTC day", async () => {
+    const principal = { subject: "human:alice", clientId: "chatgpt" };
+    const now = Date.parse("2026-08-11T12:00:00Z");
+    const day = "2026-08-11";
+    const settled = await Promise.allSettled(
+      Array.from({ length: 5 }, () =>
+        new DurableDailyQuota(env.QUOTA_DB, 3).charge(principal, 1, now),
+      ),
+    );
+    const successes = settled
+      .filter((outcome) => outcome.status === "fulfilled")
+      .map((outcome) => outcome.value)
+      .sort((left, right) => left.used - right.used);
+    const failures = settled.filter((outcome) => outcome.status === "rejected");
+    expect(successes).toEqual([
+      { day, used: 1, remaining: 2, limit: 3 },
+      { day, used: 2, remaining: 1, limit: 3 },
+      { day, used: 3, remaining: 0, limit: 3 },
+    ]);
+    expect(failures).toHaveLength(2);
+    for (const failure of failures) {
+      expect(failure.reason).toBeInstanceOf(QuotaExceeded);
+    }
+    const row = await env.QUOTA_DB.prepare(
+      "SELECT used, limit_value FROM remote_mcp_daily_quota WHERE quota_day = ? AND subject_id = ? AND client_id = ?",
+    )
+      .bind(day, principal.subject, principal.clientId)
+      .first();
+    expect({ used: Number(row.used), limit_value: Number(row.limit_value) }).toEqual({
+      used: 3,
+      limit_value: 3,
+    });
+    await expect(
+      new DurableDailyQuota(env.QUOTA_DB, 3).charge(principal, 1, now),
+    ).rejects.toBeInstanceOf(QuotaExceeded);
+    for (const [nextPrincipal, nextNow, nextDay] of [
+      [{ subject: "human:bob", clientId: "chatgpt" }, now, day],
+      [{ subject: "human:alice", clientId: "claude" }, now, day],
+      [principal, Date.parse("2026-08-12T00:01:00Z"), "2026-08-12"],
+    ]) {
+      expect(
+        await new DurableDailyQuota(env.QUOTA_DB, 3).charge(nextPrincipal, 1, nextNow),
+      ).toEqual({ day: nextDay, used: 1, remaining: 2, limit: 3 });
+    }
+  });
+});
+
 function base64(bytes) {
   let binary = "";
   for (const byte of new Uint8Array(bytes)) binary += String.fromCharCode(byte);
