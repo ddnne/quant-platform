@@ -1,8 +1,7 @@
 """Research control plane (Phase 7 stays OFF): readiness attestation, experiment plans.
 
-This barrel re-exports the fail-closed control plane only. Candidate eval is
-``research.cf_daily_path_job`` (POST /v1/daily-path). Smoke codes live in
-Offline fixtures choose their own explicit codes. Mass is NO-GO.
+This barrel re-exports the fail-closed control plane only. Runtime uses explicit
+Personal/Controlled entrypoints. Legacy eval is replay-only. Mass is disabled.
 """
 
 from __future__ import annotations
