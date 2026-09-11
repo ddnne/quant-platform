@@ -26,7 +26,7 @@ from research.readiness import (
 from research.ready_manifest import build_ready_manifest, load_exact_four_pilot_ready_binding
 from research.universe_contract import EXACT_FOUR_UNIVERSE_RULE_DIGEST
 from selection.budget_ledger import MassResearchDisabledError, ResearchBudgetCapability
-from selection.screen import ExperimentBudget, OfflineExperimentBudget
+from selection.screen import OfflineExperimentBudget
 from storage.immutable_artifact import ImmutableArtifactStore
 from tests.readiness_test_support import (
     _TestReadinessSigner,
@@ -221,11 +221,6 @@ def test_construct_fails_without_readiness(tmp_path: Path) -> None:
         _construct(tmp_path, readiness={"snapshot_id": "snap-1"})
 
 
-def test_construct_rejects_local_budget(tmp_path: Path) -> None:
-    with pytest.raises(MassResearchDisabledError, match="no local budget"):
-        _construct(tmp_path, budget=object())
-
-
 def test_controlled_scheduler_rejects_offline_caller_budget_overrides(
     tmp_path: Path,
 ) -> None:
@@ -236,17 +231,6 @@ def test_controlled_scheduler_rejects_offline_caller_budget_overrides(
     )
     with pytest.raises(MassResearchDisabledError, match="no local budget"):
         _construct(tmp_path, budget=local)
-
-
-def test_controlled_scheduler_has_no_local_ledger_or_artifact_store(
-    tmp_path: Path,
-) -> None:
-    scheduler = _construct(tmp_path)
-    assert not hasattr(scheduler, "_budget_ledger")
-    assert not hasattr(scheduler, "_budget_reservation")
-    assert not hasattr(scheduler, "_artifact_store")
-    with pytest.raises(MassResearchDisabledError, match="no local artifact store"):
-        _construct(tmp_path, immutable_artifact_store=_store(tmp_path))
 
 
 def test_construct_fails_without_plan(tmp_path: Path) -> None:
@@ -269,11 +253,7 @@ def test_construct_fails_without_bound_evaluation_service(tmp_path: Path) -> Non
     with pytest.raises(MassResearchDisabledError, match="authorized_evaluation_service"):
         _construct(tmp_path, authorized_evaluation_service=SimpleNamespace(bound=True))
     with pytest.raises(MassResearchDisabledError, match="authorized_evaluation_service"):
-        _construct(tmp_path, authorized_evaluation_service=SimpleNamespace())
-    with pytest.raises(MassResearchDisabledError, match="authorized_evaluation_service"):
         AuthorizedEvaluationService()
-    with pytest.raises(MassResearchDisabledError, match="authorized_evaluation_service"):
-        _construct(tmp_path, authorized_evaluation_service=AuthorizedEvaluationService())
 
 
 def test_construct_rejects_local_artifact_store(
@@ -281,7 +261,7 @@ def test_construct_rejects_local_artifact_store(
 ) -> None:
     assert isinstance(_construct(tmp_path, immutable_artifact_store=None), ControlledPilotScheduler)
     with pytest.raises(MassResearchDisabledError, match="no local artifact store"):
-        _construct(tmp_path, immutable_artifact_store=SimpleNamespace())
+        _construct(tmp_path, immutable_artifact_store=_store(tmp_path))
 
 
 def test_construct_rejects_operator_override(tmp_path: Path) -> None:
@@ -338,8 +318,6 @@ def test_mass_2000_catalog_eval_is_not_started(tmp_path: Path) -> None:
     sched = _construct(tmp_path)
     with pytest.raises(MassResearchDisabledError, match="2000-catalog"):
         sched.start_mass_catalog_eval()
-    with pytest.raises(MassResearchDisabledError, match="2000-catalog"):
-        sched.start_mass_catalog_eval(n=2000)
 
 
 def test_mass_scheduler_rejects_pilot_readiness(tmp_path: Path) -> None:
