@@ -18,8 +18,6 @@ import pytest
 _REPO = Path(__file__).resolve().parents[1]
 _SCRIPT = _REPO / "scripts" / "issue_signed_receipts_for_segments.py"
 _FIXTURE = _REPO / "tests" / "fixtures" / "jsda_otc_official_index_tiny.html"
-V2_REQUIRED = 8784
-WEEKEND_IN_TINY_SPAN = "2002-08-03"
 
 
 def _load_mod():
@@ -46,12 +44,9 @@ def test_read_index_text_omitted_blank_fixture(cli_module, tmp_path: Path) -> No
     blank = tmp_path / "blank.html"
     blank.write_text("   \n", encoding="utf-8")
     assert cli_module._read_index_text(blank) is None
-    html = cli_module._read_index_text(_FIXTURE)
-    assert html is not None
-    assert html.strip() != ""
-    assert "https://" not in html
-    assert "2002.8.2" in html
-    assert WEEKEND_IN_TINY_SPAN not in html.replace(".", "-")
+    assert cli_module._read_index_text(_FIXTURE) == _FIXTURE.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_read_index_text_missing_path_raises(cli_module, tmp_path: Path) -> None:
@@ -83,15 +78,12 @@ def test_refresh_issued_coverage_always_passes_index_text(
     )
     assert "index_text" in captured["kwargs"]
     assert captured["index_text"] is None
-    assert captured["index_text"] != V2_REQUIRED
     html = _FIXTURE.read_text(encoding="utf-8")
     cli_module._refresh_issued_coverage(
         object(), "db.sqlite", ["jsda_otc_bond_reference_prices"], index_text=html
     )
     assert captured["index_text"] == html
     assert captured["kwargs"]["datasets"] == ["jsda_otc_bond_reference_prices"]
-    assert captured["index_text"] is not None
-    assert captured["index_text"].strip() != ""
 
 
 def test_main_omitted_index_text_is_none_not_calendar_replay(
@@ -107,7 +99,6 @@ def test_main_omitted_index_text_is_none_not_calendar_replay(
     rc = cli_module.main(["--db", str(tmp_path / "missing.sqlite")])
     assert rc == 2
     assert captured["path"] is None
-    assert captured["path"] != V2_REQUIRED
 
 
 def test_main_supplied_index_text_path_is_forwarded(

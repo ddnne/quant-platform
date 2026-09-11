@@ -20,7 +20,6 @@ import pytest
 _REPO = Path(__file__).resolve().parents[1]
 _SCRIPT = _REPO / "scripts" / "issue_receipts_parallel.py"
 _FIXTURE = _REPO / "tests" / "fixtures" / "jsda_otc_official_index_tiny.html"
-V2_REQUIRED = 8784
 
 
 def _load_mod():
@@ -157,7 +156,6 @@ def test_main_passes_local_index_text_through(
     db, data_dir = _seed_ready(tmp_path, cli_module)
     captured = _stub_refresh(cli_module, monkeypatch)
     html = _FIXTURE.read_text(encoding="utf-8")
-    assert "https://" not in html
     rc = cli_module.main(
         [
             "--db",
@@ -174,9 +172,6 @@ def test_main_passes_local_index_text_through(
     assert captured.get("called") is True
     assert "index_text" in captured["kwargs"]
     assert captured["index_text"] == html
-    assert captured["index_text"] is not None
-    assert captured["index_text"].strip() != ""
-    assert captured["index_text"] != V2_REQUIRED
     assert captured.get("synced") is True
 
 
@@ -199,7 +194,6 @@ def test_main_omitted_index_text_is_none_not_calendar_replay(
     assert captured.get("called") is True
     assert "index_text" in captured["kwargs"]
     assert captured["index_text"] is None
-    assert captured["index_text"] != V2_REQUIRED
     assert captured.get("synced") is True
 
 

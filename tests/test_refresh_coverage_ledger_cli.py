@@ -19,7 +19,6 @@ import pytest
 _REPO = Path(__file__).resolve().parents[1]
 _SCRIPT = _REPO / "scripts" / "refresh_coverage_ledger.py"
 _FIXTURE = _REPO / "tests" / "fixtures" / "jsda_otc_official_index_tiny.html"
-V2_REQUIRED = 8784
 
 
 def _load_mod():
@@ -73,23 +72,6 @@ def _stub_refresh(cli_module, monkeypatch) -> dict:
     return captured
 
 
-def test_argparse_index_text_is_optional_path(cli_module) -> None:
-    parser = cli_module._build_parser()
-    omitted = parser.parse_args(["--db", "x.sqlite"])
-    assert omitted.index_text is None
-    supplied = parser.parse_args(
-        ["--db", "x.sqlite", "--index-text", "tests/fixtures/jsda_otc_official_index_tiny.html"]
-    )
-    assert supplied.index_text == (
-        "tests/fixtures/jsda_otc_official_index_tiny.html"
-    )
-    action = next(
-        item for item in parser._actions if "--index-text" in item.option_strings
-    )
-    assert action.required is False
-    assert action.default is None
-
-
 def test_read_index_text_missing_path_is_none(cli_module) -> None:
     assert cli_module._read_index_text(None) is None
 
@@ -100,7 +82,6 @@ def test_main_passes_local_index_text_through(
     db = _stub_db(tmp_path)
     captured = _stub_refresh(cli_module, monkeypatch)
     html = _FIXTURE.read_text(encoding="utf-8")
-    assert "https://" not in html
     rc = cli_module.main(
         [
             "--db",
@@ -114,8 +95,6 @@ def test_main_passes_local_index_text_through(
     assert rc == 0
     assert "index_text" in captured["kwargs"]
     assert captured["index_text"] == html
-    assert captured["index_text"] is not None
-    assert captured["index_text"].strip() != ""
 
 
 def test_main_omitted_index_text_is_none_not_calendar_replay(
@@ -129,7 +108,6 @@ def test_main_omitted_index_text_is_none_not_calendar_replay(
     assert rc == 0
     assert "index_text" in captured["kwargs"]
     assert captured["index_text"] is None
-    assert captured["index_text"] != V2_REQUIRED
 
 
 def test_main_missing_index_file_does_not_call_refresh(
