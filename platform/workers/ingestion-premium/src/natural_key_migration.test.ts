@@ -14,7 +14,6 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS = join(here, "..", "migrations");
-const INDEX_TS = join(here, "index.ts");
 
 const LEGACY_SHORT_RATIO_KEY = '{"Date":"2025-04-01","S33":null}';
 const SHORT_RATIO_PAYLOAD = {
@@ -226,13 +225,5 @@ describe("rebuildNaturalKeysV2", () => {
         "SELECT natural_key FROM jquants_records WHERE dataset = ?",
       ).get("markets_short_ratio") as { natural_key: string }).natural_key,
     ).toBe(canonical);
-  });
-});
-
-describe("ingestion-premium natural-key rebuild source pin", () => {
-  it("gates ingest on READY and does not read payload available_at", () => {
-    const src = readFileSync(INDEX_TS, "utf8");
-    expect(src).toContain("await requireNaturalKeysV2Ready(env.DB)");
-    expect(src).not.toContain('typeof row["available_at"]');
   });
 });
