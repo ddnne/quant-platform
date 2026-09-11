@@ -60,7 +60,7 @@
     ],
     "unclassified": "REJECT"
   },
-  "manifest_digest": "sha256:270f7f8db54dc7bb1028991498574ef3d2dfd5aacb648736a10282a95dc542c2",
+  "manifest_digest": "sha256:e9293e164155d709eaff4132a5761c54b2cc103b32e4cad96e7f5935764a4a2a",
   "ops_binding_identity_digest": "sha256:881176391253aed791eeca79c264384838fe9f6edfc8f33e48c2353e450cb6e3",
   "project_account_id": "11233bca08d134a9b738eaa46b9751d9",
   "schema_version": "cloudflare-active-worker-bindings/v11",
@@ -926,15 +926,6 @@
             "max_retries": 3,
             "queue": "quant-jsda-ingestion",
             "retry_delay": 60
-          },
-          {
-            "dead_letter_queue": "quant-jsda-ingestion-rejects",
-            "max_batch_size": 1,
-            "max_batch_timeout": 5,
-            "max_concurrency": 1,
-            "max_retries": 8,
-            "queue": "quant-jsda-ingestion-dlq",
-            "retry_delay": 60
           }
         ],
         "queue_producers": [
@@ -1031,15 +1022,6 @@
             "max_concurrency": 1,
             "max_retries": 3,
             "queue": "quant-jsda-ingestion",
-            "retry_delay": 60
-          },
-          {
-            "dead_letter_queue": "quant-jsda-ingestion-rejects",
-            "max_batch_size": 1,
-            "max_batch_timeout": 5,
-            "max_concurrency": 1,
-            "max_retries": 8,
-            "queue": "quant-jsda-ingestion-dlq",
             "retry_delay": 60
           }
         ],

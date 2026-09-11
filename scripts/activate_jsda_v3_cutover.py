@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Single-operator JSDA v3 cutover for Cloudflare.
 
-The path is intentionally small: stop Cron, observe a stable drain, pause the
-Queue, persist a Time Travel rollback point, migrate under one D1 lease,
-verify, deploy, activate, then restore the prior Cron/Queue state.  Failures
-stay stopped and require the explicit --rollback command.
+The path is intentionally small: stop JSDA Cron, observe a stable drain, pause
+the JSDA main Queue, record a Time Travel bookmark as recovery-reference
+evidence, migrate under one D1 lease, verify, deploy, activate, then restore
+the prior JSDA Cron/Queue state.  Whole shared-D1 restore is not performed.
+Failures stay stopped; --rollback refuses with FORWARD_REPAIR_REQUIRED.
 """
 
 from __future__ import annotations
@@ -50,7 +51,6 @@ _schedules = cloudflare._schedules
 _selected = cloudflare._selected
 _set_schedules = cloudflare._set_schedules
 _wrangler = cloudflare._wrangler
-_wrangler_json = cloudflare._wrangler_json
 compiled_cutover_config_digest = cloudflare.compiled_cutover_config_digest
 STATE_ROOT = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") \
     / "quant-platform" / "jsda-cutover"
@@ -59,7 +59,14 @@ _SHA = re.compile(r"^[0-9a-f]{40}$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _OWNER = re.compile(r"^apply:[0-9a-f]{32}$")
 _NONCE = re.compile(r"^[0-9a-f]{64}$")
-_BOOKMARK = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{8}-[0-9a-f]{8}-[0-9a-f]{32}$")
+RECEIPT_SCHEMA = "jsda-cutover/v3"
+RECOVERY_POLICY = "forward_repair_no_shared_d1_restore"
+FORWARD_REPAIR_REQUIRED = (
+    "FORWARD_REPAIR_REQUIRED: whole shared-D1 restore is removed. "
+    "Use --check for read-only diagnosis; a reviewed forward corrective "
+    "migration or compatible Worker release is required. Unresolved restore "
+    "intent is preserved."
+)
 
 
 def _utc() -> str:
@@ -220,7 +227,7 @@ def _build_receipt(
     environment: str, intent: Mapping[str, Any], travel: Mapping[str, str],
 ) -> dict[str, Any]:
     core = {
-        "schema_version": "jsda-cutover/v2",
+        "schema_version": RECEIPT_SCHEMA,
         "environment": environment,
         "source_sha": intent["source_sha"],
         "prior_version_id": intent["prior_version_id"],
@@ -230,6 +237,7 @@ def _build_receipt(
         "prior_queue_paused": intent["prior_queue_paused"],
         "prior_applied_migrations": intent["prior_applied_migrations"],
         "rollback_bookmark": travel["bookmark"],
+        "recovery_policy": RECOVERY_POLICY,
         "database": dict(travel),
         "config_digest": intent["config_digest"],
         "control_intent_digest": intent["intent_digest"],
@@ -333,140 +341,73 @@ def _evidence(receipt: Mapping[str, Any], name: str, document: Mapping[str, Any]
     )
 
 
-def _read_evidence(
-    receipt: Mapping[str, Any], name: str,
-) -> dict[str, Any] | None:
-    base = _receipt_path(str(receipt["environment"]), str(receipt["run_id"]))
-    path = base.with_name(f"{base.stem}.{name}.json")
-    if not path.exists():
-        return None
-    if not path.is_file() or path.is_symlink() or path.stat().st_size > MAX_RECEIPT:
-        raise JsdaCutoverError(f"{name} evidence is unsafe")
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise JsdaCutoverError(f"{name} evidence is malformed") from exc
-    if (
-        not isinstance(value, Mapping)
-        or value.get("run_id") != receipt["run_id"]
-        or value.get("receipt_digest") != receipt["receipt_digest"]
-        or value.get("name") != name
-        or not isinstance(value.get("document"), Mapping)
-    ):
-        raise JsdaCutoverError(f"{name} evidence binding is invalid")
-    return dict(value["document"])
+def _local_unresolved_restore_intents(environment: str) -> list[str]:
+    directory = _root() / environment
+    if not directory.is_dir():
+        return []
+    found: list[str] = []
+    for path in sorted(directory.iterdir()):
+        name = path.name
+        if name.endswith(".staging-intent.json"):
+            proof = path.with_name(
+                f"{name[:-len('.staging-intent.json')]}.staging-proof.json"
+            )
+            if not proof.exists():
+                found.append(name)
+        elif name.endswith(".rollback-intent.json"):
+            complete = path.with_name(
+                f"{name[:-len('.rollback-intent.json')]}.rollback-complete.json"
+            )
+            if not complete.exists():
+                found.append(name)
+    return found
 
 
-def _restore_bookmark(
-    environment: str, bookmark: str, *, token: str, account: str,
-) -> str:
-    result = _wrangler_json(
-        ["d1", "time-travel", "restore", str(SURFACE[environment]["d1"]),
-         "--bookmark", bookmark, "--json"],
-        environment=environment, token=token, account=account,
-    )
-    if not isinstance(result, Mapping) or result.get("bookmark") != bookmark:
-        raise JsdaCutoverError("Time Travel restored the wrong bookmark")
-    previous = result.get("previous_bookmark")
-    if not isinstance(previous, str) or not _BOOKMARK.fullmatch(previous):
-        raise JsdaCutoverError("Time Travel undo bookmark is missing")
-    return previous
-
-
-def _staging_drill(
-    receipt: Mapping[str, Any], *, token: str, account: str,
-) -> None:
-    if receipt["environment"] != "staging":
-        return
-    proof = _receipt_path("staging", str(receipt["run_id"])).with_name(
-        f"{str(receipt['run_id']).removeprefix('sha256:')}.staging-proof.json"
-    )
-    if proof.exists():
-        return
-    runner = _migration_runner(token, account)
-    undo = migration.time_travel_bookmark("staging", runner=runner)["bookmark"]
-    baseline = str(receipt["rollback_bookmark"])
-    intent = {
-        "phase": "queue_paused", "staging_drill": "restore_pending",
-        "baseline": baseline, "undo": undo,
-    }
-    _record_run_document(
-        receipt, "queue_paused", intent, token=token, account=account
-    )
-    _evidence(receipt, "staging-intent", {"baseline": baseline, "undo": undo})
-    returned = _restore_bookmark("staging", baseline, token=token, account=account)
-    if returned != undo:
-        raise JsdaCutoverError("staging restore returned the wrong undo bookmark")
-    _evidence(receipt, "staging-restored", {"baseline": baseline, "undo": undo})
-    returned = _restore_bookmark("staging", undo, token=token, account=account)
-    if returned != baseline:
-        raise JsdaCutoverError("staging undo did not return to the baseline")
-    _create_only(proof, {"run_id": receipt["run_id"], "baseline": baseline, "undo": undo})
-    _record_run_document(
-        receipt, "queue_paused",
-        {
-            "phase": "queue_paused", "staging_drill": "verified",
-            "baseline": baseline, "undo": undo,
-        },
-        token=token, account=account,
+def _document_has_restore_pending(document: object) -> bool:
+    if isinstance(document, str):
+        try:
+            document = json.loads(document)
+        except json.JSONDecodeError:
+            return False
+    return isinstance(document, Mapping) and document.get("staging_drill") == (
+        "restore_pending"
     )
 
 
-def _recover_staging_drill(
-    receipt: Mapping[str, Any], *, token: str, account: str,
-) -> None:
-    if receipt["environment"] != "staging":
-        return
-    base = _receipt_path("staging", str(receipt["run_id"]))
-    intent_path = base.with_name(f"{base.stem}.staging-intent.json")
-    proof_path = base.with_name(f"{base.stem}.staging-proof.json")
-    if not intent_path.exists() or proof_path.exists():
-        return
-    try:
-        intent = json.loads(intent_path.read_text(encoding="utf-8"))["document"]
-    except (OSError, KeyError, json.JSONDecodeError, TypeError) as exc:
-        raise JsdaCutoverError("staging Time Travel intent is malformed") from exc
-    baseline = str(receipt["rollback_bookmark"])
-    undo = intent.get("undo") if isinstance(intent, Mapping) else None
-    if (
-        not isinstance(intent, Mapping)
-        or intent.get("baseline") != baseline
-        or not isinstance(undo, str)
-    ):
-        raise JsdaCutoverError("staging Time Travel intent is invalid")
-    current = migration.time_travel_bookmark(
-        "staging", runner=_migration_runner(token, account)
-    )["bookmark"]
-    if current == undo:
-        _create_only(
-            proof_path,
-            {"run_id": receipt["run_id"], "baseline": baseline, "undo": undo},
-        )
-        _record_run_document(
-            receipt, "queue_paused",
-            {
-                "phase": "queue_paused", "staging_drill": "verified",
-                "baseline": baseline, "undo": undo,
-            },
+def _remote_unresolved_restore_intents(
+    environment: str, *, token: str, account: str,
+) -> list[str]:
+    tables = {
+        row.get("name")
+        for row in _d1_rows(
+            environment,
+            "SELECT name FROM sqlite_master WHERE type='table'",
             token=token, account=account,
         )
-        return
-    if current != baseline:
-        raise JsdaCutoverError("staging Time Travel recovery is ambiguous")
-    returned = _restore_bookmark("staging", undo, token=token, account=account)
-    if returned != baseline:
-        raise JsdaCutoverError("staging Time Travel recovery returned wrong bookmark")
-    _create_only(
-        proof_path, {"run_id": receipt["run_id"], "baseline": baseline, "undo": undo}
-    )
-    _record_run_document(
-        receipt, "queue_paused",
-        {
-            "phase": "queue_paused", "staging_drill": "verified",
-            "baseline": baseline, "undo": undo,
-        },
+    }
+    if "jsda_v3_cutover_run" not in tables:
+        return []
+    rows = _d1_rows(
+        environment,
+        "SELECT run_id, document_json FROM jsda_v3_cutover_run",
         token=token, account=account,
     )
+    found: list[str] = []
+    for row in rows:
+        if _document_has_restore_pending(row.get("document_json")):
+            found.append(str(row.get("run_id") or ""))
+    return found
+
+
+def _require_forward_repair_clearance(
+    environment: str, *, token: str, account: str,
+) -> None:
+    local = _local_unresolved_restore_intents(environment)
+    remote = _remote_unresolved_restore_intents(
+        environment, token=token, account=account
+    )
+    if local or remote:
+        raise JsdaCutoverError(FORWARD_REPAIR_REQUIRED)
 
 
 RUN_COLUMNS = (
@@ -513,29 +454,6 @@ def _start(receipt: Mapping[str, Any], *, token: str, account: str) -> None:
         raise JsdaCutoverError("cutover run was not persisted")
 
 
-def _record_run_document(
-    receipt: Mapping[str, Any], phase: str, document: Mapping[str, Any],
-    *, token: str, account: str,
-) -> None:
-    encoded = json.dumps(document, sort_keys=True, separators=(",", ":"))
-    result = _d1_batch(
-        str(receipt["environment"]),
-        [{
-            "sql": "UPDATE jsda_v3_cutover_run SET evidence_digest=?,"
-                   "document_json=?,updated_at=? WHERE run_id=? AND phase=? "
-                   "AND owner=? AND fence=?",
-            "params": [
-                _digest(document), encoded, _utc(), receipt["run_id"], phase,
-                receipt["lease_owner"], receipt["lease_fence"],
-            ],
-        }],
-        token=token, account=account,
-    )[0]
-    meta = result.get("meta")
-    if not isinstance(meta, Mapping) or meta.get("changes") != 1:
-        raise JsdaCutoverError("cutover evidence CAS failed")
-
-
 def _advance(
     receipt: Mapping[str, Any], from_phase: str, to_phase: str,
     *, token: str, account: str, drain_digest: str | None = None,
@@ -545,7 +463,8 @@ def _advance(
         str(receipt["environment"]),
         [{
             "sql": "UPDATE jsda_v3_cutover_run SET phase=?,evidence_digest=?,"
-                   "drain_evidence_digest=?,document_json=?,updated_at=? "
+                   "drain_evidence_digest=COALESCE(?,drain_evidence_digest),"
+                   "document_json=?,updated_at=? "
                    "WHERE run_id=? AND phase=? AND owner=? AND fence=?",
             "params": [
                 to_phase, _digest(document), drain_digest,
@@ -643,6 +562,7 @@ def _continue(
     receipt: Mapping[str, Any], *, token: str, account: str,
 ) -> dict[str, Any]:
     environment = str(receipt["environment"])
+    _require_forward_repair_clearance(environment, token=token, account=account)
     runner = _migration_runner(token, account)
     while True:
         run = _status(receipt, token=token, account=account)
@@ -656,7 +576,6 @@ def _continue(
             if state["schedules"] or not state["queue"]["paused"]:
                 raise JsdaCutoverError("migration requires stopped Cron and Queue")
             _require_drained(state, after_migration=False)
-            _staging_drill(receipt, token=token, account=account)
             identity = _lease_identity(receipt)
             lease = migration.revalidate_mutation_lease(
                 identity=identity, environment=environment,
@@ -721,6 +640,7 @@ def activate(environment: str, *, yes: bool) -> dict[str, Any]:
     if not yes:
         raise JsdaCutoverError("--activate requires --yes")
     token, account = _credentials()
+    _require_forward_repair_clearance(environment, token=token, account=account)
     baseline = _observe(environment, token=token, account=account)
     if environment == "production":
         _require_staging_admission(
@@ -768,7 +688,7 @@ def resume(environment: str, run_id: str, *, yes: bool) -> dict[str, Any]:
         raise JsdaCutoverError("--resume requires --yes")
     token, account = _credentials()
     receipt = _load_receipt(environment, run_id)
-    _recover_staging_drill(receipt, token=token, account=account)
+    _require_forward_repair_clearance(environment, token=token, account=account)
     identity = _lease_identity(receipt)
     runner = _migration_runner(token, account)
     run = _status(receipt, token=token, account=account)
@@ -793,69 +713,7 @@ def resume(environment: str, run_id: str, *, yes: bool) -> dict[str, Any]:
 def rollback(environment: str, run_id: str, *, yes: bool) -> dict[str, Any]:
     if not yes:
         raise JsdaCutoverError("--rollback requires --yes")
-    token, account = _credentials()
-    receipt = _load_receipt(environment, run_id)
-    live = _observe(environment, token=token, account=account)
-    if live["schedules"]:
-        _set_schedules(environment, [], token=token, account=account)
-    first = _observe(environment, token=token, account=account)
-    time.sleep(2)
-    second = _observe(environment, token=token, account=account)
-    _require_drained(first, after_migration=False)
-    _require_drained(second, after_migration=False)
-    if not second["queue"]["paused"]:
-        _queue_action(environment, "pause-delivery", token=token, account=account)
-    quiesced = _observe(environment, token=token, account=account)
-    if quiesced["schedules"] or not quiesced["queue"]["paused"]:
-        raise JsdaCutoverError("rollback requires stopped Cron and Queue")
-    _require_drained(quiesced, after_migration=False)
-    runner = _migration_runner(token, account)
-    current_bookmark = migration.time_travel_bookmark(environment, runner=runner)["bookmark"]
-    intent = _read_evidence(receipt, "rollback-intent")
-    target = str(receipt["rollback_bookmark"])
-    if intent is None:
-        intent = {"target": target, "undo": current_bookmark}
-        _evidence(receipt, "rollback-intent", intent)
-    undo = str(intent.get("undo") or "")
-    if intent.get("target") != target or not _BOOKMARK.fullmatch(undo):
-        raise JsdaCutoverError("rollback intent is invalid")
-    if current_bookmark == undo:
-        returned = _restore_bookmark(environment, target, token=token, account=account)
-        if returned != undo:
-            raise JsdaCutoverError("rollback returned the wrong undo bookmark")
-    elif current_bookmark != target:
-        raise JsdaCutoverError("rollback recovery bookmark is ambiguous")
-    _evidence(receipt, "rollback-undo", {"undo": undo})
-    current = _selected(environment, token=token, account=account)
-    if current["version_id"] != receipt["prior_version_id"]:
-        command = [str(_wrangler()), "rollback", str(receipt["prior_version_id"]),
-                   "--yes", *_config(environment)]
-        result = _command(command, environment=environment, token=token,
-                          account=account, timeout=300)
-        if result.returncode:
-            raise JsdaCutoverError("Worker rollback failed")
-    queue = _queue(str(SURFACE[environment]["queue"]), token=token, account=account)
-    desired = receipt["prior_queue_paused"] is True
-    if queue["paused"] is not desired:
-        action = "pause-delivery" if desired else "resume-delivery"
-        _queue_action(environment, action, token=token, account=account)
-    _set_schedules(environment, list(receipt["prior_schedules"]),
-                   token=token, account=account)
-    authority = migration.observe_mutation_lease_authority(
-        environment=environment, runner=runner)
-    if (
-        authority
-        and authority.get("owner") == receipt["lease_owner"]
-        and int(authority.get("remote_spawned") or 0) == 0
-    ):
-        migration.release_mutation_lease(
-            environment=environment, owner=str(receipt["lease_owner"]),
-            nonce=str(receipt["lease_fence"]), runner=runner,
-            allow_recovery=True,
-        )
-    _evidence(receipt, "rollback-complete", {"undo": undo})
-    _remove_control_intent(receipt)
-    return {"status": "ROLLED_BACK", "run_id": run_id, "undo_bookmark": undo}
+    raise JsdaCutoverError(FORWARD_REPAIR_REQUIRED)
 
 
 def check(environment: str) -> dict[str, Any]:

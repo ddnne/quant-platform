@@ -1755,6 +1755,32 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
                 f"ingestion-secrets/{environment}: PROXY_RATE_LIMITER binding required"
             )
 
+    jsda_main = "quant-jsda-ingestion"
+    jsda_dlq = "quant-jsda-ingestion-dlq"
+    for environment in ("base", "production"):
+        consumers = workers["ingestion-jsda"][environment]["queue_consumers"]
+        if any(row.get("queue") == jsda_dlq for row in consumers):
+            raise ValueError(
+                f"ingestion-jsda/{environment}: production DLQ must not have a consumer"
+            )
+        mains = [row for row in consumers if row.get("queue") == jsda_main]
+        if (
+            len(mains) != 1
+            or mains[0].get("dead_letter_queue") != jsda_dlq
+        ):
+            raise ValueError(
+                f"ingestion-jsda/{environment}: main Queue must keep the "
+                "quant-jsda-ingestion-dlq dead-letter route"
+            )
+    staging_consumers = workers["ingestion-jsda"]["staging"]["queue_consumers"]
+    if not any(
+        row.get("queue") == "quant-jsda-ingestion-dlq-staging"
+        for row in staging_consumers
+    ):
+        raise ValueError(
+            "ingestion-jsda/staging: staging DLQ consumer fixture is required"
+        )
+
     body = {key: value for key, value in manifest.items() if key != "manifest_digest"}
     if manifest["ops_binding_identity_digest"] != quant_ops_binding_identity_digest(
         workers

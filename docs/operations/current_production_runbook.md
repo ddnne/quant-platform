@@ -64,8 +64,15 @@ remote apply results only in immutable release evidence.
   execute market data or Containers. Global live acceptance is the final
   check, not a blocker for prerequisite Worker code rollout. This bounded
   repair does not run D1 migration, JSDA activation, or DLQ mutation.
-- **JSDA cutover follow-ups (open):** shared Premium writer quiescence for D1
-  rollback, and preserving production DLQ delivery. Neither is closed.
+- **JSDA cutover follow-ups (open):** whole shared-D1 Time Travel restore is
+  removed from the operator. A Time Travel bookmark remains recovery-reference
+  evidence only; Premium and Receipt writers are not fenced. `--rollback`
+  refuses with `FORWARD_REPAIR_REQUIRED` and does not restore D1, resume old
+  delivery, or roll a v2-only Worker onto v3 data. Production JSDA no longer
+  declares a DLQ consumer; the main Queue still dead-letters onto
+  `quant-jsda-ingestion-dlq`. This source change does not close Receipt
+  checkpoint/O(N²), scoped READY, or any live rollout. A concrete incident
+  needs its own reviewed forward correction from live state.
 - **Quant Ops legacy agent:** `QuantOpsMcpAgent` remains on deprecated,
   feature-frozen `McpAgent` for un-inventoried legacy `/sse` compatibility.
   Source CI pins `agents` and the lock bytes and measures the complete
@@ -169,21 +176,25 @@ that executed.
 [`scripts/d1_ingestion_migration_validation.py`](../../scripts/d1_ingestion_migration_validation.py)
 provides exact ephemeral schema/history validation. The operator then:
 
-1. records a small create-only control intent before changing Cron;
-2. stops writers, observes two stable drains, pauses the Queue, and verifies
-   the drain again so a post-pause enqueue cannot race the bookmark;
-3. records the Time Travel bookmark and undo command in the remote D1 run before
-   applying any migration;
+1. records a small create-only control intent before changing JSDA Cron;
+2. stops JSDA Cron, observes two stable drains, pauses the JSDA main Queue, and
+   verifies the drain again so a post-pause enqueue cannot race the bookmark.
+   This does not stop Premium or Receipt writers on the shared D1;
+3. records a Time Travel bookmark as recovery-reference evidence before applying
+   any migration. The bookmark is not restore authority;
 4. acquires the same-D1 CAS lease, crosses the `remote_spawned` fence, applies
    the canonical chain with a bounded Wrangler subprocess, and verifies exact
    schema/history;
-5. activates the new source SHA and restores the exact prior Queue/Cron state.
+5. activates the new source SHA and restores the exact prior JSDA Queue/Cron
+   state.
 
 The local control intent is a few-kilobyte crash-recovery cache, not authority.
 Remote D1 plus live Cloudflare version/config/Queue/Cron observations are the
-source of truth. Whole-file local D1 exports are not part of cutover. Rollback
-uses the recorded Time Travel bookmark after writers are stopped and the Queue
-is paused and drained.
+source of truth. Whole-file local D1 exports are not part of cutover. The
+operator does not restore `quant-ingest` / `quant-ingest-staging` via Time
+Travel. `--rollback` fails closed with `FORWARD_REPAIR_REQUIRED`. Use `--check`
+for read-only diagnosis. Any concrete incident requires an independently
+reviewed forward corrective migration or compatible Worker release.
 
 The source-manifest consistency check does not contact or mutate Cloudflare:
 
@@ -198,29 +209,29 @@ If the process exits after it has created a run, resume only that run ID:
   --environment staging --resume --run-id RUN_ID --yes
 ```
 
-For an explicit rollback, use the same environment/run ID with `--rollback
---yes`. If live state matches neither the recorded target nor undo state, the
-operator fails closed for manual inspection.
+`--rollback --yes` is a policy refusal, not a restore. It does not mutate Cron,
+Queue, D1, Worker versions, leases, or local evidence.
 
 JSDA observation identity lives in
 `platform/workers/ingestion-premium/migrations/0012_jsda_observation_identity.sql`
 and precedes migration 0013 in the canonical `quant-ingest` chain. The Worker
-reads/writes v3 after this source revision. Do not roll it back to a v2-only
-Worker while retaining post-cutover D1 state. A rollback across this boundary
-is coordinated by the operator: stop writers, pause and drain the Queue,
-restore the recorded Time Travel bookmark, then restore the old Worker.
+reads/writes v3 after this source revision. Do not deploy a v2-only Worker
+against post-cutover D1 state. Reverse Worker rollback after a shared-D1
+restore is removed from this operator.
 
 When 0012 is applied it leaves `jsda_v3_cutover_control.phase` at `bridge`.
-Safe JSDA writer sequence is: stop old v1/v2 Cron and consumers, drain
-leases/jobs/main queue to zero, persist rollback evidence, migrate, deploy and
-activate v3. Product Cron/Queue stay fail-closed until
+Safe JSDA writer sequence is: stop old v1/v2 Cron and the JSDA main consumer,
+drain leases/jobs/main queue to zero, persist the bookmark as evidence, migrate,
+deploy and activate v3. Product Cron/Queue stay fail-closed until
 `v3_active`. Activation is one-way; D1 forbids reverse transition, INSERT
 OR REPLACE, and late v1 `jsda_acquisition_jobs` writes.
 
 [`scripts/activate_jsda_v3_cutover.py`](../../scripts/activate_jsda_v3_cutover.py)
 directly observes Cloudflare state. `--check` never mutates. `--activate`
-requires double-observed zero jobs/leases/backlog, stopped old Cron/consumers,
-preserved DLQ, canonical bindings and a pre-migration Time Travel bookmark.
+requires double-observed zero JSDA jobs/leases/backlog, stopped JSDA Cron and
+main Queue delivery, the production main dead-letter route without a production
+DLQ consumer, canonical bindings, and a pre-migration Time Travel bookmark used
+only as recovery-reference evidence.
 Production additionally requires a remote staging `ACTIVATED` run for the same
 source SHA plus matching live Worker/config/Queue/Cron observations. Caller
 JSON or a local admission file is not authority. Cloud Ops Projection

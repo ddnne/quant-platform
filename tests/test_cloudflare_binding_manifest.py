@@ -353,6 +353,34 @@ def test_premium_owns_jsda_v2_v3_migrations_in_production_and_staging() -> None:
         assert "migrations_dir" not in jsda[0]
 
 
+def test_jsda_production_keeps_dlq_route_without_consumer() -> None:
+    manifest = manifest_module.build_manifest()
+    for environment in ("base", "production"):
+        consumers = manifest["workers"]["ingestion-jsda"][environment][
+            "queue_consumers"
+        ]
+        assert [row["queue"] for row in consumers] == ["quant-jsda-ingestion"]
+        assert consumers[0]["dead_letter_queue"] == "quant-jsda-ingestion-dlq"
+    staging = manifest["workers"]["ingestion-jsda"]["staging"]["queue_consumers"]
+    assert [row["queue"] for row in staging] == [
+        "quant-jsda-ingestion-staging",
+        "quant-jsda-ingestion-dlq-staging",
+    ]
+    drifted = copy.deepcopy(manifest)
+    drifted["workers"]["ingestion-jsda"]["production"]["queue_consumers"].append({
+        "dead_letter_queue": "quant-jsda-ingestion-rejects",
+        "max_batch_size": 1,
+        "max_batch_timeout": 5,
+        "max_concurrency": 1,
+        "max_retries": 8,
+        "queue": "quant-jsda-ingestion-dlq",
+        "retry_delay": 60,
+    })
+    _recompute_binding_digests(drifted)
+    with pytest.raises(ValueError, match="production DLQ must not have a consumer"):
+        manifest_module.validate_manifest(drifted)
+
+
 def test_quant_ops_mcp_object_capability_is_self_only() -> None:
     manifest = manifest_module.build_manifest()
     for environment in ("base", "production", "staging"):
