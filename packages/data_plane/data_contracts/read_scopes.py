@@ -36,6 +36,7 @@ _INITIAL_STATES = frozenset(
     {
         "all_visible_existence_and_count",
         "latest_qualifying_bps_preferred_else_eps",
+        "latest_complete_snapshot_plus_updates",
     }
 )
 _REQUIRED_FIELDS = frozenset(
@@ -45,6 +46,11 @@ _REQUIRED_FIELDS = frozenset(
         "adjustment_close",
         "payload",
         "raw_payload",
+        "holiday_division",
+        "snapshot_date",
+        "code",
+        "market_code",
+        "scale_category",
     }
 )
 _OPTIONAL_FIELDS = frozenset({"volume", "adjustment_volume"})
@@ -58,6 +64,7 @@ _SCOPE_KEYS = frozenset(
         "split_safety_anchor_interval",
         "fields",
         "optional_fields",
+        "unconsumed_membership",
     }
 )
 
@@ -187,6 +194,7 @@ class DatasetReadScope:
     split_safety_anchor_interval: bool = False
     fields: tuple[str, ...] = ()
     optional_fields: tuple[str, ...] = ()
+    unconsumed_membership: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.dataset_id, str) or not self.dataset_id.strip():
@@ -215,12 +223,26 @@ class DatasetReadScope:
         )
         object.__setattr__(self, "fields", fields)
         object.__setattr__(self, "optional_fields", optional)
+        object.__setattr__(
+            self,
+            "unconsumed_membership",
+            _strict_bool(self.unconsumed_membership, "unconsumed_membership"),
+        )
+        if self.unconsumed_membership and (
+            count is not None
+            or self.initial_visible_state is not None
+            or self.split_safety_anchor_interval
+            or fields
+            or optional
+        ):
+            raise ValueError("unconsumed membership cannot declare a read need")
         if (
             count is None
             and self.initial_visible_state is None
             and not self.split_safety_anchor_interval
             and not fields
             and not optional
+            and not self.unconsumed_membership
         ):
             raise ValueError("dataset read scope must declare at least one need")
 
@@ -241,6 +263,7 @@ class DatasetReadScope:
             ),
             fields=mapping.get("fields", ()),
             optional_fields=mapping.get("optional_fields", ()),
+            unconsumed_membership=mapping.get("unconsumed_membership", False),
         )
 
     def referenced_input_names(self) -> tuple[str, ...]:
@@ -270,6 +293,7 @@ class DatasetReadScope:
             ),
             "optional_fields": list(self.optional_fields),
             "split_safety_anchor_interval": self.split_safety_anchor_interval,
+            "unconsumed_membership": self.unconsumed_membership,
         }
 
 

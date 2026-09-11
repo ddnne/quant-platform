@@ -144,6 +144,17 @@ def test_financial_semantics_match_existing_compute_and_am_volume_projection() -
     assert bars.optional_fields == ("adjustment_volume", "volume")
     assert fins.initial_visible_state == "latest_qualifying_bps_preferred_else_eps"
     assert fins.fields == ("payload", "raw_payload")
+    master = DatasetReadScope(
+        dataset_id="equities_master",
+        initial_visible_state="latest_complete_snapshot_plus_updates",
+        fields=("snapshot_date",),
+    )
+    calendar = DatasetReadScope(
+        dataset_id="markets_calendar",
+        fields=("date", "holiday_division"),
+    )
+    assert DatasetReadScope.from_mapping(master.canonical_mapping()) == master
+    assert DatasetReadScope.from_mapping(calendar.canonical_mapping()) == calendar
 
 
 def test_declared_fins_catalog_fields_preserve_parser_selection() -> None:

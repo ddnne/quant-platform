@@ -1,19 +1,22 @@
 {
   "schema": "quant-platform-work-ledger/v1",
   "baseline_sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
-  "branch": "fix/terminal-state-test-deduplication",
-  "updated_at": "2026-09-11T01:11:00Z",
+  "branch": "feat/explicit-dependency-scopes",
+  "updated_at": "2026-09-11T04:03:00Z",
   "lanes": {
     "source_delivered": {
       "status": "partial_main_and_candidate",
-      "scope": "items_2_3a_5_runtime_wiring_and_terminal_synchronization_merged_spawn_fixture_candidate",
-      "notes": "PR103 through107 merged after native required checks on their exact final source SHAs. PR107 source0f34e800 passed all lanes and merged as5a25bded; its separate main check then failed in a redundant fork-backed unavailable-upload test whose worker remained alive after bounded joins. The current candidate consolidates that duplicated policy case and makes seven retained terminal fixtures execute an importable synthetic runner under default spawn, with failure-only bounded cleanup. Exact child-stall cause remains unproven; no production defect absence or final-main acceptance is inferred. Re-read GitHub before resuming. Source delivery remains distinct from rollout, data activation and READY.",
-      "pull_request": "https://github.com/ddnne/quant-platform/pull/103",
-      "implementation_sha": "0255744b74e8b7186940abf93a1ed0be61a033ee",
-      "merged_sha": "71410b3603b3a70d07db42d24082c3d04f280b18",
-      "required_check_source_sha": "4069b1e856e7291a3365180d3b13d7fbabbd5c3f",
+      "scope": "pr103_through_pr108_merged_pr109_scope_foundation_pushed",
+      "notes": "PR103 through108 are merged. PR108 exact source1f140b52 and merged main6ca8cf22 passed native required checks; the old test-only main failure is resolved, not a current merge blocker. PR109 remains Draft with an independently reviewed/pushed read-scope foundation and an inactive compiler/profile follow-up under review. Reader/READY/Trader wiring remains pending. Source delivery is separate from rollout, data activation and READY.",
+      "latest_main_sha": "6ca8cf228fefdea2195a8981dee79edb33cfdedf",
+      "latest_main_check_completed_at": "2026-09-11T01:43:18Z",
+      "latest_main_evidence": "https://github.com/ddnne/quant-platform/pull/108#issuecomment-5628165046",
+      "pull_request": "https://github.com/ddnne/quant-platform/pull/108",
+      "implementation_sha": "4a7d07c86b2fc3b08ed6fa1b564a92d61d631686",
+      "merged_sha": "6ca8cf228fefdea2195a8981dee79edb33cfdedf",
+      "required_check_source_sha": "1f140b526cdf9a15a67e7ac593c0d81eb1c96b26",
       "required_check_app_id": 85455,
-      "required_check_build_id": "54ef4bbd-3aa0-4d53-b23f-8637e7ebe2c6"
+      "required_check_build_id": "140328e7-5eaf-433e-a154-e739ca34f61f"
     },
     "staging_deployed": {
       "status": "not_this_branch",
@@ -55,7 +58,13 @@
       "review": "Independent critical review found no unresolved major issue in the reviewed AM/consumer scope. Global operational gates remain unresolved."
     },
     "3_dependency_scope": {
-      "status": "item_3a_merged_pr105_full_scopes_pending",
+      "status": "pr109_inactive_compiler_locally_verified_shared_reader_pending",
+      "foundation_sha": "01cbc26b5b3cb76d1d93866789fe1272e60c43a1",
+      "foundation_native_build_id": "8ed4d7e7-8a74-48bb-bd30-eac020911c5c",
+      "foundation_native_conclusion": "success",
+      "foundation_evidence": "https://github.com/ddnne/quant-platform/pull/109#issuecomment-5629084304",
+      "current_review": "Grok completed the inactive closure-v2/profile-v3 compiler. Independent review findings are fixed: exact feature/metadata/scope binding, universe field/AM-calendar declarations, unconsumed evaluation/risk membership, common duplicate/literal/clock validation, and explicit rejection of nonempty new requirements on v1. Final independent regression331 passed in17.12s; old feature/closure/profile hashes and Controlled golden fixture unchanged; generated/secret/path/finding checks passed. Reviewer re-ran the prior probes and found no additional actionable issue in this slice. Compiler final-SHA native CI remains pending; PR109 stays Draft until the shared reader/candidate/READY/runtime chain is completed and accepted. Foundation's separate native success does not cover this new commit. No activation/deployment/Pilot.",
+      "compiler_reviewed_diff_sha256": "410a95a3161077211cac10f9c1591a41ff86cab8207d0a254f1c0b0fd6c28c57",
       "implementation_commit": "521e0233",
       "merge_sha": "36b02bb4a2b1d2090bc7b2cee93c81337af6ba5a",
       "required_check_source_sha": "302ecca81e0c1b504d3d60838b7156ce7d25a7e6",
@@ -96,7 +105,7 @@
         "review": "Independent critical review identified a worker-completion race and an unbounded held-timer test driver. Grok fixed both; independent delta review confirmed resolution with no further actionable finding. PR106 subsequently passed native source CI, merged, and passed representative fresh-clone verification; the later merged-main HTTP-adapter failure is tracked separately below."
       },
       "http_adapter_followup": {
-        "status": "source_merged_pr107_main_fixture_failure_followup_pending",
+        "status": "source_merged_pr107_followup_resolved_by_pr108",
         "merge_sha": "5a25bdeddc7097395a709314f5b51358e066ccda",
         "required_check_source_sha": "0f34e800b6443c9f90a1d46b5f43d7f40fd141ca",
         "required_check_app_id": 85455,
@@ -110,7 +119,10 @@
         "followup_evidence": "https://github.com/ddnne/quant-platform/pull/107#issuecomment-5627357707"
       },
       "spawn_fixture_followup": {
-        "status": "locally_verified_native_ci_and_merge_pending",
+        "status": "merged_pr108_source_and_main_native_ci_success",
+        "merge_sha": "6ca8cf228fefdea2195a8981dee79edb33cfdedf",
+        "required_check_source_sha": "1f140b526cdf9a15a67e7ac593c0d81eb1c96b26",
+        "accepted_evidence": "https://github.com/ddnne/quant-platform/pull/108#issuecomment-5628165046",
         "implementation_commit": "4a7d07c86b2fc3b08ed6fa1b564a92d61d631686",
         "reason": "Merged-main5a25 build417cbefd-18eb-4d60-912f-60cdc3798ec1 failed:3625 passed,1 failed,4 skipped,27 warnings,611.50s. test_unavailable_terminal_upload_does_not_shutdown forced fork through _job_manager and held the watchdog; its worker remained alive after join2s and another join2s during teardown. Exact child-stall reason is not proven. A separate review also found some sibling default-spawn fixtures used unpicklable local lambdas, so a startup failure could substitute for intended child execution.",
         "scope": "Tests only: remove the redundant45-line unavailable-upload policy case, reuse one importable no-I/O synthetic failure runner under default spawn in seven existing Container/Overlay/Smile/VolPanel cases, assert its intended error, and stop an unexpectedly live supervisor outside the manager lock during failure-only cleanup. Existing product supervisor, timeout values, process-group/spawn/watchdog/cancel/lease tests and golden artifacts remain unchanged. Three test files,23 insertions and50 deletions; no new cases/modules/frameworks.",
@@ -125,9 +137,14 @@
     "6_shared_d1_receipt_reproof": { "status": "pending" },
     "7_dead_code_and_docs": { "status": "pending" },
     "8_rollout_and_research_go": { "status": "pending" },
-    "9_push_remote_and_fresh_clone_verify": { "status": "pr103_through_pr107_merged_spawn_fixture_followup_pending_final_main_verification_incomplete" }
+    "9_push_remote_and_fresh_clone_verify": { "status": "pr103_through_pr108_merged_and_fresh_clone_verified_pr109_draft_final_project_verification_pending" }
   },
   "operational_facts": [
+    {
+      "id": "pr108_merge_pr109_foundation_and_live_state_20260911",
+      "observed_at": "2026-09-11T03:47:00Z",
+      "fact": "GitHub reread confirms PR108 merged normally as6ca8cf22; source and merged-main native app85455 checks succeeded. Prior fresh GitHub clone passed282 representative tests, clean/unpushed0. PR109 foundation01cbc26b passed native check103137235978 at03:32:58Z, build8ed4d7e7:3632 Python passed/4 skipped and all Worker lanes/named environments/dry-runs. Deploy command true is not a product rollout. Independent focused326 tests and legacy/golden compatibility passed. Live read-only measurements around03:27Z remain STALE, generated2026-08-21T12:30:49.152421+00:00, generationprojgen-ef18b4f86ee946048161d25e2a30a2a8, source cursor2899297, applied cursor null, B0UNKNOWN, READYnull, refresh_attempt=false/refresh_success=false. No deployment, data activation, DLQ operation or Pilot. Compiler/profile draft review is ongoing; historical snapshots below do not override this current state."
+    },
     {
       "id": "pr107_merge_fresh_clone_and_main_failure_20260911",
       "observed_at": "2026-09-11T01:11:00Z",
