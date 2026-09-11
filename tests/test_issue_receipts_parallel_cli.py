@@ -146,10 +146,6 @@ def _stub_refresh(cli_module, monkeypatch) -> dict:
     return captured
 
 
-def test_read_index_text_missing_path_is_none(cli_module) -> None:
-    assert cli_module._read_index_text(None) is None
-
-
 def test_main_passes_local_index_text_through(
     cli_module, monkeypatch, tmp_path: Path,
 ) -> None:

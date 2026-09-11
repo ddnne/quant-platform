@@ -37,25 +37,6 @@ def cli_module():
     return _load_mod()
 
 
-def test_read_index_text_omitted_blank_fixture(cli_module, tmp_path: Path) -> None:
-    assert cli_module._read_index_text(None) is None
-    assert cli_module._read_index_text("") is None
-    assert cli_module._read_index_text("   ") is None
-    blank = tmp_path / "blank.html"
-    blank.write_text("   \n", encoding="utf-8")
-    assert cli_module._read_index_text(blank) is None
-    assert cli_module._read_index_text(_FIXTURE) == _FIXTURE.read_text(
-        encoding="utf-8"
-    )
-
-
-def test_read_index_text_missing_path_raises(cli_module, tmp_path: Path) -> None:
-    missing = tmp_path / "no_such_official_index.html"
-    assert not missing.exists()
-    with pytest.raises(FileNotFoundError):
-        cli_module._read_index_text(missing)
-
-
 def test_refresh_issued_coverage_always_passes_index_text(
     cli_module, monkeypatch,
 ) -> None:

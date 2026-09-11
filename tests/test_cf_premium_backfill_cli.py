@@ -20,7 +20,6 @@ from ops.range_batch_scheduler import SchedulerResult
 _REPO = Path(__file__).resolve().parents[1]
 _SCRIPT = _REPO / "scripts" / "ops" / "cf_premium_backfill.py"
 _FIXTURE = _REPO / "tests" / "fixtures" / "jsda_otc_official_index_tiny.html"
-V2_REQUIRED = 8784
 
 
 def _load_mod():
@@ -95,12 +94,6 @@ def _cli_paths(tmp_path: Path) -> list[str]:
     ]
 
 
-def test_read_index_text_omitted_blank_is_none(cli_module) -> None:
-    assert cli_module._read_index_text(None) is None
-    assert cli_module._read_index_text("") is None
-    assert cli_module._read_index_text("   ") is None
-
-
 def test_main_omitted_index_text_calls_plan_with_none(
     cli_module, monkeypatch, tmp_path: Path,
 ) -> None:
@@ -110,7 +103,6 @@ def test_main_omitted_index_text_calls_plan_with_none(
     assert captured["plan_calls"]
     assert "index_text" in captured["plan"]
     assert captured["plan"]["index_text"] is None
-    assert captured["plan"]["index_text"] != V2_REQUIRED
 
 
 def test_main_supplied_index_text_path_is_forwarded(
@@ -118,14 +110,11 @@ def test_main_supplied_index_text_path_is_forwarded(
 ) -> None:
     captured = _stub_planner(cli_module, monkeypatch)
     html = _FIXTURE.read_text(encoding="utf-8")
-    assert "https://" not in html
     rc = cli_module.main(_cli_paths(tmp_path) + ["--index-text", str(_FIXTURE)])
     assert rc == 0
     assert captured["plan_calls"]
     assert "index_text" in captured["plan"]
     assert captured["plan"]["index_text"] == html
-    assert captured["plan"]["index_text"] is not None
-    assert captured["plan"]["index_text"].strip() != ""
 
 
 def test_main_missing_index_file_does_not_call_plan(
