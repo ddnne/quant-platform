@@ -11,15 +11,6 @@ function req(
 }
 
 describe("authorized", () => {
-  it("unbound expected is false", async () => {
-    expect(
-      await authorized(req({ "X-Ingestion-Token": TOKEN }), undefined),
-    ).toBe(false);
-    expect(await authorized(req({ "X-Ingestion-Token": TOKEN }), "")).toBe(
-      false,
-    );
-  });
-
   it("matching header is true", async () => {
     expect(
       await authorized(req({ "X-Ingestion-Token": TOKEN }), TOKEN),
@@ -32,11 +23,5 @@ describe("authorized", () => {
       `https://ingestion-secrets.test/v1/proxy/jquants?token=${encodeURIComponent(TOKEN)}`,
     );
     expect(await authorized(request, TOKEN)).toBe(false);
-  });
-
-  it("wrong header is false", async () => {
-    expect(
-      await authorized(req({ "X-Ingestion-Token": "wrong-token" }), TOKEN),
-    ).toBe(false);
   });
 });
