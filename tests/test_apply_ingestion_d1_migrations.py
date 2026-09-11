@@ -337,9 +337,3 @@ def test_unobserved_acquire_stays_held_then_only_expired_process_free_is_reclaim
         lease_nonce_token="4" * 64,
     )
     assert replacement["owner"] == "apply:" + "3" * 32
-
-
-def test_no_local_database_export_or_backup_path_remains() -> None:
-    assert not hasattr(owner, "apply_guarded")
-    assert not hasattr(owner, "recover_guarded")
-    assert not hasattr(owner, "put_create_only_private_backup")

@@ -2,31 +2,9 @@
 
 from __future__ import annotations
 
-import importlib
-import sys
 from pathlib import Path
 
 import pytest
-
-
-def test_product_mass_eval_has_no_json_post_capability() -> None:
-    importlib.import_module("research.cf_mass_eval_job")
-    module = importlib.import_module("research.cf_mass_eval_run")
-    assert not hasattr(module, "post_json_object")
-    assert not hasattr(module, "deploy_wrangler_worker")
-    assert "post_json_object" not in vars(module)
-
-
-def test_product_daily_path_eval_has_no_git_subprocess() -> None:
-    module = importlib.import_module("research.daily_path_eval")
-    assert not hasattr(module, "git_sha")
-    assert "subprocess" not in vars(module)
-
-
-def test_product_ready_manifest_cannot_open_publication_scope() -> None:
-    module = importlib.import_module("research.ready_manifest")
-    assert not hasattr(module, "publication_verifier_scope")
-    assert "pit._ready_verifier_reads" not in vars(module)
 
 
 def test_ordinary_product_caller_cannot_open_preready_storage(

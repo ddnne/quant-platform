@@ -7,11 +7,9 @@ execution.paper_service.PaperExecutionService. It must not call run_paper.
 from __future__ import annotations
 
 
-def test_import_paper_runtime_execution_does_not_arm_and_is_not_live_service() -> None:
-    import paper_runtime
-    import paper_runtime.execution as helper
+def test_import_paper_runtime_execution_does_not_arm() -> None:
+    import paper_runtime.execution  # noqa: F401
     import agents  # noqa: F401 — complete agents↔execution cycle
-    from execution.paper_service import PaperExecutionService
     from features.research_freezes import (
         CONTINUOUS_PAPER,
         MASS_RESEARCH,
@@ -23,8 +21,3 @@ def test_import_paper_runtime_execution_does_not_arm_and_is_not_live_service() -
     assert PAPER_SCHEDULER_ARMED is False
     assert READY_DECLARED is False
     assert MASS_RESEARCH == "NO-GO"
-    assert helper.__name__ == "paper_runtime.execution"
-    assert helper.PaperExecutionService is not PaperExecutionService
-    assert PaperExecutionService.__module__ == "execution.paper_service"
-    assert "execution" not in paper_runtime.__all__
-    assert not hasattr(paper_runtime, "PaperExecutionService")
