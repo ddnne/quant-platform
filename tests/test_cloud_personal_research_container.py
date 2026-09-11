@@ -2186,66 +2186,6 @@ def test_terminal_publication_retry_state_machine(
         manager._shutdown_notified = True
 
 
-def test_matching_existing_terminal_is_accepted() -> None:
-    stored: dict[str, dict] = {}
-    terminal = threading.Event()
-    spec = _job("a" * 64, "existing-ok")
-    stored[spec.manifest_key] = {
-        "job_id": spec.job_id,
-        "request_digest": spec.request_digest,
-        "runner_version": spec.runner_version,
-        "cohort_id": spec.cohort_id,
-        "universe_id": spec.universe_id,
-        "status": "FAILED",
-    }
-
-    def uploader(key, data, *, spec, content_digest, extra_headers=None):
-        del data, spec, content_digest, extra_headers
-        raise RuntimeError("R2 upload returned 409")
-
-    manager = _job_manager(
-        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
-        on_terminal=terminal.set,
-        terminal_uploader=uploader,
-        terminal_reader=lambda item: stored.get(item.manifest_key),
-        max_job_seconds=30,
-    )
-    manager.submit(spec)
-    assert terminal.wait(1)
-
-
-def test_conflicting_terminal_shuts_down_fail_closed() -> None:
-    stored: dict[str, dict] = {}
-    terminal = threading.Event()
-    spec = _job("a" * 64, "conflict-term")
-    stored[spec.manifest_key] = {
-        "job_id": spec.job_id,
-        "request_digest": "sha256:" + "c" * 64,
-        "runner_version": spec.runner_version,
-        "cohort_id": spec.cohort_id,
-        "universe_id": spec.universe_id,
-        "status": "FAILED",
-    }
-
-    def uploader(key, data, *, spec, content_digest, extra_headers=None):
-        del data, spec, content_digest, extra_headers
-        raise RuntimeError("R2 upload returned 409")
-
-    manager = _job_manager(
-        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
-        on_terminal=terminal.set,
-        terminal_uploader=uploader,
-        terminal_reader=lambda item: stored.get(item.manifest_key),
-        retry_schedule=(0.05,),
-        max_job_seconds=30,
-    )
-    manager.submit(spec)
-    assert terminal.wait(1)
-    assert manager._shutdown_notified is True
-    assert manager._retry_timer is None
-    assert manager.status(spec.job_id)["status"] == "FAILED"
-
-
 def test_watchdog_and_normal_race_keeps_one_terminal() -> None:
     stored: dict[str, dict] = {}
     terminal = threading.Event()
@@ -2507,11 +2447,27 @@ class _ProductionR2:
         raise AssertionError(method)
 
 
-def test_production_conflict_reads_matching_terminal_without_injected_reader(
-    monkeypatch,
+@pytest.mark.parametrize(
+    "use_http_adapter",
+    (False, True),
+    ids=("injected", "http-adapter"),
+)
+@pytest.mark.parametrize(
+    "foreign_identity",
+    (False, True),
+    ids=("matching-replay", "identity-conflict"),
+)
+def test_terminal_publication_existing_identity(
+    held_retry_scheduler: list[_HeldTimer],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+    use_http_adapter: bool,
+    foreign_identity: bool,
 ) -> None:
-    fake = _ProductionR2()
-    spec = _job("a" * 64, "prod-conflict")
+    puts = {"n": 0}
+    gets = {"n": 0}
+    shutdowns: list[int] = []
+    spec = _job("a" * 64, "existing-terminal")
     existing = {
         **service._manifest_base(
             spec, started_at=service._now(), finished_at=service._now()
@@ -2519,47 +2475,83 @@ def test_production_conflict_reads_matching_terminal_without_injected_reader(
         "status": "FAILED",
         "error": "absolute Container lifetime exceeded (0.05s)",
     }
-    fake.objects[spec.manifest_key] = service._canonical_bytes(existing)
-    monkeypatch.setattr(service.urllib.request, "urlopen", fake.urlopen)
-    terminal = threading.Event()
+    if foreign_identity:
+        existing["request_digest"] = "sha256:" + "c" * 64
+    adapter = None
+    http_hits: list[str] = []
+    terminal_uploader = None
+    terminal_reader = None
+    if use_http_adapter:
+        adapter = _ProductionR2()
+        adapter.objects[spec.manifest_key] = service._canonical_bytes(existing)
+        monkeypatch.setattr(service.urllib.request, "urlopen", adapter.urlopen)
+    else:
+        http_hits = _install_isolated_http_guard(monkeypatch)
+
+        def terminal_uploader(key, data, *, spec, content_digest, extra_headers=None):
+            del key, data, spec, content_digest, extra_headers
+            puts["n"] += 1
+            raise RuntimeError("R2 upload returned 409")
+
+        def terminal_reader(item):
+            del item
+            gets["n"] += 1
+            return existing
+
     manager = _job_manager(
-        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
-        on_terminal=terminal.set,
-        retry_schedule=(0.01,),
-        max_job_seconds=30,
-    )
-    manager.submit(spec)
-    assert terminal.wait(1)
-    assert fake.puts >= 1
-    assert fake.gets >= 1
-    assert manager._shutdown_notified is True
-
-
-def test_production_mismatched_terminal_shuts_down_fail_closed(monkeypatch) -> None:
-    fake = _ProductionR2()
-    spec = _job("a" * 64, "prod-mismatch")
-    existing = {
-        **service._manifest_base(
-            spec, started_at=service._now(), finished_at=service._now()
+        lambda item: (_ for _ in ()).throw(
+            AssertionError("publication boundary test must not start a runner")
         ),
-        "status": "FAILED",
-        "error": "other",
-        "request_digest": "sha256:" + "c" * 64,
-    }
-    fake.objects[spec.manifest_key] = service._canonical_bytes(existing)
-    monkeypatch.setattr(service.urllib.request, "urlopen", fake.urlopen)
-    terminal = threading.Event()
-    manager = _job_manager(
-        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
-        on_terminal=terminal.set,
-        retry_schedule=(0.05,),
+        on_terminal=lambda: shutdowns.append(1),
+        terminal_uploader=terminal_uploader,
+        terminal_reader=terminal_reader,
         max_job_seconds=30,
     )
-    manager.submit(spec)
-    assert terminal.wait(1)
-    assert manager._shutdown_notified is True
-    assert manager._retry_timer is None
-    assert manager.status(spec.job_id)["status"] == "FAILED"
+    try:
+        manager._begin_terminal_publication(
+            spec, manager._failure_terminal(spec, "runner failed")
+        )
+        if adapter is None:
+            assert puts["n"] == 1
+            assert gets["n"] == 1
+            assert http_hits == []
+        else:
+            assert adapter.puts == 1
+            assert adapter.gets == 1
+        assert shutdowns == [1]
+        assert manager._shutdown_notified is True
+        assert manager._retry_timer is None
+        assert manager._pending_terminal is None
+        assert manager._accepting is False
+        assert held_retry_scheduler == []
+        events = [
+            json.loads(line)
+            for line in capsys.readouterr().out.splitlines()
+            if line.startswith("{")
+        ]
+        conflicts = [
+            event
+            for event in events
+            if event.get("event") == "terminal_publication_conflict"
+        ]
+        exhausted = [
+            event
+            for event in events
+            if event.get("event") == "terminal_publication_retry_exhausted"
+        ]
+        assert exhausted == []
+        if foreign_identity:
+            assert len(conflicts) == 1
+            assert conflicts[0]["go"] is False
+        else:
+            assert conflicts == []
+        with pytest.raises(service.JobBusyError):
+            manager.submit(_job("b" * 64, "other"))
+    finally:
+        if manager._retry_timer is not None:
+            manager._retry_timer.cancel()
+        manager._pending_terminal = None
+        manager._shutdown_notified = True
 
 
 def _put_then_get_404(monkeypatch, *, put_error):

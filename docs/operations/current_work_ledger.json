@@ -202,8 +202,16 @@
       "residual": "Shared-D1 source is merged but not rolled out; refusing unsafe rollback does not automatically repair a concrete incident. Receipt checkpoint remains an unmerged candidate, not operational acceptance. Production HOLD remains."
     },
     "7_dead_code_and_docs": {
-      "status": "implementation_pending_test_audit_completed",
-      "test_audit": "Read-only main1088c398 static inventory:393 test files plus2 support paths,2983 Python definitions and1115 Worker registrations, not expanded runtime cases. Main-authored candidate body/alternative review identified52 findings across100 files:13 direct-deletion groups covering22 definitions,7 assert reductions,23 consolidations,7 replacements and2 test-tier moves. Two independent critical reviews yielded9 guardrail corrections, all incorporated. No tests were deleted, timings claimed or coverage-count target adopted. Uncommitted branches were documented separately, not counted as main. Implementation remains pending and requires reviewable scoped changes, not bulk deletion."
+      "status": "test_audit_execution_in_progress",
+      "test_audit": "Baseline main1088c398 static inventory:393 test files plus2 support paths,2983 Python definitions and1115 Worker registrations, not expanded runtime cases. Main-authored candidate body/alternative review identified52 findings across100 files:13 direct-deletion groups covering22 definitions,7 assert reductions,23 consolidations,7 replacements and2 test-tier moves. Two independent critical reviews yielded9 guardrail corrections, incorporated before execution. User subsequently authorized implementation. The original inventory remains a baseline, not a claim that every candidate has been removed. Uncommitted branches are separate. No coverage-count target or bulk deletion.",
+      "terminal_publication_test_reduction": {
+        "status": "locally_verified_native_pending",
+        "audit_ids": ["CI-A01", "CI-A02"],
+        "reason": "PR113 exact54471b5e native check103247917847/app85455/builda76bacc7 failed Python test_matching_existing_terminal_is_accepted at terminal.wait(1):3678 passed/1 failed/4 skipped,382.94s. Receipt Worker lane was not reached, so that build cannot verify Receipt concurrency repair.",
+        "change": "Grok-authored test-only patch applied by Codex: four process-start/wait(1) definitions become one parameterized real publication boundary test with the same four injected/HTTP-adapter by matching/conflicting cases. Real _put/_get_json remain; one PUT/GET/callback, conflict audit distinction and closed admission/pending/retry are checked. Process/default-spawn/HTTP failure tests remain. No timeout increase or production change. One test file92 insertions/100 deletions.",
+        "verification": "Old four cases locally4 passed/0.80s; replacement4 passed/0.53s, single runs only, not a speedup or flake-rate estimate. Full Container and VolPanel modules135 passed/14 existing fork warnings/9.30s. Independent static review found no actionable issue; file15975d65250c664854895e14c19e49751d6685049bb5a50b70af422f68503b94 and diffb43ff31332847e4777b2a1b73bfec2b5ee6084d19a6667da38ab2b18cf63f773 unchanged. An initial invocation named a nonexistent supervisor file and collected no tests; it is not counted as verification.",
+        "remaining": "Exact-final-SHA native CI still required. Broader52 audit candidates, Receipt acquisition-boundary runtime regressions and existing fork-dependent tests remain separate. No merge, rollout, READY or Pilot acceptance."
+      }
     },
     "8_rollout_and_research_go": { "status": "pending" },
     "9_push_remote_and_fresh_clone_verify": { "status": "pr103_through_pr112_merged_and_fresh_clone_verified_final_project_verification_pending" }
