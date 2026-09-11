@@ -2,8 +2,6 @@ import { describe, expect, it } from "vitest";
 import { dispatchMassEvalFetch } from "./http_routes";
 import type { Env } from "./types";
 
-const TOKEN = "secret";
-
 const noopHandlers = {};
 
 function denyByDefaultEnv(extra: Partial<Env> = {}): Env {
