@@ -1,25 +1,25 @@
 {
   "schema": "quant-platform-work-ledger/v1",
   "baseline_sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
-  "branch": "test/research-label-assertions",
-  "updated_at": "2026-09-12T01:36:00Z",
+  "branch": "docs/historic-artifact-inventory",
+  "updated_at": "2026-09-12T02:03:00Z",
   "lanes": {
     "source_delivered": {
       "status": "partial_main_and_followup",
-      "scope": "pr103_through_pr135_merged_research_label_assertion_followup",
-      "notes": "PR134 source/fresh/main accepted. PR135 exact source native SUCCESS and normal merge/fresh acceptance; merged-main native still running. Historical native failures remain recorded. A07 repeated-label slice is independently reviewed and locally verified, awaiting final native acceptance. No rollout/data/READY/Pilot or HOLD bypass.",
-      "latest_main_sha": "cf7fa0193f03f408aec74b6b5bdec5d979a04a15",
+      "scope": "pr103_through_pr136_merged_bounded_artifact_inventory_followup",
+      "notes": "PR134/135 source/fresh/main accepted. PR136 exact source native SUCCESS, normal merge and fresh-clone acceptance; merged-main native still running. Grok-authored partial historical artifact inventory is a separate documentation follow-up, not source/data/READY/Pilot closure. Historical failures and every HOLD remain recorded.",
+      "latest_main_sha": "011c69efc50035744552ce4a594b23e7e439fe4a",
       "latest_main_check_completed_at": null,
-      "latest_main_evidence": "https://github.com/ddnne/quant-platform/pull/135#issuecomment-5642562505",
-      "pull_request": "https://github.com/ddnne/quant-platform/pull/135",
-      "implementation_sha": "cb59cac61450907542fcc4fec5df88b83df12d4b",
-      "merged_sha": "cf7fa0193f03f408aec74b6b5bdec5d979a04a15",
-      "required_check_source_sha": "b1020ce79faa3ebafcfad6cf89fc4534383e0e9f",
+      "latest_main_evidence": "https://github.com/ddnne/quant-platform/pull/136#issuecomment-5642685889",
+      "pull_request": "https://github.com/ddnne/quant-platform/pull/136",
+      "implementation_sha": "0a5867f772d13ba683d3153fbb0d3d68b95d9fd2",
+      "merged_sha": "011c69efc50035744552ce4a594b23e7e439fe4a",
+      "required_check_source_sha": "e0629fb9cc81740ba93d2fd995b205a22a4b08bc",
       "required_check_app_id": 85455,
-      "required_check_build_id": "04f9c280-548f-4398-83df-a251ca2e31a2",
-      "required_check_id": 103475420151,
-      "merged_main_check_id": 103475557683,
-      "merged_main_build_id": "e8a4f3ad-bdd8-42fb-ae8e-458653c7a2b9",
+      "required_check_build_id": "5c600665-4d69-4334-b925-66d36c9a64a8",
+      "required_check_id": 103478087812,
+      "merged_main_check_id": 103478257192,
+      "merged_main_build_id": "3cb321ad-ba64-4d46-8532-5bcbec5b2348",
       "merged_main_check_status": "in_progress",
       "merged_main_check_conclusion": null
     },
@@ -107,6 +107,7 @@
       ]
     },
     "4_receipt_to_ready_trader": {
+      "cloud_path_observation": "Read-only main011c69ef review: ReadyPublicationService.request_verified_publication imports the private authenticated mirror consumer from scripts/sync_d1_to_sqlite.py, while the current Container Dockerfile copies only scripts/qp-research. Current execute_snapshot_job is the personal DRAFT hydrator, not a receipt-bound READY candidate builder. The Premium receipt-products descriptor explicitly does not establish profile completeness, physical availability or READY. Do not sign a DRAFT snapshot or merely copy the local sync script into the image to claim closure. Existing trusted full-segment verification and held shared-scope integration remain required; no new code or authority was added by this observation.",
       "status": "ready_signer_owner_pr134_source_fresh_main_accepted_not_rolled_out",
       "implementation_sha": "bcf7b506f2f23dfe1b1c0d4cdee77f405987d2aa",
       "native_followup": "PR134 source60ac93d0 app85455/check103469396328/buildcfde8deb FAILED00:52:31Z:3584PASS/1FAIL/22warnings494.09s. Stale caller secret-list expectation in test_receipt_authority_pending_live_acceptance omitted intended READY key. Reproduced locally0.20s; Grok added only its name to the explicit sorted list in3b1e4e61, preserving other closed lists/no-proxy assertions. Independent delta review accepted1b4e4d0085c985d0b286d1ad40b7743f6670ccd95b7951f1771d01e77db14c8b. Expanded166synthetic receipt-admission/binding/public-surface/ledger tests PASS9.93s. Earlier126test selection and cross-review missed this dependent expectation; full native failure is not hidden or retried to pass. No product or key/deploy change. New final SHA native still required.",
@@ -121,12 +122,14 @@
     },
     "5_ci_deploy_entrypoints": {
       "research_label_assertions": {
-        "status": "reviewed_local_native_pending",
+        "status": "pr136_source_fresh_accepted_main_native_pending",
+        "acceptance": "Exacte0629fb9 app85455/check103478087812/build5c600665 SUCCESS01:52:10Z;3582Python558.12s+4toolchain14.29s/all8Workers/remote Containers/generated-clean. Terminal1789177928377/cursorWzksNDc3Ml0/truncated=false; deploy true. Normal merge011c69ef01:53:22Z; independent fresh clone/source-tree-equal/clean/unpushed0,66representative Python tests PASS with default socket guard and explicit retained socket flags; secret scan PASS. Completed branch removed locally/absent remotely. https://github.com/ddnne/quant-platform/pull/136#issuecomment-5642676117 and #issuecomment-5642685889 . Main native3cb321ad running. Separate Mass68761457 passed474Node+22runtime/build then intentional DEPLOYMENT HOLD; no retry/bypass.",
         "implementation_sha": "0a5867f772d13ba683d3153fbb0d3d68b95d9fd2",
         "evidence": "A07 four-test-file slice: remove repeated fixed labels, retain representative shared-writer labels and all numeric/candidate/authorization behavior. Grok authored/self-reviewed; independent Codex review accepted d3f7717b1683b63226394ee300c34063781f2479c81f5a0cad30015d8f5ba52c. Python83PASS25.09s, Mass474Node13.99s+22workerd0.933s and tscPASS. Latest-main integration preserved exact source diff; adjacent A07/C16 audit-row merge conflict resolved retaining both reviewed records. Details/limitations in test_reduction_ledger.json. Native/source/fresh/main acceptance pending, no live changes."
       },
       "generated_env_behavior_fixture": {
-        "status": "pr135_source_fresh_accepted_main_native_pending",
+        "status": "pr135_source_fresh_main_native_accepted",
+        "main_acceptance": "Maincf7fa019 app85455/check103477367273/builde8a4f3ad SUCCESS01:46:55Z;3582Python468.06s+4toolchain19.80s/all8Workers/remote Containers/generated-clean. Terminal1789177612626/cursorWzksNDUwOV0/truncated=false; deploy true. https://github.com/ddnne/quant-platform/pull/135#issuecomment-5642652120 . Earlier in-progress check row is stale; separate Mass deployment HOLD remains.",
         "acceptance": "Finalb1020ce7 app85455/check103475420151/build04f9c280 SUCCESS01:32:55Z;3582offline515.36s+4toolchain11.18s/all8Workers/remote Containers/generated-clean. Terminal1789176773332/cursorWzEwLDQ3NDVd/truncated=false; deploy true. Normal mergecf7fa019 at01:33:49Z, fresh clone equal/source-tree-identical/clean/unpushed0,144related tests PASS13.44s/secret scan. Completed branch removed locally and absent remotely. https://github.com/ddnne/quant-platform/pull/135#issuecomment-5642562505 . Merged-main native e8a4f3ad running; separate Mass057dea81 passed474Node+22runtime then explicit deployment HOLD, not retried.",
         "implementation_sha": "cb59cac61450907542fcc4fec5df88b83df12d4b",
         "scope": "C16: replace three emitted-source-string tests with one toolchain test invoking actual write_check and installed TypeScript. Synthetic Wrangler-shaped declarations and a real Cloudflare DurableObject type check valid base/relative import/optional binding; wrong production type, missing optional key and unexpected key must fail. Retain one parsed skipLibCheck=false assertion because compilation alone does not prove it. No generator/product/CI/dependency change.",
@@ -419,6 +422,8 @@
   ],
   "historical_artifact_inventory": {
     "closure_item": "item2",
+    "implementation_commit": "4c32fc14",
+    "authorship_review": "Grok grok-4.6-build session01a09354-c6a7-7972-b82e-be23c1765a9c authored and self-reviewed the inventory patch. Initial33KB prompt offload produced intentions only; compact inline follow-up produced the actual patch. Codex requested4precision fixes (exact CLI pin, reported archive bytes, current source versus unknown historic identity, extractor non-use versus authority absence); Grok supplied them. Codex mechanically applied patches, normalized misplaced Markdown fences, checked all19rows against actual read-only tool results and unchanged remaining parsed ledger before this separate operational checkpoint. Reviewed inventory diff74b3edf80e6ce5334c21217fd81cfb30c8d083274696f30d93da8fc14eefa3e2; no CLI token figure is account quota or billing evidence.",
     "observed_at": "2026-09-12",
     "observed_window_utc": "01:43-01:56",
     "source_commit": "011c69efc50035744552ce4a594b23e7e439fe4a",
