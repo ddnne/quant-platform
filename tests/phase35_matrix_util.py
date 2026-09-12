@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from cf_platform.ingest_premium.coverage import CheckResult
+from storage.coverage import CheckResult
 from ingestion.jquants.normalize import (
     normalize_daily_bars,
     normalize_generic,

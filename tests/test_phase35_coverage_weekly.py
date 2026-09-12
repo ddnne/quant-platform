@@ -8,8 +8,8 @@ Offline-only: no network, no Cloudflare, no API keys.
 
 from __future__ import annotations
 
-from cf_platform.ingest_premium import matrix
-from cf_platform.ingest_premium.coverage import run_coverage
+from storage import matrix
+from storage.coverage import run_coverage
 from ingestion.jquants.normalize import (
     normalize_daily_bars,
     normalize_listed_info,

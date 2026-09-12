@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from cf_platform.ingest_premium.coverage import EXPECTED_START
+from storage.coverage import EXPECTED_START
 from data_contracts.canonical import (
     CANONICAL_REGISTRY_PATH,
     canonical_dataset_for,

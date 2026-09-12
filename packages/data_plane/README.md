@@ -8,14 +8,13 @@ Contracts → ingest → store → PIT read → ops meta.
 |--------|------|
 | `data_contracts` | JSON contracts, coverage identity, governed sets (CF-adjacent SoT) |
 | `ingestion` | **Only** external market network plane (J-Quants / JSDA) |
-| `storage` | Structured write, receipts, coverage ledger |
+| `storage` | Structured write, receipts, coverage ledger, PIT coverage checks / B0 |
 | `pit` | **Sole** structured fact read path (`as_of` required) |
 | `ops` | Backfill planner, projection meta helpers, Ops-current SQL reads |
 
 ## Allowed deps (plane)
 
 - Within `data_plane` leaves as documented in ADR §5.1
-- `storage` / `cf_platform` helpers (edge) for coverage measurement reuse
 
 ## Forbidden
 
@@ -29,7 +28,7 @@ Contracts → ingest → store → PIT read → ops meta.
 | Package | Prefer |
 |---------|--------|
 | `pit` | `get_equity_bars_daily`, `get_equity_master`, `get_jquants_records`, `get_*` |
-| `storage` | coverage ledger, receipt authority, schema/store writers |
+| `storage` | coverage ledger, coverage checks / B0, receipt authority, schema/store writers |
 | `ingestion` | `pipeline`, `jquants.catalog`, clients (root is namespace-light) |
 | `data_contracts` | `loader` / `coverage` / `identity` + JSON package data |
 | `ops` | `backfill_planner`, `projection_meta`, `current_read` |

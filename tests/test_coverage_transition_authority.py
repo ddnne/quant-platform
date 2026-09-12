@@ -16,7 +16,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from data_contracts.coverage import coverage_contract_for
-from cf_platform.ingest_premium.coverage import CheckResult
+from storage.coverage import CheckResult
 from storage.coverage_ledger import (
     compare_exact_coverage_inventory,
     record_collection_receipt,

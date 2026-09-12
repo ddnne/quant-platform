@@ -34,6 +34,10 @@ Phase 6.1 adds Coverage V2:
 - Event windows may reconcile 0 raw rows to 0 structured rows as COMPLETE when
   the successful receipt and retained raw query evidence prove the window.
 
+PIT coverage checks (`coverage.py`, `matrix.py`) and B0 volume gates
+(`live_gates.py`) live here. Edge `cf_platform.ingest_premium.coverage` and
+`cf_platform.live_gates` re-export them for the Phase 3.5 CLI.
+
 JSDA governed tables retain separate PIT timestamps and revision tables.
 `SqliteStore` applies ordered idempotent migrations on open; operators should
 back up the staging database before first open after an upgrade.

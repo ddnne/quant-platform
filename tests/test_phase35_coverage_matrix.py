@@ -1,7 +1,7 @@
 """Phase 3.5 — validation matrix catalog completeness.
 
 Every id mentioned in ``docs/phase35_validation_matrix.md`` must exist in
-``cf_platform.ingest_premium.matrix.CHECKS``, and the daily tier must match
+``storage.matrix.CHECKS``, and the daily tier must match
 the doc (exactly C1–C5, C8, C12, B2, B4, K3, X4).
 
 Coverage-runner behavior is split by concern:
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-from cf_platform.ingest_premium import matrix
+from storage import matrix
 from ingestion.jquants.catalog import PREMIUM_CORE_DATASETS, list_datasets
 
 def test_check_ids_unique():

@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from _coreseed import draft_pit_observation_clock
-from cf_platform.ingest_premium.coverage import EXPECTED_START
+from storage.coverage import EXPECTED_START
 from data_contracts.canonical import canonical_dataset_for
 from data_contracts.coverage import coverage_contract_for
 from data_contracts.permanent_defer import (

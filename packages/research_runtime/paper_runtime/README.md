@@ -33,7 +33,6 @@ remaining fixture SQLite opener is private and tests-only.
 ## Allowed imports
 
 - `data_contracts`, `storage`, `strategies`, `features`
-- `cf_platform` (**documented exception** — coverage / B0 measurement reuse)
 - `execution` / `agents` (**documented exception** — `paper_runtime.execution`
   DTO adapter only; imports agents first so the agents↔execution cycle can
   finish, then delegates to the offline DRAFT service in
