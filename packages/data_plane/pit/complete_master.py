@@ -24,6 +24,7 @@ from ops.receipt_product import (
     PRODUCT_ARTIFACT_FIELDS,
     catalog_owned_product_row_digests,
     iter_product_artifact_body_rows,
+    open_stored_product_artifact,
     product_artifact_digest_ordered,
     product_row_digest,
     verify_full_segment_product_materialization,
@@ -501,7 +502,7 @@ def _owned_product_row_digests(
 
 
 def _compact_snapshots_from_artifact(
-    body: str,
+    body: Any,
     *,
     owned_digests: set[str],
     retain_start: str,
@@ -630,7 +631,7 @@ def _verify_one_generation(
         _row_mapping(raw)
         for raw in conn.execute(
             "SELECT operation_id,run_id,source,dataset,segment_id,"
-            "artifact_key,artifact_digest,artifact_body,row_count,"
+            "artifact_key,artifact_digest,row_count,"
             "byte_count,manifest_key,manifest_digest,raw_manifest_key,"
             "raw_manifest_digest,raw_page_count,raw_row_count,"
             "raw_bytes,committed_at FROM receipt_product_materializations "
@@ -677,23 +678,27 @@ def _verify_one_generation(
         observed_through=observed_through,
     )
     try:
-        observed_count, observed_digest, observed_bytes, snapshots = (
-            _compact_snapshots_from_artifact(
-                product["artifact_body"],
-                owned_digests=owned_digests,
-                retain_start=seed,
-                retain_end=period_end,
+        operation_id = str(product["operation_id"])
+        with open_stored_product_artifact(conn, operation_id) as artifact:
+            observed_count, observed_digest, observed_bytes, snapshots = (
+                _compact_snapshots_from_artifact(
+                    artifact,
+                    owned_digests=owned_digests,
+                    retain_start=seed,
+                    retain_end=period_end,
+                )
             )
-        )
-        verify_full_segment_product_materialization(
-            closure,
-            product=product,
-            run=run_rows[0] if len(run_rows) == 1 else None,
-            raw_manifest=raw_manifests[0] if len(raw_manifests) == 1 else None,
-            observed_count=observed_count,
-            observed_digest=observed_digest,
-            observed_bytes=observed_bytes,
-        )
+        with open_stored_product_artifact(conn, operation_id) as artifact:
+            verify_full_segment_product_materialization(
+                closure,
+                product=product,
+                run=run_rows[0] if len(run_rows) == 1 else None,
+                raw_manifest=raw_manifests[0] if len(raw_manifests) == 1 else None,
+                observed_count=observed_count,
+                observed_digest=observed_digest,
+                observed_bytes=observed_bytes,
+                artifact=artifact,
+            )
     except (PitError, TypeError, ValueError):
         return None
     finally:

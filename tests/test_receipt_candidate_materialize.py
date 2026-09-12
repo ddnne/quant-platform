@@ -24,6 +24,8 @@ from ops.receipt_product import (
     canonical_product_artifact_bytes,
     catalog_owned_product_row_digests,
     measure_owned_product_artifact_body,
+    measure_product_artifact_jsonl,
+    open_stored_product_artifact,
     product_artifact_digest,
 )
 from storage.coverage_ledger import RequiredCoverageSegment
@@ -238,13 +240,26 @@ def test_genuine_descriptor_persists_text_artifact_and_catalog_detects_corruptio
     assert len(stored) == 1
     assert stored[0]["available_at"] == rows[0]["available_at"]
     assert stored[0]["ingested_at"] == rows[0]["ingested_at"]
-    body = store._conn.execute(  # noqa: SLF001
-        "SELECT typeof(artifact_body), artifact_body FROM "
-        "receipt_product_materializations"
-    ).fetchone()
-    assert body[0] == "text"
-    assert type(body[1]) is str
-    assert body[1].encode("utf-8") == product_path.read_bytes()
+    conn = store._conn  # noqa: SLF001
+    operation_id = str(
+        conn.execute(
+            "SELECT operation_id FROM receipt_product_materializations"
+        ).fetchone()[0]
+    )
+    with product_path.open("rb") as handle:
+        file_measure = measure_product_artifact_jsonl(handle)
+    with open_stored_product_artifact(conn, operation_id) as first:
+        first_measure = measure_product_artifact_jsonl(first)
+    with open_stored_product_artifact(conn, operation_id) as second:
+        second_measure = measure_product_artifact_jsonl(second)
+    assert first_measure == second_measure == file_measure
+    conn.execute(
+        "UPDATE receipt_product_materializations SET artifact_body=? "
+        "WHERE operation_id=?",
+        (product_path.read_bytes().decode("utf-8"), operation_id),
+    )
+    with open_stored_product_artifact(conn, operation_id) as text_body:
+        assert measure_product_artifact_jsonl(text_body) == file_measure
     store._conn.execute(  # noqa: SLF001
         "UPDATE jquants_records SET payload='{\"poison\":true}'"
     )

@@ -1115,6 +1115,15 @@ def _read_receipt_product_materializations(
                 "trusted receipt/product materialization digest chain differs: "
                 + "/".join(map(str, identity))
             )
+        body = row["artifact_body"]
+        if type(body) is bytes:
+            try:
+                row["artifact_body"] = body.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise RuntimeError(
+                    "trusted receipt/product materialization digest chain differs: "
+                    + "/".join(map(str, identity))
+                ) from exc
         run_columns = _columns(conn, "ingestion_run_log")
         if "authority_operation_id" not in run_columns:
             raise RuntimeError(
