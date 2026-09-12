@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime
-from io import StringIO
 from typing import Any, Iterable, Iterator, Mapping
 
 
@@ -45,6 +44,116 @@ def _canonical_product_row(raw: Mapping[str, Any] | Any) -> dict[str, str]:
     if row["source"] not in {"jquants", "jsda"} or not row["dataset"]:
         raise ValueError("product materialization source/dataset is invalid")
     return row  # type: ignore[return-value]
+
+
+def _encode_product_row(row: Mapping[str, str]) -> bytes:
+    """Render one canonical JSONL line, including the trailing newline."""
+
+    return (
+        json.dumps(
+            dict(row),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        + b"\n"
+    )
+
+
+def _iter_binary_jsonl_lines(source: Any) -> Iterator[bytes]:
+    """Yield raw JSONL line bytes, including the terminating newline.
+
+    Accepts in-memory ``str``/``bytes`` or a binary ``readline`` stream.
+    Text-mode streams are rejected so CRLF decoding cannot rewrite signed bytes.
+    """
+
+    if type(source) is str or type(source) is bytes:
+        newline: str | bytes = "\n" if type(source) is str else b"\n"
+        if not source or not source.endswith(newline):
+            raise ValueError("product materialization artifact body must be JSONL")
+        start = 0
+        length = len(source)
+        while start < length:
+            end = source.find(newline, start)
+            line = source[start : end + 1]
+            if line == newline:
+                raise ValueError(
+                    "product materialization artifact body is not JSONL"
+                )
+            yield line.encode("utf-8") if type(source) is str else line
+            start = end + 1
+        return
+    readline = getattr(source, "readline", None)
+    if not callable(readline):
+        raise ValueError(
+            "product materialization artifact body must be JSONL text, bytes, "
+            "or a binary line stream"
+        )
+    while True:
+        line = readline()
+        if line == b"":
+            break
+        if type(line) is not bytes:
+            raise ValueError("product artifact stream must be binary")
+        if not line.endswith(b"\n") or line == b"\n":
+            raise ValueError("product materialization artifact body is not JSONL")
+        yield line
+
+
+def _iter_canonical_artifact_rows(
+    source: Any,
+) -> Iterator[tuple[bytes, dict[str, str]]]:
+    """Parse one JSONL artifact without retaining prior rows.
+
+    Each raw line must already be the canonical UTF-8 JSONL encoding.
+    """
+
+    previous: tuple[str, str, str] | None = None
+    for raw_line in _iter_binary_jsonl_lines(source):
+        try:
+            parsed = json.loads(raw_line[:-1].decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                "product materialization artifact body is not JSONL"
+            ) from exc
+        row = _canonical_product_row(parsed)
+        if _encode_product_row(row) != raw_line:
+            raise ValueError(
+                "product materialization artifact body is not canonical JSONL"
+            )
+        identity = (row["source"], row["dataset"], row["natural_key"])
+        binary_identity = tuple(value.encode("utf-8") for value in identity)
+        binary_previous = (
+            None
+            if previous is None
+            else tuple(value.encode("utf-8") for value in previous)
+        )
+        if binary_previous is not None and binary_identity <= binary_previous:
+            raise ValueError(
+                "product materialization rows must be unique and ordered"
+            )
+        previous = identity
+        yield raw_line, row
+
+
+def measure_product_artifact_jsonl(source: Any) -> tuple[int, str, int]:
+    """Hash one JSONL artifact from real bytes without retaining rows.
+
+    Returns ``(row_count, sha256 digest, utf-8 byte count)`` derived from the
+    stream itself. Caller-supplied digest/count values are not inputs.
+    """
+
+    hasher = hashlib.sha256()
+    count = 0
+    nbytes = 0
+    for raw_line, _row in _iter_canonical_artifact_rows(source):
+        hasher.update(raw_line)
+        count += 1
+        nbytes += len(raw_line)
+    if count == 0:
+        raise ValueError("empty product materialization is not signable")
+    return count, "sha256:" + hasher.hexdigest(), nbytes
 
 
 def _aware_instant(value: Any, *, label: str) -> datetime:
@@ -134,15 +243,7 @@ def canonical_product_artifact_bytes(
         )
     )
     return b"".join(
-        json.dumps(
-            row,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-            allow_nan=False,
-        ).encode("utf-8")
-        + b"\n"
-        for row in normalized
+        _encode_product_row(row) for row in normalized
     )
 
 
@@ -181,16 +282,7 @@ def product_artifact_digest_ordered(
                 "product materialization rows must be unique and ordered"
             )
         previous = identity
-        encoded = (
-            json.dumps(
-                row,
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-                allow_nan=False,
-            ).encode("utf-8")
-            + b"\n"
-        )
+        encoded = _encode_product_row(row)
         hasher.update(encoded)
         count += 1
         nbytes += len(encoded)
@@ -204,7 +296,7 @@ def product_artifact_body_digest(body: Any) -> str:
 
     if type(body) is not str or not body:
         raise ValueError("product materialization artifact body must be exact text")
-    return "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest()
+    return measure_product_artifact_jsonl(body)[1]
 
 
 def iter_product_artifact_body_rows(body: Any) -> Iterator[dict[str, str]]:
@@ -216,35 +308,19 @@ def iter_product_artifact_body_rows(body: Any) -> Iterator[dict[str, str]]:
 
     if type(body) is not str or not body:
         raise ValueError("product materialization artifact body must be exact text")
-    if not body.endswith("\n"):
-        raise ValueError("product materialization artifact body must be JSONL")
-    for line in StringIO(body):
-        if not line.endswith("\n") or line == "\n":
-            raise ValueError("product materialization artifact body is not JSONL")
-        try:
-            raw = json.loads(line[:-1])
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                "product materialization artifact body is not JSONL"
-            ) from exc
-        yield _canonical_product_row(raw)
+    yielded = False
+    for _raw_line, row in _iter_canonical_artifact_rows(body):
+        yielded = True
+        yield row
+    if not yielded:
+        raise ValueError("empty product materialization is not signable")
 
 
 def product_row_digest(raw: Mapping[str, Any] | Any) -> str:
     """Digest one canonical product row with the signed JSONL profile."""
 
     row = _canonical_product_row(raw)
-    encoded = (
-        json.dumps(
-            row,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-            allow_nan=False,
-        ).encode("utf-8")
-        + b"\n"
-    )
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+    return "sha256:" + hashlib.sha256(_encode_product_row(row)).hexdigest()
 
 
 def _mapping_field(raw: Mapping[str, Any] | Any, name: str) -> Any:
@@ -265,13 +341,14 @@ def verify_full_segment_product_materialization(
     observed_count: int,
     observed_digest: str,
     observed_bytes: int,
+    artifact: Any = None,
 ) -> None:
     """Close one full source segment against a verifier-minted receipt.
 
-    Callers supply the observed product independently. READY reconstructs
-    current ``jquants_records`` only. Exact-generation callers hash the signed
-    artifact body. This function does not treat current-only SQL as revision
-    proof.
+    ``observed_*`` is independently obtained by the caller: current
+    ``jquants_records`` reconstruction for READY/export, exact-generation
+    ownership for complete-master. Artifact count/digest/bytes are derived
+    here from real JSONL bytes. Current-only SQL is not revision proof.
     """
 
     from storage.verified_receipt import VerifiedCollectionClosure
@@ -291,21 +368,28 @@ def verify_full_segment_product_materialization(
     if not isinstance(raw_manifest, Mapping):
         raise ValueError("raw retention manifest is missing")
 
-    artifact_body = _mapping_field(product, "artifact_body")
-    if type(artifact_body) is not str or not artifact_body:
-        raise ValueError("product materialization artifact body must be exact text")
-    body_bytes = len(artifact_body.encode("utf-8"))
+    artifact_source = (
+        artifact if artifact is not None else _mapping_field(product, "artifact_body")
+    )
+    try:
+        artifact_count, artifact_digest, artifact_bytes = (
+            measure_product_artifact_jsonl(artifact_source)
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "full-segment product materialization does not close the signed receipt"
+        ) from exc
     if (
         closure.status != "SUCCESS"
         or not closure.pagination_exhausted
         or not closure.discovery_exhausted
-        or observed_count != closure.structured_row_count
-        or observed_digest != closure.structured_digest
-        or _mapping_field(product, "artifact_digest") != observed_digest
-        or product_artifact_body_digest(artifact_body) != observed_digest
-        or body_bytes != _mapping_field(product, "byte_count")
-        or int(_mapping_field(product, "byte_count")) != observed_bytes
-        or _mapping_field(product, "row_count") != closure.structured_row_count
+        or (artifact_count, artifact_digest, artifact_bytes)
+        != (observed_count, observed_digest, observed_bytes)
+        or artifact_digest != closure.structured_digest
+        or artifact_count != closure.structured_row_count
+        or artifact_digest != _mapping_field(product, "artifact_digest")
+        or artifact_count != _mapping_field(product, "row_count")
+        or artifact_bytes != _mapping_field(product, "byte_count")
         or _mapping_field(product, "raw_manifest_digest")
         != closure.raw_manifest_digest
         or _mapping_field(product, "raw_page_count") != closure.raw_page_count
@@ -336,6 +420,7 @@ __all__ = [
     "canonical_product_artifact_bytes",
     "iter_observed_segment_product_rows",
     "iter_product_artifact_body_rows",
+    "measure_product_artifact_jsonl",
     "product_artifact_body_digest",
     "product_artifact_digest",
     "product_artifact_digest_ordered",

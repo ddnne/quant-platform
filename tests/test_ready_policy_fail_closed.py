@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from io import BytesIO, TextIOWrapper
 import json
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
@@ -15,6 +16,7 @@ from data_contracts.coverage import (
     all_coverage_contracts,
     coverage_policy_binding,
     coverage_policy_set_binding,
+    coverage_contract_for,
 )
 from ingestion.jquants.normalize import normalize_generic
 from ops.projection_content import (
@@ -25,8 +27,11 @@ from core.execution import close_as_of
 from ops.receipt_product import (
     canonical_product_artifact_bytes,
     iter_observed_segment_product_rows,
+    iter_product_artifact_body_rows,
     product_artifact_digest,
     product_artifact_digest_ordered,
+    measure_product_artifact_jsonl,
+    verify_full_segment_product_materialization,
 )
 from pit.query import normalize_as_of
 from ops.projection_signing import (
@@ -63,8 +68,14 @@ from scripts import sync_d1_to_sqlite as sync_script
 from storage.coverage_ledger import (
     RequiredCoverageSegment,
     record_collection_receipt,
+    _receipt_from_row,
+)
+from storage.receipt_crypto import (
+    PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
+    PRODUCTION_RECEIPT_ENVIRONMENT,
 )
 from storage.sqlite_store import SqliteStore
+from storage.verified_receipt import require_verified_collection_closure
 from tests.ops_projection_signing_support import (
     TestOpsProjectionSigningKey,
     TestOpsProjectionVerifier,
@@ -1712,6 +1723,112 @@ def test_product_jsonl_vector_matches_authority_utf8_order() -> None:
         "sha256:29c603492f7aca5df78d543161ae31b7"
         "d7ea1d76d5256a027198256c98fc8a66"
     )
+    measured = measure_product_artifact_jsonl(BytesIO(body))
+    assert measured == (
+        2,
+        "sha256:29c603492f7aca5df78d543161ae31b7"
+        "d7ea1d76d5256a027198256c98fc8a66",
+        len(body),
+    )
+    with pytest.raises(ValueError, match="canonical JSONL"):
+        measure_product_artifact_jsonl(BytesIO(body.replace(b":", b": ", 1)))
+    with pytest.raises(ValueError, match="canonical JSONL"):
+        measure_product_artifact_jsonl(BytesIO(body.replace(b"\n", b"\r\n")))
+    with pytest.raises(ValueError, match="JSONL"):
+        measure_product_artifact_jsonl(BytesIO(body[:-1]))
+    swapped = b"".join(reversed(body.splitlines(keepends=True)))
+    with pytest.raises(ValueError, match="unique and ordered"):
+        measure_product_artifact_jsonl(BytesIO(swapped))
+    with pytest.raises(ValueError, match="binary"):
+        measure_product_artifact_jsonl(TextIOWrapper(BytesIO(body), encoding="utf-8"))
+
+
+def test_verify_full_segment_measures_binary_artifact_stream(
+    tmp_path,
+    receipt_ed25519_keys,
+) -> None:
+    db_path, _binding = _seed_exact_pit_scope(tmp_path, receipt_ed25519_keys)
+    dataset_id = "markets_calendar"
+    connection = sqlite3.connect(db_path)
+    connection.row_factory = sqlite3.Row
+    stored = dict(
+        connection.execute(
+            "SELECT * FROM collection_receipts WHERE dataset=?",
+            (dataset_id,),
+        ).fetchone()
+    )
+    product = dict(
+        connection.execute(
+            "SELECT * FROM receipt_product_materializations WHERE dataset=?",
+            (dataset_id,),
+        ).fetchone()
+    )
+    run = dict(
+        connection.execute(
+            "SELECT id,source,runtime,status,authority_operation_id "
+            "FROM ingestion_run_log WHERE id=?",
+            (stored["run_id"],),
+        ).fetchone()
+    )
+    raw_manifest = dict(
+        connection.execute(
+            "SELECT dataset,run_id,manifest_key,page_count,row_count,"
+            "raw_bytes,data_digest FROM raw_retention_manifests "
+            "WHERE dataset=? AND run_id=?",
+            (dataset_id, stored["run_id"]),
+        ).fetchone()
+    )
+    receipt = _receipt_from_row(stored)
+    closure = require_verified_collection_closure(
+        receipt,
+        expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+        expected_authority_instance_digest=(
+            PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+        ),
+        expected_policy_version=coverage_contract_for(dataset_id).policy_version,
+    )
+    catalog_count, catalog_digest, catalog_bytes = product_artifact_digest_ordered(
+        iter_observed_segment_product_rows(
+            connection,
+            source="jquants",
+            dataset=dataset_id,
+            segment_start=str(stored["segment_start"]),
+            segment_end=str(stored["segment_end"]),
+            observed_through=close_as_of("2023-01-06"),
+        )
+    )
+    artifact_path = tmp_path / "markets_calendar.jsonl"
+    artifact_path.write_bytes(str(product["artifact_body"]).encode("utf-8"))
+    with artifact_path.open("rb") as handle:
+        verify_full_segment_product_materialization(
+            closure,
+            product=product,
+            run=run,
+            raw_manifest=raw_manifest,
+            observed_count=catalog_count,
+            observed_digest=catalog_digest,
+            observed_bytes=catalog_bytes,
+            artifact=handle,
+        )
+    mutated = [
+        dict(row)
+        for row in iter_product_artifact_body_rows(str(product["artifact_body"]))
+    ]
+    mutated[0]["ingested_at"] = "2023-01-01T00:00:00+09:00"
+    artifact_path.write_bytes(canonical_product_artifact_bytes(mutated))
+    with artifact_path.open("rb") as handle:
+        with pytest.raises(ValueError, match="does not close the signed receipt"):
+            verify_full_segment_product_materialization(
+                closure,
+                product=product,
+                run=run,
+                raw_manifest=raw_manifest,
+                observed_count=catalog_count,
+                observed_digest=catalog_digest,
+                observed_bytes=catalog_bytes,
+                artifact=handle,
+            )
+    connection.close()
 
 
 def test_signed_product_digest_survives_sync_projection_and_ready(
