@@ -62,6 +62,12 @@ from personal_option_sidecar_job import (
     PersonalOptionSidecarJobSpec,
     execute_option_sidecar_job,
 )
+from receipt_candidate_job import (
+    RECEIPT_CANDIDATE_MAX_REQUEST_BYTES,
+    ReceiptCandidateJobInputError,
+    ReceiptCandidateJobSpec,
+    execute_receipt_candidate_job,
+)
 from data_contracts.personal_history_compact import (
     PERSONAL_HISTORY_COMPACT_BARS_TABLE,
     compact_history_state,
@@ -1751,6 +1757,8 @@ def _job_kind(spec: Any) -> str:
         return "controlled-pilot"
     if isinstance(spec, SnapshotJobSpec):
         return "snapshot"
+    if isinstance(spec, ReceiptCandidateJobSpec):
+        return "receipt-candidate"
     if isinstance(spec, PersonalSvi2023JobSpec):
         return "svi"
     if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):
@@ -2642,6 +2650,7 @@ def execute_snapshot_job(
 JobSpecLike = (
     JobSpec
     | SnapshotJobSpec
+    | ReceiptCandidateJobSpec
     | PersonalSvi2023JobSpec
     | PersonalIndexVolOverlay2023JobSpec
     | PersonalVolAmPmPanelJobSpec
@@ -2772,6 +2781,8 @@ class JobManager:
             }
             if isinstance(spec, SnapshotJobSpec):
                 record["job_kind"] = "snapshot-build"
+            elif isinstance(spec, ReceiptCandidateJobSpec):
+                record["job_kind"] = "receipt-candidate"
             elif isinstance(spec, ControlledPilotJobSpec):
                 record["job_kind"] = "controlled-pilot"
                 record["identity"] = CONTROLLED_PILOT_IDENTITY
@@ -3245,6 +3256,12 @@ class JobManager:
                 "status": "FAILED",
                 "error": error,
             }
+        if isinstance(spec, ReceiptCandidateJobSpec):
+            from receipt_candidate_job import candidate_failure_terminal
+
+            return candidate_failure_terminal(
+                spec, started_at=started, finished_at=finished, error=error
+            )
         if isinstance(spec, JobSpec):
             return {
                 **_manifest_base(spec, started_at=started, finished_at=finished),
@@ -3713,6 +3730,13 @@ def default_runner(
                     uploader=_put_child_artifact,
                     deadline=deadline,
                 )
+            if isinstance(spec, ReceiptCandidateJobSpec):
+                return execute_receipt_candidate_job(
+                    spec,
+                    work_root=work_root,
+                    uploader=_put_child_artifact,
+                    deadline=deadline,
+                )
             if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):
                 return execute_overlay_job(spec, uploader=_put_child_json, deadline=deadline)
             if isinstance(spec, PersonalSvi2023JobSpec):
@@ -3814,11 +3838,17 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
             "/v1/build-personal-vol-am-pm-panel",
             "/v1/produce-option-sidecar",
             "/v1/controlled-pilot",
+            "/v1/materialize-receipt-candidate",
         }:
             self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
             return
         raw_length = self.headers.get("content-length", "")
-        if not raw_length.isdigit() or not 0 < int(raw_length) <= MAX_REQUEST_BYTES:
+        maximum = (
+            RECEIPT_CANDIDATE_MAX_REQUEST_BYTES
+            if self.path == "/v1/materialize-receipt-candidate"
+            else MAX_REQUEST_BYTES
+        )
+        if not raw_length.isdigit() or not 0 < int(raw_length) <= maximum:
             self._json({"error": "invalid_content_length"}, HTTPStatus.BAD_REQUEST)
             return
         try:
@@ -3849,12 +3879,15 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
                 spec = PersonalVolAmPmPanelJobSpec.from_document(document)
             elif self.path == "/v1/produce-option-sidecar":
                 spec = PersonalOptionSidecarJobSpec.from_document(document)
+            elif self.path == "/v1/materialize-receipt-candidate":
+                spec = ReceiptCandidateJobSpec.from_document(document)
             else:
                 spec = JobSpec.from_document(document)
             record = self.manager.submit(spec)
         except (
             json.JSONDecodeError,
             JobInputError,
+            ReceiptCandidateJobInputError,
             SviJobInputError,
             OverlayJobInputError,
             VolPanelJobInputError,

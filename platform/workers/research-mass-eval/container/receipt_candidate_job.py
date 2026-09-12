@@ -219,6 +219,36 @@ def _manifest_base(spec: ReceiptCandidateJobSpec, *, started_at: str, finished_a
     }
 
 
+def candidate_failure_terminal(
+    spec: ReceiptCandidateJobSpec,
+    *,
+    started_at: str,
+    finished_at: str,
+    error: str,
+) -> dict[str, Any]:
+    """FAILED terminal reuses the closed base; no object keys."""
+    return {
+        **_manifest_base(spec, started_at=started_at, finished_at=finished_at),
+        "status": "FAILED",
+        "error": error,
+    }
+
+
+def _materialization_digest(rows: Sequence[Mapping[str, Any]]) -> str:
+    closed = [
+        {
+            "dataset": item["dataset"],
+            "receipt_digest": item["receipt_digest"],
+            "segment_id": item["segment_id"],
+        }
+        for item in rows
+    ]
+    closed.sort(key=lambda item: (item["dataset"], item["segment_id"]))
+    return "sha256:" + hashlib.sha256(
+        _canonical_bytes({"segments": closed})
+    ).hexdigest()
+
+
 def _remaining_budget(limit: int, *paths: Path) -> int:
     used = 0
     for path in paths:
@@ -395,24 +425,22 @@ def execute_receipt_candidate_job(
             manifest = {
                 **_manifest_base(spec, started_at=started_at, finished_at=_now()),
                 "status": "COMPLETED",
-                "materialized_segments": materialized,
                 "segment_count": len(materialized),
+                "materialization_digest": _materialization_digest(materialized),
                 "raw_bytes": raw_bytes,
                 "raw_sha256": raw_digest,
                 "gzip_sha256": gzip_digest,
                 "snapshot_key": gzip_key,
-                "pending_ready": True,
-                "ready": False,
-                "go": False,
             }
         except Exception as error:
             if store is not None:
                 rollback_receipt_candidate(store)
-            manifest = {
-                **_manifest_base(spec, started_at=started_at, finished_at=_now()),
-                "status": "FAILED",
-                "error": _safe_detail(error),
-            }
+            manifest = candidate_failure_terminal(
+                spec,
+                started_at=started_at,
+                finished_at=_now(),
+                error=_safe_detail(error),
+            )
         return manifest
     finally:
         if store is not None:
