@@ -1,25 +1,25 @@
 {
   "schema": "quant-platform-work-ledger/v1",
   "baseline_sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
-  "branch": "test/env-generator-behavior",
-  "updated_at": "2026-09-12T01:17:00Z",
+  "branch": "test/research-label-assertions",
+  "updated_at": "2026-09-12T01:36:00Z",
   "lanes": {
     "source_delivered": {
       "status": "partial_main_and_followup",
-      "scope": "pr103_through_pr134_merged_generated_env_test_followup",
-      "notes": "PR134 corrected final source62fc3077 native SUCCESS and normal merge/fresh acceptance; merged-main native still running. PR132 and PR134 earlier native failures remain historical evidence. C16 generator test consolidation is separately reviewed and awaits exact-source native acceptance. No rollout/data/READY/Pilot or HOLD bypass.",
-      "latest_main_sha": "a8a789ec90c3da28b0b73ddd82966858593a621e",
+      "scope": "pr103_through_pr135_merged_research_label_assertion_followup",
+      "notes": "PR134 source/fresh/main accepted. PR135 exact source native SUCCESS and normal merge/fresh acceptance; merged-main native still running. Historical native failures remain recorded. A07 repeated-label slice is independently reviewed and locally verified, awaiting final native acceptance. No rollout/data/READY/Pilot or HOLD bypass.",
+      "latest_main_sha": "cf7fa0193f03f408aec74b6b5bdec5d979a04a15",
       "latest_main_check_completed_at": null,
-      "latest_main_evidence": "https://github.com/ddnne/quant-platform/pull/134#issuecomment-5642466636",
-      "pull_request": "https://github.com/ddnne/quant-platform/pull/134",
-      "implementation_sha": "bcf7b506f2f23dfe1b1c0d4cdee77f405987d2aa",
-      "merged_sha": "a8a789ec90c3da28b0b73ddd82966858593a621e",
-      "required_check_source_sha": "62fc3077fb0a1baea6b6cd2d249131cf57a1cbc9",
+      "latest_main_evidence": "https://github.com/ddnne/quant-platform/pull/135#issuecomment-5642562505",
+      "pull_request": "https://github.com/ddnne/quant-platform/pull/135",
+      "implementation_sha": "cb59cac61450907542fcc4fec5df88b83df12d4b",
+      "merged_sha": "cf7fa0193f03f408aec74b6b5bdec5d979a04a15",
+      "required_check_source_sha": "b1020ce79faa3ebafcfad6cf89fc4534383e0e9f",
       "required_check_app_id": 85455,
-      "required_check_build_id": "4dd56064-d6ad-4445-b1a8-9f6134176f2b",
-      "required_check_id": 103472621990,
-      "merged_main_check_id": 103472886043,
-      "merged_main_build_id": "cb524f18-ab7c-4ac4-a8dd-6055ee4b3154",
+      "required_check_build_id": "04f9c280-548f-4398-83df-a251ca2e31a2",
+      "required_check_id": 103475420151,
+      "merged_main_check_id": 103475557683,
+      "merged_main_build_id": "e8a4f3ad-bdd8-42fb-ae8e-458653c7a2b9",
       "merged_main_check_status": "in_progress",
       "merged_main_check_conclusion": null
     },
@@ -107,7 +107,7 @@
       ]
     },
     "4_receipt_to_ready_trader": {
-      "status": "ready_signer_owner_pr134_merged_source_fresh_accepted_main_native_pending",
+      "status": "ready_signer_owner_pr134_source_fresh_main_accepted_not_rolled_out",
       "implementation_sha": "bcf7b506f2f23dfe1b1c0d4cdee77f405987d2aa",
       "native_followup": "PR134 source60ac93d0 app85455/check103469396328/buildcfde8deb FAILED00:52:31Z:3584PASS/1FAIL/22warnings494.09s. Stale caller secret-list expectation in test_receipt_authority_pending_live_acceptance omitted intended READY key. Reproduced locally0.20s; Grok added only its name to the explicit sorted list in3b1e4e61, preserving other closed lists/no-proxy assertions. Independent delta review accepted1b4e4d0085c985d0b286d1ad40b7743f6670ccd95b7951f1771d01e77db14c8b. Expanded166synthetic receipt-admission/binding/public-surface/ledger tests PASS9.93s. Earlier126test selection and cross-review missed this dependent expectation; full native failure is not hidden or retried to pass. No product or key/deploy change. New final SHA native still required.",
       "scope": "Move the existing PilotReadyPublicationService and7tests from Mass into existing Premium; no duplicate publisher, new Worker, signing authority or Service Binding. Keep authority identity, closed proof/digest verification, provider R2 checksum, create-only writes and1hour validity unchanged. Premium rejects missing/mismatched OPS_PROJECTION_ENVIRONMENT before projection/R2/sign. Mass no longer declares or exports the READY private signer; actual live secrets are untouched.",
@@ -116,11 +116,18 @@
       "review_fixes": "Fixed Premium handwritten Env narrowing: explicitly Omit OPS_PROJECTION_ENVIRONMENT before the staging/production override. Temporary typed staging probe failed TS2322 before and passed after, then was removed. Removed unused Mass http freeze barrel reexport and redundant triple-slash type reference that dragged Mass/Container types into Premium; isolated Premium typecheck passes with only Premium dependencies. Test manifest now accurately reports the existing two Receipt harness entrypoints, without adding a signer/key to the harness.",
       "test_audit": "Seven existing publication tests moved without duplicate copies; one meaningful missing/mismatched environment guard test added. Removed one redundant receipt inventory length assertion, retaining actual Receipt class/method/prototype checks and canonical full production3/Mass0 inventory comparison. This is an authority-boundary repair, not a net test-count reduction or complete C16 fixture-type consolidation.",
       "acceptance": "Final62fc3077 app85455/check103472621990/build4dd56064 SUCCESS01:13:31Z:3585Python519.18s+3toolchain4.09s/all8Workers/real remote Containers/generated-clean. Terminal1789175609499/cursorWzEwLDQ3MTld/truncated=false; deploy command true. Normal mergea8a789ec at01:15:13Z; fresh clone source tree identical, clean/equal/unpushed0 and165 selected offline receipt-admission/binding/public-surface/ledger tests PASS. Completed local/remote branch removed or absent. https://github.com/ddnne/quant-platform/pull/134#issuecomment-5642466636 . Merged-main native cb524f18 still running. Separate Mass a054f47d passed474Node+22runtime then stopped at configured deployment HOLD; no retry/bypass.",
-      "residual": "Merged-main native acceptance remains pending. Required-secret names and generated types are source declarations, not provisioned keys. Actual signer cutover, candidate orchestration, dependency scopes, signed current projection, immutable READY and Trader authorization remain incomplete; release_allowed=false and every existing HOLD remains. No READY/Pilot/Mass permission."
+      "main_acceptance": "Maina8a789ec app85455/check103474769303/buildcb524f18 SUCCESS01:28:19Z;3585Python462.10s+3toolchain11.48s/all8Workers/remote Containers/generated-clean. Terminal1789176492316/cursorWzgsNDUxNl0/truncated=false; deploy true. https://github.com/ddnne/quant-platform/pull/134#issuecomment-5642540560 .",
+      "residual": "Required-secret names and generated types are source declarations, not provisioned keys. Actual signer cutover, candidate orchestration, dependency scopes, signed current projection, immutable READY and Trader authorization remain incomplete; release_allowed=false and every existing HOLD remains. No READY/Pilot/Mass permission."
     },
     "5_ci_deploy_entrypoints": {
+      "research_label_assertions": {
+        "status": "reviewed_local_native_pending",
+        "implementation_sha": "0a5867f772d13ba683d3153fbb0d3d68b95d9fd2",
+        "evidence": "A07 four-test-file slice: remove repeated fixed labels, retain representative shared-writer labels and all numeric/candidate/authorization behavior. Grok authored/self-reviewed; independent Codex review accepted d3f7717b1683b63226394ee300c34063781f2479c81f5a0cad30015d8f5ba52c. Python83PASS25.09s, Mass474Node13.99s+22workerd0.933s and tscPASS. Latest-main integration preserved exact source diff; adjacent A07/C16 audit-row merge conflict resolved retaining both reviewed records. Details/limitations in test_reduction_ledger.json. Native/source/fresh/main acceptance pending, no live changes."
+      },
       "generated_env_behavior_fixture": {
-        "status": "reviewed_local_final_native_pending",
+        "status": "pr135_source_fresh_accepted_main_native_pending",
+        "acceptance": "Finalb1020ce7 app85455/check103475420151/build04f9c280 SUCCESS01:32:55Z;3582offline515.36s+4toolchain11.18s/all8Workers/remote Containers/generated-clean. Terminal1789176773332/cursorWzEwLDQ3NDVd/truncated=false; deploy true. Normal mergecf7fa019 at01:33:49Z, fresh clone equal/source-tree-identical/clean/unpushed0,144related tests PASS13.44s/secret scan. Completed branch removed locally and absent remotely. https://github.com/ddnne/quant-platform/pull/135#issuecomment-5642562505 . Merged-main native e8a4f3ad running; separate Mass057dea81 passed474Node+22runtime then explicit deployment HOLD, not retried.",
         "implementation_sha": "cb59cac61450907542fcc4fec5df88b83df12d4b",
         "scope": "C16: replace three emitted-source-string tests with one toolchain test invoking actual write_check and installed TypeScript. Synthetic Wrangler-shaped declarations and a real Cloudflare DurableObject type check valid base/relative import/optional binding; wrong production type, missing optional key and unexpected key must fail. Retain one parsed skipLibCheck=false assertion because compilation alone does not prove it. No generator/product/CI/dependency change.",
         "verification": "Final7tests PASS1.16s. Memory-only mutations deleting NoMissing, NoUnexpected or CompatibleTypes and enabling skipLibCheck each fail the intended assertion; source hash a53b4f17537b12c48fe6524999853190db9b5c1c09bdb17f472a2802c6d6ad4f unchanged. Five related modules142offline PASS11.44s plus2toolchain PASS2.43s; all4registered toolchain PASS2.18s. After merging PR134 main, all144 selected tests pass again, secret/path and diff checks pass, same source hash. No real Wrangler generation in this fixture, local Docker, authentic history or deployment.",
@@ -313,9 +320,10 @@
       "cross_review_protocol": "Grok implements and reviews; Codex independently reviews actual diffs and adjudicates concrete findings against code/behavior. Neither approval replaces tests/native CI. No blanket restoration of name/shape tests or unanimous-approval requirement."
     },
     "8_rollout_and_research_go": { "status": "pending" },
-    "9_push_remote_and_fresh_clone_verify": {"status":"pr134_source_fresh_accepted_main_native_running_c16_source_pending"}
+    "9_push_remote_and_fresh_clone_verify": {"status":"pr134_source_fresh_main_accepted_pr135_source_fresh_accepted_main_native_running_a07_pending"}
   },
   "operational_facts": [
+    {"id":"projection_sync_ready_live_read_20260912T0125Z","observed_at":"2026-09-12T01:25:07Z","fact":"Read-only projection/B0/READY, followed immediately by sync/Ops metadata: projection STALE at same Aug21 generationprojgen-ef18b4f86ee946048161d25e2a30a2a8, refresh_attempt=false/refresh_success=false, age1860857s; B0UNKNOWN. READY tool snapshot=null, no published generation bound. Source cursor2899842, applied_feed_cursor=null and all23 applied/ready_pinned cursors null. JQ14971 PASS at2026-09-12T10:15:21+09:00; Ops22COMPLETE/4PARTIAL, raw31192attempts/28974acquired/complete. These are Ops reports, not new trusted reproof or CoverageV3 acceptance. Full MCP schema parity/B4/Access/deployment/DLQ were not remeasured; no data rows/download or mutations."},
     {"id":"projection_sync_ops_live_read_20260911T1802Z","observed_at":"2026-09-11T18:02:25Z","fact":"Read-only quant-mcp projection/B0/sync/Ops: projection STALE, generated2026-08-21T12:30:49.152421+00:00, active generationprojgen-ef18b4f86ee946048161d25e2a30a2a8, refresh_attempt=false/refresh_success=false, age1834295s. ops_projection/v3 is not proof of CoverageV3 semantics. B0UNKNOWN; source change cursor2899647, applied_feed_cursor=null and all23 applied/ready_pinned cursors null. JQrun14963 PASS at2026-09-12T02:16:05+09:00; Ops aggregate22COMPLETE/4PARTIAL and raw31008/28790 acquired/complete are not newly reconciled READY eligibility. Source/export activity is not current apply. Separate READY snapshot and full tool/schema parity not remeasured. No DLQ/deployment/data activation/Pilot operation."},
     {
       "id": "pr111_merged_main_native_and_fresh_clone_20260911",
