@@ -1076,74 +1076,34 @@ def _verified_session_scope_from_db(path) -> dict:
             }
         )
     conn.close()
+    physical = _file_digest(path)
+    evidence_digest = canonical_digest(
+        {
+            "physical_db_digest": physical,
+            "observed_through": observed,
+            "entries": entries,
+        }
+    )
     return {
         "format": "controlled-session-scope/v1",
-        "dependency_scope_proof_digest": "sha256:" + ("44" * 32),
-        "physical_db_digest": _file_digest(path),
+        "dependency_scope_proof_digest": evidence_digest,
+        "physical_db_digest": physical,
         "observed_through": observed,
         "entries": entries,
     }
 
 
 def _verified_worker_scope_from_db(path):
-    import hashlib
-    import sqlite3
-
+    """Test-issued Worker session scope; upstream envelope/projection verify is stubbed."""
     from pit.governed_am_view import _session_scope_from_verified_worker_job
 
     session_scope = _verified_session_scope_from_db(path)
-    profile_digest = "sha256:" + ("77" * 32)
-    ready_body = {
-        "observed_through": session_scope["observed_through"],
-        "profile_digest": profile_digest,
-        "pit_contract_digests": {
-            "dependency_scope": session_scope["dependency_scope_proof_digest"]
-        },
-    }
-    ready_digest = "sha256:" + hashlib.sha256(
-        json.dumps(
-            ready_body,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-            allow_nan=False,
-        ).encode("utf-8")
-    ).hexdigest()
-    embedded = {
-        "ready_manifest": {**ready_body, "manifest_digest": ready_digest},
-        "dependency_scope_evidence": {
-            "proof_digest": session_scope["dependency_scope_proof_digest"]
-        },
-    }
-    conn = sqlite3.connect(path)
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS local_snapshot_manifests "
-        "(snapshot_id TEXT PRIMARY KEY, format TEXT NOT NULL, "
-        "committed_at TEXT NOT NULL, source_run_id INTEGER NOT NULL, "
-        "change_seq INTEGER NOT NULL, manifest_json TEXT NOT NULL)"
-    )
-    conn.execute("DELETE FROM local_snapshot_manifests")
-    conn.execute(
-        "INSERT INTO local_snapshot_manifests "
-        "(snapshot_id,format,committed_at,source_run_id,change_seq,manifest_json) "
-        "VALUES (?,?,?,?,?,?)",
-        (
-            "fixture-embedded-ready",
-            "fixture-embedded-ready/v1",
-            session_scope["observed_through"],
-            0,
-            0,
-            json.dumps(embedded, sort_keys=True, separators=(",", ":")),
-        ),
-    )
-    conn.commit()
-    conn.close()
-    session_scope["physical_db_digest"] = _file_digest(path)
+    evidence_digest = session_scope["dependency_scope_proof_digest"]
     return _session_scope_from_verified_worker_job(
         session_scope=session_scope,
-        ready_manifest_digest=ready_digest,
-        signed_projection_document_digest="sha256:" + ("66" * 32),
-        profile_digest=profile_digest,
+        ready_manifest_digest=evidence_digest,
+        signed_projection_document_digest=evidence_digest,
+        profile_digest=evidence_digest,
     )
 
 
@@ -1162,6 +1122,40 @@ def _verified_snapshot_handle_from_db(path):
 def _verified_snapshot_view_from_db(path):
     handle = _verified_snapshot_handle_from_db(path)
     return handle.am_session_data_view()
+
+
+def test_governed_open_binds_external_scope_to_final_sqlite_bytes(tmp_path) -> None:
+    """Opener uses a test-issued Worker session scope bound to finalized bytes.
+
+    Envelope/projection verification is stubbed. Not a producer/Worker proof
+    round-trip.
+    """
+    from _coreseed import seed_governed_am_pm_session_db
+    from pit.errors import SnapshotObservationClockError
+    from pit.governed_am_view import _open_verified_controlled_snapshot
+
+    db = seed_governed_am_pm_session_db(tmp_path)
+    physical = _file_digest(db)
+    verified_scope = _verified_worker_scope_from_db(db)
+    assert _file_digest(db) == physical
+    assert verified_scope.physical_db_digest == physical
+    handle = _open_verified_controlled_snapshot(
+        pinned_path=db,
+        verified_physical_digest=physical,
+        verified_session_scope=verified_scope,
+    )
+    handle.close()
+    assert _file_digest(db) == physical
+    raw = Path(db).read_bytes()
+    Path(db).write_bytes(raw[:-1] + bytes([raw[-1] ^ 0xFF]))
+    with pytest.raises(
+        SnapshotObservationClockError, match="physical snapshot digest mismatch"
+    ):
+        _open_verified_controlled_snapshot(
+            pinned_path=db,
+            verified_physical_digest=physical,
+            verified_session_scope=verified_scope,
+        )
 
 
 def test_public_bind_is_not_exported() -> None:
@@ -1553,9 +1547,6 @@ def test_controlled_open_rejects_fins_tamper_with_manifest_and_prices_unchanged(
 
     conn = sqlite3.connect(source)
     conn.row_factory = sqlite3.Row
-    manifest_before = str(
-        conn.execute("SELECT manifest_json FROM local_snapshot_manifests").fetchone()[0]
-    )
     prices_before = conn.execute(
         "SELECT dataset, artifact_digest, artifact_body "
         "FROM receipt_product_materializations "
@@ -1593,9 +1584,6 @@ def test_controlled_open_rejects_fins_tamper_with_manifest_and_prices_unchanged(
         (artifact_digest, artifact_body),
     )
     conn.commit()
-    assert str(
-        conn.execute("SELECT manifest_json FROM local_snapshot_manifests").fetchone()[0]
-    ) == manifest_before
     assert conn.execute(
         "SELECT dataset, artifact_digest, artifact_body "
         "FROM receipt_product_materializations "

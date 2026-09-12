@@ -821,41 +821,6 @@ class VerifiedPilotReadyPublication:
     def committed_at(self) -> str:
         return str(self.snapshot.committed_at)
 
-    def governed_am_session_data_view(self) -> Any:
-        """Mint the production AM view from this independently verified publication."""
-        from pit.governed_am_view import (
-            _open_verified_controlled_snapshot,
-            _verified_am_scope_fields,
-        )
-
-        manifest = self.snapshot.manifest
-        observed = (
-            str(manifest.get("observed_through") or "")
-            or str(getattr(self, "observed_through", "") or "")
-        )
-        nested = manifest.get("ready_manifest")
-        if isinstance(nested, Mapping) and nested.get("observed_through"):
-            observed = str(nested.get("observed_through"))
-        scope = manifest.get("dependency_scope_evidence")
-        if not isinstance(scope, Mapping):
-            if isinstance(nested, Mapping):
-                scope = nested
-        physical = self.snapshot.artifact_digest
-        if type(physical) is not str or physical != self.readiness.immutable_db_digest:
-            raise MassResearchDisabledError(
-                "publication physical digest is missing or mismatched"
-            )
-        binding = _verified_am_scope_fields(scope if isinstance(scope, Mapping) else None)
-        handle = _open_verified_controlled_snapshot(
-            pinned_path=self.snapshot.db_path,
-            verified_physical_digest=physical,
-            verified_am_product_digests=binding["product_artifact_digests"],
-            verified_am_natural_key_digest=binding["natural_key_digest"],
-            verified_am_natural_key_count=binding["natural_key_count"],
-            expected_observed_through=observed,
-        )
-        return handle.am_session_data_view()
-
 
 def load_exact_four_pilot_ready_binding(
     *, root: Path | None = None

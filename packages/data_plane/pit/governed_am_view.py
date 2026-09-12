@@ -533,12 +533,6 @@ def _verified_session_scope_fields(source: Any) -> dict[str, dict[str, Any]]:
     )
 
 
-def _verified_am_scope_fields(source: Any) -> dict[str, Any]:
-    """Compatibility helper for tests; never mints a production handle."""
-
-    return _verified_session_scope_fields(source)[GOVERNED_DAILY_DATASET_ID]
-
-
 @dataclass(frozen=True, slots=True)
 class _VerifiedControlledSessionScope:
     _token: object
@@ -565,8 +559,9 @@ def _session_scope_from_verified_worker_job(
     """Convert the already-verified Worker job scope into an opaque capability.
 
     The signed projection and READY envelope are verified by the Worker before
-    this job exists. Embedded SQLite manifests are deliberately not accepted as
-    authority here; they are reconciled separately by the container.
+    this job exists. SQLite-embedded ReadyManifest/scope JSON is not authority.
+    The opener rehashes the pinned object and checks product/natural-key seals
+    against this issued Worker session scope.
     """
 
     if not isinstance(session_scope, Mapping) or set(session_scope) != {
@@ -628,72 +623,6 @@ def _session_scope_from_verified_worker_job(
             {key: MappingProxyType(dict(value)) for key, value in bindings.items()}
         ),
     )
-
-
-def _reconcile_embedded_ready_manifest(
-    conn: sqlite3.Connection,
-    verified_scope: _VerifiedControlledSessionScope,
-) -> None:
-    tables = {
-        str(row[0])
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    }
-    if "local_snapshot_manifests" not in tables:
-        raise SnapshotObservationClockError("verified snapshot manifest is missing")
-    rows = conn.execute("SELECT manifest_json FROM local_snapshot_manifests").fetchall()
-    if len(rows) != 1 or not rows[0][0]:
-        raise SnapshotObservationClockError(
-            "verified snapshot manifest is not a singleton"
-        )
-    try:
-        manifest = json.loads(str(rows[0][0]))
-    except (TypeError, ValueError) as exc:
-        raise SnapshotObservationClockError(
-            "verified snapshot manifest is malformed"
-        ) from exc
-    if not isinstance(manifest, dict) or not isinstance(
-        manifest.get("ready_manifest"), dict
-    ):
-        raise SnapshotObservationClockError("embedded ReadyManifest is missing")
-    nested = dict(manifest["ready_manifest"])
-    declared_digest = nested.pop("manifest_digest", None)
-    encoded = json.dumps(
-        nested,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    )
-    recomputed = "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-    if (
-        declared_digest != verified_scope.ready_manifest_digest
-        or recomputed != verified_scope.ready_manifest_digest
-    ):
-        raise SnapshotObservationClockError(
-            "embedded ReadyManifest does not match verified Worker scope"
-        )
-    if nested.get("observed_through") != verified_scope.observed_through:
-        raise SnapshotObservationClockError(
-            "embedded ReadyManifest observation clock mismatch"
-        )
-    if nested.get("profile_digest") != verified_scope.profile_digest:
-        raise SnapshotObservationClockError(
-            "embedded ReadyManifest profile mismatch"
-        )
-    pit_contracts = nested.get("pit_contract_digests")
-    if not isinstance(pit_contracts, dict) or pit_contracts.get(
-        "dependency_scope"
-    ) != verified_scope.dependency_scope_proof_digest:
-        raise SnapshotObservationClockError(
-            "embedded dependency scope does not match verified Worker scope"
-        )
-    embedded_scope = manifest.get("dependency_scope_evidence")
-    if not isinstance(embedded_scope, dict) or embedded_scope.get(
-        "proof_digest"
-    ) != verified_scope.dependency_scope_proof_digest:
-        raise SnapshotObservationClockError(
-            "embedded dependency proof does not match verified Worker scope"
-        )
 
 
 def _verified_am_product_fields(
@@ -1425,7 +1354,6 @@ def _open_verified_controlled_snapshot(
             raise SnapshotObservationClockError(
                 "snapshot observation clock does not match manifest"
             )
-        _reconcile_embedded_ready_manifest(conn, verified_session_scope)
         sealed_by_dataset: dict[str, set[tuple[str, ...]]] = {}
         for dataset_id in CONTROLLED_SESSION_DATASET_IDS:
             binding = verified_session_scope.entries[dataset_id]
