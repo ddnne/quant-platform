@@ -240,10 +240,63 @@ def test_ordinary_and_private_owner_agree_on_revisions_ties_and_clocks(
         assert ordinary.state.observation is not None
         assert ordinary.state.observation["bps"] == 20.0
         assert ordinary.evidence.selected_natural_key == _nk("amend", "2025-04-08")
+        assert ordinary.selected_product_digest == private.selected_product_digest
     else:
         assert ordinary.state.parsed_row_count is None
         assert ordinary.state.observation is None
         assert ordinary.evidence.selected_natural_key is None
+
+
+def test_selected_product_digest_tracks_bps_winner_not_later_eps_row() -> None:
+    bps_row = _catalog_row(
+        disc="bps",
+        day="2023-01-10",
+        payload={
+            "Code": CODE,
+            "BPS": 100.0,
+            "CurPerEn": "2022-12-31",
+            "DiscDate": "2023-01-10",
+        },
+        event_time="2023-01-10T12:00:00+09:00",
+    )
+    eps_row = _catalog_row(
+        disc="eps",
+        day="2023-02-10",
+        payload={
+            "Code": CODE,
+            "EPS": 10.0,
+            "CurPerEn": "2023-01-31",
+            "DiscDate": "2023-02-10",
+        },
+        event_time="2023-02-10T12:00:00+09:00",
+    )
+    count_row = _catalog_row(
+        disc="sales",
+        day="2023-03-10",
+        payload={"Code": CODE, "NetSales": 1.0, "CurPerEn": "2023-03-31"},
+        event_time="2023-03-10T12:00:00+09:00",
+    )
+    owned = financial_observations._owned_selection_from_raw_rows(
+        iter((bps_row, eps_row, count_row)),
+        dataset="fins_summary",
+        code=CODE,
+        initial_visible_state=PER_SHARE,
+    )
+    assert owned.state.observation is not None
+    assert owned.state.observation["mode"] == "bps_over_price"
+    assert owned.state.observation["bps"] == 100.0
+    assert owned.state.parsed_row_count == 3
+    assert owned.evidence.selected_natural_key == _nk("bps", "2023-01-10")
+    assert owned.selected_product_digest == (
+        financial_observations._product_digest_from_raw(bps_row)
+    )
+    assert owned.selected_product_digest != (
+        financial_observations._product_digest_from_raw(eps_row)
+    )
+    assert owned.payload_column_evidence == {
+        "payload": "present_value",
+        "raw_payload": "present_value",
+    }
 
 
 def test_payload_clock_and_count_invariants(tmp_path) -> None:

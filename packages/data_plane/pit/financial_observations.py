@@ -22,6 +22,7 @@ from types import MappingProxyType
 from typing import Any
 
 from data_contracts.identity import canonical_finite_safe_json
+from ops.receipt_product import PRODUCT_ARTIFACT_FIELDS, product_row_digest
 
 from .query import _decode_row
 
@@ -91,10 +92,10 @@ class _PerShareObservationAccumulator:
         self.parsed_rows = 0
         self.selected_natural_key: str | None = None
 
-    def add(self, row: dict[str, Any]) -> None:
+    def add(self, row: dict[str, Any]) -> bool:
         payload = catalog_row_payload(row)
         if not payload:
-            return
+            return False
         self.parsed_rows += 1
         bps = _as_float_or_none(
             payload.get("BPS")
@@ -152,6 +153,8 @@ class _PerShareObservationAccumulator:
         if bps is not None or (eps is not None and self.latest_bps is None):
             key = row.get("natural_key")
             self.selected_natural_key = None if key is None else str(key)
+            return True
+        return False
 
     def result(self) -> dict[str, Any] | None:
         selected = self.latest_bps or self.latest_eps
@@ -204,6 +207,8 @@ class _OwnedFinancialSelection:
 
     state: FinancialCatalogState
     evidence: _FinancialSelectionEvidence
+    selected_product_digest: str | None = None
+    payload_column_evidence: Mapping[str, str] | None = None
 
 
 def _typed_raw_sql_value(value: Any) -> Any:
@@ -302,6 +307,35 @@ class _IncrementalSelectionEvidence:
         )
 
 
+def _payload_column_evidence(raw: Any) -> dict[str, str]:
+    """Inspect original SQL payload columns. Not a row-count inference."""
+
+    evidence: dict[str, str] = {}
+    for field in ("payload", "raw_payload"):
+        try:
+            value = raw[field]
+        except (KeyError, IndexError, TypeError):
+            evidence[field] = "missing"
+            continue
+        evidence[field] = "present_null" if value is None else "present_value"
+    return evidence
+
+
+def _product_digest_from_raw(raw: Any) -> str | None:
+    """Digest the selected source version. Not a COMPLETE or receipt claim."""
+
+    try:
+        fields = {field: raw[field] for field in PRODUCT_ARTIFACT_FIELDS}
+    except (KeyError, IndexError, TypeError):
+        return None
+    if any(type(value) is not str for value in fields.values()):
+        return None
+    try:
+        return product_row_digest(fields)
+    except ValueError:
+        return None
+
+
 def _owned_selection_from_raw_rows(
     raw_rows: Iterator[Any],
     *,
@@ -322,12 +356,19 @@ def _owned_selection_from_raw_rows(
         initial_visible_state=initial_visible_state,
     )
     accumulator = None if count_only else _PerShareObservationAccumulator()
+    selected_product_digest: str | None = None
+    payload_column_evidence: dict[str, str] | None = None
+    last_column_evidence: dict[str, str] | None = None
     try:
         for raw in raw_rows:
             evidence.add_raw_row(raw)
+            last_column_evidence = _payload_column_evidence(raw)
             decoded = _decode_row(raw)
-            if accumulator is not None:
-                accumulator.add(decoded)
+            if accumulator is None:
+                payload_column_evidence = last_column_evidence
+            elif accumulator.add(decoded):
+                selected_product_digest = _product_digest_from_raw(raw)
+                payload_column_evidence = last_column_evidence
     finally:
         close = getattr(raw_rows, "close", None)
         if close is not None:
@@ -339,6 +380,8 @@ def _owned_selection_from_raw_rows(
     no_value_reason = None
     if not count_only and observation is None:
         no_value_reason = "no BPS or EPS"
+        selected_product_digest = None
+        payload_column_evidence = last_column_evidence
     state = FinancialCatalogState(
         dataset=dataset,
         code=code,
@@ -353,6 +396,12 @@ def _owned_selection_from_raw_rows(
     return _OwnedFinancialSelection(
         state=state,
         evidence=evidence.finish(selected_natural_key),
+        selected_product_digest=selected_product_digest,
+        payload_column_evidence=(
+            None
+            if payload_column_evidence is None
+            else MappingProxyType(payload_column_evidence)
+        ),
     )
 
 
