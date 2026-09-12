@@ -353,8 +353,8 @@ def _posted(*, path: str, body: bytes, manager: object):
 
 def _worker_document(job_id: str, segments: list[dict[str, str]]) -> dict[str, object]:
     from execution.exact_four_binding import controlled_pilot_v1_contract
-    from receipt_candidate_job import RECEIPT_CANDIDATE_FORMAT
     from test_cloud_personal_research_container import service
+    from receipt_candidate_job import RECEIPT_CANDIDATE_FORMAT
 
     contract = controlled_pilot_v1_contract()
     digest_body = {
@@ -384,13 +384,13 @@ def _worker_document(job_id: str, segments: list[dict[str, str]]) -> dict[str, o
 def test_http_job_and_execute_publish_compact_completed_terminal(
     tmp_path: Path, receipt_ed25519_keys, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from receipt_candidate_job import RECEIPT_CANDIDATE_FORMAT, ReceiptCandidateJobSpec
     from test_cloud_personal_research_container import (
         _cancel_held_retries_after_worker,
         _job_manager,
         _join_manager_worker,
         service,
     )
+    from receipt_candidate_job import RECEIPT_CANDIDATE_FORMAT, ReceiptCandidateJobSpec
 
     _rows, product_path, raw_path, descriptor, _receipt = _signed_bundle(
         tmp_path, receipt_ed25519_keys
@@ -474,13 +474,13 @@ def test_execute_512_selectors_keeps_compact_terminal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from execution.exact_four_binding import controlled_pilot_v1_contract
+    from test_cloud_personal_research_container import service
     from receipt_candidate_job import (
         RECEIPT_CANDIDATE_MAX_REQUEST_BYTES,
         RECEIPT_CANDIDATE_MAX_SEGMENTS,
         ReceiptCandidateJobSpec,
         execute_receipt_candidate_job,
     )
-    from test_cloud_personal_research_container import service
 
     datasets = sorted(str(item) for item in controlled_pilot_v1_contract()["dataset_ids"])
     segments: list[dict[str, str]] = []
