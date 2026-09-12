@@ -413,14 +413,86 @@
     }
   ],
   "unknowns": [
-    "Affected historic AM+gross-cap engine artifact inventory was not examined; no cloud listing was performed."
+    "Nested actual-engine metadata inside unread reports, result archives, artifacts, panels, features, snapshots, and raw/history objects remains unverified; affected_pm_resize_count is null (unknown), not zero.",
+    "research/eval first-1000 List truncated=true with continuation cursor; mass_eval 915 and single_shot 307 returned no further cursor and no terminal bodies were read; other buckets/prefixes not exhausted.",
+    "AM-vol and legacy-vol manifests lack status, evaluated_count, core_engine_version, max_gross_weight_limit, and am_order_batch_policy; missing identity is UNKNOWN (not proven PM-resized, not proven unaffected)."
   ],
+  "historical_artifact_inventory": {
+    "closure_item": "item2",
+    "observed_at": "2026-09-12",
+    "observed_window_utc": "01:43-01:56",
+    "source_commit": "011c69efc50035744552ce4a594b23e7e439fe4a",
+    "source_state": "PR136 merged on main; source accepted; main native still running. This docs unit is not claimed merged, deployed, or CI-accepted.",
+    "bucket": "quant-structured",
+    "scope": "bounded List metadata plus 19 GET-read terminal personal job manifests; not exhaustive of bucket or prefixes",
+    "method": "Wrangler 4.125.0 --remote --pipe stdout; manifests <=1435 bytes; not persisted locally; no mutation; no new credential",
+    "cf_connector_get": "API-error 200 for raw R2 body; same legitimate object GET via existing Wrangler succeeded",
+    "root_prefixes": ["archive/", "research/", "structured/"],
+    "archive_next_prefixes": ["archive/jquants_records/"],
+    "research_prefixes": ["eval/", "mass_eval/", "personal/", "single_shot/"],
+    "personal_prefixes": ["acquisition-cache/", "jobs/", "option-sidecar/", "snapshot-builds/", "snapshots/", "svi-2023/", "vol-ratio-am-pm-v1/", "vol-ratio-v2/"],
+    "personal_prefix_object_counts": {"jobs": 15, "svi-2023": 18, "vol-ratio-am-pm-v1": 10, "vol-ratio-v2": 6},
+    "personal_prefix_lists_note": "per_page=1000; no pagination cursor or result_info in these four responses",
+    "terminal_manifests_read": 19,
+    "listed_not_read": {
+      "am_panel_builder_manifest_bytes": 4929,
+      "am_report_bytes": 1595959,
+      "am_artifact_bytes": 902181,
+      "am_sibling_artifact_bytes": 902189,
+      "generic_completed_result_archives": [
+        {"job": "exact-four-cloud-20260829-v5", "result_bytes": 6298982},
+        {"job": "exact-four-cloud-20260829-v8", "result_bytes": 14822222},
+        {"job": "price-topixall-v7g-20260830", "result_bytes": 21093}
+      ]
+    },
+    "generic_jobs": {"n": 12, "FAILED": 9, "COMPLETED": 3, "draft_only": true, "go": false},
+    "svi_jobs": {"n": 4, "status": "COMPLETED", "candidate_status": {"INCOMPLETE": 3, "EVALUATED": 1}, "ready": false, "draft_only": true, "go": false},
+    "am_and_legacy_vol": {"n_am": 1, "n_legacy": 2, "go": false, "not_a_pass": true, "status": null, "evaluated_count": null, "core_engine_version": null, "max_gross_weight_limit": null, "am_order_batch_policy": null, "source_ts_am_evaluator": "Current source has a separate TS fixed-hold ratio evaluator; unread historical artifact bodies are not established as Python core 0.8.0 and not established as unaffected by it. Historical code identity was not verified."},
+    "am_vol_refs": {
+      "am_pm_contract_digest": "sha256:0d370b893a70b815dfccfc71b6e4253c44a96c704b948622e28bb5e4c531c3ae",
+      "artifact_digest": "sha256:a350cb1c2194ceef2f01a141fbfdf4b90271130ac662797f4ad29963f0315a4c"
+    },
+    "affected_pm_resize_count": null,
+    "selection_admission": false,
+    "admission_helper": "packages/product/selection/engine_artifact_admission.py",
+    "admission_note": "Current code engine 0.9.0 / FROZEN_AM_ORDER_BATCH_POLICY am_frozen_order_batch/v1. Helper rejects known AM+positive-cap+core 0.8.0 or realized_pm_gross_capped sizing and unproven AM caps. Outer job manifests lacking execution_mode are not eligibility proof. Non-AM short-circuit true is not general artifact validity. Retain originals. Later authorized same-closure new-version reevaluation only after proof and release gates; never auto-execute.",
+    "legacy_lists": {
+      "research/eval": {"first_1000_truncated": true, "continuation_cursor": "1-JTdCJTIydiUyMiUzQTElMkMlMjJzdGFydEFmdGVyJTIyJTNBJTIycmVzZWFyY2glMkZldmFsJTJGam9iJTNEZXZhbC1jZi1kcC1saXExMDAtcGx1czQxLTIwMjYwODIzcl9fZXZlbnRfdW5jcm93ZGVkX21hcmdpbl91cCUyRmRhaWx5X3BhdGguanNvbiUyMiUyQyUyMnV1aWQlMjIlM0ElMjI3ZTVmZDU2MTg3MGVlY2M5YmUyOGUwZTZkNDFmYWQ3ZSUyMiU3RA=="},
+      "research/mass_eval": {"objects": 915, "further_cursor": null},
+      "research/single_shot": {"objects": 307, "further_cursor": null}
+    },
+    "etag_note": "etag is storage etag, not cryptographic proof",
+    "null_means": "unavailable, not zero and not false",
+    "retain_originals": true,
+    "auto_reevaluate": false,
+    "manifests": [
+      {"key": "research/personal/jobs/job=exact-four-cloud-20260829-v4/manifest.json", "etag": "5f8d970b4af5e72f7e8628ae1e28cda2", "bytes": 748, "reported_status": "FAILED", "reported_evaluated_count": null, "reported_candidate_status": null},
+      {"key": "research/personal/jobs/job=exact-four-cloud-20260829-v5/manifest.json", "etag": "6c42e2ad3e6a1d1db479aeb9d5fa162b", "bytes": 1160, "reported_status": "COMPLETED", "reported_evaluated_count": 4, "reported_candidate_status": null},
+      {"key": "research/personal/jobs/job=exact-four-cloud-20260829-v6/manifest.json", "etag": "56c6644aefdd3627d945dc3afc48f224", "bytes": 749, "reported_status": "FAILED", "reported_evaluated_count": null, "reported_candidate_status": null},
+      {"key": "research/personal/jobs/job=exact-four-cloud-20260829-v8/manifest.json", "etag": "b3ebc6ef604f3d145cb7d28f7eaa930e", "bytes": 1161, "reported_status": "COMPLETED", "reported_evaluated_count": 4, "reported_candidate_status": null},
+      {"key": "research/personal/jobs/job=exact-four-cloud-smoke-20260829-v1/manifest.json", "etag": "ad551e62eaafc35d0c02c4d9e75e47a8", "bytes": 749, "reported_status": "FAILED", "reported_evaluated_count": null, "reported_candidate_status": null},
+      {"key": "research/personal/jobs/job=factor-price-topixall-20260830/manifest.json", "etag": "d045bddd71729982884b68781e5c23f6", "bytes": 1025, "reported_status": "FAILED", "reported_evaluated_count": null, "reported_candidate_status": null},
+      {"key": "research/personal/jobs/job=price-topixall-v10-20260830/manifest.json", "etag": "a8e63c78acade1a300cfc940ef51d29c", "bytes": 1097, "reported_status": "FAILED", "reported_evaluated_count": null, "reported_candidate_status": null},
+      {"key": "research/personal/jobs/job=price-topixall-v10diag-20260830/manifest.json", "etag": "1f69d3d17f014914d3ccef89a8e5cc9f", "bytes": 1101, "reported_status": "FAILED", "reported_evaluated_count": null, "reported_candidate_status": null},
+      {"key": "research/personal/jobs/job=price-topixall-v11-20260830/manifest.json", "etag": "e923ef5e26d881f2a5a0fabd6557fbdb", "bytes": 1023, "reported_status": "FAILED", "reported_evaluated_count": null, "reported_candidate_status": null},
+      {"key": "research/personal/jobs/job=price-topixall-v7g-20260830/manifest.json", "etag": "e499e8c761deaea33b37546a9a50385e", "bytes": 1435, "reported_status": "COMPLETED", "reported_evaluated_count": 0, "reported_candidate_status": null},
+      {"key": "research/personal/jobs/job=price-topixall-v7h-20260830/manifest.json", "etag": "f0553ff3c81db96aee4158b51ee3992e", "bytes": 1028, "reported_status": "FAILED", "reported_evaluated_count": null, "reported_candidate_status": null},
+      {"key": "research/personal/jobs/job=price-topixall-v8-20260830/manifest.json", "etag": "b34f6db23614399b4f1dcb0f47cc737b", "bytes": 1027, "reported_status": "FAILED", "reported_evaluated_count": null, "reported_candidate_status": null},
+      {"key": "research/personal/svi-2023/job=svi-2023-prod-v151-20260831b/manifest.json", "etag": "0daeba614e40767cbff414e2f75d20b2", "bytes": 1067, "reported_status": "COMPLETED", "reported_evaluated_count": null, "reported_candidate_status": "INCOMPLETE"},
+      {"key": "research/personal/svi-2023/job=svi-2023-prod-v152-20260831c/manifest.json", "etag": "4dfaaff4f5bae3bc0e23d6bdb2fd1250", "bytes": 1067, "reported_status": "COMPLETED", "reported_evaluated_count": null, "reported_candidate_status": "INCOMPLETE"},
+      {"key": "research/personal/svi-2023/job=svi-n225-2023-20260830/manifest.json", "etag": "7d1ea0a8b939b307e64924ecd254bebb", "bytes": 994, "reported_status": "COMPLETED", "reported_evaluated_count": null, "reported_candidate_status": "EVALUATED"},
+      {"key": "research/personal/svi-2023/job=svi-n225-2023-beta-20260830/manifest.json", "etag": "6e66fc054c7a95261a4576ae4733e8e7", "bytes": 1063, "reported_status": "COMPLETED", "reported_evaluated_count": null, "reported_candidate_status": "INCOMPLETE"},
+      {"key": "research/personal/vol-ratio-am-pm-v1/job=vol-ratio-am-pm-prod-v151-20260831b/manifest.json", "etag": "2205c8987becd29b1271548c0435416f", "bytes": 647, "reported_status": null, "reported_evaluated_count": null, "reported_candidate_status": null},
+      {"key": "research/personal/vol-ratio-v2/job=vol-ratio-n225-20260830/manifest.json", "etag": "0253b3d7693859dbe2e102982e25cfb5", "bytes": 497, "reported_status": null, "reported_evaluated_count": null, "reported_candidate_status": null},
+      {"key": "research/personal/vol-ratio-v2/job=vol-ratio-n225-complete-leg-20260830/manifest.json", "etag": "cf64f61c0de43ff457575d5f6eb5aea0", "bytes": 523, "reported_status": null, "reported_evaluated_count": null, "reported_candidate_status": null}
+    ]
+  },
   "pending_operations": [
     {
       "id": "enumerate_legacy_am_gross_cap_engine_artifacts",
-      "status": "pending",
+      "status": "partial",
       "requires": "cloud evidence",
-      "notes": "Structurally reject AM+gross-cap artifacts that cannot prove am_frozen_order_batch/v1. Do not overwrite or delete historic files."
+      "notes": "Personal-prefix bounded List + 19 terminal manifests recorded as metadata only; this is not selection admission. Global enumeration, truncated research/eval continuation, mass_eval/single_shot terminal bodies, and nested actual-engine metadata remain pending. Structurally reject AM+gross-cap artifacts that cannot prove am_frozen_order_batch/v1. Do not overwrite or delete historic files. Do not pass outer job manifests lacking execution_mode through engine_artifact_admission as eligibility proof. No large-archive extractor was executed in this observation; future extraction remains subject to existing approval/HOLD boundaries."
     },
     {
       "id": "push_am_causality_branch_after_explicit_approval",
