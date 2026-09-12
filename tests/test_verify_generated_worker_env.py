@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
+import scripts.verify_generated_worker_env as verify
 from scripts.verify_generated_worker_env import (
     active_worker_environments,
     expected_env_properties,
@@ -38,34 +41,6 @@ def test_check_generation_rejects_non_wrangler_declaration(tmp_path: Path) -> No
             assertion=tmp_path / "assert.ts",
             tsconfig=tmp_path / "tsconfig.json",
         )
-
-
-def test_check_generation_pins_exact_named_environment(tmp_path: Path) -> None:
-    generated = tmp_path / "env.d.ts"
-    generated.write_text(
-        "interface __BaseEnv_Env { DB: D1Database; }\n"
-        "declare namespace Cloudflare { interface Env extends __BaseEnv_Env {} }\n"
-        "interface Env extends __BaseEnv_Env {}\n",
-        encoding="utf-8",
-    )
-    assertion = tmp_path / "assert.ts"
-    tsconfig = tmp_path / "tsconfig.json"
-    write_check(
-        worker="ingestion-premium",
-        environment="production",
-        generated_types=generated,
-        assertion=assertion,
-        tsconfig=tsconfig,
-    )
-    assertion_text = assertion.read_text(encoding="utf-8")
-    assert 'readonly "DB": D1Database;' in assertion_text
-    assert 'readonly "RAW_BUCKET": R2Bucket;' in assertion_text
-    assert 'readonly "JQUANTS_API_KEY": string;' in assertion_text
-    assert "NoUnexpectedBindings" in assertion_text
-    assert 'import("./src/index")' not in assertion_text
-    assert "DurableObjectNamespace" not in assertion_text
-    config = json.loads(tsconfig.read_text(encoding="utf-8"))
-    assert config["compilerOptions"]["skipLibCheck"] is False
 
 
 def test_every_active_worker_environment_is_covered_without_generic_erasure() -> None:
@@ -136,32 +111,6 @@ def test_base_env_keeps_same_toml_production_bindings_optional() -> None:
     assert mcp_optional == {}
 
 
-def test_base_assertion_emits_optional_production_service(tmp_path: Path) -> None:
-    generated = tmp_path / "env.d.ts"
-    generated.write_text(
-        "interface __BaseEnv_Env {\n"
-        '  CF_VERSION_METADATA: WorkerVersionMetadata;\n'
-        '  ENVIRONMENT: "disabled";\n'
-        "  JSDA_INGESTION?: Service;\n"
-        "}\n"
-        "declare namespace Cloudflare { interface Env extends __BaseEnv_Env {} }\n"
-        "interface Env extends __BaseEnv_Env {}\n",
-        encoding="utf-8",
-    )
-    assertion = tmp_path / "assert.ts"
-    write_check(
-        worker="receipt-activation-observer",
-        environment="base",
-        generated_types=generated,
-        assertion=assertion,
-        tsconfig=tmp_path / "tsconfig.json",
-    )
-    text = assertion.read_text(encoding="utf-8")
-    assert 'readonly "ENVIRONMENT": "disabled";' in text
-    assert 'readonly "JSDA_INGESTION"?: Service;' in text
-    assert "PREMIUM_RECEIPT_OPERATOR" not in text
-
-
 def test_generic_fetcher_or_do_erasure_is_rejected(tmp_path: Path) -> None:
     generated = tmp_path / "env.d.ts"
     generated.write_text(
@@ -194,25 +143,172 @@ def test_generic_fetcher_or_do_erasure_is_rejected(tmp_path: Path) -> None:
         )
 
 
-def test_durable_object_import_is_relative_to_temp_assertion(tmp_path: Path) -> None:
-    generated = tmp_path / "types" / "env.d.ts"
-    assertion = tmp_path / "types" / "assert.ts"
-    tsconfig = tmp_path / "types" / "tsconfig.json"
-    generated.parent.mkdir()
-    generated.write_text(
-        "interface __BaseEnv_Env { MCP_OBJECT: DurableObjectNamespace<never>; }\n"
-        "declare namespace Cloudflare { interface Env extends __BaseEnv_Env {} }\n"
-        "interface Env extends __BaseEnv_Env {}\n",
+@pytest.mark.toolchain
+def test_write_check_typechecks_synthetic_env_and_rejects_binding_mismatches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tsc = (
+        verify.WORKER_ROOT
+        / "ingestion-premium"
+        / "node_modules"
+        / "typescript"
+        / "bin"
+        / "tsc"
+    )
+    premium_modules = verify.WORKER_ROOT / "ingestion-premium" / "node_modules"
+    assert tsc.is_file(), f"pinned TypeScript compiler missing (run npm ci): {tsc}"
+    assert (premium_modules / "@cloudflare" / "workers-types").exists(), (
+        f"pinned @cloudflare/workers-types missing (run npm ci): {premium_modules}"
+    )
+
+    worker = "synthetic-check-worker"
+    worker_root = tmp_path / "workers"
+    worker_dir = worker_root / worker
+    src = worker_dir / "src"
+    src.mkdir(parents=True)
+    (src / "index.ts").write_text(
+        'import { DurableObject } from "cloudflare:workers";\n'
+        "export class Ledger extends DurableObject {}\n",
         encoding="utf-8",
     )
+    (worker_dir / "tsconfig.json").write_text(
+        json.dumps(
+            {
+                "compilerOptions": {
+                    "target": "ES2022",
+                    "lib": ["ES2022"],
+                    "module": "ES2022",
+                    "moduleResolution": "bundler",
+                    "strict": True,
+                    "noEmit": True,
+                    "isolatedModules": True,
+                    "skipLibCheck": False,
+                    "types": ["@cloudflare/workers-types"],
+                }
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (worker_dir / "node_modules").symlink_to(
+        premium_modules.resolve(), target_is_directory=True
+    )
+
+    empty = {
+        "d1_databases": [],
+        "r2_buckets": [],
+        "kv_namespaces": [],
+        "queue_producers": [],
+        "durable_objects": [],
+        "services": [],
+        "ratelimits": [],
+        "vars": {},
+    }
+    shared = {
+        **empty,
+        "d1_databases": [{"binding": "DB"}],
+        "durable_objects": [{"name": "LEDGER", "class_name": "Ledger"}],
+    }
+    manifest = tmp_path / "active_worker_bindings.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "workers": {
+                    worker: {
+                        "base": {**shared, "vars": {"ENVIRONMENT": "base"}},
+                        "production": {
+                            **shared,
+                            "services": [
+                                {"binding": "UPSTREAM", "entrypoint": "default"}
+                            ],
+                            "vars": {"ENVIRONMENT": "production"},
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    generated = worker_dir / "env.d.ts"
+    base_env = (
+        "interface __BaseEnv_Env {\n"
+        "  DB: D1Database;\n"
+        '  ENVIRONMENT: "base";\n'
+        '  LEDGER: DurableObjectNamespace<import("./src/index").Ledger>;\n'
+        "  UPSTREAM?: Service;\n"
+        "}\n"
+        "declare namespace Cloudflare { interface Env extends __BaseEnv_Env {} }\n"
+        "interface Env extends __BaseEnv_Env {}\n"
+    )
+    generated.write_text(base_env, encoding="utf-8")
+    assertion = tmp_path / "check" / "assert.ts"
+    tsconfig = tmp_path / "check" / "tsconfig.json"
+    assertion.parent.mkdir()
+
+    monkeypatch.setattr(verify, "MANIFEST", manifest)
+    monkeypatch.setattr(verify, "WORKER_ROOT", worker_root)
+
+    def compile_check() -> subprocess.CompletedProcess[str]:
+        node = shutil.which("node")
+        assert node, "node executable missing; toolchain tests require Node after npm ci"
+        return subprocess.run(
+            [node, str(tsc), "--pretty", "false", "-p", str(tsconfig)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
     write_check(
-        worker="quant-ops-mcp",
+        worker=worker,
+        environment="base",
+        generated_types=generated,
+        assertion=assertion,
+        tsconfig=tsconfig,
+    )
+    config = json.loads(tsconfig.read_text(encoding="utf-8"))
+    assert config["compilerOptions"]["skipLibCheck"] is False
+    success = compile_check()
+    assert success.returncode == 0, f"{success.stdout}\n{success.stderr}"
+
+    write_check(
+        worker=worker,
         environment="production",
         generated_types=generated,
         assertion=assertion,
         tsconfig=tsconfig,
     )
-    text = assertion.read_text(encoding="utf-8")
-    assert 'import("./src/index")' not in text
-    assert 'DurableObjectNamespace<import("' in text
-    assert "platform/workers/quant-ops-mcp/src/index" in text
+    wrong_env = compile_check()
+    wrong_env_out = f"{wrong_env.stdout}\n{wrong_env.stderr}"
+    assert wrong_env.returncode != 0, wrong_env_out
+    assert assertion.name in wrong_env_out
+    assert "error TS" in wrong_env_out
+
+    write_check(
+        worker=worker,
+        environment="base",
+        generated_types=generated,
+        assertion=assertion,
+        tsconfig=tsconfig,
+    )
+    generated.write_text(
+        base_env.replace("  UPSTREAM?: Service;\n", ""), encoding="utf-8"
+    )
+    missing = compile_check()
+    missing_out = f"{missing.stdout}\n{missing.stderr}"
+    assert missing.returncode != 0, missing_out
+    assert assertion.name in missing_out
+    assert "error TS" in missing_out
+
+    generated.write_text(
+        base_env.replace(
+            "  UPSTREAM?: Service;\n", "  UPSTREAM?: Service;\n  EXTRA: string;\n"
+        ),
+        encoding="utf-8",
+    )
+    extra = compile_check()
+    extra_out = f"{extra.stdout}\n{extra.stderr}"
+    assert extra.returncode != 0, extra_out
+    assert assertion.name in extra_out
+    assert "error TS" in extra_out
