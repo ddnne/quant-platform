@@ -56,7 +56,10 @@ from .source_capability import (
     source_capability_contract_or_none,
 )
 from .read_scopes import (
+    DatasetDependencyScope,
+    DatasetReadRequirement,
     DatasetReadScope,
+    DatasetRequirementError,
     VisibleObservationCount,
     resolve_dataset_read_scopes,
 )
@@ -145,7 +148,10 @@ __all__ = [
     "required_domain_subset_official",
     "source_capability_contract_for",
     "source_capability_contract_or_none",
+    "DatasetDependencyScope",
+    "DatasetReadRequirement",
     "DatasetReadScope",
+    "DatasetRequirementError",
     "VisibleObservationCount",
     "resolve_dataset_read_scopes",
 ]

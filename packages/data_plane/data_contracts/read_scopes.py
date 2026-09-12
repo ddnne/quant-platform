@@ -25,11 +25,36 @@ behavior.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import date
 from typing import Any, Mapping, Sequence
 
 
 READ_SCOPE_CONTRACT = "dataset-read-scope/v1"
 THROUGH_BOUND_DECISION_VISIBLE_VIEW = "bound_decision_visible_view"
+CONSUMER_KINDS = frozenset(
+    {
+        "feature",
+        "universe",
+        "evaluation",
+        "fill_am_mark",
+        "fill_pm_valuation",
+        "risk",
+        "calendar_prerequisite",
+    }
+)
+READ_CLOCKS = frozenset(
+    {
+        "bound_decision_visible_view",
+        "period_end_session_close",
+        "same_trading_date_pm_close",
+        "unconsumed_policy_membership",
+    }
+)
+_REQUIREMENT_KEYS = frozenset({"consumer_kind", "consumer_id", "clock", "scope"})
+
+
+class DatasetRequirementError(ValueError):
+    """Malformed dataset read requirement or dataset dependency scope."""
 
 _COUNT_KINDS = frozenset({"literal", "named_integer_input_plus"})
 _INITIAL_STATES = frozenset(
@@ -297,6 +322,219 @@ class DatasetReadScope:
         }
 
 
+def _iso_date(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise DatasetRequirementError(f"{label} must be an ISO date")
+    text = value.strip()
+    try:
+        parsed = date.fromisoformat(text)
+    except ValueError as exc:
+        raise DatasetRequirementError(f"{label} must be an ISO date") from exc
+    if parsed.isoformat() != text:
+        raise DatasetRequirementError(f"{label} must be an ISO date")
+    return text
+
+
+@dataclass(frozen=True, slots=True)
+class DatasetReadRequirement:
+    """One consumer's declared read against one dataset."""
+
+    consumer_kind: str
+    consumer_id: str
+    clock: str
+    scope: DatasetReadScope
+
+    def __post_init__(self) -> None:
+        if self.consumer_kind not in CONSUMER_KINDS:
+            raise DatasetRequirementError(
+                f"unsupported consumer kind {self.consumer_kind!r}"
+            )
+        if not isinstance(self.consumer_id, str) or not self.consumer_id.strip():
+            raise DatasetRequirementError("consumer_id must be a non-empty string")
+        object.__setattr__(self, "consumer_id", self.consumer_id.strip())
+        if self.clock not in READ_CLOCKS:
+            raise DatasetRequirementError(f"unsupported read clock {self.clock!r}")
+        if not isinstance(self.scope, DatasetReadScope):
+            raise DatasetRequirementError("requirement scope must be DatasetReadScope")
+        if self.clock == "period_end_session_close" and self.scope.dataset_id != (
+            "markets_calendar"
+        ):
+            raise DatasetRequirementError(
+                "period_end_session_close cannot authorize price or financial reads"
+            )
+        if (
+            self.consumer_kind == "feature"
+            and self.clock != "bound_decision_visible_view"
+        ):
+            raise DatasetRequirementError(
+                "feature reads use the bound decision-visible view"
+            )
+        if (
+            self.consumer_kind == "fill_pm_valuation"
+            and self.clock != "same_trading_date_pm_close"
+        ):
+            raise DatasetRequirementError(
+                "PM valuation reads use same-trading-date PM close"
+            )
+        if (
+            self.consumer_kind == "fill_am_mark"
+            and self.clock != "bound_decision_visible_view"
+        ):
+            raise DatasetRequirementError(
+                "AM marks use the bound decision-visible view"
+            )
+        if (
+            self.consumer_kind in {"universe", "calendar_prerequisite"}
+            and self.clock != "bound_decision_visible_view"
+        ):
+            raise DatasetRequirementError(
+                "universe and calendar prerequisites use the bound "
+                "decision-visible view"
+            )
+        if (
+            self.consumer_kind == "evaluation"
+            and self.scope.dataset_id == "markets_calendar"
+            and self.clock != "period_end_session_close"
+        ):
+            raise DatasetRequirementError(
+                "evaluation calendar uses period_end_session_close"
+            )
+        count = self.scope.observation_count
+        if count is not None and count.kind != "literal":
+            raise DatasetRequirementError(
+                f"unresolved observation count for {self.scope.dataset_id!r}"
+            )
+        if self.clock == "unconsumed_policy_membership":
+            if not self.scope.unconsumed_membership:
+                raise DatasetRequirementError(
+                    "unconsumed policy membership cannot declare a read"
+                )
+            if self.consumer_kind not in {"evaluation", "risk"}:
+                raise DatasetRequirementError(
+                    "unconsumed policy membership is only for evaluation or risk"
+                )
+        elif self.scope.unconsumed_membership:
+            raise DatasetRequirementError(
+                "unconsumed membership requires unconsumed_policy_membership clock"
+            )
+        if self.consumer_kind == "risk" and self.clock != "unconsumed_policy_membership":
+            raise DatasetRequirementError(
+                "risk policy membership cannot invent a history window"
+            )
+
+    @classmethod
+    def from_mapping(cls, raw: Any) -> "DatasetReadRequirement":
+        if not isinstance(raw, Mapping) or isinstance(raw, (str, bytes)):
+            raise DatasetRequirementError("read requirement must be an object")
+        extra = sorted(str(key) for key in raw if key not in _REQUIREMENT_KEYS)
+        if extra:
+            raise DatasetRequirementError(
+                f"read requirement has unsupported fields: {extra}"
+            )
+        missing = sorted(_REQUIREMENT_KEYS.difference(raw))
+        if missing:
+            raise DatasetRequirementError(
+                f"read requirement missing fields: {missing}"
+            )
+        try:
+            scope = DatasetReadScope.from_mapping(raw["scope"])
+        except ValueError as exc:
+            raise DatasetRequirementError(f"malformed requirement scope: {exc}") from exc
+        return cls(
+            consumer_kind=raw["consumer_kind"],
+            consumer_id=raw["consumer_id"],
+            clock=raw["clock"],
+            scope=scope,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "clock": self.clock,
+            "consumer_id": self.consumer_id,
+            "consumer_kind": self.consumer_kind,
+            "scope": self.scope.canonical_mapping(),
+        }
+
+
+def _derived_observation_lookback(
+    requirements: Sequence["DatasetReadRequirement"],
+) -> int:
+    counts: list[int] = []
+    for requirement in requirements:
+        count = requirement.scope.observation_count
+        if (
+            count is not None
+            and count.kind == "literal"
+            and type(count.value) is int
+        ):
+            counts.append(count.value)
+    return max(counts, default=0)
+
+
+@dataclass(frozen=True, slots=True)
+class DatasetDependencyScope:
+    """Union of required reads for one plan dataset, with per-consumer provenance."""
+
+    dataset_id: str
+    period_start: str
+    period_end: str
+    required_lookback_trading_days: int = 0
+    requirements: tuple[DatasetReadRequirement, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.dataset_id:
+            raise DatasetRequirementError("dataset scope id is required")
+        object.__setattr__(self, "period_start", _iso_date(self.period_start, "period_start"))
+        object.__setattr__(self, "period_end", _iso_date(self.period_end, "period_end"))
+        if self.period_start > self.period_end:
+            raise DatasetRequirementError("dataset scope period is reversed")
+        if (
+            isinstance(self.required_lookback_trading_days, bool)
+            or self.required_lookback_trading_days < 0
+        ):
+            raise DatasetRequirementError(
+                "dataset scope lookback must be a non-negative integer"
+            )
+        object.__setattr__(self, "requirements", tuple(self.requirements))
+        seen_consumers: set[tuple[str, str]] = set()
+        for requirement in self.requirements:
+            if not isinstance(requirement, DatasetReadRequirement):
+                raise DatasetRequirementError(
+                    "dataset scope requirements must be DatasetReadRequirement values"
+                )
+            if requirement.scope.dataset_id != self.dataset_id:
+                raise DatasetRequirementError(
+                    "requirement dataset_id must match dataset scope"
+                )
+            consumer = (requirement.consumer_kind, requirement.consumer_id)
+            if consumer in seen_consumers:
+                raise DatasetRequirementError(
+                    f"duplicate {requirement.consumer_kind} requirement "
+                    f"{requirement.consumer_id!r} on {self.dataset_id!r}"
+                )
+            seen_consumers.add(consumer)
+        if self.requirements:
+            derived = _derived_observation_lookback(self.requirements)
+            if derived != self.required_lookback_trading_days:
+                raise DatasetRequirementError(
+                    "scope-enabled lookback must be derived from declared "
+                    f"trading observations for {self.dataset_id!r}"
+                )
+
+    def to_dict(self) -> dict[str, Any]:
+        body = {
+            "dataset_id": self.dataset_id,
+            "period_start": self.period_start,
+            "period_end": self.period_end,
+            "required_lookback_trading_days": self.required_lookback_trading_days,
+        }
+        if self.requirements:
+            body["requirements"] = [
+                requirement.to_dict() for requirement in self.requirements
+            ]
+        return body
+
+
 def normalize_dataset_read_scopes(value: Any) -> tuple[DatasetReadScope, ...]:
     if value is None:
         return ()
@@ -367,7 +605,12 @@ def feature_read_scopes_payload(
 
 
 __all__ = [
+    "CONSUMER_KINDS",
+    "DatasetDependencyScope",
+    "DatasetReadRequirement",
     "DatasetReadScope",
+    "DatasetRequirementError",
+    "READ_CLOCKS",
     "VisibleObservationCount",
     "READ_SCOPE_CONTRACT",
     "THROUGH_BOUND_DECISION_VISIBLE_VIEW",
