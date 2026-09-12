@@ -10,14 +10,12 @@ Contracts → ingest → store → PIT read → ops meta.
 | `ingestion` | **Only** external market network plane (J-Quants / JSDA) |
 | `storage` | Structured write, receipts, coverage ledger |
 | `pit` | **Sole** structured fact read path (`as_of` required) |
-| `data_access` | Ops/research read façade (shared adapter; may bridge to features/paper_runtime) |
-| `ops` | Backfill planner, projection meta helpers |
+| `ops` | Backfill planner, projection meta helpers, Ops-current SQL reads |
 
 ## Allowed deps (plane)
 
 - Within `data_plane` leaves as documented in ADR §5.1
 - `storage` / `cf_platform` helpers (edge) for coverage measurement reuse
-- **Exception:** `data_access` → `features`, `paper_runtime` (intentional read-domain bridge)
 
 ## Forbidden
 
@@ -34,8 +32,7 @@ Contracts → ingest → store → PIT read → ops meta.
 | `storage` | coverage ledger, receipt authority, schema/store writers |
 | `ingestion` | `pipeline`, `jquants.catalog`, clients (root is namespace-light) |
 | `data_contracts` | `loader` / `coverage` / `identity` + JSON package data |
-| `data_access` | `QuantDataAccess`, ops/research read services |
-| `ops` | `backfill_planner`, `projection_meta` |
+| `ops` | `backfill_planner`, `projection_meta`, `current_read` |
 
 ## Operator CLIs (data_plane-facing)
 
