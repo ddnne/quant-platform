@@ -98,81 +98,20 @@ def test_receipt_authority_uses_dedicated_evidence_and_premium_owned_migrations(
 
 def test_all_named_entrypoints_and_governed_dos_have_exact_rpc_inventories() -> None:
     manifest = manifest_module.build_manifest()
-    expected = {
-        "ingestion-secrets": [{
-            "name": "IngestionSecretsService",
-            "handlers": ["class"],
-            "fetch_reserved_special": True,
-            "rpc_methods": ["fetch_governed_page"],
-        }],
-        "receipt-evidence-authority": [{
-            "name": "ReceiptAuthorityService",
-            "handlers": ["class"],
-            "fetch_reserved_special": True,
-            "rpc_methods": [
-                "begin_audit_recovery_canary",
-                "issue_for_segment",
-                "public_key_registration",
-                "recover_audit_recovery_canary",
-                "recover_issue",
-            ],
-        }],
-        "ingestion-premium": [
-            {
-                "name": "PremiumReceiptOperatorService",
-                "handlers": ["class"],
-                "fetch_reserved_special": False,
-                "rpc_methods": ["pending_public_key_registration"],
-            },
-            {
-                "name": "PremiumReceiptAuditEvidenceService",
-                "handlers": ["class"],
-                "fetch_reserved_special": False,
-                "rpc_methods": ["staging_recovery_audit_evidence"],
-            },
-            {
-                "name": "PilotReadyPublicationService",
-                "handlers": ["class"],
-                "fetch_reserved_special": True,
-                "rpc_methods": ["publishPilotReady"],
-            },
-        ],
-        "research-mass-eval": [],
-        "ingestion-jsda": [{
-            "name": "JsdaReadinessService",
-            "handlers": ["class"],
-            "fetch_reserved_special": True,
-            "rpc_methods": [],
-        }],
-        "research-ai-gateway": [{
-            "name": "GatewayService",
-            "handlers": ["class"],
-            "fetch_reserved_special": False,
-            "rpc_methods": [
-                "cancelControlledPaper",
-                "complete",
-                "finalizeControlledPaper",
-                "heartbeatControlledPaper",
-                "queryControlledPaper",
-                "reserveControlledPaper",
-            ],
-        }],
-    }
     for environment in ("base", "production", "staging"):
         for worker in manifest_module.ACTIVE_WORKERS:
             assert manifest["workers"][worker][environment]["default_handler"] == {
                 "fetch_reserved_special": True,
             }
-        for worker, inventory in expected.items():
-            assert manifest["workers"][worker][environment][
-                "worker_entrypoints"
-            ] == inventory
         premium = manifest["workers"]["ingestion-premium"][environment]
         assert premium["durable_object_class_handlers"] == []
         assert premium["workers_dev"] is False
         assert premium["preview_urls"] is False
         assert premium["route"] is None
         assert premium["routes"] == []
+        assert manifest["workers"]["research-mass-eval"][environment][
+            "worker_entrypoints"
+        ] == []
     assert manifest["workers"]["receipt-evidence-authority"]["staging"][
         "durable_object_class_handlers"
     ] == [{

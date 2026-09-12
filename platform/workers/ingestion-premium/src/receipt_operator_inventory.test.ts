@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   PremiumReceiptAuditEvidenceService,
   PremiumReceiptOperatorService,
+  PremiumReceiptProductInputService,
 } from "./index";
 
 type BindingManifest = {
@@ -32,6 +33,9 @@ describe("Premium Receipt operator manifest-bound RPC inventory", () => {
     const auditInventory = rows.find(
       (row) => row.name === "PremiumReceiptAuditEvidenceService",
     );
+    const bytesInventory = rows.find(
+      (row) => row.name === "PremiumReceiptProductInputService",
+    );
     expect(operatorInventory).toMatchObject({
       fetch_reserved_special: false,
       rpc_methods: ["pending_public_key_registration"],
@@ -39,6 +43,10 @@ describe("Premium Receipt operator manifest-bound RPC inventory", () => {
     expect(auditInventory).toMatchObject({
       fetch_reserved_special: false,
       rpc_methods: ["staging_recovery_audit_evidence"],
+    });
+    expect(bytesInventory).toMatchObject({
+      fetch_reserved_special: false,
+      rpc_methods: ["read_receipt_product_bytes"],
     });
     expect(
       Reflect.ownKeys(PremiumReceiptOperatorService.prototype)
@@ -52,5 +60,11 @@ describe("Premium Receipt operator manifest-bound RPC inventory", () => {
         .filter((name) => name !== "constructor")
         .sort(),
     ).toEqual([...(auditInventory?.rpc_methods ?? [])].sort());
+    expect(
+      Reflect.ownKeys(PremiumReceiptProductInputService.prototype)
+        .map(String)
+        .filter((name) => name !== "constructor")
+        .sort(),
+    ).toEqual([...(bytesInventory?.rpc_methods ?? [])].sort());
   });
 });

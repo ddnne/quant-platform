@@ -18,6 +18,11 @@ binding = "JQUANTS_ACQUISITION"
 service = "quant-platform-ingestion-secrets-governed-page-test"
 entrypoint = "IngestionSecretsService"
 
+[[services]]
+binding = "INGESTION_PREMIUM"
+service = "quant-platform-ingestion-premium-test"
+entrypoint = "PremiumReceiptProductInputService"
+
 [vars]
 ENVIRONMENT = "production"
 MASS_EVAL_VERSION = "research-mass-eval/test"

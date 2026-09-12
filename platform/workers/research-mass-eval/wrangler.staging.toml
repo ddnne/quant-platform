@@ -57,6 +57,11 @@ binding = "JQUANTS_ACQUISITION"
 service = "quant-platform-ingestion-secrets-staging"
 entrypoint = "IngestionSecretsService"
 
+[[services]]
+binding = "INGESTION_PREMIUM"
+service = "quant-platform-ingestion-premium-staging"
+entrypoint = "PremiumReceiptProductInputService"
+
 [observability]
 enabled = true
 head_sampling_rate = 1

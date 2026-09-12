@@ -25,7 +25,8 @@ export const RECEIPT_PRODUCT_INPUT_SET =
   "receipt-product-input-set/v1" as const;
 
 const MAX_BODY_BYTES = 64 * 1024;
-const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+export const RECEIPT_PRODUCT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+const MAX_RESPONSE_BYTES = RECEIPT_PRODUCT_MAX_RESPONSE_BYTES;
 const MAX_SEGMENTS = 128;
 const MAX_QUERIES = 24;
 const REQUIRED_TABLES = [

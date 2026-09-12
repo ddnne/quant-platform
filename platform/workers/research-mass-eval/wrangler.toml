@@ -68,6 +68,11 @@ binding = "JQUANTS_ACQUISITION"
 service = "quant-platform-ingestion-secrets"
 entrypoint = "IngestionSecretsService"
 
+[[services]]
+binding = "INGESTION_PREMIUM"
+service = "quant-platform-ingestion-premium"
+entrypoint = "PremiumReceiptProductInputService"
+
 [vars]
 ENVIRONMENT = "production"
 MASS_EVAL_VERSION = "research-mass-eval/v155-compact-v8-cloud-history"
@@ -121,6 +126,11 @@ entrypoint = "GatewayService"
 binding = "JQUANTS_ACQUISITION"
 service = "quant-platform-ingestion-secrets"
 entrypoint = "IngestionSecretsService"
+
+[[env.production.services]]
+binding = "INGESTION_PREMIUM"
+service = "quant-platform-ingestion-premium"
+entrypoint = "PremiumReceiptProductInputService"
 
 [env.production.vars]
 ENVIRONMENT = "production"

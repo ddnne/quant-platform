@@ -68,6 +68,8 @@ import {
   type ReceiptOperatorAuditEvidenceV1,
 } from "./receipt_authority_audit_canary";
 import { publishOpsProjectionBestEffort } from "./ops_projection";
+import { readReceiptProductBytes } from "./receipt_product_bytes";
+import type { ReceiptProductBytesRpc } from "./receipt_product_bytes_rpc";
 export { PilotReadyPublicationService } from "./ready_publication";
 
 /** Generated bindings plus secret/optional var refinements only. */
@@ -943,6 +945,18 @@ export class PremiumReceiptAuditEvidenceService
   implements PremiumReceiptAuditEvidenceRpc {
   staging_recovery_audit_evidence(): Promise<ReceiptOperatorAuditEvidenceV1> {
     return readStagingReceiptAuditRecoveryEvidence(this.env);
+  }
+}
+
+/**
+ * Read-only original receipt-product bytes. Named Service Binding only; no
+ * fetch handler and no bearer token. Callers may not supply object keys.
+ */
+export class PremiumReceiptProductInputService
+  extends WorkerEntrypoint<Env>
+  implements ReceiptProductBytesRpc {
+  read_receipt_product_bytes(request: unknown): Promise<Response> {
+    return readReceiptProductBytes(this.env, request);
   }
 }
 

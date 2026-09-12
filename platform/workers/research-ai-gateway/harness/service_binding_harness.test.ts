@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestHarness, type TestHarness } from "wrangler";
+import type { ReceiptProductBytesRpc } from "../../ingestion-premium/src/receipt_product_bytes_rpc";
 
 type GatewayBinding = {
   complete(body: unknown): Promise<{ http_status: number; body: unknown }>;
@@ -13,6 +14,7 @@ beforeAll(async () => {
     workers: [
       { configPath: "./wrangler.test.toml" },
       { configPath: "../research-mass-eval/wrangler.test.toml" },
+      { configPath: "../ingestion-premium/wrangler.test.toml" },
       {
         config: {
           name: "quant-platform-ingestion-secrets-governed-page-test",
@@ -50,7 +52,10 @@ describe("Gateway HTTP and Mass Service Binding", () => {
   });
 
   it("calls the named RPC entrypoint without a shared bearer token", async () => {
-    const mass = server.getWorker<{ AI_GATEWAY: GatewayBinding }>(
+    const mass = server.getWorker<{
+      AI_GATEWAY: GatewayBinding;
+      INGESTION_PREMIUM: ReceiptProductBytesRpc;
+    }>(
       "quant-platform-research-mass-eval-test",
     );
     const massEnv = await mass.getEnv();
@@ -60,5 +65,8 @@ describe("Gateway HTTP and Mass Service Binding", () => {
       ok: false,
       error: expect.stringContaining("model"),
     });
+    const denied = await massEnv.INGESTION_PREMIUM.read_receipt_product_bytes({});
+    expect(denied.status).toBe(400);
+    await expect(denied.json()).resolves.toEqual({ error: "unknown field" });
   });
 });
