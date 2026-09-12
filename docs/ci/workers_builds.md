@@ -188,10 +188,9 @@ two-generation window closes. The v6-to-v7 change verified all known SVI,
 volatility and price jobs terminal before the name changed. New submissions
 must pass the exact runner `/ready` identity gate before POST.
 
-Local **mandatory** CI is the same script: [`scripts/verify_ci.sh`](../../scripts/verify_ci.sh).
-[`scripts/verify_all.sh`](../../scripts/verify_all.sh) is a fast local helper only.
+[`scripts/verify_ci.sh`](../../scripts/verify_ci.sh) is the Cloudflare Workers Builds native CI entry, not a Mac local command; it includes Wrangler dry-run and Container image builds. Local developer verification is pytest from the repository README.
 Six ordinary product-lane `npm test` runs skip Python/catalog and are **not**
-`verify_ci`; authoritative `verify_ci` covers all seven active Workers.
+`verify_ci`; authoritative `verify_ci` covers the active Worker inventory in [`active_worker_bindings.json`](../../specs/cloudflare/active_worker_bindings.json).
 
 [Workers Builds](https://developers.cloudflare.com/workers/ci-cd/builds/) Git
 integration also posts a **pull request comment** and per-worker **check runs**

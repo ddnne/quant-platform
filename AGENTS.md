@@ -1,8 +1,9 @@
 # Development responsibilities
 
-- Grok is the default coding implementer (including fixes and test changes). Codex may implement when Grok is unavailable or rate-limited; report the fallback.
-- Grok also performs a primary review of its changes. Codex independently reviews the actual diff and evaluates findings against code and behavior; record accepted fixes and evidence-backed rejections. Cross-review does not require automatic agreement or replace tests and exact-source native CI.
-- Codex owns task direction, investigation, review, verification, commits, pushes, PRs, required CI and merges. The user approved this division on 2026-09-11; apply it to subsequent development too.
+- Grok owns a bounded unit end to end: investigate source and callers, choose the simplest justified design and implementation, edit, run minimal targeted local checks, diagnose failures, and self-review. Prefer that useful investigation, design, implementation, failure analysis, and self-review over patch-only edits.
+- When Grok cannot execute tools directly, Codex may mechanically apply Grok's patch and run Grok's selected checks, then return the results for Grok to diagnose. That fallback is mechanical execution only. Codex may implement when Grok is unavailable or rate-limited; report the fallback.
+- Codex owns high-level policy and direction, independent final review of the actual diff, git commit/push/PR, required native CI, and merge. Evaluate findings against code and behavior; record accepted fixes and evidence-backed rejections. Cross-review does not require automatic agreement or replace tests and exact-source native CI.
+- Actual Grok task, session, and usage evidence is distinct from billed account usage and quota telemetry. Do not add filler work, disable caches, switch to paid APIs, top up, or add model services to move a usage meter.
 - Subagents are for independent critical review only. They report findings and evidence, do not edit files, and do not spawn agents. The main agent evaluates and resolves findings.
 - Keep logical changes reviewable and push completed work units. Preserve native Cloudflare required checks on the exact final source SHA; never bypass them. Remove completed branches after confirming merge and preservation of their work.
 - Separate source delivery, staging rollout, production rollout, data activation, READY and Pilot execution. Source publication approval does not authorize production deployment or research execution. Preserve deployment HOLDs and use the applicable approval flow.

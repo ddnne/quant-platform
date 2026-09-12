@@ -14,7 +14,7 @@ Candidate eval is `POST /v1/daily-path`, not `python -m research.unique_logic`
 (that CLI is a retired fail-closed stub). Live counts / GO gates: [docs/phase62_residual_status.md](../docs/phase62_residual_status.md)
 only. Do not launch Mass / READY / Phase7 / `cf_premium_backfill` from residual prose alone.
 
-**Mandatory local CI:** [`verify_ci.sh`](verify_ci.sh) (active Worker lanes in parallel; no `VERIFY_*` skips). It pins `uv 0.11.26`, runs `uv sync --frozen --extra dev`, the complete Python suite with two file-scoped pytest workers, the Evaluation IR freeze, verifies the machine-readable Cloudflare binding manifest, then runs each Worker through `npm ci`, tests, typecheck, base/production/staging Wrangler dry-runs, and generated-types checks. The legacy catalog is not compiled into CI or Worker source. Wrangler, TypeScript, and Workers types are exact-versioned. Never `--legacy-peer-deps`; never skip missing dependencies; never live `wrangler deploy`.
+**Native CI (Cloudflare Workers Builds, not this Mac):** [`verify_ci.sh`](verify_ci.sh) (active Worker lanes in parallel; no `VERIFY_*` skips). It pins `uv 0.11.26`, runs `uv sync --frozen --extra dev`, the Python suite with two file-scoped pytest workers, verifies the machine-readable Cloudflare binding manifest, then runs each Worker through `npm ci`, tests, typecheck, base/production/staging Wrangler dry-runs, and generated-types checks. The legacy catalog is not compiled into CI or Worker source. Wrangler, TypeScript, and Workers types are exact-versioned. Never `--legacy-peer-deps`; never skip missing dependencies; never live `wrangler deploy`. Local developer verification is pytest from the repository README.
 
 [`activate_jsda_v3_cutover.py`](activate_jsda_v3_cutover.py) observes
 Cloudflare JSDA state twice. `--check` is read-only; `--activate --yes`
@@ -50,7 +50,7 @@ Markdown rows and the code-pinned ID inventory together; the row starts
 fixtures may call the private bytes evaluator with an all-FIXED document, but
 no production release CLI accepts a caller-selected ledger.
 
-[`verify_all.sh`](verify_all.sh) is a skippable helper only. Merge authority is the live native GitHub check from the Cloudflare Workers & Pages GitHub App for the repository-root Build running `verify_ci.sh`. The caller-supplied receipt aggregator is removed. Do not add `.github/workflows`. See [`docs/ci/workers_builds.md`](../docs/ci/workers_builds.md).
+Merge authority is the live native GitHub check from the Cloudflare Workers & Pages GitHub App for the repository-root Build running `verify_ci.sh`. The caller-supplied receipt aggregator is removed. Do not add `.github/workflows`. See [`docs/ci/workers_builds.md`](../docs/ci/workers_builds.md).
 
 **Authenticated production acceptance:**
 [`verify_cloudflare_deployment_acceptance.sh`](verify_cloudflare_deployment_acceptance.sh)

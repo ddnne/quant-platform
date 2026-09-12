@@ -2,7 +2,7 @@
 
 日本株・開示・債券のリサーチと Paper を、単一利用者向けに Cloudflare 上で進めるリポジトリです。通常の市場データ取得・保存・実データ研究はクラウドが本体です。ファンド・オブ・ファンズ、実ブローカー、実注文、自動昇格はありません。Mass は無効です。新しい Worker、authority、UID、WebAuthn、外部アンカーは増やしません。
 
-実装と一次自己レビューは Grok、計画・独立レビュー・テスト・Git・CI・マージは Codex です。役割は [AGENTS.md](AGENTS.md) に従います。時刻・PIT・保存・信頼境界は [docs/architecture.md](docs/architecture.md)、残作業の順は [docs/roadmap.md](docs/roadmap.md) です。古いフェーズ成功表は Git と ADR に残し、ここには現行経路だけを書きます。
+実装の調査・設計・編集・局所確認・失敗解析・一次自己レビューは Grok、方針・独立最終レビュー・Git・native CI・マージは Codex です。役割は [AGENTS.md](AGENTS.md) に従います。時刻・PIT・保存・信頼境界は [docs/architecture.md](docs/architecture.md)、残作業の順は [docs/roadmap.md](docs/roadmap.md) です。古いフェーズ成功表は Git と ADR に残し、ここには現行経路だけを書きます。
 
 ## 三つの経路
 
