@@ -437,8 +437,9 @@ _CATALOG_OWNERSHIP_TABLES = frozenset(
 )
 
 
-def catalog_owned_product_row_digests(
+def catalog_owns_canonical_product_row(
     conn: Any,
+    row: Mapping[str, Any],
     *,
     source: str,
     dataset: str,
@@ -446,12 +447,13 @@ def catalog_owned_product_row_digests(
     segment_end: str,
     observed_through: str,
     tables: Sequence[str],
-) -> set[str]:
-    """Digest CURRENT and REVISION catalog versions owned in ``tables``.
+) -> bool:
+    """True when one canonical signed tuple exists on a declared catalog table.
 
-    This is catalog ownership of signed product fields. It is not
-    current-only reconstruction and does not mint a receipt. Callers must
-    pass concrete tables; missing tables fail at execute time.
+    Every allowlisted table name is validated, then one UNION ALL of indexed
+    exact-field lookups is prepared together so a missing declared table fails
+    even if an earlier table would match. Observation cutoff uses
+    ``_aware_instant``, not SQL string order.
     """
 
     if type(source) is not str or type(dataset) is not str or not source or not dataset:
@@ -462,40 +464,46 @@ def catalog_owned_product_row_digests(
     end = str(segment_end)[:10]
     if not start or not end:
         raise ValueError("product segment identity is invalid")
-    cutoff = _aware_instant(
-        observed_through, label="product observation cutoff"
-    )
-    fields = ",".join(PRODUCT_ARTIFACT_FIELDS)
-    digests: set[str] = set()
     for table in tables:
         if type(table) is not str or table not in _CATALOG_OWNERSHIP_TABLES:
             raise ValueError("catalog ownership table is invalid")
-        sql = (
-            f"SELECT {fields} FROM {table} "
-            "WHERE source=? AND dataset=? "
-            "AND substr(event_time, 1, 10) BETWEEN ? AND ?"
-        )
-        for raw in conn.execute(sql, (source, dataset, start, end)):
-            try:
-                row = {field: raw[field] for field in PRODUCT_ARTIFACT_FIELDS}
-                ingested = _aware_instant(
-                    row["ingested_at"], label="product ingestion clock"
-                )
-            except (KeyError, TypeError, ValueError):
-                continue
-            if ingested > cutoff:
-                continue
-            try:
-                digests.add(product_row_digest(row))
-            except ValueError:
-                continue
-    return digests
+    canonical = _canonical_product_row(row)
+    if canonical["source"] != source or canonical["dataset"] != dataset:
+        return False
+    event_day = canonical["event_time"][:10]
+    if event_day < start or event_day > end:
+        return False
+    cutoff = _aware_instant(
+        observed_through, label="product observation cutoff"
+    )
+    ingested = _aware_instant(
+        canonical["ingested_at"], label="product ingestion clock"
+    )
+    if ingested > cutoff:
+        return False
+    where = " AND ".join(f"{field}=?" for field in PRODUCT_ARTIFACT_FIELDS)
+    params = tuple(canonical[field] for field in PRODUCT_ARTIFACT_FIELDS)
+    union = " UNION ALL ".join(
+        f"SELECT 1 FROM {table} WHERE {where}" for table in tables
+    )
+    return (
+        conn.execute(
+            f"SELECT 1 FROM ({union}) LIMIT 1", params * len(tables)
+        ).fetchone()
+        is not None
+    )
 
 
 def measure_owned_product_artifact_body(
     body: Any,
     *,
-    owned_digests: set[str],
+    conn: Any,
+    source: str,
+    dataset: str,
+    segment_start: str,
+    segment_end: str,
+    observed_through: str,
+    tables: Sequence[str],
 ) -> tuple[int, str, int, frozenset[str]]:
     """Hash one immutable artifact and require every row is catalog-owned."""
 
@@ -503,13 +511,21 @@ def measure_owned_product_artifact_body(
 
     def rows() -> Iterator[dict[str, str]]:
         for raw in iter_product_artifact_body_rows(body):
-            digest = product_row_digest(raw)
-            if digest not in owned_digests:
+            if not catalog_owns_canonical_product_row(
+                conn,
+                raw,
+                source=source,
+                dataset=dataset,
+                segment_start=segment_start,
+                segment_end=segment_end,
+                observed_through=observed_through,
+                tables=tables,
+            ):
                 raise ValueError(
                     "verified artifact row is not materialized on the "
                     "owner connection"
                 )
-            row_digests.add(digest)
+            row_digests.add(product_row_digest(raw))
             yield raw
 
     observed_count, observed_digest, observed_bytes = (
@@ -613,7 +629,7 @@ __all__ = [
     "PRODUCT_ARTIFACT_FIELDS",
     "PRODUCT_ARTIFACT_SCHEMA",
     "canonical_product_artifact_bytes",
-    "catalog_owned_product_row_digests",
+    "catalog_owns_canonical_product_row",
     "iter_observed_segment_product_rows",
     "iter_product_artifact_body_rows",
     "measure_owned_product_artifact_body",

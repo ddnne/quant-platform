@@ -16,7 +16,6 @@ from typing import Any, Mapping
 from ops.receipt_product import (
     PRODUCT_ARTIFACT_FIELDS,
     _iter_canonical_artifact_rows,
-    catalog_owned_product_row_digests,
     measure_owned_product_artifact_body,
     persist_stored_product_artifact,
     verify_full_segment_product_materialization,
@@ -413,19 +412,17 @@ def materialize_receipt_segment(
                 source=handle,
                 byte_count=closure.artifact_byte_count,
             )
-        owned = catalog_owned_product_row_digests(
-            conn,
-            source=closure.source,
-            dataset=closure.dataset,
-            segment_start=closure.segment_start,
-            segment_end=closure.segment_end,
-            observed_through=closure.checked_at,
-            tables=("jquants_records", "jquants_records_revisions"),
-        )
         with product_path.open("rb") as artifact:
             observed_count, observed_digest, observed_bytes, _owned_rows = (
                 measure_owned_product_artifact_body(
-                    artifact, owned_digests=owned
+                    artifact,
+                    conn=conn,
+                    source=closure.source,
+                    dataset=closure.dataset,
+                    segment_start=closure.segment_start,
+                    segment_end=closure.segment_end,
+                    observed_through=closure.checked_at,
+                    tables=("jquants_records", "jquants_records_revisions"),
                 )
             )
         product_row = conn.execute(
