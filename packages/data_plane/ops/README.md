@@ -1,6 +1,6 @@
 # ops
 
-Ops control-plane helpers: backfill planning, range batch scheduling, projection metadata.
+Ops control-plane helpers: backfill planning, range batch scheduling, projection metadata, Ops-current SQL reads.
 
 ## Public entry
 
@@ -17,6 +17,8 @@ from ops import (
 ```
 
 CLI drivers live under `scripts/` and `scripts/ops/` (e.g. Track A dry-run).
+
+`OpsCurrentReadService` lives in `ops.current_read` (mutable control DB; never research facts).
 
 ## Allowed imports
 

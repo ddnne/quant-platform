@@ -10,6 +10,7 @@ Compute stack (no external market network): backtest, features, strategies, pape
 | `features` | Versioned feature registry; PIT-only facts |
 | `strategies` | StrategySpec + paper runner (no direct DB/HTTP) |
 | `paper_runtime` | READY policy, snapshots, coherence, fingerprints (may touch storage) |
+| `data_access` | READY-snapshot read façade; dispatches Ops-current to `ops.current_read` |
 | `risk` | Risk audit helpers (soft edge → `agents` types) |
 | `price_basis` | Shared price-basis helpers |
 
@@ -18,6 +19,7 @@ Compute stack (no external market network): backtest, features, strategies, pape
 - `core` / `features` → `pit`, `price_basis`
 - `strategies` → `core`, `features`, `paper_runtime`, `price_basis`
 - `paper_runtime` → `data_contracts`, `storage`, `strategies`, `features`, `cf_platform`
+- `data_access` → `pit`, `data_contracts`, `storage`, `features`, `paper_runtime`, `ops.current_read`
 - **Exception:** `risk` → `agents` (soft type edge; do not expand casually)
 
 ## Forbidden
@@ -34,6 +36,7 @@ Compute stack (no external market network): backtest, features, strategies, pape
 | `features` | registry / `compute` / `v0` defs |
 | `strategies` | `spec.schema`, `spec.interpreter`, `paper.*` |
 | `paper_runtime` | `ready_policy`, snapshot APIs, `check_ready_coherence` |
+| `data_access` | `QuantDataAccess`, `QuantReadDomainService` |
 
 ## Policy
 

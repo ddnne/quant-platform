@@ -7,7 +7,7 @@ import sqlite3
 import pytest
 
 from data_access import QuantDataAccess, QuantReadDomainService
-from data_access.service import _coverage_projection_missing_reason
+from ops.current_read import _coverage_projection_missing_reason
 from mcp_servers.quant_data.server import QuantDataMCPServer
 
 

@@ -1,9 +1,10 @@
 # data_access
 
-Read-domain façade: **Ops current** vs **research READY** planes.
+Read-domain façade: **research READY** adapter and Ops/READY dispatcher.
 
-Physically under `data_plane/`, but intentionally a **cross-plane read adapter**
-(ADR: may import `features` and `paper_runtime`).
+Physically under `research_runtime/`. Ops-current SQL and sqlite connections
+stay in DataPlane `ops.current_read`; this package composes that owner and
+does not open the control database itself.
 
 ## Public entry
 
@@ -20,7 +21,8 @@ from data_access import (
 ## Allowed imports
 
 - `data_contracts`, `pit`, `storage`
-- `features`, `paper_runtime` (**documented exception**)
+- `features`, `paper_runtime`
+- `ops.current_read` (Ops SQL owner)
 
 ## Forbidden
 
