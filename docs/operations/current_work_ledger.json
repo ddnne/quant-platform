@@ -1,27 +1,27 @@
 {
   "schema": "quant-platform-work-ledger/v1",
   "baseline_sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
-  "branch": "refactor/ready-signer-owner",
-  "updated_at": "2026-09-12T00:56:00Z",
+  "branch": "test/env-generator-behavior",
+  "updated_at": "2026-09-12T01:17:00Z",
   "lanes": {
     "source_delivered": {
       "status": "partial_main_and_followup",
-      "scope": "pr103_through_pr133_merged_ready_owner_source_unit",
-      "notes": "PR133 source/fresh/main accepted. PR132's earlier authoritative Python failure remains historical evidence. READY owner PR134 source60ac93d0 failed one stale dependent secret-list expectation; corrected source3b1e4e61 and166related tests now await final native acceptance. Not deployed; no rollout/data/READY/Pilot or HOLD bypass.",
-      "latest_main_sha": "2a053003e0b5d2f8dc584aee79dc759ea68f4c1f",
-      "latest_main_check_completed_at": "2026-09-12T00:46:27Z",
-      "latest_main_evidence": "https://github.com/ddnne/quant-platform/pull/133#issuecomment-5642284844",
-      "pull_request": "https://github.com/ddnne/quant-platform/pull/133",
-      "implementation_sha": "1b2c3be8c2e6996e98a9d7c161a873ceb22e67b0",
-      "merged_sha": "2a053003e0b5d2f8dc584aee79dc759ea68f4c1f",
-      "required_check_source_sha": "1b2c3be8c2e6996e98a9d7c161a873ceb22e67b0",
+      "scope": "pr103_through_pr134_merged_generated_env_test_followup",
+      "notes": "PR134 corrected final source62fc3077 native SUCCESS and normal merge/fresh acceptance; merged-main native still running. PR132 and PR134 earlier native failures remain historical evidence. C16 generator test consolidation is separately reviewed and awaits exact-source native acceptance. No rollout/data/READY/Pilot or HOLD bypass.",
+      "latest_main_sha": "a8a789ec90c3da28b0b73ddd82966858593a621e",
+      "latest_main_check_completed_at": null,
+      "latest_main_evidence": "https://github.com/ddnne/quant-platform/pull/134#issuecomment-5642466636",
+      "pull_request": "https://github.com/ddnne/quant-platform/pull/134",
+      "implementation_sha": "bcf7b506f2f23dfe1b1c0d4cdee77f405987d2aa",
+      "merged_sha": "a8a789ec90c3da28b0b73ddd82966858593a621e",
+      "required_check_source_sha": "62fc3077fb0a1baea6b6cd2d249131cf57a1cbc9",
       "required_check_app_id": 85455,
-      "required_check_build_id": "7e408dd5-b02e-40a9-b471-5923da68667c",
-      "required_check_id": 103465465915,
-      "merged_main_check_id": 103468426895,
-      "merged_main_build_id": "21612ad9-4f68-4618-8c78-ca6e5e79638c",
-      "merged_main_check_status": "completed",
-      "merged_main_check_conclusion": "success"
+      "required_check_build_id": "4dd56064-d6ad-4445-b1a8-9f6134176f2b",
+      "required_check_id": 103472621990,
+      "merged_main_check_id": 103472886043,
+      "merged_main_build_id": "cb524f18-ab7c-4ac4-a8dd-6055ee4b3154",
+      "merged_main_check_status": "in_progress",
+      "merged_main_check_conclusion": null
     },
     "staging_deployed": {
       "status": "not_this_branch",
@@ -107,7 +107,7 @@
       ]
     },
     "4_receipt_to_ready_trader": {
-      "status": "ready_signer_owner_source_locally_verified_not_rolled_out",
+      "status": "ready_signer_owner_pr134_merged_source_fresh_accepted_main_native_pending",
       "implementation_sha": "bcf7b506f2f23dfe1b1c0d4cdee77f405987d2aa",
       "native_followup": "PR134 source60ac93d0 app85455/check103469396328/buildcfde8deb FAILED00:52:31Z:3584PASS/1FAIL/22warnings494.09s. Stale caller secret-list expectation in test_receipt_authority_pending_live_acceptance omitted intended READY key. Reproduced locally0.20s; Grok added only its name to the explicit sorted list in3b1e4e61, preserving other closed lists/no-proxy assertions. Independent delta review accepted1b4e4d0085c985d0b286d1ad40b7743f6670ccd95b7951f1771d01e77db14c8b. Expanded166synthetic receipt-admission/binding/public-surface/ledger tests PASS9.93s. Earlier126test selection and cross-review missed this dependent expectation; full native failure is not hidden or retried to pass. No product or key/deploy change. New final SHA native still required.",
       "scope": "Move the existing PilotReadyPublicationService and7tests from Mass into existing Premium; no duplicate publisher, new Worker, signing authority or Service Binding. Keep authority identity, closed proof/digest verification, provider R2 checksum, create-only writes and1hour validity unchanged. Premium rejects missing/mismatched OPS_PROJECTION_ENVIRONMENT before projection/R2/sign. Mass no longer declares or exports the READY private signer; actual live secrets are untouched.",
@@ -115,9 +115,18 @@
       "review": "Grok grok-4.6-build authored all application/test/config/runbook changes and completed final static self-review in sessione150a79e-ecdb-4224-a13a-311132a148c5; no product defect identified and Env narrowing confirmed fixed. Codex mechanically applied patches, reviewed and verified; both independent read-only reviewers accepted final19file diff26225506b5f01318df20a00a8ee0b20484a643355c61227c8bed8f3402e2f6bd. Grok's inventory residual is limited: retained checks do not prove arbitrary harness export drift is always detected. No source-text guard added to overclaim that assurance. Operational ledger records are by Codex.",
       "review_fixes": "Fixed Premium handwritten Env narrowing: explicitly Omit OPS_PROJECTION_ENVIRONMENT before the staging/production override. Temporary typed staging probe failed TS2322 before and passed after, then was removed. Removed unused Mass http freeze barrel reexport and redundant triple-slash type reference that dragged Mass/Container types into Premium; isolated Premium typecheck passes with only Premium dependencies. Test manifest now accurately reports the existing two Receipt harness entrypoints, without adding a signer/key to the harness.",
       "test_audit": "Seven existing publication tests moved without duplicate copies; one meaningful missing/mismatched environment guard test added. Removed one redundant receipt inventory length assertion, retaining actual Receipt class/method/prototype checks and canonical full production3/Mass0 inventory comparison. This is an authority-boundary repair, not a net test-count reduction or complete C16 fixture-type consolidation.",
-      "residual": "Exact final source native CI and normal merge remain pending. Required-secret names and generated types are source declarations, not provisioned keys. Actual signer cutover, candidate orchestration, dependency scopes, signed current projection, immutable READY and Trader authorization remain incomplete; release_allowed=false and every existing HOLD remains. No READY/Pilot/Mass permission."
+      "acceptance": "Final62fc3077 app85455/check103472621990/build4dd56064 SUCCESS01:13:31Z:3585Python519.18s+3toolchain4.09s/all8Workers/real remote Containers/generated-clean. Terminal1789175609499/cursorWzEwLDQ3MTld/truncated=false; deploy command true. Normal mergea8a789ec at01:15:13Z; fresh clone source tree identical, clean/equal/unpushed0 and165 selected offline receipt-admission/binding/public-surface/ledger tests PASS. Completed local/remote branch removed or absent. https://github.com/ddnne/quant-platform/pull/134#issuecomment-5642466636 . Merged-main native cb524f18 still running. Separate Mass a054f47d passed474Node+22runtime then stopped at configured deployment HOLD; no retry/bypass.",
+      "residual": "Merged-main native acceptance remains pending. Required-secret names and generated types are source declarations, not provisioned keys. Actual signer cutover, candidate orchestration, dependency scopes, signed current projection, immutable READY and Trader authorization remain incomplete; release_allowed=false and every existing HOLD remains. No READY/Pilot/Mass permission."
     },
     "5_ci_deploy_entrypoints": {
+      "generated_env_behavior_fixture": {
+        "status": "reviewed_local_final_native_pending",
+        "implementation_sha": "cb59cac61450907542fcc4fec5df88b83df12d4b",
+        "scope": "C16: replace three emitted-source-string tests with one toolchain test invoking actual write_check and installed TypeScript. Synthetic Wrangler-shaped declarations and a real Cloudflare DurableObject type check valid base/relative import/optional binding; wrong production type, missing optional key and unexpected key must fail. Retain one parsed skipLibCheck=false assertion because compilation alone does not prove it. No generator/product/CI/dependency change.",
+        "verification": "Final7tests PASS1.16s. Memory-only mutations deleting NoMissing, NoUnexpected or CompatibleTypes and enabling skipLibCheck each fail the intended assertion; source hash a53b4f17537b12c48fe6524999853190db9b5c1c09bdb17f472a2802c6d6ad4f unchanged. Five related modules142offline PASS11.44s plus2toolchain PASS2.43s; all4registered toolchain PASS2.18s. After merging PR134 main, all144 selected tests pass again, secret/path and diff checks pass, same source hash. No real Wrangler generation in this fixture, local Docker, authentic history or deployment.",
+        "review": "Grok grok-4.6-build session01a09314-1ffb-7a43-bede-4ffe5c7bcd0a authored implementation and self-review3calls/137768CLI tokens, not account quota/billing. Codex rejected overbuilt first draft; cross-review found lost skipLibCheck guarantee and a missing-key negative also caught by type compatibility. Grok fixed both; independent read-only final review accepted a53b4f17 with P2 resolved. Codex applied patches mechanically and verified mutations.",
+        "delta": "Test definitions9 to7; file218 to314 lines, net96 added. Trades three source-spelling checks for a compiler boundary, not a speed/LOC/count win. C16 remains partial and audit counts52findings/42implemented/10partial are unchanged; detail in test_reduction_ledger.json."
+      },
       "grandchild_terminal_boundary_fixture": {
         "status": "merged_pr133_source_fresh_main_native_success",
         "reason": "PR132 main f7b6f4e9 app85455/check103459004606/build28775448 FAILED23:50:31Z:3584passed/1failed/22warnings514.12s. Old grandchild late_write absence assertion failed although its preceding post-terminal PID-dead check passed. https://github.com/ddnne/quant-platform/pull/132#issuecomment-5641966771 .",
@@ -304,7 +313,7 @@
       "cross_review_protocol": "Grok implements and reviews; Codex independently reviews actual diffs and adjudicates concrete findings against code/behavior. Neither approval replaces tests/native CI. No blanket restoration of name/shape tests or unanimous-approval requirement."
     },
     "8_rollout_and_research_go": { "status": "pending" },
-    "9_push_remote_and_fresh_clone_verify": {"status":"pr133_source_fresh_main_accepted_pr134_native_followup_pending"}
+    "9_push_remote_and_fresh_clone_verify": {"status":"pr134_source_fresh_accepted_main_native_running_c16_source_pending"}
   },
   "operational_facts": [
     {"id":"projection_sync_ops_live_read_20260911T1802Z","observed_at":"2026-09-11T18:02:25Z","fact":"Read-only quant-mcp projection/B0/sync/Ops: projection STALE, generated2026-08-21T12:30:49.152421+00:00, active generationprojgen-ef18b4f86ee946048161d25e2a30a2a8, refresh_attempt=false/refresh_success=false, age1834295s. ops_projection/v3 is not proof of CoverageV3 semantics. B0UNKNOWN; source change cursor2899647, applied_feed_cursor=null and all23 applied/ready_pinned cursors null. JQrun14963 PASS at2026-09-12T02:16:05+09:00; Ops aggregate22COMPLETE/4PARTIAL and raw31008/28790 acquired/complete are not newly reconciled READY eligibility. Source/export activity is not current apply. Separate READY snapshot and full tool/schema parity not remeasured. No DLQ/deployment/data activation/Pilot operation."},
