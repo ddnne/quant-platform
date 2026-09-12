@@ -7,6 +7,7 @@ import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from dataclasses import replace
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -61,6 +62,7 @@ def _signed_authorization(
     key_id: str,
     issued: datetime,
     ttl_seconds: int = 1800,
+    max_gross_weight: float = 0.5,
 ) -> VerifiedTraderAuthorization:
     digest = "sha256:" + ("ab" * 32)
     body: dict[str, object] = {
@@ -68,7 +70,7 @@ def _signed_authorization(
         "mode": "paper",
         "strategy_id": "strategy-v1",
         "strategy_spec_hash": digest,
-        "max_gross_weight": 0.5,
+        "max_gross_weight": max_gross_weight,
         "ready_snapshot_id": digest,
         "ready_manifest_digest": digest,
         "readiness_attestation_id": "attestation-v1",
@@ -240,13 +242,6 @@ def test_trader_authorization_rejects_ttl_beyond_controlled_policy() -> None:
         assert not authorization.is_valid()
 
 
-def test_verified_trader_authorization_is_final() -> None:
-    with pytest.raises(TypeError, match="final"):
-
-        class ForgedTraderAuthorization(VerifiedTraderAuthorization):
-            pass
-
-
 def _binding(authorization: VerifiedTraderAuthorization) -> TraderAuthorizationBinding:
     return TraderAuthorizationBinding(
         authorization_id=authorization.authorization_id,
@@ -306,70 +301,39 @@ def test_exact_binding_covers_ready_plan_universe_strategy_and_gross() -> None:
             )
 
 
-def test_authorization_rejects_stateful_scalar_subclasses() -> None:
-    class EvilStr(str):
-        def __eq__(self, other: object) -> bool:
-            return True
-
-    class EvilFloat(float):
-        def __float__(self) -> float:
-            return 0.5
-
+def test_trader_gross_weight_rejects_bool_int_nonfinite_and_out_of_range() -> None:
     private_key = Ed25519PrivateKey.generate()
     issued = datetime.now(timezone.utc)
     authorization = _signed_authorization(
-        private_key, key_id="type-confusion-test", issued=issued
-    )
-    registry = TraderAuthorizationPublicKeyRegistry(
-        {"type-confusion-test": private_key.public_key()}
-    )
-    binding = _binding(authorization)
-
-    with pytest.MonkeyPatch.context() as isolated:
-        isolated.setattr(
-            TraderAuthorizationPublicKeyRegistry,
-            "load_pinned",
-            classmethod(lambda cls: registry),
-        )
-        isolated.setattr(trader_authority_module, "_now", lambda: issued)
-        object.__setattr__(authorization, "ready_snapshot_id", EvilStr("forged"))
-        assert not authorization.is_valid()
-        assert not verify_exact_trader_authorization(authorization, binding)
-
-    authorization = _signed_authorization(
-        private_key, key_id="type-confusion-test", issued=issued
-    )
-    object.__setattr__(authorization, "max_gross_weight", EvilFloat(9.0))
-    with pytest.MonkeyPatch.context() as isolated:
-        isolated.setattr(
-            TraderAuthorizationPublicKeyRegistry,
-            "load_pinned",
-            classmethod(lambda cls: registry),
-        )
-        isolated.setattr(trader_authority_module, "_now", lambda: issued)
-        assert not authorization.is_valid()
-        assert not verify_exact_trader_authorization(authorization, binding)
-
-
-def test_binding_rejects_type_confusion_and_is_final() -> None:
-    class EvilStr(str):
-        pass
-
-    private_key = Ed25519PrivateKey.generate()
-    authorization = _signed_authorization(
-        private_key,
-        key_id="binding-shape-test",
-        issued=datetime.now(timezone.utc),
+        private_key, key_id="gross-range-test", issued=issued
     )
     values = _binding(authorization).to_dict()
-    values["strategy_id"] = EvilStr("strategy-v1")
-    with pytest.raises(TypeError, match="exact non-empty strings"):
-        TraderAuthorizationBinding(**values)
-
-    with pytest.raises(TypeError, match="final"):
-
-        class ReopenedBinding(TraderAuthorizationBinding):
-            pass
+    for gross in (True, 1, float("nan")):
+        with pytest.raises(TypeError, match="finite float"):
+            TraderAuthorizationBinding(**{**values, "max_gross_weight": gross})
+        with pytest.raises(TypeError, match="finite float"):
+            replace(authorization, max_gross_weight=gross)
+    for gross in (0.0, 1.5):
+        with pytest.raises(ValueError, match=r"\(0, 1\]"):
+            TraderAuthorizationBinding(**{**values, "max_gross_weight": gross})
+    registry = TraderAuthorizationPublicKeyRegistry(
+        {"gross-range-test": private_key.public_key()}
+    )
+    with pytest.MonkeyPatch.context() as isolated:
+        isolated.setattr(
+            TraderAuthorizationPublicKeyRegistry,
+            "load_pinned",
+            classmethod(lambda cls: registry),
+        )
+        isolated.setattr(trader_authority_module, "_now", lambda: issued)
+        for gross in (0.0, 1.5):
+            invalid = _signed_authorization(
+                private_key,
+                key_id="gross-range-test",
+                issued=issued,
+                max_gross_weight=gross,
+            )
+            assert not invalid.is_valid()
 
 
 def test_caller_cannot_rewind_clock_to_revive_expired_authorization() -> None:

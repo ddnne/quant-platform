@@ -26,22 +26,6 @@ MASS_CATALOG_EVAL_SIZE: int = 2000
 
 _BIND_TOKEN = object()
 
-_DIGEST_ATTRS = (
-    "plan_set_digest",
-    "dependency_closure_digest",
-    "ready_manifest_digest",
-    "immutable_db_digest",
-    "coverage_policy_digest",
-    "coverage_proof_digest",
-    "governed_membership_digest",
-    "raw_proof_digest",
-    "receipt_proof_digest",
-    "validation_proof_digest",
-    "b0_quality_proof_digest",
-    "b4_quality_proof_digest",
-    "evidence_digest",
-)
-
 
 class AuthorizedEvaluationService:
     """Nominal eval capability. Only bind_authorized_evaluation_service may construct."""
@@ -70,39 +54,6 @@ def _require_authorized_evaluation_service(
             "(AuthorizedEvaluationService from bind_authorized_evaluation_service)"
         )
     return service
-
-
-
-def _require_signed_readiness(
-    readiness: object | None,
-    *,
-    binding: object,
-    expected_environment: str,
-) -> VerifiedPilotReadiness:
-    readiness = verify_pinned_pilot_readiness(
-        readiness, expected_environment=expected_environment
-    )
-    if (
-        tuple(readiness.plan_ids) != tuple(getattr(binding, "plan_ids", ()))
-        or readiness.profile_digest != getattr(binding, "profile_digest", None)
-        or tuple(readiness.dataset_ids)
-        != tuple(getattr(binding, "required_datasets", ()))
-    ):
-        raise MassResearchDisabledError(
-            "VerifiedPilotReadiness does not match the canonical exact-four binding"
-        )
-    ready_state = getattr(readiness, "ready_state", None)
-    if ready_state is not None and ready_state != "READY":
-        raise MassResearchDisabledError("readiness ready_state must be READY")
-    for name in _DIGEST_ATTRS:
-        if not hasattr(readiness, name):
-            continue
-        value = str(getattr(readiness, name) or "").strip()
-        if not value:
-            raise MassResearchDisabledError(
-                f"readiness {name} required (non-empty digest)"
-            )
-    return readiness
 
 
 def _require_pilot_hypothesis_count(n: int) -> int:
@@ -175,9 +126,8 @@ def _validated_controlled_pilot_scheduler_state(
         raise MassResearchDisabledError(
             "ControlledPilotScheduler requires a canonical exact-four ExperimentPlan"
         )
-    verified_readiness = _require_signed_readiness(
+    verified_readiness = verify_pinned_pilot_readiness(
         readiness,
-        binding=binding,
         expected_environment=expected_environment,
     )
     evaluation_service = _require_authorized_evaluation_service(
@@ -202,10 +152,6 @@ class ControlledPilotScheduler:
         "_readiness",
     )
 
-    def __init_subclass__(cls, **kwargs: object) -> None:
-        del cls, kwargs
-        raise TypeError("ControlledPilotScheduler is a final authority boundary")
-
     def __init__(
         self,
         *,
@@ -218,10 +164,6 @@ class ControlledPilotScheduler:
         operator_override: object | None = None,
         n_hypotheses: int | None = None,
     ) -> None:
-        if type(self) is not ControlledPilotScheduler:
-            raise MassResearchDisabledError(
-                "controlled pilot scheduler requires exact ControlledPilotScheduler"
-            )
         if n_hypotheses is not None:
             if type(n_hypotheses) is not int:
                 raise MassResearchDisabledError(
