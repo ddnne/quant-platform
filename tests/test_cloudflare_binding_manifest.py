@@ -130,7 +130,14 @@ def test_all_named_entrypoints_and_governed_dos_have_exact_rpc_inventories() -> 
                 "fetch_reserved_special": False,
                 "rpc_methods": ["staging_recovery_audit_evidence"],
             },
+            {
+                "name": "PilotReadyPublicationService",
+                "handlers": ["class"],
+                "fetch_reserved_special": True,
+                "rpc_methods": ["publishPilotReady"],
+            },
         ],
+        "research-mass-eval": [],
         "ingestion-jsda": [{
             "name": "JsdaReadinessService",
             "handlers": ["class"],
@@ -1316,7 +1323,6 @@ def test_research_mass_eval_staging_workers_dev_secret_and_production_unchanged(
     assert production["preview_urls"] is False
     assert production["secret_names"] == [
         "MASS_EVAL_TOKEN",
-        "READY_ED25519_PRIVATE_KEY",
     ]
     assert production["route"] is None
     assert production["routes"] == []
@@ -1329,7 +1335,6 @@ def test_research_mass_eval_staging_workers_dev_secret_and_production_unchanged(
     assert staging["preview_urls"] is False
     assert staging["secret_names"] == [
         "MASS_EVAL_TOKEN",
-        "READY_ED25519_PRIVATE_KEY",
     ]
     assert staging["route"] is None
     assert staging["routes"] == []

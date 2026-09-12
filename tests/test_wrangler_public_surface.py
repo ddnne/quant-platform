@@ -211,7 +211,7 @@ def test_research_mass_eval_staging_is_token_gated_workers_dev_only() -> None:
 
     assert production.get("workers_dev") is True
     assert production.get("preview_urls") is False
-    required_secrets = ["MASS_EVAL_TOKEN", "READY_ED25519_PRIVATE_KEY"]
+    required_secrets = ["MASS_EVAL_TOKEN"]
     assert production.get("secrets") == {"required": required_secrets}
     assert production_env.get("workers_dev") is True
     assert production_env.get("preview_urls") is False

@@ -40,7 +40,6 @@ import {
 
 export { ContainerProxy } from "./personal_research_container";
 export { PersonalResearchContainer };
-export { PilotReadyPublicationService } from "./ready_publication";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {

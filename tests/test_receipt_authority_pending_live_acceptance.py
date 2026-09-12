@@ -198,6 +198,7 @@ def test_staging_chain_declares_only_minimum_non_proxy_secrets() -> None:
     assert result["workers"]["caller"]["secret_binding_names"] == [
         "INGESTION_RUN_TOKEN",
         "OPS_PROJECTION_SIGNING_PKCS8_B64",
+        "READY_ED25519_PRIVATE_KEY",
     ]
     assert result["workers"]["authority"]["secret_binding_names"] == [
         "RECEIPT_KEY_WRAP_KEY"

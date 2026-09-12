@@ -34,8 +34,11 @@ remote apply results only in immutable release evidence.
   Runtime still separately enforces signed READY, signed Trader authorization,
   an immutable snapshot, signed projection, and BudgetLedger occupancy.
 - **READY publication path:** signing exists at
-  `platform/workers/research-mass-eval/src/ready_publication.ts`, but there is
-  no cloud candidate-preparation or orchestration caller/Service Binding.
+  `platform/workers/ingestion-premium/src/ready_publication.ts` (source-only
+  move from `platform/workers/research-mass-eval`; not rolled out; existing
+  Mass staging secret provisioning history is unchanged and actual cutover is
+  not done), but there is no cloud candidate-preparation or orchestration
+  caller/Service Binding.
   Source includes an undeployed read-only `POST /v1/export/receipt-products`
   descriptor; it does not check profile completeness or physical availability
   and is not READY. Premium Ops metadata still does not bind exact dependency
