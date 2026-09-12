@@ -1,6 +1,6 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 
-import { putJsonCreateOnly } from "./http";
+import { putJsonCreateOnly } from "../../research-mass-eval/src/http";
 import {
   CONTROLLED_FILL_CONTRACT_DIGEST,
   CONTROLLED_PILOT_IDENTITY,
@@ -18,19 +18,19 @@ import {
   EXACT_FOUR_UNIVERSE_RULE_DIGEST,
   controlledPhysicalSnapshotKey,
   controlledReadyKey,
-} from "./controlled_pilot_contract";
+} from "../../research-mass-eval/src/controlled_pilot_contract";
 import {
   canonicalJson,
   isRecord,
   parseCanonicalUtc,
   sha256Digest,
-} from "./controlled_pilot_json";
-import { PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES } from "./personal_research_contract";
+} from "../../research-mass-eval/src/controlled_pilot_json";
+import { PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES } from "../../research-mass-eval/src/personal_research_contract";
 import {
   verifyOpsProjectionReady,
   type ControlledSessionScope,
-} from "./ops_projection_ready";
-import type { Env } from "./types";
+} from "../../research-mass-eval/src/ops_projection_ready";
+import type { Env } from "./index";
 
 export const READY_ED25519_SECRET_NAME = "READY_ED25519_PRIVATE_KEY" as const;
 export const READY_ED25519_KEY_ID_VAR = "READY_ED25519_KEY_ID" as const;
@@ -78,6 +78,14 @@ export type ReadyPublicationCandidate = {
   ready_manifest: Record<string, unknown>;
   dependency_scope_evidence: Record<string, unknown>;
   signed_projection_document: Record<string, unknown>;
+};
+
+export type ReadyPublicationEnv = Pick<
+  Env,
+  "STRUCTURED_BUCKET" | "OPS_PROJECTION_ENVIRONMENT" | "READY_DECLARED"
+> & {
+  READY_ED25519_PRIVATE_KEY?: string;
+  READY_ED25519_KEY_ID?: string;
 };
 
 function authorityInstanceId(environment: string): string {
@@ -228,10 +236,7 @@ function rejected(error: string): ReadyPublicationResult {
 }
 
 export async function publishPilotReady(
-  env: Env & {
-    READY_ED25519_PRIVATE_KEY?: string;
-    READY_ED25519_KEY_ID?: string;
-  },
+  env: ReadyPublicationEnv,
   candidate: ReadyPublicationCandidate,
 ): Promise<ReadyPublicationResult> {
   const secret = env.READY_ED25519_PRIVATE_KEY;
@@ -253,6 +258,9 @@ export async function publishPilotReady(
   }
   if (candidate.environment !== "production" && candidate.environment !== "staging") {
     return rejected("READY environment is invalid");
+  }
+  if (env.OPS_PROJECTION_ENVIRONMENT !== candidate.environment) {
+    return rejected("READY environment does not match OPS_PROJECTION_ENVIRONMENT");
   }
   const physical = candidate.physical;
   if (

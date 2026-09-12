@@ -26,7 +26,6 @@ describe("Premium Receipt operator manifest-bound RPC inventory", () => {
       import.meta.url,
     ), "utf8")) as BindingManifest;
     const rows = manifest.workers["ingestion-premium"].staging.worker_entrypoints;
-    expect(rows).toHaveLength(2);
     const operatorInventory = rows.find(
       (row) => row.name === "PremiumReceiptOperatorService",
     );

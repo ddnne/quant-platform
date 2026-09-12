@@ -68,6 +68,7 @@ import {
   type ReceiptOperatorAuditEvidenceV1,
 } from "./receipt_authority_audit_canary";
 import { publishOpsProjectionBestEffort } from "./ops_projection";
+export { PilotReadyPublicationService } from "./ready_publication";
 
 /** Generated bindings plus secret/optional var refinements only. */
 export type Env = Omit<
@@ -75,6 +76,7 @@ export type Env = Omit<
   | "RECEIPT_EVIDENCE_AUTHORITY"
   | "RECEIPT_AUTHORITY_ENVIRONMENT"
   | "RECEIPT_AUTHORITY_OPERATION_MODE"
+  | "OPS_PROJECTION_ENVIRONMENT"
 > & {
   RECEIPT_EVIDENCE_AUTHORITY: ReceiptEvidenceAuthorityRpc;
   RECEIPT_AUTHORITY_ENVIRONMENT: ReceiptAuthorityEnvironment;

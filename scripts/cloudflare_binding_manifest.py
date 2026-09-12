@@ -260,6 +260,7 @@ PRODUCTION_SECRET_NAMES: dict[str, tuple[str, ...]] = {
         "INGESTION_RUN_TOKEN",
         "JQUANTS_API_KEY",
         "OPS_PROJECTION_SIGNING_PKCS8_B64",
+        "READY_ED25519_PRIVATE_KEY",
     ),
     "ingestion-secrets": (
         "JQUANTS_API_KEY",
@@ -274,7 +275,7 @@ PRODUCTION_SECRET_NAMES: dict[str, tuple[str, ...]] = {
     "receipt-activation-observer": (),
     "receipt-evidence-authority": ("RECEIPT_KEY_WRAP_KEY",),
     "research-ai-gateway": ("GATEWAY_TOKEN",),
-    "research-mass-eval": ("MASS_EVAL_TOKEN", "READY_ED25519_PRIVATE_KEY"),
+    "research-mass-eval": ("MASS_EVAL_TOKEN",),
 }
 
 STAGING_SECRET_NAMES: dict[str, tuple[str, ...]] = {
@@ -282,13 +283,14 @@ STAGING_SECRET_NAMES: dict[str, tuple[str, ...]] = {
     "ingestion-premium": (
         "INGESTION_RUN_TOKEN",
         "OPS_PROJECTION_SIGNING_PKCS8_B64",
+        "READY_ED25519_PRIVATE_KEY",
     ),
     "ingestion-secrets": (
         "JQUANTS_API_KEY",
         "JQUANTS_RPC_CURSOR_HMAC_KEY",
     ),
     "receipt-evidence-authority": ("RECEIPT_KEY_WRAP_KEY",),
-    "research-mass-eval": ("MASS_EVAL_TOKEN", "READY_ED25519_PRIVATE_KEY"),
+    "research-mass-eval": ("MASS_EVAL_TOKEN",),
 }
 
 
@@ -463,6 +465,7 @@ WORKER_ENTRYPOINT_RPC_POLICY: dict[
             False,
             ("staging_recovery_audit_evidence",),
         ),
+        "PilotReadyPublicationService": (True, ("publishPilotReady",)),
     },
     "ingestion-jsda": {
         "JsdaReadinessService": (True, ()),
@@ -480,9 +483,7 @@ WORKER_ENTRYPOINT_RPC_POLICY: dict[
             ),
         ),
     },
-    "research-mass-eval": {
-        "PilotReadyPublicationService": (True, ("publishPilotReady",)),
-    },
+    "research-mass-eval": {},
 }
 
 DEFAULT_FETCH_RESERVED_SPECIAL_POLICY = frozenset(
@@ -1061,6 +1062,16 @@ def _effective_surface(
         # is absent; raw TOML inheritance would otherwise freeze the wrong target.
         effective_name = f"{base_name}-{named_environment}"
 
+    entrypoint_policy = WORKER_ENTRYPOINT_RPC_POLICY.get(worker, {})
+    if environment == "test" and worker == "ingestion-premium":
+        entrypoint_policy = {
+            name: entrypoint_policy[name]
+            for name in (
+                "PremiumReceiptOperatorService",
+                "PremiumReceiptAuditEvidenceService",
+            )
+        }
+
     return {
         "config": str(config_path.relative_to(ROOT)),
         "account_id": account_id,
@@ -1107,9 +1118,7 @@ def _effective_surface(
                 "rpc_methods": list(methods),
             }
             for name, (fetch_reserved_special, methods) in (
-                WORKER_ENTRYPOINT_RPC_POLICY.get(
-                worker, {}
-                ).items()
+                entrypoint_policy.items()
             )
         ],
         "durable_object_class_handlers": [
@@ -1690,6 +1699,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
                 "staging" if environment == "staging" else "production"
             ),
             "RECEIPT_AUTHORITY_OPERATION_MODE": "PENDING",
+            "READY_DECLARED": "false",
         }:
             raise ValueError(
                 f"ingestion-premium/{environment}: Receipt environment policy drift"
