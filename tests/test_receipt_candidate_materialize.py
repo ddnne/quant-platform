@@ -439,7 +439,7 @@ def test_http_job_and_execute_publish_compact_completed_terminal(
             manager=manager,
         )
         assert posted.status == 202
-        queued = manager.status(spec.job_id)
+        queued = json.loads(posted.wfile.getvalue().decode("utf-8"))["job"]
         assert queued is not None
         assert queued["job_kind"] == "receipt-candidate"
         assert "cohort_id" not in queued
