@@ -282,6 +282,72 @@ class SqliteStore:
         )
         self._conn.commit()
 
+    def apply_exact_product_mirror(
+        self,
+        table: str,
+        rows: Iterable[Mapping[str, Any]],
+        *,
+        commit: bool = False,
+    ) -> int:
+        """Apply signed product rows without ingestion clock rewrite.
+
+        Identical signed repeats are skipped. A different current version is
+        archived onto the revision table, then the exact signed fields become
+        current. This is not ``upsert``.
+        """
+        payload = [dict(row) for row in rows]
+        if not payload:
+            return 0
+        key_cols = NATURAL_KEYS.get(table)
+        if not key_cols:
+            raise ValueError(f"no governed natural-key contract for table: {table}")
+        cols = list(payload[0].keys())
+        closed = set(cols)
+        if any(set(row) != closed for row in payload):
+            raise ValueError("exact product rows must share one closed field set")
+        if any(key not in closed for key in key_cols):
+            raise ValueError("exact product rows are missing natural-key fields")
+        existing = self._existing_by_key(table, key_cols, payload)
+        revisions: list[dict[str, Any]] = []
+        to_write: list[dict[str, Any]] = []
+        for row in payload:
+            key = tuple(row[k] for k in key_cols)
+            current = existing.get(key)
+            if current is not None:
+                if all(current.get(col) == row.get(col) for col in cols):
+                    continue
+                if (
+                    current.get("available_at") == row.get("available_at")
+                    and current.get("ingested_at") == row.get("ingested_at")
+                ):
+                    raise ValueError(
+                        "exact product version identity would be overwritten"
+                    )
+                revisions.append(dict(current))
+            to_write.append(row)
+            existing[key] = dict(row)
+        if not to_write:
+            return 0
+        placeholders = ",".join("?" for _ in cols)
+        collist = ",".join(cols)
+        assigns = [f"{c} = excluded.{c}" for c in cols if c not in set(key_cols)]
+        sql = (
+            f"INSERT INTO {table} ({collist}) VALUES ({placeholders}) "
+            f"ON CONFLICT({','.join(key_cols)}) DO UPDATE SET {','.join(assigns)}"
+        )
+        try:
+            if revisions:
+                self._archive_revisions(table, key_cols, revisions)
+            self._conn.executemany(
+                sql, [[row.get(c) for c in cols] for row in to_write]
+            )
+            if commit:
+                self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        return len(to_write)
+
     def close(self) -> None:
         try:
             self._conn.close()

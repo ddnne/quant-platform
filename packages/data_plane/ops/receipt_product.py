@@ -302,14 +302,24 @@ def product_artifact_body_digest(body: Any) -> str:
 def iter_product_artifact_body_rows(body: Any) -> Iterator[dict[str, str]]:
     """Yield canonical product rows from one signed JSONL artifact body.
 
-    This is exact-generation materialization. It does not read ``jquants_records``
-    and is not a substitute for current-mode SQL reconstruction.
+    Accepts exact UTF-8 text, bytes, or a binary readline stream already
+    understood by ``_iter_canonical_artifact_rows``. Catalog reconstruction
+    still does not substitute for this generation body.
     """
 
-    if type(body) is not str or not body:
-        raise ValueError("product materialization artifact body must be exact text")
+    if type(body) is str or type(body) is bytes:
+        if not body:
+            raise ValueError("empty product materialization is not signable")
+        source = body
+    else:
+        readline = getattr(body, "readline", None)
+        if not callable(readline):
+            raise ValueError(
+                "product materialization artifact body must be exact text"
+            )
+        source = body
     yielded = False
-    for _raw_line, row in _iter_canonical_artifact_rows(body):
+    for _raw_line, row in _iter_canonical_artifact_rows(source):
         yielded = True
         yield row
     if not yielded:
