@@ -79,11 +79,14 @@ charter for extra hostile-Python tests.
   still tested directly.
 - Replaced the watermark migration's SQL spelling assertions with an applied
   SQLite schema/index observation.
-- Removed duplicate core/features substring import bans. The single AST plane
-  dependency graph remains the structural import check; core/features tests
-  now observe PIT calls and assert that runtime contexts expose no DB handle.
-- Replaced the remaining aggregate-namespace string scan with the same parsed
-  import graph and removed its deferred-phase existence assertion.
+- Removed duplicate core/features substring import bans. DataPlane import
+  direction is checked from source Import/ImportFrom in
+  ``tests/test_plane_import_boundaries.py`` without executing those imports;
+  dynamic importlib strings and paths outside setuptools where=/py-modules
+  are not verified. core/features tests observe PIT calls and assert that
+  runtime contexts expose no DB handle.
+- Replaced the remaining aggregate-namespace string scan with that DataPlane
+  source-owner check and removed its deferred-phase existence assertion.
 - Removed the research harness's AST/function-name/environment-spelling freeze;
   Mass fail-closed behavior is already exercised through the public start gate
   and Worker scheduler/runtime tests.
