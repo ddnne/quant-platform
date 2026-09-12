@@ -55,7 +55,10 @@ describe("Premium audit-only WorkerEntrypoint capability", () => {
         name: "PremiumReceiptProductInputService",
         handlers: ["class"],
         fetch_reserved_special: false,
-        rpc_methods: ["read_receipt_product_bytes"],
+        rpc_methods: [
+          "describe_receipt_product_input",
+          "read_receipt_product_bytes",
+        ],
       },
     ]);
   });
