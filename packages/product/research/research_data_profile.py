@@ -327,6 +327,29 @@ class ResearchDataProfile:
         body.pop("profile_digest", None)
         return body
 
+    def feature_consumers(self) -> Mapping[str, tuple[Any, ...]]:
+        """Per-consumer feature requirements for this profile only."""
+        from data_contracts.read_scopes import DatasetReadRequirement
+
+        if self.profile_version != PROFILE_VERSION_V3:
+            raise ResearchDataProfileError(
+                "feature consumers require research-data-profile/v3"
+            )
+        consumers: dict[str, list[Any]] = {}
+        for scope in self.dataset_scopes:
+            for raw in scope.get("requirements") or ():
+                requirement = DatasetReadRequirement.from_mapping(raw)
+                if requirement.consumer_kind != "feature":
+                    continue
+                consumers.setdefault(requirement.consumer_id, []).append(requirement)
+        if not consumers:
+            raise ResearchDataProfileError(
+                "scope-enabled profile has no feature consumers"
+            )
+        return MappingProxyType(
+            {key: tuple(value) for key, value in consumers.items()}
+        )
+
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "ResearchDataProfile":
         if not isinstance(payload, Mapping):

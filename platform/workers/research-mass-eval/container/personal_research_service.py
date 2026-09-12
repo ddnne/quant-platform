@@ -1074,7 +1074,8 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
         from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED
         from agents.risk_agent import RiskAgent
         from research.dependency_closure import resolve_strategy_spec
-        from research.experiment_plans import PILOT_COST_SCENARIO, load_experiment_plans
+        from research.experiment_plans import PILOT_COST_SCENARIO
+        from research.ready_manifest import load_exact_four_pilot_ready_binding
         from research.universe_contract import (
             EXACT_FOUR_UNIVERSE_RULE_DIGEST,
             resolve_tse_prime_with_fins,
@@ -1103,7 +1104,12 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
         decisions: list[dict[str, Any]] = []
         ineligible_plan_ids: list[str] = []
         risk_agent = RiskAgent()
-        plans = tuple(load_experiment_plans())
+        ready_binding = load_exact_four_pilot_ready_binding()
+        if ready_binding.profile_digest != CONTROLLED_PROFILE_DIGEST:
+            raise JobInputError("controlled profile-set digest mismatch")
+        if ready_binding.closure_set_digest != CONTROLLED_CLOSURE_DIGEST:
+            raise JobInputError("controlled dependency-closure digest mismatch")
+        plans = ready_binding.plans
         slices = controlled_handle.universe_day_slices(
             period_start=plans[0].period_start,
             period_end=plans[0].period_end,
@@ -1133,6 +1139,16 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
                 iter_feature_refs(spec)
             ):
                 raise JobInputError("StrategySpec feature refs do not match the closure")
+            scoped_profile = ready_binding.profiles[ordinal - 1]
+            if scoped_profile.plan_id != plan.plan_id:
+                raise JobInputError("scoped closure plan_id mismatch")
+            controlled_handle._bind_current_plan_feature_consumers(
+                plan_id=plan.plan_id,
+                profile_version=scoped_profile.profile_version,
+                profile_set_digest=ready_binding.profile_digest,
+                consumers=scoped_profile.feature_consumers(),
+                feature_dependencies=tuple(scoped_profile.feature_dependencies),
+            )
             strategy = interpret_strategy_spec(spec)
             paper_result = _run_controlled_paper(
                 strategy,

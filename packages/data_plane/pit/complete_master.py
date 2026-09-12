@@ -21,6 +21,7 @@ from ingestion.jquants.official_business_calendar import (
 )
 from ops.receipt_product import (
     PRODUCT_ARTIFACT_FIELDS,
+    catalog_owned_product_row_digests,
     iter_product_artifact_body_rows,
     product_artifact_digest_ordered,
     product_row_digest,
@@ -478,34 +479,24 @@ def _owned_product_row_digests(
     segment_end: str,
     observed_through: str,
 ) -> set[str]:
-    cutoff = _parse_dt(observed_through, label="product observation cutoff")
-    digests: set[str] = set()
-    fields = ",".join(PRODUCT_ARTIFACT_FIELDS)
+    tables: list[str] = []
     for table in ("jquants_records", "jquants_records_revisions"):
         if not _table_columns(conn, table):
             continue
         if set(PRODUCT_ARTIFACT_FIELDS) - _table_columns(conn, table):
             raise PitError(f"universe requires canonical {table} schema")
-        sql = (
-            f"SELECT {fields} FROM {table} "
-            "WHERE source='jquants' AND dataset=? "
-            "AND substr(event_time, 1, 10) BETWEEN ? AND ?"
-        )
-        for raw in conn.execute(sql, (_MASTER_DATASET, segment_start, segment_end)):
-            try:
-                row = {field: raw[field] for field in PRODUCT_ARTIFACT_FIELDS}
-                ingested = _parse_dt(
-                    row["ingested_at"], label="product ingestion clock"
-                )
-            except (KeyError, PitError, TypeError, ValueError):
-                continue
-            if ingested > cutoff:
-                continue
-            try:
-                digests.add(product_row_digest(row))
-            except ValueError:
-                continue
-    return digests
+        tables.append(table)
+    if not tables:
+        return set()
+    return catalog_owned_product_row_digests(
+        conn,
+        source="jquants",
+        dataset=_MASTER_DATASET,
+        segment_start=segment_start,
+        segment_end=segment_end,
+        observed_through=observed_through,
+        tables=tuple(tables),
+    )
 
 
 def _compact_snapshots_from_artifact(

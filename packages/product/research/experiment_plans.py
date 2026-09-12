@@ -17,6 +17,7 @@ from research.artifacts import (
     ExperimentPlan,
 )
 from research.dependency_closure import (
+    PLAN_DEPENDENCY_CLOSURE_VERSION,
     PlanDependencyClosure,
     build_plan_dependency_closure,
     experiment_plan_digest,
@@ -179,22 +180,24 @@ def load_experiment_plans(*, root: Path | None = None) -> tuple[ExperimentPlan, 
 
 
 def load_experiment_plan_closures(
-    *, root: Path | None = None
+    *, root: Path | None = None, closure_version: str = PLAN_DEPENDENCY_CLOSURE_VERSION
 ) -> tuple[PlanDependencyClosure, ...]:
     """Compile the exact dependency closure for each of the four plans."""
     return tuple(
-        build_plan_dependency_closure(plan)
+        build_plan_dependency_closure(plan, closure_version=closure_version)
         for plan in load_experiment_plans(root=root)
     )
 
 
 def load_experiment_plan_profiles(
-    *, root: Path | None = None
+    *, root: Path | None = None, closure_version: str = PLAN_DEPENDENCY_CLOSURE_VERSION
 ) -> tuple[ResearchDataProfile, ...]:
-    """Materialize one digest-bound ResearchDataProfile v2 per closure."""
+    """Materialize one digest-bound ResearchDataProfile per closure version."""
     return tuple(
         profile_from_dependency_closure(closure)
-        for closure in load_experiment_plan_closures(root=root)
+        for closure in load_experiment_plan_closures(
+            root=root, closure_version=closure_version
+        )
     )
 
 

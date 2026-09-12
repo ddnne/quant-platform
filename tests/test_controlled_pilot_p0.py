@@ -151,6 +151,7 @@ def test_generator_repairs_stale_plan_fill_before_compile(tmp_path: Path, monkey
         gen.RESULT_MANIFEST_SCHEMA_REL,
         gen.AUTHORITY_SCHEMA_REL,
         gen.PROTOCOL_PY_REL,
+        gen.ATTESTATION_PY_REL,
         *[
             Path("specs") / "experiment_plans" / f"{plan_id}.json"
             for plan_id in gen.PLAN_IDS
@@ -1097,13 +1098,15 @@ def _verified_worker_scope_from_db(path):
     """Test-issued Worker session scope; upstream envelope/projection verify is stubbed."""
     from pit.governed_am_view import _session_scope_from_verified_worker_job
 
+    from research.ready_manifest import load_exact_four_pilot_ready_binding
+
     session_scope = _verified_session_scope_from_db(path)
     evidence_digest = session_scope["dependency_scope_proof_digest"]
     return _session_scope_from_verified_worker_job(
         session_scope=session_scope,
         ready_manifest_digest=evidence_digest,
         signed_projection_document_digest=evidence_digest,
-        profile_digest=evidence_digest,
+        profile_digest=load_exact_four_pilot_ready_binding().profile_digest,
     )
 
 
@@ -1439,14 +1442,22 @@ def test_controlled_pins_same_artifact_and_rejects_replace_mutate_swap(tmp_path)
 
 
 def test_controlled_ctx_feature_sees_d_morning_reconstruction(tmp_path) -> None:
-    from _coreseed import TRADING_DAYS, seed_governed_am_pm_session_db
+    from _coreseed import seed_governed_am_pm_session_db
     from core import PERSONAL_RETROSPECTIVE_ADJUSTED, run_backtest, standard_cost
     from core.execution import morning_close_as_of
     from core.universe import membership_at
-    from core.strategy_protocol import OrderIntent
+    from research.ready_manifest import load_exact_four_pilot_ready_binding
 
     code = "1332"
-    days = TRADING_DAYS
+    days = [
+        "2025-04-01",
+        "2025-04-02",
+        "2025-04-03",
+        "2025-04-04",
+        "2025-04-07",
+        "2025-04-08",
+        "2025-04-09",
+    ]
     db = seed_governed_am_pm_session_db(
         tmp_path,
         codes=[code],
@@ -1455,38 +1466,234 @@ def test_controlled_ctx_feature_sees_d_morning_reconstruction(tmp_path) -> None:
         afternoon_prices={code: {day: 150.0 for day in days}},
     )
     universe = membership_at(morning_close_as_of(days[0]), db_path=db, codes=(code,))
-    view = _verified_snapshot_view_from_db(db)
-    seen: dict[str, float] = {}
-
-    class FeatureProbe:
-        strategy_id = "feature_probe"
-        params: dict = {}
-
-        def on_bar(self, ctx):
-            if ctx.date == days[1]:
-                out = ctx.feature(
-                    "retrospective_split_adjusted_momentum_n",
-                    code=code,
-                    n=1,
-                )
-                seen["last_close"] = float(out.metadata["last_adjustment_close"])
-                seen["value"] = float(out.value)
-            return []
-
-    res = run_backtest(
-        FeatureProbe(),
-        days[0],
-        days[-1],
-        db_path=db,
-        universe=universe,
-        execution_mode="am_signal_pm_close",
-        price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
-        cost_model=standard_cost(bps=0.0),
-        am_session_data_view=view,
+    ready = load_exact_four_pilot_ready_binding()
+    xs = next(
+        profile
+        for profile in ready.profiles
+        if profile.plan_id == "exp-xs-hold10-mom5"
     )
+    handle = _verified_snapshot_handle_from_db(db)
+    try:
+        handle._begin_controlled_batch_reads()
+        view = handle.am_session_data_view()
+
+        class FeatureProbe:
+            strategy_id = "feature_probe"
+            params: dict = {}
+
+            def on_bar(self, ctx):
+                if ctx.date == days[-1]:
+                    ctx.feature(
+                        "retrospective_split_adjusted_momentum_n",
+                        version="1.0.0",
+                        code=code,
+                        n=5,
+                    )
+                return []
+
+        with pytest.raises(ValueError, match="current-plan"):
+            run_backtest(
+                FeatureProbe(),
+                days[0],
+                days[-1],
+                db_path=db,
+                universe=universe,
+                execution_mode="am_signal_pm_close",
+                price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+                cost_model=standard_cost(bps=0.0),
+                am_session_data_view=view,
+            )
+        handle._bind_current_plan_feature_consumers(
+            plan_id=xs.plan_id,
+            profile_version=xs.profile_version,
+            profile_set_digest=ready.profile_digest,
+            consumers=xs.feature_consumers(),
+            feature_dependencies=tuple(xs.feature_dependencies),
+        )
+        assert view.session_profile_digest == ready.profile_digest
+        seen: dict[str, float] = {}
+
+        class BoundProbe:
+            strategy_id = "feature_probe"
+            params: dict = {}
+
+            def on_bar(self, ctx):
+                if ctx.date == days[-1]:
+                    out = ctx.feature(
+                        "retrospective_split_adjusted_momentum_n",
+                        version="1.0.0",
+                        code=code,
+                        n=5,
+                    )
+                    seen["last_close"] = float(out.metadata["last_adjustment_close"])
+                    seen["value"] = float(out.value)
+                return []
+
+        res = run_backtest(
+            BoundProbe(),
+            days[0],
+            days[-1],
+            db_path=db,
+            universe=universe,
+            execution_mode="am_signal_pm_close",
+            price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+            cost_model=standard_cost(bps=0.0),
+            am_session_data_view=view,
+        )
+    finally:
+        handle._end_controlled_batch_reads()
+        handle.close()
     assert seen["last_close"] == 100.0
     assert seen["value"] == pytest.approx((100.0 - 150.0) / 150.0)
     assert res.metadata["authentic_am_session_evidence"] is False
+    assert res.metadata["price_evidence_mode"] == "historical_daily_reconstruction"
+
+
+def test_controlled_bound_v3_current_plan_numeric_and_rejects_foreign_consumer(
+    tmp_path,
+) -> None:
+    from _coreseed import seed_governed_am_pm_session_db
+    from core import PERSONAL_RETROSPECTIVE_ADJUSTED, run_backtest, standard_cost
+    from core.execution import morning_close_as_of
+    from core.universe import membership_at
+    from research.ready_manifest import load_exact_four_pilot_ready_binding
+
+    code = "1332"
+    days = [
+        "2023-01-04",
+        "2023-01-05",
+        "2023-01-06",
+        "2023-01-09",
+        "2023-01-10",
+        "2023-01-11",
+        "2023-01-12",
+        "2023-01-13",
+        "2023-01-16",
+        "2023-01-17",
+        "2023-01-18",
+        "2023-01-19",
+    ]
+    morning = {day: 100.0 for day in days}
+    morning[days[-1]] = 110.0
+    afternoon = {day: 100.0 for day in days}
+    afternoon[days[-1]] = 110.0
+    db = seed_governed_am_pm_session_db(
+        tmp_path,
+        codes=[code],
+        days=days,
+        morning_prices={code: morning},
+        afternoon_prices={code: afternoon},
+        extra_fins_payloads=[
+            {
+                "Code": code,
+                "DiscDate": days[2],
+                "DiscTime": "08:00:00",
+                "DiscNo": f"bps-{code}",
+                "BPS": 80.0,
+                "CurPerEn": "2023-01-06",
+            },
+            {
+                "Code": code,
+                "DiscDate": days[4],
+                "DiscTime": "08:00:00",
+                "DiscNo": f"eps-{code}",
+                "EPS": 5.0,
+                "CurPerEn": "2023-03-31",
+            },
+        ],
+    )
+    universe = membership_at(morning_close_as_of(days[0]), db_path=db, codes=(code,))
+    ready = load_exact_four_pilot_ready_binding()
+    profile_set_digest = ready.profile_digest
+    fund = next(
+        profile
+        for profile in ready.profiles
+        if profile.plan_id == "exp-fund-hold10-value-mom"
+    )
+    handle = _verified_snapshot_handle_from_db(db)
+    try:
+        handle._begin_controlled_batch_reads()
+        handle._bind_current_plan_feature_consumers(
+            plan_id=fund.plan_id,
+            profile_version=fund.profile_version,
+            profile_set_digest=profile_set_digest,
+            consumers=fund.feature_consumers(),
+            feature_dependencies=tuple(fund.feature_dependencies),
+        )
+        view = handle.am_session_data_view()
+        binding = view.current_plan_feature_binding()
+        assert binding is not None
+        assert binding.plan_id == fund.plan_id
+        assert binding.profile_set_digest == profile_set_digest
+        assert view.session_profile_digest == ready.profile_digest
+        assert binding.profile_set_digest == view.session_profile_digest
+        seen: dict[str, object] = {}
+
+        class BoundProbe:
+            strategy_id = "bound_probe"
+            params: dict = {}
+
+            def on_bar(self, ctx):
+                if ctx.date != days[-1]:
+                    return []
+                value = ctx.feature(
+                    "retrospective_split_safe_fundamental_value_score",
+                    version="1.0.0",
+                    code=code,
+                )
+                seen["value"] = value.value
+                seen["bps"] = value.metadata["bps"]
+                seen["mode"] = value.metadata["mode"]
+                seen["anchor"] = value.metadata["split_safety_anchor"]
+                seen["fins_rows"] = value.metadata["fins_rows"]
+                with pytest.raises(
+                    ValueError, match="not the current plan's bound consumer"
+                ):
+                    ctx.feature(
+                        "disclosure_flag_fins",
+                        version="1.0.0",
+                        code=code,
+                    )
+                with pytest.raises(
+                    ValueError, match="not the current plan's bound consumer"
+                ):
+                    ctx.feature(
+                        "retrospective_split_adjusted_momentum_n",
+                        version="1.0.0",
+                        code=code,
+                        n=5,
+                    )
+                momentum = ctx.feature(
+                    "retrospective_split_adjusted_momentum_n",
+                    version="1.0.0",
+                    code=code,
+                    n=10,
+                )
+                seen["momentum"] = momentum.value
+                seen["last_adj"] = momentum.metadata["last_adjustment_close"]
+                return []
+
+        res = run_backtest(
+            BoundProbe(),
+            days[0],
+            days[-1],
+            db_path=db,
+            universe=universe,
+            execution_mode="am_signal_pm_close",
+            price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+            cost_model=standard_cost(bps=0.0),
+            am_session_data_view=view,
+        )
+    finally:
+        handle._end_controlled_batch_reads()
+        handle.close()
+    assert seen["value"] == pytest.approx(80.0 / 110.0)
+    assert seen["bps"] == 80.0
+    assert seen["mode"] == "bps_over_price"
+    assert seen["anchor"] == "2023-01-06"
+    assert seen["fins_rows"] == 3
+    assert seen["momentum"] == pytest.approx(0.1)
+    assert seen["last_adj"] == 110.0
     assert res.metadata["price_evidence_mode"] == "historical_daily_reconstruction"
 
 
@@ -2086,14 +2293,23 @@ def test_sealed_clocks_compare_as_aware_instants_not_lexically(tmp_path) -> None
 def test_controlled_prices_features_fills_use_sealed_not_typed(tmp_path) -> None:
     import sqlite3
 
-    from _coreseed import TRADING_DAYS, seed_governed_am_pm_session_db
+    from _coreseed import seed_governed_am_pm_session_db
     from core import PERSONAL_RETROSPECTIVE_ADJUSTED, run_backtest, standard_cost
     from core.execution import morning_close_as_of
     from core.universe import membership_at
     from core.strategy_protocol import OrderIntent
+    from research.ready_manifest import load_exact_four_pilot_ready_binding
 
     code = "1332"
-    days = TRADING_DAYS
+    days = [
+        "2025-04-01",
+        "2025-04-02",
+        "2025-04-03",
+        "2025-04-04",
+        "2025-04-07",
+        "2025-04-08",
+        "2025-04-09",
+    ]
     db = seed_governed_am_pm_session_db(
         tmp_path,
         codes=[code],
@@ -2109,37 +2325,57 @@ def test_controlled_prices_features_fills_use_sealed_not_typed(tmp_path) -> None
     conn.commit()
     conn.close()
     universe = membership_at(morning_close_as_of(days[0]), db_path=db, codes=(code,))
-    view = _verified_snapshot_view_from_db(db)
-    seen: dict[str, float] = {}
-
-    class Probe:
-        strategy_id = "sealed_probe"
-        params: dict = {}
-
-        def on_bar(self, ctx):
-            if ctx.date == days[1]:
-                seen["price"] = float(ctx.prices[code])
-                out = ctx.feature(
-                    "retrospective_split_adjusted_momentum_n",
-                    code=code,
-                    n=1,
-                )
-                seen["last_close"] = float(out.metadata["last_adjustment_close"])
-                seen["value"] = float(out.value)
-            return [OrderIntent(code=code, target_weight=0.5)]
-
-    res = run_backtest(
-        Probe(),
-        days[0],
-        days[-1],
-        db_path=db,
-        universe=universe,
-        execution_mode="am_signal_pm_close",
-        price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
-        cost_model=standard_cost(bps=0.0),
-        max_gross_weight=0.5,
-        am_session_data_view=view,
+    ready = load_exact_four_pilot_ready_binding()
+    xs = next(
+        profile
+        for profile in ready.profiles
+        if profile.plan_id == "exp-xs-hold10-mom5"
     )
+    handle = _verified_snapshot_handle_from_db(db)
+    try:
+        handle._begin_controlled_batch_reads()
+        handle._bind_current_plan_feature_consumers(
+            plan_id=xs.plan_id,
+            profile_version=xs.profile_version,
+            profile_set_digest=ready.profile_digest,
+            consumers=xs.feature_consumers(),
+            feature_dependencies=tuple(xs.feature_dependencies),
+        )
+        view = handle.am_session_data_view()
+        seen: dict[str, float] = {}
+
+        class Probe:
+            strategy_id = "sealed_probe"
+            params: dict = {}
+
+            def on_bar(self, ctx):
+                if ctx.date == days[-1]:
+                    seen["price"] = float(ctx.prices[code])
+                    out = ctx.feature(
+                        "retrospective_split_adjusted_momentum_n",
+                        version="1.0.0",
+                        code=code,
+                        n=5,
+                    )
+                    seen["last_close"] = float(out.metadata["last_adjustment_close"])
+                    seen["value"] = float(out.value)
+                return [OrderIntent(code=code, target_weight=0.5)]
+
+        res = run_backtest(
+            Probe(),
+            days[0],
+            days[-1],
+            db_path=db,
+            universe=universe,
+            execution_mode="am_signal_pm_close",
+            price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+            cost_model=standard_cost(bps=0.0),
+            max_gross_weight=0.5,
+            am_session_data_view=view,
+        )
+    finally:
+        handle._end_controlled_batch_reads()
+        handle.close()
     assert seen["price"] == 100.0
     assert seen["last_close"] == 100.0
     assert seen["value"] == pytest.approx((100.0 - 150.0) / 150.0)

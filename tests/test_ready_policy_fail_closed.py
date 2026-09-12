@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from io import BytesIO, TextIOWrapper
 import json
 import sqlite3
@@ -1029,6 +1030,7 @@ def _daily_equity_bar(
         "Low": close - 1.0,
         "Close": close,
         "Volume": volume,
+        "AdjC": close,
         "MC": morning,
         "MAdjC": morning,
         "AAdjC": close,
@@ -1036,19 +1038,39 @@ def _daily_equity_bar(
 
 
 def _mini_exact_scope_binding() -> SimpleNamespace:
-    scope = {"required_lookback_trading_days": 2}
-    profile = SimpleNamespace(
-        period_start="2023-01-04",
-        period_end="2023-01-06",
-        dataset_scopes=tuple(scope for _ in _SCOPE_DATASETS),
+    from research.dependency_closure import (
+        PLAN_DEPENDENCY_CLOSURE_VERSION_V2,
+        build_plan_dependency_closure,
     )
+    from research.experiment_plans import load_experiment_plans
+    from research.research_data_profile import (
+        PROFILE_VERSION_V3,
+        profile_from_dependency_closure,
+    )
+
+    profiles = []
+    for plan in load_experiment_plans():
+        shortened = replace(
+            plan, period_start="2023-01-04", period_end="2023-01-06"
+        )
+        profile = profile_from_dependency_closure(
+            build_plan_dependency_closure(
+                shortened, closure_version=PLAN_DEPENDENCY_CLOSURE_VERSION_V2
+            )
+        )
+        if profile.profile_version != PROFILE_VERSION_V3:
+            raise AssertionError("fixture profiles must be research-data-profile/v3")
+        profiles.append(profile)
+    profiles_t = tuple(profiles)
     binding = SimpleNamespace(
-        profiles=(profile,),
+        profiles=profiles_t,
         required_datasets=_SCOPE_DATASETS,
-        profile_id="mini-exact-four-v1",
-        profile_version="1",
-        profile_digest=canonical_digest({"profile": "mini-exact-four"}),
-        plan_ids=("mini-plan-1", "mini-plan-2", "mini-plan-3", "mini-plan-4"),
+        profile_id="controlled-pilot/exact-four",
+        profile_version="research-data-profile-set/v1",
+        profile_digest=canonical_digest(
+            [profile.to_dict() for profile in profiles_t]
+        ),
+        plan_ids=tuple(profile.plan_id for profile in profiles_t),
         plan_set_digest=canonical_digest({"plans": "mini-exact-four"}),
         closure_set_digest=canonical_digest({"closure": "mini-exact-four"}),
         publication_scope="PILOT",
@@ -1062,6 +1084,132 @@ def _mini_exact_scope_binding() -> SimpleNamespace:
     return binding
 
 
+def _issue_scope_dataset_product(
+    store,
+    *,
+    authority,
+    run_id: int,
+    dataset_id: str,
+    structured,
+    raw_records,
+    segment_id: str,
+    operation: str,
+) -> str:
+    event_days = [
+        str(row["event_time"])[:10]
+        for row in structured
+        if row.get("event_time")
+    ]
+    if not event_days:
+        raise RuntimeError(f"{dataset_id} fixture has no event_time")
+    segment_start = min(event_days)
+    segment_end = max(event_days)
+    required = RequiredCoverageSegment(
+        source="jquants",
+        dataset=dataset_id,
+        segment_id=segment_id,
+        segment_start=segment_start,
+        segment_end=segment_end,
+        expected_scope={
+            "period_start": segment_start,
+            "period_end": segment_end,
+            "expected_item_unit": "source_event",
+        },
+        expected_items=len(structured),
+    )
+    artifact_body = canonical_product_artifact_bytes(structured).decode("utf-8")
+    artifact_digest = product_artifact_digest(structured)
+    operation_id = canonical_digest(
+        {"operation": operation, "dataset": dataset_id}
+    )
+    checked_at = "2026-08-25T00:00:00+00:00"
+    store._conn.executemany(  # noqa: SLF001
+        "INSERT OR IGNORE INTO ingestion_change_log "
+        "(table_name,source,dataset,natural_key,event_time,available_at,"
+        "ingested_at,payload,raw_payload,changed_at) "
+        "VALUES ('jquants_records',?,?,?,?,?,?,?,?,?)",
+        [
+            (
+                row["source"],
+                row["dataset"],
+                row["natural_key"],
+                row["event_time"],
+                row["available_at"],
+                row["ingested_at"],
+                row["payload"],
+                row["raw_payload"],
+                row["ingested_at"],
+            )
+            for row in structured
+        ],
+    )
+    evidence = reconcile_test_evidence(
+        required=required,
+        run_id=run_id,
+        raw_pages=[
+            json.dumps({"data": raw_records}, sort_keys=True).encode("utf-8")
+        ],
+        raw_records=raw_records,
+        structured_records=structured,
+        checked_at=checked_at,
+        source_request={"fixture": operation},
+        structured_digest=artifact_digest,
+    )
+    record_collection_receipt(store._conn, authority.issue(evidence))  # noqa: SLF001
+    raw_manifest_digest = str(evidence.claims["raw_manifest_digest"])
+    raw_body = json.dumps({"data": raw_records}, sort_keys=True).encode("utf-8")
+    store._conn.execute(  # noqa: SLF001
+        "INSERT INTO ingestion_run_log "
+        "(id,ran_at,source,runtime,status,detail,authority_operation_id) "
+        "VALUES (?,?,'jquants','receipt-evidence-authority','SUCCESS','{}',?)",
+        (run_id, checked_at, operation_id),
+    )
+    store._conn.execute(  # noqa: SLF001
+        "INSERT INTO raw_retention_manifests "
+        "(dataset,run_id,manifest_key,page_count,row_count,raw_bytes,"
+        "data_digest,completeness,created_at) "
+        "VALUES (?,?,?,?,?,?,?,'COMPLETE',?)",
+        (
+            dataset_id,
+            run_id,
+            f"raw/{dataset_id}/{run_id}.manifest.json",
+            1,
+            len(raw_records),
+            len(raw_body),
+            raw_manifest_digest,
+            checked_at,
+        ),
+    )
+    store._conn.execute(  # noqa: SLF001
+        "INSERT INTO receipt_product_materializations "
+        "(operation_id,run_id,source,dataset,segment_id,artifact_key,"
+        "artifact_digest,artifact_body,row_count,byte_count,manifest_key,"
+        "manifest_digest,raw_manifest_key,raw_manifest_digest,"
+        "raw_page_count,raw_row_count,raw_bytes,committed_at) "
+        "VALUES (?,?,'jquants',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            operation_id,
+            run_id,
+            dataset_id,
+            required.segment_id,
+            f"structured/{dataset_id}/{run_id}.jsonl",
+            artifact_digest,
+            artifact_body,
+            len(structured),
+            len(artifact_body.encode("utf-8")),
+            f"structured/{dataset_id}/{run_id}.manifest.json",
+            canonical_digest({"artifact_digest": artifact_digest}),
+            f"raw/{dataset_id}/{run_id}.manifest.json",
+            raw_manifest_digest,
+            1,
+            len(raw_records),
+            len(raw_body),
+            checked_at,
+        ),
+    )
+    return artifact_digest
+
+
 def _seed_exact_pit_scope(
     tmp_path,
     receipt_ed25519_keys,
@@ -1073,7 +1221,7 @@ def _seed_exact_pit_scope(
     """Synthetic five-day exact natural-key closure with governed v4 receipts."""
     db_path = tmp_path / "pit-scope.sqlite"
     calendar_dates: list[str] = []
-    cursor = date(2023, 1, 2)
+    cursor = date(2022, 12, 6)
     while cursor <= date(2023, 1, 6):
         calendar_dates.append(cursor.isoformat())
         cursor += timedelta(days=1)
@@ -1085,7 +1233,7 @@ def _seed_exact_pit_scope(
         "equities_master": [
             {
                 "Code": "1332",
-                "Date": "2023-01-02",
+                "Date": "2022-10-03",
                 "CompanyName": "Prime With Fins",
                 "MarketCode": "0111",
             }
@@ -1093,10 +1241,26 @@ def _seed_exact_pit_scope(
         "fins_summary": [
             {
                 "Code": "1332",
+                "DiscDate": "2022-10-20",
+                "DiscTime": "08:00:00",
+                "DiscNo": "disc-1332-bps",
+                "BPS": 80.0,
+                "CurPerEn": "2022-10-20",
+            },
+            {
+                "Code": "1332",
                 "DiscDate": "2023-01-03",
                 "DiscTime": "08:00:00",
                 "DiscNo": "disc-1332",
-            }
+            },
+            {
+                "Code": "1332",
+                "DiscDate": "2023-01-05",
+                "DiscTime": "08:00:00",
+                "DiscNo": "disc-1332-eps",
+                "EPS": 5.0,
+                "CurPerEn": "2023-03-31",
+            },
         ],
         "equities_bars_daily": [
             _daily_equity_bar(
@@ -1107,6 +1271,15 @@ def _seed_exact_pit_scope(
                 volume=1000.0,
             )
             for day in calendar_dates
+        ]
+        + [
+            _daily_equity_bar(
+                "1332",
+                "2022-10-20",
+                close=100.0,
+                morning=99.5,
+                volume=1000.0,
+            )
         ],
         "indices_bars_daily_topix": [
             {
@@ -1123,7 +1296,7 @@ def _seed_exact_pit_scope(
         payloads["equities_master"].append(
             {
                 "Code": "9999",
-                "Date": "2023-01-02",
+                "Date": "2022-10-03",
                 "CompanyName": "Standard Nonmember",
                 "MarketCode": "0112",
             }
@@ -1148,8 +1321,8 @@ def _seed_exact_pit_scope(
         )
     ingestion_clocks = {
         "markets_calendar": "2022-12-01T00:00:00+09:00",
-        "equities_master": "2023-01-02T08:00:00+09:00",
-        "fins_summary": "2023-01-03T08:00:00+09:00",
+        "equities_master": "2022-10-03T08:00:00+09:00",
+        "fins_summary": "2022-10-20T08:00:00+09:00",
         "indices_bars_daily_topix": "2023-01-06T16:00:00+09:00",
     }
     with SqliteStore(db_path) as store:
@@ -1242,115 +1415,15 @@ def _seed_exact_pit_scope(
                     (dataset_id,),
                 ).fetchall()
             ]
-            required = RequiredCoverageSegment(
-                source="jquants",
-                dataset=dataset_id,
-                segment_id=f"mini-scope-{dataset_id}",
-                segment_start="2023-01-02",
-                segment_end="2023-01-06",
-                expected_scope={
-                    "period_start": "2023-01-02",
-                    "period_end": "2023-01-06",
-                    "expected_item_unit": "source_event",
-                },
-                expected_items=len(structured),
-            )
-            artifact_body = canonical_product_artifact_bytes(structured).decode(
-                "utf-8"
-            )
-            artifact_digest = product_artifact_digest(structured)
-            operation_id = canonical_digest(
-                {"operation": "exact-pit-scope", "dataset": dataset_id}
-            )
-            checked_at = "2026-08-25T00:00:00+00:00"
-            store._conn.executemany(  # noqa: SLF001
-                "INSERT OR IGNORE INTO ingestion_change_log "
-                "(table_name,source,dataset,natural_key,event_time,available_at,"
-                "ingested_at,payload,raw_payload,changed_at) "
-                "VALUES ('jquants_records',?,?,?,?,?,?,?,?,?)",
-                [
-                    (
-                        row["source"],
-                        row["dataset"],
-                        row["natural_key"],
-                        row["event_time"],
-                        row["available_at"],
-                        row["ingested_at"],
-                        row["payload"],
-                        row["raw_payload"],
-                        row["ingested_at"],
-                    )
-                    for row in structured
-                ],
-            )
-            evidence = reconcile_test_evidence(
-                required=required,
+            _issue_scope_dataset_product(
+                store,
+                authority=authority,
                 run_id=run_id,
-                raw_pages=[
-                    json.dumps(
-                        {"data": payloads[dataset_id]},
-                        sort_keys=True,
-                    ).encode("utf-8")
-                ],
+                dataset_id=dataset_id,
+                structured=structured,
                 raw_records=payloads[dataset_id],
-                structured_records=structured,
-                checked_at=checked_at,
-                source_request={"fixture": "exact-pit-scope"},
-                structured_digest=artifact_digest,
-            )
-            record_collection_receipt(store._conn, authority.issue(evidence))  # noqa: SLF001
-            raw_manifest_digest = str(evidence.claims["raw_manifest_digest"])
-            raw_body = json.dumps(
-                {"data": payloads[dataset_id]}, sort_keys=True
-            ).encode("utf-8")
-            store._conn.execute(  # noqa: SLF001
-                "INSERT INTO ingestion_run_log "
-                "(id,ran_at,source,runtime,status,detail,authority_operation_id) "
-                "VALUES (?,?,'jquants','receipt-evidence-authority','SUCCESS','{}',?)",
-                (run_id, checked_at, operation_id),
-            )
-            store._conn.execute(  # noqa: SLF001
-                "INSERT INTO raw_retention_manifests "
-                "(dataset,run_id,manifest_key,page_count,row_count,raw_bytes,"
-                "data_digest,completeness,created_at) "
-                "VALUES (?,?,?,?,?,?,?,'COMPLETE',?)",
-                (
-                    dataset_id,
-                    run_id,
-                    f"raw/{dataset_id}/{run_id}.manifest.json",
-                    1,
-                    len(payloads[dataset_id]),
-                    len(raw_body),
-                    raw_manifest_digest,
-                    checked_at,
-                ),
-            )
-            store._conn.execute(  # noqa: SLF001
-                "INSERT INTO receipt_product_materializations "
-                "(operation_id,run_id,source,dataset,segment_id,artifact_key,"
-                "artifact_digest,artifact_body,row_count,byte_count,manifest_key,"
-                "manifest_digest,raw_manifest_key,raw_manifest_digest,"
-                "raw_page_count,raw_row_count,raw_bytes,committed_at) "
-                "VALUES (?,?,'jquants',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    operation_id,
-                    run_id,
-                    dataset_id,
-                    required.segment_id,
-                    f"structured/{dataset_id}/{run_id}.jsonl",
-                    artifact_digest,
-                    artifact_body,
-                    len(structured),
-                    len(artifact_body.encode("utf-8")),
-                    f"structured/{dataset_id}/{run_id}.manifest.json",
-                    canonical_digest({"artifact_digest": artifact_digest}),
-                    f"raw/{dataset_id}/{run_id}.manifest.json",
-                    raw_manifest_digest,
-                    1,
-                    len(payloads[dataset_id]),
-                    len(raw_body),
-                    checked_at,
-                ),
+                segment_id=f"mini-scope-{dataset_id}",
+                operation="exact-pit-scope",
             )
         store._conn.commit()  # noqa: SLF001
     return db_path, _mini_exact_scope_binding()
@@ -1470,7 +1543,9 @@ def test_exact_pit_dependency_scope_accepts_complete_receipt_bound_fixture(
     assert proof["status"] == "PASS"
     assert proof["period_start"] == "2023-01-04"
     assert proof["period_end"] == "2023-01-06"
-    assert proof["lookback_trading_days"] == 2
+    assert proof["lookback_trading_days"] == 11
+    selected = {entry["dataset_id"]: entry for entry in proof["entries"]}
+    assert selected["fins_summary"]["natural_key_count"] == 3
     assert {row["dataset_id"] for row in proof["entries"]} == set(
         _SCOPE_DATASETS
     )
@@ -1556,22 +1631,38 @@ def test_exact_pit_scope_verifies_full_artifact_excluding_after_cutoff_and_nonme
     selected = {
         entry["dataset_id"]: entry for entry in proof["entries"]
     }
-    assert selected["fins_summary"]["natural_key_count"] == 1
+    assert selected["fins_summary"]["natural_key_count"] == 3
     observed_through = normalize_as_of(AUTHENTICATED_EXPORT_AT)
     with sqlite3.connect(db_path) as connection:
         connection.row_factory = sqlite3.Row
+        member_keys = sorted(
+            row[0]
+            for row in connection.execute(
+                "SELECT natural_key FROM jquants_records "
+                "WHERE dataset='fins_summary' AND payload LIKE '%1332%' "
+                "AND payload NOT LIKE '%disc-9999%' "
+                "AND payload NOT LIKE '%after-close%' "
+                "AND payload NOT LIKE '%late-observation%'"
+            )
+        )
         member_key = connection.execute(
             "SELECT natural_key FROM jquants_records "
             "WHERE dataset='fins_summary' AND payload LIKE '%disc-1332\"%' "
             "AND payload LIKE '%2023-01-03%'"
         ).fetchone()[0]
+        segment_start, segment_end = connection.execute(
+            "SELECT MIN(substr(event_time,1,10)), MAX(substr(event_time,1,10)) "
+            "FROM jquants_records WHERE dataset='fins_summary' "
+            "AND ingested_at <= ?",
+            (observed_through,),
+        ).fetchone()
         artifact_count, artifact_digest, _nbytes = product_artifact_digest_ordered(
             iter_observed_segment_product_rows(
                 connection,
                 source="jquants",
                 dataset="fins_summary",
-                segment_start="2023-01-02",
-                segment_end="2023-01-06",
+                segment_start=segment_start,
+                segment_end=segment_end,
                 observed_through=observed_through,
             )
         )
@@ -1581,8 +1672,8 @@ def test_exact_pit_scope_verifies_full_artifact_excluding_after_cutoff_and_nonme
                 connection,
                 source="jquants",
                 dataset="fins_summary",
-                segment_start="2023-01-02",
-                segment_end="2023-01-06",
+                segment_start=segment_start,
+                segment_end=segment_end,
                 observed_through=observed_through,
             )
         }
@@ -1605,8 +1696,10 @@ def test_exact_pit_scope_verifies_full_artifact_excluding_after_cutoff_and_nonme
         nonmember_key,
     }
     assert selected["fins_summary"]["natural_key_digest"] == canonical_digest(
-        [member_key]
+        member_keys
     )
+    assert member_key in member_keys
+    assert len(member_keys) == 3
     assert artifact_count == stored["row_count"]
     assert artifact_digest == stored["artifact_digest"]
     assert selected["fins_summary"]["product_artifact_digests"] == [
@@ -2041,7 +2134,7 @@ def test_signed_product_digest_survives_sync_projection_and_ready(
     ("victim", "event_date"),
     (
         ("markets_calendar", "2023-01-05"),
-        ("equities_master", "2023-01-02"),
+        ("equities_master", "2022-10-03"),
         ("fins_summary", "2023-01-03"),
         ("equities_bars_daily", "2023-01-05"),
         ("indices_bars_daily_topix", "2023-01-05"),
@@ -2068,49 +2161,6 @@ def test_exact_pit_dependency_scope_rejects_each_missing_or_late_dependency(
         _verify_scope(db_path, binding, monkeypatch)
 
 
-def test_exact_pit_dependency_scope_rejects_daily_bars_missing_session_prices(
-    tmp_path,
-    receipt_ed25519_keys,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    db_path, binding = _seed_exact_pit_scope(tmp_path, receipt_ed25519_keys)
-    _mutate_sqlite(
-        db_path,
-        "UPDATE jquants_records "
-        "SET payload=json_remove(payload, '$.MAdjC', '$.AAdjC', '$.MC') "
-        "WHERE dataset='equities_bars_daily' "
-        "AND substr(event_time,1,10)='2023-01-05'",
-    )
-    with pytest.raises(
-        MassResearchDisabledError,
-        match="equities_bars_daily historical MAdjC/AAdjC closure missing",
-    ):
-        _verify_scope(db_path, binding, monkeypatch)
-
-
-def test_exact_pit_dependency_scope_rejects_one_visible_row_and_late_rest(
-    tmp_path,
-    receipt_ed25519_keys,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    db_path, binding = _seed_exact_pit_scope(
-        tmp_path, receipt_ed25519_keys
-    )
-    _mutate_sqlite(
-        db_path,
-        "UPDATE jquants_records "
-        "SET available_at=? "
-        "WHERE dataset='equities_bars_daily' "
-        "AND substr(event_time,1,10) <> '2023-01-02'",
-        (_LATE_AFTER_OBSERVED,),
-    )
-    with pytest.raises(
-        MassResearchDisabledError,
-        match="equities_bars_daily historical MAdjC/AAdjC closure missing",
-    ):
-        _verify_scope(db_path, binding, monkeypatch)
-
-
 def test_exact_pit_dependency_scope_rejects_unreceipted_natural_keys(
     tmp_path,
     receipt_ed25519_keys,
@@ -2125,6 +2175,151 @@ def test_exact_pit_dependency_scope_rejects_unreceipted_natural_keys(
         "WHERE dataset='indices_bars_daily_topix'",
     )
     with pytest.raises(MassResearchDisabledError, match="signed receipt"):
+        _verify_scope(db_path, binding, monkeypatch)
+
+
+def test_exact_pit_scope_selected_financial_keeps_original_generation_then_rejects_without_it(
+    tmp_path,
+    receipt_ed25519_keys,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path, binding = _seed_exact_pit_scope(tmp_path, receipt_ed25519_keys)
+    correction_at = "2023-01-10T08:00:00+09:00"
+
+    def _disc_bps(rows) -> list[float]:
+        values: list[float] = []
+        for row in rows:
+            payload = row["payload"]
+            parsed = json.loads(payload) if isinstance(payload, str) else payload
+            if parsed.get("DiscNo") == "disc-1332-bps":
+                values.append(float(parsed["BPS"]))
+        return values
+
+    with SqliteStore(db_path) as store:
+        old_run_id, old_digest, old_body = store._conn.execute(  # noqa: SLF001
+            "SELECT run_id, artifact_digest, artifact_body "
+            "FROM receipt_product_materializations WHERE dataset='fins_summary'"
+        ).fetchone()
+        next_run_id = int(
+            store._conn.execute(  # noqa: SLF001
+                "SELECT MAX(id) FROM ingestion_run_log"
+            ).fetchone()[0]
+        ) + 1
+        assert _disc_bps(iter_product_artifact_body_rows(old_body)) == [80.0]
+        store.upsert(
+            "jquants_records",
+            normalize_generic(
+                [
+                    {
+                        "Code": "1332",
+                        "DiscDate": "2022-10-20",
+                        "DiscTime": "08:00:00",
+                        "DiscNo": "disc-1332-bps",
+                        "BPS": 999.0,
+                        "CurPerEn": "2022-10-20",
+                    }
+                ],
+                dataset="fins_summary",
+                ingested_at=correction_at,
+                available_at=correction_at,
+            ),
+        )
+        current = [
+            dict(row)
+            for row in store._conn.execute(  # noqa: SLF001
+                "SELECT * FROM jquants_records "
+                "WHERE source='jquants' AND dataset='fins_summary' "
+                "ORDER BY natural_key"
+            )
+        ]
+        revisions = [
+            dict(row)
+            for row in store._conn.execute(  # noqa: SLF001
+                "SELECT * FROM jquants_records_revisions "
+                "WHERE source='jquants' AND dataset='fins_summary' "
+                "ORDER BY natural_key"
+            )
+        ]
+        current_bps_rows = [
+            row
+            for row in current
+            if json.loads(row["payload"]).get("DiscNo") == "disc-1332-bps"
+        ]
+        revision_bps_rows = [
+            row
+            for row in revisions
+            if json.loads(row["payload"]).get("DiscNo") == "disc-1332-bps"
+        ]
+        assert _disc_bps(current_bps_rows) == [999.0]
+        assert _disc_bps(revision_bps_rows) == [80.0]
+        assert current_bps_rows[0]["available_at"] == correction_at
+        assert revision_bps_rows[0]["available_at"] < close_as_of("2023-01-04")
+        assert current_bps_rows[0]["natural_key"] == revision_bps_rows[0]["natural_key"]
+        new_digest = _issue_scope_dataset_product(
+            store,
+            authority=_TestSignedReceiptAuthority(
+                signing_key=receipt_ed25519_keys.signing_key
+            ),
+            run_id=next_run_id,
+            dataset_id="fins_summary",
+            structured=current,
+            raw_records=[json.loads(row["payload"]) for row in current],
+            segment_id="mini-scope-fins_summary-corrected",
+            operation="exact-pit-scope-corrected",
+        )
+        owned = store._conn.execute(  # noqa: SLF001
+            "SELECT p.artifact_digest, p.artifact_body, r.runtime, r.status, "
+            "m.data_digest, c.status "
+            "FROM receipt_product_materializations p "
+            "JOIN ingestion_run_log r ON r.id = p.run_id "
+            "JOIN raw_retention_manifests m "
+            "ON m.run_id = p.run_id AND m.dataset = p.dataset "
+            "JOIN collection_receipts c "
+            "ON c.run_id = p.run_id AND c.dataset = p.dataset "
+            "WHERE p.dataset='fins_summary' AND p.run_id=?",
+            (next_run_id,),
+        ).fetchone()
+        store._conn.commit()  # noqa: SLF001
+    assert owned is not None
+    assert owned[0] == new_digest != old_digest
+    assert owned[2] == "receipt-evidence-authority"
+    assert owned[3] == "SUCCESS"
+    assert owned[4]
+    assert owned[5] == "SUCCESS"
+    assert _disc_bps(iter_product_artifact_body_rows(owned[1])) == [999.0]
+    proof = _verify_scope(db_path, binding, monkeypatch)
+    assert proof["status"] == "PASS"
+    selected = {entry["dataset_id"]: entry for entry in proof["entries"]}
+    assert selected["fins_summary"]["natural_key_count"] == 3
+    assert old_digest in selected["fins_summary"]["product_artifact_digests"]
+    assert new_digest in selected["fins_summary"]["product_artifact_digests"]
+    _mutate_sqlite(
+        db_path,
+        "DELETE FROM collection_receipts WHERE dataset='fins_summary' AND run_id=?",
+        (old_run_id,),
+    )
+    leftover = sqlite3.connect(db_path)
+    try:
+        receipt_runs = [
+            int(row[0])
+            for row in leftover.execute(
+                "SELECT run_id FROM collection_receipts "
+                "WHERE dataset='fins_summary' ORDER BY run_id"
+            )
+        ]
+        product_runs = [
+            int(row[0])
+            for row in leftover.execute(
+                "SELECT run_id FROM receipt_product_materializations "
+                "WHERE dataset='fins_summary' ORDER BY run_id"
+            )
+        ]
+    finally:
+        leftover.close()
+    assert receipt_runs == [next_run_id]
+    assert old_run_id in product_runs
+    assert next_run_id in product_runs
+    with pytest.raises(MassResearchDisabledError):
         _verify_scope(db_path, binding, monkeypatch)
 
 
