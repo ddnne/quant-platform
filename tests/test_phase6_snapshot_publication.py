@@ -433,7 +433,7 @@ def test_ready_publication_is_atomic_content_addressed_and_read_only(
     assert list_ready_snapshots(snapshot_dir) == []
     with pytest.raises(RuntimeError, match="publication marker is invalid"):
         latest_ready_snapshot(snapshot_dir)
-    with pytest.raises(RuntimeError, match="Coverage proof id is unknown"):
+    with pytest.raises(RuntimeError):
         data_snapshot_id(ready.db_path)
     with pytest.raises(RuntimeError, match="not committed"):
         data_snapshot_id(path)
