@@ -15,8 +15,6 @@ from pit.personal_research_view import (
     OPTION_SIDECAR_OBJECT_SCHEMA,
     OfflineFixtureDataView,
 )
-from research.offline.factory import MassFactoryConfig
-from research.offline.factory_eval_data import load_batch_data_context
 from research.personal_universe import PersonalResolvedUniverseMembership
 from selection.budget_ledger import MassResearchDisabledError
 
@@ -622,7 +620,6 @@ def test_disabled_mass_and_factory_fail_before_local_paths(tmp_path: Path) -> No
         build_real_period_panel,
         stage_real_panels_to_r2,
     )
-    from research.offline.factory import run_mass_factory
 
     db = tmp_path / "must-not-open.sqlite"
     db.write_text("not a database")
@@ -639,13 +636,4 @@ def test_disabled_mass_and_factory_fail_before_local_paths(tmp_path: Path) -> No
         )
     with pytest.raises(MassResearchDisabledError, match="run_cf_daily_path_fanout"):
         run_cf_daily_path_fanout(job_id="x", skip_stage=True, staging_dir=tmp_path)
-    with pytest.raises(MassResearchDisabledError, match="load_batch_data_context"):
-        load_batch_data_context(
-            MassFactoryConfig(),
-            view=db,
-            sqlite_path=db,
-            mirror_dir=tmp_path,
-        )
-    with pytest.raises(MassResearchDisabledError, match="run_mass_factory"):
-        run_mass_factory(synthetic=False, out_dir=tmp_path)
     assert db.read_text() == "not a database"

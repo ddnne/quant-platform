@@ -1,11 +1,45 @@
 # Invariant test audit
 
-This is the current test authority map. A test may demonstrate an invariant,
-but it must not create the security boundary it claims to test. Production
-boundaries therefore live in types, opaque capabilities, immutable stores,
-transactions, cryptographic verification, Cloudflare bindings, or runtime
-sandboxing. Source spelling, comments, phase names, and historical counts are
-not release authorities.
+This is a personal single-user Cloudflare quant research product on a trusted
+host. Tests catch real current failures; they do not simulate an untrusted
+multi-tenant enterprise.
+
+**Policy**
+
+1. Prioritize real numeric correctness: known-input/expected-output,
+   returns/positions/PnL/costs, PIT/AM-to-PM no lookahead, and meaningful
+   accounting.
+2. Keep only minimal practical guards against missing/corrupt data,
+   uncontrolled charge, and accidental real orders.
+3. Closed DSL/JSON only. Do not build or test hostile same-process Python
+   reflection/subclass/frozen-object attacks, root-adversary/WebAuthn/extra
+   signers, or extra enterprise authority layers unless a new explicit user
+   need is established. C04 remains pending under that rule.
+4. Before adding a layer or test, state the concrete current failure it
+   catches and whether existing code, library, schema, or test already covers
+   it. Prefer deletion/consolidation over a replacement framework. No
+   test-count or coverage targets, source-name or phase-label tests,
+   exhaustive input-form matrices, just-in-case retention, or a test of this
+   policy prose.
+5. Review runtime code and tests together for dead code, duplicate ownership,
+   and needless abstraction. Delete unused runtime code and its tests
+   together. Small logical commits; do not drop active numerical semantics.
+6. Do not weaken authentic data, PIT, budget enforcement, or explicit
+   deployment HOLDs merely to simplify.
+
+This document is the detailed policy linked from root `AGENTS.md`. It is not
+a claim that every module or test has been reviewed.
+
+A test may demonstrate an invariant, but it must not create the security
+boundary it claims to test. Where a real production boundary exists today, it
+lives in types, opaque capabilities, immutable stores, transactions,
+cryptographic verification, or Cloudflare bindings. Do not add OS-sandbox
+or extra authority frameworks. The unused macOS sandbox-exec runner was
+removed; Cloudflare Container / enableInternet=false / closed DSL remain.
+Source spelling, comments, phase names, and historical counts are not
+release authorities. Table wording such as malicious CWD or adversarial
+cases describes those existing packaging and signed-receipt checks, not a
+charter for extra hostile-Python tests.
 
 | Invariant | Structural enforcement | Minimal acceptance test |
 | --- | --- | --- |
@@ -17,7 +51,6 @@ not release authorities.
 | Profile/closure-bound READY | The dedicated publisher verifies the signed Ops evidence, exact plan closure, PIT availability, immutable DB digest, and dedicated READY key | `tests/test_ready_policy_fail_closed.py` and `tests/test_ready_manifest.py` |
 | Immutable snapshot/artifact | Snapshot handles verify read-only mode and content digest; Worker R2 create-only operations use conditional writes | `tests/test_phase6_snapshot_publication.py` and Worker R2 runtime tests |
 | Controlled Paper authorization | `OfflineFixturePaperService` and `ControlledPilotExecutionService` are distinct entrypoints; the controlled type requires verified readiness and an immutable snapshot | `tests/test_controlled_pilot_execution_service.py` |
-| Agent process isolation | Production refuses execution without an active OS sandbox; a closed tool map, issued capability, scrubbed environment, fixed argv, and `shell=False` are passed to the backend | behavioral cases in `tests/test_process_isolated_runner.py` |
 | Strict Gateway rejection | Closed request/output schemas are validated before an artifact is returned | `tests/test_gateway_fail_closed.py` and Gateway runtime tests |
 | Budget concurrency and settlement | BudgetLedger Durable Object serializes reservations and settles only through the Gateway coordinator bound to exact lease, digest, provider-start, and a retry-safe one-shot settlement capability | `platform/workers/research-ai-gateway/src/budget_runtime.test.ts` and `index_complete_budget.test.ts` |
 | OAuth boundary | The Ops MCP Worker requires OAuth while public metadata remains available | `platform/workers/quant-ops-mcp/runtime/ops_runtime.test.js` and `harness/oauth_harness.test.ts` |
@@ -31,7 +64,7 @@ not release authorities.
   snapshot as policy.
 - Removed wave/phase filename guards and optional helper-script source checks.
 - Removed repeated AST/import/comment/function-name assertions where public
-  behavior, closed schemas, capabilities, runtime bindings, or OS sandbox tests
+  behavior, closed schemas, capabilities, or runtime bindings
   already enforce the boundary.
 - Removed `tests/test_research_default_r2_put_callers.py`, whose glob and
   implementation-string assertions duplicated the stronger R2 boundary.
@@ -56,8 +89,9 @@ not release authorities.
 - Removed the dead W83-W86 three-pin freeze surface and smoke-universe count
   guards. Exact-four plans now own their immutable strategy/feature parameters;
   Mass and Paper remain disabled by their capability gates.
-- Replaced the runner's `inspect.getsource`/string check for `shell=False` with
-  an intercepted invocation that asserts the actual subprocess contract.
+- Historical isolated-runner `shell=False` source-string check was replaced by
+  an intercepted subprocess contract; that unused macOS sandbox-exec runner is
+  now removed.
 - Removed the JSDA recovery sealer's function-name/import spelling assertions;
   its local-index input and persisted `FAILED / RECOVERED_RAW_ONLY` evidence are
   exercised directly, including a zero structured-row count and no COMPLETE.

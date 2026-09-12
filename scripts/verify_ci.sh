@@ -124,7 +124,7 @@ echo "==> python pytest (2 workers, file-scoped scheduling)"
 # while using the two build CPUs; file-scoped scheduling avoids splitting tests
 # from the same module across processes. Documented offline selection excludes
 # tests that require actual Node/npm.
-"$py" -m pytest -n 2 --dist=loadfile -m "not toolchain and not live and not platform" tests/
+"$py" -m pytest -n 2 --dist=loadfile -m "not toolchain and not live" tests/
 
 if ! command -v npm >/dev/null 2>&1; then
   echo "npm not found" >&2
@@ -164,7 +164,7 @@ if ! bash "$ROOT/scripts/ci_bounded_jobs.sh" 2 "$ci_log_dir" "install-" \
 fi
 
 echo "==> python pytest toolchain (2 workers, file-scoped scheduling)"
-"$py" -m pytest -n 2 --dist=loadfile -m "toolchain and not live and not platform" tests/
+"$py" -m pytest -n 2 --dist=loadfile -m "toolchain and not live" tests/
 
 
 # Evaluation IR generated-artifact drift, independent Draft7 schema

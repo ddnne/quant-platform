@@ -76,19 +76,6 @@ def test_unknown_cs_gate_fails_closed() -> None:
     assert pack.get("go") is not True
 
 
-def test_factory_templates_do_not_clone_combo_catalog() -> None:
-    from research.offline.factory import LOGIC_TEMPLATES
-    from research.unique_logic.constants import RESEARCH_UNIQUE_LOGIC_IDS
-    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
-
-    combo_ids = {s["logic_id"] for s in NEW_COMBO_LOGIC}
-    cloned = sorted(combo_ids & set(LOGIC_TEMPLATES))
-    assert cloned == []
-    assert "event_eqar_high_pead" not in LOGIC_TEMPLATES
-    assert "event_funding_stress_skip" in RESEARCH_UNIQUE_LOGIC_IDS
-    assert "event_funding_stress_skip" not in LOGIC_TEMPLATES
-
-
 def test_cf_combo_specs_carry_gates() -> None:
     from research.cf_mass_eval_job import default_logic_specs
 

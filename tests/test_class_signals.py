@@ -623,3 +623,91 @@ def test_offline_bar_eval_pure_on_synthetic_bars():
     )
     assert xs10["hold_days"] == 10
     assert xs10.get("occurrence") is not None
+
+
+def test_nky_vol_signal_helpers_pure():
+    from features.class_signals import (
+        CLASS_INDEX_VOL_REGIME,
+        compute_nky_vol_abs_level_signal,
+        compute_nky_vol_term_levels_signal,
+        compute_nky_vol_term_ratio_signal,
+        nky_vol_regime_from_abs_level,
+        nky_vol_regime_from_term_levels,
+        nky_vol_regime_from_term_ratio,
+    )
+
+    assert nky_vol_regime_from_abs_level(0.05)[0] == "low"
+    assert nky_vol_regime_from_abs_level(0.30)[0] == "high"
+    assert nky_vol_regime_from_abs_level(0.15)[0] == "mid"
+    assert nky_vol_regime_from_term_levels(0.05, 0.08)[0] == "low"
+    assert nky_vol_regime_from_term_levels(0.30, 0.25)[0] == "high"
+    assert nky_vol_regime_from_term_levels(0.05, 0.25)[0] == "mid"  # disagree
+    assert nky_vol_regime_from_term_ratio(0.30, 0.20)[0] == "expanding"
+    assert nky_vol_regime_from_term_ratio(0.10, 0.20)[0] == "compressing"
+
+    abs_s = compute_nky_vol_abs_level_signal(cs_sign=1.0, vol_level=0.05)
+    assert abs_s["value"] == 1.0  # low → keep
+    abs_h = compute_nky_vol_abs_level_signal(cs_sign=1.0, vol_level=0.30)
+    assert abs_h["value"] == -1.0  # high → reverse
+    abs_m = compute_nky_vol_abs_level_signal(cs_sign=1.0, vol_level=0.15)
+    assert abs_m["value"] is None  # mid → flat
+
+    term = compute_nky_vol_term_levels_signal(
+        cs_sign=1.0, short_vol=0.05, long_vol=0.08
+    )
+    assert term["value"] == 1.0
+    ratio = compute_nky_vol_term_ratio_signal(
+        cs_sign=1.0, short_vol=0.30, long_vol=0.20
+    )
+    assert ratio["value"] == -1.0  # expanding → reverse
+    assert ratio["hypothesis_class"] == CLASS_INDEX_VOL_REGIME
+
+
+def test_opt225_signal_helpers_pure():
+    from features.class_signals import (
+        CLASS_OPTIONS_VOL_REGIME,
+        compute_opt225_basevol_abs_level_signal,
+        compute_opt225_basevol_delta_abs_signal,
+        compute_opt225_cm_term_abs_level_signal,
+        compute_opt225_cm_term_ratio_signal,
+        compute_opt225_iv_base_spread_abs_signal,
+        compute_opt225_skew_abs_level_signal,
+        compute_opt225_vol_signal,
+    )
+
+    low = compute_opt225_basevol_abs_level_signal(cs_sign=1.0, vol_level=10.0)
+    assert low["hypothesis_class"] == CLASS_OPTIONS_VOL_REGIME
+    assert low["value"] == 1.0
+    high = compute_opt225_basevol_abs_level_signal(cs_sign=1.0, vol_level=30.0)
+    assert high["value"] == -1.0
+    mid = compute_opt225_basevol_abs_level_signal(cs_sign=1.0, vol_level=18.0)
+    assert mid["value"] is None
+    sp = compute_opt225_iv_base_spread_abs_signal(cs_sign=1.0, vol_level=2.0)
+    assert sp["value"] == -1.0
+    ratio = compute_opt225_vol_signal(
+        mode="term_ratio",
+        cs_sign=1.0,
+        short_vol=20.0,
+        long_vol=10.0,
+        series_kind="atm_iv",
+    )
+    assert ratio["regime"] == "expanding"
+    assert ratio["value"] == -1.0
+    skew_hi = compute_opt225_skew_abs_level_signal(cs_sign=1.0, vol_level=4.0)
+    assert skew_hi["value"] == -1.0
+    skew_lo = compute_opt225_skew_abs_level_signal(cs_sign=1.0, vol_level=0.2)
+    assert skew_lo["value"] == 1.0
+    term_hi = compute_opt225_cm_term_abs_level_signal(cs_sign=1.0, vol_level=3.0)
+    assert term_hi["value"] == -1.0
+    term_ratio_hi = compute_opt225_cm_term_ratio_signal(
+        cs_sign=1.0, vol_level=0.20
+    )
+    assert term_ratio_hi["value"] == -1.0
+    term_ratio_equal = compute_opt225_cm_term_ratio_signal(
+        cs_sign=1.0, vol_level=0.0
+    )
+    assert term_ratio_equal["value"] is None
+    dlt_hi = compute_opt225_basevol_delta_abs_signal(cs_sign=1.0, vol_level=2.0)
+    assert dlt_hi["value"] == -1.0
+    dlt_lo = compute_opt225_basevol_delta_abs_signal(cs_sign=1.0, vol_level=-2.0)
+    assert dlt_lo["value"] == 1.0

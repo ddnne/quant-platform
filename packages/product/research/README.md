@@ -24,7 +24,7 @@ Research control plane (Phase 7 stays OFF): readiness attestation, experiment pl
 - **Historical catalog replay:** `research.occupancy_audit` remains available for explicit audit/replay only. It cannot populate the Pilot or Mass runtime inventory.
 - **`cost_models.py` / `options_225_vol_series.py`:** live math. Do not fake-split.
 
-CF period-net (`research.cf_mass_eval_job`, `POST /v1/mass-eval`) is auxiliary; `n_survivors` is not a pass. Offline `research.offline.bar_eval` / `multiyear` / `factory` are local helpers, not candidate SoT.
+CF period-net (`research.cf_mass_eval_job`) remains disabled; `n_survivors` is not a pass. Offline `research.offline.bar_eval` / `multiyear` are local helpers, not candidate SoT.
 
 ## Public entry (control plane)
 

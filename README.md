@@ -32,14 +32,11 @@ checkout した開発者向けです。通常利用者の実行手順ではな�
 # ロックどおり開発 extra を同期する
 uv sync --frozen --extra dev
 
-# 通常スイート。toolchain / live / platform を除く
-.venv/bin/python -m pytest tests/ -m "not toolchain and not live and not platform"
+# 通常スイート。toolchain / live を除く
+.venv/bin/python -m pytest tests/ -m "not toolchain and not live"
 
-# toolchain。live と platform は除く
-.venv/bin/python -m pytest tests/ -m "toolchain and not live and not platform"
-
-# platform マーカーだけを選び、--run-platform でオプトインする
-.venv/bin/python -m pytest tests/ -m platform --run-platform
+# toolchain。live は除く
+.venv/bin/python -m pytest tests/ -m "toolchain and not live"
 ```
 
 Cloudflare Builds 上のランナー専用です。Mac で実行する指示ではありません。実 Wrangler dry-run と Container イメージビルドを含みます。
@@ -48,4 +45,4 @@ Cloudflare Builds 上のランナー専用です。Mac で実行する指示で�
 scripts/verify_ci.sh
 ```
 
-既定の pytest-socket は、テスト実行中の通常 Python ソケット生成と `getaddrinfo` / `gethostbyname` を拒みます。Unix IPC は許します。すべての DNS を止めるわけではなく、コレクションや import、exec した子、native / Node / Worker までは覆いません。`-m platform` は該当テストだけを選び、`--run-platform` がオプトインです。`live` は CI から除外しますが収集スキップではなく、`QP_LIVE` だけではネットワークは開きません。非 live スイートは SQLite とプロセス統合を含みます。件数・壁時計・費用は保証しません。
+既定の pytest-socket は、テスト実行中の通常 Python ソケット生成と `getaddrinfo` / `gethostbyname` を拒みます。Unix IPC は許します。すべての DNS を止めるわけではなく、コレクションや import、exec した子、native / Node / Worker までは覆いません。`live` は CI から除外しますが収集スキップではなく、`QP_LIVE` だけではネットワークは開きません。非 live スイートは SQLite とプロセス統合を含みます。件数・壁時計・費用は保証しません。
