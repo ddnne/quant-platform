@@ -2290,39 +2290,97 @@ def test_timeout_kills_term_ignoring_group_before_failed_terminal(tmp_path: Path
 
 
 def test_root_exit_with_live_grandchild_is_stopped_before_terminal(tmp_path: Path) -> None:
-    terminal = threading.Event()
     grandchild_pid = tmp_path / "grandchild.pid"
-    late_write = tmp_path / "grandchild-write"
+    observed: list[dict[str, object]] = []
+    hold_read, hold_write = os.pipe()
+    worker = None
+    manager = None
+    try:
 
-    def runner(spec):
-        pid = os.fork()
-        if pid == 0:
-            signal.signal(signal.SIGTERM, signal.SIG_IGN)
-            time.sleep(0.8)
-            late_write.write_text("forbidden", encoding="utf-8")
-            os._exit(0)
-        grandchild_pid.write_text(str(pid), encoding="ascii")
-        return _manager_completed_result(spec)
+        def runner(spec):
+            os.close(hold_write)
+            ready_read, ready_write = os.pipe()
+            try:
+                pid = os.fork()
+            except BaseException:
+                os.close(ready_read)
+                os.close(ready_write)
+                os.close(hold_read)
+                raise
+            if pid == 0:
+                os.close(ready_read)
+                try:
+                    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+                    grandchild_pid.write_text(str(os.getpid()), encoding="ascii")
+                    os.write(ready_write, b"1")
+                except BaseException:
+                    os.close(ready_write)
+                    os.close(hold_read)
+                    os._exit(70)
+                os.close(ready_write)
+                try:
+                    os.read(hold_read, 1)
+                finally:
+                    os.close(hold_read)
+                    os._exit(0)
+            os.close(ready_write)
+            os.close(hold_read)
+            try:
+                os.set_blocking(ready_read, False)
+                deadline = time.monotonic() + 1
+                confirmed = b""
+                while time.monotonic() < deadline:
+                    try:
+                        confirmed = os.read(ready_read, 1)
+                    except BlockingIOError:
+                        confirmed = b""
+                    if confirmed:
+                        break
+                    time.sleep(0.005)
+            finally:
+                os.close(ready_read)
+            if confirmed != b"1":
+                raise RuntimeError("grandchild readiness was not confirmed")
+            return _manager_completed_result(spec)
 
-    manager = _job_manager(
-        runner,
-        on_terminal=terminal.set,
-        terminal_uploader=lambda *_args, **_kwargs: None,
-        process_term_grace_seconds=0.2,
-        process_kill_grace_seconds=0.5,
-    )
-    manager.submit(_job("a" * 64, "grandchild-boundary"))
-    deadline = time.monotonic() + 1
-    while not grandchild_pid.exists() and time.monotonic() < deadline:
-        time.sleep(0.005)
-    assert grandchild_pid.exists()
-    assert not terminal.wait(0.05)
-    assert terminal.wait(2)
-    pid = int(grandchild_pid.read_text(encoding="ascii"))
-    with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)
-    time.sleep(0.85)
-    assert not late_write.exists()
+        def terminal_uploader(*_args, **_kwargs):
+            try:
+                pid = int(grandchild_pid.read_text(encoding="ascii"))
+            except (OSError, ValueError):
+                observed.append({"pid": None, "dead": False})
+                return
+            try:
+                os.kill(pid, 0)
+                dead = False
+            except ProcessLookupError:
+                dead = True
+            observed.append({"pid": pid, "dead": dead})
+
+        spec = _job("a" * 64, "grandchild-boundary")
+        manager = _job_manager(
+            runner,
+            terminal_uploader=terminal_uploader,
+            process_term_grace_seconds=0.2,
+            process_kill_grace_seconds=0.5,
+        )
+        manager.submit(spec)
+        worker = _join_manager_worker(manager)
+        record = manager.status(spec.job_id)
+        assert observed
+        assert all(
+            entry.get("pid") is not None and entry.get("dead") is True
+            for entry in observed
+        )
+        assert record is not None
+        assert record["status"] == "COMPLETED"
+    finally:
+        for fd in (hold_write, hold_read):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if manager is not None:
+            _cancel_held_retries_after_worker(manager, worker)
 
 
 def test_cancel_uses_the_bounded_group_stop_path() -> None:

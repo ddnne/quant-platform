@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { reset } from "cloudflare:test";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CONTROLLED_PILOT_RUNNER_VERSION } from "../src/controlled_pilot_contract";
 import {
@@ -133,7 +133,11 @@ async function putJson(
 }
 
 describe("real Miniflare R2 lease CAS", () => {
+  let dateNowSpy: { mockRestore(): void } | undefined;
+
   afterEach(async () => {
+    dateNowSpy?.mockRestore();
+    dateNowSpy = undefined;
     await reset();
   });
 
@@ -220,6 +224,8 @@ describe("real Miniflare R2 lease CAS", () => {
   });
 
   it("directly seeded malformed CLAIMED objects cannot terminal-transition; exact closed lease can", async () => {
+    // Fixtures are built once before many real R2 awaits; production trustedNowSeconds() is Date.now()/1000, so now+skew+1 is a valid heartbeat if wall time moves ≥1s before GET.
+    dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.now());
     const closed = leaseDoc("owner-nonce-1", 1);
     const missing = { ...closed };
     delete (missing as { heartbeat_at?: number }).heartbeat_at;
