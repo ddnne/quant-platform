@@ -2,15 +2,15 @@
   "schema": "quant-platform-work-ledger/v1",
   "baseline_sha": "b121564feb9ebb9a5613fbb9ab05d5dd90f96105",
   "branch": "docs/historic-artifact-inventory",
-  "updated_at": "2026-09-12T02:03:00Z",
+  "updated_at": "2026-09-12T02:10:00Z",
   "lanes": {
     "source_delivered": {
       "status": "partial_main_and_followup",
       "scope": "pr103_through_pr136_merged_bounded_artifact_inventory_followup",
-      "notes": "PR134/135 source/fresh/main accepted. PR136 exact source native SUCCESS, normal merge and fresh-clone acceptance; merged-main native still running. Grok-authored partial historical artifact inventory is a separate documentation follow-up, not source/data/READY/Pilot closure. Historical failures and every HOLD remain recorded.",
+      "notes": "PR134/135/136 source/fresh/main accepted. PR137 is the pushed, unmerged documentation follow-up for a Grok-authored partial historical artifact inventory; its own final-source native acceptance remains pending. Historical failures and every HOLD remain recorded. Source/data/READY/Pilot are separate.",
       "latest_main_sha": "011c69efc50035744552ce4a594b23e7e439fe4a",
-      "latest_main_check_completed_at": null,
-      "latest_main_evidence": "https://github.com/ddnne/quant-platform/pull/136#issuecomment-5642685889",
+      "latest_main_check_completed_at": "2026-09-12T02:06:56Z",
+      "latest_main_evidence": "https://github.com/ddnne/quant-platform/pull/136#issuecomment-5642761538",
       "pull_request": "https://github.com/ddnne/quant-platform/pull/136",
       "implementation_sha": "0a5867f772d13ba683d3153fbb0d3d68b95d9fd2",
       "merged_sha": "011c69efc50035744552ce4a594b23e7e439fe4a",
@@ -18,10 +18,10 @@
       "required_check_app_id": 85455,
       "required_check_build_id": "5c600665-4d69-4334-b925-66d36c9a64a8",
       "required_check_id": 103478087812,
-      "merged_main_check_id": 103478257192,
+      "merged_main_check_id": 103480089225,
       "merged_main_build_id": "3cb321ad-ba64-4d46-8532-5bcbec5b2348",
-      "merged_main_check_status": "in_progress",
-      "merged_main_check_conclusion": null
+      "merged_main_check_status": "completed",
+      "merged_main_check_conclusion": "success"
     },
     "staging_deployed": {
       "status": "not_this_branch",
@@ -122,7 +122,8 @@
     },
     "5_ci_deploy_entrypoints": {
       "research_label_assertions": {
-        "status": "pr136_source_fresh_accepted_main_native_pending",
+        "status": "pr136_source_fresh_main_native_accepted",
+        "main_acceptance": "Main011c69ef latest completed app85455/check103480089225/build3cb321ad SUCCESS02:06:56Z;3582Python476.42s+4toolchain10.36s/all8Workers/remote Containers/generated-clean. Terminal1789178813994/cursorWzksNDU2OV0/truncated=false; deploy true. https://github.com/ddnne/quant-platform/pull/136#issuecomment-5642761538 . Earlier running checkpoints below are historical, not the current state. No rollout or HOLD bypass.",
         "acceptance": "Exacte0629fb9 app85455/check103478087812/build5c600665 SUCCESS01:52:10Z;3582Python558.12s+4toolchain14.29s/all8Workers/remote Containers/generated-clean. Terminal1789177928377/cursorWzksNDc3Ml0/truncated=false; deploy true. Normal merge011c69ef01:53:22Z; independent fresh clone/source-tree-equal/clean/unpushed0,66representative Python tests PASS with default socket guard and explicit retained socket flags; secret scan PASS. Completed branch removed locally/absent remotely. https://github.com/ddnne/quant-platform/pull/136#issuecomment-5642676117 and #issuecomment-5642685889 . Main native3cb321ad running. Separate Mass68761457 passed474Node+22runtime/build then intentional DEPLOYMENT HOLD; no retry/bypass.",
         "implementation_sha": "0a5867f772d13ba683d3153fbb0d3d68b95d9fd2",
         "evidence": "A07 four-test-file slice: remove repeated fixed labels, retain representative shared-writer labels and all numeric/candidate/authorization behavior. Grok authored/self-reviewed; independent Codex review accepted d3f7717b1683b63226394ee300c34063781f2479c81f5a0cad30015d8f5ba52c. Python83PASS25.09s, Mass474Node13.99s+22workerd0.933s and tscPASS. Latest-main integration preserved exact source diff; adjacent A07/C16 audit-row merge conflict resolved retaining both reviewed records. Details/limitations in test_reduction_ledger.json. Native/source/fresh/main acceptance pending, no live changes."
@@ -323,7 +324,7 @@
       "cross_review_protocol": "Grok implements and reviews; Codex independently reviews actual diffs and adjudicates concrete findings against code/behavior. Neither approval replaces tests/native CI. No blanket restoration of name/shape tests or unanimous-approval requirement."
     },
     "8_rollout_and_research_go": { "status": "pending" },
-    "9_push_remote_and_fresh_clone_verify": {"status":"pr134_source_fresh_main_accepted_pr135_source_fresh_accepted_main_native_running_a07_pending"}
+    "9_push_remote_and_fresh_clone_verify": {"status":"pr134_pr135_pr136_source_fresh_main_accepted_pr137_documentation_followup_native_pending"}
   },
   "operational_facts": [
     {"id":"projection_sync_ready_live_read_20260912T0125Z","observed_at":"2026-09-12T01:25:07Z","fact":"Read-only projection/B0/READY, followed immediately by sync/Ops metadata: projection STALE at same Aug21 generationprojgen-ef18b4f86ee946048161d25e2a30a2a8, refresh_attempt=false/refresh_success=false, age1860857s; B0UNKNOWN. READY tool snapshot=null, no published generation bound. Source cursor2899842, applied_feed_cursor=null and all23 applied/ready_pinned cursors null. JQ14971 PASS at2026-09-12T10:15:21+09:00; Ops22COMPLETE/4PARTIAL, raw31192attempts/28974acquired/complete. These are Ops reports, not new trusted reproof or CoverageV3 acceptance. Full MCP schema parity/B4/Access/deployment/DLQ were not remeasured; no data rows/download or mutations."},
