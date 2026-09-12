@@ -102,6 +102,20 @@ describe("personal snapshot and batch HTTP routes", () => {
     );
     expect(response.status).toBe(401);
     expect(submit).not.toHaveBeenCalled();
+    const candidate = vi.fn();
+    const gated = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/receipt-candidate", {
+        method: "POST",
+        body: JSON.stringify({
+          job_id: "cand-1",
+          segments: [{ dataset: "equities_bars_daily", segment_id: "2023-01" }],
+        }),
+      }),
+      env(),
+      { submitPersonalReceiptCandidate: candidate },
+    );
+    expect(gated.status).toBe(401);
+    expect(candidate).not.toHaveBeenCalled();
   });
 
   it("rejects snapshot POST bodies over 8 KiB and chunked input", async () => {

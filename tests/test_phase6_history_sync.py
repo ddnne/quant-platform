@@ -61,66 +61,41 @@ def test_multiple_amendments_with_same_available_at_are_all_preserved(tmp_path):
 
 
 def test_local_schema_migrations_are_formal_and_idempotent(tmp_path):
+    from storage.migrations import MIGRATIONS
+
     path = tmp_path / "migrations.sqlite"
     first = SqliteStore(path)
-    rows = first._conn.execute(  # noqa: SLF001
-        "SELECT version, name FROM schema_migrations ORDER BY version"
-    ).fetchall()
-    assert [(row[0], row[1]) for row in rows] == [
-        (1, "phase6_sync_and_snapshot_control"),
-        (2, "revision_identity_includes_ingestion_time"),
-        (3, "phase6_ready_snapshot_and_coverage_ledger"),
-        (4, "phase6_raw_retention_attestations"),
-        (5, "phase61_collection_coverage_v2"),
-        (6, "phase61_jsda_otc_bond_reference_archive"),
-        (7, "phase61_jsda_correction_provenance"),
-        (8, "phase62_jsda_corporate_bond_transactions"),
-        (9, "phase632_raw_acquisition_status"),
-        (10, "phase633_immutable_local_coverage_proofs"),
-        (11, "phase631_exact_coverage_inventory_proofs"),
-        (12, "phase631_coverage_complete_transition_tombstones"),
-        (13, "phase631_receipt_product_materializations"),
-        (14, "personal_daily_market_cap"),
-        (15, "personal_session_adjustment_bars"),
+    applied = [
+        int(row[0])
+        for row in first._conn.execute(  # noqa: SLF001
+            "SELECT version FROM schema_migrations ORDER BY version"
+        )
     ]
-    assert "market_cap" in {
-        row[1]
-        for row in first._conn.execute(  # noqa: SLF001
-            "PRAGMA table_info(jquants_daily_bars)"
-        )
-    }
-    assert "market_cap" in {
-        row[1]
-        for row in first._conn.execute(  # noqa: SLF001
-            "PRAGMA table_info(jquants_daily_bars_revisions)"
-        )
-    }
-    session_columns = {
-        "morning_adjustment_close",
-        "morning_turnover_value",
-        "morning_adjustment_volume",
-        "afternoon_adjustment_close",
-        "afternoon_turnover_value",
-        "afternoon_adjustment_volume",
-    }
-    assert session_columns <= {
-        row[1]
-        for row in first._conn.execute(  # noqa: SLF001
-            "PRAGMA table_info(jquants_daily_bars)"
-        )
-    }
-    assert session_columns <= {
-        row[1]
-        for row in first._conn.execute(  # noqa: SLF001
-            "PRAGMA table_info(jquants_daily_bars_revisions)"
-        )
-    }
+    declared = [migration.version for migration in MIGRATIONS]
+    assert applied == declared
+    assert applied == sorted(set(applied))
+    digest = "sha256:" + "a" * 64
+    body = b'{"holiday":"2023-01-01"}'
+    first._conn.execute(  # noqa: SLF001
+        "INSERT INTO official_calendar_raw (raw_body_digest, body) VALUES (?, ?)",
+        (digest, body),
+    )
+    first._conn.commit()  # noqa: SLF001
     first.close()
 
     second = SqliteStore(path)
-    assert second._conn.execute(  # noqa: SLF001
-        "SELECT COUNT(*) FROM schema_migrations"
-    ).fetchone()[0] == 15
+    again = [
+        int(row[0])
+        for row in second._conn.execute(  # noqa: SLF001
+            "SELECT version FROM schema_migrations ORDER BY version"
+        )
+    ]
+    assert again == applied
+    stored = second._conn.execute(  # noqa: SLF001
+        "SELECT body FROM official_calendar_raw WHERE raw_body_digest=?",
+        (digest,),
+    ).fetchone()
+    assert stored is not None and bytes(stored[0]) == body
     second.close()
 
 

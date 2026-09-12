@@ -7,17 +7,16 @@ import json
 import sqlite3
 from contextlib import nullcontext
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Iterator, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from core.execution import (
     close_as_of,
     morning_close_as_of,
 )
 from data_contracts import coverage_contract_for
-from data_contracts.identity import natural_key as contract_natural_key
 from pit import PitError
 
 from pit.read_clock import (
@@ -36,10 +35,9 @@ from storage.receipt_crypto import (
     PRODUCTION_RECEIPT_ENVIRONMENT,
 )
 from storage.coverage_ledger import CollectionReceipt
-from storage.schema import CATALOG_CODE_SQL
 from ops.receipt_product import (
-    iter_observed_segment_product_rows,
-    product_artifact_digest_ordered,
+    catalog_owned_product_row_digests,
+    measure_owned_product_artifact_body,
     verify_full_segment_product_materialization,
 )
 from storage.verified_receipt import require_verified_collection_closure
@@ -53,18 +51,6 @@ def _calendar_dates(start: str, end: str) -> tuple[str, ...]:
         values.append(cursor.isoformat())
         cursor += timedelta(days=1)
     return tuple(values)
-
-
-def _payload_session_price(payload: Mapping[str, Any], keys: tuple[str, ...]) -> float | None:
-    for key in keys:
-        value = payload.get(key)
-        try:
-            price = float(value)
-        except (TypeError, ValueError):
-            continue
-        if price == price and price not in (float("inf"), float("-inf")) and price > 0.0:
-            return price
-    return None
 
 
 def canonical_digest(payload: Mapping[str, Any] | Sequence[Any] | str) -> str:
@@ -150,8 +136,9 @@ def _verify_publication_on_authenticated_mirror(
     versioned daily universe from the candidate snapshot, enumerates every
     calendar/master/bar/TOPIX/financials key needed by that universe and its
     longest lookback, enforces ``available_at <= decision as_of``, and then
-    requires every selected key to belong to a current v4 signed collection
-    closure whose structured digest reproduces from the local database.
+    requires every selected version digest to belong to a verified v4 signed
+    collection closure whose immutable artifact is catalog-owned on CURRENT
+    and REVISION rows.
     Catalog and product scans are closure-local: they never accept a caller
     clock, token, or path, and they never escape as rows or connections.
     """
@@ -164,6 +151,19 @@ def _verify_publication_on_authenticated_mirror(
             "exact-four plans must share one governed universe period"
         )
     period_start, period_end = next(iter(periods))
+    from research.research_data_profile import (
+        PROFILE_VERSION_V3,
+        ResearchDataProfile,
+    )
+
+    if len(binding.profiles) != 4 or any(
+        type(profile) is not ResearchDataProfile
+        or profile.profile_version != PROFILE_VERSION_V3
+        for profile in binding.profiles
+    ):
+        raise MassResearchDisabledError(
+            "controlled READY requires four research-data-profile/v3 consumers"
+        )
     max_lookback = max(
         int(scope["required_lookback_trading_days"])
         for profile in binding.profiles
@@ -176,10 +176,6 @@ def _verify_publication_on_authenticated_mirror(
             "exact-four PIT verifier dataset closure drifted"
         )
 
-    calendar_start = (
-        date.fromisoformat(period_start)
-        - timedelta(days=max(int(max_lookback) * 3, 14))
-    ).isoformat()
     from scripts.sync_d1_to_sqlite import (
         _authenticated_applied_mirror_connection_identity,
         _canonical_applied_mirror_identity_json,
@@ -216,9 +212,11 @@ def _verify_publication_on_authenticated_mirror(
                     period_end: str,
                     as_of_for_day: Mapping[str, str],
                 ):
-                    from pit.universe_pit import _universe_day_slices_from_connection
+                    from pit.complete_master import (
+                        _complete_master_day_slices_from_connection,
+                    )
 
-                    return _universe_day_slices_from_connection(
+                    return _complete_master_day_slices_from_connection(
                         conn,
                         period_start=period_start,
                         period_end=period_end,
@@ -285,20 +283,6 @@ def _verify_publication_on_authenticated_mirror(
                 "raw_bytes",
                 "committed_at",
             }
-            product_row_fields = (
-                "source",
-                "dataset",
-                "natural_key",
-                "event_time",
-                "available_at",
-                "ingested_at",
-                "payload",
-                "raw_payload",
-            )
-            market_datasets = frozenset(
-                {"markets_calendar", "indices_bars_daily_topix"}
-            )
-
             def table_columns(table: str) -> set[str]:
                 return {
                     str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")
@@ -316,6 +300,12 @@ def _verify_publication_on_authenticated_mirror(
                 if not catalog_required <= columns:
                     raise PitError(
                         "PIT dependency scope requires canonical jquants_records columns"
+                    )
+                revision_columns = table_columns("jquants_records_revisions")
+                if not catalog_required <= revision_columns:
+                    raise PitError(
+                        "PIT dependency scope requires canonical "
+                        "jquants_records_revisions columns"
                     )
                 placeholders = ",".join("?" for _ in datasets)
                 if not receipt_required <= table_columns("collection_receipts"):
@@ -390,118 +380,6 @@ def _verify_publication_on_authenticated_mirror(
                     raw_retention_manifests,
                 )
 
-            def iter_catalog_product_rows(
-                dataset: str,
-                event_start: str,
-                event_end: str,
-                codes: Sequence[str] = (),
-                *,
-                available_at_cutoff: str | None = None,
-            ) -> Iterator[dict[str, str]]:
-                vis_sql = [
-                    "event_time IS NOT NULL",
-                    "available_at IS NOT NULL",
-                    "ingested_at IS NOT NULL",
-                ]
-                wanted = [str(code).strip() for code in codes if str(code).strip()]
-                fields = ",".join(product_row_fields)
-                sql = (
-                    f"SELECT {fields} FROM jquants_records "
-                    "WHERE source='jquants' AND dataset=? "
-                    "AND substr(event_time, 1, 10) >= ? "
-                    "AND substr(event_time, 1, 10) <= ? AND "
-                    + " AND ".join(vis_sql)
-                )
-                params: list[Any] = [
-                    dataset,
-                    str(event_start)[:10],
-                    str(event_end)[:10],
-                ]
-                if wanted and dataset not in market_datasets:
-                    placeholders = ",".join("?" for _ in wanted)
-                    sql += f" AND {CATALOG_CODE_SQL} IN ({placeholders})"
-                    params.extend(wanted)
-                sql += " ORDER BY source, dataset, natural_key"
-                for raw in conn.execute(sql, params):
-                    row = {field: raw[field] for field in product_row_fields}
-                    if any(type(value) is not str for value in row.values()):
-                        raise PitError(
-                            f"{dataset} product row fields must be exact text"
-                        )
-                    available_cutoff = (
-                        available_at_cutoff or proof_clock.decision_at
-                    )
-                    event_at = _as_datetime(
-                        row["event_time"], f"{dataset}.event_time"
-                    )
-                    available_at = _as_datetime(
-                        row["available_at"], f"{dataset}.available_at"
-                    )
-                    ingested_at = _as_datetime(
-                        row["ingested_at"], f"{dataset}.ingested_at"
-                    )
-                    observed = _as_datetime(
-                        proof_clock.observed_through, "observed_through"
-                    )
-                    cutoff = _as_datetime(available_cutoff, "available_at_cutoff")
-                    if available_at_cutoff is None:
-                        decision = _as_datetime(
-                            proof_clock.decision_at, "decision_at"
-                        )
-                        if (
-                            event_at > decision
-                            or available_at > decision
-                            or ingested_at > observed
-                        ):
-                            continue
-                    elif available_at > cutoff or ingested_at > observed:
-                        continue
-                    yield row
-
-            def iter_catalog_fact_pages(
-                dataset: str,
-                event_start: str,
-                event_end: str,
-                codes: Sequence[str] = (),
-                page_size: int = 64,
-                *,
-                available_at_cutoff: str | None = None,
-            ) -> Iterator[tuple[dict[str, Any], ...]]:
-                if not isinstance(page_size, int) or page_size < 1:
-                    raise PitError("READY catalog page size is invalid")
-                page: list[dict[str, Any]] = []
-                for row in iter_catalog_product_rows(
-                    dataset,
-                    event_start,
-                    event_end,
-                    codes,
-                    available_at_cutoff=available_at_cutoff,
-                ):
-                    payload_raw: Any = row["payload"]
-                    try:
-                        payload = json.loads(payload_raw) if payload_raw else None
-                    except json.JSONDecodeError as exc:
-                        raise PitError(f"{dataset} payload is not JSON") from exc
-                    if not isinstance(payload, Mapping):
-                        raise PitError(f"{dataset} payload is missing")
-                    page.append(
-                        {
-                            "natural_key": row["natural_key"],
-                            "event_date": str(row["event_time"])[:10],
-                            "event_time": row["event_time"],
-                            "available_at": row["available_at"],
-                            "ingested_at": row["ingested_at"],
-                            "payload": {
-                                str(key): value for key, value in payload.items()
-                            },
-                        }
-                    )
-                    if len(page) >= page_size:
-                        yield tuple(page)
-                        page.clear()
-                if page:
-                    yield tuple(page)
-
             as_of_for_day = {
                 day: morning_close_as_of(day)
                 for day in _calendar_dates(period_start, period_end)
@@ -517,15 +395,6 @@ def _verify_publication_on_authenticated_mirror(
                 period_start=period_start,
                 period_end=period_end,
             )
-            member_codes = tuple(
-                sorted(
-                    {
-                        code
-                        for _day, codes in resolved_universe.decision_memberships
-                        for code in codes
-                    }
-                )
-            )
             (
                 collection_receipts,
                 product_materializations,
@@ -533,297 +402,18 @@ def _verify_publication_on_authenticated_mirror(
                 raw_retention_manifests,
             ) = load_receipt_scope(required_datasets)
 
-            def _as_datetime(value: Any, label: str) -> datetime:
-                try:
-                    parsed = datetime.fromisoformat(
-                        str(value).replace("Z", "+00:00")
-                    )
-                except (TypeError, ValueError) as exc:
-                    raise MassResearchDisabledError(
-                        f"PIT dependency scope {label} is malformed"
-                    ) from exc
-                if parsed.tzinfo is None:
-                    raise MassResearchDisabledError(
-                        f"PIT dependency scope {label} lacks timezone"
-                    )
-                return parsed
-
-            def _payload_value(payload: Mapping[str, Any], *names: str) -> str:
-                for name in names:
-                    value = payload.get(name)
-                    if value is not None and str(value).strip():
-                        return str(value).strip()
-                return ""
-
-            def _row_code(row: Mapping[str, Any]) -> str:
-                return _payload_value(row["payload"], "Code", "code")
-
-            def _compact_fact(dataset_id: str, fact: Mapping[str, Any]) -> dict[str, Any]:
-                payload = fact["payload"]
-                expected_key = contract_natural_key(payload, dataset_id)
-                if (
-                    expected_key.startswith("hash:sha256:")
-                    or fact.get("natural_key") != expected_key
-                ):
-                    raise MassResearchDisabledError(
-                        f"{dataset_id} natural key is noncanonical"
-                    )
-                ingested = str(fact.get("ingested_at") or "")
-                if not ingested or _as_datetime(
-                    ingested, f"{dataset_id}.ingested_at"
-                ) > _as_datetime(
-                    proof_clock.observed_through, "observed_through"
-                ):
-                    raise MassResearchDisabledError(
-                        f"{dataset_id} fact ingested after snapshot observed_through"
-                    )
-                return {
-                    "payload": payload,
-                    "natural_key": str(fact["natural_key"]),
-                    "event_date": str(fact["event_date"])[:10],
-                    "event_at": _as_datetime(
-                        fact["event_time"], f"{dataset_id}.event_time"
-                    ),
-                    "available_at": _as_datetime(
-                        fact["available_at"], f"{dataset_id}.available_at"
-                    ),
-                    "ingested_at": ingested,
-                }
-
-            def _iter_dataset_facts(
-                dataset_id: str,
-                *,
-                codes: Sequence[str] = (),
-                available_at_cutoff: str | None = None,
-            ):
-                try:
-                    for page in iter_catalog_fact_pages(
-                        dataset_id,
-                        calendar_start,
-                        period_end,
-                        codes,
-                        available_at_cutoff=available_at_cutoff,
-                    ):
-                        for fact in page:
-                            yield _compact_fact(dataset_id, fact)
-                except PitError as exc:
-                    raise MassResearchDisabledError(str(exc)) from exc
-
-            calendar_by_date: dict[str, dict[str, Any]] = {}
-            for row in _iter_dataset_facts("markets_calendar"):
-                day = row["event_date"]
-                if day in calendar_by_date:
-                    raise MassResearchDisabledError(
-                        f"markets_calendar duplicates natural date {day}"
-                    )
-                calendar_by_date[day] = row
-
-            start_clock = _as_datetime(
-                morning_close_as_of(period_start), "period_start"
+            from pit.compiled_dependency_scope import (
+                CompiledControlledSelection,
+                _select_compiled_dependency_scope,
             )
-            prior_trading = sorted(
-                day
-                for day, row in calendar_by_date.items()
-                if day < period_start
-                and row["available_at"] <= start_clock
-                and _payload_value(
-                    row["payload"], "HolidayDivision", "HolDiv", "holiday_division"
-                )
-                == "1"
+            from pit.scoped_selection import (
+                _owned_scoped_research_owner_from_verified_witness,
             )
-            if len(prior_trading) < max_lookback:
-                raise MassResearchDisabledError(
-                    "PIT dependency scope lacks the exact calendar lookback: "
-                    f"visible={len(prior_trading)}, required={max_lookback}"
-                )
-            lookback_dates = tuple(prior_trading[-max_lookback:])
-            scope_start = lookback_dates[0] if lookback_dates else period_start
 
-            cursor = datetime.fromisoformat(scope_start).date()
-            end_date = datetime.fromisoformat(period_end).date()
-            calendar_dates: list[str] = []
-            while cursor <= end_date:
-                calendar_dates.append(cursor.isoformat())
-                cursor = cursor.fromordinal(cursor.toordinal() + 1)
-            selected_keys: dict[str, set[str]] = {
-                dataset_id: set() for dataset_id in required_datasets
-            }
-            selected_event_dates: dict[str, dict[str, str]] = {
+            verified_row_backings: dict[str, dict[str, list[tuple[str, str]]]] = {
                 dataset_id: {} for dataset_id in required_datasets
             }
-            trading_dates: list[str] = []
-            for day in calendar_dates:
-                row = calendar_by_date.get(day)
-                if row is None:
-                    raise MassResearchDisabledError(
-                        f"markets_calendar missing exact scope date {day}"
-                    )
-                if row["available_at"] > _as_datetime(
-                    morning_close_as_of(day), day
-                ):
-                    raise MassResearchDisabledError(
-                        f"markets_calendar {day} is late at decision time"
-                    )
-                selected_keys["markets_calendar"].add(row["natural_key"])
-                selected_event_dates["markets_calendar"][row["natural_key"]] = row[
-                    "event_date"
-                ]
-                if _payload_value(
-                    row["payload"], "HolidayDivision", "HolDiv", "holiday_division"
-                ) == "1":
-                    trading_dates.append(day)
-            in_period_trading = tuple(
-                day for day in trading_dates if period_start <= day <= period_end
-            )
-            if tuple(resolved_universe.membership_by_date) != in_period_trading:
-                raise MassResearchDisabledError(
-                    "resolved universe decision dates do not equal the exact calendar"
-                )
-            first_membership = resolved_universe.codes_for(in_period_trading[0])
-
-            master_by_date: dict[str, dict[str, dict[str, Any]]] = {}
-            for row in _iter_dataset_facts("equities_master", codes=member_codes):
-                code = _row_code(row)
-                if code:
-                    master_by_date.setdefault(row["event_date"], {})[code] = row
-            fins_by_code: dict[str, list[dict[str, Any]]] = {}
-            for row in _iter_dataset_facts("fins_summary", codes=member_codes):
-                code = _row_code(row)
-                if code:
-                    fins_by_code.setdefault(code, []).append(row)
-            bars_by_day_code: dict[tuple[str, str], list[dict[str, Any]]] = {}
-            for row in _iter_dataset_facts(
-                "equities_bars_daily",
-                codes=member_codes,
-                available_at_cutoff=proof_clock.observed_through,
-            ):
-                code = _row_code(row)
-                if code:
-                    bars_by_day_code.setdefault((row["event_date"], code), []).append(row)
-            topix_by_day: dict[str, list[dict[str, Any]]] = {}
-            for row in _iter_dataset_facts("indices_bars_daily_topix"):
-                topix_by_day.setdefault(row["event_date"], []).append(row)
-
-            for day in in_period_trading:
-                decision_clock = _as_datetime(morning_close_as_of(day), day)
-                members = resolved_universe.codes_for(day)
-                visible_dates = [stamp for stamp in master_by_date if stamp <= day]
-                if not visible_dates:
-                    raise MassResearchDisabledError(
-                        f"equities_master missing daily PIT snapshot for {day}"
-                    )
-                latest_snapshot = max(visible_dates)
-                master_by_code = {
-                    code: row
-                    for code, row in master_by_date[latest_snapshot].items()
-                    if row["event_at"] <= decision_clock
-                    and row["available_at"] <= decision_clock
-                }
-                missing_master = sorted(set(members) - set(master_by_code))
-                if missing_master:
-                    raise MassResearchDisabledError(
-                        f"equities_master missing resolved members at {day}: "
-                        f"{missing_master[:5]}"
-                    )
-                for code in members:
-                    selected_keys["equities_master"].add(
-                        master_by_code[code]["natural_key"]
-                    )
-                    selected_event_dates["equities_master"][
-                        master_by_code[code]["natural_key"]
-                    ] = master_by_code[code]["event_date"]
-                    fins = [
-                        row
-                        for row in fins_by_code.get(code, ())
-                        if row["event_at"] <= decision_clock
-                        and row["available_at"] <= decision_clock
-                    ]
-                    if not fins:
-                        raise MassResearchDisabledError(
-                            f"fins_summary missing or late for {code} at {day}"
-                        )
-                    latest_fins = max(
-                        fins,
-                        key=lambda row: (
-                            row["event_at"],
-                            row["available_at"],
-                            row["natural_key"],
-                        ),
-                    )
-                    selected_keys["fins_summary"].add(latest_fins["natural_key"])
-                    selected_event_dates["fins_summary"][latest_fins["natural_key"]] = (
-                        latest_fins["event_date"]
-                    )
-            observed_clock = _as_datetime(
-                proof_clock.observed_through, "observed_through"
-            )
-            for day in trading_dates:
-                decision_clock = _as_datetime(close_as_of(day), day)
-                members = (
-                    resolved_universe.codes_for(day)
-                    if day >= period_start
-                    else first_membership
-                )
-                for code in members:
-                    matches = [
-                        row
-                        for row in bars_by_day_code.get((day, code), ())
-                        if row["available_at"] <= observed_clock
-                        and _as_datetime(
-                            row["ingested_at"], "equities_bars_daily.ingested_at"
-                        )
-                        <= _as_datetime(
-                            proof_clock.observed_through, "observed_through"
-                        )
-                        and _payload_session_price(
-                            row["payload"],
-                            ("MAdjC", "MorningAdjustmentClose", "morning_adjustment_close"),
-                        )
-                        is not None
-                        and _payload_session_price(
-                            row["payload"],
-                            (
-                                "AAdjC",
-                                "AfternoonAdjustmentClose",
-                                "afternoon_adjustment_close",
-                            ),
-                        )
-                        is not None
-                    ]
-                    if len(matches) != 1:
-                        raise MassResearchDisabledError(
-                            "equities_bars_daily historical MAdjC/AAdjC closure "
-                            f"missing for {code}/{day}: rows={len(matches)}"
-                        )
-                    selected_keys["equities_bars_daily"].add(
-                        matches[0]["natural_key"]
-                    )
-                    selected_event_dates["equities_bars_daily"][
-                        matches[0]["natural_key"]
-                    ] = matches[0]["event_date"]
-                topix = [
-                    row
-                    for row in topix_by_day.get(day, ())
-                    if row["event_at"] <= decision_clock
-                    and row["available_at"] <= decision_clock
-                ]
-                if len(topix) != 1:
-                    raise MassResearchDisabledError(
-                        "indices_bars_daily_topix exact trading-date closure "
-                        f"missing/late for {day}: rows={len(topix)}"
-                    )
-                selected_keys["indices_bars_daily_topix"].add(
-                    topix[0]["natural_key"]
-                )
-                selected_event_dates["indices_bars_daily_topix"][
-                    topix[0]["natural_key"]
-                ] = topix[0]["event_date"]
-
-            verified_segments: dict[
-                str, list[tuple[str, str, str, str]]
-            ] = {
-                dataset_id: [] for dataset_id in required_datasets
-            }
+            witness: set[str] = set()
             for raw in collection_receipts:
                 stored = dict(raw)
                 dataset_id = str(stored["dataset"])
@@ -887,22 +477,22 @@ def _verify_publication_on_authenticated_mirror(
                         if row.get("dataset") == closure.dataset
                         and row.get("run_id") == closure.run_id
                     ]
-                    # A receipt attests the complete governed source segment,
-                    # not the smaller set of natural keys selected by this
-                    # plan's PIT universe. Reconstruct that full artifact
-                    # under segment identity and the authenticated mirror
-                    # observation instant only. Trading-decision cutoff and
-                    # daily PIT membership stay on dependency-key selection.
-                    observed_count, observed_product_digest, observed_bytes = (
-                        product_artifact_digest_ordered(
-                            iter_observed_segment_product_rows(
-                                conn,
-                                source="jquants",
-                                dataset=dataset_id,
-                                segment_start=closure.segment_start,
-                                segment_end=closure.segment_end,
-                                observed_through=proof_clock.observed_through,
-                            )
+                    owned_digests = catalog_owned_product_row_digests(
+                        conn,
+                        source="jquants",
+                        dataset=dataset_id,
+                        segment_start=closure.segment_start,
+                        segment_end=closure.segment_end,
+                        observed_through=proof_clock.observed_through,
+                        tables=(
+                            "jquants_records",
+                            "jquants_records_revisions",
+                        ),
+                    )
+                    observed_count, observed_product_digest, observed_bytes, row_digests = (
+                        measure_owned_product_artifact_body(
+                            product.get("artifact_body"),
+                            owned_digests=owned_digests,
                         )
                     )
                     verify_full_segment_product_materialization(
@@ -918,40 +508,65 @@ def _verify_publication_on_authenticated_mirror(
                     )
                 except Exception:
                     continue
-                verified_segments[dataset_id].append(
-                    (
-                        closure.segment_start[:10],
-                        closure.segment_end[:10],
-                        closure.receipt_digest,
-                        closure.structured_digest,
-                    )
-                )
+                backings = verified_row_backings[dataset_id]
+                pair = (closure.receipt_digest, closure.structured_digest)
+                for digest in row_digests:
+                    bucket = backings.setdefault(digest, [])
+                    if pair not in bucket:
+                        bucket.append(pair)
+                if dataset_id in {"equities_bars_daily", "fins_summary"}:
+                    witness.update(row_digests)
+
+            if not conn.in_transaction:
+                conn.execute("BEGIN")
+            owner = _owned_scoped_research_owner_from_verified_witness(
+                conn, witness=frozenset(witness)
+            )
+            selected_scope = _select_compiled_dependency_scope(
+                conn,
+                compiled=CompiledControlledSelection(
+                    period_start=period_start,
+                    period_end=period_end,
+                    lookback_trading_days=max_lookback,
+                    profile_digest=binding.profile_digest,
+                    feature_consumers=tuple(
+                        profile.feature_consumers() for profile in binding.profiles
+                    ),
+                ),
+                observed_through=proof_clock.observed_through,
+                slices=slices,
+                resolved_universe=resolved_universe,
+                scoped_owner=owner,
+            )
+            selected_keys = {
+                dataset_id: set(selected_scope.selected_keys[dataset_id])
+                for dataset_id in required_datasets
+            }
+            selected_digests = {
+                dataset_id: set(selected_scope.selected_versions[dataset_id])
+                for dataset_id in required_datasets
+            }
 
             entries: list[dict[str, Any]] = []
             for dataset_id in required_datasets:
                 selected = selected_keys[dataset_id]
-                if not selected:
+                selected_versions = selected_digests[dataset_id]
+                if not selected or not selected_versions:
                     raise MassResearchDisabledError(
                         f"PIT dependency scope selected no keys for {dataset_id}"
                     )
                 used_receipts: set[str] = set()
                 used_products: set[str] = set()
-                for natural_key in selected:
-                    event_date = selected_event_dates[dataset_id][natural_key]
-                    matches = [
-                        (receipt_digest, product_digest)
-                        for segment_start, segment_end, receipt_digest, product_digest
-                        in verified_segments[dataset_id]
-                        if segment_start <= event_date <= segment_end
-                    ]
+                for digest in selected_versions:
+                    matches = verified_row_backings[dataset_id].get(digest, ())
                     if not matches:
                         raise MassResearchDisabledError(
-                            "PIT dependency scope natural key is not bound to a "
-                            f"current signed receipt: {dataset_id}/{natural_key}"
+                            "PIT dependency scope selected version is not bound to a "
+                            f"current signed receipt: {dataset_id}"
                         )
-                    receipt_digest, product_digest = sorted(matches)[-1]
-                    used_receipts.add(receipt_digest)
-                    used_products.add(product_digest)
+                    for receipt_digest, product_digest in matches:
+                        used_receipts.add(receipt_digest)
+                        used_products.add(product_digest)
                 entries.append(
                     {
                         "dataset_id": dataset_id,

@@ -67,6 +67,12 @@ AUTHORITY_SCHEMA_REL = (
 PROTOCOL_PY_REL = (
     Path("packages") / "product" / "execution" / "exact_four_protocol.py"
 )
+ATTESTATION_PY_REL = (
+    Path("packages")
+    / "research_runtime"
+    / "paper_runtime"
+    / "readiness_attestation.py"
+)
 REGISTRY_RAW_TS_REL = (
     Path("platform")
     / "workers"
@@ -817,6 +823,31 @@ def render_protocol_schema_pins(
     return text.encode("utf-8")
 
 
+def render_readiness_attestation_pins(contract: dict[str, Any]) -> bytes:
+    pins = {
+        "EXACT_FOUR_PROFILE_DIGEST": str(contract["profile_digest"]),
+        "EXACT_FOUR_PLAN_SET_DIGEST": str(contract["plan_set_digest"]),
+        "EXACT_FOUR_CLOSURE_DIGEST": str(
+            contract["dependency_closure_digest"]
+        ),
+        "EXACT_FOUR_UNIVERSE_RULE_DIGEST": str(
+            contract["universe_rule_digest"]
+        ),
+        "CONTROLLED_FILL_CONTRACT_DIGEST": str(
+            contract["fill_contract_digest"]
+        ),
+    }
+    text = (ROOT / ATTESTATION_PY_REL).read_text(encoding="utf-8")
+    for name, digest in pins.items():
+        pattern = re.compile(
+            rf"({re.escape(name)} = \(\n    \")sha256:[0-9a-f]{{64}}(\"\n\))"
+        )
+        text, count = pattern.subn(rf"\g<1>{digest}\2", text, count=1)
+        if count != 1:
+            raise RuntimeError(f"cannot retarget {name} in {ATTESTATION_PY_REL}")
+    return text.encode("utf-8")
+
+
 def canonical_authority_result_schema_errors() -> list[str]:
     import importlib
     import sys
@@ -917,6 +948,9 @@ def write_artifacts(*, check: bool) -> int:
         str(PROTOCOL_PY_REL): render_protocol_schema_pins(
             authority_schema=authority_schema,
             result_schema=plan_artifacts[str(RESULT_MANIFEST_SCHEMA_REL)],
+        ),
+        str(ATTESTATION_PY_REL): render_readiness_attestation_pins(
+            contract
         ),
         str(CONTRACT_REL): render_contract(contract),
         str(REGISTRY_RAW_TS_REL): render_registry_raw_ts(contract),

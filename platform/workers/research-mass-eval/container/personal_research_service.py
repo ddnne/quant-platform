@@ -62,6 +62,12 @@ from personal_option_sidecar_job import (
     PersonalOptionSidecarJobSpec,
     execute_option_sidecar_job,
 )
+from receipt_candidate_job import (
+    RECEIPT_CANDIDATE_MAX_REQUEST_BYTES,
+    ReceiptCandidateJobInputError,
+    ReceiptCandidateJobSpec,
+    execute_receipt_candidate_job,
+)
 from data_contracts.personal_history_compact import (
     PERSONAL_HISTORY_COMPACT_BARS_TABLE,
     compact_history_state,
@@ -936,7 +942,13 @@ def _canonical_feature_tuple(refs: Sequence[Any]) -> tuple[tuple[str, str, str],
 _CONTROLLED_VERIFIED_JOB = threading.local()
 
 
-def _mint_controlled_am_view(db_path: Any, physical_digest: str, document: Mapping[str, Any]):
+def _mint_controlled_am_view(
+    db_path: Any,
+    physical_digest: str,
+    document: Mapping[str, Any],
+    compiled_selection: Any,
+    resolve_membership: Any,
+):
     from pit.governed_am_view import (
         _open_verified_controlled_snapshot,
         _session_scope_from_verified_worker_job,
@@ -953,6 +965,8 @@ def _mint_controlled_am_view(db_path: Any, physical_digest: str, document: Mappi
         pinned_path=db_path,
         verified_physical_digest=physical_digest,
         verified_session_scope=verified_scope,
+        compiled_selection=compiled_selection,
+        resolve_membership=resolve_membership,
     )
 
 
@@ -1062,19 +1076,12 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
         if reopened.hexdigest() != physical_hex:
             raise JobInputError("reopened snapshot hash mismatch")
         verify_sqlite(destination)
-        controlled_handle = _mint_controlled_am_view(
-            destination,
-            str(physical_digest),
-            document,
-        )
-        controlled_handle._begin_controlled_batch_reads()
-        _CONTROLLED_VERIFIED_JOB.document = document
-        _CONTROLLED_VERIFIED_JOB.physical_digest = physical_digest
-        _CONTROLLED_VERIFIED_JOB.snapshot_handle = controlled_handle
         from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED
         from agents.risk_agent import RiskAgent
+        from pit.compiled_dependency_scope import CompiledControlledSelection
         from research.dependency_closure import resolve_strategy_spec
-        from research.experiment_plans import PILOT_COST_SCENARIO, load_experiment_plans
+        from research.experiment_plans import PILOT_COST_SCENARIO
+        from research.ready_manifest import load_exact_four_pilot_ready_binding
         from research.universe_contract import (
             EXACT_FOUR_UNIVERSE_RULE_DIGEST,
             resolve_tse_prime_with_fins,
@@ -1094,6 +1101,42 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
             raise JobInputError("controlled closure digest mismatch")
         if document.get("exact_four_binding_digest") != CONTROLLED_BINDING_DIGEST:
             raise JobInputError("controlled binding digest mismatch")
+        ready_binding = load_exact_four_pilot_ready_binding()
+        if ready_binding.profile_digest != CONTROLLED_PROFILE_DIGEST:
+            raise JobInputError("controlled profile-set digest mismatch")
+        if ready_binding.closure_set_digest != CONTROLLED_CLOSURE_DIGEST:
+            raise JobInputError("controlled dependency-closure digest mismatch")
+        periods = {
+            (str(profile.period_start), str(profile.period_end))
+            for profile in ready_binding.profiles
+        }
+        if len(periods) != 1:
+            raise JobInputError("exact-four plans must share one governed universe period")
+        period_start, period_end = next(iter(periods))
+        compiled_selection = CompiledControlledSelection(
+            period_start=period_start,
+            period_end=period_end,
+            lookback_trading_days=max(
+                int(scope["required_lookback_trading_days"])
+                for profile in ready_binding.profiles
+                for scope in profile.dataset_scopes
+            ),
+            profile_digest=ready_binding.profile_digest,
+            feature_consumers=tuple(
+                profile.feature_consumers() for profile in ready_binding.profiles
+            ),
+        )
+        controlled_handle = _mint_controlled_am_view(
+            destination,
+            str(physical_digest),
+            document,
+            compiled_selection,
+            resolve_tse_prime_with_fins,
+        )
+        controlled_handle._begin_controlled_batch_reads()
+        _CONTROLLED_VERIFIED_JOB.document = document
+        _CONTROLLED_VERIFIED_JOB.physical_digest = physical_digest
+        _CONTROLLED_VERIFIED_JOB.snapshot_handle = controlled_handle
 
         logical_id = controlled_handle.logical_snapshot_id()
         if logical_id != snapshot_id:
@@ -1103,7 +1146,7 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
         decisions: list[dict[str, Any]] = []
         ineligible_plan_ids: list[str] = []
         risk_agent = RiskAgent()
-        plans = tuple(load_experiment_plans())
+        plans = ready_binding.plans
         slices = controlled_handle.universe_day_slices(
             period_start=plans[0].period_start,
             period_end=plans[0].period_end,
@@ -1133,6 +1176,16 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
                 iter_feature_refs(spec)
             ):
                 raise JobInputError("StrategySpec feature refs do not match the closure")
+            scoped_profile = ready_binding.profiles[ordinal - 1]
+            if scoped_profile.plan_id != plan.plan_id:
+                raise JobInputError("scoped closure plan_id mismatch")
+            controlled_handle._bind_current_plan_feature_consumers(
+                plan_id=plan.plan_id,
+                profile_version=scoped_profile.profile_version,
+                profile_set_digest=ready_binding.profile_digest,
+                consumers=scoped_profile.feature_consumers(),
+                feature_dependencies=tuple(scoped_profile.feature_dependencies),
+            )
             strategy = interpret_strategy_spec(spec)
             paper_result = _run_controlled_paper(
                 strategy,
@@ -1735,6 +1788,8 @@ def _job_kind(spec: Any) -> str:
         return "controlled-pilot"
     if isinstance(spec, SnapshotJobSpec):
         return "snapshot"
+    if isinstance(spec, ReceiptCandidateJobSpec):
+        return "receipt-candidate"
     if isinstance(spec, PersonalSvi2023JobSpec):
         return "svi"
     if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):
@@ -2626,6 +2681,7 @@ def execute_snapshot_job(
 JobSpecLike = (
     JobSpec
     | SnapshotJobSpec
+    | ReceiptCandidateJobSpec
     | PersonalSvi2023JobSpec
     | PersonalIndexVolOverlay2023JobSpec
     | PersonalVolAmPmPanelJobSpec
@@ -2756,6 +2812,8 @@ class JobManager:
             }
             if isinstance(spec, SnapshotJobSpec):
                 record["job_kind"] = "snapshot-build"
+            elif isinstance(spec, ReceiptCandidateJobSpec):
+                record["job_kind"] = "receipt-candidate"
             elif isinstance(spec, ControlledPilotJobSpec):
                 record["job_kind"] = "controlled-pilot"
                 record["identity"] = CONTROLLED_PILOT_IDENTITY
@@ -3229,6 +3287,12 @@ class JobManager:
                 "status": "FAILED",
                 "error": error,
             }
+        if isinstance(spec, ReceiptCandidateJobSpec):
+            from receipt_candidate_job import candidate_failure_terminal
+
+            return candidate_failure_terminal(
+                spec, started_at=started, finished_at=finished, error=error
+            )
         if isinstance(spec, JobSpec):
             return {
                 **_manifest_base(spec, started_at=started, finished_at=finished),
@@ -3697,6 +3761,13 @@ def default_runner(
                     uploader=_put_child_artifact,
                     deadline=deadline,
                 )
+            if isinstance(spec, ReceiptCandidateJobSpec):
+                return execute_receipt_candidate_job(
+                    spec,
+                    work_root=work_root,
+                    uploader=_put_child_artifact,
+                    deadline=deadline,
+                )
             if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):
                 return execute_overlay_job(spec, uploader=_put_child_json, deadline=deadline)
             if isinstance(spec, PersonalSvi2023JobSpec):
@@ -3798,11 +3869,17 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
             "/v1/build-personal-vol-am-pm-panel",
             "/v1/produce-option-sidecar",
             "/v1/controlled-pilot",
+            "/v1/materialize-receipt-candidate",
         }:
             self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
             return
         raw_length = self.headers.get("content-length", "")
-        if not raw_length.isdigit() or not 0 < int(raw_length) <= MAX_REQUEST_BYTES:
+        maximum = (
+            RECEIPT_CANDIDATE_MAX_REQUEST_BYTES
+            if self.path == "/v1/materialize-receipt-candidate"
+            else MAX_REQUEST_BYTES
+        )
+        if not raw_length.isdigit() or not 0 < int(raw_length) <= maximum:
             self._json({"error": "invalid_content_length"}, HTTPStatus.BAD_REQUEST)
             return
         try:
@@ -3833,12 +3910,15 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
                 spec = PersonalVolAmPmPanelJobSpec.from_document(document)
             elif self.path == "/v1/produce-option-sidecar":
                 spec = PersonalOptionSidecarJobSpec.from_document(document)
+            elif self.path == "/v1/materialize-receipt-candidate":
+                spec = ReceiptCandidateJobSpec.from_document(document)
             else:
                 spec = JobSpec.from_document(document)
             record = self.manager.submit(spec)
         except (
             json.JSONDecodeError,
             JobInputError,
+            ReceiptCandidateJobInputError,
             SviJobInputError,
             OverlayJobInputError,
             VolPanelJobInputError,

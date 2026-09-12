@@ -7,10 +7,10 @@
   "public_key_b64": "YRMjID9SanCZBg4UX63gBWiKR4zZTmAaRGXsO4goZy4=",
   "request": {
     "idempotency_key": "controlled-job-1",
-    "ready_attestation_id": "ready-49fe6b9d3e7f8f55736c0e2891a116d8ea705c5308134f41f3a76158aa7b88a3",
+    "ready_attestation_id": "ready-d2f626df8006620e82e5962ef1526cdab14d2df6f5a8f7bc1101b03384d7a3a7",
     "snapshot_id": "sha256:29058b15274a0bdf21e1946a7f363843b40b7a3ed338c8548ff1c8a97ab01d1b"
   },
-  "request_digest": "sha256:cf33c755907d906b32144ac547a263089ff48648cf7c689eae5677be0bbf4e63",
+  "request_digest": "sha256:919b1974aeeb9327695936292ecc4281dafdc4e7763d4e57a258992ddccb2ea7",
   "resolved_universe_digest": "sha256:d2a896a01bf1b1d203efc9a7f28b29c3e15712fa5e5f89cde4bd16ba459dfa8a",
   "ttl_seconds": 3600,
   "verifier_now": "2026-09-02T12:00:30+00:00"

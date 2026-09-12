@@ -17,6 +17,7 @@ from typing import Any, Mapping, Sequence
 import features
 import pit
 from features.runtime import (
+    _BoundScopedFeatureReads,
     bind_personal_retrospective_am_session_daily_bars,
     bind_verified_controlled_am_session_daily_bars,
     compute_with_engine_daily_bars_capability,
@@ -115,11 +116,52 @@ def _params_hash(params: dict[str, Any]) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
+def _bound_plan_consumer_id(
+    feature_dependencies: Sequence[Any],
+    *,
+    feature_id: str,
+    version: str | None,
+    inputs: Mapping[str, Any],
+    definition: Any,
+) -> str:
+    if version is None:
+        raise ValueError("scoped feature compute requires an exact feature version")
+    matches: list[Any] = []
+    for dependency in feature_dependencies:
+        if str(dependency.get("id") or "") != feature_id:
+            continue
+        if str(dependency.get("version") or "") != version:
+            continue
+        compiled_effective = dict(definition.inputs.optional_kwargs)
+        compiled_effective.update(dict(dependency.get("params") or {}))
+        used_overrides = {
+            key: inputs[key] for key in compiled_effective if key in inputs
+        }
+        execution_effective = dict(definition.inputs.optional_kwargs)
+        execution_effective.update(used_overrides)
+        if execution_effective != compiled_effective:
+            continue
+        digest = features.feature_definition_digest(
+            definition, metadata_version="v2"
+        )
+        if digest != str(dependency.get("definition_digest") or ""):
+            continue
+        matches.append(dependency)
+    if len(matches) != 1:
+        raise ValueError(
+            f"feature {feature_id!r}@{version!r} is not the current plan's bound consumer"
+        )
+    dependency = matches[0]
+    return f"{dependency['id']}@{dependency['version']}#{dependency['ordinal']}"
+
+
 def _make_feature_accessor(
     as_of: str,
     db_path: Any,
     *,
     daily_bars_capability: Any = None,
+    bound_feature_binding: Any = None,
+    governed_am_view: Any = None,
 ):
     """Bind the trusted PIT scope used by one decision context."""
 
@@ -173,7 +215,59 @@ def _make_feature_accessor(
 
         compute_kw = dict(inputs)
         target = definition if version is not None else feature_id
-        if daily_bars_capability is not None:
+        if type(governed_am_view) is GovernedAmSessionDataView:
+            if bound_feature_binding is None:
+                raise ValueError(
+                    "controlled feature compute requires current-plan "
+                    "research-data-profile/v3 consumers"
+                )
+            if (
+                bound_feature_binding.profile_set_digest
+                != governed_am_view.session_profile_digest
+            ):
+                raise ValueError(
+                    "current-plan profile-set digest does not match the verified session"
+                )
+        if bound_feature_binding is not None:
+            if type(governed_am_view) is not GovernedAmSessionDataView:
+                raise TypeError(
+                    "bound plan feature reads require a verifier-minted data view"
+                )
+            if daily_bars_capability is None:
+                raise ValueError(
+                    "bound plan feature reads require the verified AM daily-bar capability"
+                )
+            if (
+                bound_feature_binding.profile_version != "research-data-profile/v3"
+                or not bound_feature_binding.profile_set_digest
+                or not bound_feature_binding.plan_id
+            ):
+                raise ValueError(
+                    "bound plan feature reads require current-plan profile-set identity"
+                )
+            consumer_id = _bound_plan_consumer_id(
+                bound_feature_binding.feature_dependencies,
+                feature_id=feature_id,
+                version=version,
+                inputs=inputs,
+                definition=definition,
+            )
+            if consumer_id not in bound_feature_binding.consumers:
+                raise ValueError(
+                    f"feature {feature_id!r}@{version!r} is not the current plan's bound consumer"
+                )
+            completed = compute_with_engine_daily_bars_capability(
+                target,
+                as_of=as_of,
+                db_path=db_path,
+                daily_bars_capability=daily_bars_capability,
+                scoped_feature_reads=_BoundScopedFeatureReads(
+                    data_view=governed_am_view,
+                    consumer_id=consumer_id,
+                ),
+                **compute_kw,
+            )
+        elif daily_bars_capability is not None:
             completed = compute_with_engine_daily_bars_capability(
                 target,
                 as_of=as_of,
@@ -1811,6 +1905,12 @@ def _run_backtest_impl(
                     decision_as_of,
                     resolved_db_path,
                     daily_bars_capability=daily_bars_capability,
+                    bound_feature_binding=(
+                        governed_am_view.current_plan_feature_binding()
+                        if type(governed_am_view) is GovernedAmSessionDataView
+                        else None
+                    ),
+                    governed_am_view=governed_am_view,
                 ),
             )
 

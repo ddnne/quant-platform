@@ -30,6 +30,12 @@ def close_iso(date: str) -> str:
     return f"{date}T15:30:00+09:00"
 
 
+def official_close_iso(date: str) -> str:
+    """Official afternoon close clock for seeded TOPIX event/available times."""
+    hhmmss = "15:30:00" if date >= "2024-11-05" else "15:00:00"
+    return f"{date}T{hhmmss}+09:00"
+
+
 def morning_iso(date: str) -> str:
     return f"{date}T11:30:00+09:00"
 
@@ -277,6 +283,7 @@ def seed_governed_am_pm_session_db(
     days: list[str] | None = None,
     morning_prices: dict | None = None,
     afternoon_prices: dict | None = None,
+    extra_fins_payloads: list[dict] | None = None,
 ) -> Path:
     """Positive Controlled fixture: AM row at 11:30, PM revision at close."""
 
@@ -449,6 +456,25 @@ def seed_governed_am_pm_session_db(
                 "raw_payload": "",
             }
         )
+    for payload in extra_fins_payloads or ():
+        if "DiscDate" not in payload:
+            raise ValueError("financial catalog payload requires DiscDate")
+        disc = str(payload["DiscDate"])[:10]
+        event = f"{disc}T08:00:00+09:00"
+        closure_catalog.append(
+            {
+                "source": "jquants",
+                "dataset": "fins_summary",
+                "natural_key": natural_key(payload, "fins_summary"),
+                "event_time": event,
+                "available_at": event,
+                "ingested_at": event,
+                "payload": json.dumps(
+                    payload, sort_keys=True, separators=(",", ":")
+                ),
+                "raw_payload": "",
+            }
+        )
     for day in days:
         topix_payload = {
             "Date": day,
@@ -464,9 +490,9 @@ def seed_governed_am_pm_session_db(
                 "natural_key": natural_key(
                     topix_payload, "indices_bars_daily_topix"
                 ),
-                "event_time": close_iso(day),
-                "available_at": close_iso(day),
-                "ingested_at": close_iso(day),
+                "event_time": official_close_iso(day),
+                "available_at": official_close_iso(day),
+                "ingested_at": official_close_iso(day),
                 "payload": json.dumps(
                     topix_payload, sort_keys=True, separators=(",", ":")
                 ),

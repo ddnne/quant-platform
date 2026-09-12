@@ -13,11 +13,15 @@ from ingestion.jquants.normalize import normalize_generic
 from ingestion.jquants.official_business_calendar import (
     derive_official_business_calendar,
 )
+from ops.receipt_candidate_materialize import persist_official_calendar_raw
 from ops.receipt_product import (
     canonical_product_artifact_bytes,
     product_artifact_digest,
 )
-from pit.complete_master import _owned_complete_master_selection_from_connection
+from pit.complete_master import (
+    _complete_master_day_slices_from_connection,
+    _owned_complete_master_selection_from_connection,
+)
 from pit.errors import PitError
 from pit.query import connect_readonly
 from pit.universe_pit import resolve_universe_day_slices
@@ -423,6 +427,16 @@ def test_seed_older_than_warmup_agrees_with_draft(
         calendar_raw=calendar_raw,
         extras=extras,
     )
+    persist_official_calendar_raw(
+        store._conn,  # noqa: SLF001
+        body=calendar_raw,
+        expected_digest=extras["official_calendar_raw_body_digest"],
+    )
+    store._conn.execute(  # noqa: SLF001
+        "INSERT INTO official_calendar_raw (raw_body_digest, body) VALUES (?, ?)",
+        ("sha256:" + "0" * 64, 1),
+    )
+    store._conn.commit()  # noqa: SLF001
     store.close()
     draft = resolve_universe_day_slices(
         path,
@@ -433,6 +447,12 @@ def test_seed_older_than_warmup_agrees_with_draft(
     conn = _open(path)
     try:
         owned = _strict(conn, _calendar_bodies(calendar_raw))
+        assert _complete_master_day_slices_from_connection(
+            conn,
+            period_start=PERIOD_START,
+            period_end=PERIOD_END,
+            as_of_for_day=_as_of_for_day(),
+        ) == owned.slices
     finally:
         conn.close()
     assert owned.proof.format == "complete-master-selection-evidence/v1"

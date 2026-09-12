@@ -209,6 +209,8 @@ class _OwnedFinancialSelection:
     evidence: _FinancialSelectionEvidence
     selected_product_digest: str | None = None
     payload_column_evidence: Mapping[str, str] | None = None
+    visible_identities: tuple[tuple[str, str], ...] = ()
+    visible_product_digests: tuple[str | None, ...] = ()
 
 
 def _typed_raw_sql_value(value: Any) -> Any:
@@ -359,10 +361,21 @@ def _owned_selection_from_raw_rows(
     selected_product_digest: str | None = None
     payload_column_evidence: dict[str, str] | None = None
     last_column_evidence: dict[str, str] | None = None
+    visible_identities: list[tuple[str, str]] = []
+    visible_product_digests: list[str | None] = []
     try:
         for raw in raw_rows:
             evidence.add_raw_row(raw)
             last_column_evidence = _payload_column_evidence(raw)
+            visible_product_digests.append(_product_digest_from_raw(raw))
+            try:
+                key = raw["natural_key"]
+                event_time = raw["event_time"]
+            except (KeyError, IndexError, TypeError):
+                key = None
+                event_time = None
+            if key is not None and str(key):
+                visible_identities.append((str(key), str(event_time or "")[:10]))
             decoded = _decode_row(raw)
             if accumulator is None:
                 payload_column_evidence = last_column_evidence
@@ -402,6 +415,8 @@ def _owned_selection_from_raw_rows(
             if payload_column_evidence is None
             else MappingProxyType(payload_column_evidence)
         ),
+        visible_identities=tuple(visible_identities),
+        visible_product_digests=tuple(visible_product_digests),
     )
 
 

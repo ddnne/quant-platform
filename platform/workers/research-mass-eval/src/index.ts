@@ -14,6 +14,10 @@ import {
   personalSnapshotBuildStatus,
   submitPersonalSnapshotBuild,
 } from "./personal_snapshot";
+import {
+  personalReceiptCandidateStatus,
+  submitPersonalReceiptCandidate,
+} from "./personal_receipt_candidate";
 import { runPersonalVolResearch } from "./personal_vol_research";
 import { runPersonalVolAmPmResearch } from "./personal_vol_am_pm";
 import {
@@ -54,6 +58,8 @@ export default {
       personalIndexVolOverlay2023Status,
       submitPersonalSnapshotBuild,
       personalSnapshotBuildStatus,
+      submitPersonalReceiptCandidate,
+      personalReceiptCandidateStatus,
       submitPersonalVolAmPmPanelBuild,
       personalVolAmPmPanelBuildStatus,
       submitPersonalOptionSidecarProduce,

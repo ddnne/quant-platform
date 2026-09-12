@@ -635,6 +635,16 @@ MIGRATIONS: tuple[Migration, ...] = (
         ALTER TABLE jquants_daily_bars_revisions ADD COLUMN afternoon_adjustment_volume REAL;
         """,
     ),
+    Migration(
+        16,
+        "receipt_candidate_official_calendar_raw",
+        """
+        CREATE TABLE IF NOT EXISTS official_calendar_raw (
+            raw_body_digest TEXT PRIMARY KEY,
+            body BLOB NOT NULL
+        );
+        """,
+    ),
 )
 
 

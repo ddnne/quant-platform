@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime
-from typing import Any, Iterable, Iterator, Mapping
+from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 
 PRODUCT_ARTIFACT_SCHEMA = "jquants_records/v1"
@@ -302,14 +302,24 @@ def product_artifact_body_digest(body: Any) -> str:
 def iter_product_artifact_body_rows(body: Any) -> Iterator[dict[str, str]]:
     """Yield canonical product rows from one signed JSONL artifact body.
 
-    This is exact-generation materialization. It does not read ``jquants_records``
-    and is not a substitute for current-mode SQL reconstruction.
+    Accepts exact UTF-8 text, bytes, or a binary readline stream already
+    understood by ``_iter_canonical_artifact_rows``. Catalog reconstruction
+    still does not substitute for this generation body.
     """
 
-    if type(body) is not str or not body:
-        raise ValueError("product materialization artifact body must be exact text")
+    if type(body) is str or type(body) is bytes:
+        if not body:
+            raise ValueError("empty product materialization is not signable")
+        source = body
+    else:
+        readline = getattr(body, "readline", None)
+        if not callable(readline):
+            raise ValueError(
+                "product materialization artifact body must be exact text"
+            )
+        source = body
     yielded = False
-    for _raw_line, row in _iter_canonical_artifact_rows(body):
+    for _raw_line, row in _iter_canonical_artifact_rows(source):
         yielded = True
         yield row
     if not yielded:
@@ -321,6 +331,92 @@ def product_row_digest(raw: Mapping[str, Any] | Any) -> str:
 
     row = _canonical_product_row(raw)
     return "sha256:" + hashlib.sha256(_encode_product_row(row)).hexdigest()
+
+
+_CATALOG_OWNERSHIP_TABLES = frozenset(
+    {"jquants_records", "jquants_records_revisions"}
+)
+
+
+def catalog_owned_product_row_digests(
+    conn: Any,
+    *,
+    source: str,
+    dataset: str,
+    segment_start: str,
+    segment_end: str,
+    observed_through: str,
+    tables: Sequence[str],
+) -> set[str]:
+    """Digest CURRENT and REVISION catalog versions owned in ``tables``.
+
+    This is catalog ownership of signed product fields. It is not
+    current-only reconstruction and does not mint a receipt. Callers must
+    pass concrete tables; missing tables fail at execute time.
+    """
+
+    if type(source) is not str or type(dataset) is not str or not source or not dataset:
+        raise ValueError("product materialization source/dataset is invalid")
+    if not tables:
+        raise ValueError("catalog ownership tables are missing")
+    start = str(segment_start)[:10]
+    end = str(segment_end)[:10]
+    if not start or not end:
+        raise ValueError("product segment identity is invalid")
+    cutoff = _aware_instant(
+        observed_through, label="product observation cutoff"
+    )
+    fields = ",".join(PRODUCT_ARTIFACT_FIELDS)
+    digests: set[str] = set()
+    for table in tables:
+        if type(table) is not str or table not in _CATALOG_OWNERSHIP_TABLES:
+            raise ValueError("catalog ownership table is invalid")
+        sql = (
+            f"SELECT {fields} FROM {table} "
+            "WHERE source=? AND dataset=? "
+            "AND substr(event_time, 1, 10) BETWEEN ? AND ?"
+        )
+        for raw in conn.execute(sql, (source, dataset, start, end)):
+            try:
+                row = {field: raw[field] for field in PRODUCT_ARTIFACT_FIELDS}
+                ingested = _aware_instant(
+                    row["ingested_at"], label="product ingestion clock"
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+            if ingested > cutoff:
+                continue
+            try:
+                digests.add(product_row_digest(row))
+            except ValueError:
+                continue
+    return digests
+
+
+def measure_owned_product_artifact_body(
+    body: Any,
+    *,
+    owned_digests: set[str],
+) -> tuple[int, str, int, frozenset[str]]:
+    """Hash one immutable artifact and require every row is catalog-owned."""
+
+    row_digests: set[str] = set()
+
+    def rows() -> Iterator[dict[str, str]]:
+        for raw in iter_product_artifact_body_rows(body):
+            digest = product_row_digest(raw)
+            if digest not in owned_digests:
+                raise ValueError(
+                    "verified artifact row is not materialized on the "
+                    "owner connection"
+                )
+            row_digests.add(digest)
+            yield raw
+
+    observed_count, observed_digest, observed_bytes = (
+        product_artifact_digest_ordered(rows())
+    )
+    return observed_count, observed_digest, observed_bytes, frozenset(row_digests)
 
 
 def _mapping_field(raw: Mapping[str, Any] | Any, name: str) -> Any:
@@ -418,8 +514,10 @@ __all__ = [
     "PRODUCT_ARTIFACT_FIELDS",
     "PRODUCT_ARTIFACT_SCHEMA",
     "canonical_product_artifact_bytes",
+    "catalog_owned_product_row_digests",
     "iter_observed_segment_product_rows",
     "iter_product_artifact_body_rows",
+    "measure_owned_product_artifact_body",
     "measure_product_artifact_jsonl",
     "product_artifact_body_digest",
     "product_artifact_digest",

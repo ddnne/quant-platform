@@ -151,6 +151,7 @@ def test_generator_repairs_stale_plan_fill_before_compile(tmp_path: Path, monkey
         gen.RESULT_MANIFEST_SCHEMA_REL,
         gen.AUTHORITY_SCHEMA_REL,
         gen.PROTOCOL_PY_REL,
+        gen.ATTESTATION_PY_REL,
         *[
             Path("specs") / "experiment_plans" / f"{plan_id}.json"
             for plan_id in gen.PLAN_IDS
@@ -1039,43 +1040,321 @@ def _file_digest(path) -> str:
     return "sha256:" + digest.hexdigest()
 
 
-def _verified_session_scope_from_db(path) -> dict:
+def _attach_fixture_complete_master(path, receipt_ed25519_keys) -> None:
+    """Persist signed master + owned calendar for this fixture's actual dates."""
     import sqlite3
-    from ops.receipt_product import PRODUCT_ARTIFACT_FIELDS, product_artifact_digest
+
+    from ingestion.jquants.normalize import normalize_generic
+    from ops.receipt_candidate_materialize import persist_official_calendar_raw
+    from storage.sqlite_store import SqliteStore
+    from tests.receipt_test_support import TestSignedReceiptAuthority
+    from tests.test_complete_master_scope import (
+        _calendar_extras,
+        _issue_master_product,
+        _official_calendar_bytes,
+        _read_master,
+    )
+
+    conn = sqlite3.connect(path)
+    try:
+        tables = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        if (
+            "official_calendar_raw" in tables
+            and conn.execute("SELECT COUNT(*) FROM official_calendar_raw").fetchone()[0]
+        ):
+            return
+        days = [
+            str(row[0])
+            for row in conn.execute(
+                "SELECT DISTINCT substr(event_time, 1, 10) FROM jquants_records "
+                "WHERE dataset='markets_calendar' ORDER BY 1"
+            )
+        ]
+        codes: list[str] = []
+        for row in conn.execute(
+            "SELECT payload FROM jquants_records WHERE dataset='equities_master'"
+        ):
+            payload = json.loads(row[0]) if isinstance(row[0], str) else {}
+            code = str(payload.get("Code") or payload.get("code") or "")
+            if code and code not in codes:
+                codes.append(code)
+    finally:
+        conn.close()
+    if not days or not codes:
+        raise AssertionError("controlled fixture is missing calendar or master rows")
+    from datetime import date, timedelta
+
+    from ops.receipt_product import (
+        canonical_product_artifact_bytes,
+        product_artifact_digest,
+    )
+
+    start = date.fromisoformat(days[0])
+    end = date.fromisoformat(days[-1])
+    all_days: list[str] = []
+    cursor = start
+    while cursor <= end:
+        all_days.append(cursor.isoformat())
+        cursor += timedelta(days=1)
+    trading = set(days)
+
+    store = SqliteStore(path)
+    try:
+        columns = {
+            str(row[1])
+            for row in store._conn.execute("PRAGMA table_info(ingestion_run_log)")  # noqa: SLF001
+        }
+        if "authority_operation_id" not in columns:
+            store._conn.execute(  # noqa: SLF001
+                "ALTER TABLE ingestion_run_log ADD COLUMN authority_operation_id TEXT"
+            )
+        store._conn.execute(  # noqa: SLF001
+            "DELETE FROM receipt_product_materializations WHERE dataset='equities_master'"
+        )
+        master_rows = []
+        for day in days:
+            stamp = f"{day}T08:00:00+09:00"
+            for code in codes:
+                master_rows.extend(
+                    normalize_generic(
+                        [
+                            {
+                                "Code": code,
+                                "Date": day,
+                                "MarketCode": "0111",
+                                "ScaleCategory": "TOPIX Core30",
+                            }
+                        ],
+                        dataset="equities_master",
+                        ingested_at=stamp,
+                        available_at=stamp,
+                    )
+                )
+        store.upsert("jquants_records", master_rows)
+        calendar_rows = []
+        for day in all_days:
+            stamp = f"{day}T00:00:00+09:00"
+            payload = {
+                "Date": day,
+                "HolidayDivision": "1" if day in trading else "0",
+            }
+            calendar_rows.extend(
+                normalize_generic(
+                    [payload],
+                    dataset="markets_calendar",
+                    ingested_at=stamp,
+                    available_at=stamp,
+                )
+            )
+        store.upsert("jquants_records", calendar_rows)
+        calendar_raw = _official_calendar_bytes(
+            start=all_days[0], end=all_days[-1], business=tuple(days)
+        )
+        extras = _calendar_extras(calendar_raw, start=days[0], end=days[-1])
+        _issue_master_product(
+            store,
+            authority=TestSignedReceiptAuthority(
+                signing_key=receipt_ed25519_keys.signing_key
+            ),
+            run_id=101,
+            structured=_read_master(store),
+            calendar_raw=calendar_raw,
+            extras=extras,
+            segment_id="p0-complete-master",
+            segment_start=days[0],
+            segment_end=days[-1],
+        )
+        persist_official_calendar_raw(
+            store._conn,  # noqa: SLF001
+            body=calendar_raw,
+            expected_digest=extras["official_calendar_raw_body_digest"],
+        )
+        for dataset_id in ("markets_calendar", "fins_summary", "indices_bars_daily_topix"):
+            stored = store._conn.execute(  # noqa: SLF001
+                "SELECT source, dataset, natural_key, event_time, available_at, "
+                "ingested_at, payload, COALESCE(raw_payload, '') AS raw_payload "
+                "FROM jquants_records WHERE dataset=? ORDER BY natural_key",
+                (dataset_id,),
+            ).fetchall()
+            product_rows = []
+            for row in stored:
+                payload_raw = row["payload"]
+                payload_obj = json.loads(payload_raw) if isinstance(payload_raw, str) else {}
+                product_rows.append(
+                    {
+                        "source": str(row["source"]),
+                        "dataset": str(row["dataset"]),
+                        "natural_key": str(row["natural_key"]),
+                        "event_time": str(row["event_time"]),
+                        "available_at": str(row["available_at"]),
+                        "ingested_at": str(row["ingested_at"]),
+                        "payload": json.dumps(
+                            payload_obj,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            ensure_ascii=False,
+                        ),
+                        "raw_payload": str(row["raw_payload"] or ""),
+                    }
+                )
+            artifact_body = canonical_product_artifact_bytes(product_rows).decode(
+                "utf-8"
+            )
+            artifact_digest = product_artifact_digest(product_rows)
+            store._conn.execute(  # noqa: SLF001
+                "UPDATE receipt_product_materializations "
+                "SET artifact_digest=?, artifact_body=?, row_count=?, byte_count=? "
+                "WHERE dataset=?",
+                (
+                    artifact_digest,
+                    artifact_body,
+                    len(product_rows),
+                    len(artifact_body.encode("utf-8")),
+                    dataset_id,
+                ),
+            )
+        store._conn.commit()  # noqa: SLF001
+    finally:
+        store.close()
+
+
+def _fixture_compiled_selection(path):
+    """Fixture period/lookback from seeded calendar; reused v3 consumers.
+
+    profile_digest covers those fixture facts. It is not the canonical 2023
+    Pilot pin.
+    """
+    import sqlite3
+
+    from pit.compiled_dependency_scope import CompiledControlledSelection
+    from research.ready_manifest import canonical_digest, load_exact_four_pilot_ready_binding
+
+    binding = load_exact_four_pilot_ready_binding()
+    conn = sqlite3.connect(path)
+    try:
+        days = [
+            str(row[0])
+            for row in conn.execute(
+                "SELECT DISTINCT substr(event_time, 1, 10) FROM jquants_records "
+                "WHERE dataset='markets_calendar' ORDER BY 1"
+            )
+        ]
+    finally:
+        conn.close()
+    consumers = tuple(
+        profile.feature_consumers() for profile in binding.profiles
+    )
+    return CompiledControlledSelection(
+        period_start=days[0],
+        period_end=days[-1],
+        lookback_trading_days=0,
+        profile_digest=canonical_digest(
+            {
+                "kind": "p0-numeric-fixture-selection",
+                "period_start": days[0],
+                "period_end": days[-1],
+                "lookback_trading_days": 0,
+                "consumer_ids": [sorted(mapping.keys()) for mapping in consumers],
+            }
+        ),
+        feature_consumers=consumers,
+    )
+
+
+def _selected_session_scope_from_db(path, compiled) -> dict:
+    import sqlite3
+
+    from ops.receipt_product import product_row_digest
+    from pit.compiled_dependency_scope import _select_compiled_dependency_scope
+    from pit.complete_master import _complete_master_day_slices_from_connection
+    from pit.governed_am_view import (
+        CONTROLLED_SESSION_DATASET_IDS,
+        GOVERNED_DAILY_DATASET_ID,
+        _load_sealed_products,
+        am_information_cutoff,
+    )
+    from pit.read_clock import (
+        SNAPSHOT_OBSERVATION_LABEL,
+        PitReadClock,
+        install_read_clock,
+    )
+    from pit.scoped_selection import _owned_scoped_research_owner_from_verified_witness
+    from pit.universe_pit import _calendar_dates
     from research.ready_manifest import canonical_digest
+    from research.universe_contract import resolve_tse_prime_with_fins
 
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
-    observed = str(
-        conn.execute("SELECT observed_through FROM snapshot_observation_clock").fetchone()[0]
-    )
-    entries = []
-    from pit.governed_am_view import CONTROLLED_SESSION_DATASET_IDS
-
-    for dataset_id in CONTROLLED_SESSION_DATASET_IDS:
-        products = conn.execute(
-            "SELECT artifact_body FROM receipt_product_materializations WHERE dataset=?",
-            (dataset_id,),
-        ).fetchall()
-        rows = []
-        for product in products:
-            for line in str(product["artifact_body"] or "").splitlines():
-                if not line:
-                    continue
-                parsed = json.loads(line)
-                rows.append({field: parsed[field] for field in PRODUCT_ARTIFACT_FIELDS})
-        keys = sorted({row["natural_key"] for row in rows})
-        digest = product_artifact_digest(rows)
-        entries.append(
-            {
-                "dataset_id": dataset_id,
-                "natural_key_count": len(keys),
-                "natural_key_digest": canonical_digest(keys),
-                "product_artifact_digests": [digest],
-                "product_artifact_set_digest": canonical_digest([digest]),
-            }
+    try:
+        conn.execute("BEGIN")
+        observed = str(
+            conn.execute(
+                "SELECT observed_through FROM snapshot_observation_clock"
+            ).fetchone()[0]
         )
-    conn.close()
+        artifact_digest_lists: dict[str, list[str]] = {}
+        scoped_witness: set[str] = set()
+        for dataset_id in CONTROLLED_SESSION_DATASET_IDS:
+            _sealed, product_rows, artifact_digests = _load_sealed_products(
+                conn, dataset_id=dataset_id
+            )
+            artifact_digest_lists[dataset_id] = sorted(artifact_digests)
+            versions = {product_row_digest(row) for row in product_rows}
+            if dataset_id in {GOVERNED_DAILY_DATASET_ID, "fins_summary"}:
+                scoped_witness.update(versions)
+        owner = _owned_scoped_research_owner_from_verified_witness(
+            conn, witness=frozenset(scoped_witness)
+        )
+        as_of_for_day = {
+            day: am_information_cutoff(day)
+            for day in _calendar_dates(compiled.period_start, compiled.period_end)
+        }
+        proof_clock = PitReadClock(
+            decision_at=am_information_cutoff(compiled.period_end),
+            observed_through=observed,
+            observation_label=SNAPSHOT_OBSERVATION_LABEL,
+            promotable=True,
+        )
+        with install_read_clock(proof_clock):
+            slices = _complete_master_day_slices_from_connection(
+                conn,
+                period_start=compiled.period_start,
+                period_end=compiled.period_end,
+                as_of_for_day=as_of_for_day,
+            )
+        resolved = resolve_tse_prime_with_fins(
+            slices,
+            period_start=compiled.period_start,
+            period_end=compiled.period_end,
+        )
+        selected = _select_compiled_dependency_scope(
+            conn,
+            compiled=compiled,
+            observed_through=observed,
+            slices=slices,
+            resolved_universe=resolved,
+            scoped_owner=owner,
+        )
+        entries = []
+        for dataset_id in CONTROLLED_SESSION_DATASET_IDS:
+            keys = sorted(selected.selected_keys[dataset_id])
+            products = artifact_digest_lists[dataset_id]
+            entries.append(
+                {
+                    "dataset_id": dataset_id,
+                    "natural_key_count": len(keys),
+                    "natural_key_digest": canonical_digest(keys),
+                    "product_artifact_digests": products,
+                    "product_artifact_set_digest": canonical_digest(products),
+                }
+            )
+    finally:
+        conn.close()
     physical = _file_digest(path)
     evidence_digest = canonical_digest(
         {
@@ -1093,38 +1372,53 @@ def _verified_session_scope_from_db(path) -> dict:
     }
 
 
-def _verified_worker_scope_from_db(path):
-    """Test-issued Worker session scope; upstream envelope/projection verify is stubbed."""
+def _verified_worker_scope_from_db(path, compiled):
+    """Test-issued Worker session scope from compiled selection.
+
+    Upstream Worker READY/projection signatures are stubbed.
+    """
     from pit.governed_am_view import _session_scope_from_verified_worker_job
 
-    session_scope = _verified_session_scope_from_db(path)
+    session_scope = _selected_session_scope_from_db(path, compiled)
     evidence_digest = session_scope["dependency_scope_proof_digest"]
     return _session_scope_from_verified_worker_job(
         session_scope=session_scope,
         ready_manifest_digest=evidence_digest,
         signed_projection_document_digest=evidence_digest,
-        profile_digest=evidence_digest,
+        profile_digest=compiled.profile_digest,
     )
 
 
-def _verified_snapshot_handle_from_db(path):
+def _fixture_open_args(path, receipt_ed25519_keys) -> dict:
+    from research.universe_contract import resolve_tse_prime_with_fins
+
+    _attach_fixture_complete_master(path, receipt_ed25519_keys)
+    compiled = _fixture_compiled_selection(path)
+    return {
+        "verified_physical_digest": _file_digest(path),
+        "verified_session_scope": _verified_worker_scope_from_db(path, compiled),
+        "compiled_selection": compiled,
+        "resolve_membership": resolve_tse_prime_with_fins,
+    }
+
+
+def _verified_snapshot_handle_from_db(path, receipt_ed25519_keys):
     from pit.governed_am_view import _open_verified_controlled_snapshot
 
-    verified_scope = _verified_worker_scope_from_db(path)
-    handle = _open_verified_controlled_snapshot(
+    return _open_verified_controlled_snapshot(
         pinned_path=path,
-        verified_physical_digest=_file_digest(path),
-        verified_session_scope=verified_scope,
+        **_fixture_open_args(path, receipt_ed25519_keys),
     )
-    return handle
 
 
-def _verified_snapshot_view_from_db(path):
-    handle = _verified_snapshot_handle_from_db(path)
+def _verified_snapshot_view_from_db(path, receipt_ed25519_keys):
+    handle = _verified_snapshot_handle_from_db(path, receipt_ed25519_keys)
     return handle.am_session_data_view()
 
 
-def test_governed_open_binds_external_scope_to_final_sqlite_bytes(tmp_path) -> None:
+def test_governed_open_binds_external_scope_to_final_sqlite_bytes(
+    tmp_path, receipt_ed25519_keys
+) -> None:
     """Opener uses a test-issued Worker session scope bound to finalized bytes.
 
     Envelope/projection verification is stubbed. Not a producer/Worker proof
@@ -1135,15 +1429,11 @@ def test_governed_open_binds_external_scope_to_final_sqlite_bytes(tmp_path) -> N
     from pit.governed_am_view import _open_verified_controlled_snapshot
 
     db = seed_governed_am_pm_session_db(tmp_path)
-    physical = _file_digest(db)
-    verified_scope = _verified_worker_scope_from_db(db)
+    args = _fixture_open_args(db, receipt_ed25519_keys)
+    physical = args["verified_physical_digest"]
     assert _file_digest(db) == physical
-    assert verified_scope.physical_db_digest == physical
-    handle = _open_verified_controlled_snapshot(
-        pinned_path=db,
-        verified_physical_digest=physical,
-        verified_session_scope=verified_scope,
-    )
+    assert args["verified_session_scope"].physical_db_digest == physical
+    handle = _open_verified_controlled_snapshot(pinned_path=db, **args)
     handle.close()
     assert _file_digest(db) == physical
     raw = Path(db).read_bytes()
@@ -1151,11 +1441,7 @@ def test_governed_open_binds_external_scope_to_final_sqlite_bytes(tmp_path) -> N
     with pytest.raises(
         SnapshotObservationClockError, match="physical snapshot digest mismatch"
     ):
-        _open_verified_controlled_snapshot(
-            pinned_path=db,
-            verified_physical_digest=physical,
-            verified_session_scope=verified_scope,
-        )
+        _open_verified_controlled_snapshot(pinned_path=db, **args)
 
 
 def test_public_bind_is_not_exported() -> None:
@@ -1365,7 +1651,9 @@ def test_fixture_view_cannot_enter_controlled(tmp_path) -> None:
         )
 
 
-def test_controlled_pins_same_artifact_and_rejects_replace_mutate_swap(tmp_path) -> None:
+def test_controlled_pins_same_artifact_and_rejects_replace_mutate_swap(
+    tmp_path, receipt_ed25519_keys
+) -> None:
     from _coreseed import TRADING_DAYS, seed_governed_am_pm_session_db
     from core import PERSONAL_RETROSPECTIVE_ADJUSTED, run_backtest, standard_cost
     from core.execution import morning_close_as_of
@@ -1384,7 +1672,7 @@ def test_controlled_pins_same_artifact_and_rejects_replace_mutate_swap(tmp_path)
         afternoon_prices={code: {day: 150.0 for day in days}},
     )
     universe = membership_at(morning_close_as_of(days[0]), db_path=db, codes=(code,))
-    view = _verified_snapshot_view_from_db(db)
+    view = _verified_snapshot_view_from_db(db, receipt_ed25519_keys)
 
     class AlwaysLong:
         strategy_id = "always_long"
@@ -1438,15 +1726,25 @@ def test_controlled_pins_same_artifact_and_rejects_replace_mutate_swap(tmp_path)
         view.assert_pinned_artifact(other)
 
 
-def test_controlled_ctx_feature_sees_d_morning_reconstruction(tmp_path) -> None:
-    from _coreseed import TRADING_DAYS, seed_governed_am_pm_session_db
+def test_controlled_ctx_feature_sees_d_morning_reconstruction(
+    tmp_path, receipt_ed25519_keys
+) -> None:
+    from _coreseed import seed_governed_am_pm_session_db
     from core import PERSONAL_RETROSPECTIVE_ADJUSTED, run_backtest, standard_cost
     from core.execution import morning_close_as_of
     from core.universe import membership_at
-    from core.strategy_protocol import OrderIntent
+    from research.ready_manifest import load_exact_four_pilot_ready_binding
 
     code = "1332"
-    days = TRADING_DAYS
+    days = [
+        "2025-04-01",
+        "2025-04-02",
+        "2025-04-03",
+        "2025-04-04",
+        "2025-04-07",
+        "2025-04-08",
+        "2025-04-09",
+    ]
     db = seed_governed_am_pm_session_db(
         tmp_path,
         codes=[code],
@@ -1455,73 +1753,260 @@ def test_controlled_ctx_feature_sees_d_morning_reconstruction(tmp_path) -> None:
         afternoon_prices={code: {day: 150.0 for day in days}},
     )
     universe = membership_at(morning_close_as_of(days[0]), db_path=db, codes=(code,))
-    view = _verified_snapshot_view_from_db(db)
-    seen: dict[str, float] = {}
-
-    class FeatureProbe:
-        strategy_id = "feature_probe"
-        params: dict = {}
-
-        def on_bar(self, ctx):
-            if ctx.date == days[1]:
-                out = ctx.feature(
-                    "retrospective_split_adjusted_momentum_n",
-                    code=code,
-                    n=1,
-                )
-                seen["last_close"] = float(out.metadata["last_adjustment_close"])
-                seen["value"] = float(out.value)
-            return []
-
-    res = run_backtest(
-        FeatureProbe(),
-        days[0],
-        days[-1],
-        db_path=db,
-        universe=universe,
-        execution_mode="am_signal_pm_close",
-        price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
-        cost_model=standard_cost(bps=0.0),
-        am_session_data_view=view,
+    ready = load_exact_four_pilot_ready_binding()
+    xs = next(
+        profile
+        for profile in ready.profiles
+        if profile.plan_id == "exp-xs-hold10-mom5"
     )
+    handle = _verified_snapshot_handle_from_db(db, receipt_ed25519_keys)
+    try:
+        handle._begin_controlled_batch_reads()
+        view = handle.am_session_data_view()
+
+        class FeatureProbe:
+            strategy_id = "feature_probe"
+            params: dict = {}
+
+            def on_bar(self, ctx):
+                if ctx.date == days[-1]:
+                    ctx.feature(
+                        "retrospective_split_adjusted_momentum_n",
+                        version="1.0.0",
+                        code=code,
+                        n=5,
+                    )
+                return []
+
+        with pytest.raises(ValueError, match="current-plan"):
+            run_backtest(
+                FeatureProbe(),
+                days[0],
+                days[-1],
+                db_path=db,
+                universe=universe,
+                execution_mode="am_signal_pm_close",
+                price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+                cost_model=standard_cost(bps=0.0),
+                am_session_data_view=view,
+            )
+        handle._bind_current_plan_feature_consumers(
+            plan_id=xs.plan_id,
+            profile_version=xs.profile_version,
+            profile_set_digest=handle.session_profile_digest,
+            consumers=xs.feature_consumers(),
+            feature_dependencies=tuple(xs.feature_dependencies),
+        )
+        assert view.session_profile_digest == handle.session_profile_digest
+        seen: dict[str, float] = {}
+
+        class BoundProbe:
+            strategy_id = "feature_probe"
+            params: dict = {}
+
+            def on_bar(self, ctx):
+                if ctx.date == days[-1]:
+                    out = ctx.feature(
+                        "retrospective_split_adjusted_momentum_n",
+                        version="1.0.0",
+                        code=code,
+                        n=5,
+                    )
+                    seen["last_close"] = float(out.metadata["last_adjustment_close"])
+                    seen["value"] = float(out.value)
+                return []
+
+        res = run_backtest(
+            BoundProbe(),
+            days[0],
+            days[-1],
+            db_path=db,
+            universe=universe,
+            execution_mode="am_signal_pm_close",
+            price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+            cost_model=standard_cost(bps=0.0),
+            am_session_data_view=view,
+        )
+    finally:
+        handle._end_controlled_batch_reads()
+        handle.close()
     assert seen["last_close"] == 100.0
     assert seen["value"] == pytest.approx((100.0 - 150.0) / 150.0)
     assert res.metadata["authentic_am_session_evidence"] is False
     assert res.metadata["price_evidence_mode"] == "historical_daily_reconstruction"
 
 
-def test_controlled_open_rejects_symlink_and_wal_sidecar(tmp_path) -> None:
+def test_controlled_bound_v3_current_plan_numeric_and_rejects_foreign_consumer(
+    tmp_path, receipt_ed25519_keys
+) -> None:
+    from _coreseed import seed_governed_am_pm_session_db
+    from core import PERSONAL_RETROSPECTIVE_ADJUSTED, run_backtest, standard_cost
+    from core.execution import morning_close_as_of
+    from core.universe import membership_at
+    from research.ready_manifest import load_exact_four_pilot_ready_binding
+
+    code = "1332"
+    days = [
+        "2023-01-04",
+        "2023-01-05",
+        "2023-01-06",
+        "2023-01-09",
+        "2023-01-10",
+        "2023-01-11",
+        "2023-01-12",
+        "2023-01-13",
+        "2023-01-16",
+        "2023-01-17",
+        "2023-01-18",
+        "2023-01-19",
+    ]
+    morning = {day: 100.0 for day in days}
+    morning[days[-1]] = 110.0
+    afternoon = {day: 100.0 for day in days}
+    afternoon[days[-1]] = 110.0
+    db = seed_governed_am_pm_session_db(
+        tmp_path,
+        codes=[code],
+        days=days,
+        morning_prices={code: morning},
+        afternoon_prices={code: afternoon},
+        extra_fins_payloads=[
+            {
+                "Code": code,
+                "DiscDate": days[2],
+                "DiscTime": "08:00:00",
+                "DiscNo": f"bps-{code}",
+                "BPS": 80.0,
+                "CurPerEn": "2023-01-06",
+            },
+            {
+                "Code": code,
+                "DiscDate": days[4],
+                "DiscTime": "08:00:00",
+                "DiscNo": f"eps-{code}",
+                "EPS": 5.0,
+                "CurPerEn": "2023-03-31",
+            },
+        ],
+    )
+    universe = membership_at(morning_close_as_of(days[0]), db_path=db, codes=(code,))
+    ready = load_exact_four_pilot_ready_binding()
+    fund = next(
+        profile
+        for profile in ready.profiles
+        if profile.plan_id == "exp-fund-hold10-value-mom"
+    )
+    handle = _verified_snapshot_handle_from_db(db, receipt_ed25519_keys)
+    try:
+        handle._begin_controlled_batch_reads()
+        handle._bind_current_plan_feature_consumers(
+            plan_id=fund.plan_id,
+            profile_version=fund.profile_version,
+            profile_set_digest=handle.session_profile_digest,
+            consumers=fund.feature_consumers(),
+            feature_dependencies=tuple(fund.feature_dependencies),
+        )
+        view = handle.am_session_data_view()
+        binding = view.current_plan_feature_binding()
+        assert binding is not None
+        assert binding.plan_id == fund.plan_id
+        assert binding.profile_set_digest == view.session_profile_digest
+        assert binding.profile_set_digest != ready.profile_digest
+        seen: dict[str, object] = {}
+
+        class BoundProbe:
+            strategy_id = "bound_probe"
+            params: dict = {}
+
+            def on_bar(self, ctx):
+                if ctx.date != days[-1]:
+                    return []
+                value = ctx.feature(
+                    "retrospective_split_safe_fundamental_value_score",
+                    version="1.0.0",
+                    code=code,
+                )
+                seen["value"] = value.value
+                seen["bps"] = value.metadata["bps"]
+                seen["mode"] = value.metadata["mode"]
+                seen["anchor"] = value.metadata["split_safety_anchor"]
+                seen["fins_rows"] = value.metadata["fins_rows"]
+                with pytest.raises(
+                    ValueError, match="not the current plan's bound consumer"
+                ):
+                    ctx.feature(
+                        "disclosure_flag_fins",
+                        version="1.0.0",
+                        code=code,
+                    )
+                with pytest.raises(
+                    ValueError, match="not the current plan's bound consumer"
+                ):
+                    ctx.feature(
+                        "retrospective_split_adjusted_momentum_n",
+                        version="1.0.0",
+                        code=code,
+                        n=5,
+                    )
+                momentum = ctx.feature(
+                    "retrospective_split_adjusted_momentum_n",
+                    version="1.0.0",
+                    code=code,
+                    n=10,
+                )
+                seen["momentum"] = momentum.value
+                seen["last_adj"] = momentum.metadata["last_adjustment_close"]
+                return []
+
+        res = run_backtest(
+            BoundProbe(),
+            days[0],
+            days[-1],
+            db_path=db,
+            universe=universe,
+            execution_mode="am_signal_pm_close",
+            price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+            cost_model=standard_cost(bps=0.0),
+            am_session_data_view=view,
+        )
+    finally:
+        handle._end_controlled_batch_reads()
+        handle.close()
+    assert seen["value"] == pytest.approx(80.0 / 110.0)
+    assert seen["bps"] == 80.0
+    assert seen["mode"] == "bps_over_price"
+    assert seen["anchor"] == "2023-01-06"
+    assert seen["fins_rows"] == 3
+    assert seen["momentum"] == pytest.approx(0.1)
+    assert seen["last_adj"] == 110.0
+    assert res.metadata["price_evidence_mode"] == "historical_daily_reconstruction"
+
+
+def test_controlled_open_rejects_symlink_and_wal_sidecar(
+    tmp_path, receipt_ed25519_keys
+) -> None:
     from _coreseed import seed_governed_am_pm_session_db
     from pit.errors import SnapshotObservationClockError
     from pit.governed_am_view import _open_verified_controlled_snapshot
 
     source = seed_governed_am_pm_session_db(tmp_path / "source")
-    scope = _verified_worker_scope_from_db(source)
-    physical_digest = _file_digest(source)
+    args = _fixture_open_args(source, receipt_ed25519_keys)
     alias = tmp_path / "alias.sqlite"
     try:
         alias.symlink_to(source)
     except OSError:
         pytest.skip("host does not permit symlinks")
     with pytest.raises(SnapshotObservationClockError, match="missing|symlink"):
-        _open_verified_controlled_snapshot(
-            pinned_path=alias,
-            verified_physical_digest=physical_digest,
-            verified_session_scope=scope,
-        )
+        _open_verified_controlled_snapshot(pinned_path=alias, **args)
 
     wal = Path(str(source) + "-wal")
     wal.write_bytes(b"uncommitted-generation")
     with pytest.raises(SnapshotObservationClockError, match="WAL/SHM"):
-        _open_verified_controlled_snapshot(
-            pinned_path=source,
-            verified_physical_digest=physical_digest,
-            verified_session_scope=scope,
-        )
+        _open_verified_controlled_snapshot(pinned_path=source, **args)
 
 
 def test_controlled_open_rejects_fins_tamper_with_manifest_and_prices_unchanged(
-    tmp_path,
+    tmp_path, receipt_ed25519_keys
 ) -> None:
     import sqlite3
 
@@ -1537,8 +2022,10 @@ def test_controlled_open_rejects_fins_tamper_with_manifest_and_prices_unchanged(
     )
 
     source = seed_governed_am_pm_session_db(tmp_path)
-    verified_scope = _verified_worker_scope_from_db(source)
-    signed_session_scope = _verified_session_scope_from_db(source)
+    _attach_fixture_complete_master(source, receipt_ed25519_keys)
+    compiled = _fixture_compiled_selection(source)
+    verified_scope = _verified_worker_scope_from_db(source, compiled)
+    signed_session_scope = _selected_session_scope_from_db(source, compiled)
     from pit.governed_am_view import CONTROLLED_SESSION_DATASET_IDS
 
     assert [entry["dataset_id"] for entry in signed_session_scope["entries"]] == list(
@@ -1601,6 +2088,10 @@ def test_controlled_open_rejects_fins_tamper_with_manifest_and_prices_unchanged(
             pinned_path=source,
             verified_physical_digest=changed_physical_digest,
             verified_session_scope=verified_scope,
+            compiled_selection=compiled,
+            resolve_membership=__import__(
+                "research.universe_contract", fromlist=["resolve_tse_prime_with_fins"]
+            ).resolve_tse_prime_with_fins,
         )
 
     # Exercise the execution-side six-dataset seal independently of the
@@ -1617,16 +2108,22 @@ def test_controlled_open_rejects_fins_tamper_with_manifest_and_prices_unchanged(
     )
     with pytest.raises(
         SnapshotObservationClockError,
-        match="fins_summary product digest set does not match signed PIT dependency scope",
+        match="sealed fins_summary product materialization is missing",
     ):
         _open_verified_controlled_snapshot(
             pinned_path=source,
             verified_physical_digest=changed_physical_digest,
             verified_session_scope=execution_scope,
+            compiled_selection=compiled,
+            resolve_membership=__import__(
+                "research.universe_contract", fromlist=["resolve_tse_prime_with_fins"]
+            ).resolve_tse_prime_with_fins,
         )
 
 
-def test_engine_exception_releases_binding_and_handle_is_one_shot(tmp_path) -> None:
+def test_engine_exception_releases_binding_and_handle_is_one_shot(
+    tmp_path, receipt_ed25519_keys
+) -> None:
     from _coreseed import TRADING_DAYS, seed_governed_am_pm_session_db
     from core import PERSONAL_RETROSPECTIVE_ADJUSTED, run_backtest, standard_cost
     from core.execution import morning_close_as_of
@@ -1640,7 +2137,7 @@ def test_engine_exception_releases_binding_and_handle_is_one_shot(tmp_path) -> N
     universe = membership_at(
         morning_close_as_of(days[0]), db_path=db, codes=(code,)
     )
-    handle = _verified_snapshot_handle_from_db(db)
+    handle = _verified_snapshot_handle_from_db(db, receipt_ed25519_keys)
     view = handle.am_session_data_view()
 
     class Explodes:
@@ -1672,7 +2169,7 @@ def test_engine_exception_releases_binding_and_handle_is_one_shot(tmp_path) -> N
 
 
 def test_controlled_batch_uses_one_pinned_connection_for_identity_universe_and_four_runs(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
+    tmp_path, monkeypatch: pytest.MonkeyPatch, receipt_ed25519_keys
 ) -> None:
     import sqlite3
 
@@ -1750,8 +2247,8 @@ def test_controlled_batch_uses_one_pinned_connection_for_identity_universe_and_f
     conn.commit()
     conn.close()
 
-    verified_scope = _verified_worker_scope_from_db(db)
-    physical_digest = _file_digest(db)
+    args = _fixture_open_args(db, receipt_ed25519_keys)
+    physical_digest = args["verified_physical_digest"]
     actual_connect = sqlite3.connect
     connect_calls: list[str] = []
 
@@ -1762,11 +2259,7 @@ def test_controlled_batch_uses_one_pinned_connection_for_identity_universe_and_f
         return actual_connect(*args, **kwargs)
 
     monkeypatch.setattr(sqlite3, "connect", only_authority_open)
-    handle = governed._open_verified_controlled_snapshot(
-        pinned_path=db,
-        verified_physical_digest=physical_digest,
-        verified_session_scope=verified_scope,
-    )
+    handle = governed._open_verified_controlled_snapshot(pinned_path=db, **args)
 
     class AlwaysLong:
         strategy_id = "always_long"
@@ -1808,7 +2301,9 @@ def test_controlled_batch_uses_one_pinned_connection_for_identity_universe_and_f
     assert len(connect_calls) == 1
 
 
-def test_later_ingested_daily_session_is_historical_not_backdated(tmp_path) -> None:
+def test_later_ingested_daily_session_is_historical_not_backdated(
+    tmp_path, receipt_ed25519_keys
+) -> None:
     from _coreseed import TRADING_DAYS, seed_governed_am_pm_session_db, write_snapshot_observation_clock
     from core.execution import morning_close_as_of
     from storage.sqlite_store import SqliteStore
@@ -1873,7 +2368,7 @@ def test_later_ingested_daily_session_is_historical_not_backdated(tmp_path) -> N
     store = SqliteStore(db)
     write_snapshot_observation_clock(store, later)
     store.close()
-    view = _verified_snapshot_view_from_db(db)
+    view = _verified_snapshot_view_from_db(db, receipt_ed25519_keys)
     visible = view.authorized_rows(
         as_of=morning_close_as_of(days[-1]),
         codes={code},
@@ -1931,12 +2426,14 @@ def _reseal_daily_catalog(conn) -> None:
     )
 
 
-def test_sealed_clocks_compare_as_aware_instants_not_lexically(tmp_path) -> None:
+def test_sealed_clocks_compare_as_aware_instants_not_lexically(
+    tmp_path, receipt_ed25519_keys
+) -> None:
     import sqlite3
 
     from _coreseed import TRADING_DAYS, seed_governed_am_pm_session_db
     from core.execution import morning_close_as_of
-    from pit.errors import SnapshotObservationClockError
+    from pit.errors import PitError, SnapshotObservationClockError
 
     code = "1332"
     days = TRADING_DAYS
@@ -1959,7 +2456,7 @@ def test_sealed_clocks_compare_as_aware_instants_not_lexically(tmp_path) -> None
     _reseal_daily_catalog(conn)
     conn.commit()
     conn.close()
-    view = _verified_snapshot_view_from_db(db)
+    view = _verified_snapshot_view_from_db(db, receipt_ed25519_keys)
     visible = view.authorized_rows(
         as_of=morning_close_as_of(last),
         codes={code},
@@ -1989,7 +2486,7 @@ def test_sealed_clocks_compare_as_aware_instants_not_lexically(tmp_path) -> None
     _reseal_daily_catalog(conn)
     conn.commit()
     conn.close()
-    view_ms = _verified_snapshot_view_from_db(db_ms)
+    view_ms = _verified_snapshot_view_from_db(db_ms, receipt_ed25519_keys)
     visible_ms = view_ms.authorized_rows(
         as_of=morning_close_as_of(last),
         codes={code},
@@ -2018,19 +2515,11 @@ def test_sealed_clocks_compare_as_aware_instants_not_lexically(tmp_path) -> None
     _reseal_daily_catalog(conn)
     conn.commit()
     conn.close()
-    view_future = _verified_snapshot_view_from_db(db_future)
-    assert (
-        view_future.authorized_rows(
-            as_of=morning_close_as_of(last),
-            codes={code},
-            from_date=last,
-            to_date=last,
-        )
-        == ()
-    )
-    fills = view_future.pm_fill_closes(session_date=last, codes={code})
-    assert fills == {}
-    view_future._handle.close()
+    with pytest.raises(
+        (PitError, SnapshotObservationClockError),
+        match="historical MAdjC/AAdjC closure",
+    ):
+        _verified_snapshot_view_from_db(db_future, receipt_ed25519_keys)
 
     fractional = f"{last}T15:30:00.001+09:00"
     db_frac = seed_governed_am_pm_session_db(
@@ -2050,17 +2539,11 @@ def test_sealed_clocks_compare_as_aware_instants_not_lexically(tmp_path) -> None
     _reseal_daily_catalog(conn)
     conn.commit()
     conn.close()
-    view_frac = _verified_snapshot_view_from_db(db_frac)
-    assert (
-        view_frac.authorized_rows(
-            as_of=morning_close_as_of(last),
-            codes={code},
-            from_date=last,
-            to_date=last,
-        )
-        == ()
-    )
-    view_frac._handle.close()
+    with pytest.raises(
+        (PitError, SnapshotObservationClockError),
+        match="historical MAdjC/AAdjC closure",
+    ):
+        _verified_snapshot_view_from_db(db_frac, receipt_ed25519_keys)
 
     db_naive = seed_governed_am_pm_session_db(
         tmp_path / "naive",
@@ -2079,21 +2562,35 @@ def test_sealed_clocks_compare_as_aware_instants_not_lexically(tmp_path) -> None
     _reseal_daily_catalog(conn)
     conn.commit()
     conn.close()
-    with pytest.raises(SnapshotObservationClockError, match="timezone|malformed"):
-        _verified_snapshot_view_from_db(db_naive)
+    with pytest.raises(
+        (PitError, SnapshotObservationClockError),
+        match="lacks timezone",
+    ):
+        _verified_snapshot_view_from_db(db_naive, receipt_ed25519_keys)
 
 
-def test_controlled_prices_features_fills_use_sealed_not_typed(tmp_path) -> None:
+def test_controlled_prices_features_fills_use_sealed_not_typed(
+    tmp_path, receipt_ed25519_keys
+) -> None:
     import sqlite3
 
-    from _coreseed import TRADING_DAYS, seed_governed_am_pm_session_db
+    from _coreseed import seed_governed_am_pm_session_db
     from core import PERSONAL_RETROSPECTIVE_ADJUSTED, run_backtest, standard_cost
     from core.execution import morning_close_as_of
     from core.universe import membership_at
     from core.strategy_protocol import OrderIntent
+    from research.ready_manifest import load_exact_four_pilot_ready_binding
 
     code = "1332"
-    days = TRADING_DAYS
+    days = [
+        "2025-04-01",
+        "2025-04-02",
+        "2025-04-03",
+        "2025-04-04",
+        "2025-04-07",
+        "2025-04-08",
+        "2025-04-09",
+    ]
     db = seed_governed_am_pm_session_db(
         tmp_path,
         codes=[code],
@@ -2109,37 +2606,57 @@ def test_controlled_prices_features_fills_use_sealed_not_typed(tmp_path) -> None
     conn.commit()
     conn.close()
     universe = membership_at(morning_close_as_of(days[0]), db_path=db, codes=(code,))
-    view = _verified_snapshot_view_from_db(db)
-    seen: dict[str, float] = {}
-
-    class Probe:
-        strategy_id = "sealed_probe"
-        params: dict = {}
-
-        def on_bar(self, ctx):
-            if ctx.date == days[1]:
-                seen["price"] = float(ctx.prices[code])
-                out = ctx.feature(
-                    "retrospective_split_adjusted_momentum_n",
-                    code=code,
-                    n=1,
-                )
-                seen["last_close"] = float(out.metadata["last_adjustment_close"])
-                seen["value"] = float(out.value)
-            return [OrderIntent(code=code, target_weight=0.5)]
-
-    res = run_backtest(
-        Probe(),
-        days[0],
-        days[-1],
-        db_path=db,
-        universe=universe,
-        execution_mode="am_signal_pm_close",
-        price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
-        cost_model=standard_cost(bps=0.0),
-        max_gross_weight=0.5,
-        am_session_data_view=view,
+    ready = load_exact_four_pilot_ready_binding()
+    xs = next(
+        profile
+        for profile in ready.profiles
+        if profile.plan_id == "exp-xs-hold10-mom5"
     )
+    handle = _verified_snapshot_handle_from_db(db, receipt_ed25519_keys)
+    try:
+        handle._begin_controlled_batch_reads()
+        handle._bind_current_plan_feature_consumers(
+            plan_id=xs.plan_id,
+            profile_version=xs.profile_version,
+            profile_set_digest=handle.session_profile_digest,
+            consumers=xs.feature_consumers(),
+            feature_dependencies=tuple(xs.feature_dependencies),
+        )
+        view = handle.am_session_data_view()
+        seen: dict[str, float] = {}
+
+        class Probe:
+            strategy_id = "sealed_probe"
+            params: dict = {}
+
+            def on_bar(self, ctx):
+                if ctx.date == days[-1]:
+                    seen["price"] = float(ctx.prices[code])
+                    out = ctx.feature(
+                        "retrospective_split_adjusted_momentum_n",
+                        version="1.0.0",
+                        code=code,
+                        n=5,
+                    )
+                    seen["last_close"] = float(out.metadata["last_adjustment_close"])
+                    seen["value"] = float(out.value)
+                return [OrderIntent(code=code, target_weight=0.5)]
+
+        res = run_backtest(
+            Probe(),
+            days[0],
+            days[-1],
+            db_path=db,
+            universe=universe,
+            execution_mode="am_signal_pm_close",
+            price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+            cost_model=standard_cost(bps=0.0),
+            max_gross_weight=0.5,
+            am_session_data_view=view,
+        )
+    finally:
+        handle._end_controlled_batch_reads()
+        handle.close()
     assert seen["price"] == 100.0
     assert seen["last_close"] == 100.0
     assert seen["value"] == pytest.approx((100.0 - 150.0) / 150.0)
@@ -2151,7 +2668,7 @@ def test_controlled_prices_features_fills_use_sealed_not_typed(tmp_path) -> None
 
 
 def test_sealed_daily_reader_does_not_decode_unrelated_history(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, receipt_ed25519_keys
 ) -> None:
     import sqlite3
 
@@ -2171,7 +2688,7 @@ def test_sealed_daily_reader_does_not_decode_unrelated_history(
     )
     conn = sqlite3.connect(db)
     for day in ("2008-01-04", "2008-01-07", "2008-01-08"):
-        for item in (code, other):
+        for item in (other,):
             payload = {
                 "Code": item,
                 "Date": day,
@@ -2202,7 +2719,7 @@ def test_sealed_daily_reader_does_not_decode_unrelated_history(
             )
     conn.commit()
     conn.close()
-    view = _verified_snapshot_view_from_db(db)
+    view = _verified_snapshot_view_from_db(db, receipt_ed25519_keys)
     decoded_dates: list[str] = []
     real = governed._decode_payload
 
@@ -2235,7 +2752,7 @@ def test_sealed_daily_reader_does_not_decode_unrelated_history(
 
 
 def test_latest_n_counts_only_decision_visible_sealed_rows(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, receipt_ed25519_keys
 ) -> None:
     import sqlite3
 
@@ -2308,7 +2825,7 @@ def test_latest_n_counts_only_decision_visible_sealed_rows(
     store = SqliteStore(db)
     write_snapshot_observation_clock(store, observed)
     store.close()
-    view = _verified_snapshot_view_from_db(db)
+    view = _verified_snapshot_view_from_db(db, receipt_ed25519_keys)
     decoded_dates: list[str] = []
     real = governed._decode_payload
 
@@ -2357,7 +2874,9 @@ def test_latest_n_counts_only_decision_visible_sealed_rows(
     view._handle.close()
 
 
-def test_tip_only_am_absent_does_not_block_historical_daily_closure(tmp_path) -> None:
+def test_tip_only_am_absent_does_not_block_historical_daily_closure(
+    tmp_path, receipt_ed25519_keys
+) -> None:
     import sqlite3
 
     from _coreseed import TRADING_DAYS, seed_governed_am_pm_session_db
@@ -2376,7 +2895,7 @@ def test_tip_only_am_absent_does_not_block_historical_daily_closure(tmp_path) ->
     )
     conn.commit()
     conn.close()
-    view = _verified_snapshot_view_from_db(db)
+    view = _verified_snapshot_view_from_db(db, receipt_ed25519_keys)
     rows = view.authorized_rows(
         as_of=f"{TRADING_DAYS[0]}T11:30:00+09:00",
         codes={"1332"},
