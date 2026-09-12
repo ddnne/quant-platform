@@ -388,9 +388,14 @@ async function fireAlarm(
   stub: ReturnType<typeof runtimeEnv.RECEIPT_EVIDENCE_AUTHORITY_DO.getByName>,
 ): Promise<void> {
   await runInDurableObject(stub, async (_instance, state) => {
-    await state.storage.setAlarm(Date.now());
+    const scheduled = await state.storage.getAlarm();
+    if (scheduled === null || scheduled <= Date.now()) {
+      await state.storage.setAlarm(Date.now() + EVENT_AUDIT_PERIODIC_MS);
+    }
   });
-  await runDurableObjectAlarm(stub);
+  if (!await runDurableObjectAlarm(stub)) {
+    throw new Error("fireAlarm required a scheduled Durable Object alarm");
+  }
 }
 
 async function runDueAudit(
@@ -400,9 +405,8 @@ async function runDueAudit(
     state.storage.sql.exec(
       "UPDATE authority_event_audit SET next_alarm_at=0 WHERE singleton=1",
     );
-    await state.storage.setAlarm(Date.now());
   });
-  await runDurableObjectAlarm(stub);
+  await fireAlarm(stub);
 }
 
 async function seedSyntheticEventChain(
