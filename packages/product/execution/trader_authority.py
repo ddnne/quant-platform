@@ -181,9 +181,6 @@ class TraderAuthorizationPublicKeyRegistry:
 class VerifiedTraderAuthorization:
     """Signed, immutable authorization for one exact READY/plan/universe."""
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        raise TypeError("VerifiedTraderAuthorization is final")
-
     authorization_id: str
     mode: str
     strategy_id: str
@@ -209,9 +206,6 @@ class VerifiedTraderAuthorization:
     identity: str = CONTROLLED_PILOT_IDENTITY
 
     def __post_init__(self) -> None:
-        # Do not admit str/float subclasses or stateful coercion objects into
-        # an authority-bearing DTO.  Verification below still snapshots every
-        # field once because ``frozen=True`` is not an OS security boundary.
         _materialize_authorization(self)
 
     def to_canonical_body(self) -> dict[str, Any]:
@@ -243,9 +237,6 @@ class TraderAuthorizationBinding:
     product verifier compares the signed body with this binding atomically.
     """
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        raise TypeError("TraderAuthorizationBinding is final")
-
     authorization_id: str
     strategy_id: str
     strategy_spec_hash: str
@@ -267,24 +258,6 @@ class TraderAuthorizationBinding:
     identity: str = CONTROLLED_PILOT_IDENTITY
 
     def __post_init__(self) -> None:
-        values = tuple(
-            object.__getattribute__(self, name)
-            for name in _BINDING_STRING_FIELDS
-        )
-        if any(type(value) is not str or not value for value in values):
-            raise TypeError(
-                "TraderAuthorizationBinding requires exact non-empty strings"
-            )
-        gross = object.__getattribute__(self, "max_gross_weight")
-        if type(gross) is not float or not math.isfinite(gross):
-            raise TypeError(
-                "TraderAuthorizationBinding max_gross_weight must be an exact "
-                "finite float"
-            )
-        if not 0.0 < gross <= 1.0:
-            raise ValueError(
-                "TraderAuthorizationBinding max_gross_weight must be in (0, 1]"
-            )
         _materialize_binding(self)
 
     def to_dict(self) -> dict[str, Any]:
@@ -346,14 +319,14 @@ def _materialize_authorization(
     if type(authorization) is not VerifiedTraderAuthorization:
         raise TypeError("exact VerifiedTraderAuthorization required")
     values = {
-        name: object.__getattribute__(authorization, name)
+        name: getattr(authorization, name)
         for name in _AUTHORIZATION_STRING_FIELDS
     }
     if any(type(value) is not str for value in values.values()):
         raise TypeError(
             "VerifiedTraderAuthorization fields must be exact built-in strings"
         )
-    gross = object.__getattribute__(authorization, "max_gross_weight")
+    gross = getattr(authorization, "max_gross_weight")
     if type(gross) is not float or not math.isfinite(gross):
         raise TypeError(
             "VerifiedTraderAuthorization max_gross_weight must be an exact "
@@ -398,18 +371,22 @@ def _materialize_binding(binding: TraderAuthorizationBinding) -> dict[str, Any]:
     if type(binding) is not TraderAuthorizationBinding:
         raise TypeError("exact TraderAuthorizationBinding required")
     values = {
-        name: object.__getattribute__(binding, name)
+        name: getattr(binding, name)
         for name in _BINDING_STRING_FIELDS
     }
     if any(type(value) is not str or not value for value in values.values()):
         raise TypeError(
             "TraderAuthorizationBinding requires exact non-empty strings"
         )
-    gross = object.__getattribute__(binding, "max_gross_weight")
+    gross = getattr(binding, "max_gross_weight")
     if type(gross) is not float or not math.isfinite(gross):
         raise TypeError(
             "TraderAuthorizationBinding max_gross_weight must be an exact "
             "finite float"
+        )
+    if not 0.0 < gross <= 1.0:
+        raise ValueError(
+            "TraderAuthorizationBinding max_gross_weight must be in (0, 1]"
         )
     for name in (
         "authorization_id",
@@ -457,9 +434,8 @@ def verify_exact_trader_authorization(
 ) -> bool:
     """Verify signature and exact independently reconstructed decision values.
 
-    The same one-time materialization is used for both cryptographic and
-    semantic checks.  A caller cannot make validation observe one value and
-    the execution-artifact verifier observe another via a stateful scalar.
+    Cryptographic and semantic checks use the same materialized body and
+    independently reconstructed binding.
     """
 
     try:
