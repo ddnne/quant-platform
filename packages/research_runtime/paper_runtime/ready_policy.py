@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
 
 from paper_runtime.coherence import CoherenceGateResult, check_ready_coherence
-from paper_runtime.snapshot_coverage_proof import (
+from storage.coverage_proof import (
     CoverageProofVerificationError,
     require_persisted_coverage_proof,
 )
