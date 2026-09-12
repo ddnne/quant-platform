@@ -11,7 +11,7 @@ from pathlib import Path
 import sqlite3
 from typing import Any, Iterable, Mapping, Sequence
 
-from cf_platform.ingest_premium.coverage import CheckResult, run_coverage
+from storage.coverage import CheckResult, run_coverage
 from data_contracts.coverage import (
     COVERAGE_STATUSES,
     SNAPSHOT_SEGMENT_GRANULARITIES,

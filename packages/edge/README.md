@@ -6,7 +6,7 @@ CF-adjacent Python helpers and local MCP. Import names stay leaf top-level.
 
 | Import | Role |
 |--------|------|
-| `cf_platform` | Python SoT mirror for Premium coverage / validate / natural_key / live_gates (volume B0 ≠ Track B0) |
+| `cf_platform` | Worker-mirror validate/availability/natural_key; coverage/matrix/live_gates re-export storage |
 | `mcp_servers` | Local stdio quant_data MCP (dev/offline only) |
 
 ## Allowed deps

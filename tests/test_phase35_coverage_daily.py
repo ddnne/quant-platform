@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import pytest
 
-from cf_platform.ingest_premium import matrix
-from cf_platform.ingest_premium.coverage import (
+from storage import matrix
+from storage.coverage import (
     CheckResult,
     _ADDON_IDS,
     has_failures,

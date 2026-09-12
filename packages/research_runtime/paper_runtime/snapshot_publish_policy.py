@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from cf_platform.ingest_premium.coverage import run_coverage, summarize
+from storage.coverage import run_coverage, summarize
 from data_contracts.loader import all_contracts
 from paper_runtime.snapshot_coverage_proof import (
     _coverage_proof,

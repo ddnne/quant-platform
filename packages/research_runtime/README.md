@@ -18,7 +18,7 @@ Compute stack (no external market network): backtest, features, strategies, pape
 
 - `core` / `features` → `pit`, `price_basis`
 - `strategies` → `core`, `features`, `paper_runtime`, `price_basis`
-- `paper_runtime` → `data_contracts`, `storage`, `strategies`, `features`, `cf_platform`
+- `paper_runtime` → `data_contracts`, `storage`, `strategies`, `features`
 - `data_access` → `pit`, `data_contracts`, `storage`, `features`, `paper_runtime`, `ops.current_read`
 - **Exception:** `risk` → `agents` (soft type edge; do not expand casually)
 
