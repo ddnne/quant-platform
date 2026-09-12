@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import readyFixture from "../../../../specs/ready/controlled_pilot_ready.generated.json";
-import { controlledPhysicalSnapshotKey, controlledReadyKey } from "./controlled_pilot_contract";
+import { controlledPhysicalSnapshotKey, controlledReadyKey } from "../../research-mass-eval/src/controlled_pilot_contract";
 
 const projectionMock = vi.hoisted(() => vi.fn());
 vi.mock("cloudflare:workers", () => ({ WorkerEntrypoint: class {} }));
-vi.mock("./ops_projection_ready", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./ops_projection_ready")>();
+vi.mock("../../research-mass-eval/src/ops_projection_ready", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../research-mass-eval/src/ops_projection_ready")>();
   return { ...actual, verifyOpsProjectionReady: projectionMock };
 });
 
@@ -95,6 +95,7 @@ describe("READY publication physical R2 trust boundary", () => {
     } as unknown as R2Bucket;
     const result = await publishPilotReady({
       STRUCTURED_BUCKET: bucket,
+      OPS_PROJECTION_ENVIRONMENT: "staging",
       READY_ED25519_PRIVATE_KEY: await signingSecret(),
       READY_ED25519_KEY_ID: "ready-test",
       READY_DECLARED: "false",
@@ -125,6 +126,7 @@ describe("READY publication physical R2 trust boundary", () => {
     } as unknown as R2Bucket;
     const result = await publishPilotReady({
       STRUCTURED_BUCKET: bucket,
+      OPS_PROJECTION_ENVIRONMENT: "staging",
       READY_ED25519_PRIVATE_KEY: await signingSecret(),
       READY_ED25519_KEY_ID: "ready-test",
       READY_DECLARED: "false",
@@ -161,6 +163,7 @@ describe("READY publication physical R2 trust boundary", () => {
     } as unknown as R2Bucket;
     const result = await publishPilotReady({
       STRUCTURED_BUCKET: bucket,
+      OPS_PROJECTION_ENVIRONMENT: "staging",
       READY_ED25519_PRIVATE_KEY: await signingSecret(),
       READY_ED25519_KEY_ID: "ready-test",
       READY_DECLARED: "false",
@@ -217,6 +220,7 @@ describe("READY publication physical R2 trust boundary", () => {
       } as unknown as R2Bucket;
       return publishPilotReady({
         STRUCTURED_BUCKET: bucket,
+        OPS_PROJECTION_ENVIRONMENT: "staging",
         READY_ED25519_PRIVATE_KEY: await signingSecret(),
         READY_ED25519_KEY_ID: "ready-test",
         READY_DECLARED: "false",
@@ -247,6 +251,7 @@ describe("READY publication physical R2 trust boundary", () => {
     } as unknown as R2Bucket;
     const result = await publishPilotReady({
       STRUCTURED_BUCKET: bucket,
+      OPS_PROJECTION_ENVIRONMENT: "staging",
       READY_ED25519_PRIVATE_KEY: await signingSecret(),
       READY_ED25519_KEY_ID: "ready-test",
       READY_DECLARED: "false",
@@ -278,6 +283,7 @@ describe("READY publication physical R2 trust boundary", () => {
     } as unknown as R2Bucket;
     const env = {
       STRUCTURED_BUCKET: bucket,
+      OPS_PROJECTION_ENVIRONMENT: "staging",
       READY_ED25519_PRIVATE_KEY: await signingSecret(),
       READY_ED25519_KEY_ID: "ready-test",
       READY_DECLARED: "false",
@@ -289,5 +295,37 @@ describe("READY publication physical R2 trust boundary", () => {
     if (!retry.ok) return;
     expect(objects.has(retry.envelope_key)).toBe(true);
     expect(objects.has(retry.attestation_key)).toBe(true);
+  });
+
+  it("rejects when OPS_PROJECTION_ENVIRONMENT is missing or mismatches the candidate", async () => {
+    const input = candidate();
+    const secret = await signingSecret();
+    for (const environmentFields of [
+      {},
+      { OPS_PROJECTION_ENVIRONMENT: "production" },
+    ] as const) {
+      const bucket = {
+        head: vi.fn(),
+        get: vi.fn(),
+        put: vi.fn(),
+      } as unknown as R2Bucket;
+      projectionMock.mockClear();
+      const result = await publishPilotReady({
+        STRUCTURED_BUCKET: bucket,
+        READY_ED25519_PRIVATE_KEY: secret,
+        READY_ED25519_KEY_ID: "ready-test",
+        READY_DECLARED: "false",
+        ...environmentFields,
+      } as never, input);
+      expect(result).toMatchObject({
+        ok: false,
+        status: "REJECTED",
+        error: "READY environment does not match OPS_PROJECTION_ENVIRONMENT",
+      });
+      expect(projectionMock).not.toHaveBeenCalled();
+      expect(bucket.head).not.toHaveBeenCalled();
+      expect(bucket.get).not.toHaveBeenCalled();
+      expect(bucket.put).not.toHaveBeenCalled();
+    }
   });
 });

@@ -1,11 +1,9 @@
-/// <reference types="@cloudflare/workers-types" />
 
 import { sha256Hex } from "./sha256";
 
 export { json } from "./http_json";
 export { sha256Hex } from "./sha256";
 export { authorized } from "./authorized";
-export { freezePayload } from "./freeze";
 
 async function cancelRequestBody(request: Request): Promise<void> {
   const body = request.body;
