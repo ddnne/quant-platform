@@ -1,9 +1,7 @@
-"""CF Worker POST /v1/propose-thesis. Does not write YAML. Does not GO.
+"""Propose-thesis review helper. Does not write YAML. Does not GO.
 
-Remote proposals SoT is the Worker route. Review / write-block policy
-lives in ``research.cf_propose_policy``. Local
-``research.offline.factory_propose.propose_profit_hypotheses`` stays
-offline-only. Does not import factory / class_hyp_eval / bar_eval.
+Review / write-block policy lives in ``research.cf_propose_policy``.
+The Worker propose endpoint remains refused. Does not import bar_eval.
 """
 
 from __future__ import annotations

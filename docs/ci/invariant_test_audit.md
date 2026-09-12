@@ -1,11 +1,44 @@
 # Invariant test audit
 
-This is the current test authority map. A test may demonstrate an invariant,
-but it must not create the security boundary it claims to test. Production
-boundaries therefore live in types, opaque capabilities, immutable stores,
-transactions, cryptographic verification, Cloudflare bindings, or runtime
-sandboxing. Source spelling, comments, phase names, and historical counts are
-not release authorities.
+This is a personal single-user Cloudflare quant research product on a trusted
+host. Tests catch real current failures; they do not simulate an untrusted
+multi-tenant enterprise.
+
+**Policy**
+
+1. Prioritize real numeric correctness: known-input/expected-output,
+   returns/positions/PnL/costs, PIT/AM-to-PM no lookahead, and meaningful
+   accounting.
+2. Keep only minimal practical guards against missing/corrupt data,
+   uncontrolled charge, and accidental real orders.
+3. Closed DSL/JSON only. Do not build or test hostile same-process Python
+   reflection/subclass/frozen-object attacks, root-adversary/WebAuthn/extra
+   signers, or extra enterprise authority layers unless a new explicit user
+   need is established. C04 remains pending under that rule.
+4. Before adding a layer or test, state the concrete current failure it
+   catches and whether existing code, library, schema, or test already covers
+   it. Prefer deletion/consolidation over a replacement framework. No
+   test-count or coverage targets, source-name or phase-label tests,
+   exhaustive input-form matrices, just-in-case retention, or a test of this
+   policy prose.
+5. Review runtime code and tests together for dead code, duplicate ownership,
+   and needless abstraction. Delete unused runtime code and its tests
+   together. Small logical commits; do not drop active numerical semantics.
+6. Do not weaken authentic data, PIT, budget enforcement, or explicit
+   deployment HOLDs merely to simplify.
+
+This document is the detailed policy linked from root `AGENTS.md`. It is not
+a claim that every module or test has been reviewed.
+
+A test may demonstrate an invariant, but it must not create the security
+boundary it claims to test. Where a real production boundary exists today, it
+lives in types, opaque capabilities, immutable stores, transactions,
+cryptographic verification, or Cloudflare bindings. Runtime OS sandboxing
+applies only to the existing isolated-runner path, not as a reason to add
+broader sandbox or authority frameworks. Source spelling, comments, phase
+names, and historical counts are not release authorities. Table wording such
+as malicious CWD or adversarial cases describes those existing packaging and
+signed-receipt checks, not a charter for extra hostile-Python tests.
 
 | Invariant | Structural enforcement | Minimal acceptance test |
 | --- | --- | --- |

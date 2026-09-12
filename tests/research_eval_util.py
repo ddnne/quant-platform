@@ -228,8 +228,7 @@ def assert_unique_family_specs(
     *,
     disjoint_from: tuple[frozenset[str], ...] = (),
 ) -> None:
-    """YAML-backed unique family identity. generation_enabled/go: catalog parity."""
-    from research.offline.factory import propose_profit_hypotheses
+    """YAML-backed unique family identity. Not a factory or GO check."""
     from research.unique_logic.constants import (
         KNOWN_DEMOTED_OR_WEAK,
         KNOWN_WEAK_THESIS,
@@ -251,13 +250,6 @@ def assert_unique_family_specs(
             assert lid not in other
         params = s.get("params")
         assert isinstance(params, dict)
-    out = propose_profit_hypotheses(specs, evaluate=False)
-    assert out["n_accepted"] == len(specs)
-    assert out["n_rejected"] == 0
-    assert [a["logic_id"] for a in out["accepted"]] == ids
-    for a in out["accepted"]:
-        assert a["logic_id"] not in LOGIC_CATALOG_HEADLINE_BAN
-        assert a.get("eval_mapped_to_catalog") in (None, False)
 
 
 def _eval_cell(logic_id: str, **fields):

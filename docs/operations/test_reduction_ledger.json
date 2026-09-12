@@ -31,6 +31,32 @@
   ],
   "retired_mass_route_cleanup": {"id":"T01-F01","status":"merged_pr127_source_fresh_main_native_accepted","implementation_commit":"585fa6f0a1684b9b0ee6a20ecb53b1ae53650603","integration_cleanup":"29467e4f","reason":"Retire permanently disabled Mass execution from active Worker. Original T01/C19 Python/replay prerequisites remain open.","removed_test_groups":[{"file":"platform/workers/research-mass-eval/src/http.test.ts","selectors":["index.ts write order pin > mass-eval and daily-path commit children before job manifest","http_routes.ts fetch dispatch > exposes POST /v1/children-then-manifest with X-Mass-Eval-Token"],"count":2,"bug_missed_if_removed":"No live Mass handler remains to order. Actual children HTTP writes/auth/order tests retain the storage contract; no loss of live ordering protection."},{"file":"platform/workers/research-mass-eval/src/http.test.ts","selectors":["POST /v1/propose-thesis (3 cases)","POST /v1/mass-eval capability gate (2 cases)","POST /v1/daily-path capability gate (2 cases)"],"count":7,"bug_missed_if_removed":"Method/auth/capability regressions matter: actual worker.fetch runtime405/401/403 replaces dispatcher-plus-MemR2 probes."},{"file":"platform/workers/research-mass-eval/src/http_query_token.test.ts","selectors":["POST /v1/mass-eval?token=secret with no header is 401 and does not eval","POST /v1/daily-path?token=secret with no header is 401 and does not eval","POST /v1/propose-thesis?token=secret with no header is 401 and does not eval"],"count":3,"bug_missed_if_removed":"Query-token acceptance remains covered on all3 actual Worker routes; real children query guard stays."},{"file":"platform/workers/research-mass-eval/src/http_nets_only.test.ts","selectors":["returns 403 capability_missing mass_screen, not a nets_only screen"],"count":1,"bug_missed_if_removed":"Retired route has no mode parser/handler. Runtime all-GO/NETS_ONLY=allow with malformed unread body, denied binding access and no fetch supersedes this fixture."}],"retained":"evaluation_ir actual complete/partial encode and golden reads remain; only index-source tail removed and title shortened, not a deleted case. Personal spies/admission, AM/PM v2 misrouting, children writes and unbound-token denial remain.13 Node definitions replaced by3 runtime cases; extinct callback fakes removed.","verification":"Integrated481Node/22workerd/typecheck+41Python/secret PASS; final cleanup query case PASS. Source/test diff7ce8001a. Worker skill kept native execution; no new dependency/config/authority.17files net793 lines removed, not speed/count proof. Before integration same esbuild815723->701680, final701643 bytes; five legacy modules absent from output, active kernels remain. Source native/push/merge and rollout separate.","acceptance":"PR127 source/fresh/main accepted; merged86ce3b57 native app85455/check103432931201/build3cb21bea SUCCESS21:46:59.567Z. Terminal logs3587offline/3skip+3toolchain/all8Worker lanes/named-env/typegen/remote Container dry-runs/generated-clean. Evidence https://github.com/ddnne/quant-platform/pull/127#issuecomment-5641023108 . Completed branch removed; no rollout; T01/C19 and operational HOLDs remain."},
   "verification_reference": "docs/operations/current_work_ledger.json#items.7_dead_code_and_docs",
+  "partial_repo_simplification": {
+    "id": "S01",
+    "title": "partial repo simplification: retired offline Mass factory",
+    "status": "this_batch_only_not_full_repo",
+    "scope": "First code-reduction batch. Not a claim that all tests or modules were reviewed. C04 and other pending findings remain.",
+    "removed_runtime": [
+      "packages/product/research/offline/factory.py",
+      "packages/product/research/offline/factory_eval.py",
+      "packages/product/research/offline/factory_eval_data.py",
+      "packages/product/research/offline/factory_eval_screen.py",
+      "packages/product/research/offline/factory_propose.py",
+      "packages/product/research/offline/factory_templates.py"
+    ],
+    "removed_tests_and_imports": [
+      "tests/test_mass_strategy_factory.py (factory-only cases)",
+      "tests/test_research_freezes.py::test_factory_templates_do_not_clone_combo_catalog",
+      "factory probes in tests/test_phase632_p1_simplification.py",
+      "propose_profit_hypotheses call in tests/research_eval_util.py::assert_unique_family_specs"
+    ],
+    "moved_numeric_tests": [
+      "tests/test_class_signals.py::test_nky_vol_signal_helpers_pure",
+      "tests/test_class_signals.py::test_opt225_signal_helpers_pure"
+    ],
+    "retained": "offline bar_eval/multiyear, cost_models, features.class_signals nky/opt225 helpers, strategies, BAR_NATIVE_SPECS via cf_mass_eval_job, unique_logic, exact-four plans, Personal/volatility/SVI, artifacts/evidence, CF Mass/daily-path refusal probes",
+    "note": "No active non-test consumer of the factory cycle. pyproject/Docker already exclude research.offline from normal runtime. Git history keeps the retired implementation. No replacement factory or archival stubs."
+  },
   "findings": [
     {"id":"D01","action":"DELETE","title":"同一本文のAM拒否テスト","status":"implemented_local_verification","implementation_commit":"25c6d5fe","baseline_targets":[["tests/test_controlled_pilot_p0.py","test_synthetic_am_timestamps_on_daily_bars_are_rejected$"]],"reason":"close-onlyテストとAST本文が完全一致。名前に反して別のsynthetic timestamp条件を作っていない。","bug_missed_if_removed":"なし。同じ入力・同じ関数・同じ拒否検証が残る。","required_retained_guarantee":"同ファイル test_close_only_bars_are_not_controlled_am_evidence を残す。"},
     {"id":"D02","action":"DELETE","title":"WorkerのSHA実装文字列固定","status":"implemented_local_verification","implementation_commit":"71f6f6e9","baseline_targets":[["src/sha256.test.ts","source uses WebCrypto"]],"reason":"WebCrypto/Node importの綴りは出力の正しさでも実ランタイム互換性でもない。","bug_missed_if_removed":"Node APIへの置換自体は見逃すが、それ自体を製品バグとしない。ランタイム非互換はworkerdで検知する。","required_retained_guarantee":"既存の既知digestベクトルとworkerd receipt/gateway実行を残す。"},
