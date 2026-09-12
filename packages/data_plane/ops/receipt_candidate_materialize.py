@@ -18,6 +18,7 @@ from ops.receipt_product import (
     _iter_canonical_artifact_rows,
     catalog_owned_product_row_digests,
     measure_owned_product_artifact_body,
+    persist_stored_product_artifact,
     verify_full_segment_product_materialization,
 )
 from storage.coverage_ledger_io import record_collection_receipt
@@ -246,26 +247,6 @@ def _apply_product_file(
             _guard_database_bytes(store, max_database_bytes=max_database_bytes)
 
 
-def _store_artifact_text(
-    conn: sqlite3.Connection,
-    *,
-    operation_id: str,
-    product_path: Path,
-    byte_count: int,
-) -> None:
-    with product_path.open("rb") as handle:
-        payload = handle.read(byte_count + 1)
-    if len(payload) != byte_count:
-        raise ReceiptCandidateMaterializeError(
-            "product artifact spool size does not match the signed byte count"
-        )
-    conn.execute(
-        "UPDATE receipt_product_materializations SET artifact_body=? "
-        "WHERE operation_id=?",
-        (payload.decode("utf-8"), operation_id),
-    )
-
-
 def materialize_receipt_segment(
     store: SqliteStore,
     *,
@@ -393,7 +374,7 @@ def materialize_receipt_segment(
             "artifact_digest, artifact_body, row_count, byte_count, manifest_key, "
             "manifest_digest, raw_manifest_key, raw_manifest_digest, raw_page_count, "
             "raw_row_count, raw_bytes, committed_at) VALUES "
-            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "(?,?,?,?,?,?,?,zeroblob(?),?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(operation_id) DO UPDATE SET "
             "run_id=excluded.run_id, source=excluded.source, dataset=excluded.dataset, "
             "segment_id=excluded.segment_id, artifact_key=excluded.artifact_key, "
@@ -412,7 +393,7 @@ def materialize_receipt_segment(
                 closure.segment_id,
                 closure.artifact_key,
                 closure.structured_digest,
-                "",
+                closure.artifact_byte_count,
                 closure.structured_row_count,
                 closure.artifact_byte_count,
                 closure.manifest_key,
@@ -425,12 +406,13 @@ def materialize_receipt_segment(
                 descriptor.get("product", {}).get("committed_at"),
             ),
         )
-        _store_artifact_text(
-            conn,
-            operation_id=operation_id,
-            product_path=product_path,
-            byte_count=closure.artifact_byte_count,
-        )
+        with product_path.open("rb") as handle:
+            persist_stored_product_artifact(
+                conn,
+                operation_id=operation_id,
+                source=handle,
+                byte_count=closure.artifact_byte_count,
+            )
         owned = catalog_owned_product_row_digests(
             conn,
             source=closure.source,

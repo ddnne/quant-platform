@@ -9,7 +9,10 @@ receipt table can never substitute for the product consumed by research.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
+import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
@@ -156,6 +159,104 @@ def measure_product_artifact_jsonl(source: Any) -> tuple[int, str, int]:
     return count, "sha256:" + hasher.hexdigest(), nbytes
 
 
+_ARTIFACT_TABLE = "receipt_product_materializations"
+_ARTIFACT_COLUMN = "artifact_body"
+_STREAM_CHUNK = 1024 * 1024
+
+
+class _BlobRawIO(io.RawIOBase):
+    def __init__(self, blob: Any) -> None:
+        super().__init__()
+        self._blob = blob
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, b: Any) -> int:
+        data = self._blob.read(len(b))
+        n = len(data)
+        b[:n] = data
+        return n
+
+    def close(self) -> None:
+        if not self.closed:
+            blob = self._blob
+            self._blob = None
+            if blob is not None:
+                blob.close()
+            super().close()
+
+
+def persist_stored_product_artifact(
+    conn: Any,
+    *,
+    operation_id: str,
+    source: Any,
+    byte_count: int,
+) -> None:
+    """Fill an existing zeroblob from a binary stream without a whole-body Python copy."""
+
+    if type(operation_id) is not str or not operation_id:
+        raise ValueError("operation_id is missing")
+    if type(byte_count) is not int or byte_count < 1:
+        raise ValueError("empty product materialization is not signable")
+    read = getattr(source, "read", None)
+    if not callable(read):
+        raise ValueError("product artifact stream must be binary")
+    row = conn.execute(
+        f"SELECT rowid FROM {_ARTIFACT_TABLE} WHERE operation_id=?",
+        (operation_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("product materialization artifact body is missing")
+    written = 0
+    with conn.blobopen(_ARTIFACT_TABLE, _ARTIFACT_COLUMN, int(row[0])) as blob:
+        while True:
+            chunk = read(_STREAM_CHUNK)
+            if not chunk:
+                break
+            if type(chunk) is not bytes:
+                raise ValueError("product artifact stream must be binary")
+            blob.write(chunk)
+            written += len(chunk)
+    if written != byte_count:
+        raise ValueError(
+            "product artifact spool size does not match the signed byte count"
+        )
+
+
+@contextmanager
+def open_stored_product_artifact(conn: Any, operation_id: str) -> Iterator[Any]:
+    """Reopenable UTF-8 JSONL reader over one stored TEXT or BLOB generation body."""
+
+    if type(operation_id) is not str or not operation_id:
+        raise ValueError("operation_id is missing")
+    row = conn.execute(
+        f"SELECT rowid FROM {_ARTIFACT_TABLE} WHERE operation_id=?",
+        (operation_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("product materialization artifact body is missing")
+    try:
+        blob = conn.blobopen(
+            _ARTIFACT_TABLE, _ARTIFACT_COLUMN, int(row[0]), readonly=True
+        )
+    except sqlite3.Error as exc:
+        raise ValueError(
+            "product materialization artifact body is not JSONL"
+        ) from exc
+    raw = _BlobRawIO(blob)
+    try:
+        reader = io.BufferedReader(raw, buffer_size=_STREAM_CHUNK)
+    except Exception:
+        raw.close()
+        raise
+    try:
+        yield reader
+    finally:
+        reader.close()
+
+
 def _aware_instant(value: Any, *, label: str) -> datetime:
     """Parse a timezone-aware instant, preserving fractional seconds.
 
@@ -292,10 +393,8 @@ def product_artifact_digest_ordered(
 
 
 def product_artifact_body_digest(body: Any) -> str:
-    """Rehash the exported UTF-8 copy of the authority's R2 readback bytes."""
+    """Rehash signed generation JSONL from text, bytes, or a binary stream."""
 
-    if type(body) is not str or not body:
-        raise ValueError("product materialization artifact body must be exact text")
     return measure_product_artifact_jsonl(body)[1]
 
 
@@ -518,6 +617,8 @@ __all__ = [
     "iter_observed_segment_product_rows",
     "iter_product_artifact_body_rows",
     "measure_owned_product_artifact_body",
+    "open_stored_product_artifact",
+    "persist_stored_product_artifact",
     "measure_product_artifact_jsonl",
     "product_artifact_body_digest",
     "product_artifact_digest",

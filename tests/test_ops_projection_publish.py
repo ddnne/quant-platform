@@ -378,7 +378,9 @@ def _insert_current_product_materialization(
     conn: sqlite3.Connection,
     *,
     run_id: int,
-) -> None:
+    blob: bool = False,
+    catalog: bool = True,
+) -> str:
     row = {
         "source": "jquants",
         "dataset": "indices_bars_daily_topix",
@@ -389,8 +391,9 @@ def _insert_current_product_materialization(
         "payload": '{"Close":2,"Date":"2024-02-01","Open":1}',
         "raw_payload": '{"Date":"2024-02-01","Open":1,"Close":2}',
     }
-    body = canonical_product_artifact_bytes([row]).decode("utf-8")
-    digest = product_artifact_body_digest(body)
+    body_bytes = canonical_product_artifact_bytes([row])
+    body_text = body_bytes.decode("utf-8")
+    digest = product_artifact_body_digest(body_bytes)
     raw_digest = f"sha256:{run_id + 1000:064x}"
     operation_id = f"sha256:{run_id:064x}"
     conn.execute(
@@ -420,9 +423,9 @@ def _insert_current_product_materialization(
             "2024-02",
             f"structured/{run_id}.jsonl",
             digest,
-            body,
+            body_bytes if blob else body_text,
             1,
-            len(body.encode("utf-8")),
+            len(body_bytes),
             f"structured/{run_id}.manifest.json",
             f"sha256:{run_id + 2000:064x}",
             f"raw/{run_id}.manifest.json",
@@ -441,10 +444,12 @@ def _insert_current_product_materialization(
         "INSERT INTO raw_retention_manifests VALUES (?,?,?,?,?,?,?)",
         (row["dataset"], run_id, f"raw/{run_id}.manifest.json", 1, 1, 100, raw_digest),
     )
-    conn.execute(
-        "INSERT INTO jquants_records VALUES (?,?,?,?,?,?,?,?)",
-        tuple(row.values()),
-    )
+    if catalog:
+        conn.execute(
+            "INSERT INTO jquants_records VALUES (?,?,?,?,?,?,?,?)",
+            tuple(row.values()),
+        )
+    return body_text
 
 
 def test_product_projection_selects_only_latest_active_receipt_generation(
@@ -453,7 +458,10 @@ def test_product_projection_selects_only_latest_active_receipt_generation(
     conn = _receipt_product_projection_source()
     _insert_product_receipt_candidate(conn, run_id=101)
     _insert_product_receipt_candidate(conn, run_id=102)
-    _insert_current_product_materialization(conn, run_id=102)
+    _insert_current_product_materialization(conn, run_id=101, catalog=False)
+    current_jsonl = _insert_current_product_materialization(
+        conn, run_id=102, blob=True
+    )
 
     def verify(receipt: object, **_scope: object) -> SimpleNamespace:
         run_id = object.__getattribute__(receipt, "run_id")
@@ -462,6 +470,7 @@ def test_product_projection_selects_only_latest_active_receipt_generation(
     monkeypatch.setattr(exporter, "verify_collection_closure", verify)
     rows = exporter._read_receipt_product_materializations(conn, "generation")
     assert [row["run_id"] for row in rows] == [102]
+    assert rows[0]["artifact_body"] == current_jsonl
     conn.close()
 
 

@@ -38,6 +38,7 @@ from storage.coverage_ledger import CollectionReceipt
 from ops.receipt_product import (
     catalog_owned_product_row_digests,
     measure_owned_product_artifact_body,
+    open_stored_product_artifact,
     verify_full_segment_product_materialization,
 )
 from storage.verified_receipt import require_verified_collection_closure
@@ -345,7 +346,7 @@ def _verify_publication_on_authenticated_mirror(
                     dict(row)
                     for row in conn.execute(
                         "SELECT operation_id,run_id,source,dataset,segment_id,"
-                        "artifact_key,artifact_digest,artifact_body,row_count,"
+                        "artifact_key,artifact_digest,row_count,"
                         "byte_count,manifest_key,manifest_digest,raw_manifest_key,"
                         "raw_manifest_digest,raw_page_count,raw_row_count,"
                         "raw_bytes,committed_at FROM receipt_product_materializations "
@@ -489,23 +490,27 @@ def _verify_publication_on_authenticated_mirror(
                             "jquants_records_revisions",
                         ),
                     )
-                    observed_count, observed_product_digest, observed_bytes, row_digests = (
-                        measure_owned_product_artifact_body(
-                            product.get("artifact_body"),
-                            owned_digests=owned_digests,
+                    operation_id = str(product["operation_id"])
+                    with open_stored_product_artifact(conn, operation_id) as artifact:
+                        observed_count, observed_product_digest, observed_bytes, row_digests = (
+                            measure_owned_product_artifact_body(
+                                artifact,
+                                owned_digests=owned_digests,
+                            )
                         )
-                    )
-                    verify_full_segment_product_materialization(
-                        closure,
-                        product=product,
-                        run=run_rows[0] if len(run_rows) == 1 else None,
-                        raw_manifest=(
-                            raw_manifests[0] if len(raw_manifests) == 1 else None
-                        ),
-                        observed_count=observed_count,
-                        observed_digest=observed_product_digest,
-                        observed_bytes=observed_bytes,
-                    )
+                    with open_stored_product_artifact(conn, operation_id) as artifact:
+                        verify_full_segment_product_materialization(
+                            closure,
+                            product=product,
+                            run=run_rows[0] if len(run_rows) == 1 else None,
+                            raw_manifest=(
+                                raw_manifests[0] if len(raw_manifests) == 1 else None
+                            ),
+                            observed_count=observed_count,
+                            observed_digest=observed_product_digest,
+                            observed_bytes=observed_bytes,
+                            artifact=artifact,
+                        )
                 except Exception:
                     continue
                 backings = verified_row_backings[dataset_id]

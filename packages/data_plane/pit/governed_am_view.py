@@ -23,6 +23,7 @@ from urllib.parse import quote
 from ops.receipt_product import (
     PRODUCT_ARTIFACT_FIELDS,
     iter_product_artifact_body_rows,
+    open_stored_product_artifact,
     product_artifact_body_digest,
     product_row_digest,
     _aware_instant,
@@ -356,14 +357,14 @@ def _load_sealed_products(
         str(item[1])
         for item in conn.execute("PRAGMA table_info(receipt_product_materializations)")
     }
-    required = {"dataset", "artifact_digest", "artifact_body"}
+    required = {"dataset", "artifact_digest", "artifact_body", "operation_id"}
     if not required <= columns:
         return set(), [], set()
     sealed: set[tuple[str, ...]] = set()
     product_rows: list[dict[str, str]] = []
     artifact_digests: set[str] = set()
     products = conn.execute(
-        "SELECT artifact_digest, artifact_body FROM receipt_product_materializations "
+        "SELECT operation_id, artifact_digest FROM receipt_product_materializations "
         "WHERE source='jquants' AND dataset=?",
         (dataset_id,),
     ).fetchall()
@@ -372,15 +373,10 @@ def _load_sealed_products(
         digest = str(product["artifact_digest"] or "")
         if required is not None and digest not in required:
             continue
-        body = product["artifact_body"]
-        if type(body) is not str or not body:
-            if required is not None:
-                raise SnapshotObservationClockError(
-                    f"sealed {dataset_id} product materialization is missing"
-                )
-            continue
+        operation_id = str(product["operation_id"] or "")
         try:
-            body_ok = product_artifact_body_digest(body) == digest
+            with open_stored_product_artifact(conn, operation_id) as body:
+                body_ok = product_artifact_body_digest(body) == digest
         except ValueError:
             body_ok = False
         if not body_ok:
@@ -390,16 +386,17 @@ def _load_sealed_products(
                 )
             continue
         artifact_digests.add(digest)
-        for parsed in iter_product_artifact_body_rows(body):
-            if (
-                parsed["source"] != "jquants"
-                or parsed["dataset"] != dataset_id
-            ):
-                continue
-            sealed.add(tuple(parsed[field] for field in PRODUCT_ARTIFACT_FIELDS))
-            product_rows.append(
-                {field: parsed[field] for field in PRODUCT_ARTIFACT_FIELDS}
-            )
+        with open_stored_product_artifact(conn, operation_id) as body:
+            for parsed in iter_product_artifact_body_rows(body):
+                if (
+                    parsed["source"] != "jquants"
+                    or parsed["dataset"] != dataset_id
+                ):
+                    continue
+                sealed.add(tuple(parsed[field] for field in PRODUCT_ARTIFACT_FIELDS))
+                product_rows.append(
+                    {field: parsed[field] for field in PRODUCT_ARTIFACT_FIELDS}
+                )
     if required is not None and required != artifact_digests:
         raise SnapshotObservationClockError(
             f"sealed {dataset_id} product materialization is missing"
