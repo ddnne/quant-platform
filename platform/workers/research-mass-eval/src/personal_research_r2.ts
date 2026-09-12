@@ -14,6 +14,13 @@ import {
   personalSnapshotObjectKey,
 } from "./personal_snapshot_contract";
 import {
+  RECEIPT_CANDIDATE_FORMAT,
+  isReceiptCandidateManifestKey,
+  isReceiptCandidateObjectKey,
+  personalReceiptCandidateManifestKey,
+  personalReceiptCandidateObjectKey,
+} from "./personal_receipt_candidate_contract";
+import {
   isPersonalIndexOverlayFamilyCohort,
   personalIndexOverlayFamilyRunnerVersion,
   personalIndexOverlayFamilyTerminalManifestKey,
@@ -145,17 +152,30 @@ function existingMatches(
   );
 }
 
-function snapshotObjectMatches(
+function gzipObjectMatches(
   object: R2Object,
   identity: { contentDigest: string; rawDigest: string },
+  format: string,
 ): boolean {
   return (
     object.customMetadata?.sha256 === identity.contentDigest &&
     object.customMetadata?.raw_sha256 === identity.rawDigest &&
-    object.customMetadata?.format === PERSONAL_SNAPSHOT_FORMAT &&
+    object.customMetadata?.format === format &&
     checksumMatches(object, identity.contentDigest)
   );
 }
+
+type SqliteGzipKind = {
+  format: string;
+  plane: "personal_snapshot" | "receipt_candidate";
+  label: "snapshot" | "receipt candidate";
+  objectKey: (rawHex: string) => string;
+  manifestKey: (jobId: string) => string;
+  closedManifest: (
+    manifest: Record<string, unknown>,
+    status: string,
+  ) => string | null;
+};
 
 async function exactTerminalExists(
   env: R2Env,
@@ -356,37 +376,104 @@ async function getSnapshot(
   return new Response(body, { status: 200, headers });
 }
 
-async function putSnapshotGzip(
+function snapshotManifestForbidsSecrets(manifest: Record<string, unknown>): boolean {
+  const serialized = JSON.stringify(manifest).toLowerCase();
+  return !["api_key", "jquants_api_key", "authorization", "secret", "password"].some(
+    (token) => serialized.includes(token),
+  );
+}
+
+function snapshotManifestClosed(
+  manifest: Record<string, unknown>,
+  status: string,
+): string | null {
+  if (
+    manifest.research_state !== "PERSONAL_DRAFT" ||
+    manifest.completeness_claim !== "NONE" ||
+    manifest.controlled_live_eligibility !== "FORBIDDEN"
+  ) {
+    return "snapshot manifest identity mismatch";
+  }
+  if (status !== "COMPLETED") return null;
+  const observedThrough =
+    typeof manifest.observed_through === "string" ? manifest.observed_through : "";
+  const revisionDays = manifest.revision_window_calendar_days;
+  const revisionCoverage =
+    typeof manifest.revision_coverage === "string" ? manifest.revision_coverage : "";
+  if (
+    !observedThrough ||
+    typeof revisionDays !== "number" ||
+    !Number.isInteger(revisionDays) ||
+    revisionDays < 1 ||
+    (revisionCoverage !== "WINDOW_COMPLETE" &&
+      revisionCoverage !== "BOUNDED_WINDOW")
+  ) {
+    return "completed snapshot identity is invalid";
+  }
+  return null;
+}
+
+function receiptCandidateManifestClosed(
+  manifest: Record<string, unknown>,
+  _status: string,
+): string | null {
+  if (
+    manifest.format !== RECEIPT_CANDIDATE_FORMAT ||
+    manifest.pending_ready !== true ||
+    manifest.ready !== false ||
+    manifest.go !== false ||
+    manifest.completeness_claim !== "NONE" ||
+    manifest.controlled_live_eligibility !== "FORBIDDEN"
+  ) {
+    return "receipt candidate manifest identity mismatch";
+  }
+  return null;
+}
+
+const SNAPSHOT_GZIP_KIND: SqliteGzipKind = {
+  format: PERSONAL_SNAPSHOT_FORMAT,
+  plane: "personal_snapshot",
+  label: "snapshot",
+  objectKey: personalSnapshotObjectKey,
+  manifestKey: personalSnapshotManifestKey,
+  closedManifest: snapshotManifestClosed,
+};
+
+const RECEIPT_CANDIDATE_GZIP_KIND: SqliteGzipKind = {
+  format: RECEIPT_CANDIDATE_FORMAT,
+  plane: "receipt_candidate",
+  label: "receipt candidate",
+  objectKey: personalReceiptCandidateObjectKey,
+  manifestKey: personalReceiptCandidateManifestKey,
+  closedManifest: receiptCandidateManifestClosed,
+};
+
+async function putSqliteGzip(
   request: Request,
   env: R2Env,
   key: string,
+  kind: SqliteGzipKind,
 ): Promise<Response> {
   const identity = snapshotGzipIdentity(request);
   const rawHex = identity?.rawDigest.slice("sha256:".length) ?? "";
   if (
     !identity ||
     !SHA_HEX_RE.test(rawHex) ||
-    key !== personalSnapshotObjectKey(rawHex)
+    key !== kind.objectKey(rawHex)
   ) {
-    return responseJson({ error: "invalid snapshot identity" }, 400);
+    return responseJson({ error: `invalid ${kind.label} identity` }, 400);
   }
   const length = contentLength(request, SNAPSHOT_GZIP_MAX_BYTES);
   if (length === null || request.body === null) {
-    return responseJson({ error: "invalid snapshot length" }, 400);
+    return responseJson({ error: `invalid ${kind.label} length` }, 400);
   }
   const existing = await env.STRUCTURED_BUCKET.head(key);
   if (existing) {
-    return snapshotObjectMatches(existing, identity)
+    return gzipObjectMatches(existing, identity, kind.format)
       ? responseJson({ ok: true, created: false, key })
-      : responseJson({ error: "immutable snapshot conflict" }, 409);
+      : responseJson({ error: `immutable ${kind.label} conflict` }, 409);
   }
-  if (
-    await exactTerminalExists(
-      env,
-      personalSnapshotManifestKey(identity.jobId),
-      identity,
-    )
-  ) {
+  if (await exactTerminalExists(env, kind.manifestKey(identity.jobId), identity)) {
     return responseJson({ error: "terminal already exists" }, 409);
   }
   let put: R2Object | null;
@@ -394,8 +481,8 @@ async function putSnapshotGzip(
     put = await env.STRUCTURED_BUCKET.put(key, request.body, {
       httpMetadata: { contentType: "application/gzip" },
       customMetadata: {
-        plane: "personal_snapshot",
-        format: PERSONAL_SNAPSHOT_FORMAT,
+        plane: kind.plane,
+        format: kind.format,
         sha256: identity.contentDigest,
         raw_sha256: identity.rawDigest,
         immutable: "true",
@@ -404,42 +491,36 @@ async function putSnapshotGzip(
       onlyIf: { etagDoesNotMatch: "*" },
     });
   } catch {
-    return responseJson({ error: "snapshot upload checksum rejected" }, 502);
+    return responseJson({ error: `${kind.label} upload checksum rejected` }, 502);
   }
   if (put !== null) return responseJson({ ok: true, created: true, key }, 201);
   const raced = await env.STRUCTURED_BUCKET.head(key);
-  return raced && snapshotObjectMatches(raced, identity)
+  return raced && gzipObjectMatches(raced, identity, kind.format)
     ? responseJson({ ok: true, created: false, key })
-    : responseJson({ error: "immutable snapshot conflict" }, 409);
+    : responseJson({ error: `immutable ${kind.label} conflict` }, 409);
 }
 
-function snapshotManifestForbidsSecrets(manifest: Record<string, unknown>): boolean {
-  const serialized = JSON.stringify(manifest).toLowerCase();
-  return !["api_key", "jquants_api_key", "authorization", "secret", "password"].some(
-    (token) => serialized.includes(token),
-  );
-}
-
-async function putSnapshotManifest(
+async function putSqliteManifest(
   request: Request,
   env: R2Env,
   key: string,
+  kind: SqliteGzipKind,
 ): Promise<Response> {
   const identity = outputIdentity(request);
-  if (!identity || key !== personalSnapshotManifestKey(identity.jobId)) {
-    return responseJson({ error: "invalid snapshot manifest identity" }, 400);
+  if (!identity || key !== kind.manifestKey(identity.jobId)) {
+    return responseJson({ error: `invalid ${kind.label} manifest identity` }, 400);
   }
   const length = contentLength(request, MANIFEST_MAX_BYTES);
   if (length === null) {
-    return responseJson({ error: "invalid snapshot manifest length" }, 400);
+    return responseJson({ error: `invalid ${kind.label} manifest length` }, 400);
   }
   const bytes = new Uint8Array(await request.arrayBuffer());
   if (bytes.byteLength !== length) {
-    return responseJson({ error: "snapshot manifest length mismatch" }, 400);
+    return responseJson({ error: `${kind.label} manifest length mismatch` }, 400);
   }
   const actualDigest = `sha256:${await sha256Hex(bytes)}`;
   if (actualDigest !== identity.contentDigest) {
-    return responseJson({ error: "snapshot manifest digest mismatch" }, 400);
+    return responseJson({ error: `${kind.label} manifest digest mismatch` }, 400);
   }
   let manifest: Record<string, unknown>;
   try {
@@ -449,20 +530,19 @@ async function putSnapshotManifest(
     }
     manifest = parsed as Record<string, unknown>;
   } catch {
-    return responseJson({ error: "snapshot manifest must be JSON object" }, 400);
+    return responseJson({ error: `${kind.label} manifest must be JSON object` }, 400);
   }
   const status = manifest.status;
   if (
     manifest.job_id !== identity.jobId ||
     manifest.request_digest !== identity.requestDigest ||
     (status !== "COMPLETED" && status !== "FAILED") ||
-    manifest.research_state !== "PERSONAL_DRAFT" ||
-    manifest.completeness_claim !== "NONE" ||
-    manifest.controlled_live_eligibility !== "FORBIDDEN" ||
     !snapshotManifestForbidsSecrets(manifest)
   ) {
-    return responseJson({ error: "snapshot manifest identity mismatch" }, 400);
+    return responseJson({ error: `${kind.label} manifest identity mismatch` }, 400);
   }
+  const closed = kind.closedManifest(manifest, status);
+  if (closed) return responseJson({ error: closed }, 400);
   if (status === "COMPLETED") {
     const rawDigest =
       typeof manifest.raw_sha256 === "string" ? manifest.raw_sha256 : "";
@@ -471,35 +551,24 @@ async function putSnapshotManifest(
     const snapshotKey =
       typeof manifest.snapshot_key === "string" ? manifest.snapshot_key : "";
     const rawHex = rawDigest.startsWith("sha256:") ? rawDigest.slice(7) : "";
-    const observedThrough =
-      typeof manifest.observed_through === "string" ? manifest.observed_through : "";
-    const revisionDays = manifest.revision_window_calendar_days;
-    const revisionCoverage =
-      typeof manifest.revision_coverage === "string" ? manifest.revision_coverage : "";
     if (
       !DIGEST_RE.test(rawDigest) ||
       !DIGEST_RE.test(gzipDigest) ||
       !SHA_HEX_RE.test(rawHex) ||
-      snapshotKey !== personalSnapshotObjectKey(rawHex) ||
-      !observedThrough ||
-      typeof revisionDays !== "number" ||
-      !Number.isInteger(revisionDays) ||
-      revisionDays < 1 ||
-      (revisionCoverage !== "WINDOW_COMPLETE" &&
-        revisionCoverage !== "BOUNDED_WINDOW")
+      snapshotKey !== kind.objectKey(rawHex)
     ) {
-      return responseJson({ error: "completed snapshot identity is invalid" }, 400);
+      return responseJson({ error: `completed ${kind.label} identity is invalid` }, 400);
     }
-    const snapshot = await env.STRUCTURED_BUCKET.head(snapshotKey);
+    const uploaded = await env.STRUCTURED_BUCKET.head(snapshotKey);
     if (
-      !snapshot ||
-      snapshot.customMetadata?.sha256 !== gzipDigest ||
-      snapshot.customMetadata?.raw_sha256 !== rawDigest ||
-      snapshot.customMetadata?.format !== PERSONAL_SNAPSHOT_FORMAT ||
-      !checksumMatches(snapshot, gzipDigest)
+      !uploaded ||
+      uploaded.customMetadata?.sha256 !== gzipDigest ||
+      uploaded.customMetadata?.raw_sha256 !== rawDigest ||
+      uploaded.customMetadata?.format !== kind.format ||
+      !checksumMatches(uploaded, gzipDigest)
     ) {
       return responseJson(
-        { error: "completed snapshot manifest has no matching object" },
+        { error: `completed ${kind.label} manifest has no matching object` },
         409,
       );
     }
@@ -508,21 +577,23 @@ async function putSnapshotManifest(
     manifest.gzip_sha256 != null ||
     manifest.raw_sha256 != null
   ) {
-    return responseJson({ error: "failed snapshot must not publish an object" }, 400);
+    return responseJson(
+      { error: `failed ${kind.label} must not publish an object` },
+      400,
+    );
   }
-
   const existing = await env.STRUCTURED_BUCKET.head(key);
   if (existing) {
     return existingMatches(existing, identity)
       ? responseJson({ ok: true, created: false, key })
-      : responseJson({ error: "immutable snapshot manifest conflict" }, 409);
+      : responseJson({ error: `immutable ${kind.label} manifest conflict` }, 409);
   }
   let put: R2Object | null;
   try {
     put = await env.STRUCTURED_BUCKET.put(key, bytes, {
       httpMetadata: { contentType: "application/json; charset=utf-8" },
       customMetadata: {
-        plane: "personal_snapshot",
+        plane: kind.plane,
         job_id: identity.jobId,
         request_digest: identity.requestDigest,
         sha256: identity.contentDigest,
@@ -533,13 +604,45 @@ async function putSnapshotManifest(
       onlyIf: { etagDoesNotMatch: "*" },
     });
   } catch {
-    return responseJson({ error: "snapshot manifest upload checksum rejected" }, 502);
+    return responseJson({ error: `${kind.label} manifest upload checksum rejected` }, 502);
   }
   if (put !== null) return responseJson({ ok: true, created: true, key }, 201);
   const raced = await env.STRUCTURED_BUCKET.head(key);
   return raced && existingMatches(raced, identity)
     ? responseJson({ ok: true, created: false, key })
-    : responseJson({ error: "immutable snapshot manifest conflict" }, 409);
+    : responseJson({ error: `immutable ${kind.label} manifest conflict` }, 409);
+}
+
+async function putSnapshotGzip(
+  request: Request,
+  env: R2Env,
+  key: string,
+): Promise<Response> {
+  return putSqliteGzip(request, env, key, SNAPSHOT_GZIP_KIND);
+}
+
+async function putSnapshotManifest(
+  request: Request,
+  env: R2Env,
+  key: string,
+): Promise<Response> {
+  return putSqliteManifest(request, env, key, SNAPSHOT_GZIP_KIND);
+}
+
+async function putReceiptCandidateGzip(
+  request: Request,
+  env: R2Env,
+  key: string,
+): Promise<Response> {
+  return putSqliteGzip(request, env, key, RECEIPT_CANDIDATE_GZIP_KIND);
+}
+
+async function putReceiptCandidateManifest(
+  request: Request,
+  env: R2Env,
+  key: string,
+): Promise<Response> {
+  return putSqliteManifest(request, env, key, RECEIPT_CANDIDATE_GZIP_KIND);
 }
 
 function parseTerminalManifestKey(
@@ -548,6 +651,7 @@ function parseTerminalManifestKey(
   const patterns: Array<[PersonalContainerKind, RegExp]> = [
     ["research", /^research\/personal\/jobs\/job=([a-z0-9][a-z0-9._-]{0,63})\/manifest\.json$/],
     ["snapshot", /^research\/personal\/snapshot-builds\/job=([a-z0-9][a-z0-9._-]{0,63})\/manifest\.json$/],
+    ["receipt-candidate", /^research\/receipt-candidates\/job=([a-z0-9][a-z0-9._-]{0,63})\/manifest\.json$/],
     ["svi", /^research\/personal\/svi-2023\/job=([a-z0-9][a-z0-9._-]{0,63})\/manifest\.json$/],
     ["overlay", /^research\/personal\/(?:index-vol-overlay-2023|index-smile-transport-2023)(?:-am-pm)?\/job=([a-z0-9][a-z0-9._-]{0,63})\/manifest\.json$/],
     ["vol-panel", /^research\/personal\/vol-ratio-am-pm-v1\/panel-builds\/job=([a-z0-9][a-z0-9._-]{0,63})\/manifest\.json$/],
@@ -568,6 +672,9 @@ function expectedTerminalManifestKey(
   if (!isPersonalResearchJobId(jobId)) return null;
   if (kind === "research") return personalResearchManifestKey(jobId);
   if (kind === "snapshot") return personalSnapshotManifestKey(jobId);
+  if (kind === "receipt-candidate") {
+    return personalReceiptCandidateManifestKey(jobId);
+  }
   if (kind === "svi") return personalSviTerminalManifestKey(jobId);
   if (kind === "vol-panel") return personalVolAmPmPanelBuildTerminalKey(jobId);
   if (kind === PERSONAL_OPTION_SIDECAR_KIND) {
@@ -592,7 +699,7 @@ function requiredTerminalHeaders(kind: PersonalContainerKind): string[] {
   if (kind === "research") {
     return [...common, "x-personal-cohort-id", "x-personal-universe-id"];
   }
-  if (kind === "snapshot") return common;
+  if (kind === "snapshot" || kind === "receipt-candidate") return common;
   return [...common, "x-personal-cohort-id"];
 }
 
@@ -600,7 +707,11 @@ function expectedRunnerVersion(
   kind: PersonalContainerKind,
   cohortId: string,
 ): string | null {
-  if (kind === "research" || kind === "snapshot") {
+  if (
+    kind === "research" ||
+    kind === "snapshot" ||
+    kind === "receipt-candidate"
+  ) {
     return PERSONAL_RESEARCH_RUNNER_VERSION;
   }
   if (kind === "svi") return PERSONAL_SVI_2023_RUNNER_VERSION;
@@ -809,6 +920,12 @@ export async function personalResearchR2Outbound(
   if ((request.method === "GET" || request.method === "HEAD") &&
       isPersonalResearchSnapshotKey(key)) {
     return getSnapshot(request, env, key);
+  }
+  if (request.method === "PUT" && isReceiptCandidateObjectKey(key)) {
+    return putReceiptCandidateGzip(request, env, key);
+  }
+  if (request.method === "PUT" && isReceiptCandidateManifestKey(key)) {
+    return putReceiptCandidateManifest(request, env, key);
   }
   if (request.method === "PUT" && isPersonalResearchSnapshotKey(key) && key.endsWith(".sqlite.gz")) {
     return putSnapshotGzip(request, env, key);

@@ -1,8 +1,9 @@
 """Private complete-master selection using existing receipt authority.
 
-This operation is internal until authenticated publication and the pinned
-Controlled handle share the same versioned scopes. It does not mint COMPLETE
-from counts, booleans, or caller-selected codes.
+READY publication and the pinned Controlled handle resolve universe day
+slices through this owner, loading persisted official_calendar_raw bodies
+from the same owned connection. It does not mint COMPLETE from counts,
+booleans, or caller-selected codes.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from ingestion.jquants.official_business_calendar import (
 )
 from ops.receipt_product import (
     PRODUCT_ARTIFACT_FIELDS,
+    catalog_owned_product_row_digests,
     iter_product_artifact_body_rows,
     product_artifact_digest_ordered,
     product_row_digest,
@@ -230,7 +232,7 @@ class _CompleteMembershipGate:
         self,
         *,
         conn: sqlite3.Connection,
-        official_calendars: Mapping[str, bytes],
+        official_calendars: Mapping[str, bytes] | None,
         period_end: str,
         observed_through: datetime,
         observed_through_text: str,
@@ -478,34 +480,24 @@ def _owned_product_row_digests(
     segment_end: str,
     observed_through: str,
 ) -> set[str]:
-    cutoff = _parse_dt(observed_through, label="product observation cutoff")
-    digests: set[str] = set()
-    fields = ",".join(PRODUCT_ARTIFACT_FIELDS)
+    tables: list[str] = []
     for table in ("jquants_records", "jquants_records_revisions"):
         if not _table_columns(conn, table):
             continue
         if set(PRODUCT_ARTIFACT_FIELDS) - _table_columns(conn, table):
             raise PitError(f"universe requires canonical {table} schema")
-        sql = (
-            f"SELECT {fields} FROM {table} "
-            "WHERE source='jquants' AND dataset=? "
-            "AND substr(event_time, 1, 10) BETWEEN ? AND ?"
-        )
-        for raw in conn.execute(sql, (_MASTER_DATASET, segment_start, segment_end)):
-            try:
-                row = {field: raw[field] for field in PRODUCT_ARTIFACT_FIELDS}
-                ingested = _parse_dt(
-                    row["ingested_at"], label="product ingestion clock"
-                )
-            except (KeyError, PitError, TypeError, ValueError):
-                continue
-            if ingested > cutoff:
-                continue
-            try:
-                digests.add(product_row_digest(row))
-            except ValueError:
-                continue
-    return digests
+        tables.append(table)
+    if not tables:
+        return set()
+    return catalog_owned_product_row_digests(
+        conn,
+        source="jquants",
+        dataset=_MASTER_DATASET,
+        segment_start=segment_start,
+        segment_end=segment_end,
+        observed_through=observed_through,
+        tables=tuple(tables),
+    )
 
 
 def _compact_snapshots_from_artifact(
@@ -609,7 +601,7 @@ def _verify_one_generation(
     conn: sqlite3.Connection,
     closure: VerifiedCollectionClosure,
     *,
-    official_calendars: Mapping[str, bytes],
+    official_calendars: Mapping[str, bytes] | None,
     observed_through: str,
     seed: str,
     period_end: str,
@@ -621,12 +613,15 @@ def _verify_one_generation(
             "signed equities_master closure is missing official calendar digest: "
             "official_calendar_raw_body_digest"
         )
-    calendar_raw = official_calendars.get(raw_digest)
-    if calendar_raw is None:
-        raise PitError(
-            "official calendar raw body is missing for signed equities_master "
-            f"run {closure.run_id}; complete master remains inactive"
-        )
+    if official_calendars is None:
+        calendar_raw = _official_calendar_raw_body_for_digest(conn, raw_digest)
+    else:
+        calendar_raw = official_calendars.get(raw_digest)
+        if calendar_raw is None:
+            raise PitError(
+                "official calendar raw body is missing for signed equities_master "
+                f"run {closure.run_id}; complete master remains inactive"
+            )
     calendar = _verify_calendar_against_closure(
         closure, official_calendar_raw=calendar_raw
     )
@@ -718,7 +713,7 @@ def _verify_one_generation(
 def _load_required_master_generations(
     conn: sqlite3.Connection,
     *,
-    official_calendars: Mapping[str, bytes],
+    official_calendars: Mapping[str, bytes] | None,
     observed_through: str,
     seed: str,
     period_end: str,
@@ -777,16 +772,22 @@ def _owned_complete_master_selection_from_connection(
     period_start: str,
     period_end: str,
     as_of_for_day: Mapping[str, str],
-    official_calendar_raw: Sequence[bytes],
+    official_calendar_raw: Sequence[bytes] | None = None,
 ) -> _OwnedCompleteMasterSelection:
     """Return immutable day membership plus owner-side proof.
 
-    ``official_calendar_raw`` is an untrusted sequence of exact calendar bodies,
-    matched by signed raw-body digest and fully derived per closure. Callers
-    cannot supply dates or calendar objects as the source domain.
+    A supplied ``official_calendar_raw`` sequence is the private fixture path:
+    bodies are matched only by signed raw-body digest and are not mixed with
+    stored rows. When omitted, each required verified master closure loads its
+    signed digest from official_calendar_raw on this connection. Callers cannot
+    supply dates or calendar objects as the source domain.
     """
 
-    calendars = _index_calendar_bodies(official_calendar_raw)
+    calendars = (
+        None
+        if official_calendar_raw is None
+        else _index_calendar_bodies(official_calendar_raw)
+    )
     if _compact_flag_from_connection(conn):
         raise PitError("complete master does not read compact personal history")
     from .query import normalize_as_of
@@ -823,6 +824,60 @@ def _owned_complete_master_selection_from_connection(
         ),
     )
     return _OwnedCompleteMasterSelection(slices=slices, proof=proof)
+
+
+def _official_calendar_raw_body_for_digest(
+    conn: sqlite3.Connection, raw_digest: str
+) -> bytes:
+    """Return the persisted calendar BLOB for one signed raw-body digest."""
+
+    columns = _table_columns(conn, "official_calendar_raw")
+    if not columns:
+        raise PitError(
+            "official_calendar_raw is missing; complete master remains inactive"
+        )
+    if not {"raw_body_digest", "body"} <= columns:
+        raise PitError(
+            "official_calendar_raw is missing required columns; "
+            "complete master remains inactive"
+        )
+    row = conn.execute(
+        "SELECT body FROM official_calendar_raw WHERE raw_body_digest=?",
+        (raw_digest,),
+    ).fetchone()
+    if row is None:
+        raise PitError(
+            "official calendar raw body is missing; complete master remains inactive"
+        )
+    body = row[0]
+    if type(body) is not bytes or not body:
+        raise PitError(
+            "official calendar raw body is not exact stored bytes; "
+            "complete master remains inactive"
+        )
+    if _raw_calendar_digest(body) != raw_digest:
+        raise PitError(
+            "official calendar raw body digest does not match stored key"
+        )
+    return body
+
+
+def _complete_master_day_slices_from_connection(
+    conn: sqlite3.Connection,
+    *,
+    period_start: str,
+    period_end: str,
+    as_of_for_day: Mapping[str, str],
+) -> tuple[UniverseDaySlice, ...]:
+    """Resolve complete-master day slices on an already-open owned connection."""
+
+    owned = _owned_complete_master_selection_from_connection(
+        conn,
+        period_start=period_start,
+        period_end=period_end,
+        as_of_for_day=as_of_for_day,
+    )
+    return owned.slices
 
 
 __all__ = [

@@ -118,6 +118,8 @@ class ScopedFinancialView:
     selected_product_digest: str | None
     field_evidence: Mapping[str, str]
     split_safety_anchor: str | None
+    visible_identities: tuple[tuple[str, str], ...] = ()
+    visible_product_digests: tuple[str | None, ...] = ()
 
 
 def _row_text(row: Any, key: str) -> str:
@@ -598,6 +600,8 @@ def _select_financial(
         selected_product_digest=owned.selected_product_digest,
         field_evidence=MappingProxyType(evidence),
         split_safety_anchor=None if anchor is None else str(anchor),
+        visible_identities=owned.visible_identities,
+        visible_product_digests=owned.visible_product_digests,
     )
 
 
@@ -695,6 +699,25 @@ def _owned_scoped_research_owner(
         _OWNER_TOKEN,
         conn=conn,
         witness=_index_product_digests(product_artifact_bodies),
+    )
+
+
+def _owned_scoped_research_owner_from_verified_witness(
+    conn: sqlite3.Connection,
+    *,
+    witness: frozenset[str],
+) -> _OwnedScopedResearchOwner:
+    """Pin a compact already-verified digest witness. No JSONL reparse."""
+
+    _require_active_sqlite_transaction(conn)
+    if not witness:
+        raise ScopedSelectionError(
+            "selected catalog version requires verified full-segment product backing"
+        )
+    return _OwnedScopedResearchOwner(
+        _OWNER_TOKEN,
+        conn=conn,
+        witness=frozenset(witness),
     )
 
 

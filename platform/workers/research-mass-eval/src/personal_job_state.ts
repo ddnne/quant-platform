@@ -19,6 +19,7 @@ import {
   personalResearchManifestKey,
 } from "./personal_research_contract";
 import { personalSnapshotManifestKey } from "./personal_snapshot_contract";
+import { personalReceiptCandidateManifestKey } from "./personal_receipt_candidate_contract";
 import {
   PERSONAL_OPTION_SIDECAR_KIND,
   PERSONAL_OPTION_SIDECAR_RUNNER_VERSION,
@@ -31,6 +32,7 @@ import type { Env } from "./types";
 export type PersonalJobKind =
   | "research"
   | "snapshot"
+  | "receipt-candidate"
   | "svi"
   | "overlay"
   | "vol-panel"
@@ -89,6 +91,9 @@ export function personalJobStateKey(kind: PersonalJobKind, jobId: string): strin
   if (kind === "snapshot") {
     return `research/personal/snapshot-builds/job=${jobId}/state.json`;
   }
+  if (kind === "receipt-candidate") {
+    return `research/receipt-candidates/job=${jobId}/state.json`;
+  }
   if (kind === "svi") {
     return `research/personal/svi-2023/job=${jobId}/state.json`;
   }
@@ -110,6 +115,9 @@ export function personalJobTerminalKey(
   overlayCohortId?: PersonalIndexVolOverlay2023CohortId,
 ): string {
   if (kind === "snapshot") return personalSnapshotManifestKey(jobId);
+  if (kind === "receipt-candidate") {
+    return personalReceiptCandidateManifestKey(jobId);
+  }
   if (kind === "svi") {
     return `research/personal/svi-2023/job=${jobId}/manifest.json`;
   }
@@ -267,6 +275,18 @@ export function timeoutFailedTerminal(
       controlled_live_eligibility: "FORBIDDEN",
     };
   }
+  if (document.kind === "receipt-candidate") {
+    return {
+      ...base,
+      format: "receipt-candidate/v1",
+      pending_ready: true,
+      ready: false,
+      ready_snapshot_declared: false,
+      go: false,
+      completeness_claim: "NONE",
+      controlled_live_eligibility: "FORBIDDEN",
+    };
+  }
   if (document.kind === "svi") {
     return {
       ...base,
@@ -392,7 +412,12 @@ export async function finalizeExpiredFailed(
     personalJobTerminalKey(kind, jobId, overlayCohortId ?? undefined),
     failed,
     {
-      plane: kind === "snapshot" ? "personal_snapshot" : "personal_research",
+      plane:
+        kind === "snapshot"
+          ? "personal_snapshot"
+          : kind === "receipt-candidate"
+            ? "receipt_candidate"
+            : "personal_research",
       job_id: jobId,
       request_digest: String(state.request_digest),
       status: "FAILED",

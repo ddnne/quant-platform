@@ -293,6 +293,11 @@ def test_selected_product_digest_tracks_bps_winner_not_later_eps_row() -> None:
     assert owned.selected_product_digest != (
         financial_observations._product_digest_from_raw(eps_row)
     )
+    assert owned.visible_identities == (
+        (_nk("bps", "2023-01-10"), "2023-01-10"),
+        (_nk("eps", "2023-02-10"), "2023-02-10"),
+        (_nk("sales", "2023-03-10"), "2023-03-10"),
+    )
     assert owned.payload_column_evidence == {
         "payload": "present_value",
         "raw_payload": "present_value",

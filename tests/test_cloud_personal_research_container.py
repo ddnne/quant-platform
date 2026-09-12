@@ -3210,6 +3210,9 @@ def test_controlled_container_runs_canonical_four_with_independent_artifacts(
         def _begin_controlled_batch_reads(self) -> None:
             handle_events.append("begin")
 
+        def _bind_current_plan_feature_consumers(self, **_kwargs: object) -> None:
+            return None
+
         def logical_snapshot_id(self) -> str:
             return snapshot_id
 
@@ -3329,6 +3332,16 @@ def _run_controlled_container_with_engine_meta(
                 ROOT / "specs" / "ready" / "controlled_pilot_verify_keys.generated.json"
             ).read_text(encoding="utf-8")
         )
+        from paper_runtime.canonical_json import canonical_json_digest
+
+        trader = json.loads(
+            (
+                ROOT
+                / "specs"
+                / "ready"
+                / "controlled_pilot_trader_batch.generated.json"
+            ).read_text(encoding="utf-8")
+        )
         snapshot_id = str(keys["logical_snapshot_id"])
         physical_id = str(keys["physical_snapshot_id"])
         snapshot_bytes = b"controlled-pilot-physical-sqlite"
@@ -3341,9 +3354,7 @@ def _run_controlled_container_with_engine_meta(
                 + ".sqlite"
             ),
             "snapshot_size": 32,
-            "authorization_digest": (
-                "sha256:36ba29b33d04f68468fb89e6c76ada53d019a156e9ca03ed3df6ef16e1a03b7e"
-            ),
+            "authorization_digest": canonical_json_digest(trader),
             "request_digest": keys["request_digest"],
         }
 
@@ -3384,6 +3395,9 @@ def _run_controlled_container_with_engine_meta(
 
     class _Handle:
         def _begin_controlled_batch_reads(self) -> None:
+            return None
+
+        def _bind_current_plan_feature_consumers(self, **_kwargs: object) -> None:
             return None
 
         def logical_snapshot_id(self) -> str:

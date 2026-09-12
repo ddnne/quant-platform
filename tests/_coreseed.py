@@ -277,6 +277,7 @@ def seed_governed_am_pm_session_db(
     days: list[str] | None = None,
     morning_prices: dict | None = None,
     afternoon_prices: dict | None = None,
+    extra_fins_payloads: list[dict] | None = None,
 ) -> Path:
     """Positive Controlled fixture: AM row at 11:30, PM revision at close."""
 
@@ -445,6 +446,25 @@ def seed_governed_am_pm_session_db(
                 "ingested_at": master_event,
                 "payload": json.dumps(
                     fins_payload, sort_keys=True, separators=(",", ":")
+                ),
+                "raw_payload": "",
+            }
+        )
+    for payload in extra_fins_payloads or ():
+        if "DiscDate" not in payload:
+            raise ValueError("financial catalog payload requires DiscDate")
+        disc = str(payload["DiscDate"])[:10]
+        event = f"{disc}T08:00:00+09:00"
+        closure_catalog.append(
+            {
+                "source": "jquants",
+                "dataset": "fins_summary",
+                "natural_key": natural_key(payload, "fins_summary"),
+                "event_time": event,
+                "available_at": event,
+                "ingested_at": event,
+                "payload": json.dumps(
+                    payload, sort_keys=True, separators=(",", ":")
                 ),
                 "raw_payload": "",
             }

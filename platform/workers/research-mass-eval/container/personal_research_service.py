@@ -62,6 +62,12 @@ from personal_option_sidecar_job import (
     PersonalOptionSidecarJobSpec,
     execute_option_sidecar_job,
 )
+from receipt_candidate_job import (
+    RECEIPT_CANDIDATE_MAX_REQUEST_BYTES,
+    ReceiptCandidateJobInputError,
+    ReceiptCandidateJobSpec,
+    execute_receipt_candidate_job,
+)
 from data_contracts.personal_history_compact import (
     PERSONAL_HISTORY_COMPACT_BARS_TABLE,
     compact_history_state,
@@ -1074,7 +1080,8 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
         from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED
         from agents.risk_agent import RiskAgent
         from research.dependency_closure import resolve_strategy_spec
-        from research.experiment_plans import PILOT_COST_SCENARIO, load_experiment_plans
+        from research.experiment_plans import PILOT_COST_SCENARIO
+        from research.ready_manifest import load_exact_four_pilot_ready_binding
         from research.universe_contract import (
             EXACT_FOUR_UNIVERSE_RULE_DIGEST,
             resolve_tse_prime_with_fins,
@@ -1103,7 +1110,12 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
         decisions: list[dict[str, Any]] = []
         ineligible_plan_ids: list[str] = []
         risk_agent = RiskAgent()
-        plans = tuple(load_experiment_plans())
+        ready_binding = load_exact_four_pilot_ready_binding()
+        if ready_binding.profile_digest != CONTROLLED_PROFILE_DIGEST:
+            raise JobInputError("controlled profile-set digest mismatch")
+        if ready_binding.closure_set_digest != CONTROLLED_CLOSURE_DIGEST:
+            raise JobInputError("controlled dependency-closure digest mismatch")
+        plans = ready_binding.plans
         slices = controlled_handle.universe_day_slices(
             period_start=plans[0].period_start,
             period_end=plans[0].period_end,
@@ -1133,6 +1145,16 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
                 iter_feature_refs(spec)
             ):
                 raise JobInputError("StrategySpec feature refs do not match the closure")
+            scoped_profile = ready_binding.profiles[ordinal - 1]
+            if scoped_profile.plan_id != plan.plan_id:
+                raise JobInputError("scoped closure plan_id mismatch")
+            controlled_handle._bind_current_plan_feature_consumers(
+                plan_id=plan.plan_id,
+                profile_version=scoped_profile.profile_version,
+                profile_set_digest=ready_binding.profile_digest,
+                consumers=scoped_profile.feature_consumers(),
+                feature_dependencies=tuple(scoped_profile.feature_dependencies),
+            )
             strategy = interpret_strategy_spec(spec)
             paper_result = _run_controlled_paper(
                 strategy,
@@ -1735,6 +1757,8 @@ def _job_kind(spec: Any) -> str:
         return "controlled-pilot"
     if isinstance(spec, SnapshotJobSpec):
         return "snapshot"
+    if isinstance(spec, ReceiptCandidateJobSpec):
+        return "receipt-candidate"
     if isinstance(spec, PersonalSvi2023JobSpec):
         return "svi"
     if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):
@@ -2626,6 +2650,7 @@ def execute_snapshot_job(
 JobSpecLike = (
     JobSpec
     | SnapshotJobSpec
+    | ReceiptCandidateJobSpec
     | PersonalSvi2023JobSpec
     | PersonalIndexVolOverlay2023JobSpec
     | PersonalVolAmPmPanelJobSpec
@@ -2756,6 +2781,8 @@ class JobManager:
             }
             if isinstance(spec, SnapshotJobSpec):
                 record["job_kind"] = "snapshot-build"
+            elif isinstance(spec, ReceiptCandidateJobSpec):
+                record["job_kind"] = "receipt-candidate"
             elif isinstance(spec, ControlledPilotJobSpec):
                 record["job_kind"] = "controlled-pilot"
                 record["identity"] = CONTROLLED_PILOT_IDENTITY
@@ -3229,6 +3256,12 @@ class JobManager:
                 "status": "FAILED",
                 "error": error,
             }
+        if isinstance(spec, ReceiptCandidateJobSpec):
+            from receipt_candidate_job import candidate_failure_terminal
+
+            return candidate_failure_terminal(
+                spec, started_at=started, finished_at=finished, error=error
+            )
         if isinstance(spec, JobSpec):
             return {
                 **_manifest_base(spec, started_at=started, finished_at=finished),
@@ -3697,6 +3730,13 @@ def default_runner(
                     uploader=_put_child_artifact,
                     deadline=deadline,
                 )
+            if isinstance(spec, ReceiptCandidateJobSpec):
+                return execute_receipt_candidate_job(
+                    spec,
+                    work_root=work_root,
+                    uploader=_put_child_artifact,
+                    deadline=deadline,
+                )
             if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):
                 return execute_overlay_job(spec, uploader=_put_child_json, deadline=deadline)
             if isinstance(spec, PersonalSvi2023JobSpec):
@@ -3798,11 +3838,17 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
             "/v1/build-personal-vol-am-pm-panel",
             "/v1/produce-option-sidecar",
             "/v1/controlled-pilot",
+            "/v1/materialize-receipt-candidate",
         }:
             self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
             return
         raw_length = self.headers.get("content-length", "")
-        if not raw_length.isdigit() or not 0 < int(raw_length) <= MAX_REQUEST_BYTES:
+        maximum = (
+            RECEIPT_CANDIDATE_MAX_REQUEST_BYTES
+            if self.path == "/v1/materialize-receipt-candidate"
+            else MAX_REQUEST_BYTES
+        )
+        if not raw_length.isdigit() or not 0 < int(raw_length) <= maximum:
             self._json({"error": "invalid_content_length"}, HTTPStatus.BAD_REQUEST)
             return
         try:
@@ -3833,12 +3879,15 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
                 spec = PersonalVolAmPmPanelJobSpec.from_document(document)
             elif self.path == "/v1/produce-option-sidecar":
                 spec = PersonalOptionSidecarJobSpec.from_document(document)
+            elif self.path == "/v1/materialize-receipt-candidate":
+                spec = ReceiptCandidateJobSpec.from_document(document)
             else:
                 spec = JobSpec.from_document(document)
             record = self.manager.submit(spec)
         except (
             json.JSONDecodeError,
             JobInputError,
+            ReceiptCandidateJobInputError,
             SviJobInputError,
             OverlayJobInputError,
             VolPanelJobInputError,

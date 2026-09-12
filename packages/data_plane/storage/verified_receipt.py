@@ -1070,11 +1070,56 @@ verify = verify_collection_closure
 require_verified_receipt = require_verified_collection_closure
 
 
+def collection_receipt_from_signed_envelope(envelope: Any) -> Any:
+    """Convert a signed envelope to ``CollectionReceipt`` using claims schema.
+
+    Signed claims use ``raw_count`` / ``structured_count``. Outer receipt
+    columns use ``raw_row_count`` / ``structured_row_count``. Missing claims
+    keys fail closed; there is no lenient alias or coercion.
+    """
+    from storage.coverage_ledger import CollectionReceipt
+
+    if type(envelope) is not dict:
+        raise ReceiptVerificationError(
+            "signed receipt envelope must be an exact object"
+        )
+    digests = _copy_exact_json(envelope, field="signed receipt envelope")
+    body_b64 = digests.get("signed_body_b64")
+    if type(body_b64) is not str or not body_b64:
+        raise ReceiptVerificationError("missing signed_body_b64")
+    claims, _signed_body = _decode_strict_signed_claims(body_b64)
+    try:
+        return CollectionReceipt(
+            source=claims["source"],
+            dataset=claims["dataset"],
+            segment_id=claims["segment_id"],
+            segment_start=claims["segment_start"],
+            segment_end=claims["segment_end"],
+            expected_scope=claims["expected_scope"],
+            expected_items=claims["expected_items"],
+            observed_items=claims["observed_items"],
+            raw_page_count=claims["raw_page_count"],
+            raw_row_count=claims["raw_count"],
+            structured_row_count=claims["structured_count"],
+            pagination_exhausted=claims["pagination_exhausted"],
+            digests=digests,
+            run_id=claims["run_id"],
+            status=claims["status"],
+            error=claims["error"],
+            checked_at=claims["checked_at"],
+        )
+    except KeyError as exc:
+        raise ReceiptVerificationError(
+            "signed claims are missing a required collection field"
+        ) from exc
+
+
 __all__ = [
     "ReceiptVerificationError",
     "VerifiedCollectionClosure",
     "audit_collection_closure",
     "audit_signed_receipt_claims",
+    "collection_receipt_from_signed_envelope",
     "require_verified_collection_closure",
     "verify_collection_closure",
 ]

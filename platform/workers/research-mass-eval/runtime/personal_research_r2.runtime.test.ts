@@ -3,6 +3,8 @@ import { reset } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import { personalResearchR2Outbound } from "../src/personal_research_r2";
 import { PERSONAL_SNAPSHOT_FORMAT } from "../src/personal_snapshot_contract";
+import { RECEIPT_CANDIDATE_FORMAT } from "../src/personal_receipt_candidate_contract";
+import { PERSONAL_RESEARCH_RUNNER_VERSION } from "../src/personal_research_contract";
 
 const runtimeEnv = env as { STRUCTURED_BUCKET: R2Bucket };
 
@@ -15,7 +17,7 @@ const WRONG_DIGEST = `sha256:${"c".repeat(64)}`;
 const RAW_HEX = "d".repeat(64);
 const RAW_DIGEST = `sha256:${RAW_HEX}`;
 
-type Kind = "result" | "snapshot";
+type Kind = "result" | "snapshot" | "candidate";
 type ProduceMode = "complete" | "short" | "overflow" | "abort";
 
 function hex(data: ArrayBuffer | ArrayBufferView): string {
@@ -29,15 +31,23 @@ function hex(data: ArrayBuffer | ArrayBufferView): string {
 }
 
 function objectKey(kind: Kind, jobId: string): string {
-  return kind === "result"
-    ? `research/personal/jobs/job=${jobId}/result.tar.gz`
-    : `research/personal/snapshots/sha256=${RAW_HEX}.sqlite.gz`;
+  if (kind === "result") {
+    return `research/personal/jobs/job=${jobId}/result.tar.gz`;
+  }
+  if (kind === "candidate") {
+    return `research/receipt-candidates/sha256=${RAW_HEX}.sqlite.gz`;
+  }
+  return `research/personal/snapshots/sha256=${RAW_HEX}.sqlite.gz`;
 }
 
 function manifestKey(kind: Kind, jobId: string): string {
-  return kind === "result"
-    ? `research/personal/jobs/job=${jobId}/manifest.json`
-    : `research/personal/snapshot-builds/job=${jobId}/manifest.json`;
+  if (kind === "result") {
+    return `research/personal/jobs/job=${jobId}/manifest.json`;
+  }
+  if (kind === "candidate") {
+    return `research/receipt-candidates/job=${jobId}/manifest.json`;
+  }
+  return `research/personal/snapshot-builds/job=${jobId}/manifest.json`;
 }
 
 function uploadHeaders(
@@ -51,7 +61,7 @@ function uploadHeaders(
     "x-personal-request-digest": REQUEST_DIGEST,
     "x-content-sha256": contentDigest,
   };
-  if (kind === "snapshot") {
+  if (kind === "snapshot" || kind === "candidate") {
     headers["x-personal-raw-sha256"] = RAW_DIGEST;
   }
   return headers;
@@ -60,6 +70,7 @@ function uploadHeaders(
 function completedManifest(
   kind: Kind,
   jobId: string,
+  options?: { omitFormat?: boolean },
 ): Record<string, unknown> {
   if (kind === "result") {
     return {
@@ -67,6 +78,23 @@ function completedManifest(
       request_digest: REQUEST_DIGEST,
       status: "COMPLETED",
       result_sha256: CONTENT_DIGEST,
+    };
+  }
+  if (kind === "candidate") {
+    return {
+      job_id: jobId,
+      request_digest: REQUEST_DIGEST,
+      runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
+      status: "COMPLETED",
+      pending_ready: true,
+      ready: false,
+      go: false,
+      completeness_claim: "NONE",
+      controlled_live_eligibility: "FORBIDDEN",
+      raw_sha256: RAW_DIGEST,
+      gzip_sha256: CONTENT_DIGEST,
+      snapshot_key: objectKey("candidate", jobId),
+      ...(options?.omitFormat ? {} : { format: RECEIPT_CANDIDATE_FORMAT }),
     };
   }
   return {
@@ -141,9 +169,10 @@ async function putWithProducer(
 async function putCompletedManifest(
   kind: Kind,
   jobId: string,
+  options?: { omitFormat?: boolean },
 ): Promise<Response> {
   const bytes = new TextEncoder().encode(
-    JSON.stringify(completedManifest(kind, jobId)),
+    JSON.stringify(completedManifest(kind, jobId, options)),
   );
   const digest = `sha256:${hex(await crypto.subtle.digest("SHA-256", bytes))}`;
   return personalResearchR2Outbound(
@@ -272,4 +301,65 @@ describe("personalResearchR2Outbound workerd/R2 runtime", () => {
       );
     },
   );
+
+  it("candidate gzip then COMPLETED terminal is retrievable", async () => {
+    const jobId = "r05-candidate-ok";
+    const { response, producer } = await putWithProducer(
+      "candidate",
+      jobId,
+      "complete",
+      CONTENT_DIGEST,
+    );
+    expect(producer.status).toBe("fulfilled");
+    expect(response.status).toBe(201);
+    const stored = await runtimeEnv.STRUCTURED_BUCKET.get(
+      objectKey("candidate", jobId),
+    );
+    expect(stored).not.toBeNull();
+    expect(stored!.customMetadata?.format).toBe(RECEIPT_CANDIDATE_FORMAT);
+    const manifest = await putCompletedManifest("candidate", jobId);
+    expect(manifest.status).toBe(201);
+    const get = await personalResearchR2Outbound(
+      new Request(`http://research.r2/${manifestKey("candidate", jobId)}`, {
+        method: "GET",
+        headers: {
+          "x-personal-job-id": jobId,
+          "x-personal-request-digest": REQUEST_DIGEST,
+          "x-personal-runner-version": PERSONAL_RESEARCH_RUNNER_VERSION,
+          "x-personal-job-kind": "receipt-candidate",
+        },
+      }),
+      runtimeEnv,
+    );
+    expect(get.status).toBe(200);
+    expect(await get.json()).toMatchObject({
+      job_id: jobId,
+      status: "COMPLETED",
+      format: RECEIPT_CANDIDATE_FORMAT,
+      pending_ready: true,
+      ready: false,
+      go: false,
+    });
+  });
+
+  it("candidate COMPLETED without format is refused after gzip exists", async () => {
+    const jobId = "r05-candidate-noformat";
+    const { response } = await putWithProducer(
+      "candidate",
+      jobId,
+      "complete",
+      CONTENT_DIGEST,
+    );
+    expect(response.status).toBe(201);
+    const refused = await putCompletedManifest("candidate", jobId, {
+      omitFormat: true,
+    });
+    expect(refused.status).toBe(400);
+    expect(await refused.json()).toEqual({
+      error: "receipt candidate manifest identity mismatch",
+    });
+    expect(
+      await runtimeEnv.STRUCTURED_BUCKET.head(manifestKey("candidate", jobId)),
+    ).toBeNull();
+  });
 });

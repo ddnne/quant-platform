@@ -194,6 +194,38 @@ def bind_verified_controlled_am_session_daily_bars(
 
 
 @dataclass(frozen=True, slots=True)
+class _BoundScopedFeatureReads:
+    """Engine-only: one current-plan feature consumer on a verified view."""
+
+    data_view: Any
+    consumer_id: str
+
+    def __post_init__(self) -> None:
+        from pit.governed_am_view import GovernedAmSessionDataView
+
+        if type(self.data_view) is not GovernedAmSessionDataView:
+            raise TypeError(
+                "bound plan feature reads require a verifier-minted data view"
+            )
+        binding = self.data_view.current_plan_feature_binding()
+        if (
+            binding is None
+            or binding.profile_version != "research-data-profile/v3"
+            or not binding.profile_set_digest
+            or not binding.plan_id
+        ):
+            raise TypeError(
+                "bound plan feature reads require current-plan profile-set identity"
+            )
+        if type(self.consumer_id) is not str or not self.consumer_id.strip():
+            raise TypeError("bound plan feature consumer_id is missing")
+        if self.consumer_id not in binding.consumers:
+            raise TypeError(
+                "bound plan feature consumer is not on the current plan"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class FeatureContext:
     """Read-only PIT-scoped context handed to a feature's ``compute``.
 
@@ -359,6 +391,7 @@ def _compute(
     as_of: Any,
     db_path: Any = None,
     daily_bars_capability: _DailyBarsReaderCapability | None = None,
+    scoped_feature_reads: _BoundScopedFeatureReads | None = None,
     **inputs: Any,
 ) -> FeatureOutput:
     if isinstance(feature, str):
@@ -378,6 +411,10 @@ def _compute(
             raise ValueError(
                 "bound daily-bar capability db_path does not match compute db_path"
             )
+    if scoped_feature_reads is not None and not isinstance(
+        scoped_feature_reads, _BoundScopedFeatureReads
+    ):
+        raise TypeError("scoped_feature_reads is not a bound plan capability")
     if feature.id in AM_SESSION_FEATURE_IDS:
         session_view = getattr(daily_bars_capability, "session_view", None)
         if daily_bars_capability is None or session_view != "personal_retrospective_am_signal":
@@ -386,7 +423,114 @@ def _compute(
                 "retrospective AM daily-bar capability"
             )
 
+    selected_by_dataset: dict[tuple[str, str], Any] = {}
+
+    def _declared_selected(
+        dataset_id: str, code: str, *, split_anchor: str | None = None
+    ):
+        key = (dataset_id, code)
+        if key not in selected_by_dataset:
+            selected_by_dataset[key] = (
+                scoped_feature_reads.data_view._select_declared_feature_dataset(
+                    consumer_id=scoped_feature_reads.consumer_id,
+                    dataset_id=dataset_id,
+                    decision_as_of=as_of_iso,
+                    codes=(code,),
+                    split_anchor=split_anchor,
+                )
+            )
+        return selected_by_dataset[key]
+
     def _read_pit(resource: str, kwargs: Mapping[str, Any]):
+        if scoped_feature_reads is not None:
+            declared = scoped_feature_reads.data_view._declared_feature_dataset_ids(
+                consumer_id=scoped_feature_reads.consumer_id
+            )
+            if resource == "jquants_records":
+                dataset_id = str(kwargs.get("dataset") or "")
+            else:
+                dataset_id = {
+                    "equity_bars_daily": "equities_bars_daily",
+                    "financial_state": "fins_summary",
+                    "equity_master": "equities_master",
+                    "market_calendar": "markets_calendar",
+                    "jsda_repo_rates": "jsda_tokyo_repo_rates",
+                }.get(resource, "")
+            if not dataset_id or dataset_id not in declared:
+                raise ValueError(
+                    f"undeclared {dataset_id or resource} read for the current plan consumer"
+                )
+            code = kwargs.get("code")
+            if code is None or not str(code).strip():
+                raise ValueError("scoped feature read requires one code")
+            code = str(code)
+            if resource == "financial_state":
+                selected = _declared_selected("fins_summary", code)
+                state = selected.state
+                if str(kwargs.get("dataset") or "") != "fins_summary":
+                    raise ValueError("scoped financial dataset is not fins_summary")
+                if kwargs.get("initial_visible_state") != state.initial_visible_state:
+                    raise ValueError(
+                        "financial initial_visible_state does not match the bound consumer"
+                    )
+                return state
+            if resource == "equity_bars_daily":
+                requirement = (
+                    scoped_feature_reads.data_view._declared_feature_requirement(
+                        consumer_id=scoped_feature_reads.consumer_id,
+                        dataset_id="equities_bars_daily",
+                    )
+                )
+                split_anchor = None
+                if requirement.scope.split_safety_anchor_interval:
+                    fins_requirement = (
+                        scoped_feature_reads.data_view._declared_feature_requirement(
+                            consumer_id=scoped_feature_reads.consumer_id,
+                            dataset_id="fins_summary",
+                        )
+                    )
+                    if fins_requirement is not None:
+                        financial = _declared_selected("fins_summary", code)
+                        split_anchor = financial.split_safety_anchor
+                selected = _declared_selected(
+                    "equities_bars_daily", code, split_anchor=split_anchor
+                )
+                rows = [
+                    {
+                        "code": bar.code,
+                        "date": bar.date,
+                        "close": bar.close,
+                        "adjustment_close": bar.adjustment_close,
+                        "volume": bar.volume,
+                        "adjustment_volume": bar.adjustment_volume,
+                    }
+                    for bar in selected
+                ]
+                from_event = kwargs.get("from_event")
+                if from_event is not None:
+                    start = str(from_event)[:10]
+                    rows = [row for row in rows if row["date"] >= start]
+                to_event = kwargs.get("to_event")
+                if to_event is not None:
+                    end = str(to_event)[:10]
+                    rows = [row for row in rows if row["date"] <= end]
+                latest_n = kwargs.get("latest_n")
+                if latest_n is not None:
+                    rows = rows[-int(latest_n) :]
+                return pit.PitResult(
+                    rows=rows,
+                    metadata={
+                        "as_of": as_of_iso,
+                        "table": "jquants_records",
+                        "dataset": "equities_bars_daily",
+                        "count": len(rows),
+                        "pit_api_version": pit.PIT_API_VERSION,
+                        "source": "jquants",
+                    },
+                )
+            raise ValueError(
+                f"undeclared {dataset_id} read for the current plan consumer"
+            )
         if resource == "equity_bars_daily" and daily_bars_capability is not None:
             return daily_bars_capability.reader(**dict(kwargs))
         readers = {
@@ -472,6 +616,7 @@ def compute_with_engine_daily_bars_capability(
     as_of: Any,
     db_path: Any = None,
     daily_bars_capability: _DailyBarsReaderCapability,
+    scoped_feature_reads: _BoundScopedFeatureReads | None = None,
     **inputs: Any,
 ) -> FeatureOutput:
     """Engine-only compute: AM session-masked daily bars, ordinary other PIT."""
@@ -480,6 +625,7 @@ def compute_with_engine_daily_bars_capability(
         as_of=as_of,
         db_path=db_path,
         daily_bars_capability=daily_bars_capability,
+        scoped_feature_reads=scoped_feature_reads,
         **inputs,
     )
 

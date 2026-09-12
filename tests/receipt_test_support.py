@@ -646,6 +646,7 @@ def reconcile_test_evidence(
     source_request: Mapping[str, Any] | None = None,
     extra_evidence: Mapping[str, Any] | None = None,
     structured_digest: str | None = None,
+    product_artifact_bytes: bytes | None = None,
     environment: str = PRODUCTION_RECEIPT_ENVIRONMENT,
     authority_instance_digest: str = PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
     include_jquants_acquisition_digests: bool = True,
@@ -702,13 +703,18 @@ def reconcile_test_evidence(
         f"test/receipt-raw/{required.source}/{required.dataset}/"
         f"{required.segment_id}/manifest.json"
     )
-    artifact_body = json.dumps(
-        list(structured_rows),
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-        allow_nan=False,
-    ).encode("utf-8")
+    if product_artifact_bytes is None:
+        artifact_body = json.dumps(
+            list(structured_rows),
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+            allow_nan=False,
+        ).encode("utf-8")
+    else:
+        if type(product_artifact_bytes) is not bytes or not product_artifact_bytes:
+            raise ValueError("product artifact bytes must be exact non-empty bytes")
+        artifact_body = product_artifact_bytes
     manifest_body = canonical_receipt_body(
         {"artifact_key": artifact_key, "structured_digest": structured_digest_value}
     )
