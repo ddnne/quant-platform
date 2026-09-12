@@ -12,6 +12,14 @@ import {
   type ExportEnv,
 } from "../src/http_export";
 import {
+  readReceiptProductBytes,
+  RECEIPT_PRODUCT_BYTE_REQUEST,
+} from "../src/receipt_product_bytes";
+import {
+  RECEIPT_PRODUCT_HOST,
+  receiptProductSourceOutbound,
+} from "../../research-mass-eval/src/receipt_product_source";
+import {
   PINNED_RECEIPT_REGISTRY_SCOPE,
   closedReceiptVerifyRegistry,
   type ReceiptVerifyRegistry,
@@ -64,7 +72,12 @@ function restoreRegistries(): void {
 }
 
 const EXPORT_TOKEN = "premium-test-export-token-do-not-leak";
-const runtimeEnv = env as { DB: D1Database; OPS_PROJECTION_ENVIRONMENT: string };
+const runtimeEnv = env as {
+  DB: D1Database;
+  OPS_PROJECTION_ENVIRONMENT: string;
+  RAW_BUCKET: R2Bucket;
+  STRUCTURED_BUCKET: R2Bucket;
+};
 const migrations = inject<Array<{ name: string; queries: string[] }>>(
   "premiumD1Migrations",
 );
@@ -165,6 +178,7 @@ async function seedGovernedObjects() {
   const rawManifest = new TextEncoder().encode('{"format":"jquants-raw-manifest/v1"}');
   return {
     structured: await sha256Prefixed(artifact),
+    artifact,
     manifestDigest: await sha256Prefixed(manifest),
     rawDigest: "sha256:" + "aa".repeat(32),
     rawFileDigest: await sha256Prefixed(rawManifest),
@@ -638,7 +652,7 @@ async function seedPair(options?: {
     objects,
     requestState: options?.calRequest,
   });
-  return { registry };
+  return { registry, objects };
 }
 
 afterEach(async () => {
@@ -916,6 +930,268 @@ describe("POST /v1/export/receipt-products workerd D1", () => {
     expect(await pending!.json()).toMatchObject({
       status: "HOLD",
       hold_reason: "PENDING_REGISTRY",
+    });
+  });
+});
+
+function masterScope(start = "2026-08-01", end = "2026-08-31") {
+  return {
+    coverage_mode: "scd2_event_sourcing",
+    expected_frequency: "trading_day",
+    expected_item_unit: "source_query",
+    segment_end: end,
+    segment_start: start,
+    universe_rule: "all_listed_equities_at_event_date",
+    segment_granularity: "calendar_month",
+  };
+}
+
+function byteRequest(
+  dataset: string,
+  segmentId: string,
+  operationId: string,
+  receiptDigest: string,
+  resource: "product_artifact" | "raw_collection_manifest" | "official_calendar_raw",
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    schema_version: RECEIPT_PRODUCT_BYTE_REQUEST,
+    profile_id: controlledPilot.profile_id,
+    profile_digest: controlledPilot.profile_digest,
+    dependency_closure_digest: controlledPilot.dependency_closure_digest,
+    dataset,
+    segment_id: segmentId,
+    operation_id: operationId,
+    receipt_digest: receiptDigest,
+    resource,
+    ...extra,
+  };
+}
+
+describe("original receipt product bytes workerd R2", () => {
+  it("streams signed product bytes and refuses a wrong receipt identity or missing object", async () => {
+    const { registry, objects } = await seedPair();
+    installRegistry("staging", registry);
+    await runtimeEnv.STRUCTURED_BUCKET.put("bars-artifact.jsonl", objects.artifact);
+    const described = await postReceiptProducts(exportEnv(), inputRequest([
+      { dataset: "markets_calendar", segment_id: "2026-08" },
+      { dataset: "equities_bars_daily", segment_id: "2026-08" },
+    ]));
+    expect(described?.status).toBe(200);
+    const body = await described!.json() as {
+      input_set_digest: string;
+      segments: Array<{
+        dataset: string;
+        segment_id: string;
+        operation_id: string;
+        receipt_digest: string;
+      }>;
+    };
+    const segment = body.segments.find((row) =>
+      row.dataset === "equities_bars_daily" && row.segment_id === "2026-08"
+    );
+    expect(segment).toBeDefined();
+    const payload = byteRequest(
+      "equities_bars_daily",
+      "2026-08",
+      segment.operation_id,
+      segment.receipt_digest,
+      "product_artifact",
+    );
+    const encoded = JSON.stringify(payload);
+    const streamed = await receiptProductSourceOutbound(
+      new Request(`http://${RECEIPT_PRODUCT_HOST}/v1/read-receipt-product-bytes`, {
+        method: "POST",
+        headers: { "content-length": String(encoded.length) },
+        body: encoded,
+      }),
+      {
+        INGESTION_PREMIUM: {
+          read_receipt_product_bytes: (request) =>
+            readReceiptProductBytes(runtimeEnv, request),
+        },
+      },
+    );
+    expect(streamed.status).toBe(200);
+    expect(new Uint8Array(await streamed.arrayBuffer())).toEqual(objects.artifact);
+
+    const changed = await readReceiptProductBytes(runtimeEnv, byteRequest(
+      "equities_bars_daily",
+      "2026-08",
+      segment.operation_id,
+      "sha256:" + "00".repeat(32),
+      "product_artifact",
+    ));
+    expect(changed.status).toBe(409);
+    expect(await changed.json()).toMatchObject({
+      status: "HOLD",
+      hold_reason: "UNTRUSTED_CHAIN",
+    });
+
+    await runtimeEnv.STRUCTURED_BUCKET.delete("bars-artifact.jsonl");
+    const missing = await readReceiptProductBytes(runtimeEnv, byteRequest(
+      "equities_bars_daily",
+      "2026-08",
+      segment.operation_id,
+      segment.receipt_digest,
+      "product_artifact",
+    ));
+    expect(missing.status).toBe(409);
+    expect(await missing.json()).toMatchObject({
+      status: "HOLD",
+      hold_reason: "READ_FAILURE",
+    });
+
+    const nonMaster = await readReceiptProductBytes(runtimeEnv, byteRequest(
+      "equities_bars_daily",
+      "2026-08",
+      segment.operation_id,
+      segment.receipt_digest,
+      "official_calendar_raw",
+    ));
+    expect(nonMaster.status).toBe(400);
+    expect(await nonMaster.json()).toEqual({
+      error: "official calendar is master-only",
+    });
+  });
+
+  it("returns original calendar bytes and refuses key-reordered re-encoding", async () => {
+    await applyD1Migrations(runtimeEnv.DB, migrations);
+    await seedBase(runtimeEnv.DB);
+    const pair = await crypto.subtle.generateKey(
+      { name: "Ed25519" },
+      true,
+      ["sign", "verify"],
+    );
+    const raw = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
+    const registry = await closedActiveStagingRegistry(raw);
+    installRegistry("staging", registry);
+    const objects = await seedGovernedObjects();
+    const original = new TextEncoder().encode(
+      '{"data":[{"Date":"2026-08-01","HolDiv":"1"}]}',
+    );
+    const reordered = new TextEncoder().encode(
+      '{"data":[{"HolDiv":"1","Date":"2026-08-01"}]}',
+    );
+    expect(original.byteLength).toBe(reordered.byteLength);
+    const prefix =
+      "raw/receipt-authority/staging/equities_master/2026-08/op/attempt-1/";
+    const rawKey = `${prefix}manifest.json`;
+    const calendarKey = `${prefix}official-calendar.json`;
+    const evidence = {
+      raw_path: calendarKey,
+      source_path: "/v2/markets/calendar",
+      raw_size: original.byteLength,
+      raw_digest: await sha256Prefixed(original),
+      calendar_query_digest: "sha256:" + "c1".repeat(32),
+      business_dates_digest: "sha256:" + "c2".repeat(32),
+      binding_digest: "sha256:" + "c3".repeat(32),
+      business_dates: ["2026-08-01"],
+    };
+    const page = {
+      raw_path: `${prefix}page-000000.json`,
+      raw_size: 2,
+      raw_digest: "sha256:" + "bb".repeat(32),
+      response_status: 200,
+      headers: { "content-type": "application/json" },
+      metadata: { pagination_state: "EXHAUSTED" },
+    };
+    const captureBody = {
+      schema_version: "jquants-acquisition-collection/v2",
+      capture_mode: "LIVE_SERVICE_BINDING_RESPONSE",
+      initial_request: { dataset_id: "equities_master" },
+      official_calendar_evidence: evidence,
+      pages: [page],
+    };
+    const collectionDigest = await canonicalDigest(captureBody);
+    const collectionJson = canonicalJson({
+      ...captureBody,
+      collection_digest: collectionDigest,
+    });
+    const collectionBytes = new TextEncoder().encode(collectionJson);
+    const rawManifestDigest = await canonicalDigest({
+      pages: [{ index: 0, digest: page.raw_digest, size: page.raw_size }],
+      official_calendar_evidence: evidence,
+    });
+    const claims = await canonicalV3Claims({
+      ...objects,
+      rawDigest: rawManifestDigest,
+      rawFileDigest: await sha256Prefixed(collectionBytes),
+      rawBytes: collectionBytes.byteLength,
+    }, {
+      dataset: "equities_master",
+      expected_scope: masterScope(),
+      artifact_key: "master-artifact.jsonl",
+      manifest_key: "master-manifest.json",
+      raw_manifest_key: rawKey,
+      receipt_issue_digest: "sha256:" + "ce".repeat(32),
+      run_id: 3,
+      structured_generation: 3,
+      extra_digests: {
+        acquisition_collection_manifest_file_digest:
+          await sha256Prefixed(collectionBytes),
+        acquisition_collection_digest: collectionDigest,
+        acquisition_terminal_chain_digest: "sha256:" + "13".repeat(32),
+        product_artifact_digest: objects.structured,
+        product_manifest_digest: objects.manifestDigest,
+        official_calendar_evidence_digest: await canonicalDigest(evidence),
+        official_calendar_raw_body_digest: evidence.raw_digest,
+        official_calendar_query_digest: evidence.calendar_query_digest,
+        official_business_dates_digest: evidence.business_dates_digest,
+        official_calendar_binding_digest: evidence.binding_digest,
+      },
+    });
+    await seedComplete(runtimeEnv.DB, {
+      dataset: "equities_master",
+      segmentId: "2026-08",
+      runId: 3,
+      operationId: "op-master",
+      nonce: "ad".repeat(32),
+      requestDigest: "sha256:" + "ce".repeat(32),
+      expectedScope: masterScope(),
+      artifactKey: "master-artifact.jsonl",
+      manifestKey: "master-manifest.json",
+      rawKey,
+      envelope: await signV3Claims(pair, claims),
+      objects: {
+        ...objects,
+        rawDigest: rawManifestDigest,
+        rawFileDigest: await sha256Prefixed(collectionBytes),
+        rawBytes: collectionBytes.byteLength,
+      },
+    });
+    await runtimeEnv.RAW_BUCKET.put(rawKey, collectionBytes);
+    await runtimeEnv.RAW_BUCKET.put(calendarKey, original);
+    const described = await postReceiptProducts(exportEnv(), inputRequest([
+      { dataset: "equities_master", segment_id: "2026-08" },
+    ]));
+    const describedBody = await described!.json() as {
+      input_set_digest: string;
+      segments: Array<{ operation_id: string; receipt_digest: string }>;
+    };
+    const segment = describedBody.segments[0]!;
+    const originalRead = await readReceiptProductBytes(runtimeEnv, byteRequest(
+      "equities_master",
+      "2026-08",
+      segment.operation_id,
+      segment.receipt_digest,
+      "official_calendar_raw",
+    ));
+    expect(originalRead.status).toBe(200);
+    expect(new Uint8Array(await originalRead.arrayBuffer())).toEqual(original);
+
+    await runtimeEnv.RAW_BUCKET.put(calendarKey, reordered);
+    const refused = await readReceiptProductBytes(runtimeEnv, byteRequest(
+      "equities_master",
+      "2026-08",
+      segment.operation_id,
+      segment.receipt_digest,
+      "official_calendar_raw",
+    ));
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({
+      status: "HOLD",
+      hold_reason: "UNTRUSTED_CHAIN",
     });
   });
 });

@@ -5,6 +5,7 @@ import type {
 export {
   PremiumReceiptAuditEvidenceService,
   PremiumReceiptOperatorService,
+  PremiumReceiptProductInputService,
 } from "../src/index";
 
 type HarnessEnv = {

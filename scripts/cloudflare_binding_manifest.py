@@ -465,6 +465,10 @@ WORKER_ENTRYPOINT_RPC_POLICY: dict[
             False,
             ("staging_recovery_audit_evidence",),
         ),
+        "PremiumReceiptProductInputService": (
+            False,
+            ("read_receipt_product_bytes",),
+        ),
         "PilotReadyPublicationService": (True, ("publishPilotReady",)),
     },
     "ingestion-jsda": {
@@ -1069,6 +1073,7 @@ def _effective_surface(
             for name in (
                 "PremiumReceiptOperatorService",
                 "PremiumReceiptAuditEvidenceService",
+                "PremiumReceiptProductInputService",
             )
         }
 
@@ -1427,6 +1432,11 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
                 "service": "quant-platform-research-ai-gateway",
             },
             {
+                "binding": "INGESTION_PREMIUM",
+                "entrypoint": "PremiumReceiptProductInputService",
+                "service": "quant-platform-ingestion-premium",
+            },
+            {
                 "binding": "JQUANTS_ACQUISITION",
                 "entrypoint": "IngestionSecretsService",
                 "service": "quant-platform-ingestion-secrets",
@@ -1437,6 +1447,11 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
                 "binding": "AI_GATEWAY",
                 "entrypoint": "GatewayService",
                 "service": "quant-platform-research-ai-gateway",
+            },
+            {
+                "binding": "INGESTION_PREMIUM",
+                "entrypoint": "PremiumReceiptProductInputService",
+                "service": "quant-platform-ingestion-premium",
             },
             {
                 "binding": "JQUANTS_ACQUISITION",
@@ -1451,6 +1466,11 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
                 "service": "quant-platform-research-ai-gateway-staging",
             },
             {
+                "binding": "INGESTION_PREMIUM",
+                "entrypoint": "PremiumReceiptProductInputService",
+                "service": "quant-platform-ingestion-premium-staging",
+            },
+            {
                 "binding": "JQUANTS_ACQUISITION",
                 "entrypoint": "IngestionSecretsService",
                 "service": "quant-platform-ingestion-secrets-staging",
@@ -1461,7 +1481,8 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         if workers["research-mass-eval"][environment]["services"] != expected_services:
             raise ValueError(
                 f"research-mass-eval/{environment}: GatewayService and "
-                "IngestionSecretsService bindings are required"
+                "IngestionSecretsService and PremiumReceiptProductInputService "
+                "bindings are required"
             )
 
     personal_container = [

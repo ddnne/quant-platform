@@ -18,6 +18,7 @@ import {
   type PersonalResearchBatchItem,
 } from "./personal_research_batch";
 import { personalHistorySourceOutbound } from "./personal_history_source";
+import { receiptProductSourceOutbound } from "./receipt_product_source";
 import {
   durablePersonalJobStatus,
   submittedStateDocument,
@@ -282,6 +283,7 @@ PersonalResearchContainer.outboundByHost = {
   "research.r2": personalResearchR2Outbound,
   [CONTROLLED_R2_HOST]: denyControlledPilotR2Outbound,
   "history.source": personalHistorySourceOutbound,
+  "receipt.products": receiptProductSourceOutbound,
 };
 
 type StoredManifest = Record<string, unknown> & {

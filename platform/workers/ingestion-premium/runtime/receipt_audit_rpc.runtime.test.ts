@@ -51,6 +51,12 @@ describe("Premium audit-only WorkerEntrypoint capability", () => {
         fetch_reserved_special: false,
         rpc_methods: ["staging_recovery_audit_evidence"],
       },
+      {
+        name: "PremiumReceiptProductInputService",
+        handlers: ["class"],
+        fetch_reserved_special: false,
+        rpc_methods: ["read_receipt_product_bytes"],
+      },
     ]);
   });
 });
