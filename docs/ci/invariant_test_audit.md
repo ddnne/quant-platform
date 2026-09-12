@@ -33,12 +33,13 @@ a claim that every module or test has been reviewed.
 A test may demonstrate an invariant, but it must not create the security
 boundary it claims to test. Where a real production boundary exists today, it
 lives in types, opaque capabilities, immutable stores, transactions,
-cryptographic verification, or Cloudflare bindings. Runtime OS sandboxing
-applies only to the existing isolated-runner path, not as a reason to add
-broader sandbox or authority frameworks. Source spelling, comments, phase
-names, and historical counts are not release authorities. Table wording such
-as malicious CWD or adversarial cases describes those existing packaging and
-signed-receipt checks, not a charter for extra hostile-Python tests.
+cryptographic verification, or Cloudflare bindings. Do not add OS-sandbox
+or extra authority frameworks. The unused macOS sandbox-exec runner was
+removed; Cloudflare Container / enableInternet=false / closed DSL remain.
+Source spelling, comments, phase names, and historical counts are not
+release authorities. Table wording such as malicious CWD or adversarial
+cases describes those existing packaging and signed-receipt checks, not a
+charter for extra hostile-Python tests.
 
 | Invariant | Structural enforcement | Minimal acceptance test |
 | --- | --- | --- |
@@ -50,7 +51,6 @@ signed-receipt checks, not a charter for extra hostile-Python tests.
 | Profile/closure-bound READY | The dedicated publisher verifies the signed Ops evidence, exact plan closure, PIT availability, immutable DB digest, and dedicated READY key | `tests/test_ready_policy_fail_closed.py` and `tests/test_ready_manifest.py` |
 | Immutable snapshot/artifact | Snapshot handles verify read-only mode and content digest; Worker R2 create-only operations use conditional writes | `tests/test_phase6_snapshot_publication.py` and Worker R2 runtime tests |
 | Controlled Paper authorization | `OfflineFixturePaperService` and `ControlledPilotExecutionService` are distinct entrypoints; the controlled type requires verified readiness and an immutable snapshot | `tests/test_controlled_pilot_execution_service.py` |
-| Agent process isolation | Production refuses execution without an active OS sandbox; a closed tool map, issued capability, scrubbed environment, fixed argv, and `shell=False` are passed to the backend | behavioral cases in `tests/test_process_isolated_runner.py` |
 | Strict Gateway rejection | Closed request/output schemas are validated before an artifact is returned | `tests/test_gateway_fail_closed.py` and Gateway runtime tests |
 | Budget concurrency and settlement | BudgetLedger Durable Object serializes reservations and settles only through the Gateway coordinator bound to exact lease, digest, provider-start, and a retry-safe one-shot settlement capability | `platform/workers/research-ai-gateway/src/budget_runtime.test.ts` and `index_complete_budget.test.ts` |
 | OAuth boundary | The Ops MCP Worker requires OAuth while public metadata remains available | `platform/workers/quant-ops-mcp/runtime/ops_runtime.test.js` and `harness/oauth_harness.test.ts` |
@@ -64,7 +64,7 @@ signed-receipt checks, not a charter for extra hostile-Python tests.
   snapshot as policy.
 - Removed wave/phase filename guards and optional helper-script source checks.
 - Removed repeated AST/import/comment/function-name assertions where public
-  behavior, closed schemas, capabilities, runtime bindings, or OS sandbox tests
+  behavior, closed schemas, capabilities, or runtime bindings
   already enforce the boundary.
 - Removed `tests/test_research_default_r2_put_callers.py`, whose glob and
   implementation-string assertions duplicated the stronger R2 boundary.
@@ -89,8 +89,9 @@ signed-receipt checks, not a charter for extra hostile-Python tests.
 - Removed the dead W83-W86 three-pin freeze surface and smoke-universe count
   guards. Exact-four plans now own their immutable strategy/feature parameters;
   Mass and Paper remain disabled by their capability gates.
-- Replaced the runner's `inspect.getsource`/string check for `shell=False` with
-  an intercepted invocation that asserts the actual subprocess contract.
+- Historical isolated-runner `shell=False` source-string check was replaced by
+  an intercepted subprocess contract; that unused macOS sandbox-exec runner is
+  now removed.
 - Removed the JSDA recovery sealer's function-name/import spelling assertions;
   its local-index input and persisted `FAILED / RECOVERED_RAW_ONLY` evidence are
   exercised directly, including a zero structured-row count and no COMPLETE.

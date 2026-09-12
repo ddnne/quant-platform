@@ -10,8 +10,6 @@
    and ``gethostbyname`` during test execution, not all DNS APIs.
    It does not cover collection or imports, separately exec'd processes, or
    native/Node/Worker runtimes.
-4. ``--run-platform`` opts into tests marked ``platform`` (real-host OS
-   integration). Those stay skipped unless the flag is passed.
 """
 
 from __future__ import annotations
@@ -36,24 +34,6 @@ for _plane in ("edge", "data_plane", "research_runtime", "product"):
 import pytest
 
 from ingestion.common.http import HttpResponse
-
-
-def pytest_addoption(parser):
-    parser.addoption(
-        "--run-platform",
-        action="store_true",
-        default=False,
-        help="Run tests marked platform (opt-in real-host OS integration).",
-    )
-
-
-def pytest_collection_modifyitems(config, items):
-    if config.getoption("--run-platform"):
-        return
-    skip_platform = pytest.mark.skip(reason="need --run-platform to run platform tests")
-    for item in items:
-        if item.get_closest_marker("platform") is not None:
-            item.add_marker(skip_platform)
 
 
 class FakeHttpClient:

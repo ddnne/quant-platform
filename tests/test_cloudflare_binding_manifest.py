@@ -1142,11 +1142,11 @@ def test_authoritative_ci_dry_runs_test_harness_configs(
     commands = [r["command"] for r in recs]
     offline_pytest = [
         "python", "-m", "pytest", "-n", "2", "--dist=loadfile",
-        "-m", "not toolchain and not live and not platform", "tests/",
+        "-m", "not toolchain and not live", "tests/",
     ]
     toolchain_pytest = [
         "python", "-m", "pytest", "-n", "2", "--dist=loadfile",
-        "-m", "toolchain and not live and not platform", "tests/",
+        "-m", "toolchain and not live", "tests/",
     ]
     pytest_invocations = [
         cmd for cmd in commands if cmd[:3] == ["python", "-m", "pytest"]

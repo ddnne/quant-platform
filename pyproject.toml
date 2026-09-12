@@ -82,5 +82,4 @@ norecursedirs = [".*", "build", "dist"]
 markers = [
     "live: reserved marker for operator-gated live deployment acceptance; CI excludes it. QP_LIVE alone does not enable network",
     "toolchain: tests that require actual Node/npm",
-    "platform: opt-in real-host OS integration; skipped unless --run-platform",
 ]

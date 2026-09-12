@@ -55,7 +55,24 @@
       "tests/test_class_signals.py::test_opt225_signal_helpers_pure"
     ],
     "retained": "offline bar_eval/multiyear, cost_models, features.class_signals nky/opt225 helpers, strategies, BAR_NATIVE_SPECS via cf_mass_eval_job, unique_logic, exact-four plans, Personal/volatility/SVI, artifacts/evidence, CF Mass/daily-path refusal probes",
-    "note": "No active non-test consumer of the factory cycle. pyproject/Docker already exclude research.offline from normal runtime. Git history keeps the retired implementation. No replacement factory or archival stubs."
+    "note": "No active non-test consumer of the factory cycle. pyproject/Docker already exclude research.offline from normal runtime. Git history keeps the retired implementation. No replacement factory or archival stubs.",
+    "s02": {
+      "id": "S02",
+      "title": "unused macOS sandbox-exec + HMAC isolation runner",
+      "status": "this_batch_only_not_full_repo",
+      "removed_runtime": [
+        "packages/product/agents/isolated_runner.py",
+        "packages/product/agents/signed_capability.py"
+      ],
+      "removed_tests": [
+        "tests/test_process_isolated_runner.py",
+        "tests/test_signed_isolation_capability.py"
+      ],
+      "removed_platform_tier": "--run-platform hook, pytest platform marker, verify_ci and not platform, binding-manifest argv pin",
+      "retained": "agents.runtime, Cloudflare Container/enableInternet=false/closed DSL/Service Binding/budget/real process management, live/toolchain/socket limits, Worker/runtime/type/env/remote Container gates",
+      "supersedes": "T02 platform-tiering of this unused subsystem, and the old --run-platform / platform-marker evidence in T02 plus current_work_ledger item5.python_default_offline_boundary. Those historical texts are left unchanged. This batch retires the unused runner instead of keeping a platform lane.",
+      "note": "No real caller. No replacement stub, archive, or new authority. Partial repo simplification, not completion."
+    }
   },
   "findings": [
     {"id":"D01","action":"DELETE","title":"同一本文のAM拒否テスト","status":"implemented_local_verification","implementation_commit":"25c6d5fe","baseline_targets":[["tests/test_controlled_pilot_p0.py","test_synthetic_am_timestamps_on_daily_bars_are_rejected$"]],"reason":"close-onlyテストとAST本文が完全一致。名前に反して別のsynthetic timestamp条件を作っていない。","bug_missed_if_removed":"なし。同じ入力・同じ関数・同じ拒否検証が残る。","required_retained_guarantee":"同ファイル test_close_only_bars_are_not_controlled_am_evidence を残す。"},

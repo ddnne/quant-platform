@@ -83,7 +83,7 @@ data_contracts = ["*.json"]
 | `paper_runtime/` | READY / coherence / snapshots | `snapshot`, `ready_policy`, `coherence`, `execution`, `experiment_index`, `code_fingerprints` |
 | `cf_platform/` | Python mirrors of CF Worker logic | `live_gates`, `ingest_premium/{availability,coverage,matrix,natural_key,validate}` |
 | `data_contracts/` | JSON SoT + loaders | `loader`, `canonical`, `coverage`, `identity`, `inventory`, `jsda` + `*.json` package data |
-| `agents/` | Multi-agent paper pipeline | `pipeline`, `roles`, `runtime`, `mass_research`, `isolated_runner`, role modules (`pm`, `quant`, `trader`, …) |
+| `agents/` | Multi-agent paper pipeline | `pipeline`, `roles`, `runtime`, `mass_research`, role modules (`pm`, `quant`, `trader`, …) |
 | `risk/` | Risk store | `store` |
 | `data_access/` | Read-domain service | `service`, `adapter` |
 | `mcp_servers/` | Local stdio MCP façade | `quant_data/{server,__main__}` |
