@@ -46,7 +46,10 @@ describe("Premium Receipt operator manifest-bound RPC inventory", () => {
     });
     expect(bytesInventory).toMatchObject({
       fetch_reserved_special: false,
-      rpc_methods: ["read_receipt_product_bytes"],
+      rpc_methods: [
+        "describe_receipt_product_input",
+        "read_receipt_product_bytes",
+      ],
     });
     expect(
       Reflect.ownKeys(PremiumReceiptOperatorService.prototype)

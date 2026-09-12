@@ -467,7 +467,7 @@ WORKER_ENTRYPOINT_RPC_POLICY: dict[
         ),
         "PremiumReceiptProductInputService": (
             False,
-            ("read_receipt_product_bytes",),
+            ("describe_receipt_product_input", "read_receipt_product_bytes"),
         ),
         "PilotReadyPublicationService": (True, ("publishPilotReady",)),
     },

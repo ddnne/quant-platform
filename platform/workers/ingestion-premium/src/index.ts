@@ -69,6 +69,10 @@ import {
 } from "./receipt_authority_audit_canary";
 import { publishOpsProjectionBestEffort } from "./ops_projection";
 import { readReceiptProductBytes } from "./receipt_product_bytes";
+import {
+  describeReceiptProductInput,
+  parseReceiptProductInputRequest,
+} from "./receipt_product_input";
 import type { ReceiptProductBytesRpc } from "./receipt_product_bytes_rpc";
 export { PilotReadyPublicationService } from "./ready_publication";
 
@@ -957,6 +961,13 @@ export class PremiumReceiptProductInputService
   implements ReceiptProductBytesRpc {
   read_receipt_product_bytes(request: unknown): Promise<Response> {
     return readReceiptProductBytes(this.env, request);
+  }
+
+  async describe_receipt_product_input(request: unknown): Promise<Response> {
+    const closed = parseReceiptProductInputRequest(request);
+    if (!closed.ok) return json({ error: closed.error }, 400);
+    const result = await describeReceiptProductInput(this.env, closed.request);
+    return json(result.body, result.httpStatus);
   }
 }
 
