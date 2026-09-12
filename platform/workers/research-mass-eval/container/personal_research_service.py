@@ -942,7 +942,13 @@ def _canonical_feature_tuple(refs: Sequence[Any]) -> tuple[tuple[str, str, str],
 _CONTROLLED_VERIFIED_JOB = threading.local()
 
 
-def _mint_controlled_am_view(db_path: Any, physical_digest: str, document: Mapping[str, Any]):
+def _mint_controlled_am_view(
+    db_path: Any,
+    physical_digest: str,
+    document: Mapping[str, Any],
+    compiled_selection: Any,
+    resolve_membership: Any,
+):
     from pit.governed_am_view import (
         _open_verified_controlled_snapshot,
         _session_scope_from_verified_worker_job,
@@ -959,6 +965,8 @@ def _mint_controlled_am_view(db_path: Any, physical_digest: str, document: Mappi
         pinned_path=db_path,
         verified_physical_digest=physical_digest,
         verified_session_scope=verified_scope,
+        compiled_selection=compiled_selection,
+        resolve_membership=resolve_membership,
     )
 
 
@@ -1068,17 +1076,9 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
         if reopened.hexdigest() != physical_hex:
             raise JobInputError("reopened snapshot hash mismatch")
         verify_sqlite(destination)
-        controlled_handle = _mint_controlled_am_view(
-            destination,
-            str(physical_digest),
-            document,
-        )
-        controlled_handle._begin_controlled_batch_reads()
-        _CONTROLLED_VERIFIED_JOB.document = document
-        _CONTROLLED_VERIFIED_JOB.physical_digest = physical_digest
-        _CONTROLLED_VERIFIED_JOB.snapshot_handle = controlled_handle
         from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED
         from agents.risk_agent import RiskAgent
+        from pit.compiled_dependency_scope import CompiledControlledSelection
         from research.dependency_closure import resolve_strategy_spec
         from research.experiment_plans import PILOT_COST_SCENARIO
         from research.ready_manifest import load_exact_four_pilot_ready_binding
@@ -1101,6 +1101,42 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
             raise JobInputError("controlled closure digest mismatch")
         if document.get("exact_four_binding_digest") != CONTROLLED_BINDING_DIGEST:
             raise JobInputError("controlled binding digest mismatch")
+        ready_binding = load_exact_four_pilot_ready_binding()
+        if ready_binding.profile_digest != CONTROLLED_PROFILE_DIGEST:
+            raise JobInputError("controlled profile-set digest mismatch")
+        if ready_binding.closure_set_digest != CONTROLLED_CLOSURE_DIGEST:
+            raise JobInputError("controlled dependency-closure digest mismatch")
+        periods = {
+            (str(profile.period_start), str(profile.period_end))
+            for profile in ready_binding.profiles
+        }
+        if len(periods) != 1:
+            raise JobInputError("exact-four plans must share one governed universe period")
+        period_start, period_end = next(iter(periods))
+        compiled_selection = CompiledControlledSelection(
+            period_start=period_start,
+            period_end=period_end,
+            lookback_trading_days=max(
+                int(scope["required_lookback_trading_days"])
+                for profile in ready_binding.profiles
+                for scope in profile.dataset_scopes
+            ),
+            profile_digest=ready_binding.profile_digest,
+            feature_consumers=tuple(
+                profile.feature_consumers() for profile in ready_binding.profiles
+            ),
+        )
+        controlled_handle = _mint_controlled_am_view(
+            destination,
+            str(physical_digest),
+            document,
+            compiled_selection,
+            resolve_tse_prime_with_fins,
+        )
+        controlled_handle._begin_controlled_batch_reads()
+        _CONTROLLED_VERIFIED_JOB.document = document
+        _CONTROLLED_VERIFIED_JOB.physical_digest = physical_digest
+        _CONTROLLED_VERIFIED_JOB.snapshot_handle = controlled_handle
 
         logical_id = controlled_handle.logical_snapshot_id()
         if logical_id != snapshot_id:
@@ -1110,11 +1146,6 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
         decisions: list[dict[str, Any]] = []
         ineligible_plan_ids: list[str] = []
         risk_agent = RiskAgent()
-        ready_binding = load_exact_four_pilot_ready_binding()
-        if ready_binding.profile_digest != CONTROLLED_PROFILE_DIGEST:
-            raise JobInputError("controlled profile-set digest mismatch")
-        if ready_binding.closure_set_digest != CONTROLLED_CLOSURE_DIGEST:
-            raise JobInputError("controlled dependency-closure digest mismatch")
         plans = ready_binding.plans
         slices = controlled_handle.universe_day_slices(
             period_start=plans[0].period_start,

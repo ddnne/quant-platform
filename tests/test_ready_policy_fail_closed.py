@@ -1241,6 +1241,9 @@ def _scope_calendar_extras(raw: bytes, *, start: str, end: str) -> dict[str, str
     }
 
 
+AUTHENTICATED_EXPORT_AT = "2026-08-25T12:00:00+00:00"
+
+
 def _seed_exact_pit_scope(
     tmp_path,
     receipt_ed25519_keys,
@@ -1368,7 +1371,7 @@ def _seed_exact_pit_scope(
         )
         store._conn.execute(  # noqa: SLF001
             "INSERT INTO snapshot_observation_clock VALUES (?)",
-            (close_as_of("2023-01-06"),),
+            (normalize_as_of(AUTHENTICATED_EXPORT_AT),),
         )
         store._conn.executescript(  # noqa: SLF001
             """
@@ -1497,9 +1500,6 @@ def _seed_exact_pit_scope(
     return db_path, _mini_exact_scope_binding()
 
 
-AUTHENTICATED_EXPORT_AT = "2026-08-25T12:00:00+00:00"
-
-
 def authenticate_applied_mirror(
     path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1590,6 +1590,81 @@ def _verify_scope(
     return _verify_exact_four_pit_dependency_scope(handle, binding)
 
 
+def _open_controlled_from_ready_proof(path: Path, proof, binding):
+    """Python consumer: READY proof entries + authenticated snapshot clock.
+
+    Upstream Worker READY/projection signatures are stubbed.
+    """
+    from pit.compiled_dependency_scope import CompiledControlledSelection
+    from pit.governed_am_view import (
+        _open_verified_controlled_snapshot,
+        _session_scope_from_verified_worker_job,
+    )
+    from research.universe_contract import resolve_tse_prime_with_fins
+
+    connection = sqlite3.connect(path)
+    try:
+        observed = str(
+            connection.execute(
+                "SELECT observed_through FROM snapshot_observation_clock"
+            ).fetchone()[0]
+        )
+    finally:
+        connection.close()
+    observed = normalize_as_of(observed)
+    if observed != normalize_as_of(AUTHENTICATED_EXPORT_AT):
+        raise AssertionError(
+            "authenticated snapshot observation clock does not match the READY export clock"
+        )
+    entries = [
+        {
+            "dataset_id": entry["dataset_id"],
+            "natural_key_count": entry["natural_key_count"],
+            "natural_key_digest": entry["natural_key_digest"],
+            "product_artifact_digests": entry["product_artifact_digests"],
+            "product_artifact_set_digest": entry["product_artifact_set_digest"],
+        }
+        for entry in proof["entries"]
+    ]
+    verified = _session_scope_from_verified_worker_job(
+        session_scope={
+            "format": "controlled-session-scope/v1",
+            "dependency_scope_proof_digest": proof["proof_digest"],
+            "physical_db_digest": proof["physical_db_digest"],
+            "observed_through": observed,
+            "entries": entries,
+        },
+        ready_manifest_digest=proof["proof_digest"],
+        signed_projection_document_digest=proof["proof_digest"],
+        profile_digest=proof["profile_digest"],
+    )
+    periods = {
+        (str(profile.period_start), str(profile.period_end))
+        for profile in binding.profiles
+    }
+    period_start, period_end = next(iter(periods))
+    handle = _open_verified_controlled_snapshot(
+        pinned_path=path,
+        verified_physical_digest=proof["physical_db_digest"],
+        verified_session_scope=verified,
+        compiled_selection=CompiledControlledSelection(
+            period_start=period_start,
+            period_end=period_end,
+            lookback_trading_days=max(
+                int(scope["required_lookback_trading_days"])
+                for profile in binding.profiles
+                for scope in profile.dataset_scopes
+            ),
+            profile_digest=binding.profile_digest,
+            feature_consumers=tuple(
+                profile.feature_consumers() for profile in binding.profiles
+            ),
+        ),
+        resolve_membership=resolve_tse_prime_with_fins,
+    )
+    return handle
+
+
 def _mutate_sqlite(path: Path, sql: str, params: tuple[object, ...] = ()) -> None:
     connection = sqlite3.connect(path)
     try:
@@ -1653,6 +1728,56 @@ def test_exact_pit_dependency_scope_verifies_full_source_artifact_before_univers
         receipt_ed25519_keys,
         include_nonmember_rows=True,
     )
+    extra_bar = _daily_equity_bar(
+        "1332",
+        "2022-01-04",
+        close=80.0,
+        morning=79.5,
+        volume=100.0,
+    )
+    with SqliteStore(db_path) as store:
+        store.upsert(
+            "jquants_records",
+            normalize_generic(
+                [extra_bar],
+                dataset="equities_bars_daily",
+                ingested_at="2022-01-04T16:00:00+09:00",
+            ),
+        )
+        extra_structured = [
+            dict(row)
+            for row in store._conn.execute(  # noqa: SLF001
+                "SELECT * FROM jquants_records "
+                "WHERE dataset='equities_bars_daily' "
+                "AND substr(event_time, 1, 10)='2022-01-04' "
+                "ORDER BY natural_key"
+            ).fetchall()
+        ]
+        extra_bars_digest = _issue_scope_dataset_product(
+            store,
+            authority=_TestSignedReceiptAuthority(
+                signing_key=receipt_ed25519_keys.signing_key
+            ),
+            run_id=99,
+            dataset_id="equities_bars_daily",
+            structured=extra_structured,
+            raw_records=[extra_bar],
+            segment_id="mini-scope-equities_bars_daily-outside-period",
+            operation="exact-pit-scope-outside-period",
+        )
+        store._conn.commit()  # noqa: SLF001
+
+    persisted = sqlite3.connect(db_path)
+    try:
+        extra_rows = persisted.execute(
+            "SELECT artifact_digest, row_count FROM receipt_product_materializations "
+            "WHERE dataset='equities_bars_daily' AND artifact_digest=?",
+            (extra_bars_digest,),
+        ).fetchall()
+        assert len(extra_rows) == 1
+        assert int(extra_rows[0][1]) >= 1
+    finally:
+        persisted.close()
 
     proof = _verify_scope(db_path, binding, monkeypatch)
 
@@ -1665,17 +1790,28 @@ def test_exact_pit_dependency_scope_verifies_full_source_artifact_before_univers
         for entry in proof["entries"]
     }
     with sqlite3.connect(db_path) as connection:
-        full_artifact_counts = dict(
-            connection.execute(
-                "SELECT dataset,row_count FROM receipt_product_materializations"
-            ).fetchall()
-        )
+        full_artifact_counts = {
+            str(dataset_id): int(total)
+            for dataset_id, total in connection.execute(
+                "SELECT dataset, SUM(row_count) "
+                "FROM receipt_product_materializations GROUP BY dataset"
+            )
+        }
     for dataset_id in (
         "equities_master",
         "fins_summary",
         "equities_bars_daily",
     ):
         assert full_artifact_counts[dataset_id] > selected_counts[dataset_id]
+    bars_entry = next(
+        entry
+        for entry in proof["entries"]
+        if entry["dataset_id"] == "equities_bars_daily"
+    )
+    assert bars_entry["natural_key_count"] == 33
+    assert extra_bars_digest not in bars_entry["product_artifact_digests"]
+    handle = _open_controlled_from_ready_proof(db_path, proof, binding)
+    handle.close()
 
 
 def test_exact_pit_scope_verifies_full_artifact_excluding_after_cutoff_and_nonmember_from_selection(
@@ -1714,6 +1850,8 @@ def test_exact_pit_scope_verifies_full_artifact_excluding_after_cutoff_and_nonme
         entry["dataset_id"]: entry for entry in proof["entries"]
     }
     assert selected["fins_summary"]["natural_key_count"] == 3
+    handle = _open_controlled_from_ready_proof(db_path, proof, binding)
+    handle.close()
     observed_through = normalize_as_of(AUTHENTICATED_EXPORT_AT)
     with sqlite3.connect(db_path) as connection:
         connection.row_factory = sqlite3.Row
@@ -2383,6 +2521,8 @@ def test_exact_pit_scope_selected_financial_keeps_original_generation_then_rejec
     assert selected["fins_summary"]["natural_key_count"] == 3
     assert old_digest in selected["fins_summary"]["product_artifact_digests"]
     assert new_digest in selected["fins_summary"]["product_artifact_digests"]
+    handle = _open_controlled_from_ready_proof(db_path, proof, binding)
+    handle.close()
     _mutate_sqlite(
         db_path,
         "DELETE FROM collection_receipts WHERE dataset='fins_summary' AND run_id=?",

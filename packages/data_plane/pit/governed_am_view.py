@@ -29,7 +29,7 @@ from ops.receipt_product import (
 )
 from storage.schema import CATALOG_CODE_SQL
 
-from .errors import SnapshotObservationClockError
+from .errors import PitError, SnapshotObservationClockError
 from .query import (
     bind_external_readonly_connection,
     normalize_as_of,
@@ -341,7 +341,10 @@ def _observed_through_from_connection(conn: sqlite3.Connection) -> str:
 
 
 def _load_sealed_products(
-    conn: Any, *, dataset_id: str
+    conn: Any,
+    *,
+    dataset_id: str,
+    required_digests: set[str] | None = None,
 ) -> tuple[set[tuple[str, ...]], list[dict[str, str]], set[str]]:
     tables = {
         str(row[0])
@@ -364,15 +367,27 @@ def _load_sealed_products(
         "WHERE source='jquants' AND dataset=?",
         (dataset_id,),
     ).fetchall()
+    required = set(required_digests) if required_digests is not None else None
     for product in products:
         digest = str(product["artifact_digest"] or "")
+        if required is not None and digest not in required:
+            continue
         body = product["artifact_body"]
         if type(body) is not str or not body:
+            if required is not None:
+                raise SnapshotObservationClockError(
+                    f"sealed {dataset_id} product materialization is missing"
+                )
             continue
         try:
-            if product_artifact_body_digest(body) != digest:
-                continue
+            body_ok = product_artifact_body_digest(body) == digest
         except ValueError:
+            body_ok = False
+        if not body_ok:
+            if required is not None:
+                raise SnapshotObservationClockError(
+                    f"{dataset_id} product digest set does not match signed PIT dependency scope"
+                )
             continue
         artifact_digests.add(digest)
         for parsed in iter_product_artifact_body_rows(body):
@@ -385,6 +400,10 @@ def _load_sealed_products(
             product_rows.append(
                 {field: parsed[field] for field in PRODUCT_ARTIFACT_FIELDS}
             )
+    if required is not None and required != artifact_digests:
+        raise SnapshotObservationClockError(
+            f"sealed {dataset_id} product materialization is missing"
+        )
     return sealed, product_rows, artifact_digests
 
 
@@ -1497,14 +1516,27 @@ def _open_verified_controlled_snapshot(
     pinned_path: Any,
     verified_physical_digest: str,
     verified_session_scope: _VerifiedControlledSessionScope,
+    compiled_selection: Any,
+    resolve_membership: Any,
 ) -> VerifiedControlledSnapshotHandle:
     """Private one-shot opener. Callers must already have verified READY.
 
     The physical digest is rehashed from the pinned object. A plain Mapping
     is not accepted. Same-DB catalog rehash is compared to independently
-    verified product fields, not treated as the proof itself.
+    verified product fields, not treated as the proof itself. Compiled
+    selection and membership resolution are required; missing input never
+    mints a handle.
     """
 
+    from .compiled_dependency_scope import (
+        CompiledControlledSelection,
+        _select_compiled_dependency_scope,
+    )
+
+    if type(compiled_selection) is not CompiledControlledSelection:
+        raise SnapshotObservationClockError("compiled session selection is missing")
+    if resolve_membership is None or not callable(resolve_membership):
+        raise SnapshotObservationClockError("compiled membership resolver is missing")
     if type(verified_session_scope) is not _VerifiedControlledSessionScope or isinstance(
         pinned_path, Mapping
     ):
@@ -1519,18 +1551,22 @@ def _open_verified_controlled_snapshot(
         raise SnapshotObservationClockError(
             "physical snapshot digest does not match signed PIT dependency scope"
         )
+    if compiled_selection.profile_digest != verified_session_scope.profile_digest:
+        raise SnapshotObservationClockError(
+            "compiled profile digest does not match the verified session"
+        )
     expected_clock = verified_session_scope.observed_through
     path = resolve_db_path(pinned_path)
     if path.is_symlink() or not path.is_file():
         raise SnapshotObservationClockError("pinned snapshot is missing")
-    resolved = path.resolve()
-    live_digest = _physical_sqlite_digest(resolved)
+    pinned = path.resolve()
+    live_digest = _physical_sqlite_digest(pinned)
     if live_digest != verified_physical_digest:
         raise SnapshotObservationClockError("physical snapshot digest mismatch")
-    identity = _sqlite_file_identity(resolved)
-    conn = _open_immutable_readonly(resolved)
+    identity = _sqlite_file_identity(pinned)
+    conn = _open_immutable_readonly(pinned)
     try:
-        if _sqlite_file_identity(resolved) != identity:
+        if _sqlite_file_identity(pinned) != identity:
             raise SnapshotObservationClockError(
                 "pinned snapshot was replaced while opening"
             )
@@ -1544,36 +1580,34 @@ def _open_verified_controlled_snapshot(
             )
         sealed_by_dataset: dict[str, set[tuple[str, ...]]] = {}
         scoped_witness: set[str] = set()
+        artifact_versions: dict[str, set[str]] = {}
         for dataset_id in CONTROLLED_SESSION_DATASET_IDS:
             binding = verified_session_scope.entries[dataset_id]
+            required_products = set(binding["product_artifact_digests"])
             sealed, product_rows, artifact_digests = _load_sealed_products(
-                conn, dataset_id=dataset_id
+                conn,
+                dataset_id=dataset_id,
+                required_digests=required_products,
             )
             if not product_rows:
                 raise SnapshotObservationClockError(
                     f"sealed {dataset_id} product materialization is missing"
                 )
-            if artifact_digests != set(binding["product_artifact_digests"]):
+            if artifact_digests != required_products:
                 raise SnapshotObservationClockError(
                     f"{dataset_id} product digest set does not match signed PIT dependency scope"
                 )
-            live_keys = sorted({row["natural_key"] for row in product_rows})
-            live_key_digest = "sha256:" + hashlib.sha256(
-                json.dumps(live_keys, sort_keys=True, separators=(",", ":")).encode("utf-8")
-            ).hexdigest()
-            if live_key_digest != binding["natural_key_digest"] or len(live_keys) != binding["natural_key_count"]:
+            try:
+                versions = {product_row_digest(row) for row in product_rows}
+            except ValueError as exc:
                 raise SnapshotObservationClockError(
-                    f"{dataset_id} natural-key set does not match signed PIT dependency scope"
-                )
+                    "verified product row cannot be digested for scoped selection"
+                ) from exc
+            artifact_versions[dataset_id] = versions
             if dataset_id in {GOVERNED_DAILY_DATASET_ID, "fins_summary"}:
-                try:
-                    for row in product_rows:
-                        scoped_witness.add(product_row_digest(row))
-                except ValueError as exc:
-                    raise SnapshotObservationClockError(
-                        "verified product row cannot be digested for scoped selection"
-                    ) from exc
+                scoped_witness.update(versions)
             sealed_by_dataset[dataset_id] = sealed
+        from .complete_master import _complete_master_day_slices_from_connection
         from .scoped_selection import (
             _owned_scoped_research_owner_from_verified_witness,
         )
@@ -1581,12 +1615,65 @@ def _open_verified_controlled_snapshot(
         scoped_owner = _owned_scoped_research_owner_from_verified_witness(
             conn, witness=frozenset(scoped_witness)
         )
+        as_of_for_day = {
+            day: am_information_cutoff(day)
+            for day in _calendar_dates(
+                compiled_selection.period_start,
+                compiled_selection.period_end,
+            )
+        }
+        proof_clock = PitReadClock(
+            decision_at=am_information_cutoff(compiled_selection.period_end),
+            observed_through=observed_through,
+            observation_label=SNAPSHOT_OBSERVATION_LABEL,
+            promotable=True,
+        )
+        with install_read_clock(proof_clock):
+            slices = _complete_master_day_slices_from_connection(
+                conn,
+                period_start=compiled_selection.period_start,
+                period_end=compiled_selection.period_end,
+                as_of_for_day=as_of_for_day,
+            )
+        try:
+            resolved_universe = resolve_membership(
+                slices,
+                period_start=compiled_selection.period_start,
+                period_end=compiled_selection.period_end,
+            )
+            selected = _select_compiled_dependency_scope(
+                conn,
+                compiled=compiled_selection,
+                observed_through=observed_through,
+                slices=slices,
+                resolved_universe=resolved_universe,
+                scoped_owner=scoped_owner,
+            )
+        except PitError as exc:
+            raise SnapshotObservationClockError(str(exc)) from exc
+        for dataset_id in CONTROLLED_SESSION_DATASET_IDS:
+            binding = verified_session_scope.entries[dataset_id]
+            keys = sorted(selected.selected_keys[dataset_id])
+            live_key_digest = "sha256:" + hashlib.sha256(
+                json.dumps(keys, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            if (
+                live_key_digest != binding["natural_key_digest"]
+                or len(keys) != binding["natural_key_count"]
+            ):
+                raise SnapshotObservationClockError(
+                    f"{dataset_id} natural-key set does not match signed PIT dependency scope"
+                )
+            if not selected.selected_versions[dataset_id] <= artifact_versions[dataset_id]:
+                raise SnapshotObservationClockError(
+                    f"{dataset_id} selected version is not in the verified artifact"
+                )
         authorized, unauthorized = _load_authorized_am_rows(
             conn,
             observed_through=observed_through,
             sealed=sealed_by_dataset[GOVERNED_DAILY_DATASET_ID],
         )
-        if _sqlite_file_identity(resolved) != identity:
+        if _sqlite_file_identity(pinned) != identity:
             raise SnapshotObservationClockError(
                 "pinned snapshot was replaced during verification"
             )
@@ -1599,7 +1686,7 @@ def _open_verified_controlled_snapshot(
             sealed_daily=sealed_by_dataset[GOVERNED_DAILY_DATASET_ID],
             physical_digest=verified_physical_digest,
             file_identity=identity,
-            pinned_path=str(resolved),
+            pinned_path=str(pinned),
             scoped_owner=scoped_owner,
             session_profile_digest=verified_session_scope.profile_digest,
         )
