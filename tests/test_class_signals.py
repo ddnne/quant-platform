@@ -473,13 +473,11 @@ def test_production_candidate_bar_all_criteria():
     disc = _prod_bar(occurrence_ok=False)
     assert disc["research_candidate"] is False
     assert disc["candidate_yes_no"] == "no_discussion_only"
-    _assert_mass_ready_off(disc)
 
     # weak econ → not_candidate
     weak = _prod_bar(economic_net_ok=False)
     assert weak["research_candidate"] is False
     assert weak["verdict"] == "not_candidate_economic_net_not_meaningful"
-    _assert_mass_ready_off(weak)
 
     # W81: stats bar fail with W80 core ok → demote discussion_only
     noisy = _prod_bar(

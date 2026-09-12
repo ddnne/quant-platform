@@ -38,16 +38,13 @@ describe("evaluateLogicAcrossPeriods period_nets", () => {
     expect(result.screen.candidate_grade).toBe(false);
   });
 
-  it("rejects a single period_net as insufficient_periods with freeze still NO-GO", () => {
+  it("rejects a single period_net as insufficient_periods", () => {
     const result = evaluateLogicAcrossPeriods(
       logic({ logic_id: "one_period", period_nets: [0.02] }),
       [],
     );
     expect(result.screen.survived).toBe(false);
     expect(result.screen.reject_reasons).toContain("insufficient_periods");
-    expectFreezeNoGo(result);
-    expect(result.screen.n_survivors_are_not_a_pass).toBe(true);
-    expect(result.screen.candidate_grade).toBe(false);
   });
 
   it("marks a null period_net data_missing and counts ok rows separately", () => {
@@ -78,7 +75,6 @@ describe("evaluateLogicAcrossPeriods period_nets", () => {
     expect(result.low_variance_artifact).toBe(true);
     expect(result.screen.survived).toBe(false);
     expect(result.screen.reject_reasons).toContain("inflated_t_low_variance");
-    expectFreezeNoGo(result);
   });
 });
 

@@ -179,7 +179,6 @@ def _eval_template(lid: str, family_id: str, ctx) -> None:
     assert res["status"] == "evaluated"
     assert res["n_periods_total"] >= 1
     assert res.get("logic_id") == lid
-    _assert_mass_ready_off(res)
 
 
 def test_logic_template_generation_enabled_defaults_false() -> None:

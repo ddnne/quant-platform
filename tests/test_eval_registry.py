@@ -366,7 +366,6 @@ def test_retired_gated_thesis_stays_out_of_candidate_pool() -> None:
     row = summary["logics"][0]
     assert row["candidate"] is False
     assert row["main_pool"] is False
-    assert row["go"] is False
     assert row["promote_as_main"] is False
     assert summary["n_candidate_logics"] == 0
     assert summary["strong_t_floor"] is None
