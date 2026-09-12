@@ -5,14 +5,11 @@ default path. Live API paths (if any) are opt-in via env flags and are not part
 of the guard packs below.
 
 ```bash
-# Mandatory local CI (7 active workers in parallel; no VERIFY_* skips)
-scripts/verify_ci.sh
+# Local developer suite. toolchain / live を除く
+.venv/bin/python -m pytest tests/ -m "not toolchain and not live"
 
-# Skippable helper only (optional VERIFY_* skips; may skip missing node_modules)
-scripts/verify_all.sh
-
-# Full offline suite (G2)
-.venv/bin/python -m pytest tests/ -q
+# toolchain。live は除く。Node/npm が要る
+.venv/bin/python -m pytest tests/ -m "toolchain and not live"
 
 # Guard pack only (G0 — architecture invariants)
 .venv/bin/python -m pytest tests/ -q \
@@ -26,7 +23,7 @@ scripts/verify_all.sh
 Live residual COMPLETE / Mass status is **not** decided by tests — see
 [`docs/phase62_residual_status.md`](../docs/phase62_residual_status.md).
 Live review findings: [`docs/phase633_finding_ledger.md`](../docs/phase633_finding_ledger.md) (sole). Historical review waves remain in Git history, not the active tree.
-Mandatory local CI: [`scripts/verify_ci.sh`](../scripts/verify_ci.sh) (7 active workers, no `VERIFY_*` skips; pinned `uv sync --frozen`). [`scripts/verify_all.sh`](../scripts/verify_all.sh) is a skippable helper only. The merge gate is the live native Cloudflare GitHub App check for the repo-root `verify_ci.sh` Build. The legacy receipt aggregator has been removed. Do not add `.github/workflows`. See [`docs/ci/workers_builds.md`](../docs/ci/workers_builds.md).
+Native CI is [`scripts/verify_ci.sh`](../scripts/verify_ci.sh) on Cloudflare Workers Builds. Do not run it on this Mac. Local developer verification is pytest as above. See [`docs/ci/workers_builds.md`](../docs/ci/workers_builds.md).
 
 ---
 
@@ -36,7 +33,7 @@ Mandatory local CI: [`scripts/verify_ci.sh`](../scripts/verify_ci.sh) (7 active 
 |------|--------|-------------|------------------|
 | **G0** | Architecture guards — stop the batch if red | named `-k` pack or explicit paths | plane import boundaries, Mass fail-closed, gateway fail-closed, publish guard, sticky COMPLETE, empty-raw ban, core/features/strategies data boundaries |
 | **G1** | Contract / behavior | modules for the change you made | PIT look-ahead, StrategySpec reject, receipt signature, JSDA parse, J-Quants catalog, coverage ledger |
-| **G2** | Full offline | `pytest tests/ -q` | everything under `tests/` that does not need live network |
+| **G2** | Full offline | `pytest tests/ -m "not toolchain and not live"` | `tests/` excluding live and Node/npm toolchain |
 
 ### G0 named guards (prefer these names in PR bodies)
 

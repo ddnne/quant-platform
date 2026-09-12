@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Authoritative CI: fail if anything is missing. No VERIFY_* skip flags.
 # Fail-closed. No live wrangler deploy. Never npm ci --legacy-peer-deps.
-# Never skip missing node_modules. Fast local helper: scripts/verify_all.sh
+# Never skip missing node_modules. Cloudflare Workers Builds; not a Mac local command.
 set -euo pipefail
 
 # Vitest's Wrangler integration also reads this ambient selector. Every CLI
