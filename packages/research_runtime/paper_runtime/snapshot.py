@@ -23,7 +23,7 @@ from data_contracts.loader import SCHEMA_VERSION as DATASET_CONTRACT_VERSION
 from paper_runtime.snapshot_coverage_proof import (
     _coverage_proof,
 )
-from paper_runtime.snapshot_identity import (
+from pit.sqlite_identity import (
     DATA_SNAPSHOT_FORMAT,
     RESEARCH_SNAPSHOT_MANIFEST_FORMAT,
     _canonical_digest,

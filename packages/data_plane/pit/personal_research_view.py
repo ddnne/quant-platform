@@ -201,7 +201,7 @@ def _capture_observation(source: Path) -> tuple[str, str, bool]:
 def _bind_draft_source(source: Path, artifacts: Path) -> Path:
     """Copy stable managed input to PERSONAL_DRAFT before typed binding."""
 
-    from paper_runtime.personal_snapshot import _bind_personal_draft_source
+    from pit._draft_storage import _bind_personal_draft_source
 
     bound, _copied = _bind_personal_draft_source(
         source,

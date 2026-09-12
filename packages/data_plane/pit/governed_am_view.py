@@ -917,7 +917,7 @@ class VerifiedControlledSnapshotHandle:
         """Derive the logical identity on this handle's pinned transaction."""
 
         path = self._assert_controlled_batch()
-        from paper_runtime.snapshot_identity import (
+        from .sqlite_identity import (
             _immutable_data_snapshot_id_from_pinned_connection,
         )
 
