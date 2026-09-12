@@ -20,6 +20,10 @@ from data_contracts.coverage import (
     coverage_contract_for,
 )
 from ingestion.jquants.normalize import normalize_generic
+from ingestion.jquants.official_business_calendar import (
+    derive_official_business_calendar,
+)
+from ops.receipt_candidate_materialize import persist_official_calendar_raw
 from ops.projection_content import (
     PROJECTED_CONTENT_TABLES,
     build_projection_content_manifest,
@@ -1094,6 +1098,7 @@ def _issue_scope_dataset_product(
     raw_records,
     segment_id: str,
     operation: str,
+    extra_evidence: dict | None = None,
 ) -> str:
     event_days = [
         str(row["event_time"])[:10]
@@ -1154,6 +1159,7 @@ def _issue_scope_dataset_product(
         checked_at=checked_at,
         source_request={"fixture": operation},
         structured_digest=artifact_digest,
+        extra_evidence=extra_evidence,
     )
     record_collection_receipt(store._conn, authority.issue(evidence))  # noqa: SLF001
     raw_manifest_digest = str(evidence.claims["raw_manifest_digest"])
@@ -1210,6 +1216,31 @@ def _issue_scope_dataset_product(
     return artifact_digest
 
 
+def _official_scope_calendar_raw() -> bytes:
+    start = date(2022, 10, 3)
+    end = date(2023, 1, 6)
+    markets_start = date(2022, 12, 6)
+    rows = []
+    cursor = start
+    while cursor <= end:
+        holiday = "1" if cursor == start or cursor >= markets_start else "0"
+        rows.append({"Date": cursor.isoformat(), "HolDiv": holiday})
+        cursor += timedelta(days=1)
+    return json.dumps({"data": rows}, separators=(",", ":")).encode("utf-8")
+
+
+def _scope_calendar_extras(raw: bytes, *, start: str, end: str) -> dict[str, str]:
+    calendar = derive_official_business_calendar(
+        raw, segment_start=start, segment_end=end
+    )
+    return {
+        "official_calendar_raw_body_digest": calendar.raw_body_digest,
+        "official_calendar_query_digest": calendar.calendar_query_digest,
+        "official_business_dates_digest": calendar.business_dates_digest,
+        "official_calendar_binding_digest": calendar.binding_digest,
+    }
+
+
 def _seed_exact_pit_scope(
     tmp_path,
     receipt_ed25519_keys,
@@ -1233,10 +1264,11 @@ def _seed_exact_pit_scope(
         "equities_master": [
             {
                 "Code": "1332",
-                "Date": "2022-10-03",
+                "Date": day,
                 "CompanyName": "Prime With Fins",
                 "MarketCode": "0111",
             }
+            for day in ("2022-10-03", "2023-01-04", "2023-01-05", "2023-01-06")
         ],
         "fins_summary": [
             {
@@ -1293,13 +1325,14 @@ def _seed_exact_pit_scope(
         ],
     }
     if include_nonmember_rows:
-        payloads["equities_master"].append(
+        payloads["equities_master"].extend(
             {
                 "Code": "9999",
-                "Date": "2022-10-03",
+                "Date": day,
                 "CompanyName": "Standard Nonmember",
                 "MarketCode": "0112",
             }
+            for day in ("2022-10-03", "2023-01-04", "2023-01-05", "2023-01-06")
         )
         payloads["fins_summary"].append(
             {
@@ -1371,6 +1404,18 @@ def _seed_exact_pit_scope(
                             ingested_at=close_as_of(day),
                         ),
                     )
+            elif dataset_id == "equities_master":
+                for row in rows:
+                    stamp = f"{row['Date']}T08:00:00+09:00"
+                    store.upsert(
+                        "jquants_records",
+                        normalize_generic(
+                            [row],
+                            dataset=dataset_id,
+                            ingested_at=stamp,
+                            available_at=stamp,
+                        ),
+                    )
             else:
                 store.upsert(
                     "jquants_records",
@@ -1405,6 +1450,8 @@ def _seed_exact_pit_scope(
         authority = _TestSignedReceiptAuthority(
             signing_key=receipt_ed25519_keys.signing_key
         )
+        calendar_raw = _official_scope_calendar_raw()
+        calendar_digest = ""
         for run_id, dataset_id in enumerate(_SCOPE_DATASETS, start=1):
             structured = [
                 dict(row)
@@ -1415,6 +1462,21 @@ def _seed_exact_pit_scope(
                     (dataset_id,),
                 ).fetchall()
             ]
+            extra_evidence = None
+            if dataset_id == "equities_master":
+                event_days = [
+                    str(row["event_time"])[:10]
+                    for row in structured
+                    if row.get("event_time")
+                ]
+                extra_evidence = _scope_calendar_extras(
+                    calendar_raw,
+                    start=min(event_days),
+                    end=max(event_days),
+                )
+                calendar_digest = extra_evidence[
+                    "official_calendar_raw_body_digest"
+                ]
             _issue_scope_dataset_product(
                 store,
                 authority=authority,
@@ -1424,7 +1486,13 @@ def _seed_exact_pit_scope(
                 raw_records=payloads[dataset_id],
                 segment_id=f"mini-scope-{dataset_id}",
                 operation="exact-pit-scope",
+                extra_evidence=extra_evidence,
             )
+        persist_official_calendar_raw(
+            store._conn,  # noqa: SLF001
+            body=calendar_raw,
+            expected_digest=calendar_digest,
+        )
         store._conn.commit()  # noqa: SLF001
     return db_path, _mini_exact_scope_binding()
 
@@ -1559,6 +1627,20 @@ def test_exact_pit_dependency_scope_accepts_complete_receipt_bound_fixture(
     finally:
         listing_conn.close()
     assert listing is None
+
+
+def test_ready_rejects_missing_official_calendar_raw(
+    tmp_path,
+    receipt_ed25519_keys,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path, binding = _seed_exact_pit_scope(tmp_path, receipt_ed25519_keys)
+    _mutate_sqlite(db_path, "DELETE FROM official_calendar_raw")
+    with pytest.raises(
+        MassResearchDisabledError,
+        match="official calendar raw body is missing",
+    ):
+        _verify_scope(db_path, binding, monkeypatch)
 
 
 def test_exact_pit_dependency_scope_verifies_full_source_artifact_before_universe_selection(
@@ -1959,6 +2041,14 @@ def test_signed_product_digest_survives_sync_projection_and_ready(
             ]
             seen, registered = sync_script._sync_one(mirror, table, rows)
             assert (seen, registered) == (len(rows), len(rows))
+        for raw in source.execute(
+            "SELECT raw_body_digest, body FROM official_calendar_raw"
+        ):
+            persist_official_calendar_raw(
+                mirror._conn,  # noqa: SLF001
+                body=raw["body"],
+                expected_digest=str(raw["raw_body_digest"]),
+            )
 
         coverage_rows = []
         for contract in all_coverage_contracts():

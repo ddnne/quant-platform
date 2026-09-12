@@ -43,7 +43,6 @@ from .read_clock import (
 from .universe_pit import (
     UniverseDaySlice,
     _calendar_dates,
-    _universe_day_slices_from_connection,
 )
 
 GOVERNED_AM_DATASET_ID = "equities_bars_daily_am"
@@ -933,7 +932,9 @@ class VerifiedControlledSnapshotHandle:
             promotable=True,
         )
         with install_read_clock(proof_clock):
-            return _universe_day_slices_from_connection(
+            from .complete_master import _complete_master_day_slices_from_connection
+
+            return _complete_master_day_slices_from_connection(
                 self._connection,
                 period_start=period_start,
                 period_end=period_end,

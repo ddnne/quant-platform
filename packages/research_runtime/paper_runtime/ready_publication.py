@@ -231,9 +231,11 @@ def _verify_publication_on_authenticated_mirror(
                     period_end: str,
                     as_of_for_day: Mapping[str, str],
                 ):
-                    from pit.universe_pit import _universe_day_slices_from_connection
+                    from pit.complete_master import (
+                        _complete_master_day_slices_from_connection,
+                    )
 
-                    return _universe_day_slices_from_connection(
+                    return _complete_master_day_slices_from_connection(
                         conn,
                         period_start=period_start,
                         period_end=period_end,

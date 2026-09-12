@@ -1879,7 +1879,7 @@ def test_engine_exception_releases_binding_and_handle_is_one_shot(tmp_path) -> N
 
 
 def test_controlled_batch_uses_one_pinned_connection_for_identity_universe_and_four_runs(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
+    tmp_path, monkeypatch: pytest.MonkeyPatch, receipt_ed25519_keys
 ) -> None:
     import sqlite3
 
@@ -1956,6 +1956,70 @@ def test_controlled_batch_uses_one_pinned_connection_for_identity_universe_and_f
     )
     conn.commit()
     conn.close()
+
+    from ingestion.jquants.normalize import normalize_generic
+    from ops.receipt_candidate_materialize import persist_official_calendar_raw
+    from storage.sqlite_store import SqliteStore
+    from tests.receipt_test_support import TestSignedReceiptAuthority
+    from tests.test_complete_master_scope import (
+        _calendar_extras,
+        _issue_master_product,
+        _official_calendar_bytes,
+        _read_master,
+    )
+
+    store = SqliteStore(db)
+    try:
+        store._conn.execute(  # noqa: SLF001
+            "ALTER TABLE ingestion_run_log ADD COLUMN authority_operation_id TEXT"
+        )
+        store._conn.execute(  # noqa: SLF001
+            "DELETE FROM receipt_product_materializations WHERE dataset='equities_master'"
+        )
+        master_rows = []
+        for day in days:
+            stamp = f"{day}T08:00:00+09:00"
+            master_rows.extend(
+                normalize_generic(
+                    [
+                        {
+                            "Code": code,
+                            "Date": day,
+                            "MarketCode": "0111",
+                            "ScaleCategory": "TOPIX Core30",
+                        }
+                    ],
+                    dataset="equities_master",
+                    ingested_at=stamp,
+                    available_at=stamp,
+                )
+            )
+        store.upsert("jquants_records", master_rows)
+        calendar_raw = _official_calendar_bytes(
+            start=days[0], end=days[-1], business=tuple(days)
+        )
+        extras = _calendar_extras(calendar_raw, start=days[0], end=days[-1])
+        _issue_master_product(
+            store,
+            authority=TestSignedReceiptAuthority(
+                signing_key=receipt_ed25519_keys.signing_key
+            ),
+            run_id=101,
+            structured=_read_master(store),
+            calendar_raw=calendar_raw,
+            extras=extras,
+            segment_id="p0-complete-master",
+            segment_start=days[0],
+            segment_end=days[-1],
+        )
+        persist_official_calendar_raw(
+            store._conn,  # noqa: SLF001
+            body=calendar_raw,
+            expected_digest=extras["official_calendar_raw_body_digest"],
+        )
+        store._conn.commit()  # noqa: SLF001
+    finally:
+        store.close()
 
     verified_scope = _verified_worker_scope_from_db(db)
     physical_digest = _file_digest(db)
