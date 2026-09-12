@@ -22,6 +22,10 @@ from ops.projection_content import (
     PROJECTED_CONTENT_TABLES,
     build_projection_content_manifest,
 )
+from ops.receipt_product import (
+    canonical_product_artifact_bytes,
+    product_artifact_body_digest,
+)
 from ops.projection_signing import (
     OpsProjectionSignatureError,
     PINNED_OPS_PROJECTION_PRIOR_REGISTRY_DIGEST,
@@ -385,8 +389,8 @@ def _insert_current_product_materialization(
         "payload": '{"Close":2,"Date":"2024-02-01","Open":1}',
         "raw_payload": '{"Date":"2024-02-01","Open":1,"Close":2}',
     }
-    body = exporter.canonical_product_artifact_bytes([row]).decode("utf-8")
-    digest = exporter.product_artifact_body_digest(body)
+    body = canonical_product_artifact_bytes([row]).decode("utf-8")
+    digest = product_artifact_body_digest(body)
     raw_digest = f"sha256:{run_id + 1000:064x}"
     operation_id = f"sha256:{run_id:064x}"
     conn.execute(

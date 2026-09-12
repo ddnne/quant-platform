@@ -22,6 +22,7 @@ from urllib.parse import quote
 
 from ops.receipt_product import (
     PRODUCT_ARTIFACT_FIELDS,
+    iter_product_artifact_body_rows,
     product_artifact_body_digest,
     _aware_instant,
 )
@@ -374,26 +375,16 @@ def _load_sealed_products(
         except ValueError:
             continue
         artifact_digests.add(digest)
-        for line in body.splitlines():
-            if not line:
-                continue
-            try:
-                parsed = json.loads(line)
-            except (TypeError, ValueError):
-                continue
-            if not isinstance(parsed, dict):
-                continue
-            if any(field not in parsed for field in PRODUCT_ARTIFACT_FIELDS):
-                continue
-            if any(type(parsed[field]) is not str for field in PRODUCT_ARTIFACT_FIELDS):
-                continue
+        for parsed in iter_product_artifact_body_rows(body):
             if (
                 parsed["source"] != "jquants"
                 or parsed["dataset"] != dataset_id
             ):
                 continue
             sealed.add(tuple(parsed[field] for field in PRODUCT_ARTIFACT_FIELDS))
-            product_rows.append({field: parsed[field] for field in PRODUCT_ARTIFACT_FIELDS})
+            product_rows.append(
+                {field: parsed[field] for field in PRODUCT_ARTIFACT_FIELDS}
+            )
     return sealed, product_rows, artifact_digests
 
 

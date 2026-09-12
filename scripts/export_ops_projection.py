@@ -42,9 +42,8 @@ ROOT = ensure_repo_root()
 
 from ops.projection_content import build_projection_content_manifest  # noqa: E402
 from ops.receipt_product import (  # noqa: E402
-    canonical_product_artifact_bytes,
-    product_artifact_body_digest,
-    product_artifact_digest,
+    measure_product_artifact_jsonl,
+    product_artifact_digest_ordered,
 )
 from ops.projection_contract_snapshot import ProjectionContractSnapshot  # noqa: E402
 from ops.d1_sync_signing import d1_sync_digest  # noqa: E402
@@ -1074,6 +1073,15 @@ def _read_receipt_product_materializations(
         sha_fields = (
             "artifact_digest", "manifest_digest", "raw_manifest_digest"
         )
+        try:
+            artifact_count, artifact_digest, artifact_bytes = (
+                measure_product_artifact_jsonl(row["artifact_body"])
+            )
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "trusted receipt/product materialization digest chain differs: "
+                + "/".join(map(str, identity))
+            ) from exc
         if (
             not isinstance(row["operation_id"], str)
             or not row["operation_id"].startswith("sha256:")
@@ -1085,11 +1093,11 @@ def _read_receipt_product_materializations(
                 for field in sha_fields
             )
             or row["artifact_digest"] != digests.get("structured_digest")
-            or product_artifact_body_digest(row["artifact_body"])
-            != row["artifact_digest"]
-            or len(row["artifact_body"].encode("utf-8")) != row["byte_count"]
+            or artifact_digest != row["artifact_digest"]
+            or artifact_count != structured_count
+            or artifact_count != row["row_count"]
+            or artifact_bytes != row["byte_count"]
             or row["raw_manifest_digest"] != digests.get("raw_manifest_digest")
-            or row["row_count"] != structured_count
             or not isinstance(row["byte_count"], int)
             or row["byte_count"] <= 0
             or not isinstance(row["raw_page_count"], int)
@@ -1144,34 +1152,49 @@ def _read_receipt_product_materializations(
                 "product materialization is not bound to exact raw evidence: "
                 + "/".join(map(str, identity))
             )
-        product_rows = [
-            dict(product_row)
-            for product_row in conn.execute(
-                "SELECT source,dataset,natural_key,event_time,available_at,"
-                "ingested_at,payload,raw_payload FROM main.jquants_records "
-                "WHERE source=? AND dataset=? "
-                "AND substr(event_time,1,10)>=? AND substr(event_time,1,10)<=? "
-                "ORDER BY natural_key",
-                (
-                    identity[0],
-                    identity[1],
-                    receipt["segment_start"][:10],
-                    receipt["segment_end"][:10],
-                ),
-            ).fetchall()
-        ]
         try:
-            observed_digest = product_artifact_digest(product_rows)
+            catalog_count, catalog_digest, catalog_bytes = (
+                product_artifact_digest_ordered(
+                    (
+                        {
+                            field: product_row[field]
+                            for field in (
+                                "source",
+                                "dataset",
+                                "natural_key",
+                                "event_time",
+                                "available_at",
+                                "ingested_at",
+                                "payload",
+                                "raw_payload",
+                            )
+                        }
+                        for product_row in conn.execute(
+                            "SELECT source,dataset,natural_key,event_time,"
+                            "available_at,ingested_at,payload,raw_payload "
+                            "FROM main.jquants_records "
+                            "WHERE source=? AND dataset=? "
+                            "AND substr(event_time,1,10)>=? "
+                            "AND substr(event_time,1,10)<=? "
+                            "ORDER BY natural_key",
+                            (
+                                identity[0],
+                                identity[1],
+                                receipt["segment_start"][:10],
+                                receipt["segment_end"][:10],
+                            ),
+                        )
+                    )
+                )
+            )
         except ValueError as exc:
             raise RuntimeError(
                 "governed product materialization cannot be reproduced: "
                 + "/".join(map(str, identity))
             ) from exc
         if (
-            len(product_rows) != structured_count
-            or observed_digest != row["artifact_digest"]
-            or canonical_product_artifact_bytes(product_rows).decode("utf-8")
-            != row["artifact_body"]
+            (catalog_count, catalog_digest, catalog_bytes)
+            != (artifact_count, artifact_digest, artifact_bytes)
         ):
             raise RuntimeError(
                 "governed product rows differ from signed materialization: "
