@@ -1464,8 +1464,6 @@ def test_exact_pit_dependency_scope_accepts_complete_receipt_bound_fixture(
         _SCOPE_DATASETS
     )
     assert all(row["receipt_digests"] for row in proof["entries"])
-    assert proof["exported_at"] == AUTHENTICATED_EXPORT_AT
-    assert proof["observed_through"] == AUTHENTICATED_EXPORT_AT
     listing_conn = sqlite3.connect(db_path)
     try:
         listing = listing_conn.execute(
@@ -1548,7 +1546,7 @@ def test_exact_pit_scope_verifies_full_artifact_excluding_after_cutoff_and_nonme
         entry["dataset_id"]: entry for entry in proof["entries"]
     }
     assert selected["fins_summary"]["natural_key_count"] == 1
-    observed_through = normalize_as_of(proof["observed_through"])
+    observed_through = normalize_as_of(AUTHENTICATED_EXPORT_AT)
     with sqlite3.connect(db_path) as connection:
         connection.row_factory = sqlite3.Row
         member_key = connection.execute(

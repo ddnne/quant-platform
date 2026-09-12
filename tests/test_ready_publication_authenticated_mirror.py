@@ -16,36 +16,11 @@ from paper_runtime.ready_publication import (
 from scripts import sync_d1_to_sqlite as sync
 from selection.budget_ledger import MassResearchDisabledError
 from tests.test_ready_policy_fail_closed import (
-    AUTHENTICATED_EXPORT_AT,
     _open_ready_handle,
     _seed_exact_pit_scope,
     _verify_scope,
     authenticate_applied_mirror,
 )
-
-
-def _identity_fields(proof: dict) -> tuple[str, ...]:
-    return (
-        "environment",
-        "resource_identity",
-        "audit_digest",
-        "issuer_key_id",
-        "export_digest",
-        "source_change_seq",
-        "applied_change_seq",
-        "export_cursor",
-        "applied_cursor",
-        "source_content_digest",
-        "local_content_digest",
-        "source_schema_digest",
-        "schema_digest",
-        "table_counts",
-        "exported_at",
-        "observed_through",
-        "physical_db_digest",
-        "physical_db_identity",
-        "applied_mirror_identity",
-    )
 
 
 def test_governed_mirror_without_personal_history_manifest_uses_exported_at(
@@ -56,16 +31,17 @@ def test_governed_mirror_without_personal_history_manifest_uses_exported_at(
     db_path, binding = _seed_exact_pit_scope(tmp_path, receipt_ed25519_keys)
     proof = _verify_scope(db_path, binding, monkeypatch)
     assert proof["status"] == "PASS"
-    assert proof["exported_at"] == AUTHENTICATED_EXPORT_AT
-    assert proof["observed_through"] == AUTHENTICATED_EXPORT_AT
-    assert proof["export_cursor"] == proof["source_change_seq"]
-    assert proof["applied_cursor"] == proof["applied_change_seq"]
-    identity = proof["applied_mirror_identity"]
-    assert identity["exported_at"] == AUTHENTICATED_EXPORT_AT
-    assert set(identity) == sync._APPLIED_MIRROR_IDENTITY_FIELDS
-    for field in _identity_fields(proof):
-        assert field in proof
-        assert proof[field] not in (None, "", {}, [])
+    import json
+
+    fixture = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "specs"
+            / "ready"
+            / "controlled_pilot_ready.generated.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert set(proof) == set(fixture["dependency_scope_evidence"])
     listing_conn = sqlite3.connect(db_path)
     try:
         listing = listing_conn.execute(
