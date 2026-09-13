@@ -892,8 +892,8 @@ def test_container_execute_job_does_not_launch_product_cli(
     sha = _sqlite(source)
     spec = _job(sha)
 
-    def direct(_spec, *, database, output, timeout_seconds, **_kwargs):
-        del _spec, database, timeout_seconds
+    def direct(_spec, *, database, output, timeout_seconds, deadline, clock):
+        del _spec, database, timeout_seconds, deadline, clock
         return _direct_run_from_summary(_runner_summary(spec), output)
 
     monkeypatch.setattr(service, "_run_direct_research", direct)
