@@ -5,7 +5,7 @@ import {
   putJsonCreateOnly,
   serializedJsonBytes,
 } from "../../research-mass-eval/src/http";
-import { keyUsableAt, loadPinnedReadyKeys } from "../../research-mass-eval/src/controlled_pilot_registries";
+import { keyUsableAt, loadPinnedReadyKeys, loadPinnedTraderKeys } from "../../research-mass-eval/src/controlled_pilot_registries";
 import {
   pinReceiptNativeSource,
   verifyControlledPilotBinding,
@@ -18,20 +18,33 @@ import {
   CONTROLLED_PILOT_IDENTITY,
   CONTROLLED_READY_ENVELOPE_FORMAT,
   CONTROLLED_READY_RECEIPT_NATIVE_ENVELOPE_FORMAT,
+  CONTROLLED_TRADER_BATCH_FORMAT,
+  EXACT_FOUR_BINDING_DIGEST,
+  EXACT_FOUR_BUDGET_SCOPE_DIGEST,
   EXACT_FOUR_CLOSURE_DIGEST,
   EXACT_FOUR_COVERAGE_POLICY_DIGEST,
   EXACT_FOUR_COVERAGE_POLICY_VERSION,
   EXACT_FOUR_DATASET_IDS,
   EXACT_FOUR_DATASET_MEMBERSHIP_DIGEST,
+  EXACT_FOUR_EXECUTION_LIMIT_SET_DIGEST,
   EXACT_FOUR_PLAN_IDS,
   EXACT_FOUR_PLAN_SET_DIGEST,
+  EXACT_FOUR_POLICY_DIGEST,
   EXACT_FOUR_PROFILE_DIGEST,
   EXACT_FOUR_PROFILE_ID,
   EXACT_FOUR_PROFILE_VERSION,
   EXACT_FOUR_UNIVERSE_RULE_DIGEST,
   controlledPhysicalSnapshotKey,
+  controlledPilotRequestDigest,
   controlledReadyKey,
+  controlledTraderAuthorizationKey,
+  type ControlledPilotRequest,
 } from "../../research-mass-eval/src/controlled_pilot_contract";
+import {
+  exactFourTraderRows,
+  verifyTraderAuthorizationBatch,
+  type TraderReadyBind,
+} from "../../research-mass-eval/src/controlled_pilot_trader_batch";
 import {
   canonicalJson,
   isRecord,
@@ -58,6 +71,7 @@ import type { Env } from "./index";
 
 export const READY_ED25519_SECRET_NAME = "READY_ED25519_PRIVATE_KEY" as const;
 export const READY_ED25519_KEY_ID_VAR = "READY_ED25519_KEY_ID" as const;
+export const TRADER_ED25519_SECRET_NAME = "TRADER_ED25519_PRIVATE_KEY" as const;
 export const READINESS_ATTESTATION_FORMAT = "verified-readiness-attestation/v1";
 export const READY_MANIFEST_FORMAT = "ready-manifest/v1";
 export { READY_MANIFEST_V2_FORMAT };
@@ -97,6 +111,7 @@ export type ReadyPublicationEnv = Pick<
 > & {
   READY_ED25519_PRIVATE_KEY?: string;
   READY_ED25519_KEY_ID?: string;
+  TRADER_ED25519_PRIVATE_KEY?: string;
 };
 
 function authorityInstanceId(environment: string): string {
@@ -579,13 +594,194 @@ async function recoverNativeEnvelope(
     stored.attestation,
   );
   if (sidecar.conflict) return rejected("conflicting READY attestation");
-  return readyPublicationSuccess(
-    verified.publication.attestation_id,
+  return pairPaperTraderAuthorization(env, stored, expected);
+}
+
+type NativeEnvelopeWinner = {
+  jobId: string;
+  environment: "production" | "staging";
+  snapshotId: string;
+  physicalDigest: string;
+  envelopeKey: string;
+  attestationKey: string;
+};
+
+async function pairPaperTraderAuthorization(
+  env: ReadyPublicationEnv,
+  envelope: Record<string, unknown>,
+  expected: NativeEnvelopeWinner,
+): Promise<ReadyPublicationResult> {
+  const attestation = envelope.attestation;
+  const physical = envelope.physical;
+  if (!isRecord(attestation) || !isRecord(physical)) {
+    return rejected("READY envelope attestation or physical is missing");
+  }
+  const attestationId = String(attestation.attestation_id || "");
+  if (!attestationId) return rejected("READY envelope attestation id is missing");
+  if (typeof physical.key !== "string" || !Number.isSafeInteger(physical.size)) {
+    return rejected("READY envelope physical snapshot is invalid");
+  }
+  const request: ControlledPilotRequest = {
+    idempotency_key: expected.jobId,
+    ready_attestation_id: attestationId,
+    snapshot_id: expected.snapshotId,
+  };
+  const ready: TraderReadyBind = {
+    environment: expected.environment,
+    ready_manifest_digest: String(attestation.ready_manifest_digest || ""),
+    snapshot_id: expected.snapshotId,
+    immutable_db_digest: expected.physicalDigest,
+    physical: { key: physical.key, size: Number(physical.size) },
+    profile_digest: EXACT_FOUR_PROFILE_DIGEST,
+    dependency_closure_digest: EXACT_FOUR_CLOSURE_DIGEST,
+    resolved_universe_digest: String(attestation.resolved_universe_digest || ""),
+  };
+  const digest = await controlledPilotRequestDigest(request);
+  const authKey = controlledTraderAuthorizationKey(expected.jobId, attestationId);
+  const success = () => readyPublicationSuccess(
+    attestationId,
     expected.snapshotId,
     expected.physicalDigest,
     expected.envelopeKey,
     expected.attestationKey,
   );
+  const existing = await env.STRUCTURED_BUCKET.get(authKey);
+  if (existing) {
+    return recoverStoredPaperTrader(
+      existing,
+      request,
+      ready,
+      digest,
+      expected.environment,
+      {
+        verifiedAt: String(attestation.verified_at || ""),
+        expiresAt: String(attestation.expires_at || ""),
+      },
+      success,
+    );
+  }
+  const secret = env.TRADER_ED25519_PRIVATE_KEY;
+  if (typeof secret !== "string" || !secret.trim()) {
+    return pending("TRADER_ED25519_PRIVATE_KEY unprovisioned");
+  }
+  const pinned = await loadPinnedTraderKeys(expected.environment);
+  const active = pinned.filter((key) => key.status === "active");
+  if (active.length !== 1) {
+    return pending("trader authorization issuer is unprovisioned");
+  }
+  const traderKey = active[0]!;
+  const issuedMs = Date.now();
+  const readyExpiresMs = parseCanonicalUtc(String(attestation.expires_at || ""));
+  if (!Number.isFinite(readyExpiresMs) || issuedMs > readyExpiresMs) {
+    return pending("READY envelope is expired");
+  }
+  if (!keyUsableAt(traderKey, issuedMs)) {
+    return pending("trader key window denied");
+  }
+  const issuedAt = isoUtc(issuedMs);
+  const expiresAt = String(attestation.expires_at);
+  const body = {
+    format: CONTROLLED_TRADER_BATCH_FORMAT,
+    schema_version: 2,
+    purpose: "controlled_trader_authorization_verification",
+    algorithm: "Ed25519",
+    identity: CONTROLLED_PILOT_IDENTITY,
+    environment: expected.environment,
+    authority_instance_id: `trader-authority/${expected.environment}/v1`,
+    request_digest: digest,
+    idempotency_key: expected.jobId,
+    ready_attestation_id: attestationId,
+    ready_manifest_digest: ready.ready_manifest_digest,
+    snapshot_id: expected.snapshotId,
+    immutable_db_digest: expected.physicalDigest,
+    snapshot_key: physical.key,
+    snapshot_size: Number(physical.size),
+    profile_digest: EXACT_FOUR_PROFILE_DIGEST,
+    dependency_closure_digest: EXACT_FOUR_CLOSURE_DIGEST,
+    exact_four_binding_digest: EXACT_FOUR_BINDING_DIGEST,
+    policy_digest: EXACT_FOUR_POLICY_DIGEST,
+    budget_scope_digest: EXACT_FOUR_BUDGET_SCOPE_DIGEST,
+    execution_limit_set_digest: EXACT_FOUR_EXECUTION_LIMIT_SET_DIGEST,
+    resolved_universe_digest: ready.resolved_universe_digest,
+    fill_contract_digest: CONTROLLED_FILL_CONTRACT_DIGEST,
+    rows: exactFourTraderRows(),
+    issued_at: issuedAt,
+    expires_at: expiresAt,
+    key_id: traderKey.key_id,
+    issuer: "ControlledTraderAuthorizationService/v1",
+  };
+  const signature = await signReadyAttestation(secret.trim(), body);
+  if (!signature) return pending("TRADER_ED25519_PRIVATE_KEY unusable");
+  const document = { ...body, signature };
+  const verified = await verifyTraderAuthorizationBatch(
+    document,
+    request,
+    ready,
+    digest,
+    [traderKey],
+  );
+  if (!verified.ok) return pending(verified.error);
+  const put = await putJsonCreateOnly(env.STRUCTURED_BUCKET, authKey, document);
+  if (put.conflict) {
+    const raced = await env.STRUCTURED_BUCKET.get(authKey);
+    if (!raced) return rejected("conflicting trader authorization");
+    return recoverStoredPaperTrader(
+      raced,
+      request,
+      ready,
+      digest,
+      expected.environment,
+      {
+        verifiedAt: String(attestation.verified_at || ""),
+        expiresAt: String(attestation.expires_at || ""),
+      },
+      success,
+    );
+  }
+  return success();
+}
+
+async function recoverStoredPaperTrader(
+  object: { size: number; arrayBuffer(): Promise<ArrayBuffer> },
+  request: ControlledPilotRequest,
+  ready: TraderReadyBind,
+  digest: string,
+  environment: "production" | "staging",
+  readyLifetime: { verifiedAt: string; expiresAt: string },
+  success: () => ReadyPublicationResult,
+): Promise<ReadyPublicationResult> {
+  const parsed = await readBoundedJson(object, CREATE_ONLY_COMPARE_MAX_BYTES);
+  if (!parsed) return rejected("existing trader authorization is not JSON");
+  const issuedAt = parseCanonicalUtc(parsed.issued_at);
+  const expiresAt = parseCanonicalUtc(parsed.expires_at);
+  const readyVerifiedAt = parseCanonicalUtc(readyLifetime.verifiedAt);
+  const readyExpiresAt = parseCanonicalUtc(readyLifetime.expiresAt);
+  if (
+    !Number.isFinite(issuedAt) ||
+    !Number.isFinite(expiresAt) ||
+    !Number.isFinite(readyVerifiedAt) ||
+    !Number.isFinite(readyExpiresAt) ||
+    issuedAt < readyVerifiedAt ||
+    expiresAt > readyExpiresAt
+  ) {
+    return rejected("existing trader authorization does not match this job/source");
+  }
+  const pinned = await loadPinnedTraderKeys(environment);
+  const historical = pinned.filter(
+    (key) => key.key_id === String(parsed.key_id || "") && keyUsableAt(key, issuedAt),
+  );
+  const verified = await verifyTraderAuthorizationBatch(
+    parsed,
+    request,
+    ready,
+    digest,
+    historical,
+  );
+  if (verified.ok) return success();
+  if (verified.error === "trader authorization is expired") {
+    return pending(verified.error);
+  }
+  return rejected("existing trader authorization does not match this job/source");
 }
 
 export async function publishAdmittedReceiptCandidate(
@@ -917,11 +1113,5 @@ export async function publishAdmittedReceiptCandidate(
     attestation,
   );
   if (sidecar.conflict) return rejected("conflicting READY attestation");
-  return readyPublicationSuccess(
-    verified.publication.attestation_id,
-    snapshotId,
-    physicalDigest,
-    envelopeKey,
-    attestationKey,
-  );
+  return pairPaperTraderAuthorization(env, envelope, expectedWinner);
 }

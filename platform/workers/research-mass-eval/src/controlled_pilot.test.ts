@@ -32,6 +32,7 @@ import {
   EXACT_FOUR_STRATEGY_SPEC_HASHES,
   EXACT_FOUR_STRATEGY_SPEC_VERSIONS,
   controlledPhysicalSnapshotKey,
+  controlledPilotRequestDigest,
   controlledReadyKey,
   controlledTraderAuthorizationKey,
   parseControlledPilotRequest,
@@ -705,7 +706,8 @@ describe("strict JSON and Python-generated fixtures", () => {
 
   it("completes native candidate-key submit, rejects retired first admission, and resumes historically", async () => {
     // Boundary: verifyReceiptNativeReadyPublication is mocked; not end-to-end crypto or live READY proof.
-    const seeded = await seedEnv();
+    const seeded = await seedEnv({ skipAuth: true });
+    const nativeRequest = { ...seeded.request, idempotency_key: "r1" };
     const hex = seeded.physicalId.slice("sha256:".length);
     const candidateKey = personalReceiptCandidatePhysicalKey(hex);
     const snapshot = new TextEncoder().encode("controlled-pilot-physical-sqlite");
@@ -733,9 +735,9 @@ describe("strict JSON and Python-generated fixtures", () => {
       .controlled_session_scope;
     const nativePublicationValue = {
       format: CONTROLLED_READY_RECEIPT_NATIVE_ENVELOPE_FORMAT,
-      job_id: seeded.request.idempotency_key,
-      attestation_id: seeded.request.ready_attestation_id,
-      snapshot_id: seeded.request.snapshot_id,
+      job_id: nativeRequest.idempotency_key,
+      attestation_id: nativeRequest.ready_attestation_id,
+      snapshot_id: nativeRequest.snapshot_id,
       immutable_db_digest: seeded.physicalId,
       physical: {
         key: candidateKey,
@@ -766,7 +768,7 @@ describe("strict JSON and Python-generated fixtures", () => {
       JSON.stringify({
         format: CONTROLLED_READY_RECEIPT_NATIVE_ENVELOPE_FORMAT,
         identity: CONTROLLED_PILOT_IDENTITY,
-        job_id: seeded.request.idempotency_key,
+        job_id: nativeRequest.idempotency_key,
         admitted_native_digest: admitted,
       }),
     );
@@ -775,16 +777,24 @@ describe("strict JSON and Python-generated fixtures", () => {
       { ...active, key_id: "other-active" },
       { ...active, status: "retired" },
     ]);
-    const retiredFirst = await submitControlledPilot(seeded.env, seeded.request);
+    const retiredFirst = await submitControlledPilot(seeded.env, nativeRequest);
     expect(retiredFirst.status).toBe(400);
     expect(await retiredFirst.json()).toMatchObject({
       error: "READY attestation issuer is not trusted",
     });
     vi.spyOn(registries, "loadPinnedReadyKeys").mockReturnValue(fixturePublicKey());
-    const mismatched = await submitControlledPilot(seeded.env, seeded.request);
-    expect(mismatched.status).toBe(401);
-    expect(await mismatched.json()).toMatchObject({
-      error: "trader authorization does not bind the request",
+    const wrongMap = await submitControlledPilot(seeded.env, {
+      ...nativeRequest,
+      idempotency_key: "other-job-1",
+    });
+    expect(wrongMap.status).toBe(400);
+    expect(await wrongMap.json()).toMatchObject({
+      error: "native controlled idempotency_key does not match READY job_id",
+    });
+    const missingAuth = await submitControlledPilot(seeded.env, nativeRequest);
+    expect(missingAuth.status).toBe(404);
+    expect(await missingAuth.json()).toMatchObject({
+      error: "trader authorization not found",
     });
     const pair = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
     const publicKey = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
@@ -804,6 +814,8 @@ describe("strict JSON and Python-generated fixtures", () => {
     delete traderBody.signature;
     traderBody.snapshot_key = candidateKey;
     traderBody.snapshot_size = snapshot.byteLength;
+    traderBody.idempotency_key = nativeRequest.idempotency_key;
+    traderBody.request_digest = await controlledPilotRequestDigest(nativeRequest);
     traderBody.key_id = "native-test-trader";
     const signature = new Uint8Array(
       await crypto.subtle.sign(
@@ -818,13 +830,13 @@ describe("strict JSON and Python-generated fixtures", () => {
     const authorizationDigest = await sha256Digest(canonicalJson(signedTrader));
     await seeded.mem.put(
       controlledTraderAuthorizationKey(
-        seeded.request.idempotency_key,
-        seeded.request.ready_attestation_id,
+        nativeRequest.idempotency_key,
+        nativeRequest.ready_attestation_id,
       ),
       JSON.stringify(signedTrader),
     );
     const ctx = new WaitCtx();
-    const admittedResponse = await submitControlledPilot(seeded.env, seeded.request, ctx);
+    const admittedResponse = await submitControlledPilot(seeded.env, nativeRequest, ctx);
     expect(admittedResponse.status).toBe(202);
     await ctx.pending;
     const candidateCall = seeded.outboundCalls.find(
@@ -856,7 +868,7 @@ describe("strict JSON and Python-generated fixtures", () => {
     expect(postedSpec).not.toHaveProperty("signed_projection_document_digest");
     const completed = await controlledPilotStatus(
       seeded.env,
-      seeded.request.idempotency_key,
+      nativeRequest.idempotency_key,
     );
     const completedBody = (await completed.json()) as {
       status: string;
@@ -870,7 +882,7 @@ describe("strict JSON and Python-generated fixtures", () => {
     expect(completedBody.manifest?.admitted_native_digest).toBe(admitted);
     const paper = await (
       await seeded.env.STRUCTURED_BUCKET.get(
-        `research/controlled_pilot/v1/jobs/${seeded.request.idempotency_key}/paper/1.json`,
+        `research/controlled_pilot/v1/jobs/${nativeRequest.idempotency_key}/paper/1.json`,
       )
     )!.json() as {
       bindings: Record<string, unknown>;
@@ -883,7 +895,7 @@ describe("strict JSON and Python-generated fixtures", () => {
     vi.spyOn(registries, "loadPinnedReadyKeys").mockReturnValue([
       { ...active, status: "retired" },
     ]);
-    const replay = await submitControlledPilot(seeded.env, seeded.request);
+    const replay = await submitControlledPilot(seeded.env, nativeRequest);
     expect(replay.status).toBe(202);
   });
 

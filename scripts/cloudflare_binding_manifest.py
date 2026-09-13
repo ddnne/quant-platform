@@ -261,6 +261,7 @@ PRODUCTION_SECRET_NAMES: dict[str, tuple[str, ...]] = {
         "JQUANTS_API_KEY",
         "OPS_PROJECTION_SIGNING_PKCS8_B64",
         "READY_ED25519_PRIVATE_KEY",
+        "TRADER_ED25519_PRIVATE_KEY",
     ),
     "ingestion-secrets": (
         "JQUANTS_API_KEY",
@@ -284,6 +285,7 @@ STAGING_SECRET_NAMES: dict[str, tuple[str, ...]] = {
         "INGESTION_RUN_TOKEN",
         "OPS_PROJECTION_SIGNING_PKCS8_B64",
         "READY_ED25519_PRIVATE_KEY",
+        "TRADER_ED25519_PRIVATE_KEY",
     ),
     "ingestion-secrets": (
         "JQUANTS_API_KEY",

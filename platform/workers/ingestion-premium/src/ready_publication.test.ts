@@ -7,7 +7,9 @@ import {
   EXACT_FOUR_PLAN_SET_DIGEST,
   EXACT_FOUR_PROFILE_DIGEST,
   controlledPhysicalSnapshotKey,
+  controlledPilotRequestDigest,
   controlledReadyKey,
+  controlledTraderAuthorizationKey,
 } from "../../research-mass-eval/src/controlled_pilot_contract";
 import { verifyReceiptNativeReadyPublication } from "../../research-mass-eval/src/receipt_native_ready_publication";
 import {
@@ -19,6 +21,7 @@ import { PINNED_RECEIPT_REGISTRY_SCOPE } from "./ops_projection_policy";
 
 const projectionMock = vi.hoisted(() => vi.fn());
 const loadPinnedReadyKeysMock = vi.hoisted(() => vi.fn());
+const loadPinnedTraderKeysMock = vi.hoisted(() => vi.fn());
 vi.mock("cloudflare:workers", () => ({ WorkerEntrypoint: class {} }));
 vi.mock("../../research-mass-eval/src/ops_projection_ready", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../research-mass-eval/src/ops_projection_ready")>();
@@ -26,7 +29,11 @@ vi.mock("../../research-mass-eval/src/ops_projection_ready", async (importOrigin
 });
 vi.mock("../../research-mass-eval/src/controlled_pilot_registries", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../research-mass-eval/src/controlled_pilot_registries")>();
-  return { ...actual, loadPinnedReadyKeys: loadPinnedReadyKeysMock };
+  return {
+    ...actual,
+    loadPinnedReadyKeys: loadPinnedReadyKeysMock,
+    loadPinnedTraderKeys: loadPinnedTraderKeysMock,
+  };
 });
 
 import { readFileSync } from "node:fs";
@@ -36,6 +43,7 @@ import {
   isRecord,
   sha256Digest,
 } from "../../research-mass-eval/src/controlled_pilot_json";
+import { verifyTraderAuthorizationBatch } from "../../research-mass-eval/src/controlled_pilot_trader_batch";
 import {
   providerVerifiedR2Digest,
   publishAdmittedReceiptCandidate,
@@ -83,6 +91,8 @@ beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-02T12:00:30Z"));
   loadPinnedReadyKeysMock.mockReset();
   loadPinnedReadyKeysMock.mockResolvedValue([]);
+  loadPinnedTraderKeysMock.mockReset();
+  loadPinnedTraderKeysMock.mockResolvedValue([]);
   projectionMock.mockReset();
   projectionMock.mockResolvedValue({
     ok: true,
@@ -714,6 +724,7 @@ describe("pointer receipt-native READY publication", () => {
     const { terminal, native, proofDigest, scopeBytes } = await admittedNative();
     const { bucket, stored } = candidateBucket(terminal, proofDigest, scopeBytes);
     const pair = await signingPair();
+    const traderPair = await signingPair();
     loadPinnedReadyKeysMock.mockResolvedValue([
       {
         key_id: "ready-test",
@@ -732,55 +743,112 @@ describe("pointer receipt-native READY publication", () => {
       READY_ED25519_PRIVATE_KEY: pair.secret,
       READY_ED25519_KEY_ID: "ready-test",
       READY_DECLARED: "false",
-    } as never;
-    const first = await publishAdmittedReceiptCandidate(env, {
+    } as Record<string, unknown>;
+    const first = await publishAdmittedReceiptCandidate(env as never, {
       job_id: jobId,
       environment: "staging",
     });
     expect(first).toMatchObject({
-      ok: true,
-      status: "VERIFIED_PILOT_READINESS",
-      ready_declared: false,
-      operational_go: false,
-      mass_research: "NO-GO",
+      ok: false,
+      status: "PENDING",
+      error: "TRADER_ED25519_PRIVATE_KEY unprovisioned",
     });
-    if (!first.ok) throw new Error(String(first.error));
-    const envelopeBytes = stored.get(first.envelope_key);
+    const envelopeKey = [...stored.keys()].find(
+      (key) => key.includes("/v1/ready/") && key.endsWith(".json") && !key.includes(".attestation."),
+    );
+    expect(envelopeKey).toBeTruthy();
+    const envelopeBytes = stored.get(envelopeKey!);
     expect(envelopeBytes).toBeTruthy();
     const envelope = JSON.parse(new TextDecoder().decode(envelopeBytes)) as Record<string, unknown>;
     expect(envelope.format).toBe(CONTROLLED_READY_RECEIPT_NATIVE_ENVELOPE_FORMAT);
-    expect(envelope).not.toHaveProperty("signed_projection_document");
     const verified = await verifyReceiptNativeReadyPublication(
       envelope,
       String(native.snapshot_id),
       "staging",
     );
     if (!verified.ok) throw new Error(verified.error);
-    expect(verified.publication.attestation_id).toBe(first.attestation_id);
     const firstPublishedAt = isRecord(envelope.attestation)
       ? envelope.attestation.verified_at
       : null;
-    const firstAttestationBytes = stored.get(first.attestation_key);
-    expect(firstAttestationBytes).toBeTruthy();
-    stored.delete(first.attestation_key);
+    const firstAttestationBytes = stored.get(`${envelopeKey}.attestation.json`);
+    const traderKey = {
+      key_id: "trader-test",
+      public_key: traderPair.publicKey,
+      algorithm: "Ed25519" as const,
+      status: "active" as const,
+      not_before: "2026-09-02T12:10:00Z",
+      not_after: "2099-01-01T00:00:00Z",
+      revoked_at: null,
+      environment: "staging",
+    };
+    loadPinnedTraderKeysMock.mockResolvedValue([traderKey]);
+    env.TRADER_ED25519_PRIVATE_KEY = traderPair.secret;
     vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-02T12:20:00Z"));
-    const retry = await publishAdmittedReceiptCandidate(env, {
+    const minted = await publishAdmittedReceiptCandidate(env as never, {
+      job_id: jobId,
+      environment: "staging",
+    });
+    expect(minted).toMatchObject({
+      ok: true,
+      status: "VERIFIED_PILOT_READINESS",
+      ready_declared: false,
+      operational_go: false,
+      mass_research: "NO-GO",
+    });
+    if (!minted.ok) throw new Error(String(minted.error));
+    expect(stored.get(minted.envelope_key)).toEqual(envelopeBytes);
+    const authKey = controlledTraderAuthorizationKey(jobId, minted.attestation_id);
+    const authBytes = stored.get(authKey);
+    expect(authBytes).toBeTruthy();
+    const traderDoc = JSON.parse(new TextDecoder().decode(authBytes)) as Record<string, unknown>;
+    expect(traderDoc.issued_at).toBe("2026-09-02T12:20:00Z");
+    expect(traderDoc.issued_at).not.toBe(firstPublishedAt);
+    expect(traderDoc.expires_at).toBe(
+      isRecord(envelope.attestation) ? envelope.attestation.expires_at : null,
+    );
+    const traderRequest = {
+      idempotency_key: jobId,
+      ready_attestation_id: minted.attestation_id,
+      snapshot_id: String(native.snapshot_id),
+    };
+    const authorized = await verifyTraderAuthorizationBatch(
+      traderDoc,
+      traderRequest,
+      {
+        environment: "staging",
+        ready_manifest_digest: String(
+          isRecord(envelope.attestation) ? envelope.attestation.ready_manifest_digest : "",
+        ),
+        snapshot_id: String(native.snapshot_id),
+        immutable_db_digest: String(isRecord(envelope.physical) ? envelope.physical.digest : ""),
+        physical: {
+          key: String(isRecord(envelope.physical) ? envelope.physical.key : ""),
+          size: Number(isRecord(envelope.physical) ? envelope.physical.size : 0),
+        },
+        profile_digest: EXACT_FOUR_PROFILE_DIGEST,
+        dependency_closure_digest: EXACT_FOUR_CLOSURE_DIGEST,
+        resolved_universe_digest: String(
+          isRecord(envelope.attestation) ? envelope.attestation.resolved_universe_digest : "",
+        ),
+      },
+      await controlledPilotRequestDigest(traderRequest),
+      [traderKey],
+    );
+    expect(authorized.ok).toBe(true);
+    stored.delete(`${envelopeKey}.attestation.json`);
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-02T12:40:00Z"));
+    const retry = await publishAdmittedReceiptCandidate(env as never, {
       job_id: jobId,
       environment: "staging",
     });
     expect(retry).toMatchObject({
       ok: true,
-      attestation_id: first.attestation_id,
-      envelope_key: first.envelope_key,
+      attestation_id: minted.attestation_id,
+      envelope_key: minted.envelope_key,
     });
-    const retryBytes = stored.get(first.envelope_key);
-    expect(retryBytes).toEqual(envelopeBytes);
-    const retryEnvelope = JSON.parse(
-      new TextDecoder().decode(retryBytes),
-    ) as Record<string, unknown>;
-    expect(isRecord(retryEnvelope.attestation) ? retryEnvelope.attestation.verified_at : null)
-      .toBe(firstPublishedAt);
-    expect(stored.get(first.attestation_key)).toEqual(firstAttestationBytes);
+    expect(stored.get(minted.envelope_key)).toEqual(envelopeBytes);
+    expect(stored.get(authKey)).toEqual(authBytes);
+    expect(stored.get(`${envelopeKey}.attestation.json`)).toEqual(firstAttestationBytes);
   });
 
   it("rejects outer PASS labels when B0 measure rows are not ok", async () => {

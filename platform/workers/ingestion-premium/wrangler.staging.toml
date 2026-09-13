@@ -7,7 +7,7 @@ workers_dev = false
 preview_urls = false
 
 [secrets]
-required = ["INGESTION_RUN_TOKEN", "OPS_PROJECTION_SIGNING_PKCS8_B64", "READY_ED25519_PRIVATE_KEY"]
+required = ["INGESTION_RUN_TOKEN", "OPS_PROJECTION_SIGNING_PKCS8_B64", "READY_ED25519_PRIVATE_KEY", "TRADER_ED25519_PRIVATE_KEY"]
 
 [[r2_buckets]]
 binding = "RAW_BUCKET"

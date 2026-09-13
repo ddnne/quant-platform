@@ -25,6 +25,7 @@ import {
   receiptNativeManifestBodyDigest,
   receiptNativeSnapshotId,
 } from "../src/ready_manifest_v2";
+import { controlledTraderAuthorizationKey } from "../src/controlled_pilot_contract";
 import { canonicalJson, sha256Digest } from "../src/controlled_pilot_json";
 import exampleNative from "../../../../specs/ready/ready_manifest_v2.example.json";
 
@@ -904,6 +905,54 @@ describe("personalResearchR2Outbound workerd/R2 runtime", () => {
     });
     expect(
       (observed.publication as Record<string, unknown>).attempt_status,
+    ).toBeUndefined();
+    const pointerObject = await runtimeEnv.STRUCTURED_BUCKET.get(
+      personalReceiptCandidatePublicationKey("r05-candidate-pub"),
+    );
+    const pointerBytes = new Uint8Array(await pointerObject!.arrayBuffer());
+    const pointer = JSON.parse(new TextDecoder().decode(pointerBytes)) as {
+      attestation_id: string;
+    };
+    const afterPointer = publishAdmittedReceiptCandidate.mock.calls.length;
+    const reconnect = await submitPersonalReceiptCandidate(
+      publishEnv as never,
+      parsed.value,
+    );
+    expect(publishAdmittedReceiptCandidate.mock.calls.length).toBe(afterPointer + 1);
+    expect(await reconnect.json()).toMatchObject({
+      publication: {
+        historical: true,
+        persisted: true,
+        attempt_status: "VERIFIED_PILOT_READINESS",
+      },
+    });
+    expect(
+      new Uint8Array(
+        await (
+          await runtimeEnv.STRUCTURED_BUCKET.get(
+            personalReceiptCandidatePublicationKey("r05-candidate-pub"),
+          )
+        )!.arrayBuffer(),
+      ),
+    ).toEqual(pointerBytes);
+    await runtimeEnv.STRUCTURED_BUCKET.put(
+      controlledTraderAuthorizationKey("r05-candidate-pub", pointer.attestation_id),
+      new TextEncoder().encode("{}"),
+    );
+    const afterAuth = publishAdmittedReceiptCandidate.mock.calls.length;
+    await submitPersonalReceiptCandidate(publishEnv as never, parsed.value);
+    expect(publishAdmittedReceiptCandidate.mock.calls.length).toBe(afterAuth);
+    const afterPairedGet = publishAdmittedReceiptCandidate.mock.calls.length;
+    const pairedStatus = (await (
+      await personalReceiptCandidateStatus(publishEnv as never, "r05-candidate-pub")
+    ).json()) as Record<string, unknown>;
+    expect(publishAdmittedReceiptCandidate.mock.calls.length).toBe(afterPairedGet);
+    expect(pairedStatus.publication).toMatchObject({
+      historical: true,
+      persisted: true,
+    });
+    expect(
+      (pairedStatus.publication as Record<string, unknown>).attempt_status,
     ).toBeUndefined();
     const expiredId = "r05-candidate-expired";
     const expiredCalls = publishAdmittedReceiptCandidate.mock.calls.length;
