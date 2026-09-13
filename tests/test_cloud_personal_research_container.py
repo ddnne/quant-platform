@@ -4124,13 +4124,14 @@ def test_heartbeat_cas_loss_fences_old_executor_zero_late_success(
             process_kill_grace_seconds=0.5,
         )
         monkeypatch.setattr(old, "_start_lease_heartbeat", lambda _spec: None)
+        job_budget_seconds = 5
         new = _job_manager(
             _controlled_runner(executions),
             terminal_uploader=store.upload,
             terminal_reader=store.reader,
             object_reader=store.object_reader,
             on_terminal=new_done.set,
-            max_job_seconds=5,
+            max_job_seconds=job_budget_seconds,
             retry_schedule=(0.01,),
             lease_ttl_seconds=0.3,
             lease_clock=lease_clock,
@@ -4163,7 +4164,11 @@ def test_heartbeat_cas_loss_fences_old_executor_zero_late_success(
         assert old_done.wait(2.0)
         takeover = new.submit(spec)
         assert takeover["status"] in {"QUEUED", "RUNNING", "COMPLETED"}
-        assert new_done.wait(3.0)
+        assert new_done.wait(
+            job_budget_seconds
+            + service.SUPERVISOR_TERM_GRACE_SECONDS
+            + service.SUPERVISOR_KILL_GRACE_SECONDS
+        )
         with store.lock:
             snapshot = {
                 key: json.loads(raw[0].decode("utf-8"))
