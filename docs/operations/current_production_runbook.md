@@ -61,10 +61,11 @@ remote apply results only in immutable release evidence.
   remain distinct. Activating keys is not live READY or GO. Inactive source
   rollout is not global live acceptance. Wire the existing trust root; do not
   add another authority or Worker.
-- **Release evidence:** publication is **PENDING/HOLD**. Normalized caller JSON
-  is schema-only and cannot prove any remote response. The dedicated signed
-  release-observation authority has zero active keys and is not implemented;
-  see `specs/cloudflare/release_observation_authority.json`. A6 remains OPEN.
+- **Release evidence:** publication is **PENDING/HOLD**. Caller JSON is
+  untrusted. Authenticated collection/publication implementation is missing
+  (not merely unprovisioned observation keys). A6 remains OPEN until a
+  content-addressed artifact from authentic observation is independently
+  accepted.
 - **Mass Research:** **NO-GO**. Mass talks to Gateway only through typed
   Service Binding RPC `GatewayService`. `GATEWAY_TOKEN` is HTTP defense in
   depth if a closed route is attached later; it is not a shared Mass
