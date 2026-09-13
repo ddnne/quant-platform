@@ -32,6 +32,8 @@ from storage.sqlite_store import SqliteStore
 RECEIPT_CANDIDATE_FORMAT = "receipt-candidate/v1"
 RECEIPT_CANDIDATE_MAX_SEGMENTS = 512
 RECEIPT_CANDIDATE_MAX_REQUEST_BYTES = 64 * 1024
+# R2 single-object PUT ceiling: 5 GiB minus 5 MiB (Cloudflare R2 limits footnote 4).
+RECEIPT_CANDIDATE_RAW_PUT_MAX_BYTES = (5 * 1024 * 1024 * 1024) - (5 * 1024 * 1024)
 _JOB_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
@@ -489,6 +491,24 @@ def execute_receipt_candidate_job(
                 raise ReceiptCandidateMaterializeError(
                     "receipt candidate sqlite digest drifted"
                 )
+            sqlite_key = (
+                f"research/receipt-candidates/sha256={raw_digest[7:]}.sqlite"
+            )
+            if scope.get("compiled_scope_status") == "PASS":
+                if raw_bytes > RECEIPT_CANDIDATE_RAW_PUT_MAX_BYTES:
+                    raise ReceiptCandidateMaterializeError(
+                        "receipt candidate sqlite exceeds the raw R2 object put cap"
+                    )
+                uploader(
+                    sqlite_key,
+                    database,
+                    spec=spec,
+                    content_digest=raw_digest,
+                    extra_headers={
+                        "content-type": "application/vnd.sqlite3",
+                        "x-personal-raw-sha256": raw_digest,
+                    },
+                )
             gzip_path = job_root / "receipt-candidate.sqlite.gz"
             _gzip_file(database, gzip_path)
             gzip_digest = "sha256:" + _sha256_file(gzip_path)
@@ -513,6 +533,8 @@ def execute_receipt_candidate_job(
                 "snapshot_key": gzip_key,
                 **_scope_manifest_fields(scope),
             }
+            if scope.get("compiled_scope_status") == "PASS":
+                manifest["physical_key"] = sqlite_key
         except Exception as error:
             if store is not None:
                 rollback_receipt_candidate(store)

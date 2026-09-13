@@ -3,7 +3,10 @@ import { reset } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import { personalResearchR2Outbound } from "../src/personal_research_r2";
 import { PERSONAL_SNAPSHOT_FORMAT } from "../src/personal_snapshot_contract";
-import { RECEIPT_CANDIDATE_FORMAT } from "../src/personal_receipt_candidate_contract";
+import {
+  RECEIPT_CANDIDATE_FORMAT,
+  personalReceiptCandidatePhysicalKey,
+} from "../src/personal_receipt_candidate_contract";
 import { PERSONAL_RESEARCH_RUNNER_VERSION } from "../src/personal_research_contract";
 import {
   receiptNativeManifestBodyDigest,
@@ -60,6 +63,7 @@ function uploadHeaders(
   kind: Kind,
   jobId: string,
   contentDigest: string,
+  rawDigest = RAW_DIGEST,
 ): Record<string, string> {
   const headers: Record<string, string> = {
     "content-length": "3",
@@ -68,7 +72,7 @@ function uploadHeaders(
     "x-content-sha256": contentDigest,
   };
   if (kind === "snapshot" || kind === "candidate") {
-    headers["x-personal-raw-sha256"] = RAW_DIGEST;
+    headers["x-personal-raw-sha256"] = rawDigest;
   }
   return headers;
 }
@@ -125,6 +129,7 @@ async function putWithProducer(
   jobId: string,
   mode: ProduceMode,
   contentDigest: string,
+  options?: { key?: string; rawDigest?: string },
 ): Promise<{
   response: Response;
   producer: PromiseSettledResult<void>;
@@ -163,9 +168,9 @@ async function putWithProducer(
     (reason: unknown) => ({ status: "rejected", reason }),
   );
   const response = await personalResearchR2Outbound(
-    new Request(`http://research.r2/${objectKey(kind, jobId)}`, {
+    new Request(`http://research.r2/${options?.key ?? objectKey(kind, jobId)}`, {
       method: "PUT",
-      headers: uploadHeaders(kind, jobId, contentDigest),
+      headers: uploadHeaders(kind, jobId, contentDigest, options?.rawDigest),
       body: stream.readable,
     }),
     runtimeEnv,
@@ -417,6 +422,76 @@ describe("personalResearchR2Outbound workerd/R2 runtime", () => {
       { extra: passExtra },
     );
     expect(created.status).toBe(201);
+
+    const rejectedPhysical = await putWithProducer(
+      "candidate",
+      "r05-candidate-phys-bad",
+      "complete",
+      RAW_DIGEST,
+      {
+        key: personalReceiptCandidatePhysicalKey(RAW_HEX),
+        rawDigest: RAW_DIGEST,
+      },
+    );
+    expect(rejectedPhysical.response.status).toBe(502);
+    expect(await rejectedPhysical.response.json()).toEqual({
+      error: "receipt candidate upload checksum rejected",
+    });
+
+    const physGzip = await putWithProducer(
+      "candidate",
+      "r05-candidate-phys-ok",
+      "complete",
+      CONTENT_DIGEST,
+      {
+        key: `research/receipt-candidates/sha256=${ACTUAL_HEX}.sqlite.gz`,
+        rawDigest: CONTENT_DIGEST,
+      },
+    );
+    expect(physGzip.response.status).toBe(201);
+    const physNative = await sealedNative(CONTENT_DIGEST);
+    const physicalExtra = {
+      ...passExtra,
+      compiled_scope_physical_digest: CONTENT_DIGEST,
+      raw_sha256: CONTENT_DIGEST,
+      gzip_sha256: CONTENT_DIGEST,
+      snapshot_key: `research/receipt-candidates/sha256=${ACTUAL_HEX}.sqlite.gz`,
+      physical_key: personalReceiptCandidatePhysicalKey(ACTUAL_HEX),
+      receipt_native_manifest: physNative,
+      receipt_native_manifest_digest: physNative.manifest_digest,
+    };
+    const missingPhysical = await putCompletedManifest(
+      "candidate",
+      "r05-candidate-phys-ok",
+      { extra: physicalExtra },
+    );
+    expect(missingPhysical.status).toBe(409);
+    expect(await missingPhysical.json()).toEqual({
+      error:
+        "completed receipt candidate manifest has no matching physical object",
+    });
+    expect(
+      await runtimeEnv.STRUCTURED_BUCKET.head(
+        manifestKey("candidate", "r05-candidate-phys-ok"),
+      ),
+    ).toBeNull();
+    const physSqlite = await putWithProducer(
+      "candidate",
+      "r05-candidate-phys-ok",
+      "complete",
+      CONTENT_DIGEST,
+      {
+        key: personalReceiptCandidatePhysicalKey(ACTUAL_HEX),
+        rawDigest: CONTENT_DIGEST,
+      },
+    );
+    expect(physSqlite.response.status).toBe(201);
+    const withPhysical = await putCompletedManifest(
+      "candidate",
+      "r05-candidate-phys-ok",
+      { extra: physicalExtra },
+    );
+    expect(withPhysical.status).toBe(201);
 
     const other = await sealedNative(OTHER_RAW);
     const swappedSnapshot = await sealedNative(RAW_DIGEST, (body) => {

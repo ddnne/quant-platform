@@ -631,9 +631,115 @@ def test_execute_512_selectors_keeps_compact_terminal(
     assert terminal["snapshot_b0_status"] == "FAIL"
     assert terminal["snapshot_quality_digest"].startswith("sha256:")
     assert "observation_checked_at" not in terminal
+    assert "physical_key" not in terminal
     assert len(
         json.dumps(terminal, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
     ) < 64 * 1024
+
+
+def test_execute_pass_streams_closed_sqlite_before_gzip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from receipt_candidate_job import ReceiptCandidateJobSpec, execute_receipt_candidate_job
+
+    selector = {"dataset": "equities_bars_daily", "segment_id": "2023-01"}
+    spec = ReceiptCandidateJobSpec.from_document(
+        _worker_document("cand-phys-1", [selector])
+    )
+    digest = "sha256:" + "1" * 64
+    transport = _ReceiptTransport(
+        {
+            (selector["dataset"], selector["segment_id"]): {
+                **selector,
+                "receipt_digest": digest,
+                "operation_id": digest,
+            }
+        },
+        {
+            "product_artifact": b"x",
+            "raw_collection_manifest": b"y",
+            "official_calendar_raw": b"z",
+        },
+        tmp_path,
+    )
+    monkeypatch.setattr(
+        "receipt_candidate_job.materialize_receipt_segment",
+        lambda store, **kwargs: {
+            "dataset": kwargs["descriptor"]["dataset"],
+            "segment_id": kwargs["descriptor"]["segment_id"],
+            "receipt_digest": kwargs["descriptor"]["receipt_digest"],
+        },
+    )
+
+    def _pass_scope(store, **kwargs):
+        del kwargs
+        freeze_receipt_candidate_snapshot(store)
+        physical = hash_receipt_candidate_snapshot(store)
+        return {
+            "compiled_scope_status": "PASS",
+            "compiled_scope_kind": "receipt-candidate-scope-diagnostic/v1",
+            "observation_policy": "max_verified_claims_checked_at",
+            "observation_checked_at": "2026-08-25T00:00:00+00:00",
+            "compiled_scope_proof_digest": physical,
+            "physical_db_digest": physical,
+            "receipt_source": {
+                "kind": "governed-receipt-candidate",
+                "receipt_runset_digest": physical,
+            },
+            "receipt_native_manifest": {"format": "ready-manifest/v2"},
+            "receipt_native_manifest_digest": physical,
+        }
+
+    monkeypatch.setattr(
+        "paper_runtime.ready_publication.verify_committed_receipt_candidate_scope",
+        _pass_scope,
+    )
+    puts: list[dict[str, object]] = []
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del spec
+        headers = dict(extra_headers or {})
+        puts.append(
+            {
+                "key": key,
+                "digest": content_digest,
+                "content_type": headers.get("content-type"),
+                "raw": headers.get("x-personal-raw-sha256"),
+                "size": data.stat().st_size if isinstance(data, Path) else len(data),
+            }
+        )
+
+    terminal = execute_receipt_candidate_job(
+        spec, work_root=tmp_path, uploader=uploader, opener=transport
+    )
+    assert terminal["status"] == "COMPLETED"
+    assert terminal["compiled_scope_status"] == "PASS"
+    assert terminal["pending_ready"] is True
+    assert terminal["ready"] is False
+    assert terminal["go"] is False
+    assert [item["key"] for item in puts] == [
+        terminal["physical_key"],
+        terminal["snapshot_key"],
+    ]
+    assert str(terminal["physical_key"]).endswith(".sqlite")
+    assert not str(terminal["physical_key"]).endswith(".gz")
+    assert puts[0]["digest"] == terminal["raw_sha256"]
+    assert puts[0]["content_type"] == "application/vnd.sqlite3"
+    assert puts[0]["raw"] == terminal["raw_sha256"]
+    assert puts[0]["size"] == terminal["raw_bytes"]
+    assert puts[1]["digest"] == terminal["gzip_sha256"]
+
+    def boom(key, data, *, spec, content_digest, extra_headers=None):
+        del data, spec, content_digest, extra_headers
+        if str(key).endswith(".sqlite"):
+            raise RuntimeError("R2 upload returned 502")
+
+    failed = execute_receipt_candidate_job(
+        spec, work_root=tmp_path, uploader=boom, opener=transport
+    )
+    assert failed["status"] == "FAILED"
+    assert "physical_key" not in failed
+    assert "snapshot_key" not in failed
 
 
 @pytest.mark.parametrize("environment", ["production", "staging"])
