@@ -23,8 +23,13 @@ binding = "INGESTION_PREMIUM"
 service = "quant-platform-ingestion-premium-test"
 entrypoint = "PremiumReceiptProductInputService"
 
+[[services]]
+binding = "PILOT_READY_PUBLICATION"
+service = "quant-platform-ingestion-premium-test"
+entrypoint = "PilotReadyPublicationService"
+
 [vars]
-ENVIRONMENT = "production"
+ENVIRONMENT = "staging"
 MASS_EVAL_VERSION = "research-mass-eval/test"
 MASS_EVAL_WAVE = "test"
 MASS_RESEARCH = "NO-GO"

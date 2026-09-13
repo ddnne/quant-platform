@@ -1,13 +1,25 @@
 import { env } from "cloudflare:workers";
 import { reset } from "cloudflare:test";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { personalResearchR2Outbound } from "../src/personal_research_r2";
 import { PERSONAL_SNAPSHOT_FORMAT } from "../src/personal_snapshot_contract";
 import {
   RECEIPT_CANDIDATE_FORMAT,
+  parseReceiptCandidateRequest,
   personalReceiptCandidatePhysicalKey,
+  personalReceiptCandidatePublicationKey,
   personalReceiptCandidateScopeKey,
+  receiptCandidateRequestDigest,
 } from "../src/personal_receipt_candidate_contract";
+import {
+  personalReceiptCandidateStatus,
+  submitPersonalReceiptCandidate,
+} from "../src/personal_receipt_candidate";
+import type { ReadyPublicationResult } from "../../ingestion-premium/src/pilot_ready_publication_rpc";
+import {
+  personalJobStateKey,
+  submittedStateDocument,
+} from "../src/personal_job_state";
 import { PERSONAL_RESEARCH_RUNNER_VERSION } from "../src/personal_research_contract";
 import {
   receiptNativeManifestBodyDigest,
@@ -67,11 +79,12 @@ function uploadHeaders(
   contentDigest: string,
   rawDigest = RAW_DIGEST,
   byteLength = 3,
+  requestDigest = REQUEST_DIGEST,
 ): Record<string, string> {
   const headers: Record<string, string> = {
     "content-length": String(byteLength),
     "x-personal-job-id": jobId,
-    "x-personal-request-digest": REQUEST_DIGEST,
+    "x-personal-request-digest": requestDigest,
     "x-content-sha256": contentDigest,
   };
   if (kind === "snapshot" || kind === "candidate") {
@@ -83,12 +96,17 @@ function uploadHeaders(
 function completedManifest(
   kind: Kind,
   jobId: string,
-  options?: { omitFormat?: boolean; extra?: Record<string, unknown> },
+  options?: {
+    omitFormat?: boolean;
+    extra?: Record<string, unknown>;
+    requestDigest?: string;
+  },
 ): Record<string, unknown> {
+  const requestDigest = options?.requestDigest ?? REQUEST_DIGEST;
   if (kind === "result") {
     return {
       job_id: jobId,
-      request_digest: REQUEST_DIGEST,
+      request_digest: requestDigest,
       status: "COMPLETED",
       result_sha256: CONTENT_DIGEST,
     };
@@ -96,7 +114,7 @@ function completedManifest(
   if (kind === "candidate") {
     return {
       job_id: jobId,
-      request_digest: REQUEST_DIGEST,
+      request_digest: requestDigest,
       runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
       status: "COMPLETED",
       pending_ready: true,
@@ -113,7 +131,7 @@ function completedManifest(
   }
   return {
     job_id: jobId,
-    request_digest: REQUEST_DIGEST,
+    request_digest: requestDigest,
     status: "COMPLETED",
     research_state: "PERSONAL_DRAFT",
     completeness_claim: "NONE",
@@ -132,7 +150,13 @@ async function putWithProducer(
   jobId: string,
   mode: ProduceMode,
   contentDigest: string,
-  options?: { key?: string; rawDigest?: string; body?: Uint8Array },
+  options?: {
+    key?: string;
+    rawDigest?: string;
+    body?: Uint8Array;
+    requestDigest?: string;
+    env?: typeof runtimeEnv;
+  },
 ): Promise<{
   response: Response;
   producer: PromiseSettledResult<void>;
@@ -185,10 +209,11 @@ async function putWithProducer(
         contentDigest,
         options?.rawDigest,
         payload.byteLength,
+        options?.requestDigest,
       ),
       body: stream.readable,
     }),
-    runtimeEnv,
+    options?.env ?? runtimeEnv,
   );
   return { response, producer: await producerSettled };
 }
@@ -196,8 +221,14 @@ async function putWithProducer(
 async function putCompletedManifest(
   kind: Kind,
   jobId: string,
-  options?: { omitFormat?: boolean; extra?: Record<string, unknown> },
+  options?: {
+    omitFormat?: boolean;
+    extra?: Record<string, unknown>;
+    requestDigest?: string;
+    env?: typeof runtimeEnv;
+  },
 ): Promise<Response> {
+  const requestDigest = options?.requestDigest ?? REQUEST_DIGEST;
   const bytes = new TextEncoder().encode(
     JSON.stringify(completedManifest(kind, jobId, options)),
   );
@@ -208,12 +239,12 @@ async function putCompletedManifest(
       headers: {
         "content-length": String(bytes.byteLength),
         "x-personal-job-id": jobId,
-        "x-personal-request-digest": REQUEST_DIGEST,
+        "x-personal-request-digest": requestDigest,
         "x-content-sha256": digest,
       },
       body: bytes,
     }),
-    runtimeEnv,
+    options?.env ?? runtimeEnv,
   );
 }
 
@@ -677,6 +708,235 @@ describe("personalResearchR2Outbound workerd/R2 runtime", () => {
     expect(await planShape.json()).toEqual({
       error: "ReadyManifest plan_ids is invalid",
     });
+  });
+
+  it("publishes after admitted PASS without rematerializing on retry", async () => {
+    const parsed = parseReceiptCandidateRequest({
+      job_id: "r05-candidate-pub",
+      segments: [{ dataset: "equities_bars_daily", segment_id: "2023-01" }],
+    });
+    if (!parsed.ok) throw new Error(parsed.error);
+    const pubDigest = await receiptCandidateRequestDigest(parsed.value);
+    let publishMode: "stall" | "reject" | "verify" = "stall";
+    const terminalPresent: boolean[] = [];
+    const publishAdmittedReceiptCandidate = vi.fn(async (): Promise<ReadyPublicationResult> => {
+      terminalPresent.push(
+        (await runtimeEnv.STRUCTURED_BUCKET.head(
+          manifestKey("candidate", "r05-candidate-pub"),
+        )) !== null,
+      );
+      if (publishMode === "stall") {
+        return await new Promise<ReadyPublicationResult>(() => {});
+      }
+      if (publishMode === "reject") {
+        return {
+          ok: false,
+          status: "REJECTED",
+          error: "issuer is not trusted",
+          ready_declared: false,
+          operational_go: false,
+        };
+      }
+      return {
+        ok: true,
+        status: "VERIFIED_PILOT_READINESS",
+        ready_declared: false,
+        operational_go: false,
+        mass_research: "NO-GO",
+        automatic_promotion: false,
+        live_orders_enabled: false,
+        attestation_id: "ready-runtime",
+        snapshot_id: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        immutable_db_digest: CONTENT_DIGEST,
+        envelope_key: "research/controlled-pilot/ready/ready-runtime.json",
+        attestation_key:
+          "research/controlled-pilot/ready/ready-runtime.json.attestation.json",
+      };
+    });
+    const publishEnv = {
+      ...runtimeEnv,
+      ENVIRONMENT: "staging",
+      CF_VERSION_METADATA: { id: "runtime-test" },
+      PILOT_READY_PUBLICATION: { publishAdmittedReceiptCandidate },
+      PERSONAL_RESEARCH_CONTAINER: { getByName: vi.fn() },
+    };
+    const gzip = await putWithProducer(
+      "candidate",
+      "r05-candidate-pub",
+      "complete",
+      CONTENT_DIGEST,
+      {
+        key: `research/receipt-candidates/sha256=${ACTUAL_HEX}.sqlite.gz`,
+        rawDigest: CONTENT_DIGEST,
+        requestDigest: pubDigest,
+        env: publishEnv,
+      },
+    );
+    expect(gzip.response.status).toBe(201);
+    const sqlite = await putWithProducer(
+      "candidate",
+      "r05-candidate-pub",
+      "complete",
+      CONTENT_DIGEST,
+      {
+        key: personalReceiptCandidatePhysicalKey(ACTUAL_HEX),
+        rawDigest: CONTENT_DIGEST,
+        requestDigest: pubDigest,
+        env: publishEnv,
+      },
+    );
+    expect(sqlite.response.status).toBe(201);
+    const scopeBody = {
+      format: "pit-dependency-scope-proof/v1",
+      status: "PASS",
+      physical_db_digest: CONTENT_DIGEST,
+    };
+    const scopeJson = canonicalJson(scopeBody);
+    const scopeDigest = await sha256Digest(scopeJson);
+    const scopeBytes = new TextEncoder().encode(scopeJson);
+    const scopePut = await putWithProducer(
+      "candidate",
+      "r05-candidate-pub",
+      "complete",
+      scopeDigest,
+      {
+        key: personalReceiptCandidateScopeKey(scopeDigest.slice("sha256:".length)),
+        rawDigest: CONTENT_DIGEST,
+        body: scopeBytes,
+        requestDigest: pubDigest,
+        env: publishEnv,
+      },
+    );
+    expect(scopePut.response.status).toBe(201);
+    expect(publishAdmittedReceiptCandidate).not.toHaveBeenCalled();
+    const native = await sealedNative(CONTENT_DIGEST, undefined, scopeDigest);
+    const extra = {
+      compiled_scope_status: "PASS",
+      compiled_scope_kind: "receipt-candidate-scope-diagnostic/v1",
+      compiled_scope_physical_digest: CONTENT_DIGEST,
+      raw_sha256: CONTENT_DIGEST,
+      gzip_sha256: CONTENT_DIGEST,
+      snapshot_key: `research/receipt-candidates/sha256=${ACTUAL_HEX}.sqlite.gz`,
+      physical_key: personalReceiptCandidatePhysicalKey(ACTUAL_HEX),
+      compiled_scope_proof_digest: scopeDigest,
+      dependency_scope_key: personalReceiptCandidateScopeKey(
+        scopeDigest.slice("sha256:".length),
+      ),
+      receipt_native_manifest: native,
+      receipt_native_manifest_digest: native.manifest_digest,
+    };
+    const admitted = await putCompletedManifest("candidate", "r05-candidate-pub", {
+      requestDigest: pubDigest,
+      env: publishEnv,
+      extra,
+    });
+    expect(admitted.status).toBe(201);
+    expect(publishAdmittedReceiptCandidate).toHaveBeenCalledTimes(1);
+    expect(publishAdmittedReceiptCandidate).toHaveBeenCalledWith({
+      job_id: "r05-candidate-pub",
+      environment: "staging",
+    });
+    expect(terminalPresent).toEqual([true]);
+    const admittedTerminal = await runtimeEnv.STRUCTURED_BUCKET.get(
+      manifestKey("candidate", "r05-candidate-pub"),
+    );
+    const admittedBytes = new Uint8Array(await admittedTerminal!.arrayBuffer());
+    expect(
+      await runtimeEnv.STRUCTURED_BUCKET.head(
+        personalReceiptCandidatePublicationKey("r05-candidate-pub"),
+      ),
+    ).toBeNull();
+    publishMode = "reject";
+    const retry = await putCompletedManifest("candidate", "r05-candidate-pub", {
+      requestDigest: pubDigest,
+      env: publishEnv,
+      extra,
+    });
+    expect(retry.status).toBe(200);
+    expect(publishAdmittedReceiptCandidate).toHaveBeenCalledTimes(2);
+    expect(publishAdmittedReceiptCandidate).toHaveBeenNthCalledWith(2, {
+      job_id: "r05-candidate-pub",
+      environment: "staging",
+    });
+    expect(terminalPresent).toEqual([true, true]);
+    expect(
+      new Uint8Array(
+        await (
+          await runtimeEnv.STRUCTURED_BUCKET.get(
+            manifestKey("candidate", "r05-candidate-pub"),
+          )
+        )!.arrayBuffer(),
+      ),
+    ).toEqual(admittedBytes);
+    const beforeGet = publishAdmittedReceiptCandidate.mock.calls.length;
+    const getBody = (await (
+      await personalReceiptCandidateStatus(publishEnv as never, "r05-candidate-pub")
+    ).json()) as Record<string, unknown>;
+    expect(publishAdmittedReceiptCandidate.mock.calls.length).toBe(beforeGet);
+    expect(getBody.publication).toBeUndefined();
+    expect(getBody).toMatchObject({
+      pending_ready: true,
+      ready: false,
+      job: { status: "COMPLETED" },
+    });
+    publishMode = "verify";
+    const repaired = await submitPersonalReceiptCandidate(
+      publishEnv as never,
+      parsed.value,
+    );
+    expect(publishEnv.PERSONAL_RESEARCH_CONTAINER.getByName).not.toHaveBeenCalled();
+    expect(await repaired.json()).toMatchObject({
+      ok: true,
+      idempotent: true,
+      ready: false,
+      publication: {
+        historical: false,
+        persisted: true,
+        attempt_status: "VERIFIED_PILOT_READINESS",
+      },
+    });
+    const observed = (await (
+      await personalReceiptCandidateStatus(publishEnv as never, "r05-candidate-pub")
+    ).json()) as Record<string, unknown>;
+    expect(observed.publication).toMatchObject({
+      historical: true,
+      persisted: true,
+    });
+    expect(
+      (observed.publication as Record<string, unknown>).attempt_status,
+    ).toBeUndefined();
+    const expiredId = "r05-candidate-expired";
+    const expiredCalls = publishAdmittedReceiptCandidate.mock.calls.length;
+    await runtimeEnv.STRUCTURED_BUCKET.put(
+      personalJobStateKey("receipt-candidate", expiredId),
+      JSON.stringify(
+        submittedStateDocument({
+          jobId: expiredId,
+          requestDigest: pubDigest,
+          kind: "receipt-candidate",
+          deploymentId: "runtime-test",
+          now: new Date(0),
+        }),
+      ),
+    );
+    const expired = (await (
+      await personalReceiptCandidateStatus(
+        publishEnv as never,
+        expiredId,
+        new Date("2026-09-13T00:00:00Z"),
+      )
+    ).json()) as Record<string, unknown>;
+    expect(publishAdmittedReceiptCandidate.mock.calls.length).toBe(expiredCalls);
+    expect(expired).toMatchObject({
+      ok: false,
+      durable: false,
+      observation_only: true,
+      expired: true,
+      job: { status: "SUBMITTED" },
+    });
+    expect(
+      await runtimeEnv.STRUCTURED_BUCKET.head(manifestKey("candidate", expiredId)),
+    ).toBeNull();
   });
 });
 

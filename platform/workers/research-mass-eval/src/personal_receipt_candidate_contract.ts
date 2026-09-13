@@ -98,6 +98,13 @@ export function personalReceiptCandidateManifestKey(jobId: string): string {
   return `research/receipt-candidates/job=${jobId}/manifest.json`;
 }
 
+export function personalReceiptCandidatePublicationKey(jobId: string): string {
+  if (!isPersonalResearchJobId(jobId)) {
+    throw new Error("invalid receipt candidate job id");
+  }
+  return `research/receipt-candidates/job=${jobId}/publication.json`;
+}
+
 export function personalReceiptCandidateObjectKey(rawSha256Hex: string): string {
   if (!/^[0-9a-f]{64}$/.test(rawSha256Hex)) {
     throw new Error("invalid receipt candidate digest");

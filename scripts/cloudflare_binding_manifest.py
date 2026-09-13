@@ -469,7 +469,10 @@ WORKER_ENTRYPOINT_RPC_POLICY: dict[
             False,
             ("describe_receipt_product_input", "read_receipt_product_bytes"),
         ),
-        "PilotReadyPublicationService": (True, ("publishPilotReady",)),
+        "PilotReadyPublicationService": (
+            True,
+            ("publishAdmittedReceiptCandidate", "publishPilotReady"),
+        ),
     },
     "ingestion-jsda": {
         "JsdaReadinessService": (True, ()),
@@ -1074,6 +1077,7 @@ def _effective_surface(
                 "PremiumReceiptOperatorService",
                 "PremiumReceiptAuditEvidenceService",
                 "PremiumReceiptProductInputService",
+                "PilotReadyPublicationService",
             )
         }
 
@@ -1424,65 +1428,48 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
                         f"{worker}/staging: {table}.environment must be staging"
                     )
 
-    mass_eval_services = {
-        "base": [
+    mass_eval_service_bindings = (
+        ("AI_GATEWAY", "GatewayService", "quant-platform-research-ai-gateway"),
+        (
+            "INGESTION_PREMIUM",
+            "PremiumReceiptProductInputService",
+            "quant-platform-ingestion-premium",
+        ),
+        (
+            "JQUANTS_ACQUISITION",
+            "IngestionSecretsService",
+            "quant-platform-ingestion-secrets",
+        ),
+        (
+            "PILOT_READY_PUBLICATION",
+            "PilotReadyPublicationService",
+            "quant-platform-ingestion-premium",
+        ),
+    )
+
+    def mass_eval_expected_services(environment: str) -> list[dict[str, str]]:
+        suffix = "-staging" if environment == "staging" else ""
+        rows = [
             {
-                "binding": "AI_GATEWAY",
-                "entrypoint": "GatewayService",
-                "service": "quant-platform-research-ai-gateway",
-            },
-            {
-                "binding": "INGESTION_PREMIUM",
-                "entrypoint": "PremiumReceiptProductInputService",
-                "service": "quant-platform-ingestion-premium",
-            },
-            {
-                "binding": "JQUANTS_ACQUISITION",
-                "entrypoint": "IngestionSecretsService",
-                "service": "quant-platform-ingestion-secrets",
-            },
-        ],
-        "production": [
-            {
-                "binding": "AI_GATEWAY",
-                "entrypoint": "GatewayService",
-                "service": "quant-platform-research-ai-gateway",
-            },
-            {
-                "binding": "INGESTION_PREMIUM",
-                "entrypoint": "PremiumReceiptProductInputService",
-                "service": "quant-platform-ingestion-premium",
-            },
-            {
-                "binding": "JQUANTS_ACQUISITION",
-                "entrypoint": "IngestionSecretsService",
-                "service": "quant-platform-ingestion-secrets",
-            },
-        ],
-        "staging": [
-            {
-                "binding": "AI_GATEWAY",
-                "entrypoint": "GatewayService",
-                "service": "quant-platform-research-ai-gateway-staging",
-            },
-            {
-                "binding": "INGESTION_PREMIUM",
-                "entrypoint": "PremiumReceiptProductInputService",
-                "service": "quant-platform-ingestion-premium-staging",
-            },
-            {
-                "binding": "JQUANTS_ACQUISITION",
-                "entrypoint": "IngestionSecretsService",
-                "service": "quant-platform-ingestion-secrets-staging",
-            },
-        ],
-    }
-    for environment, expected_services in mass_eval_services.items():
-        if workers["research-mass-eval"][environment]["services"] != expected_services:
+                "binding": binding,
+                "entrypoint": entrypoint,
+                "service": f"{service}{suffix}",
+            }
+            for binding, entrypoint, service in mass_eval_service_bindings
+        ]
+        return sorted(
+            [dict(sorted(row.items())) for row in rows],
+            key=lambda row: json.dumps(row, sort_keys=True),
+        )
+
+    for environment in ("base", "production", "staging"):
+        if workers["research-mass-eval"][environment]["services"] != mass_eval_expected_services(
+            environment
+        ):
             raise ValueError(
-                f"research-mass-eval/{environment}: GatewayService and "
-                "IngestionSecretsService and PremiumReceiptProductInputService "
-                "bindings are required"
+                f"research-mass-eval/{environment}: GatewayService, "
+                "IngestionSecretsService, PremiumReceiptProductInputService, and "
+                "PilotReadyPublicationService bindings are required"
             )
 
     personal_container = [

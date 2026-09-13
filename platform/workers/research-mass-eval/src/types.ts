@@ -1,16 +1,21 @@
 import type { JquantsAcquisitionRpc } from "../../ingestion-secrets/src/jquants_acquisition_types";
 import type { GatewayRpc } from "../../research-ai-gateway/src/gateway_rpc";
 import type { ReceiptProductBytesRpc } from "../../ingestion-premium/src/receipt_product_bytes_rpc";
+import type { PilotReadyPublicationRpc } from "../../ingestion-premium/src/pilot_ready_publication_rpc";
 import type { PersonalResearchContainer } from "./personal_research_container";
 
 /** Generated bindings with typed Gateway RPC; secrets stay string-only. */
 export type Env = Omit<
   Cloudflare.Env,
-  "AI_GATEWAY" | "JQUANTS_ACQUISITION" | "INGESTION_PREMIUM"
+  | "AI_GATEWAY"
+  | "JQUANTS_ACQUISITION"
+  | "INGESTION_PREMIUM"
+  | "PILOT_READY_PUBLICATION"
 > & {
   AI_GATEWAY: GatewayRpc;
   JQUANTS_ACQUISITION?: JquantsAcquisitionRpc;
   INGESTION_PREMIUM?: ReceiptProductBytesRpc;
+  PILOT_READY_PUBLICATION?: PilotReadyPublicationRpc;
   MASS_EVAL_TOKEN?: string;
   PERSONAL_RESEARCH_CONTAINER?: DurableObjectNamespace<PersonalResearchContainer>;
 };

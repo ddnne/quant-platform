@@ -16,21 +16,22 @@ import {
   receiptCandidateRequestDigest,
 } from "./personal_receipt_candidate_contract";
 import {
-  durablePersonalJobStatus,
+  personalJobStateKey,
   readSmallJson,
   submittedStateDocument,
   writeSubmittedState,
 } from "./personal_job_state";
+import {
+  configuredPublicationEnvironment,
+  isCompletedPassTerminal,
+  publishAdmittedReceiptCandidatePointer,
+  readStoredPublicationPointer,
+} from "./personal_receipt_candidate_publication";
 import { verifiedPersonalResearchContainer } from "./personal_research_runner";
 import type { Env } from "./types";
 
 const TERMINAL_MAX_BYTES = 64 * 1024;
-
-function configuredEnvironment(env: Env): "production" | "staging" | null {
-  const value = String(env.ENVIRONMENT ?? "");
-  if (value === "staging" || value === "production") return value;
-  return null;
-}
+const STATE_MAX_BYTES = 8 * 1024;
 
 export async function submitPersonalReceiptCandidate(
   env: Env,
@@ -49,16 +50,35 @@ export async function submitPersonalReceiptCandidate(
         409,
       );
     }
+    let publication;
+    try {
+      publication = isCompletedPassTerminal(existing)
+        ? await publishAdmittedReceiptCandidatePointer(env, request.job_id)
+        : await readStoredPublicationPointer(env, request.job_id);
+    } catch (error) {
+      publication = isCompletedPassTerminal(existing)
+        ? {
+            historical: false,
+            persisted: false,
+            ready_declared: false as const,
+            operational_go: false as const,
+            job_id: request.job_id,
+            attempt_status: "PENDING" as const,
+            error: "publication rpc failed",
+          }
+        : null;
+    }
     return json({
       ok: existing.status === "COMPLETED",
       idempotent: true,
       job: existing,
+      ...(publication ? { publication } : {}),
       go: false,
       pending_ready: true,
       ready: false,
     });
   }
-  const environment = configuredEnvironment(env);
+  const environment = configuredPublicationEnvironment(env);
   if (!environment || !env.INGESTION_PREMIUM) {
     return json(
       {
@@ -121,6 +141,62 @@ export async function submitPersonalReceiptCandidate(
 export async function personalReceiptCandidateStatus(
   env: Env,
   jobId: string,
+  now = new Date(),
 ): Promise<Response> {
-  return durablePersonalJobStatus(env, "receipt-candidate", jobId);
+  const terminal = await readSmallJson(
+    env.STRUCTURED_BUCKET,
+    personalReceiptCandidateManifestKey(jobId),
+    TERMINAL_MAX_BYTES,
+  );
+  if (terminal) {
+    const publication = await readStoredPublicationPointer(env, jobId);
+    return json({
+      ok: terminal.status === "COMPLETED",
+      durable: true,
+      job: terminal,
+      ...(publication ? { publication } : {}),
+      go: false,
+      pending_ready: true,
+      ready: false,
+      automatic_promotion: false,
+      live_orders_enabled: false,
+    });
+  }
+  const state = await readSmallJson(
+    env.STRUCTURED_BUCKET,
+    personalJobStateKey("receipt-candidate", jobId),
+    STATE_MAX_BYTES,
+  );
+  if (state && state.status === "SUBMITTED") {
+    const expiresAt = Date.parse(String(state.expires_at ?? ""));
+    if (Number.isFinite(expiresAt) && expiresAt <= now.getTime()) {
+      return json({
+        ok: false,
+        durable: false,
+        observation_only: true,
+        job: { ...state, status: "SUBMITTED" },
+        expired: true,
+        expires_at: state.expires_at,
+        go: false,
+        pending_ready: true,
+        ready: false,
+        automatic_promotion: false,
+        live_orders_enabled: false,
+      });
+    }
+    return json({
+      ok: false,
+      durable: true,
+      job: { ...state, status: "PENDING" },
+      go: false,
+      pending_ready: true,
+      ready: false,
+      automatic_promotion: false,
+      live_orders_enabled: false,
+    });
+  }
+  return json(
+    { ok: false, error: "job_not_found", job_id: jobId, go: false },
+    404,
+  );
 }
