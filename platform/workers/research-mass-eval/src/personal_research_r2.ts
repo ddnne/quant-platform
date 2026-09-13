@@ -18,9 +18,11 @@ import {
   isReceiptCandidateManifestKey,
   isReceiptCandidateObjectKey,
   isReceiptCandidatePhysicalKey,
+  isReceiptCandidateScopeKey,
   personalReceiptCandidateManifestKey,
   personalReceiptCandidateObjectKey,
   personalReceiptCandidatePhysicalKey,
+  personalReceiptCandidateScopeKey,
 } from "./personal_receipt_candidate_contract";
 import {
   isPersonalIndexOverlayFamilyCohort,
@@ -73,6 +75,7 @@ import {
   receiptNativeV2WireError,
 } from "./ready_manifest_v2";
 import { CONTROLLED_PILOT_KEY_PREFIX } from "./controlled_pilot_contract";
+import { CREATE_ONLY_COMPARE_MAX_BYTES } from "./http";
 
 const RESULT_MAX_BYTES = 512 * 1024 * 1024;
 const MANIFEST_MAX_BYTES = 64 * 1024;
@@ -189,6 +192,7 @@ type SqliteGzipKind = {
   contentType?: string;
   maxBytes?: number;
   requireContentMatchesRaw?: boolean;
+  keyFromContentDigest?: boolean;
 };
 
 async function exactTerminalExists(
@@ -492,6 +496,13 @@ async function receiptCandidateCompletedCorrelation(
   if (native.snapshot_id !== expectedSnapshot) {
     return "receipt-native snapshot_id does not match source";
   }
+  if (
+    typeof manifest.compiled_scope_proof_digest === "string" &&
+    native.source.compiled_scope_proof_digest !==
+      manifest.compiled_scope_proof_digest
+  ) {
+    return "receipt-native compiled_scope_proof_digest mismatch";
+  }
   return null;
 }
 
@@ -521,14 +532,60 @@ async function receiptCandidatePhysicalObject(
   const uploaded = await env.STRUCTURED_BUCKET.head(manifest.physical_key);
   if (
     !uploaded ||
-    uploaded.customMetadata?.sha256 !== rawDigest ||
-    uploaded.customMetadata?.raw_sha256 !== rawDigest ||
-    uploaded.customMetadata?.format !== RECEIPT_CANDIDATE_FORMAT ||
-    !checksumMatches(uploaded, rawDigest)
+    !gzipObjectMatches(
+      uploaded,
+      { contentDigest: rawDigest, rawDigest },
+      RECEIPT_CANDIDATE_FORMAT,
+    )
   ) {
     return {
       error:
         "completed receipt candidate manifest has no matching physical object",
+      status: 409,
+    };
+  }
+  return null;
+}
+
+async function receiptCandidateScopeObject(
+  env: R2Env,
+  manifest: Record<string, unknown>,
+  rawDigest: string,
+): Promise<{ error: string; status: 400 | 409 } | null> {
+  if (manifest.dependency_scope_key == null) return null;
+  if (manifest.compiled_scope_status !== "PASS") {
+    return {
+      error:
+        "completed receipt candidate scope pointer requires compiled-scope PASS",
+      status: 400,
+    };
+  }
+  const proofDigest = manifest.compiled_scope_proof_digest;
+  const proofHex =
+    typeof proofDigest === "string" ? proofDigest.slice("sha256:".length) : "";
+  if (
+    typeof proofDigest !== "string" ||
+    !DIGEST_RE.test(proofDigest) ||
+    !SHA_HEX_RE.test(proofHex) ||
+    typeof manifest.dependency_scope_key !== "string" ||
+    manifest.dependency_scope_key !== personalReceiptCandidateScopeKey(proofHex)
+  ) {
+    return {
+      error: "completed receipt candidate scope identity is invalid",
+      status: 400,
+    };
+  }
+  const uploaded = await env.STRUCTURED_BUCKET.head(manifest.dependency_scope_key);
+  if (
+    !uploaded ||
+    !gzipObjectMatches(
+      uploaded,
+      { contentDigest: proofDigest, rawDigest },
+      RECEIPT_CANDIDATE_FORMAT,
+    )
+  ) {
+    return {
+      error: "completed receipt candidate manifest has no matching scope object",
       status: 409,
     };
   }
@@ -565,6 +622,18 @@ const RECEIPT_CANDIDATE_PHYSICAL_KIND: SqliteGzipKind = {
   requireContentMatchesRaw: true,
 };
 
+const RECEIPT_CANDIDATE_SCOPE_KIND: SqliteGzipKind = {
+  format: RECEIPT_CANDIDATE_FORMAT,
+  plane: "receipt_candidate",
+  label: "receipt candidate",
+  objectKey: personalReceiptCandidateScopeKey,
+  manifestKey: personalReceiptCandidateManifestKey,
+  closedManifest: receiptCandidateManifestClosed,
+  contentType: "application/json; charset=utf-8",
+  maxBytes: CREATE_ONLY_COMPARE_MAX_BYTES,
+  keyFromContentDigest: true,
+};
+
 async function putSqliteGzip(
   request: Request,
   env: R2Env,
@@ -573,12 +642,15 @@ async function putSqliteGzip(
 ): Promise<Response> {
   const identity = snapshotGzipIdentity(request);
   const rawHex = identity?.rawDigest.slice("sha256:".length) ?? "";
+  const contentHex = identity?.contentDigest.slice("sha256:".length) ?? "";
+  const keyHex = kind.keyFromContentDigest ? contentHex : rawHex;
   if (
     !identity ||
     !SHA_HEX_RE.test(rawHex) ||
+    !SHA_HEX_RE.test(keyHex) ||
     (kind.requireContentMatchesRaw &&
       identity.contentDigest !== identity.rawDigest) ||
-    key !== kind.objectKey(rawHex)
+    key !== kind.objectKey(keyHex)
   ) {
     return responseJson({ error: `invalid ${kind.label} identity` }, 400);
   }
@@ -708,12 +780,21 @@ async function putSqliteManifest(
       if (physical) {
         return responseJson({ error: physical.error }, physical.status);
       }
+      const scope = await receiptCandidateScopeObject(
+        env,
+        manifest,
+        rawDigest,
+      );
+      if (scope) {
+        return responseJson({ error: scope.error }, scope.status);
+      }
     }
   } else if (
     manifest.snapshot_key != null ||
     manifest.gzip_sha256 != null ||
     manifest.raw_sha256 != null ||
-    manifest.physical_key != null
+    manifest.physical_key != null ||
+    manifest.dependency_scope_key != null
   ) {
     return responseJson(
       { error: `failed ${kind.label} must not publish an object` },
@@ -1058,6 +1139,9 @@ export async function personalResearchR2Outbound(
   if ((request.method === "GET" || request.method === "HEAD") &&
       isPersonalResearchSnapshotKey(key)) {
     return getSnapshot(request, env, key);
+  }
+  if (request.method === "PUT" && isReceiptCandidateScopeKey(key)) {
+    return putSqliteGzip(request, env, key, RECEIPT_CANDIDATE_SCOPE_KIND);
   }
   if (request.method === "PUT" && isReceiptCandidatePhysicalKey(key)) {
     return putSqliteGzip(request, env, key, RECEIPT_CANDIDATE_PHYSICAL_KIND);

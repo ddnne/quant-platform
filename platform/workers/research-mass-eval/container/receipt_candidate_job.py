@@ -34,6 +34,8 @@ RECEIPT_CANDIDATE_MAX_SEGMENTS = 512
 RECEIPT_CANDIDATE_MAX_REQUEST_BYTES = 64 * 1024
 # R2 single-object PUT ceiling: 5 GiB minus 5 MiB (Cloudflare R2 limits footnote 4).
 RECEIPT_CANDIDATE_RAW_PUT_MAX_BYTES = (5 * 1024 * 1024 * 1024) - (5 * 1024 * 1024)
+# Matches CREATE_ONLY_COMPARE_MAX_BYTES in platform/workers/research-mass-eval/src/http.ts.
+RECEIPT_CANDIDATE_SCOPE_SIDECAR_MAX_BYTES = 256 * 1024
 _JOB_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
@@ -452,6 +454,8 @@ def execute_receipt_candidate_job(
                         calendar_path.unlink(missing_ok=True)
             commit_receipt_candidate(store)
             from paper_runtime.ready_publication import (
+                canonical_digest,
+                canonical_json_bytes,
                 verify_committed_receipt_candidate_scope,
             )
             from research.ready_manifest import load_exact_four_pilot_ready_binding
@@ -494,11 +498,41 @@ def execute_receipt_candidate_job(
             sqlite_key = (
                 f"research/receipt-candidates/sha256={raw_digest[7:]}.sqlite"
             )
+            sidecar_key = None
             if scope.get("compiled_scope_status") == "PASS":
                 if raw_bytes > RECEIPT_CANDIDATE_RAW_PUT_MAX_BYTES:
                     raise ReceiptCandidateMaterializeError(
                         "receipt candidate sqlite exceeds the raw R2 object put cap"
                     )
+                evidence_body = scope.pop("_receipt_scope_evidence_body", None)
+                if type(evidence_body) is not dict:
+                    raise ReceiptCandidateMaterializeError(
+                        "receipt candidate PASS is missing scope evidence"
+                    )
+                sidecar_bytes = canonical_json_bytes(evidence_body)
+                if len(sidecar_bytes) > RECEIPT_CANDIDATE_SCOPE_SIDECAR_MAX_BYTES:
+                    raise ReceiptCandidateMaterializeError(
+                        "receipt candidate scope evidence exceeds the sidecar cap"
+                    )
+                sidecar_digest = canonical_digest(evidence_body)
+                if sidecar_digest != scope.get("compiled_scope_proof_digest"):
+                    raise ReceiptCandidateMaterializeError(
+                        "receipt candidate scope evidence digest drifted"
+                    )
+                sidecar_key = (
+                    "research/receipt-candidates/"
+                    f"sha256={sidecar_digest[7:]}.pit-dependency-scope.json"
+                )
+                uploader(
+                    sidecar_key,
+                    sidecar_bytes,
+                    spec=spec,
+                    content_digest=sidecar_digest,
+                    extra_headers={
+                        "content-type": "application/json; charset=utf-8",
+                        "x-personal-raw-sha256": raw_digest,
+                    },
+                )
                 uploader(
                     sqlite_key,
                     database,
@@ -535,6 +569,8 @@ def execute_receipt_candidate_job(
             }
             if scope.get("compiled_scope_status") == "PASS":
                 manifest["physical_key"] = sqlite_key
+                if sidecar_key is not None:
+                    manifest["dependency_scope_key"] = sidecar_key
         except Exception as error:
             if store is not None:
                 rollback_receipt_candidate(store)

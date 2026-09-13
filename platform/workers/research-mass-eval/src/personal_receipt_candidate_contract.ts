@@ -128,6 +128,19 @@ export function isReceiptCandidatePhysicalKey(key: string): boolean {
   return /^research\/receipt-candidates\/sha256=[0-9a-f]{64}\.sqlite$/.test(key);
 }
 
+export function personalReceiptCandidateScopeKey(contentSha256Hex: string): string {
+  if (!/^[0-9a-f]{64}$/.test(contentSha256Hex)) {
+    throw new Error("invalid receipt candidate digest");
+  }
+  return `research/receipt-candidates/sha256=${contentSha256Hex}.pit-dependency-scope.json`;
+}
+
+export function isReceiptCandidateScopeKey(key: string): boolean {
+  return /^research\/receipt-candidates\/sha256=[0-9a-f]{64}\.pit-dependency-scope\.json$/.test(
+    key,
+  );
+}
+
 export function receiptCandidateJobIdFromPath(pathname: string): string | null {
   const prefix = "/v1/receipt-candidate/";
   if (!pathname.startsWith(prefix)) return null;

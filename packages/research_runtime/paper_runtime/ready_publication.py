@@ -59,14 +59,16 @@ def _calendar_dates(start: str, end: str) -> tuple[str, ...]:
     return tuple(values)
 
 
-def canonical_digest(payload: Mapping[str, Any] | Sequence[Any] | str) -> str:
+def canonical_json_bytes(payload: Mapping[str, Any] | Sequence[Any] | str) -> bytes:
     if isinstance(payload, str):
-        raw = payload.encode("utf-8")
-    else:
-        raw = json.dumps(
-            payload, sort_keys=True, separators=(",", ":"), default=str
-        ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(raw).hexdigest()
+        return payload.encode("utf-8")
+    return json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), default=str
+    ).encode("utf-8")
+
+
+def canonical_digest(payload: Mapping[str, Any] | Sequence[Any] | str) -> str:
+    return "sha256:" + hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
 
 
 def _closed_applied_mirror_identity(
@@ -1147,6 +1149,11 @@ def verify_committed_receipt_candidate_scope(
             "compiled_scope_proof_digest": payload["proof_digest"],
             "physical_db_digest": physical_digest,
             "receipt_source": receipt_source,
+            "_receipt_scope_evidence_body": {
+                key: value
+                for key, value in payload.items()
+                if key != "proof_digest"
+            },
         }
     except (MassResearchDisabledError, PitError, sqlite3.Error) as exc:
         compiled = {
@@ -1278,6 +1285,7 @@ __all__ = [
     "ReadyPublicationService",
     "VerifiedPublicationEvidence",
     "canonical_digest",
+    "canonical_json_bytes",
     "verify_committed_receipt_candidate_scope",
     "verify_controlled_publication_evidence",
 ]
