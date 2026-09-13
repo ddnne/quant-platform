@@ -191,56 +191,83 @@ def test_deployment_acceptance_finding_ledger_gate_runs_before_credentials(
         assert "CLOUDFLARE_API_TOKEN is required" in result.stderr
 
 
-def test_pending_acceptance_gives_credentials_only_to_live_commands(
-    tmp_path: Path,
-) -> None:
-    fixture_root = _acceptance_fixture(tmp_path)
-    scripts = fixture_root / "scripts"
-    _write_executable(
-        scripts / "verify_ci.sh",
-        """#!/bin/sh
-if env | grep -q '^CLOUDFLARE_' || [ -n "${UNRELATED_SECRET:-}" ]; then
-  echo 'ambient environment leaked to verify_ci' >&2
-  exit 91
+def _pending_python_stub(fake_bin: Path, *, gate_status: int) -> None:
+    source = f"""#!/bin/sh
+if [ \"$1\" = \"-c\" ]; then
+  exit 0
 fi
-echo 'verify-ci-isolated'
-""",
-    )
-    _write_executable(
-        fixture_root / ".venv" / "bin" / "python",
-        """#!/bin/sh
-case "$1" in
+case \"$1\" in
   *receipt_authority_pending_gate.py)
-    if env | grep -q '^CLOUDFLARE_' || [ -n "${UNRELATED_SECRET:-}" ]; then
+    if env | grep -q '^CLOUDFLARE_' || [ -n \"${{UNRELATED_SECRET:-}}\" ]; then
       echo 'credential leaked to pending source gate' >&2
       exit 92
+    fi
+    if [ {gate_status} -ne 0 ]; then
+      echo 'Receipt PENDING native required check HOLD: required check is not completed success' >&2
+      exit {gate_status}
     fi
     echo 'pending-gate-isolated'
     ;;
   *verify_cloudflare_secret_inventory.py|*receipt_authority_pending_live_acceptance.py)
-    if [ "${CLOUDFLARE_API_TOKEN:-}" != 'captured-test-token' ] || \
-       [ "${CLOUDFLARE_ACCOUNT_ID:-}" != 'captured-test-account' ]; then
+    if [ \"${{CLOUDFLARE_API_TOKEN:-}}\" != 'captured-test-token' ] || \\
+       [ \"${{CLOUDFLARE_ACCOUNT_ID:-}}\" != 'captured-test-account' ]; then
       echo 'explicit live credential missing' >&2
       exit 93
     fi
-    if [ -n "${CLOUDFLARE_API_KEY:-}" ] || \
-       [ -n "${CLOUDFLARE_EMAIL:-}" ] || \
-       [ -n "${UNRELATED_SECRET:-}" ] || \
-       [ "${HOME:-}" = '/ambient/oauth-home-must-not-pass' ]; then
+    if [ -n \"${{CLOUDFLARE_API_KEY:-}}\" ] || \\
+       [ -n \"${{CLOUDFLARE_EMAIL:-}}\" ] || \\
+       [ -n \"${{UNRELATED_SECRET:-}}\" ] || \\
+       [ \"${{HOME:-}}\" = '/ambient/oauth-home-must-not-pass' ]; then
       echo 'ambient credential leaked to live command' >&2
       exit 94
     fi
     echo 'live-command-minimum-env'
     ;;
   *)
-    echo "unexpected fixture command: $1" >&2
+    echo \"unexpected fixture command: $1\" >&2
     exit 95
     ;;
 esac
+"""
+    _write_executable(fake_bin / "python3.11", source)
+    _write_executable(fake_bin / "python3", source)
+
+
+@pytest.mark.parametrize(
+    ("gate_status", "npm_status"),
+    ((0, 0), (1, 0), (0, 1)),
+    ids=("native-success", "native-hold", "npm-hold"),
+)
+def test_pending_acceptance_gives_credentials_only_to_live_commands(
+    tmp_path: Path,
+    gate_status: int,
+    npm_status: int,
+) -> None:
+    fixture_root = _acceptance_fixture(tmp_path)
+    scripts = fixture_root / "scripts"
+    _write_executable(
+        scripts / "verify_ci.sh",
+        """#!/bin/sh
+echo 'verify_ci executed' >&2
+exit 96
+""",
+    )
+    fake_bin = tmp_path / "bin"
+    npm_log = tmp_path / "npm-ci.log"
+    _pending_python_stub(fake_bin, gate_status=gate_status)
+    _write_executable(
+        fake_bin / "npm",
+        f"""#!/bin/sh
+if env | grep -q '^CLOUDFLARE_' || [ -n \"${{UNRELATED_SECRET:-}}\" ]; then
+  echo 'credential leaked to npm' >&2
+  exit 91
+fi
+printf '%s\\n' \"$*\" >> {shlex.quote(str(npm_log))}
+exit {npm_status}
 """,
     )
     environment = {
-        "PATH": os.environ.get("PATH", ""),
+        "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
         "LANG": "C",
         "HOME": "/ambient/oauth-home-must-not-pass",
         "CLOUDFLARE_API_TOKEN": "captured-test-token",
@@ -263,9 +290,28 @@ esac
         env=environment,
         check=False,
     )
+    combined = result.stdout + result.stderr
+    npm_lines = npm_log.read_text().splitlines() if npm_log.exists() else []
+    chain = [
+        fixture_root / "platform" / "workers" / "ingestion-secrets",
+        fixture_root / "platform" / "workers" / "receipt-evidence-authority",
+        fixture_root / "platform" / "workers" / "ingestion-premium",
+    ]
+    assert "verify_ci executed" not in combined
+    if gate_status != 0:
+        assert result.returncode != 0
+        assert npm_lines == []
+        assert "live-command-minimum-env" not in combined
+        assert "required check is not completed success" in result.stderr
+        return
+    if npm_status != 0:
+        assert result.returncode != 0
+        assert npm_lines == [f"--prefix {chain[0]} ci"]
+        assert "live-command-minimum-env" not in combined
+        return
     assert result.returncode == 0, result.stderr
-    assert "verify-ci-isolated" in result.stdout
     assert "pending-gate-isolated" in result.stdout
+    assert npm_lines == [f"--prefix {directory} ci" for directory in chain]
     assert result.stdout.count("live-command-minimum-env") == 2
     assert "receipt authority PENDING deployment acceptance: ok" in result.stdout
 

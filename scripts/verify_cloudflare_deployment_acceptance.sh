@@ -99,6 +99,34 @@ fi
 # Keep production credentials and stored Wrangler OAuth out of dependency
 # installation, tests, builds, and dry-runs. Only the read-only live inventory
 # commands below receive the captured API token and account id.
+if [[ -n "$pending_environment" ]]; then
+  if ! "$gate_py" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)'; then
+    echo "Receipt PENDING acceptance requires Python 3.11+; $gate_py is too old" >&2
+    echo "Live three-Worker dry-run still uses each Worker's pinned Wrangler 4.125.0; this preflight does not install Node or create a venv." >&2
+    exit 1
+  fi
+  run_without_cloudflare_credentials \
+    "$gate_py" "$ROOT/scripts/receipt_authority_pending_gate.py" \
+    --environment "$pending_environment" \
+    --expected-source-sha "$expected_source_sha"
+  for worker in ingestion-secrets receipt-evidence-authority ingestion-premium; do
+    run_without_cloudflare_credentials \
+      npm --prefix "$ROOT/platform/workers/$worker" ci
+  done
+  run_with_cloudflare_credentials \
+    "$gate_py" "$ROOT/scripts/verify_cloudflare_secret_inventory.py" \
+    --require-api-token \
+    --environment "$pending_environment" \
+    --worker receipt-evidence-authority
+  run_with_cloudflare_credentials \
+    "$gate_py" "$ROOT/scripts/receipt_authority_pending_live_acceptance.py" \
+    --environment "$pending_environment" \
+    --expected-source-sha "$expected_source_sha" \
+    --expected-account-id "$cloudflare_account_id"
+  echo "receipt authority PENDING deployment acceptance: ok ($pending_environment)"
+  exit 0
+fi
+
 run_without_cloudflare_credentials \
   /bin/bash "$ROOT/scripts/verify_ci.sh"
 
@@ -106,25 +134,6 @@ py="$ROOT/.venv/bin/python"
 if [[ ! -x "$py" ]]; then
   echo "verify_ci did not provide the pinned Python runtime" >&2
   exit 1
-fi
-
-if [[ -n "$pending_environment" ]]; then
-  run_without_cloudflare_credentials \
-    "$py" "$ROOT/scripts/receipt_authority_pending_gate.py" \
-    --environment "$pending_environment" \
-    --expected-source-sha "$expected_source_sha"
-  run_with_cloudflare_credentials \
-    "$py" "$ROOT/scripts/verify_cloudflare_secret_inventory.py" \
-    --require-api-token \
-    --environment "$pending_environment" \
-    --worker receipt-evidence-authority
-  run_with_cloudflare_credentials \
-    "$py" "$ROOT/scripts/receipt_authority_pending_live_acceptance.py" \
-    --environment "$pending_environment" \
-    --expected-source-sha "$expected_source_sha" \
-    --expected-account-id "$cloudflare_account_id"
-  echo "receipt authority PENDING deployment acceptance: ok ($pending_environment)"
-  exit 0
 fi
 
 run_with_cloudflare_credentials \
