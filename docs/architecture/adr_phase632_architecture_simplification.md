@@ -55,6 +55,13 @@ profile, and snapshot digest must close exactly. Trusted receipt, Coverage V3,
 B0/B4, and READY are required. Execution is one Paper run. No auto-promotion,
 broker, or order.
 
+Receipt-native exact-four snapshot quality on a frozen candidate is compiled
+scope for 2023-01-04..2023-10-13 plus lookbacks/anchors, plus snapshot B0
+(LIVE_GATES 3000 on the whole sqlite, not cutoff-filtered), bound-window B4,
+and calendar-series C8 versus profile `period_end`. It is not official-domain
+COMPLETE from 2008, not `profile_ready()` D1 cursor admission, and not
+Ops/global B0. A one-issuer fixture honestly fails snapshot B0.
+
 The cloud Controlled Paper path lives in the existing `research-mass-eval`
 Worker plus its Container; local Python is OfflineFixture DRAFT only.
 Operator input is only an idempotency key, READY attestation id, and logical

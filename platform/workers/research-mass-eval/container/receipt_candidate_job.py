@@ -253,6 +253,21 @@ def _scope_manifest_fields(scope: Mapping[str, Any]) -> dict[str, Any]:
     kind = scope.get("compiled_scope_kind")
     if type(kind) is not str or not kind:
         kind = "receipt-candidate-scope-diagnostic/v1"
+    quality: dict[str, Any] = {}
+    digest = scope.get("snapshot_quality_digest")
+    payload = scope.get("snapshot_quality")
+    if type(digest) is str and digest and isinstance(payload, Mapping):
+        quality = {
+            "snapshot_quality_kind": scope.get("snapshot_quality_kind"),
+            "snapshot_quality_digest": digest,
+            "snapshot_quality": dict(payload),
+            "snapshot_b0_status": scope.get("snapshot_b0_status"),
+            "snapshot_b4_status": scope.get("snapshot_b4_status"),
+            "snapshot_c8_status": scope.get("snapshot_c8_status"),
+            "b0_proof_digest": scope.get("b0_proof_digest"),
+            "b4_proof_digest": scope.get("b4_proof_digest"),
+            "validation_proof_digest": scope.get("validation_proof_digest"),
+        }
     if scope.get("compiled_scope_status") == "PASS":
         return {
             "compiled_scope_status": "PASS",
@@ -268,10 +283,13 @@ def _scope_manifest_fields(scope: Mapping[str, Any]) -> dict[str, Any]:
             "receipt_native_manifest_digest": scope[
                 "receipt_native_manifest_digest"
             ],
+            "receipt_native_manifest": scope["receipt_native_manifest"],
+            **quality,
         }
     fields: dict[str, Any] = {
         "compiled_scope_status": "FAIL",
         "compiled_scope_kind": kind,
+        **quality,
     }
     error = scope.get("compiled_scope_error")
     if type(error) is str and error:
