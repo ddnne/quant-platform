@@ -33,20 +33,35 @@ remote apply results only in immutable release evidence.
   `docs/phase62_residual_status.md` passes. Green tests do not arm exact-four.
   Runtime still separately enforces signed READY, signed Trader authorization,
   an immutable snapshot, signed projection, and BudgetLedger occupancy.
-- **READY publication path:** signing exists at
+- **READY publication path:** source exists and is undeployed. Distinguish
+  those layers. Mass `personal_receipt_candidate.ts` plus
+  `personal_receipt_candidate_contract.ts` submits Container
+  `POST /v1/materialize-receipt-candidate`
+  (`container/receipt_candidate_job.py`, `ops/receipt_candidate_materialize.py`).
+  A COMPLETED candidate job uploads a receipt-candidate snapshot only; code
+  returns `go: false` / `ready: false` and does not call READY, B0, B4, compiled
+  scope, or the Trader signer. Product bytes use source Service Binding
+  `INGESTION_PREMIUM` → `PremiumReceiptProductInputService`. Scheduled Ops
+  publisher owner is `platform/workers/ingestion-premium/src/ops_projection.ts`
+  (`publishOpsProjection` / `publishOpsProjectionBestEffort` from the Premium
+  scheduled worker). READY signer owner is
   `platform/workers/ingestion-premium/src/ready_publication.ts` (source-only
-  move from `platform/workers/research-mass-eval`; not rolled out; existing
-  Mass staging secret provisioning history is unchanged and actual cutover is
-  not done), but there is no cloud candidate-preparation or orchestration
-  caller/Service Binding.
-  Source includes an undeployed read-only `POST /v1/export/receipt-products`
-  descriptor; it does not check profile completeness or physical availability
-  and is not READY. Premium Ops metadata still does not bind exact dependency
-  scope, raw retention, or validation proofs; those remain a distinct pending
-  workflow integration. The Trader production signer is absent. The release
-  builder is unconditionally PENDING. Wire the existing trust root; do not add
-  another authority. Activating keys alone does not close any of these gaps.
-  A metadata-only Ops envelope is not READY.
+  move from Mass; not rolled out). Those are different modules. Existing Mass
+  staging secret provisioning history is unchanged and is not this SHA
+  deployed. Source also includes undeployed read-only
+  `POST /v1/export/receipt-products`; it does not check profile completeness or
+  physical availability and is not READY. Premium Ops metadata still does not
+  bind exact dependency scope, raw retention, or validation proofs. There is
+  no accepted Trader production signer or connection (not remeasured as live
+  registry/private-key state in this docs turn). The release builder is
+  unconditionally PENDING. Wire the existing trust root; do not add another
+  authority. Activating keys alone does not close these gaps. A metadata-only
+  Ops envelope is not READY. Candidate COMPLETED is not immutable READY.
+  Connecting candidate → same-snapshot compiled scope / B0 / B4 → immutable
+  READY / existing signer → Trader is missing source, not only unaccepted
+  rollout. Global live acceptance is the final gate after that source exists
+  and inactive code can roll out; it is not a prerequisite that forbids
+  inactive code rollout.
 - **Release evidence:** publication is **PENDING/HOLD**. Normalized caller JSON
   is schema-only and cannot prove any remote response. The dedicated signed
   release-observation authority has zero active keys and is not implemented;
@@ -88,8 +103,14 @@ remote apply results only in immutable release evidence.
   [`../architecture/adr_quant_ops_mcpagent_migration.md`](../architecture/adr_quant_ops_mcpagent_migration.md): migrate `/mcp` to `createMcpHandler`, then drain
   `/sse` only after a real client inventory.
 - **AM history:** do not treat V2 monthly AM completeness as a current target.
-  V3 AM is tip-scoped. Residual PARTIAL rows are not permission to mint empty
-  COMPLETE receipts.
+  V3 AM completeness remains tip-scoped. Residual PARTIAL rows are not
+  permission to mint empty COMPLETE receipts. 2023-class historic reconstruction
+  uses Premium daily `MC` / `MAdjC` / `AAdjC` with original `available_at` /
+  `ingested_at` (`historical_daily_reconstruction` in `governed_am_view.py`).
+  Tip Coverage and retrospective daily provenance are different; do not revive
+  "AM history impossible". Historic AM+gross-cap engine artifacts that cannot
+  prove `am_frozen_order_batch/v1` stay invalidated; do not overwrite or delete
+  them. Cloud inventory of those artifacts is still pending.
 - **Authority reachability:** Paper-only trust is the existing Cloudflare
   Receipt evidence authority, READY publisher, environment-scoped public-key
   registries, typed Service Bindings, content-addressed R2 snapshot, and
@@ -273,10 +294,11 @@ Safe cloud-only order, still HOLD:
 6. Switch production MCP bindings only after a SEALED generation exists.
 7. Production 17-tool smoke.
 
-Until the cloud-side publisher exists, keep live MCP on its current binding
-and leave dedicated projection/quota DBs unpublished. See
+Scheduled publisher source exists (`ops_projection.ts`). Keep live MCP on its
+current binding and leave dedicated projection/quota DBs unpublished until an
+accepted SEALED cloud generation is present. See
 [`projection_publish_guard.md`](projection_publish_guard.md) for the
-COMPLETE-count guard once a publisher exists.
+COMPLETE-count guard. Publish remains HOLD.
 
 ## 4. Remote Ops MCP
 
