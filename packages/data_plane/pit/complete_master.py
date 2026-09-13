@@ -237,12 +237,20 @@ class _CompleteMembershipGate:
         period_end: str,
         observed_through: datetime,
         observed_through_text: str,
+        expected_environment: str = PRODUCTION_RECEIPT_ENVIRONMENT,
+        expected_authority_instance_digest: str = (
+            PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+        ),
     ) -> None:
         self._conn = conn
         self._official_calendars = official_calendars
         self._period_end = period_end
         self._observed_through = observed_through
         self._observed_through_text = observed_through_text
+        self._expected_environment = expected_environment
+        self._expected_authority_instance_digest = (
+            expected_authority_instance_digest
+        )
         self._seed_snapshot_date: str | None = None
         self._generations: tuple[_VerifiedGeneration, ...] = ()
 
@@ -394,6 +402,10 @@ class _CompleteMembershipGate:
                 observed_through=self._observed_through_text,
                 seed=current_snapshot,
                 period_end=self._period_end,
+                expected_environment=self._expected_environment,
+                expected_authority_instance_digest=(
+                    self._expected_authority_instance_digest
+                ),
             )
             self._assert_source_domain(seed=current_snapshot)
         elif current_snapshot < self._seed_snapshot_date:
@@ -549,6 +561,11 @@ def _compact_snapshots_from_artifact(
 
 def _iter_success_closures(
     conn: sqlite3.Connection,
+    *,
+    expected_environment: str = PRODUCTION_RECEIPT_ENVIRONMENT,
+    expected_authority_instance_digest: str = (
+        PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+    ),
 ) -> tuple[VerifiedCollectionClosure, ...]:
     if not _PRODUCT_REQUIRED <= _table_columns(
         conn, "receipt_product_materializations"
@@ -581,9 +598,9 @@ def _iter_success_closures(
             receipt = _collection_receipt_from_row(stored)
             closure = require_verified_collection_closure(
                 receipt,
-                expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+                expected_environment=expected_environment,
                 expected_authority_instance_digest=(
-                    PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+                    expected_authority_instance_digest
                 ),
                 expected_policy_version=policy_version,
             )
@@ -716,8 +733,16 @@ def _load_required_master_generations(
     observed_through: str,
     seed: str,
     period_end: str,
+    expected_environment: str = PRODUCTION_RECEIPT_ENVIRONMENT,
+    expected_authority_instance_digest: str = (
+        PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+    ),
 ) -> tuple[_VerifiedGeneration, ...]:
-    closures = _iter_success_closures(conn)
+    closures = _iter_success_closures(
+        conn,
+        expected_environment=expected_environment,
+        expected_authority_instance_digest=expected_authority_instance_digest,
+    )
     required = [
         closure
         for closure in closures
@@ -772,6 +797,10 @@ def _owned_complete_master_selection_from_connection(
     period_end: str,
     as_of_for_day: Mapping[str, str],
     official_calendar_raw: Sequence[bytes] | None = None,
+    expected_environment: str = PRODUCTION_RECEIPT_ENVIRONMENT,
+    expected_authority_instance_digest: str = (
+        PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+    ),
 ) -> _OwnedCompleteMasterSelection:
     """Return immutable day membership plus owner-side proof.
 
@@ -803,6 +832,8 @@ def _owned_complete_master_selection_from_connection(
         period_end=period_end,
         observed_through=observed_through,
         observed_through_text=clock.observed_through,
+        expected_environment=expected_environment,
+        expected_authority_instance_digest=expected_authority_instance_digest,
     )
     slices = _universe_day_slices_from_connection(
         conn,
@@ -867,6 +898,10 @@ def _complete_master_day_slices_from_connection(
     period_start: str,
     period_end: str,
     as_of_for_day: Mapping[str, str],
+    expected_environment: str = PRODUCTION_RECEIPT_ENVIRONMENT,
+    expected_authority_instance_digest: str = (
+        PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+    ),
 ) -> tuple[UniverseDaySlice, ...]:
     """Resolve complete-master day slices on an already-open owned connection."""
 
@@ -875,6 +910,8 @@ def _complete_master_day_slices_from_connection(
         period_start=period_start,
         period_end=period_end,
         as_of_for_day=as_of_for_day,
+        expected_environment=expected_environment,
+        expected_authority_instance_digest=expected_authority_instance_digest,
     )
     return owned.slices
 

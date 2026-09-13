@@ -17,7 +17,9 @@ import urllib.request
 from ingestion.jquants.normalize import normalize_generic
 from ops.receipt_candidate_materialize import (
     ReceiptCandidateMaterializeError,
+    commit_receipt_candidate,
     configure_receipt_candidate_limits,
+    hash_receipt_candidate_snapshot,
     materialize_receipt_segment,
 )
 from ops.receipt_product import (
@@ -475,6 +477,12 @@ def test_http_job_and_execute_publish_compact_completed_terminal(
         assert terminal["pending_ready"] is True
         assert terminal["ready"] is False
         assert terminal["go"] is False
+        assert terminal["compiled_scope_status"] == "FAIL"
+        assert terminal["compiled_scope_kind"] == (
+            "receipt-candidate-scope-diagnostic/v1"
+        )
+        assert "observation_checked_at" not in terminal
+        assert "source_generation" not in terminal
         assert "materialized_segments" not in terminal
         assert terminal["segment_count"] == 1
         gzip_path = uploads / "candidate.sqlite.gz"
@@ -587,6 +595,80 @@ def test_execute_512_selectors_keeps_compact_terminal(
     assert "materialized_segments" not in terminal
     assert terminal["ready"] is False
     assert terminal["go"] is False
+    assert terminal["compiled_scope_status"] == "FAIL"
+    assert terminal["compiled_scope_kind"] == (
+        "receipt-candidate-scope-diagnostic/v1"
+    )
+    assert "observation_checked_at" not in terminal
     assert len(
         json.dumps(terminal, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
     ) < 64 * 1024
+
+
+@pytest.mark.parametrize("environment", ["production", "staging"])
+def test_committed_candidate_scope_pass_ignores_unsigned_later_receipt(
+    tmp_path: Path, receipt_ed25519_keys, environment: str
+) -> None:
+    from paper_runtime.ready_publication import (
+        RECEIPT_CANDIDATE_SCOPE_DIAGNOSTIC_KIND,
+        verify_committed_receipt_candidate_scope,
+    )
+    from tests.test_ready_policy_fail_closed import _seed_exact_pit_scope
+
+    db_path, binding = _seed_exact_pit_scope(
+        tmp_path, receipt_ed25519_keys, environment=environment
+    )
+    store = SqliteStore(db_path)
+    store._conn.execute(  # noqa: SLF001
+        "INSERT INTO collection_receipts ("
+        "source,dataset,segment_id,segment_start,segment_end,expected_scope,"
+        "expected_items,observed_items,raw_page_count,raw_row_count,"
+        "structured_row_count,pagination_exhausted,digests_json,run_id,"
+        "status,error,checked_at"
+        ") VALUES ("
+        "'jquants','equities_bars_daily','unsigned-later',"
+        "'2023-01-01','2023-01-31','{}',0,0,0,0,0,1,'{}',999,"
+        "'SUCCESS',NULL,'2099-01-01T00:00:00+00:00'"
+        ")"
+    )
+    commit_receipt_candidate(store)
+    result = verify_committed_receipt_candidate_scope(
+        store,
+        binding=binding,
+        environment=environment,
+    )
+    assert result["compiled_scope_status"] == "PASS"
+    assert result["compiled_scope_kind"] == RECEIPT_CANDIDATE_SCOPE_DIAGNOSTIC_KIND
+    assert result["observation_policy"] == "max_verified_claims_checked_at"
+    assert result["observation_checked_at"] == "2026-08-25T00:00:00+00:00"
+    assert result["physical_db_digest"] == hash_receipt_candidate_snapshot(store)
+    assert "source_generation" not in result
+    assert "exported_at" not in result
+    store.close()
+
+
+def test_committed_candidate_scope_rejects_corrupted_backing(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    from paper_runtime.ready_publication import (
+        verify_committed_receipt_candidate_scope,
+    )
+    from tests.test_ready_policy_fail_closed import _seed_exact_pit_scope
+
+    db_path, binding = _seed_exact_pit_scope(tmp_path, receipt_ed25519_keys)
+    store = SqliteStore(db_path)
+    store._conn.execute(  # noqa: SLF001
+        "UPDATE jquants_records SET payload='{\"poison\":true}' "
+        "WHERE dataset='equities_bars_daily'"
+    )
+    commit_receipt_candidate(store)
+    result = verify_committed_receipt_candidate_scope(
+        store,
+        binding=binding,
+        environment="production",
+    )
+    assert result["compiled_scope_status"] == "FAIL"
+    assert result.get("compiled_scope_error")
+    assert "compiled_scope_proof_digest" not in result
+    assert "observation_checked_at" not in result
+    store.close()

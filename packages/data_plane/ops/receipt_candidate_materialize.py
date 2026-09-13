@@ -151,6 +151,56 @@ def commit_receipt_candidate(store: SqliteStore) -> None:
     store._conn.commit()  # noqa: SLF001
 
 
+def freeze_receipt_candidate_snapshot(store: SqliteStore) -> None:
+    """Checkpoint WAL into the main file and switch off WAL for this job DB."""
+
+    if type(store) is not SqliteStore:
+        raise ReceiptCandidateMaterializeError("receipt candidate store is invalid")
+    conn = store._conn  # noqa: SLF001
+    path = Path(store.path)
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.execute("PRAGMA journal_mode=DELETE")
+    except sqlite3.Error as exc:
+        raise ReceiptCandidateMaterializeError(
+            "receipt candidate sqlite checkpoint failed"
+        ) from exc
+    for sidecar in (
+        Path(str(path) + "-wal"),
+        Path(str(path) + "-shm"),
+        Path(str(path) + "-journal"),
+    ):
+        if sidecar.exists() and sidecar.stat().st_size != 0:
+            raise ReceiptCandidateMaterializeError(
+                "receipt candidate sqlite has a live journal sidecar"
+            )
+
+
+def hash_receipt_candidate_snapshot(store: SqliteStore) -> str:
+    """Hash durable main-file bytes after freeze; refuse a live sidecar."""
+
+    if type(store) is not SqliteStore:
+        raise ReceiptCandidateMaterializeError("receipt candidate store is invalid")
+    path = Path(store.path)
+    for sidecar in (
+        Path(str(path) + "-wal"),
+        Path(str(path) + "-shm"),
+        Path(str(path) + "-journal"),
+    ):
+        if sidecar.exists() and sidecar.stat().st_size != 0:
+            raise ReceiptCandidateMaterializeError(
+                "receipt candidate sqlite has a live journal sidecar"
+            )
+    hasher = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            hasher.update(chunk)
+    return "sha256:" + hasher.hexdigest()
+
+
 def rollback_receipt_candidate(store: SqliteStore) -> None:
     store._conn.rollback()  # noqa: SLF001
 
