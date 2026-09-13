@@ -544,7 +544,9 @@ def _verified_session_scope_fields(source: Any) -> dict[str, dict[str, Any]]:
 class _VerifiedControlledSessionScope:
     _token: object
     ready_manifest_digest: str
-    signed_projection_document_digest: str
+    signed_projection_document_digest: str | None
+    admitted_native_digest: str | None
+    native_source: Mapping[str, Any] | None
     profile_digest: str
     dependency_scope_proof_digest: str
     physical_db_digest: str
@@ -556,19 +558,58 @@ class _VerifiedControlledSessionScope:
             raise TypeError("controlled session scope is an opaque Worker capability")
 
 
+_NATIVE_SOURCE_IDENTITY_FIELDS = (
+    "kind",
+    "environment",
+    "authority_instance_digest",
+    "physical_digest",
+    "observation_policy",
+    "observed_through",
+    "compiled_scope_proof_digest",
+    "receipt_runset_digest",
+)
+
+NATIVE_LOGICAL_SNAPSHOT_FORMAT = "controlled-receipt-native-snapshot/v1"
+
+
+def _freeze_native_source(value: Any) -> MappingProxyType:
+    if not isinstance(value, Mapping):
+        raise SnapshotObservationClockError("native source is invalid")
+    if tuple(sorted(value)) != tuple(sorted(_NATIVE_SOURCE_IDENTITY_FIELDS)):
+        raise SnapshotObservationClockError("native source is invalid")
+    frozen: dict[str, str] = {}
+    for field in _NATIVE_SOURCE_IDENTITY_FIELDS:
+        item = value[field]
+        if type(item) is not str or not item:
+            raise SnapshotObservationClockError("native source is invalid")
+        frozen[field] = item
+    return MappingProxyType(frozen)
+
+
+def _native_logical_snapshot_id(source: Mapping[str, str]) -> str:
+    from data_contracts.identity import canonical_json
+
+    digest = hashlib.sha256(
+        canonical_json({"source": dict(source)}).encode("utf-8")
+    ).hexdigest()
+    return "sha256:" + digest
+
+
 def _session_scope_from_verified_worker_job(
     *,
     session_scope: Any,
     ready_manifest_digest: Any,
-    signed_projection_document_digest: Any,
     profile_digest: Any,
+    signed_projection_document_digest: Any = None,
+    admitted_native_digest: Any = None,
+    native_source: Any = None,
 ) -> _VerifiedControlledSessionScope:
     """Convert the already-verified Worker job scope into an opaque capability.
 
-    The signed projection and READY envelope are verified by the Worker before
-    this job exists. SQLite-embedded ReadyManifest/scope JSON is not authority.
-    The opener rehashes the pinned object and checks product/natural-key seals
-    against this issued Worker session scope.
+    The signed projection or admitted-native digest and READY envelope are
+    verified by the Worker before this job exists. SQLite-embedded ReadyManifest/scope
+    JSON is not authority. The opener rehashes the pinned object and checks
+    product/natural-key seals against this issued Worker session scope.
     """
 
     if not isinstance(session_scope, Mapping) or set(session_scope) != {
@@ -581,9 +622,19 @@ def _session_scope_from_verified_worker_job(
         raise SnapshotObservationClockError("controlled session scope is not closed")
     if session_scope.get("format") != "controlled-session-scope/v1":
         raise SnapshotObservationClockError("controlled session scope format is invalid")
+    native = admitted_native_digest is not None
+    legacy = signed_projection_document_digest is not None
+    if native == legacy:
+        raise SnapshotObservationClockError("Worker job provenance digest is invalid")
+    if native and not isinstance(native_source, Mapping):
+        raise SnapshotObservationClockError("native source is invalid")
+    if not native and native_source is not None:
+        raise SnapshotObservationClockError("native source is invalid")
+    provenance = admitted_native_digest if native else signed_projection_document_digest
+    provenance_name = "admitted native" if native else "signed projection"
     for value, name in (
         (ready_manifest_digest, "ReadyManifest"),
-        (signed_projection_document_digest, "signed projection"),
+        (provenance, provenance_name),
         (profile_digest, "profile"),
         (session_scope.get("dependency_scope_proof_digest"), "dependency scope"),
         (session_scope.get("physical_db_digest"), "physical snapshot"),
@@ -621,7 +672,11 @@ def _session_scope_from_verified_worker_job(
     return _VerifiedControlledSessionScope(
         _token=_SESSION_SCOPE_TOKEN,
         ready_manifest_digest=str(ready_manifest_digest),
-        signed_projection_document_digest=str(signed_projection_document_digest),
+        signed_projection_document_digest=(
+            None if native else str(signed_projection_document_digest)
+        ),
+        admitted_native_digest=None if not native else str(admitted_native_digest),
+        native_source=None if not native else _freeze_native_source(native_source),
         profile_digest=str(profile_digest),
         dependency_scope_proof_digest=str(session_scope["dependency_scope_proof_digest"]),
         physical_db_digest=str(session_scope["physical_db_digest"]),
@@ -717,6 +772,7 @@ class VerifiedControlledSnapshotHandle:
         pinned_path: str,
         scoped_owner: Any,
         session_profile_digest: str,
+        verified_session_scope: _VerifiedControlledSessionScope,
     ) -> None:
         if token is not _HANDLE_TOKEN:
             raise TypeError(
@@ -744,6 +800,7 @@ class VerifiedControlledSnapshotHandle:
         ):
             raise SnapshotObservationClockError("session profile digest is invalid")
         self._session_profile_digest = session_profile_digest
+        self._verified_session_scope = verified_session_scope
         self._bound_plan_feature_binding: _BoundPlanFeatureBinding | None = None
 
     @property
@@ -910,18 +967,49 @@ class VerifiedControlledSnapshotHandle:
             )
         return path
 
-    def logical_snapshot_id(self) -> str:
-        """Derive the logical identity on this handle's pinned transaction."""
-
+    def _logical_snapshot_identity(self) -> tuple[str, str]:
         path = self._assert_controlled_batch()
+        native_source = self._verified_session_scope.native_source
+        if native_source is not None:
+            if native_source["physical_digest"] != self._physical_digest:
+                raise SnapshotObservationClockError(
+                    "native source physical digest mismatch"
+                )
+            if (
+                native_source["compiled_scope_proof_digest"]
+                != self._verified_session_scope.dependency_scope_proof_digest
+            ):
+                raise SnapshotObservationClockError(
+                    "native source compiled scope mismatch"
+                )
+            if native_source["observed_through"] != self._observed_through:
+                raise SnapshotObservationClockError(
+                    "native source observed_through mismatch"
+                )
+            return (
+                _native_logical_snapshot_id(native_source),
+                NATIVE_LOGICAL_SNAPSHOT_FORMAT,
+            )
         from .sqlite_identity import (
+            DATA_SNAPSHOT_FORMAT,
             _immutable_data_snapshot_id_from_pinned_connection,
         )
 
-        return _immutable_data_snapshot_id_from_pinned_connection(
-            self._connection,
-            path=path,
+        return (
+            _immutable_data_snapshot_id_from_pinned_connection(
+                self._connection,
+                path=path,
+            ),
+            DATA_SNAPSHOT_FORMAT,
         )
+
+    def logical_snapshot_id(self) -> str:
+        """Derive the logical identity on this handle's pinned transaction."""
+
+        return self._logical_snapshot_identity()[0]
+
+    def data_snapshot_format(self) -> str:
+        return self._logical_snapshot_identity()[1]
 
     def universe_day_slices(
         self,
@@ -1387,6 +1475,12 @@ class GovernedAmSessionDataView:
     def physical_digest(self) -> str:
         return self._handle.physical_digest
 
+    def logical_snapshot_id(self) -> str:
+        return self._handle.logical_snapshot_id()
+
+    def data_snapshot_format(self) -> str:
+        return self._handle.data_snapshot_format()
+
     @property
     def pinned_db_path(self) -> Path:
         return self._handle.pinned_db_path
@@ -1686,6 +1780,7 @@ def _open_verified_controlled_snapshot(
             pinned_path=str(pinned),
             scoped_owner=scoped_owner,
             session_profile_digest=verified_session_scope.profile_digest,
+            verified_session_scope=verified_session_scope,
         )
     except Exception:
         conn.close()

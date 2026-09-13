@@ -19,7 +19,9 @@ import {
   CONTROLLED_FILL_EXECUTION_MODE,
   CONTROLLED_PILOT_CONTRACT,
   CONTROLLED_PILOT_IDENTITY,
+  CONTROLLED_NATIVE_JOB_SPEC_FORMAT,
   CONTROLLED_READY_ENVELOPE_FORMAT,
+  CONTROLLED_READY_RECEIPT_NATIVE_ENVELOPE_FORMAT,
   CONTROLLED_TRADER_BATCH_FORMAT,
   EXACT_FOUR_BINDING_DIGEST,
   EXACT_FOUR_CLOSURE_DIGEST,
@@ -34,6 +36,8 @@ import {
   controlledTraderAuthorizationKey,
   parseControlledPilotRequest,
 } from "./controlled_pilot_contract";
+import { personalReceiptCandidatePhysicalKey } from "./personal_receipt_candidate_contract";
+import * as nativePublication from "./receipt_native_ready_publication";
 import {
   EXACT_FOUR_PLAN_IDS,
   canonicalJson,
@@ -235,6 +239,73 @@ async function artifacts(logicalId: string, payload: ContainerArtifactPayload = 
   return structuredClone(payload);
 }
 
+async function rebindPostedSpecArtifacts(
+  result: ContainerArtifactPayload,
+  spec: Record<string, unknown>,
+): Promise<void> {
+  if (spec.format !== CONTROLLED_NATIVE_JOB_SPEC_FORMAT) {
+    return;
+  }
+  const snapshotKey = spec.snapshot_key;
+  const snapshotSize = spec.snapshot_size;
+  const authorizationDigest = spec.authorization_digest;
+  const current = result.papers[0];
+  if (
+    current === undefined ||
+    (snapshotKey === current.snapshot_key &&
+      snapshotSize === current.snapshot_size &&
+      authorizationDigest === current.authorization_digest)
+  ) {
+    return;
+  }
+  const rewrite = async (row: Record<string, unknown>) => {
+    if (typeof snapshotKey === "string") row.snapshot_key = snapshotKey;
+    if (typeof snapshotSize === "number") row.snapshot_size = snapshotSize;
+    if (typeof authorizationDigest === "string") {
+      row.authorization_digest = authorizationDigest;
+    }
+    delete row.artifact_id;
+    delete row.digest;
+    delete row.semantic_digest;
+    delete row.bindings;
+    delete row.lineage;
+    row.semantic_digest = await sha256Digest(canonicalJson(row));
+    if (row.kind === "knowledge") {
+      row.artifact_id = row.semantic_digest;
+      row.digest = row.semantic_digest;
+    }
+  };
+  for (const paper of result.papers) await rewrite(paper);
+  for (let index = 0; index < result.risks.length; index += 1) {
+    result.risks[index]!.paper_semantic_digest = result.papers[index]!.semantic_digest;
+    await rewrite(result.risks[index]!);
+  }
+  const paperDigests = result.papers.map((row) => row.semantic_digest);
+  const riskDigests = result.risks.map((row) => row.semantic_digest);
+  result.selection.paper_semantic_digests = paperDigests;
+  result.selection.risk_semantic_digests = riskDigests;
+  result.selection.semantic_child_set_digest = await sha256Digest(
+    canonicalJson({
+      paper_semantic_digests: paperDigests,
+      risk_semantic_digests: riskDigests,
+    }),
+  );
+  await rewrite(result.selection);
+  const payload = result.knowledge.payload;
+  if (payload && typeof payload === "object") {
+    const knowledgePayload = payload as Record<string, unknown>;
+    knowledgePayload.semantic_child_set_digest = result.selection.semantic_child_set_digest;
+    knowledgePayload.selection_semantic_digest = result.selection.semantic_digest;
+  }
+  result.knowledge.selection_semantic_digest = result.selection.semantic_digest;
+  result.knowledge.semantic_child_set_digest = result.selection.semantic_child_set_digest;
+  await rewrite(result.knowledge);
+}
+
+type OutboundPolicyCall =
+  | { kind: "host"; host: string; method: string; params: unknown }
+  | { kind: "hosts"; handlers: Record<string, unknown> };
+
 function mockContainer(options?: {
   fail?: "error" | "timeout";
   omitOutbound?: boolean;
@@ -266,9 +337,12 @@ function mockContainer(options?: {
   stall?: ContainerStall;
   scheduled?: string[];
   outbound?: Map<string, unknown>;
+  outboundCalls?: OutboundPolicyCall[];
+  postedSpecs?: Record<string, unknown>[];
   containerArtifacts?: ContainerArtifactPayload;
 }): Env["PERSONAL_RESEARCH_CONTAINER"] {
   const outbound = options?.outbound ?? new Map<string, unknown>();
+  const outboundCalls = options?.outboundCalls;
   const fetches = options?.fetches ?? { n: 0, post: 0 };
   const jobs = new Map<string, Record<string, unknown>>();
   let forgotFirstStatus = false;
@@ -297,8 +371,10 @@ function mockContainer(options?: {
             if (options?.stall?.post) return rejectWhenAborted(request.signal);
             if (options?.stall?.body === "post") return stalledBodyResponse(202);
             fetches.post += 1;
-            const body = (await request.json()) as { job_id: string; snapshot_id: string };
-            const result = await artifacts(body.snapshot_id, options?.containerArtifacts);
+            const body = (await request.json()) as Record<string, unknown>;
+            options?.postedSpecs?.push(body);
+            const result = await artifacts(String(body.snapshot_id), options?.containerArtifacts);
+            await rebindPostedSpecArtifacts(result, body);
             if (options?.tamper === "reorder") {
               result.papers = [result.papers[1]!, result.papers[0]!, result.papers[2]!, result.papers[3]!];
             }
@@ -428,9 +504,11 @@ function mockContainer(options?: {
       };
       if (!options?.omitOutbound) {
         target.setOutboundByHost = async (host: string, method: string, params: unknown) => {
+          outboundCalls?.push({ kind: "host", host, method, params });
           outbound.set(host, { method, params });
         };
         target.setOutboundByHosts = async (handlers: Record<string, unknown>) => {
+          outboundCalls?.push({ kind: "hosts", handlers: { ...handlers } });
           outbound.clear();
           for (const [host, handler] of Object.entries(handlers)) outbound.set(host, handler);
         };
@@ -527,6 +605,8 @@ async function seedEnv(options?: {
   const fetches = options?.fetches ?? { n: 0, post: 0 };
   const scheduled: string[] = [];
   const outbound = new Map<string, unknown>();
+  const outboundCalls: OutboundPolicyCall[] = [];
+  const postedSpecs: Record<string, unknown>[] = [];
   const env = {
     STRUCTURED_BUCKET: mem.asBucket(),
     AI_GATEWAY: mockGateway(budget),
@@ -540,12 +620,14 @@ async function seedEnv(options?: {
       stall: options?.stall,
       scheduled,
       outbound,
+      outboundCalls,
+      postedSpecs,
       containerArtifacts: options?.containerArtifacts,
     }),
     MASS_EVAL_TOKEN: "secret",
     ENVIRONMENT: "staging",
   } as unknown as Env;
-  return { env, mem, logicalId, physicalId, budget, request, fetches, scheduled, outbound };
+  return { env, mem, logicalId, physicalId, budget, request, fetches, scheduled, outbound, outboundCalls, postedSpecs };
 }
 
 const VERIFIER_NOW = Date.parse(String(fixtureKeys.verifier_now || "2026-09-02T12:00:30+00:00"));
@@ -619,6 +701,190 @@ describe("strict JSON and Python-generated fixtures", () => {
       productionKey,
     );
     expect(crossEnvironment).toEqual({ ok: false, error: "trader key environment denied" });
+  });
+
+  it("completes native candidate-key submit, rejects retired first admission, and resumes historically", async () => {
+    // Boundary: verifyReceiptNativeReadyPublication is mocked; not end-to-end crypto or live READY proof.
+    const seeded = await seedEnv();
+    const hex = seeded.physicalId.slice("sha256:".length);
+    const candidateKey = personalReceiptCandidatePhysicalKey(hex);
+    const snapshot = new TextEncoder().encode("controlled-pilot-physical-sqlite");
+    await seeded.mem.put(candidateKey, snapshot);
+    const attestation = (readyFixture as { attestation: Record<string, unknown> }).attestation;
+    const admitted = "sha256:" + "aa".repeat(32);
+    const nativeSource = {
+      kind: "governed-receipt-candidate",
+      environment: "staging",
+      authority_instance_digest:
+        "sha256:5104b2d3b85ddbbd44fb9e4ddc2689898232c2e6e175727c71c1ce2cb6ec9bff",
+      physical_digest: seeded.physicalId,
+      observation_policy: "max_verified_claims_checked_at",
+      observed_through: String(
+        (readyFixture as { controlled_session_scope: { observed_through: string } })
+          .controlled_session_scope.observed_through,
+      ),
+      compiled_scope_proof_digest: String(
+        (readyFixture as { controlled_session_scope: { dependency_scope_proof_digest: string } })
+          .controlled_session_scope.dependency_scope_proof_digest,
+      ),
+      receipt_runset_digest: "sha256:" + "11".repeat(32),
+    };
+    const sessionScope = (readyFixture as { controlled_session_scope: never })
+      .controlled_session_scope;
+    const nativePublicationValue = {
+      format: CONTROLLED_READY_RECEIPT_NATIVE_ENVELOPE_FORMAT,
+      job_id: seeded.request.idempotency_key,
+      attestation_id: seeded.request.ready_attestation_id,
+      snapshot_id: seeded.request.snapshot_id,
+      immutable_db_digest: seeded.physicalId,
+      physical: {
+        key: candidateKey,
+        digest: seeded.physicalId,
+        size: snapshot.byteLength,
+      },
+      admitted_native_digest: admitted,
+      ready_manifest_digest: String(
+        (readyFixture as { ready_manifest: { manifest_digest: string } }).ready_manifest
+          .manifest_digest,
+      ),
+      identity: CONTROLLED_PILOT_IDENTITY,
+      environment: "staging",
+      session_scope: sessionScope,
+      envelope: {
+        format: CONTROLLED_READY_RECEIPT_NATIVE_ENVELOPE_FORMAT,
+        attestation,
+        ready_manifest: { source: nativeSource },
+        admitted_native_digest: admitted,
+      },
+    };
+    vi.spyOn(nativePublication, "verifyReceiptNativeReadyPublication").mockResolvedValue({
+      ok: true,
+      publication: nativePublicationValue,
+    });
+    await seeded.mem.put(
+      controlledReadyKey(seeded.request.ready_attestation_id),
+      JSON.stringify({
+        format: CONTROLLED_READY_RECEIPT_NATIVE_ENVELOPE_FORMAT,
+        identity: CONTROLLED_PILOT_IDENTITY,
+        job_id: seeded.request.idempotency_key,
+        admitted_native_digest: admitted,
+      }),
+    );
+    const active = fixturePublicKey()[0]!;
+    vi.spyOn(registries, "loadPinnedReadyKeys").mockReturnValue([
+      { ...active, key_id: "other-active" },
+      { ...active, status: "retired" },
+    ]);
+    const retiredFirst = await submitControlledPilot(seeded.env, seeded.request);
+    expect(retiredFirst.status).toBe(400);
+    expect(await retiredFirst.json()).toMatchObject({
+      error: "READY attestation issuer is not trusted",
+    });
+    vi.spyOn(registries, "loadPinnedReadyKeys").mockReturnValue(fixturePublicKey());
+    const mismatched = await submitControlledPilot(seeded.env, seeded.request);
+    expect(mismatched.status).toBe(401);
+    expect(await mismatched.json()).toMatchObject({
+      error: "trader authorization does not bind the request",
+    });
+    const pair = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
+    const publicKey = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
+    vi.spyOn(registries, "loadPinnedTraderKeys").mockReturnValue([
+      {
+        key_id: "native-test-trader",
+        public_key: publicKey,
+        algorithm: "Ed25519",
+        status: "active",
+        not_before: "2026-01-01T00:00:00Z",
+        not_after: "2099-01-01T00:00:00Z",
+        revoked_at: null,
+        environment: "staging",
+      },
+    ]);
+    const traderBody = { ...(traderFixture as Record<string, unknown>) };
+    delete traderBody.signature;
+    traderBody.snapshot_key = candidateKey;
+    traderBody.snapshot_size = snapshot.byteLength;
+    traderBody.key_id = "native-test-trader";
+    const signature = new Uint8Array(
+      await crypto.subtle.sign(
+        "Ed25519",
+        pair.privateKey,
+        new TextEncoder().encode(canonicalJson(traderBody)),
+      ),
+    );
+    let encoded = "";
+    for (const byte of signature) encoded += String.fromCharCode(byte);
+    const signedTrader = { ...traderBody, signature: `ed25519:${btoa(encoded)}` };
+    const authorizationDigest = await sha256Digest(canonicalJson(signedTrader));
+    await seeded.mem.put(
+      controlledTraderAuthorizationKey(
+        seeded.request.idempotency_key,
+        seeded.request.ready_attestation_id,
+      ),
+      JSON.stringify(signedTrader),
+    );
+    const ctx = new WaitCtx();
+    const admittedResponse = await submitControlledPilot(seeded.env, seeded.request, ctx);
+    expect(admittedResponse.status).toBe(202);
+    await ctx.pending;
+    const candidateCall = seeded.outboundCalls.find(
+      (call) => call.kind === "host" && call.host === "controlled.r2",
+    );
+    expect(candidateCall).toEqual({
+      kind: "host",
+      host: "controlled.r2",
+      method: "controlledPilotSnapshot",
+      params: { key: candidateKey, digest: seeded.physicalId, size: snapshot.byteLength },
+    });
+    const installedAt = seeded.outboundCalls.indexOf(candidateCall!);
+    const clearedAt = seeded.outboundCalls.findIndex(
+      (call, index) =>
+        index > installedAt &&
+        call.kind === "hosts" &&
+        Object.keys(call.handlers).length === 0,
+    );
+    expect(clearedAt).toBeGreaterThan(installedAt);
+    expect(seeded.outbound.size).toBe(0);
+    expect(seeded.postedSpecs).toHaveLength(1);
+    const postedSpec = seeded.postedSpecs[0];
+    expect(postedSpec).toMatchObject({
+      format: CONTROLLED_NATIVE_JOB_SPEC_FORMAT,
+      admitted_native_digest: admitted,
+      snapshot_key: candidateKey,
+    });
+    expect(postedSpec?.native_source).toEqual(nativeSource);
+    expect(postedSpec).not.toHaveProperty("signed_projection_document_digest");
+    const completed = await controlledPilotStatus(
+      seeded.env,
+      seeded.request.idempotency_key,
+    );
+    const completedBody = (await completed.json()) as {
+      status: string;
+      error?: string;
+      manifest?: { snapshot_key: string; admitted_native_digest?: string };
+    };
+    expect(
+      completedBody.status === "COMPLETED" ? completedBody.status : completedBody,
+    ).toBe("COMPLETED");
+    expect(completedBody.manifest?.snapshot_key).toBe(candidateKey);
+    expect(completedBody.manifest?.admitted_native_digest).toBe(admitted);
+    const paper = await (
+      await seeded.env.STRUCTURED_BUCKET.get(
+        `research/controlled_pilot/v1/jobs/${seeded.request.idempotency_key}/paper/1.json`,
+      )
+    )!.json() as {
+      bindings: Record<string, unknown>;
+      semantic_body: Record<string, unknown>;
+    };
+    expect(paper.semantic_body.snapshot_key).toBe(candidateKey);
+    expect(paper.semantic_body.authorization_digest).toBe(authorizationDigest);
+    expect(paper.bindings.admitted_native_digest).toBe(admitted);
+    expect(paper.bindings).not.toHaveProperty("signed_projection_document_digest");
+    vi.spyOn(registries, "loadPinnedReadyKeys").mockReturnValue([
+      { ...active, status: "retired" },
+    ]);
+    const replay = await submitControlledPilot(seeded.env, seeded.request);
+    expect(replay.status).toBe(202);
   });
 
   it("rejects Coverage v1, long TTL, and tampered READY", async () => {

@@ -232,6 +232,7 @@ def _reproducibility(
     *,
     config: PaperRunConfig,
     snapshot_id: str,
+    snapshot_format: str,
     feature_versions: dict[str, str],
     feature_hashes: dict[str, str],
     strategy_hash: str,
@@ -277,7 +278,7 @@ def _reproducibility(
         "strategy_definition_hash": strategy_hash,
         "git_commit": commit,
         "db_path": core_md["db_path"],
-        "data_snapshot_format": DATA_SNAPSHOT_FORMAT,
+        "data_snapshot_format": snapshot_format,
         "data_snapshot_id": snapshot_id,
         "calendar_as_of": config.calendar_as_of,
         "trading_days": core_md["trading_days"],
@@ -348,7 +349,18 @@ def execute_paper_backtest(
     sf_model, lev_model, financing_load = _build_financing_models(
         config, db_path=configured_path
     )
-    before = data_snapshot_id(configured_path)
+    identity = getattr(am_session_data_view, "logical_snapshot_id", None)
+    format_attr = getattr(am_session_data_view, "data_snapshot_format", None)
+    if callable(identity):
+        if not callable(format_attr):
+            raise RuntimeError(
+                "pinned AM view omitted data_snapshot_format with logical_snapshot_id"
+            )
+        before = str(identity())
+        snapshot_format = str(format_attr())
+    else:
+        before = data_snapshot_id(configured_path)
+        snapshot_format = DATA_SNAPSHOT_FORMAT
     backtest = run_backtest(
         strategy,
         config.start,
@@ -366,7 +378,11 @@ def execute_paper_backtest(
         max_gross_weight=config.max_gross_weight,
         am_session_data_view=am_session_data_view,
     )
-    after = data_snapshot_id(configured_path)
+    after = (
+        str(identity())
+        if callable(identity)
+        else data_snapshot_id(configured_path)
+    )
     if before != after:
         raise RuntimeError(
             "paper database changed during the run; retry against a stable "
@@ -376,6 +392,7 @@ def execute_paper_backtest(
         backtest,
         config=config,
         snapshot_id=before,
+        snapshot_format=snapshot_format,
         feature_versions=feature_versions,
         feature_hashes=feature_hashes,
         strategy_hash=strategy_hash,

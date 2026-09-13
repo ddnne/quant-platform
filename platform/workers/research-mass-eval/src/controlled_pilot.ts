@@ -35,7 +35,9 @@ import {
   EXACT_FOUR_STRATEGY_SPEC_VERSIONS,
   EXACT_FOUR_UNIVERSE_RULE_DIGEST,
   CONTROLLED_PILOT_RUNNER_VERSION,
+  CONTROLLED_NATIVE_JOB_SPEC_FORMAT,
   closedControlledPilotJobSpec,
+  closedControlledPilotNativeJobSpec,
   controlledCandidateManifestKey,
   controlledContainerTerminalKey,
   controlledExecutionStageKey,
@@ -47,6 +49,7 @@ import {
   controlledTraderAuthorizationKey,
   parseControlledPilotRequest,
   type ControlledPhysicalSnapshot,
+  type AnyControlledPilotJobSpec,
   type ControlledPilotJobSpec,
   type ControlledPilotRequest,
 } from "./controlled_pilot_contract";
@@ -67,6 +70,11 @@ import {
   isContainerRequestTimeout,
 } from "./bounded_container_request";
 import { verifiedPersonalResearchContainer } from "./personal_research_runner";
+import { personalReceiptCandidatePhysicalKey } from "./personal_receipt_candidate_contract";
+import {
+  verifyReceiptNativeReadyPublication,
+  type VerifiedReceiptNativePublication,
+} from "./receipt_native_ready_publication";
 import type { Env } from "./types";
 import type { ControlledSessionScope } from "./ops_projection_ready";
 
@@ -276,6 +284,38 @@ export type VerifiedControlledReady = {
   signed_projection_document_digest: string;
   session_scope: ControlledSessionScope;
 };
+
+export type VerifiedNativeExecutionReady = Omit<
+  VerifiedControlledReady,
+  "signed_projection_document_digest"
+> & {
+  format: typeof CONTROLLED_READY_RECEIPT_NATIVE_ENVELOPE_FORMAT;
+  admitted_native_digest: string;
+  native_source: Record<string, unknown>;
+};
+
+export type ExecutionReady = VerifiedControlledReady | VerifiedNativeExecutionReady;
+
+type ContainerArtifactLineage = {
+  attestation_id: string;
+  snapshot_id: string;
+  immutable_db_digest: string;
+  physical: { key: string; size: number };
+  fill_contract_digest: string;
+  profile_digest: string;
+  plan_set_digest: string;
+  dependency_closure_digest: string;
+  resolved_universe_digest: string;
+};
+
+function isNativeExecutionReady(
+  ready: ExecutionReady,
+): ready is VerifiedNativeExecutionReady {
+  return (
+    "admitted_native_digest" in ready &&
+    ready.format === CONTROLLED_READY_RECEIPT_NATIVE_ENVELOPE_FORMAT
+  );
+}
 
 function jsonEqual(left: unknown, right: unknown): boolean {
   return canonicalJson(left) === canonicalJson(right);
@@ -611,10 +651,105 @@ export async function verifyControlledReadyEnvelopeBytes(
   }
 }
 
+function executionReadyFromNative(
+  publication: VerifiedReceiptNativePublication,
+): VerifiedNativeExecutionReady | null {
+  const attestation = publication.envelope.attestation;
+  const manifest = publication.envelope.ready_manifest;
+  if (!isRecord(attestation) || !isRecord(manifest) || !isRecord(manifest.source)) {
+    return null;
+  }
+  if (
+    !isSha256(attestation.receipt_proof_digest) ||
+    !isSha256(attestation.coverage_proof_digest) ||
+    !isSha256(attestation.b0_quality_proof_digest) ||
+    !isSha256(attestation.b4_quality_proof_digest) ||
+    !isSha256(attestation.resolved_universe_digest)
+  ) {
+    return null;
+  }
+  return {
+    format: CONTROLLED_READY_RECEIPT_NATIVE_ENVELOPE_FORMAT,
+    attestation_id: publication.attestation_id,
+    snapshot_id: publication.snapshot_id,
+    immutable_db_digest: publication.immutable_db_digest,
+    physical: publication.physical,
+    identity: publication.identity,
+    profile_digest: EXACT_FOUR_PROFILE_DIGEST,
+    plan_set_digest: EXACT_FOUR_PLAN_SET_DIGEST,
+    dependency_closure_digest: EXACT_FOUR_CLOSURE_DIGEST,
+    ready_manifest_digest: publication.ready_manifest_digest,
+    fill_contract_digest: CONTROLLED_FILL_CONTRACT_DIGEST,
+    receipt_proof_digest: attestation.receipt_proof_digest,
+    coverage_proof_digest: attestation.coverage_proof_digest,
+    b0_quality_proof_digest: attestation.b0_quality_proof_digest,
+    b4_quality_proof_digest: attestation.b4_quality_proof_digest,
+    resolved_universe_digest: attestation.resolved_universe_digest,
+    environment: publication.environment,
+    admitted_native_digest: publication.admitted_native_digest,
+    native_source: manifest.source,
+    session_scope: publication.session_scope,
+  };
+}
+
+function currentlyActiveReadyKeyId(
+  readyKeyId: string,
+  activeKeys: readonly PinnedVerifyKey[],
+): boolean {
+  return activeKeys.some((key) => key.key_id === readyKeyId);
+}
+
+async function verifyExecutionReadyEnvelope(
+  bytes: Uint8Array,
+  snapshotId: string,
+  environment: string,
+  v1Keys: readonly PinnedVerifyKey[],
+  clock: VerifierClock,
+): Promise<
+  | { ok: true; value: ExecutionReady; ready_key_id: string }
+  | { ok: false; error: string }
+> {
+  let document: unknown;
+  try {
+    document = decodeStrictJson(bytes);
+  } catch (error) {
+    const detail = error instanceof StrictJsonError ? error.message : "READY JSON is invalid";
+    return { ok: false, error: detail };
+  }
+  if (isRecord(document) && document.format === CONTROLLED_READY_RECEIPT_NATIVE_ENVELOPE_FORMAT) {
+    const verified = await verifyReceiptNativeReadyPublication(
+      document,
+      snapshotId,
+      environment,
+      clock,
+    );
+    if (!verified.ok) return { ok: false, error: verified.error };
+    const mapped = executionReadyFromNative(verified.publication);
+    const attestation = verified.publication.envelope.attestation;
+    const readyKeyId =
+      isRecord(attestation) && typeof attestation.key_id === "string" ? attestation.key_id : "";
+    if (!mapped || readyKeyId.length < 1 || readyKeyId.length > 128) {
+      return { ok: false, error: "READY envelope identity or environment is invalid" };
+    }
+    return { ok: true, value: mapped, ready_key_id: readyKeyId };
+  }
+  const v1 = await verifyControlledReadyEnvelope(
+    document,
+    snapshotId,
+    environment,
+    v1Keys,
+    clock,
+  );
+  if (!v1.ok) return v1;
+  const readyKeyId = v1Keys[0]?.key_id;
+  if (!readyKeyId) return { ok: false, error: "CONTROLLED_AUTHORITY_UNPROVISIONED" };
+  return { ok: true, value: v1.value, ready_key_id: readyKeyId };
+}
+
 export async function verifyTraderAuthorizationBatch(
   document: unknown,
   request: ControlledPilotRequest,
-  ready: VerifiedControlledReady,
+  ready: ExecutionReady,
   requestDigest: string,
   keys: readonly PinnedVerifyKey[],
   clock: VerifierClock = SYSTEM_CLOCK,
@@ -722,7 +857,7 @@ export async function verifyTraderAuthorizationBatch(
 export async function verifyTraderAuthorizationBatchBytes(
   bytes: Uint8Array,
   request: ControlledPilotRequest,
-  ready: VerifiedControlledReady,
+  ready: ExecutionReady,
   requestDigest: string,
   keys: readonly PinnedVerifyKey[],
   clock: VerifierClock = SYSTEM_CLOCK,
@@ -1053,7 +1188,7 @@ async function validateContainerArtifacts(
     selection: Record<string, unknown>;
     knowledge: Record<string, unknown>;
   },
-  ready: VerifiedControlledReady,
+  ready: ContainerArtifactLineage,
 ): Promise<VerifiedContainerSemantics> {
   if (artifacts.papers.length !== 4 || artifacts.risks.length !== 4) {
     lineageError("controlled container did not return exactly four papers and risks");
@@ -1247,7 +1382,7 @@ class PersistedChildConflict extends Error {}
 
 function controlledArtifactBindings(
   request: ControlledPilotRequest,
-  ready: VerifiedControlledReady,
+  ready: ExecutionReady,
   authorizationDigest: string,
 ): Record<string, unknown> {
   return {
@@ -1261,7 +1396,9 @@ function controlledArtifactBindings(
     plan_set_digest: ready.plan_set_digest,
     dependency_closure_digest: ready.dependency_closure_digest,
     ready_manifest_digest: ready.ready_manifest_digest,
-    signed_projection_document_digest: ready.signed_projection_document_digest,
+    ...(isNativeExecutionReady(ready)
+      ? { admitted_native_digest: ready.admitted_native_digest }
+      : { signed_projection_document_digest: ready.signed_projection_document_digest }),
     session_scope: ready.session_scope,
     resolved_universe_digest: ready.resolved_universe_digest,
     universe_rule_digest: EXACT_FOUR_UNIVERSE_RULE_DIGEST,
@@ -1308,7 +1445,7 @@ async function persistChild(
 async function persistBoundChildren(
   bucket: R2Bucket,
   request: ControlledPilotRequest,
-  ready: VerifiedControlledReady,
+  ready: ExecutionReady,
   authorizationDigest: string,
   artifacts: {
     papers: Record<string, unknown>[];
@@ -1435,7 +1572,9 @@ function bindingsFromManifest(manifest: Record<string, unknown>): Record<string,
     plan_set_digest: manifest.plan_set_digest,
     dependency_closure_digest: manifest.dependency_closure_digest,
     ready_manifest_digest: manifest.ready_manifest_digest,
-    signed_projection_document_digest: manifest.signed_projection_document_digest,
+    ...(manifest.admitted_native_digest !== undefined
+      ? { admitted_native_digest: manifest.admitted_native_digest }
+      : { signed_projection_document_digest: manifest.signed_projection_document_digest }),
     session_scope: manifest.session_scope,
     resolved_universe_digest: manifest.resolved_universe_digest,
     universe_rule_digest: manifest.universe_rule_digest,
@@ -1597,7 +1736,7 @@ type ContainerArtifacts = {
 
 async function callContainer(
   env: Env,
-  spec: ControlledPilotJobSpec,
+  spec: AnyControlledPilotJobSpec,
   containerName: string,
   options?: { skipPost?: boolean },
 ): Promise<
@@ -1706,21 +1845,12 @@ async function callContainer(
       attestation_id: spec.ready_attestation_id,
       snapshot_id: spec.snapshot_id,
       immutable_db_digest: spec.immutable_db_digest,
-      physical: { key: spec.snapshot_key, digest: spec.immutable_db_digest, size: spec.snapshot_size },
-      identity: CONTROLLED_PILOT_IDENTITY,
+      physical: { key: spec.snapshot_key, size: spec.snapshot_size },
+      fill_contract_digest: spec.fill_contract_digest,
       profile_digest: spec.profile_digest,
       plan_set_digest: spec.plan_set_digest,
       dependency_closure_digest: spec.dependency_closure_digest,
-      ready_manifest_digest: "",
-      fill_contract_digest: CONTROLLED_FILL_CONTRACT_DIGEST,
-      receipt_proof_digest: "",
-      coverage_proof_digest: "",
-      b0_quality_proof_digest: "",
-      b4_quality_proof_digest: "",
       resolved_universe_digest: spec.resolved_universe_digest,
-      environment: "",
-      signed_projection_document_digest: spec.signed_projection_document_digest,
-      session_scope: spec.session_scope,
     });
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "child lineage is invalid" };
@@ -1816,6 +1946,14 @@ const VERIFIED_READY_STATE_FIELDS = new Set([
   "resolved_universe_digest", "environment", "signed_projection_document_digest",
   "session_scope",
 ]);
+const VERIFIED_NATIVE_READY_STATE_FIELDS = new Set([
+  "format", "attestation_id", "snapshot_id", "immutable_db_digest", "physical", "identity",
+  "profile_digest", "plan_set_digest", "dependency_closure_digest",
+  "ready_manifest_digest", "fill_contract_digest", "receipt_proof_digest",
+  "coverage_proof_digest", "b0_quality_proof_digest", "b4_quality_proof_digest",
+  "resolved_universe_digest", "environment", "admitted_native_digest",
+  "native_source", "session_scope",
+]);
 
 type ControlledPilotSubmittedState = {
   identity: typeof CONTROLLED_PILOT_IDENTITY;
@@ -1828,8 +1966,8 @@ type ControlledPilotSubmittedState = {
     ready_key_id: string;
     trader_key_id: string;
   };
-  spec: ControlledPilotJobSpec;
-  ready: VerifiedControlledReady;
+  spec: AnyControlledPilotJobSpec;
+  ready: ExecutionReady;
   request: ControlledPilotRequest;
   go: false;
   automatic_promotion: false;
@@ -1839,7 +1977,7 @@ type ControlledPilotSubmittedState = {
 
 type ReverifiedControlledSubmission = {
   state: ControlledPilotSubmittedState;
-  ready: VerifiedControlledReady;
+  ready: ExecutionReady;
   authorization_digest: string;
 };
 
@@ -1935,11 +2073,51 @@ async function parseStoredSessionScope(
   return jsonEqual(value, parsed) ? parsed : null;
 }
 
+function closedSpecForReady(
+  ready: ExecutionReady,
+  request: ControlledPilotRequest,
+  jobId: string,
+  digest: string,
+  authorizationDigest: string,
+  executionId: string,
+): AnyControlledPilotJobSpec {
+  const shared = {
+    job_id: jobId,
+    idempotency_key: request.idempotency_key,
+    ready_attestation_id: request.ready_attestation_id,
+    ready_manifest_digest: ready.ready_manifest_digest,
+    session_scope: ready.session_scope,
+    snapshot_id: request.snapshot_id,
+    immutable_db_digest: ready.immutable_db_digest,
+    snapshot_key: ready.physical.key,
+    snapshot_size: ready.physical.size,
+    authorization_digest: authorizationDigest,
+    request_digest: digest,
+    resolved_universe_digest: ready.resolved_universe_digest,
+    manifest_key: controlledContainerTerminalKey(jobId),
+    execution_id: executionId,
+  };
+  if (isNativeExecutionReady(ready)) {
+    return closedControlledPilotNativeJobSpec({
+      ...shared,
+      admitted_native_digest: ready.admitted_native_digest,
+      native_source: ready.native_source,
+    });
+  }
+  return closedControlledPilotJobSpec({
+    ...shared,
+    signed_projection_document_digest: ready.signed_projection_document_digest,
+  });
+}
+
 async function parseStoredVerifiedReady(
   value: unknown,
   request: ControlledPilotRequest,
   environment: string,
-): Promise<VerifiedControlledReady | null> {
+): Promise<ExecutionReady | null> {
+  if (isRecord(value) && value.format === CONTROLLED_READY_RECEIPT_NATIVE_ENVELOPE_FORMAT) {
+    return parseStoredNativeReady(value, request, environment);
+  }
   if (!isRecord(value) || !closedShape(value, VERIFIED_READY_STATE_FIELDS) ||
       value.attestation_id !== request.ready_attestation_id ||
       value.snapshot_id !== request.snapshot_id || !isSha256(value.snapshot_id) ||
@@ -1990,6 +2168,73 @@ async function parseStoredVerifiedReady(
   return jsonEqual(value, ready) ? ready : null;
 }
 
+async function parseStoredNativeReady(
+  value: Record<string, unknown>,
+  request: ControlledPilotRequest,
+  environment: string,
+): Promise<VerifiedNativeExecutionReady | null> {
+  const digest = String(value.immutable_db_digest || "");
+  const hex = digest.startsWith("sha256:") ? digest.slice("sha256:".length) : "";
+  if (
+    !closedShape(value, VERIFIED_NATIVE_READY_STATE_FIELDS) ||
+    value.attestation_id !== request.ready_attestation_id ||
+    value.snapshot_id !== request.snapshot_id ||
+    !isSha256(value.snapshot_id) ||
+    !isSha256(digest) ||
+    !isRecord(value.physical) ||
+    !closedShape(value.physical, PHYSICAL_FIELDS) ||
+    value.physical.digest !== digest ||
+    value.physical.key !== personalReceiptCandidatePhysicalKey(hex) ||
+    !Number.isSafeInteger(value.physical.size) ||
+    Number(value.physical.size) < 1 ||
+    value.identity !== CONTROLLED_PILOT_IDENTITY ||
+    value.profile_digest !== EXACT_FOUR_PROFILE_DIGEST ||
+    value.plan_set_digest !== EXACT_FOUR_PLAN_SET_DIGEST ||
+    value.dependency_closure_digest !== EXACT_FOUR_CLOSURE_DIGEST ||
+    value.fill_contract_digest !== CONTROLLED_FILL_CONTRACT_DIGEST ||
+    value.environment !== environment ||
+    !isSha256(value.ready_manifest_digest) ||
+    !isSha256(value.receipt_proof_digest) ||
+    !isSha256(value.coverage_proof_digest) ||
+    !isSha256(value.b0_quality_proof_digest) ||
+    !isSha256(value.b4_quality_proof_digest) ||
+    !isSha256(value.resolved_universe_digest) ||
+    !isSha256(value.admitted_native_digest) ||
+    !isRecord(value.native_source)
+  ) {
+    return null;
+  }
+  const sessionScope = await parseStoredSessionScope(value.session_scope, digest);
+  if (sessionScope === null) return null;
+  const ready: VerifiedNativeExecutionReady = {
+    format: CONTROLLED_READY_RECEIPT_NATIVE_ENVELOPE_FORMAT,
+    attestation_id: request.ready_attestation_id,
+    snapshot_id: request.snapshot_id,
+    immutable_db_digest: digest,
+    physical: {
+      key: value.physical.key as string,
+      digest,
+      size: Number(value.physical.size),
+    },
+    identity: CONTROLLED_PILOT_IDENTITY,
+    profile_digest: EXACT_FOUR_PROFILE_DIGEST,
+    plan_set_digest: EXACT_FOUR_PLAN_SET_DIGEST,
+    dependency_closure_digest: EXACT_FOUR_CLOSURE_DIGEST,
+    ready_manifest_digest: value.ready_manifest_digest,
+    fill_contract_digest: CONTROLLED_FILL_CONTRACT_DIGEST,
+    receipt_proof_digest: value.receipt_proof_digest,
+    coverage_proof_digest: value.coverage_proof_digest,
+    b0_quality_proof_digest: value.b0_quality_proof_digest,
+    b4_quality_proof_digest: value.b4_quality_proof_digest,
+    resolved_universe_digest: value.resolved_universe_digest,
+    environment,
+    admitted_native_digest: value.admitted_native_digest,
+    native_source: value.native_source,
+    session_scope: sessionScope,
+  };
+  return jsonEqual(value, ready) ? ready : null;
+}
+
 async function parseControlledPilotSubmittedState(
   value: unknown,
   jobId: string,
@@ -2024,23 +2269,14 @@ async function parseControlledPilotSubmittedState(
   );
   if (ready === null || !isRecord(value.spec) ||
       !isSha256(value.spec.authorization_digest)) return null;
-  const expectedSpec = closedControlledPilotJobSpec({
-    job_id: jobId,
-    idempotency_key: parsedRequest.value.idempotency_key,
-    ready_attestation_id: parsedRequest.value.ready_attestation_id,
-    ready_manifest_digest: ready.ready_manifest_digest,
-    signed_projection_document_digest: ready.signed_projection_document_digest,
-    session_scope: ready.session_scope,
-    snapshot_id: parsedRequest.value.snapshot_id,
-    immutable_db_digest: ready.immutable_db_digest,
-    snapshot_key: ready.physical.key,
-    snapshot_size: ready.physical.size,
-    authorization_digest: value.spec.authorization_digest,
-    request_digest: digest,
-    resolved_universe_digest: ready.resolved_universe_digest,
-    manifest_key: controlledContainerTerminalKey(jobId),
-    execution_id: await controlledPilotExecutionId(jobId, digest),
-  });
+  const expectedSpec = closedSpecForReady(
+    ready,
+    parsedRequest.value,
+    jobId,
+    digest,
+    String(value.spec.authorization_digest),
+    await controlledPilotExecutionId(jobId, digest),
+  );
   if (!jsonEqual(value.spec, expectedSpec)) return null;
   const parsed: ControlledPilotSubmittedState = {
     identity: CONTROLLED_PILOT_IDENTITY,
@@ -2095,7 +2331,7 @@ async function reverifyControlledSubmission(
   const historicalClock: VerifierClock = { now: () => admissionTime };
   const readyKeys = (await registries.loadPinnedReadyKeys(environment))
     .filter((key) => key.key_id === state.admission.ready_key_id);
-  const verifiedReady = await verifyControlledReadyEnvelopeBytes(
+  const verifiedReady = await verifyExecutionReadyEnvelope(
     readyBytes,
     state.request.snapshot_id,
     environment,
@@ -2105,6 +2341,7 @@ async function reverifyControlledSubmission(
   if (
     !verifiedReady.ok ||
     verifiedReady.value.attestation_id !== state.request.ready_attestation_id ||
+    verifiedReady.ready_key_id !== state.admission.ready_key_id ||
     !jsonEqual(verifiedReady.value, state.ready)
   ) {
     return null;
@@ -2282,7 +2519,7 @@ export async function submitControlledPilot(
   // Preflight READY before using its content-addressed physical key. The
   // authoritative admission clock is captured only after all remote reads so
   // a slow first submission cannot persist an already-invalid timestamp.
-  const preflight = await verifyControlledReadyEnvelopeBytes(
+  const preflight = await verifyExecutionReadyEnvelope(
     readyBytes,
     request.snapshot_id,
     environment,
@@ -2295,6 +2532,9 @@ export async function submitControlledPilot(
   }
   if (preflight.value.attestation_id !== request.ready_attestation_id) {
     return json({ ok: false, error: "READY attestation id mismatch", go: false }, 400);
+  }
+  if (!currentlyActiveReadyKeyId(preflight.ready_key_id, readyKeys)) {
+    return json({ ok: false, error: "READY attestation issuer is not trusted", go: false }, 400);
   }
   const authBytes = await loadBytes(
     env.STRUCTURED_BUCKET,
@@ -2312,7 +2552,7 @@ export async function submitControlledPilot(
   const admissionTime = Date.now();
   const admittedAt = new Date(admissionTime).toISOString();
   const admissionClock: VerifierClock = { now: () => admissionTime };
-  const verified = await verifyControlledReadyEnvelopeBytes(
+  const verified = await verifyExecutionReadyEnvelope(
     readyBytes,
     request.snapshot_id,
     environment,
@@ -2326,6 +2566,9 @@ export async function submitControlledPilot(
   if (verified.value.attestation_id !== request.ready_attestation_id) {
     return json({ ok: false, error: "READY attestation id mismatch", go: false }, 400);
   }
+  if (!currentlyActiveReadyKeyId(verified.ready_key_id, readyKeys)) {
+    return json({ ok: false, error: "READY attestation issuer is not trusted", go: false }, 400);
+  }
   const authorized = await verifyTraderAuthorizationBatchBytes(
     authBytes,
     request,
@@ -2335,23 +2578,17 @@ export async function submitControlledPilot(
     admissionClock,
   );
   if (!authorized.ok) return json({ ok: false, error: authorized.error, go: false }, 401);
-  const spec = closedControlledPilotJobSpec({
-    job_id: jobId,
-    idempotency_key: request.idempotency_key,
-    ready_attestation_id: request.ready_attestation_id,
-    ready_manifest_digest: verified.value.ready_manifest_digest,
-    signed_projection_document_digest: verified.value.signed_projection_document_digest,
-    session_scope: verified.value.session_scope,
-    snapshot_id: request.snapshot_id,
-    immutable_db_digest: verified.value.immutable_db_digest,
-    snapshot_key: verified.value.physical.key,
-    snapshot_size: verified.value.physical.size,
-    authorization_digest: authorized.authorization_digest,
-    request_digest: digest,
-    resolved_universe_digest: verified.value.resolved_universe_digest,
-    manifest_key: controlledContainerTerminalKey(jobId),
-    execution_id: executionId,
-  });
+  if (!traderKeys[0]) {
+    return json({ ok: false, error: "trader authorization issuer is unprovisioned", go: false }, 401);
+  }
+  const spec = closedSpecForReady(
+    verified.value,
+    request,
+    jobId,
+    digest,
+    authorized.authorization_digest,
+    executionId,
+  );
   const submitted = {
     identity: CONTROLLED_PILOT_IDENTITY,
     status: "SUBMITTED",
@@ -2360,8 +2597,8 @@ export async function submitControlledPilot(
     submitted_at: admittedAt,
     admission: {
       verified_at: admittedAt,
-      ready_key_id: readyKeys[0]!.key_id,
-      trader_key_id: traderKeys[0]!.key_id,
+      ready_key_id: verified.ready_key_id,
+      trader_key_id: traderKeys[0].key_id,
     },
     spec,
     ready: verified.value,

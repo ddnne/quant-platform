@@ -691,6 +691,8 @@ _CONTRACT_PATH = (
 _CONTROLLED_CONTRACT = json.loads(_CONTRACT_PATH.read_text(encoding="utf-8"))
 CONTROLLED_PILOT_IDENTITY = str(_CONTROLLED_CONTRACT["identity"])
 CONTROLLED_SNAPSHOT_KEY_PREFIX = "research/controlled_pilot/v1/snapshots/"
+RECEIPT_CANDIDATE_SNAPSHOT_KEY_PREFIX = "research/receipt-candidates/"
+CONTROLLED_NATIVE_JOB_SPEC_FORMAT = "controlled-pilot-job-spec/receipt-native/v1"
 CONTROLLED_R2_ORIGIN = "http://controlled.r2"
 CONTROLLED_FILL_CONTRACT_DIGEST = str(_CONTROLLED_CONTRACT["fill_contract_digest"])
 CONTROLLED_FILL_EXECUTION_MODE = str(
@@ -718,7 +720,7 @@ class ControlledPilotJobSpec:
     def from_document(cls, document: Any) -> "ControlledPilotJobSpec":
         if not isinstance(document, dict):
             raise JobInputError("controlled job must be a JSON object")
-        if set(document) != CONTROLLED_JOB_SPEC_FIELDS:
+        if set(document) != _job_spec_field_set(document):
             raise JobInputError("controlled job fields are closed")
         job_id = str(document.get("job_id") or "")
         request_digest = str(document.get("request_digest") or "")
@@ -735,7 +737,7 @@ class ControlledPilotJobSpec:
             raise JobInputError("controlled runner_version is invalid")
         if not manifest_key.endswith("/container-terminal.json"):
             raise JobInputError("controlled manifest_key is invalid")
-        for field in ("ready_manifest_digest", "signed_projection_document_digest"):
+        for field in _provenance_digest_fields(document):
             if _DIGEST_RE.fullmatch(str(document.get(field) or "")) is None:
                 raise JobInputError(f"controlled {field} must be sha256")
         if not isinstance(document.get("session_scope"), dict):
@@ -815,6 +817,25 @@ CONTROLLED_JOB_SPEC_FIELDS = {
     "dependency_closure_digest",
     "exact_four_binding_digest",
 }
+CONTROLLED_NATIVE_JOB_SPEC_FIELDS = (
+    CONTROLLED_JOB_SPEC_FIELDS - {"signed_projection_document_digest"}
+) | {"admitted_native_digest", "native_source"}
+
+
+def _is_native_job_spec(document: Mapping[str, Any]) -> bool:
+    return document.get("format") == CONTROLLED_NATIVE_JOB_SPEC_FORMAT
+
+
+def _job_spec_field_set(document: Mapping[str, Any]) -> set[str]:
+    if _is_native_job_spec(document):
+        return set(CONTROLLED_NATIVE_JOB_SPEC_FIELDS)
+    return set(CONTROLLED_JOB_SPEC_FIELDS)
+
+
+def _provenance_digest_fields(document: Mapping[str, Any]) -> tuple[str, ...]:
+    if _is_native_job_spec(document):
+        return ("ready_manifest_digest", "admitted_native_digest")
+    return ("ready_manifest_digest", "signed_projection_document_digest")
 
 _CONTROLLED_TERMINAL_BIND_FIELDS = {
     "identity",
@@ -953,12 +974,17 @@ def _mint_controlled_am_view(
         _open_verified_controlled_snapshot,
         _session_scope_from_verified_worker_job,
     )
+    native = _is_native_job_spec(document)
     verified_scope = _session_scope_from_verified_worker_job(
         session_scope=document.get("session_scope"),
         ready_manifest_digest=document.get("ready_manifest_digest"),
-        signed_projection_document_digest=document.get(
-            "signed_projection_document_digest"
+        signed_projection_document_digest=(
+            None if native else document.get("signed_projection_document_digest")
         ),
+        admitted_native_digest=(
+            document.get("admitted_native_digest") if native else None
+        ),
+        native_source=document.get("native_source") if native else None,
         profile_digest=document.get("profile_digest"),
     )
     return _open_verified_controlled_snapshot(
@@ -1017,17 +1043,24 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
     """Stream the verified physical snapshot, run the canonical four, then delete temp files."""
     if not isinstance(document, dict):
         raise JobInputError("controlled job must be a JSON object")
-    if set(document) != CONTROLLED_JOB_SPEC_FIELDS:
+    if set(document) != _job_spec_field_set(document):
         raise JobInputError("controlled job fields are closed")
     if document.get("identity") != CONTROLLED_PILOT_IDENTITY:
         raise JobInputError("controlled identity must be controlled_pilot_v1")
-    if document.get("format") != "controlled-pilot-job-spec/v1":
+    if document.get("format") not in {
+        "controlled-pilot-job-spec/v1",
+        CONTROLLED_NATIVE_JOB_SPEC_FORMAT,
+    }:
         raise JobInputError("controlled job spec format is invalid")
     if document.get("fill_contract_digest") != CONTROLLED_FILL_CONTRACT_DIGEST:
         raise JobInputError("controlled fill-contract mismatch")
-    for field in ("ready_manifest_digest", "signed_projection_document_digest"):
+    for field in _provenance_digest_fields(document):
         if _DIGEST_RE.fullmatch(str(document.get(field) or "")) is None:
             raise JobInputError(f"controlled {field} must be sha256")
+    if _is_native_job_spec(document) and not isinstance(
+        document.get("native_source"), Mapping
+    ):
+        raise JobInputError("native source is missing")
     if not isinstance(document.get("session_scope"), dict):
         raise JobInputError("controlled session_scope is missing")
     job_id = str(document.get("job_id") or "")
@@ -1051,7 +1084,12 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
     if snapshot_id == physical_digest:
         raise JobInputError("logical snapshot_id cannot be the physical digest")
     physical_hex = str(physical_digest)[len("sha256:") :]
-    expected_key = f"{CONTROLLED_SNAPSHOT_KEY_PREFIX}sha256={physical_hex}.sqlite"
+    if _is_native_job_spec(document):
+        expected_key = (
+            f"{RECEIPT_CANDIDATE_SNAPSHOT_KEY_PREFIX}sha256={physical_hex}.sqlite"
+        )
+    else:
+        expected_key = f"{CONTROLLED_SNAPSHOT_KEY_PREFIX}sha256={physical_hex}.sqlite"
     if snapshot_key != expected_key:
         raise JobInputError("snapshot key is not the physical digest key")
     if type(snapshot_size) is not int or snapshot_size < 1:

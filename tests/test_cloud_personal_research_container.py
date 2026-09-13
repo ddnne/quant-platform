@@ -3143,6 +3143,23 @@ def test_controlled_container_rejects_caller_paths_and_bytes() -> None:
         )
 
 
+def test_controlled_container_v1_spec_rejects_candidate_snapshot_key() -> None:
+    spec = _controlled_job_spec()
+    hex_digest = str(spec["immutable_db_digest"])[len("sha256:") :]
+    spec["snapshot_key"] = f"research/receipt-candidates/sha256={hex_digest}.sqlite"
+    with pytest.raises(service.JobInputError, match="snapshot key is not the physical digest key"):
+        service.execute_controlled_pilot_container(spec)
+
+
+def test_controlled_container_native_spec_rejects_v1_snapshot_prefix() -> None:
+    spec = _controlled_job_spec()
+    spec["format"] = service.CONTROLLED_NATIVE_JOB_SPEC_FORMAT
+    spec["admitted_native_digest"] = spec.pop("signed_projection_document_digest")
+    spec["native_source"] = {"kind": "governed-receipt-candidate"}
+    with pytest.raises(service.JobInputError, match="snapshot key is not the physical digest key"):
+        service.execute_controlled_pilot_container(spec)
+
+
 def test_controlled_container_deletes_ephemeral_snapshot_on_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
