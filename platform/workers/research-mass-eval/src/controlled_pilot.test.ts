@@ -8,6 +8,7 @@ vi.stubGlobal(
     }
   },
 );
+vi.mock("cloudflare:workers", () => ({ WorkerEntrypoint: class {} }));
 
 import readyFixture from "../../../../specs/ready/controlled_pilot_ready.generated.json";
 import traderFixture from "../../../../specs/ready/controlled_pilot_trader_batch.generated.json";
@@ -21,7 +22,6 @@ import {
   CONTROLLED_PILOT_IDENTITY,
   CONTROLLED_NATIVE_JOB_SPEC_FORMAT,
   CONTROLLED_READY_ENVELOPE_FORMAT,
-  CONTROLLED_READY_RECEIPT_NATIVE_ENVELOPE_FORMAT,
   CONTROLLED_TRADER_BATCH_FORMAT,
   EXACT_FOUR_BINDING_DIGEST,
   EXACT_FOUR_CLOSURE_DIGEST,
@@ -37,8 +37,6 @@ import {
   controlledTraderAuthorizationKey,
   parseControlledPilotRequest,
 } from "./controlled_pilot_contract";
-import { personalReceiptCandidatePhysicalKey } from "./personal_receipt_candidate_contract";
-import * as nativePublication from "./receipt_native_ready_publication";
 import {
   EXACT_FOUR_PLAN_IDS,
   canonicalJson,
@@ -54,6 +52,10 @@ import { decodeStrictJson, sha256Digest, StrictJsonError } from "./controlled_pi
 import { dispatchMassEvalFetch } from "./http_routes";
 import { PERSONAL_RESEARCH_RUNNER_VERSION } from "./personal_research_contract";
 import type { Env } from "./types";
+import {
+  mintPairedNativeReadyTrader,
+  nativePublishSigningPair,
+} from "../../ingestion-premium/test_support/ready_native_publication_test_support";
 
 type Stored = { body: Uint8Array; etag: string; uploaded: Date };
 
@@ -233,8 +235,16 @@ type ContainerArtifactPayload = {
   knowledge: Record<string, unknown>;
 };
 
-async function artifacts(logicalId: string, payload: ContainerArtifactPayload = pythonContainerArtifacts as unknown as ContainerArtifactPayload) {
-  if (logicalId !== fixtureKeys.logical_snapshot_id) {
+async function artifacts(
+  logicalId: string,
+  payload: ContainerArtifactPayload = pythonContainerArtifacts as unknown as ContainerArtifactPayload,
+  spec?: Record<string, unknown>,
+) {
+  const expectedId =
+    spec?.format === CONTROLLED_NATIVE_JOB_SPEC_FORMAT && typeof spec.snapshot_id === "string"
+      ? spec.snapshot_id
+      : fixtureKeys.logical_snapshot_id;
+  if (logicalId !== expectedId) {
     throw new Error("Python Container fixture logical snapshot mismatch");
   }
   return structuredClone(payload);
@@ -255,7 +265,8 @@ async function rebindPostedSpecArtifacts(
     current === undefined ||
     (snapshotKey === current.snapshot_key &&
       snapshotSize === current.snapshot_size &&
-      authorizationDigest === current.authorization_digest)
+      authorizationDigest === current.authorization_digest &&
+      current.snapshot_id === spec.snapshot_id)
   ) {
     return;
   }
@@ -264,6 +275,23 @@ async function rebindPostedSpecArtifacts(
     if (typeof snapshotSize === "number") row.snapshot_size = snapshotSize;
     if (typeof authorizationDigest === "string") {
       row.authorization_digest = authorizationDigest;
+    }
+    if ("snapshot_id" in row && typeof spec.snapshot_id === "string") {
+      row.snapshot_id = spec.snapshot_id;
+    }
+    if ("immutable_db_digest" in row && typeof spec.immutable_db_digest === "string") {
+      row.immutable_db_digest = spec.immutable_db_digest;
+    }
+    if ("ready_attestation_id" in row && typeof spec.ready_attestation_id === "string") {
+      row.ready_attestation_id = spec.ready_attestation_id;
+    }
+    const repro = row.reproducibility;
+    if (repro && typeof repro === "object" && typeof spec.snapshot_id === "string") {
+      (repro as Record<string, unknown>).data_snapshot_id = spec.snapshot_id;
+    }
+    const payload = row.payload;
+    if (payload && typeof payload === "object" && typeof spec.snapshot_id === "string") {
+      (payload as Record<string, unknown>).snapshot_id = spec.snapshot_id;
     }
     delete row.artifact_id;
     delete row.digest;
@@ -374,7 +402,11 @@ function mockContainer(options?: {
             fetches.post += 1;
             const body = (await request.json()) as Record<string, unknown>;
             options?.postedSpecs?.push(body);
-            const result = await artifacts(String(body.snapshot_id), options?.containerArtifacts);
+            const result = await artifacts(
+              String(body.snapshot_id),
+              options?.containerArtifacts,
+              body,
+            );
             await rebindPostedSpecArtifacts(result, body);
             if (options?.tamper === "reorder") {
               result.papers = [result.papers[1]!, result.papers[0]!, result.papers[2]!, result.papers[3]!];
@@ -705,84 +737,64 @@ describe("strict JSON and Python-generated fixtures", () => {
   });
 
   it("completes native candidate-key submit, rejects retired first admission, and resumes historically", async () => {
-    // Boundary: verifyReceiptNativeReadyPublication is mocked; not end-to-end crypto or live READY proof.
-    const seeded = await seedEnv({ skipAuth: true });
-    const nativeRequest = { ...seeded.request, idempotency_key: "r1" };
-    const hex = seeded.physicalId.slice("sha256:".length);
-    const candidateKey = personalReceiptCandidatePhysicalKey(hex);
-    const snapshot = new TextEncoder().encode("controlled-pilot-physical-sqlite");
-    await seeded.mem.put(candidateKey, snapshot);
-    const attestation = (readyFixture as { attestation: Record<string, unknown> }).attestation;
-    const admitted = "sha256:" + "aa".repeat(32);
-    const nativeSource = {
-      kind: "governed-receipt-candidate",
+    // Source interop: Premium publishAdmittedReceiptCandidate envelope+trader
+    // bytes into submitControlledPilot with real verifyReceiptNativeReadyPublication
+    // and verifyTraderAuthorizationBatch. Seams: MemR2, mockContainer Python
+    // artifacts, budget gateway, Date.now=VERIFIER_NOW, registry spies matching
+    // producer keys. Not live ingestion or workerd multi-Worker E2E.
+    const readyPair = await nativePublishSigningPair();
+    const traderPair = await nativePublishSigningPair();
+    const readyKey = {
+      key_id: "ready-test",
+      public_key: readyPair.publicKey,
+      algorithm: "Ed25519" as const,
+      status: "active" as const,
+      not_before: "2026-01-01T00:00:00Z",
+      not_after: "2099-01-01T00:00:00Z",
+      revoked_at: null,
       environment: "staging",
-      authority_instance_digest:
-        "sha256:5104b2d3b85ddbbd44fb9e4ddc2689898232c2e6e175727c71c1ce2cb6ec9bff",
-      physical_digest: seeded.physicalId,
-      observation_policy: "max_verified_claims_checked_at",
-      observed_through: String(
-        (readyFixture as { controlled_session_scope: { observed_through: string } })
-          .controlled_session_scope.observed_through,
-      ),
-      compiled_scope_proof_digest: String(
-        (readyFixture as { controlled_session_scope: { dependency_scope_proof_digest: string } })
-          .controlled_session_scope.dependency_scope_proof_digest,
-      ),
-      receipt_runset_digest: "sha256:" + "11".repeat(32),
     };
-    const sessionScope = (readyFixture as { controlled_session_scope: never })
-      .controlled_session_scope;
-    const nativePublicationValue = {
-      format: CONTROLLED_READY_RECEIPT_NATIVE_ENVELOPE_FORMAT,
-      job_id: nativeRequest.idempotency_key,
-      attestation_id: nativeRequest.ready_attestation_id,
-      snapshot_id: nativeRequest.snapshot_id,
-      immutable_db_digest: seeded.physicalId,
-      physical: {
-        key: candidateKey,
-        digest: seeded.physicalId,
-        size: snapshot.byteLength,
-      },
-      admitted_native_digest: admitted,
-      ready_manifest_digest: String(
-        (readyFixture as { ready_manifest: { manifest_digest: string } }).ready_manifest
-          .manifest_digest,
-      ),
-      identity: CONTROLLED_PILOT_IDENTITY,
+    const traderKey = {
+      key_id: "trader-test",
+      public_key: traderPair.publicKey,
+      algorithm: "Ed25519" as const,
+      status: "active" as const,
+      not_before: "2026-01-01T00:00:00Z",
+      not_after: "2099-01-01T00:00:00Z",
+      revoked_at: null,
       environment: "staging",
-      session_scope: sessionScope,
-      envelope: {
-        format: CONTROLLED_READY_RECEIPT_NATIVE_ENVELOPE_FORMAT,
-        attestation,
-        ready_manifest: { source: nativeSource },
-        admitted_native_digest: admitted,
-      },
     };
-    vi.spyOn(nativePublication, "verifyReceiptNativeReadyPublication").mockResolvedValue({
-      ok: true,
-      publication: nativePublicationValue,
+    vi.spyOn(registries, "loadPinnedReadyKeys").mockReturnValue([readyKey]);
+    vi.spyOn(registries, "loadPinnedTraderKeys").mockReturnValue([traderKey]);
+    const produced = await mintPairedNativeReadyTrader({
+      jobId: "r1",
+      readySecret: readyPair.secret,
+      traderSecret: traderPair.secret,
+      readyKeyId: "ready-test",
     });
-    await seeded.mem.put(
-      controlledReadyKey(seeded.request.ready_attestation_id),
-      JSON.stringify({
-        format: CONTROLLED_READY_RECEIPT_NATIVE_ENVELOPE_FORMAT,
-        identity: CONTROLLED_PILOT_IDENTITY,
-        job_id: nativeRequest.idempotency_key,
-        admitted_native_digest: admitted,
-      }),
-    );
-    const active = fixturePublicKey()[0]!;
+    const seeded = await seedEnv({
+      skipAuth: true,
+      skipReady: true,
+    });
+    vi.spyOn(registries, "loadPinnedReadyKeys").mockReturnValue([readyKey]);
+    vi.spyOn(registries, "loadPinnedTraderKeys").mockReturnValue([traderKey]);
+    await seeded.mem.put(produced.envelopeKey, produced.envelopeBytes);
+    await seeded.mem.put(produced.physicalKey, produced.physicalBytes);
+    const nativeRequest = {
+      idempotency_key: produced.jobId,
+      ready_attestation_id: produced.attestationId,
+      snapshot_id: produced.snapshotId,
+    };
     vi.spyOn(registries, "loadPinnedReadyKeys").mockReturnValue([
-      { ...active, key_id: "other-active" },
-      { ...active, status: "retired" },
+      { ...readyKey, key_id: "other-active" },
+      { ...readyKey, status: "retired" },
     ]);
     const retiredFirst = await submitControlledPilot(seeded.env, nativeRequest);
     expect(retiredFirst.status).toBe(400);
     expect(await retiredFirst.json()).toMatchObject({
       error: "READY attestation issuer is not trusted",
     });
-    vi.spyOn(registries, "loadPinnedReadyKeys").mockReturnValue(fixturePublicKey());
+    vi.spyOn(registries, "loadPinnedReadyKeys").mockReturnValue([readyKey]);
     const wrongMap = await submitControlledPilot(seeded.env, {
       ...nativeRequest,
       idempotency_key: "other-job-1",
@@ -796,45 +808,7 @@ describe("strict JSON and Python-generated fixtures", () => {
     expect(await missingAuth.json()).toMatchObject({
       error: "trader authorization not found",
     });
-    const pair = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
-    const publicKey = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
-    vi.spyOn(registries, "loadPinnedTraderKeys").mockReturnValue([
-      {
-        key_id: "native-test-trader",
-        public_key: publicKey,
-        algorithm: "Ed25519",
-        status: "active",
-        not_before: "2026-01-01T00:00:00Z",
-        not_after: "2099-01-01T00:00:00Z",
-        revoked_at: null,
-        environment: "staging",
-      },
-    ]);
-    const traderBody = { ...(traderFixture as Record<string, unknown>) };
-    delete traderBody.signature;
-    traderBody.snapshot_key = candidateKey;
-    traderBody.snapshot_size = snapshot.byteLength;
-    traderBody.idempotency_key = nativeRequest.idempotency_key;
-    traderBody.request_digest = await controlledPilotRequestDigest(nativeRequest);
-    traderBody.key_id = "native-test-trader";
-    const signature = new Uint8Array(
-      await crypto.subtle.sign(
-        "Ed25519",
-        pair.privateKey,
-        new TextEncoder().encode(canonicalJson(traderBody)),
-      ),
-    );
-    let encoded = "";
-    for (const byte of signature) encoded += String.fromCharCode(byte);
-    const signedTrader = { ...traderBody, signature: `ed25519:${btoa(encoded)}` };
-    const authorizationDigest = await sha256Digest(canonicalJson(signedTrader));
-    await seeded.mem.put(
-      controlledTraderAuthorizationKey(
-        nativeRequest.idempotency_key,
-        nativeRequest.ready_attestation_id,
-      ),
-      JSON.stringify(signedTrader),
-    );
+    await seeded.mem.put(produced.traderObjectKey, produced.traderBytes);
     const ctx = new WaitCtx();
     const admittedResponse = await submitControlledPilot(seeded.env, nativeRequest, ctx);
     expect(admittedResponse.status).toBe(202);
@@ -846,7 +820,11 @@ describe("strict JSON and Python-generated fixtures", () => {
       kind: "host",
       host: "controlled.r2",
       method: "controlledPilotSnapshot",
-      params: { key: candidateKey, digest: seeded.physicalId, size: snapshot.byteLength },
+      params: {
+        key: produced.physicalKey,
+        digest: produced.physicalDigest,
+        size: produced.physicalSize,
+      },
     });
     const installedAt = seeded.outboundCalls.indexOf(candidateCall!);
     const clearedAt = seeded.outboundCalls.findIndex(
@@ -861,10 +839,10 @@ describe("strict JSON and Python-generated fixtures", () => {
     const postedSpec = seeded.postedSpecs[0];
     expect(postedSpec).toMatchObject({
       format: CONTROLLED_NATIVE_JOB_SPEC_FORMAT,
-      admitted_native_digest: admitted,
-      snapshot_key: candidateKey,
+      admitted_native_digest: produced.admittedNativeDigest,
+      snapshot_key: produced.physicalKey,
     });
-    expect(postedSpec?.native_source).toEqual(nativeSource);
+    expect(postedSpec?.native_source).toEqual(produced.nativeSource);
     expect(postedSpec).not.toHaveProperty("signed_projection_document_digest");
     const completed = await controlledPilotStatus(
       seeded.env,
@@ -878,8 +856,10 @@ describe("strict JSON and Python-generated fixtures", () => {
     expect(
       completedBody.status === "COMPLETED" ? completedBody.status : completedBody,
     ).toBe("COMPLETED");
-    expect(completedBody.manifest?.snapshot_key).toBe(candidateKey);
-    expect(completedBody.manifest?.admitted_native_digest).toBe(admitted);
+    expect(completedBody.manifest?.snapshot_key).toBe(produced.physicalKey);
+    expect(completedBody.manifest?.admitted_native_digest).toBe(
+      produced.admittedNativeDigest,
+    );
     const paper = await (
       await seeded.env.STRUCTURED_BUCKET.get(
         `research/controlled_pilot/v1/jobs/${nativeRequest.idempotency_key}/paper/1.json`,
@@ -888,12 +868,12 @@ describe("strict JSON and Python-generated fixtures", () => {
       bindings: Record<string, unknown>;
       semantic_body: Record<string, unknown>;
     };
-    expect(paper.semantic_body.snapshot_key).toBe(candidateKey);
-    expect(paper.semantic_body.authorization_digest).toBe(authorizationDigest);
-    expect(paper.bindings.admitted_native_digest).toBe(admitted);
+    expect(paper.semantic_body.snapshot_key).toBe(produced.physicalKey);
+    expect(paper.semantic_body.authorization_digest).toBe(produced.authorizationDigest);
+    expect(paper.bindings.admitted_native_digest).toBe(produced.admittedNativeDigest);
     expect(paper.bindings).not.toHaveProperty("signed_projection_document_digest");
     vi.spyOn(registries, "loadPinnedReadyKeys").mockReturnValue([
-      { ...active, status: "retired" },
+      { ...readyKey, status: "retired" },
     ]);
     const replay = await submitControlledPilot(seeded.env, nativeRequest);
     expect(replay.status).toBe(202);
