@@ -5,6 +5,11 @@ import { personalResearchR2Outbound } from "../src/personal_research_r2";
 import { PERSONAL_SNAPSHOT_FORMAT } from "../src/personal_snapshot_contract";
 import { RECEIPT_CANDIDATE_FORMAT } from "../src/personal_receipt_candidate_contract";
 import { PERSONAL_RESEARCH_RUNNER_VERSION } from "../src/personal_research_contract";
+import {
+  receiptNativeManifestBodyDigest,
+  receiptNativeSnapshotId,
+} from "../src/ready_manifest_v2";
+import exampleNative from "../../../../specs/ready/ready_manifest_v2.example.json";
 
 const runtimeEnv = env as { STRUCTURED_BUCKET: R2Bucket };
 
@@ -14,6 +19,7 @@ const ACTUAL_HEX =
 const CONTENT_DIGEST = `sha256:${ACTUAL_HEX}`;
 const REQUEST_DIGEST = `sha256:${"b".repeat(64)}`;
 const WRONG_DIGEST = `sha256:${"c".repeat(64)}`;
+const OTHER_RAW = `sha256:${"a".repeat(64)}`;
 const RAW_HEX = "d".repeat(64);
 const RAW_DIGEST = `sha256:${RAW_HEX}`;
 
@@ -70,7 +76,7 @@ function uploadHeaders(
 function completedManifest(
   kind: Kind,
   jobId: string,
-  options?: { omitFormat?: boolean },
+  options?: { omitFormat?: boolean; extra?: Record<string, unknown> },
 ): Record<string, unknown> {
   if (kind === "result") {
     return {
@@ -95,6 +101,7 @@ function completedManifest(
       gzip_sha256: CONTENT_DIGEST,
       snapshot_key: objectKey("candidate", jobId),
       ...(options?.omitFormat ? {} : { format: RECEIPT_CANDIDATE_FORMAT }),
+      ...(options?.extra ?? {}),
     };
   }
   return {
@@ -169,7 +176,7 @@ async function putWithProducer(
 async function putCompletedManifest(
   kind: Kind,
   jobId: string,
-  options?: { omitFormat?: boolean },
+  options?: { omitFormat?: boolean; extra?: Record<string, unknown> },
 ): Promise<Response> {
   const bytes = new TextEncoder().encode(
     JSON.stringify(completedManifest(kind, jobId, options)),
@@ -362,4 +369,163 @@ describe("personalResearchR2Outbound workerd/R2 runtime", () => {
       await runtimeEnv.STRUCTURED_BUCKET.head(manifestKey("candidate", jobId)),
     ).toBeNull();
   });
+
+  it("binds gzip raw_sha256 to receipt-native v2 identity without making READY", async () => {
+    const gzip = await putWithProducer(
+      "candidate",
+      "r05-candidate-native-gz",
+      "complete",
+      CONTENT_DIGEST,
+    );
+    expect(gzip.response.status).toBe(201);
+
+    const failScope = await putCompletedManifest(
+      "candidate",
+      "r05-candidate-scope-fail",
+      {
+        extra: {
+          compiled_scope_status: "FAIL",
+          compiled_scope_kind: "receipt-candidate-scope-diagnostic/v1",
+          compiled_scope_error: "compiled window is incomplete",
+        },
+      },
+    );
+    expect(failScope.status).toBe(201);
+
+    expect(
+      await receiptNativeSnapshotId(
+        exampleNative.source as Record<string, unknown>,
+      ),
+    ).toBe(exampleNative.snapshot_id);
+    expect(
+      await receiptNativeManifestBodyDigest(
+        exampleNative as Record<string, unknown>,
+      ),
+    ).toBe(exampleNative.manifest_digest);
+
+    const native = await sealedNative(RAW_DIGEST);
+    const passExtra = {
+      compiled_scope_status: "PASS",
+      compiled_scope_kind: "receipt-candidate-scope-diagnostic/v1",
+      compiled_scope_physical_digest: RAW_DIGEST,
+      receipt_native_manifest: native,
+      receipt_native_manifest_digest: native.manifest_digest,
+    };
+    const created = await putCompletedManifest(
+      "candidate",
+      "r05-candidate-native-ok",
+      { extra: passExtra },
+    );
+    expect(created.status).toBe(201);
+
+    const other = await sealedNative(OTHER_RAW);
+    const swappedSnapshot = await sealedNative(RAW_DIGEST, (body) => {
+      body.snapshot_id = other.snapshot_id;
+    });
+    const snapshotSwap = await putCompletedManifest(
+      "candidate",
+      "r05-candidate-native-snap",
+      {
+        extra: {
+          ...passExtra,
+          receipt_native_manifest: swappedSnapshot,
+          receipt_native_manifest_digest: swappedSnapshot.manifest_digest,
+        },
+      },
+    );
+    expect(snapshotSwap.status).toBe(400);
+    expect(await snapshotSwap.json()).toEqual({
+      error: "receipt-native snapshot_id does not match source",
+    });
+
+    const innerMismatch = await sealedNative(RAW_DIGEST);
+    innerMismatch.manifest_digest = WRONG_DIGEST;
+    const inner = await putCompletedManifest(
+      "candidate",
+      "r05-candidate-native-inner",
+      {
+        extra: {
+          ...passExtra,
+          receipt_native_manifest: innerMismatch,
+          receipt_native_manifest_digest:
+            await receiptNativeManifestBodyDigest(innerMismatch),
+        },
+      },
+    );
+    expect(inner.status).toBe(400);
+    expect(await inner.json()).toEqual({
+      error: "receipt-native manifest_digest mismatch",
+    });
+
+    const foreign = await sealedNative(OTHER_RAW);
+    const physicalSwap = await putCompletedManifest(
+      "candidate",
+      "r05-candidate-native-phys",
+      {
+        extra: {
+          ...passExtra,
+          receipt_native_manifest: foreign,
+          receipt_native_manifest_digest: foreign.manifest_digest,
+        },
+      },
+    );
+    expect(physicalSwap.status).toBe(400);
+    expect(await physicalSwap.json()).toEqual({
+      error: "receipt-native physical_digest does not match gzip raw_sha256",
+    });
+
+    const withCursor = await sealedNative(RAW_DIGEST, (body) => {
+      body.source_generation = "1";
+    });
+    const cursors = await putCompletedManifest(
+      "candidate",
+      "r05-candidate-native-d1",
+      {
+        extra: {
+          ...passExtra,
+          receipt_native_manifest: withCursor,
+          receipt_native_manifest_digest: withCursor.manifest_digest,
+        },
+      },
+    );
+    expect(cursors.status).toBe(400);
+    expect(await cursors.json()).toEqual({
+      error: "receipt-native ReadyManifest forbids D1 cursor fields",
+    });
+
+    const badPlans = await sealedNative(RAW_DIGEST, (body) => {
+      body.plan_ids = "exp-mdh-hold10-momentum";
+    });
+    const planShape = await putCompletedManifest(
+      "candidate",
+      "r05-candidate-native-plans",
+      {
+        extra: {
+          ...passExtra,
+          receipt_native_manifest: badPlans,
+          receipt_native_manifest_digest: badPlans.manifest_digest,
+        },
+      },
+    );
+    expect(planShape.status).toBe(400);
+    expect(await planShape.json()).toEqual({
+      error: "ReadyManifest plan_ids is invalid",
+    });
+  });
 });
+
+async function sealedNative(
+  physicalDigest: string,
+  mutate?: (native: Record<string, unknown>) => void,
+): Promise<Record<string, unknown>> {
+  const native = structuredClone(exampleNative) as Record<string, unknown>;
+  const source = {
+    ...(exampleNative.source as Record<string, unknown>),
+    physical_digest: physicalDigest,
+  };
+  native.source = source;
+  native.snapshot_id = await receiptNativeSnapshotId(source);
+  mutate?.(native);
+  native.manifest_digest = await receiptNativeManifestBodyDigest(native);
+  return native;
+}
