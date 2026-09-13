@@ -36,7 +36,6 @@ from storage.receipt_crypto import (
 )
 from storage.coverage_ledger import CollectionReceipt
 from ops.receipt_product import (
-    catalog_owned_product_row_digests,
     measure_owned_product_artifact_body,
     open_stored_product_artifact,
     verify_full_segment_product_materialization,
@@ -478,24 +477,21 @@ def _verify_publication_on_authenticated_mirror(
                         if row.get("dataset") == closure.dataset
                         and row.get("run_id") == closure.run_id
                     ]
-                    owned_digests = catalog_owned_product_row_digests(
-                        conn,
-                        source="jquants",
-                        dataset=dataset_id,
-                        segment_start=closure.segment_start,
-                        segment_end=closure.segment_end,
-                        observed_through=proof_clock.observed_through,
-                        tables=(
-                            "jquants_records",
-                            "jquants_records_revisions",
-                        ),
-                    )
                     operation_id = str(product["operation_id"])
                     with open_stored_product_artifact(conn, operation_id) as artifact:
                         observed_count, observed_product_digest, observed_bytes, row_digests = (
                             measure_owned_product_artifact_body(
                                 artifact,
-                                owned_digests=owned_digests,
+                                conn=conn,
+                                source="jquants",
+                                dataset=dataset_id,
+                                segment_start=closure.segment_start,
+                                segment_end=closure.segment_end,
+                                observed_through=proof_clock.observed_through,
+                                tables=(
+                                    "jquants_records",
+                                    "jquants_records_revisions",
+                                ),
                             )
                         )
                     with open_stored_product_artifact(conn, operation_id) as artifact:

@@ -6,6 +6,7 @@ import gzip
 import hashlib
 import io
 import json
+import sqlite3
 import threading
 from functools import partial
 from pathlib import Path
@@ -22,7 +23,6 @@ from ops.receipt_candidate_materialize import (
 from ops.receipt_product import (
     PRODUCT_ARTIFACT_FIELDS,
     canonical_product_artifact_bytes,
-    catalog_owned_product_row_digests,
     measure_owned_product_artifact_body,
     measure_product_artifact_jsonl,
     open_stored_product_artifact,
@@ -260,21 +260,29 @@ def test_genuine_descriptor_persists_text_artifact_and_catalog_detects_corruptio
     )
     with open_stored_product_artifact(conn, operation_id) as text_body:
         assert measure_product_artifact_jsonl(text_body) == file_measure
+    ownership = {
+        "conn": store._conn,  # noqa: SLF001
+        "source": "jquants",
+        "dataset": "equities_bars_daily",
+        "segment_start": "2023-01-01",
+        "segment_end": "2023-01-31",
+        "observed_through": CHECKED_AT,
+        "tables": ("jquants_records", "jquants_records_revisions"),
+    }
+    store._conn.execute("DROP TABLE jquants_records_revisions")  # noqa: SLF001
+    with product_path.open("rb") as handle:
+        with pytest.raises(sqlite3.OperationalError, match="no such table"):
+            measure_owned_product_artifact_body(handle, **ownership)
+    store._conn.execute(  # noqa: SLF001
+        "CREATE TABLE jquants_records_revisions AS "
+        "SELECT * FROM jquants_records WHERE 0"
+    )
     store._conn.execute(  # noqa: SLF001
         "UPDATE jquants_records SET payload='{\"poison\":true}'"
     )
-    owned = catalog_owned_product_row_digests(
-        store._conn,  # noqa: SLF001
-        source="jquants",
-        dataset="equities_bars_daily",
-        segment_start="2023-01-01",
-        segment_end="2023-01-31",
-        observed_through=CHECKED_AT,
-        tables=("jquants_records", "jquants_records_revisions"),
-    )
     with product_path.open("rb") as handle:
         with pytest.raises(ValueError, match="not materialized on the owner connection"):
-            measure_owned_product_artifact_body(handle, owned_digests=owned)
+            measure_owned_product_artifact_body(handle, **ownership)
     store.close()
 
 
