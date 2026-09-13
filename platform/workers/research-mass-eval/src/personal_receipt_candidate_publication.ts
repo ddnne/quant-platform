@@ -9,6 +9,7 @@ import {
 } from "./bounded_container_request";
 import { putJsonCreateOnly } from "./http";
 import { readSmallJson } from "./personal_job_state";
+import { controlledTraderAuthorizationKey } from "./controlled_pilot_contract";
 import { personalReceiptCandidatePublicationKey } from "./personal_receipt_candidate_contract";
 
 export const RECEIPT_CANDIDATE_PUBLICATION_POINTER_FORMAT =
@@ -205,6 +206,7 @@ export async function publishAdmittedReceiptCandidatePointer(
   env: PublicationEnv,
   jobId: string,
 ): Promise<ReceiptCandidatePublicationObservation> {
+  let stored: ReceiptCandidatePublicationObservation | null = null;
   const pending = (error: string): ReceiptCandidatePublicationObservation => ({
     ...observationBase(env, jobId),
     historical: false,
@@ -212,17 +214,35 @@ export async function publishAdmittedReceiptCandidatePointer(
     attempt_status: "PENDING",
     error,
   });
+  const pendingWithStored = (error: string): ReceiptCandidatePublicationObservation => {
+    if (!stored?.pointer) return pending(error);
+    return {
+      ...stored,
+      historical: true,
+      persisted: true,
+      attempt_status: "PENDING",
+      error,
+    };
+  };
   try {
     return await withRequestDeadline(async (signal) => {
-      const stored = await awaitUntilAborted(
+      stored = await awaitUntilAborted(
         readStoredPublicationPointer(env, jobId),
         signal,
       );
-      if (stored) return stored;
+      if (stored?.pointer) {
+        const trader = await awaitUntilAborted(
+          env.STRUCTURED_BUCKET.head(
+            controlledTraderAuthorizationKey(jobId, stored.pointer.attestation_id),
+          ),
+          signal,
+        );
+        if (trader) return stored;
+      }
       const environment = configuredPublicationEnvironment(env);
       const rpc = publicationRpc(env.PILOT_READY_PUBLICATION);
       if (!environment || !rpc) {
-        return pending("PILOT_READY_PUBLICATION unprovisioned");
+        return pendingWithStored("PILOT_READY_PUBLICATION unprovisioned");
       }
       const result = await awaitUntilAborted(
         rpc.publishAdmittedReceiptCandidate({ job_id: jobId, environment }),
@@ -231,10 +251,17 @@ export async function publishAdmittedReceiptCandidatePointer(
       if (!result.ok) {
         return {
           ...observationBase(env, jobId),
-          historical: false,
-          persisted: false,
+          historical: Boolean(stored),
+          persisted: Boolean(stored?.persisted),
           attempt_status: result.status,
           error: result.error,
+          ...(stored?.pointer ? { pointer: stored.pointer } : {}),
+        };
+      }
+      if (stored) {
+        return {
+          ...stored,
+          attempt_status: result.status,
         };
       }
       const persisted = await awaitUntilAborted(
@@ -251,7 +278,7 @@ export async function publishAdmittedReceiptCandidatePointer(
       };
     });
   } catch (error) {
-    return pending(
+    return pendingWithStored(
       isContainerRequestTimeout(error)
         ? "publication attempt timeout"
         : "publication attempt failed",

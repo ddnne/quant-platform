@@ -31,47 +31,36 @@ remote apply results only in immutable release evidence.
   Access observation.
 - **Controlled Pilot:** **NO-GO** until live evidence in
   `docs/phase62_residual_status.md` passes. Green tests do not arm exact-four.
-  Runtime still separately enforces signed READY, signed Trader authorization,
-  an immutable snapshot, signed projection, and BudgetLedger occupancy.
-- **READY publication path:** source exists and is undeployed. Distinguish
-  those layers. Mass `personal_receipt_candidate.ts` plus
-  `personal_receipt_candidate_contract.ts` submits Container
-  `POST /v1/materialize-receipt-candidate`
-  (`container/receipt_candidate_job.py`, `ops/receipt_candidate_materialize.py`).
-  A COMPLETED candidate job freezes one receipt-candidate snapshot and, on that
-  same byte identity, measures compiled-scope diagnostics plus read-only B0/B4/C8
-  quality. Those measures are not B0 PASS and are not READY. A populated
-  receipt-native v2 manifest with verified resolved universe and all-four
-  feature/catalog pins is emitted only when compiled scope passes; compiled-scope
-  FAIL emits no receipt-native manifest. Coverage, raw, and receipt proofs stay
-  MISSING until an authentic proof/consumer contract exists. The job still
-  returns `go: false` / `ready: false`. COMPLETED is not immutable READY. Public
-  v2 attestation and Python publication remain PENDING. There is no Trader
-  connection and no Pilot/GO. Product bytes use source Service Binding
-  `INGESTION_PREMIUM` → `PremiumReceiptProductInputService`. Source-only
-  `raw_collection_manifest` still returns the same collection-manifest bytes
-  after in-place RAW_BUCKET page-body checks (256 pages / 64MiB total / 16MiB
-  per page are local verification caps, not acquisition or platform limits;
-  over-cap is HOLD). Live R2 page inventory is not verified here. v2 coverage,
-  raw, and receipt proofs stay MISSING; public v2 attestation stays PENDING.
-  Scheduled Ops
-  publisher owner is `platform/workers/ingestion-premium/src/ops_projection.ts`
-  (`publishOpsProjection` / `publishOpsProjectionBestEffort` from the Premium
-  scheduled worker). READY signer owner is
-  `platform/workers/ingestion-premium/src/ready_publication.ts` (source-only
-  move from Mass; not rolled out). Those are different modules. Existing Mass
-  staging secret provisioning history is unchanged and is not this SHA
-  deployed. Source also includes undeployed read-only
-  `POST /v1/export/receipt-products`; it does not check profile completeness or
-  physical availability and is not READY. Premium Ops metadata still does not
-  bind exact dependency scope, raw retention, or validation proofs. There is
-  no accepted Trader production signer or connection (not remeasured as live
-  registry/private-key state in this docs turn). The release builder is
-  unconditionally PENDING. Wire the existing trust root; do not add another
-  authority or Worker. Activating keys alone does not close these gaps. A
-  metadata-only Ops envelope is not READY. Global live acceptance is the final
-  gate after inactive code can roll out; it is not a prerequisite that forbids
-  inactive code rollout.
+  Runtime still requires signed READY, signed Trader authorization, an
+  immutable snapshot, and BudgetLedger occupancy. Legacy v1 envelopes also
+  require signed projection; PR168 native execution uses receipt-native signed
+  evidence instead of `signed_projection_document`. Global live Ops projection
+  freshness remains a separate outstanding acceptance gate. Do not infer GO.
+- **READY publication path:** live publication is PENDING/undeployed. Mass
+  submits Container `POST /v1/materialize-receipt-candidate`; COMPLETED PASS
+  freezes one candidate snapshot and may emit a receipt-native v2 manifest,
+  still `go:false` / `ready:false`. Last-recorded live observation
+  (2026-09-13T00:09:20Z, not remeasured) has READY/applied null and B0 UNKNOWN;
+  coverage, raw, and receipt proofs are last-recorded MISSING/unmeasured live
+  evidence, not a claim that source cannot accept complete authentic proofs.
+  Public v2 attestation stays PENDING until that live evidence exists. Product bytes use Service
+  Binding `INGESTION_PREMIUM` → `PremiumReceiptProductInputService`. Source-only
+  `raw_collection_manifest` re-reads collection-manifest bytes after in-place
+  RAW_BUCKET page-body checks (256 pages / 64MiB total / 16MiB per page are
+  local verification caps, not acquisition or platform limits; over-cap is
+  HOLD). Live R2 page inventory is not verified here. Scheduled Ops publisher
+  is `ops_projection.ts`; READY signer is `ready_publication.ts` (undeployed).
+  Native envelope execution is accepted source (PR168) and consumes
+  receipt-native evidence, not legacy `signed_projection_document`. Paired
+  Paper Trader v2 mint is source-only on `publishAdmittedReceiptCandidate` when
+  a dedicated trader secret and one ACTIVE trader key are present at runtime;
+  this source unit did not provision those and did not remeasure live
+  secret/registry state; otherwise PENDING without deleting READY. Existing Mass staging secret
+  history is not this SHA deployed. `POST /v1/export/receipt-products` is
+  undeployed read-only and is not READY. Generic v1/Python publication routes
+  remain distinct. Activating keys is not live READY or GO. Inactive source
+  rollout is not global live acceptance. Wire the existing trust root; do not
+  add another authority or Worker.
 - **Release evidence:** publication is **PENDING/HOLD**. Normalized caller JSON
   is schema-only and cannot prove any remote response. The dedicated signed
   release-observation authority has zero active keys and is not implemented;

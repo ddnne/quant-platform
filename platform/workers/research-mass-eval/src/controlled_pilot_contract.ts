@@ -1,5 +1,5 @@
 import contract from "../../../../specs/ready/controlled_pilot_v1.generated.json";
-import { sha256Digest } from "./controlled_pilot_json";
+import { canonicalJson, sha256Digest } from "./controlled_pilot_json";
 import type { ControlledSessionScope } from "./ops_projection_ready";
 
 export const CONTROLLED_PILOT_CONTRACT = contract;
@@ -40,7 +40,7 @@ export const CONTROLLED_READY_KEY_PREFIX =
   `${CONTROLLED_PILOT_KEY_PREFIX}v1/ready/`;
 export const CONTROLLED_JOB_KEY_PREFIX = `${CONTROLLED_PILOT_KEY_PREFIX}v1/jobs/`;
 
-const IDEMPOTENCY_RE = /^[a-z0-9][a-z0-9._-]{7,63}$/;
+const IDEMPOTENCY_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const ATTESTATION_RE = /^[a-zA-Z0-9._:-]{8,128}$/;
 const SHA256_RE = /^sha256:[0-9a-f]{64}$/;
 
@@ -166,6 +166,19 @@ export function exactFourUniversePeriod():
     return null;
   }
   return { period_start, period_end };
+}
+
+export async function controlledPilotRequestDigest(
+  request: ControlledPilotRequest,
+): Promise<string> {
+  return sha256Digest(
+    canonicalJson({
+      identity: CONTROLLED_PILOT_IDENTITY,
+      idempotency_key: request.idempotency_key,
+      ready_attestation_id: request.ready_attestation_id,
+      snapshot_id: request.snapshot_id,
+    }),
+  );
 }
 
 export function parseControlledPilotRequest(

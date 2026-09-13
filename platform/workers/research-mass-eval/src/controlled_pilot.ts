@@ -14,7 +14,6 @@ import {
   CONTROLLED_PILOT_PLAN_COUNT,
   CONTROLLED_READY_ENVELOPE_FORMAT,
   CONTROLLED_READY_RECEIPT_NATIVE_ENVELOPE_FORMAT,
-  CONTROLLED_TRADER_BATCH_FORMAT,
   EXACT_FOUR_BINDING_DIGEST,
   EXACT_FOUR_BUDGET_SCOPE_DIGEST,
   EXACT_FOUR_CLOSURE_DIGEST,
@@ -46,6 +45,7 @@ import {
   controlledPilotContainerName,
   controlledPilotExecutionId,
   controlledReadyKey,
+  controlledPilotRequestDigest,
   controlledTraderAuthorizationKey,
   parseControlledPilotRequest,
   type ControlledPhysicalSnapshot,
@@ -77,6 +77,15 @@ import {
 } from "./receipt_native_ready_publication";
 import type { Env } from "./types";
 import type { ControlledSessionScope } from "./ops_projection_ready";
+import {
+  verifyTraderAuthorizationBatch,
+  verifyTraderAuthorizationBatchBytes,
+} from "./controlled_pilot_trader_batch";
+
+export {
+  verifyTraderAuthorizationBatch,
+  verifyTraderAuthorizationBatchBytes,
+};
 
 export {
   canonicalJson,
@@ -212,16 +221,6 @@ const ATTESTATION_FIELDS = [
   "b0_quality_proof_digest", "b4_quality_proof_digest", "source_generation", "export_cursor", "applied_cursor",
   "verified_at", "expires_at", "evidence_digest", "key_id", "signature", "issuer", "fill_contract_digest",
 ] as const;
-const TRADER_FIELDS = [
-  "format", "schema_version", "purpose", "algorithm", "identity", "environment", "authority_instance_id",
-  "request_digest", "idempotency_key", "ready_attestation_id", "ready_manifest_digest", "snapshot_id",
-  "immutable_db_digest", "snapshot_key", "snapshot_size", "profile_digest", "dependency_closure_digest",
-  "exact_four_binding_digest", "policy_digest", "budget_scope_digest", "execution_limit_set_digest",
-  "resolved_universe_digest", "fill_contract_digest", "rows", "issued_at", "expires_at", "key_id", "issuer",
-] as const;
-const TRADER_ROW_FIELDS = new Set([
-  "ordinal", "plan_id", "plan_binding_digest", "strategy_spec_id", "strategy_spec_version", "strategy_spec_hash",
-]);
 const CHILD_KEYS = [
   ...EXACT_FOUR_PLAN_IDS.map((_, i) => `paper/${i + 1}.json`),
   ...EXACT_FOUR_PLAN_IDS.map((_, i) => `risk/${i + 1}.json`),
@@ -706,7 +705,7 @@ async function verifyExecutionReadyEnvelope(
   v1Keys: readonly PinnedVerifyKey[],
   clock: VerifierClock,
 ): Promise<
-  | { ok: true; value: ExecutionReady; ready_key_id: string }
+  | { ok: true; value: ExecutionReady; ready_key_id: string; native_job_id?: string }
   | { ok: false; error: string }
 > {
   let document: unknown;
@@ -731,7 +730,12 @@ async function verifyExecutionReadyEnvelope(
     if (!mapped || readyKeyId.length < 1 || readyKeyId.length > 128) {
       return { ok: false, error: "READY envelope identity or environment is invalid" };
     }
-    return { ok: true, value: mapped, ready_key_id: readyKeyId };
+    return {
+      ok: true,
+      value: mapped,
+      ready_key_id: readyKeyId,
+      native_job_id: verified.publication.job_id,
+    };
   }
   const v1 = await verifyControlledReadyEnvelope(
     document,
@@ -746,147 +750,7 @@ async function verifyExecutionReadyEnvelope(
   return { ok: true, value: v1.value, ready_key_id: readyKeyId };
 }
 
-export async function verifyTraderAuthorizationBatch(
-  document: unknown,
-  request: ControlledPilotRequest,
-  ready: ExecutionReady,
-  requestDigest: string,
-  keys: readonly PinnedVerifyKey[],
-  clock: VerifierClock = SYSTEM_CLOCK,
-): Promise<{ ok: true; authorization_digest: string } | { ok: false; error: string }> {
-  if (!isRecord(document) || !("signature" in document)) {
-    return { ok: false, error: "trader authorization must be an object" };
-  }
-  const traderBody = { ...document };
-  delete traderBody.signature;
-  if (!closedShape(traderBody, TRADER_FIELDS)) {
-    return { ok: false, error: "trader authorization must be an object" };
-  }
-  if (document.format !== CONTROLLED_TRADER_BATCH_FORMAT) {
-    return { ok: false, error: "trader authorization format is invalid" };
-  }
-  if (keys.length === 0) return { ok: false, error: "trader authorization issuer is unprovisioned" };
-  if (keys.length !== 1) return { ok: false, error: "trader authorization permits exactly one ACTIVE key" };
-  const issuedAt = parseCanonicalUtc(document.issued_at);
-  const traderKey = keys[0]!;
-  if (traderKey.environment && traderKey.environment !== ready.environment) {
-    return { ok: false, error: "trader key environment denied" };
-  }
-  if (traderKey.not_before && !registries.keyUsableAt(traderKey, issuedAt)) {
-    return { ok: false, error: "trader key window denied" };
-  }
-  if (traderKey.key_id !== String(document.key_id || "")) {
-    return { ok: false, error: "trader authorization issuer is untrusted" };
-  }
-  if (
-    document.schema_version !== 2 ||
-    document.purpose !== "controlled_trader_authorization_verification" ||
-    document.algorithm !== "Ed25519" ||
-    document.identity !== CONTROLLED_PILOT_IDENTITY ||
-    document.environment !== ready.environment ||
-    document.authority_instance_id !== `trader-authority/${ready.environment}/v1` ||
-    document.request_digest !== requestDigest ||
-    document.idempotency_key !== request.idempotency_key ||
-    document.ready_attestation_id !== request.ready_attestation_id ||
-    document.ready_manifest_digest !== ready.ready_manifest_digest ||
-    document.snapshot_id !== ready.snapshot_id ||
-    document.immutable_db_digest !== ready.immutable_db_digest ||
-    document.snapshot_key !== ready.physical.key ||
-    document.snapshot_size !== ready.physical.size ||
-    document.fill_contract_digest !== CONTROLLED_FILL_CONTRACT_DIGEST ||
-    document.profile_digest !== ready.profile_digest ||
-    document.dependency_closure_digest !== ready.dependency_closure_digest ||
-    document.resolved_universe_digest !== ready.resolved_universe_digest ||
-    document.exact_four_binding_digest !== EXACT_FOUR_BINDING_DIGEST ||
-    document.policy_digest !== EXACT_FOUR_POLICY_DIGEST ||
-    document.budget_scope_digest !== EXACT_FOUR_BUDGET_SCOPE_DIGEST ||
-    document.execution_limit_set_digest !== EXACT_FOUR_EXECUTION_LIMIT_SET_DIGEST ||
-    document.issuer !== "ControlledTraderAuthorizationService/v1"
-  ) {
-    return { ok: false, error: "trader authorization does not bind the request" };
-  }
-  const rows = document.rows;
-  if (!Array.isArray(rows) || rows.length !== CONTROLLED_PILOT_PLAN_COUNT) {
-    return { ok: false, error: "trader authorization must cover the canonical four" };
-  }
-  for (let index = 0; index < rows.length; index += 1) {
-    const raw = rows[index];
-    if (!isRecord(raw) || !closedShape(raw, TRADER_ROW_FIELDS)) {
-      return { ok: false, error: "trader authorization row is invalid" };
-    }
-    const expectedPlan = EXACT_FOUR_PLAN_IDS[index]!;
-    const strategyId = EXACT_FOUR_STRATEGY_BY_PLAN[expectedPlan];
-    if (
-      raw.ordinal !== index + 1 ||
-      raw.plan_id !== expectedPlan ||
-      raw.strategy_spec_id !== strategyId ||
-      raw.strategy_spec_version !== EXACT_FOUR_STRATEGY_SPEC_VERSIONS[expectedPlan] ||
-      raw.strategy_spec_hash !== EXACT_FOUR_STRATEGY_SPEC_HASHES[strategyId] ||
-      raw.plan_binding_digest !== EXACT_FOUR_PLAN_BINDING_DIGESTS[expectedPlan]
-    ) {
-      return { ok: false, error: "trader authorization plan sequence is not the canonical ordered four" };
-    }
-  }
-  const issued = parseTime(document.issued_at);
-  const expires = parseTime(document.expires_at);
-  const ttl = expires - issued;
-  if (
-    !Number.isFinite(issued) ||
-    !Number.isFinite(expires) ||
-    ttl < MIN_TTL_MS ||
-    ttl > MAX_TTL_MS ||
-    clock.now() > expires
-  ) {
-    return { ok: false, error: "trader authorization is expired" };
-  }
-  const key = keys.find((item) => item.key_id === String(document.key_id || ""));
-  if (!key) return { ok: false, error: "trader authorization issuer is untrusted" };
-  const signature = decodeSignature(document.signature);
-  if (!signature) return { ok: false, error: "trader authorization signature is invalid" };
-  const body = { ...document };
-  delete body.signature;
-  if (!(await verifyEd25519(key.public_key, signature, new TextEncoder().encode(canonicalJson(body))))) {
-    return { ok: false, error: "trader authorization signature is invalid" };
-  }
-  return {
-    ok: true,
-    authorization_digest: await sha256Digest(canonicalJson(document)),
-  };
-}
 
-export async function verifyTraderAuthorizationBatchBytes(
-  bytes: Uint8Array,
-  request: ControlledPilotRequest,
-  ready: ExecutionReady,
-  requestDigest: string,
-  keys: readonly PinnedVerifyKey[],
-  clock: VerifierClock = SYSTEM_CLOCK,
-): Promise<{ ok: true; authorization_digest: string } | { ok: false; error: string }> {
-  try {
-    return await verifyTraderAuthorizationBatch(
-      decodeStrictJson(bytes),
-      request,
-      ready,
-      requestDigest,
-      keys,
-      clock,
-    );
-  } catch (error) {
-    const detail = error instanceof StrictJsonError ? error.message : "trader JSON is invalid";
-    return { ok: false, error: detail };
-  }
-}
-
-async function requestDigest(request: ControlledPilotRequest): Promise<string> {
-  return sha256Digest(
-    canonicalJson({
-      identity: CONTROLLED_PILOT_IDENTITY,
-      idempotency_key: request.idempotency_key,
-      ready_attestation_id: request.ready_attestation_id,
-      snapshot_id: request.snapshot_id,
-    }),
-  );
-}
 
 function gatewayBody(rpc: { http_status: number; body: unknown }): Record<string, unknown> {
   return isRecord(rpc.body) ? rpc.body : {};
@@ -2260,7 +2124,7 @@ async function parseControlledPilotSubmittedState(
   const parsedRequest = parseControlledPilotRequest(value.request);
   if (!parsedRequest.ok || !jsonEqual(value.request, parsedRequest.value) ||
       parsedRequest.value.idempotency_key !== jobId) return null;
-  const digest = await requestDigest(parsedRequest.value);
+  const digest = await controlledPilotRequestDigest(parsedRequest.value);
   if (value.request_digest !== digest) return null;
   const ready = await parseStoredVerifiedReady(
     value.ready,
@@ -2471,7 +2335,7 @@ export async function submitControlledPilot(
   if (!env.AI_GATEWAY) return json({ ok: false, error: "AI_GATEWAY not bound", go: false }, 503);
   const environment = registries.controlledEnvironment(env);
   if (!environment) return json({ ok: false, error: "controlled environment is invalid", go: false }, 503);
-  const digest = await requestDigest(request);
+  const digest = await controlledPilotRequestDigest(request);
   const jobId = request.idempotency_key;
   const existing = await verifiedTerminal(env, jobId, digest);
   if (existing) {
@@ -2535,6 +2399,16 @@ export async function submitControlledPilot(
   }
   if (!currentlyActiveReadyKeyId(preflight.ready_key_id, readyKeys)) {
     return json({ ok: false, error: "READY attestation issuer is not trusted", go: false }, 400);
+  }
+  if (
+    preflight.native_job_id !== undefined &&
+    request.idempotency_key !== preflight.native_job_id
+  ) {
+    return json({
+      ok: false,
+      error: "native controlled idempotency_key does not match READY job_id",
+      go: false,
+    }, 400);
   }
   const authBytes = await loadBytes(
     env.STRUCTURED_BUCKET,
