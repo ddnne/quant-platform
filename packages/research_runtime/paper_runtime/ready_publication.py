@@ -35,7 +35,11 @@ from storage.receipt_crypto import (
     PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
     PRODUCTION_RECEIPT_ENVIRONMENT,
 )
-from storage.coverage_ledger import CollectionReceipt
+from storage.coverage_ledger import (
+    CollectionReceipt,
+    declared_coverage_segments,
+    evaluate_segment,
+)
 from ops.receipt_product import (
     _aware_instant,
     measure_owned_product_artifact_body,
@@ -402,6 +406,7 @@ def _collect_verified_receipt_backings(
     set[str],
     tuple[str, ...],
     tuple[Mapping[str, Any], ...],
+    tuple[Mapping[str, Any], ...],
 ]:
     verified_row_backings: dict[str, dict[str, list[tuple[str, str]]]] = {
         dataset_id: {} for dataset_id in required_datasets
@@ -409,6 +414,7 @@ def _collect_verified_receipt_backings(
     witness: set[str] = set()
     accepted_clocks: list[str] = []
     accepted_runset: list[dict[str, Any]] = []
+    accepted_bindings: list[dict[str, Any]] = []
     for raw in collection_receipts:
         stored = dict(raw)
         dataset_id = str(stored["dataset"])
@@ -537,11 +543,26 @@ def _collect_verified_receipt_backings(
                 "structured_digest": str(closure.structured_digest),
             }
         )
+        accepted_bindings.append(
+            {
+                "dataset": str(closure.dataset),
+                "raw_manifest": (
+                    dict(raw_manifests[0]) if len(raw_manifests) == 1 else None
+                ),
+                "raw_manifest_digest": str(closure.raw_manifest_digest),
+                "receipt": receipt,
+                "receipt_digest": str(closure.receipt_digest),
+                "run_id": int(closure.run_id),
+                "segment_id": str(closure.segment_id),
+                "source": str(closure.source),
+            }
+        )
     return (
         verified_row_backings,
         witness,
         tuple(accepted_clocks),
         tuple(accepted_runset),
+        tuple(accepted_bindings),
     )
 
 
@@ -558,6 +579,199 @@ def _receipt_runset_digest(rows: Sequence[Mapping[str, Any]]) -> str:
     return canonical_digest(closed)
 
 
+def _scoped_receipt_native_proofs(
+    *,
+    payload: Mapping[str, Any],
+    accepted_bindings: Sequence[Mapping[str, Any]],
+    lookback_start: str,
+    period_end: str,
+    selected_event_dates: Mapping[str, frozenset[str]],
+    bar_split_interval_start: str | None,
+    binding: Any,
+    physical_digest: str,
+    expected_environment: str,
+    expected_authority_instance_digest: str,
+) -> tuple[str, str, str, str | None]:
+    from data_contracts.coverage import coverage_policy_set_binding
+    from research.ready_manifest import MISSING
+
+    cited: set[str] = set()
+    for entry in payload.get("entries") or ():
+        if not isinstance(entry, Mapping):
+            continue
+        receipts = entry.get("receipt_digests")
+        if type(receipts) is not list:
+            continue
+        cited.update(str(item) for item in receipts if type(item) is str and item)
+
+    def _identity_proofs(
+        rows: Sequence[Mapping[str, Any]],
+    ) -> tuple[str, str]:
+        ordered = sorted(
+            (dict(row) for row in rows),
+            key=lambda row: (
+                str(row["source"]),
+                str(row["dataset"]),
+                str(row["segment_id"]),
+                int(row["run_id"]),
+            ),
+        )
+        rebound: list[dict[str, Any]] = []
+        for item in ordered:
+            raw = item.get("raw_manifest")
+            if (
+                not isinstance(raw, Mapping)
+                or str(raw.get("data_digest") or "")
+                != str(item["raw_manifest_digest"])
+            ):
+                return MISSING, MISSING
+            rebound.append(
+                {
+                    "dataset": str(item["dataset"]),
+                    "manifest_key": str(raw["manifest_key"]),
+                    "page_count": int(raw["page_count"]),
+                    "raw_bytes": int(raw["raw_bytes"]),
+                    "raw_manifest_digest": str(item["raw_manifest_digest"]),
+                    "receipt_digest": str(item["receipt_digest"]),
+                    "row_count": int(raw["row_count"]),
+                    "run_id": int(item["run_id"]),
+                    "segment_id": str(item["segment_id"]),
+                    "source": str(item["source"]),
+                }
+            )
+        return (
+            canonical_digest(
+                {"physical_digest": physical_digest, "raw": rebound}
+            ),
+            canonical_digest(
+                {
+                    "coverage_receipt_count": len(ordered),
+                    "physical_digest": physical_digest,
+                    "receipts": [
+                        {
+                            "dataset": str(row["dataset"]),
+                            "receipt_digest": str(row["receipt_digest"]),
+                            "run_id": int(row["run_id"]),
+                            "segment_id": str(row["segment_id"]),
+                            "source": str(row["source"]),
+                        }
+                        for row in ordered
+                    ],
+                }
+            ),
+        )
+
+    selected = [
+        dict(row)
+        for row in accepted_bindings
+        if str(row.get("receipt_digest") or "") in cited
+    ]
+    if not selected:
+        return MISSING, MISSING, MISSING, "compiled selected receipts are missing"
+    raw_proof, receipt_proof = _identity_proofs(selected)
+    coverage_proof = MISSING
+    reason: str | None = None
+    try:
+        policy_set = coverage_policy_set_binding(list(binding.required_datasets))
+        planned = declared_coverage_segments(
+            tuple(binding.required_datasets),
+            lookback_start=lookback_start,
+            period_end=period_end,
+            selected_event_dates=selected_event_dates,
+            bar_split_interval_start=bar_split_interval_start,
+        )
+        covered: list[dict[str, Any]] = []
+        inventory: list[Mapping[str, Any]] = []
+        by_identity: dict[tuple[str, str, str], list[Mapping[str, Any]]] = {}
+        for row in accepted_bindings:
+            key = (
+                str(row["source"]),
+                str(row["dataset"]),
+                str(row["segment_id"]),
+            )
+            by_identity.setdefault(key, []).append(row)
+        for segment in planned:
+            matches = by_identity.get(
+                (segment.source, segment.dataset, segment.segment_id),
+                (),
+            )
+            if len(matches) != 1:
+                raise ValueError(
+                    "declared segment "
+                    f"{segment.dataset}/{segment.segment_id} "
+                    "is not a unique signed closure"
+                )
+            match = matches[0]
+            status, detail = evaluate_segment(
+                coverage_contract_for(segment.dataset),
+                segment,
+                match.get("receipt"),
+                expected_environment=expected_environment,
+                expected_authority_instance_digest=(
+                    expected_authority_instance_digest
+                ),
+            )
+            raw = match.get("raw_manifest")
+            if (
+                status != "COMPLETE"
+                or not isinstance(raw, Mapping)
+                or str(raw.get("data_digest") or "")
+                != str(match["raw_manifest_digest"])
+            ):
+                raise ValueError(
+                    "declared segment "
+                    f"{segment.dataset}/{segment.segment_id} "
+                    f"is not a complete signed closure: {detail.get('reason')}"
+                )
+            covered.append(
+                {
+                    "dataset": segment.dataset,
+                    "expected_items": segment.expected_items,
+                    "expected_scope": dict(segment.expected_scope),
+                    "receipt_digest": str(match["receipt_digest"]),
+                    "run_id": int(match["run_id"]),
+                    "segment_end": segment.segment_end,
+                    "segment_id": segment.segment_id,
+                    "segment_start": segment.segment_start,
+                    "source": segment.source,
+                }
+            )
+            inventory.append(match)
+        covered.sort(
+            key=lambda row: (
+                row["source"],
+                row["dataset"],
+                row["segment_id"],
+                row["run_id"],
+            )
+        )
+        inventory_raw, inventory_receipt = _identity_proofs(inventory)
+        if inventory_raw == MISSING or inventory_receipt == MISSING:
+            raise ValueError(
+                "declared coverage inventory raw identities are incomplete"
+            )
+        raw_proof = inventory_raw
+        receipt_proof = inventory_receipt
+        coverage_proof = canonical_digest(
+            {
+                "coverage_policy_digest": str(policy_set["policy_digest"]),
+                "coverage_policy_version": str(policy_set["policy_version"]),
+                "lookback_start": lookback_start,
+                "lookback_trading_days": payload["lookback_trading_days"],
+                "period_end": payload["period_end"],
+                "period_start": payload["period_start"],
+                "physical_digest": physical_digest,
+                "profile_id": binding.profile_id,
+                "profile_version": binding.profile_version,
+                "segments": covered,
+            }
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        coverage_proof = MISSING
+        reason = str(exc)
+    return coverage_proof, raw_proof, receipt_proof, reason
+
+
 def _prove_exact_four_compiled_scope(
     conn: sqlite3.Connection,
     binding: Any,
@@ -567,7 +781,17 @@ def _prove_exact_four_compiled_scope(
     snapshot_observed_through: str | None,
     physical_digest: str,
     allowed_segments: frozenset[tuple[str, str]] | None = None,
-) -> tuple[VerifiedPublicationEvidence, str, str]:
+) -> tuple[
+    VerifiedPublicationEvidence,
+    str,
+    str,
+    tuple[
+        tuple[Mapping[str, Any], ...],
+        str,
+        Mapping[str, frozenset[str]],
+        str | None,
+    ],
+]:
     period_start, period_end, max_lookback, required_datasets = (
         _require_controlled_exact_four_binding(binding)
     )
@@ -601,7 +825,7 @@ def _prove_exact_four_compiled_scope(
                 expected_authority_instance_digest
             ),
         )
-        verified_row_backings, witness, _accepted, runset_rows = (
+        verified_row_backings, witness, _accepted, runset_rows, accepted_bindings = (
             _collect_verified_receipt_backings(
                 conn,
                 measure_through=observed_through,
@@ -609,7 +833,7 @@ def _prove_exact_four_compiled_scope(
             )
         )
     else:
-        verified_row_backings, witness, accepted, runset_rows = (
+        verified_row_backings, witness, accepted, runset_rows, accepted_bindings = (
             _collect_verified_receipt_backings(
                 conn,
                 measure_through=None,
@@ -740,6 +964,12 @@ def _prove_exact_four_compiled_scope(
         ),
         observed_through,
         _receipt_runset_digest(runset_rows),
+        (
+            tuple(accepted_bindings),
+            selected_scope.lookback_start,
+            selected_scope.selected_event_dates,
+            selected_scope.bar_split_interval_start,
+        ),
     )
 
 
@@ -789,7 +1019,7 @@ def _verify_publication_on_authenticated_mirror(
         with nullcontext(conn) as conn:
             if _authenticated_applied_mirror_connection_identity(conn) is not registered:
                 raise PitError("READY publication connection identity swapped")
-            evidence, _observed_through, _runset_digest = _prove_exact_four_compiled_scope(
+            evidence, _observed_through, _runset_digest, _proof_scope = _prove_exact_four_compiled_scope(
                 conn,
                 binding,
                 expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
@@ -879,16 +1109,18 @@ def verify_committed_receipt_candidate_scope(
     }
     try:
         conn.row_factory = sqlite3.Row
-        evidence, observed_through, runset_digest = _prove_exact_four_compiled_scope(
-            conn,
-            binding,
-            expected_environment=environment,
-            expected_authority_instance_digest=(
-                PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS[environment]
-            ),
-            snapshot_observed_through=None,
-            physical_digest=physical_digest,
-            allowed_segments=allowed_segments,
+        evidence, observed_through, runset_digest, proof_scope = (
+            _prove_exact_four_compiled_scope(
+                conn,
+                binding,
+                expected_environment=environment,
+                expected_authority_instance_digest=(
+                    PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS[environment]
+                ),
+                snapshot_observed_through=None,
+                physical_digest=physical_digest,
+                allowed_segments=allowed_segments,
+            )
         )
         payload = evidence.as_dict()
         if payload.get("physical_db_digest") != physical_digest:
@@ -991,6 +1223,34 @@ def verify_committed_receipt_candidate_scope(
             contract_versions=binding.contract_versions,
             dataset_ids=binding.required_datasets,
         )
+        (
+            accepted_bindings,
+            lookback_start,
+            selected_event_dates,
+            bar_split_interval_start,
+        ) = proof_scope
+        coverage_proof, raw_proof, receipt_proof, coverage_reason = (
+            _scoped_receipt_native_proofs(
+                payload=payload,
+                accepted_bindings=accepted_bindings,
+                lookback_start=lookback_start,
+                period_end=period_end,
+                selected_event_dates=selected_event_dates,
+                bar_split_interval_start=bar_split_interval_start,
+                binding=binding,
+                physical_digest=physical_digest,
+                expected_environment=environment,
+                expected_authority_instance_digest=(
+                    PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS[environment]
+                ),
+            )
+        )
+        if coverage_reason:
+            compiled["coverage_proof_reason"] = coverage_reason
+        if hash_receipt_candidate_snapshot(store) != physical_digest:
+            raise MassResearchDisabledError(
+                "physical DB digest does not match the prepared snapshot"
+            )
         receipt_manifest = build_receipt_native_ready_manifest(
             compiled["receipt_source"],
             binding=binding,
@@ -1002,6 +1262,9 @@ def verify_committed_receipt_candidate_scope(
             resolved_universe_digest=payload["resolved_universe_digest"],
             feature_generation=feature_generation,
             catalog_generation=catalog_generation,
+            coverage_proof_digest=coverage_proof,
+            raw_proof_digest=raw_proof,
+            receipt_proof_digest=receipt_proof,
         )
         compiled["receipt_native_manifest"] = receipt_manifest.to_dict()
         compiled["receipt_native_manifest_digest"] = receipt_manifest.manifest_digest

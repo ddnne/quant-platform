@@ -27,6 +27,7 @@ from .read_clock import (
 from .scoped_selection import (
     ScopedBarView,
     ScopedFinancialView,
+    split_safety_interval_start,
 )
 from .universe_pit import _calendar_dates
 
@@ -92,6 +93,9 @@ class CompiledControlledSelection:
 class _CompiledDependencyScopeHits:
     selected_keys: Mapping[str, frozenset[str]]
     selected_versions: Mapping[str, frozenset[str]]
+    lookback_start: str
+    selected_event_dates: Mapping[str, frozenset[str]]
+    bar_split_interval_start: str | None
 
 
 def _require_aware(value: Any, label: str) -> datetime:
@@ -272,6 +276,10 @@ def _select_compiled_dependency_scope(
     selected_digests: dict[str, set[str]] = {
         dataset_id: set() for dataset_id in _SESSION_DATASETS
     }
+    selected_event_dates: dict[str, set[str]] = {
+        dataset_id: set() for dataset_id in _SESSION_DATASETS
+    }
+    earliest_bar_interval: str | None = None
 
     def _facts(
         dataset_id: str,
@@ -335,6 +343,7 @@ def _select_compiled_dependency_scope(
             raise PitError(f"markets_calendar {day} is late at decision time")
         selected_keys["markets_calendar"].add(row["natural_key"])
         selected_digests["markets_calendar"].add(row["product_row_digest"])
+        selected_event_dates["markets_calendar"].add(day)
         if (
             _payload_value(
                 row["payload"], "HolidayDivision", "HolDiv", "holiday_division"
@@ -425,6 +434,9 @@ def _select_compiled_dependency_scope(
             selected_digests["equities_master"].add(
                 master_by_code[code]["product_row_digest"]
             )
+            selected_event_dates["equities_master"].add(
+                str(master_by_code[code]["event_date"])
+            )
 
     with install_read_clock(proof_clock):
         for day in in_period_trading:
@@ -459,8 +471,12 @@ def _select_compiled_dependency_scope(
                                 selected_keys["fins_summary"].add(
                                     financial.selected_natural_key
                                 )
-                            for natural_key, _event_day in financial.visible_identities:
+                            for natural_key, event_day in financial.visible_identities:
                                 selected_keys["fins_summary"].add(natural_key)
+                                if event_day:
+                                    selected_event_dates["fins_summary"].add(
+                                        str(event_day)
+                                    )
                             if financial.state.visible_row_count != len(
                                 financial.visible_product_digests
                             ):
@@ -483,6 +499,18 @@ def _select_compiled_dependency_scope(
                                     f"fins_summary missing or late for {code} at {day}"
                                 )
                         if bars_req is not None:
+                            if (
+                                bars_req.scope.split_safety_anchor_interval
+                                and split_anchor
+                            ):
+                                interval_start = split_safety_interval_start(
+                                    split_anchor
+                                )
+                                if interval_start and (
+                                    earliest_bar_interval is None
+                                    or interval_start < earliest_bar_interval
+                                ):
+                                    earliest_bar_interval = interval_start
                             bars = scoped_owner.select_am_research_scope(
                                 requirement=bars_req,
                                 decision_as_of=decision_as_of,
@@ -504,6 +532,9 @@ def _select_compiled_dependency_scope(
                                 )
                                 selected_digests["equities_bars_daily"].add(
                                     bar.product_row_digest
+                                )
+                                selected_event_dates["equities_bars_daily"].add(
+                                    bar.date
                                 )
 
     observed_clock = _require_aware(observed_through, "observed_through")
@@ -549,6 +580,9 @@ def _select_compiled_dependency_scope(
             selected_digests["equities_bars_daily"].add(
                 matches[0]["product_row_digest"]
             )
+            selected_event_dates["equities_bars_daily"].add(
+                str(matches[0]["event_date"])
+            )
         topix = [
             row
             for row in topix_by_day.get(day, ())
@@ -564,6 +598,7 @@ def _select_compiled_dependency_scope(
         selected_digests["indices_bars_daily_topix"].add(
             topix[0]["product_row_digest"]
         )
+        selected_event_dates["indices_bars_daily_topix"].add(day)
 
     return _CompiledDependencyScopeHits(
         selected_keys=MappingProxyType(
@@ -572,4 +607,12 @@ def _select_compiled_dependency_scope(
         selected_versions=MappingProxyType(
             {key: frozenset(value) for key, value in selected_digests.items()}
         ),
+        lookback_start=scope_start,
+        selected_event_dates=MappingProxyType(
+            {
+                key: frozenset(value)
+                for key, value in selected_event_dates.items()
+            }
+        ),
+        bar_split_interval_start=earliest_bar_interval,
     )

@@ -32,6 +32,7 @@ from .read_clock import resolve_read_clock
 
 
 THROUGH_BOUND_DECISION_VISIBLE_VIEW = "bound_decision_visible_view"
+_SPLIT_SAFETY_LOOKBACK_DAYS = 31
 _BARS_DATASET = "equities_bars_daily"
 _FINS_DATASET = "fins_summary"
 _MASTER_DATASET = "equities_master"
@@ -459,6 +460,19 @@ def _select_prior_bars(
     return collected
 
 
+def split_safety_interval_start(split_anchor: str | None) -> str | None:
+    """Declared bar split-safety window start: anchor date minus 31 days."""
+    text = str(split_anchor or "").strip()
+    if not text:
+        return None
+    try:
+        return (
+            date.fromisoformat(text) - timedelta(days=_SPLIT_SAFETY_LOOKBACK_DAYS)
+        ).isoformat()
+    except ValueError:
+        return None
+
+
 def _select_bars(
     conn: sqlite3.Connection,
     *,
@@ -486,14 +500,7 @@ def _select_bars(
     )
     interval_start = None
     if scope.split_safety_anchor_interval and split_anchor:
-        text = str(split_anchor).strip()
-        if text:
-            try:
-                interval_start = (
-                    date.fromisoformat(text) - timedelta(days=31)
-                ).isoformat()
-            except ValueError:
-                interval_start = None
+        interval_start = split_safety_interval_start(split_anchor)
     prior_limit = None
     if latest_n is not None:
         prior_limit = {
@@ -701,6 +708,7 @@ __all__ = [
     "ScopedFinancialView",
     "ScopedSelectionError",
     "alias_field_evidence",
+    "split_safety_interval_start",
     "sqlite_row_code",
     "sqlite_row_event_date",
 ]

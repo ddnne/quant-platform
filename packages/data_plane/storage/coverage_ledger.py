@@ -343,6 +343,7 @@ def plan_required_segments(
     source: str = "jquants",
     expected_items_by_segment: Mapping[str, int] | None = None,
     index_text: str | None = None,
+    range_start: str | None = None,
 ) -> tuple[RequiredCoverageSegment, ...]:
     """Create the required inventory independently of observed rows/receipts.
 
@@ -353,6 +354,10 @@ def plan_required_segments(
     Official-archive-index datasets take listed publication days from
     ``index_text``. Missing index text yields an empty required set
     (UNKNOWN / fail-closed), not a calendar-day walk.
+
+    ``range_start`` optionally raises the history floor after official
+    availability. Default None keeps the contract history target so global
+    inventory callers and v1 hashes are unchanged.
     """
     capability = _source_capability_for(policy.dataset_id)
     domain = _official_domain_for(capability)
@@ -361,6 +366,10 @@ def plan_required_segments(
         official = date.fromisoformat(domain.earliest_official_availability)
         if start < official:
             start = official
+    if range_start is not None:
+        bounded = date.fromisoformat(range_start)
+        if bounded > start:
+            start = bounded
     end = date.fromisoformat(target_end)
     if end < start:
         raise ValueError("target_end precedes coverage history target")
@@ -466,6 +475,86 @@ def plan_required_segments(
             f"unsupported segment granularity: {policy.segment_granularity!r}"
         )
     return tuple(segments)
+
+
+_WARMUP_COVERAGE_DATASETS = frozenset(
+    {
+        "indices_bars_daily_topix",
+        "markets_calendar",
+    }
+)
+
+
+def _full_collection_month_range(floor: str, period_end: str) -> tuple[str, str]:
+    """Align a consumer window to canonical calendar-month collection bounds."""
+    start = date.fromisoformat(floor).replace(day=1)
+    end = _month_end(date.fromisoformat(period_end))
+    return start.isoformat(), end.isoformat()
+
+
+def declared_coverage_segments(
+    datasets: Sequence[str],
+    *,
+    lookback_start: str,
+    period_end: str,
+    selected_event_dates: Mapping[str, frozenset[str]],
+    bar_split_interval_start: str | None = None,
+) -> tuple[RequiredCoverageSegment, ...]:
+    """Plan canonical V3 collection months for compiled-declared windows.
+
+    Bars use the selector split-safety interval plus warmup, not observed
+    bar min/max. Financials use seed disclosures through the decision period.
+    Master keeps snapshot months only. Receipt min/max cannot shrink this set.
+    """
+    planned: list[RequiredCoverageSegment] = []
+    for dataset_id in datasets:
+        policy = coverage_contract_for(dataset_id)
+        events = frozenset(selected_event_dates.get(dataset_id) or ())
+        keep_all = False
+        if dataset_id == "equities_bars_daily":
+            floor = lookback_start
+            if bar_split_interval_start:
+                floor = min(floor, bar_split_interval_start)
+            keep_all = True
+        elif dataset_id in _WARMUP_COVERAGE_DATASETS:
+            floor = lookback_start
+            keep_all = True
+        elif policy.expected_frequency == "event_driven":
+            if not events:
+                raise ValueError(
+                    f"declared coverage events are missing for {dataset_id}"
+                )
+            floor = min(events)
+            keep_all = True
+        else:
+            if not events:
+                raise ValueError(
+                    f"declared coverage events are missing for {dataset_id}"
+                )
+            floor = min(events)
+        range_start, range_end = _full_collection_month_range(floor, period_end)
+        segments = plan_required_segments(
+            policy,
+            range_end,
+            range_start=range_start,
+        )
+        if keep_all:
+            kept = list(segments)
+        else:
+            kept = [
+                segment
+                for segment in segments
+                if any(
+                    segment.segment_start <= day <= segment.segment_end
+                    for day in events
+                )
+            ]
+        if not kept:
+            raise ValueError(
+                f"declared coverage inventory is empty for {dataset_id}"
+            )
+        planned.extend(kept)
+    return tuple(planned)
 
 
 _DETERMINISTIC_READY_INVENTORY_GRAINS = frozenset({"calendar_month"})
@@ -698,6 +787,11 @@ def _evaluate_segment_with_closure(
     policy: CollectionCoverageContract,
     required: RequiredCoverageSegment,
     receipt: CollectionReceipt | None,
+    *,
+    expected_environment: str = PRODUCTION_RECEIPT_ENVIRONMENT,
+    expected_authority_instance_digest: str = (
+        PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+    ),
 ) -> tuple[str, dict[str, Any], Any | None]:
     """Evaluate one segment and retain the verifier-minted closure internally."""
     if receipt is None:
@@ -712,9 +806,9 @@ def _evaluate_segment_with_closure(
 
         closure = require_verified_collection_closure(
             receipt,
-            expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+            expected_environment=expected_environment,
             expected_authority_instance_digest=(
-                PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+                expected_authority_instance_digest
             ),
             required=required,
             expected_policy_version=policy.policy_version,
@@ -800,12 +894,19 @@ def evaluate_segment(
     policy: CollectionCoverageContract,
     required: RequiredCoverageSegment,
     receipt: CollectionReceipt | None,
+    *,
+    expected_environment: str = PRODUCTION_RECEIPT_ENVIRONMENT,
+    expected_authority_instance_digest: str = (
+        PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+    ),
 ) -> tuple[str, dict[str, Any]]:
     """Evaluate one required segment without treating absent events as gaps."""
     status, detail, _closure = _evaluate_segment_with_closure(
         policy,
         required,
         receipt,
+        expected_environment=expected_environment,
+        expected_authority_instance_digest=expected_authority_instance_digest,
     )
     return status, detail
 
@@ -2474,6 +2575,7 @@ __all__ = [
     "compare_exact_coverage_inventory",
     "coverage_gaps",
     "coverage_summary",
+    "declared_coverage_segments",
     "evaluate_segment",
     "evaluate_required_segments",
     "is_synthetic_receipt",
