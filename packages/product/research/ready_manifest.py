@@ -34,12 +34,27 @@ from selection.controlled_pilot_policy import (
     require_controlled_pilot_identity,
 )
 from storage.receipt_crypto import (
+    PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS,
     PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
     PRODUCTION_RECEIPT_ENVIRONMENT,
 )
+from types import MappingProxyType
 
 READY_MANIFEST_FORMAT: str = "ready-manifest/v1"
+READY_MANIFEST_V2_FORMAT: str = "ready-manifest/v2"
 SCHEMA_REL: Path = Path("specs") / "ready" / "ready_manifest.schema.json"
+SCHEMA_V2_REL: Path = Path("specs") / "ready" / "ready_manifest_v2.schema.json"
+RECEIPT_NATIVE_SOURCE_KIND: str = "governed-receipt-candidate"
+RECEIPT_NATIVE_SOURCE_FIELDS: tuple[str, ...] = (
+    "kind",
+    "environment",
+    "authority_instance_digest",
+    "physical_digest",
+    "observation_policy",
+    "observed_through",
+    "compiled_scope_proof_digest",
+    "receipt_runset_digest",
+)
 CORE_PROFILE_REL: Path = Path("specs") / "research_profiles" / "core_v1.json"
 MISSING: str = "MISSING"
 UNKNOWN: str = "UNKNOWN"
@@ -74,6 +89,7 @@ GENERATION_PIN_FIELDS: tuple[str, ...] = (
 )
 
 _SCHEMA: dict[str, Any] | None = None
+_SCHEMA_V2: dict[str, Any] | None = None
 
 
 def _now() -> datetime:
@@ -141,10 +157,84 @@ def load_ready_manifest_schema(*, root: Path | None = None) -> dict[str, Any]:
     return raw
 
 
+def load_ready_manifest_v2_schema(*, root: Path | None = None) -> dict[str, Any]:
+    """Load the receipt-native ReadyManifest JSON Schema."""
+    global _SCHEMA_V2
+    if _SCHEMA_V2 is not None and root is None:
+        return _SCHEMA_V2
+    path = (root or repo_root()) / SCHEMA_V2_REL
+    if not path.is_file():
+        raise MassResearchDisabledError(f"ReadyManifest v2 schema missing: {path}")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise MassResearchDisabledError("ReadyManifest v2 schema must be an object")
+    if raw.get("$id") != READY_MANIFEST_V2_FORMAT:
+        raise MassResearchDisabledError(
+            f"ReadyManifest v2 schema $id must be {READY_MANIFEST_V2_FORMAT!r}"
+        )
+    if raw.get("additionalProperties") is not False:
+        raise MassResearchDisabledError(
+            "ReadyManifest v2 schema must set additionalProperties false"
+        )
+    if root is None:
+        _SCHEMA_V2 = raw
+    return raw
+
+
+def closed_receipt_native_source(value: Any) -> Mapping[str, Any]:
+    from paper_runtime.ready_publication import RECEIPT_CANDIDATE_OBSERVATION_POLICY
+
+    if not isinstance(value, Mapping):
+        raise MassResearchDisabledError("receipt-native source must be an object")
+    if tuple(sorted(value)) != tuple(sorted(RECEIPT_NATIVE_SOURCE_FIELDS)):
+        raise MassResearchDisabledError("receipt-native source fields are not closed")
+    if value.get("kind") != RECEIPT_NATIVE_SOURCE_KIND:
+        raise MassResearchDisabledError("receipt-native source kind is invalid")
+    environment = value.get("environment")
+    if environment not in PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS:
+        raise MassResearchDisabledError(
+            "receipt-native source environment is not pinned"
+        )
+    if value.get("authority_instance_digest") != (
+        PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS[environment]
+    ):
+        raise MassResearchDisabledError(
+            "receipt-native source authority pin mismatch"
+        )
+    if value.get("observation_policy") != RECEIPT_CANDIDATE_OBSERVATION_POLICY:
+        raise MassResearchDisabledError(
+            "receipt-native source observation policy is invalid"
+        )
+    observed = value.get("observed_through")
+    if type(observed) is not str or not observed.strip():
+        raise MassResearchDisabledError(
+            "receipt-native source observed_through is missing"
+        )
+    for field in (
+        "authority_instance_digest",
+        "physical_digest",
+        "compiled_scope_proof_digest",
+        "receipt_runset_digest",
+    ):
+        if not is_sha256_digest(value.get(field)):
+            raise MassResearchDisabledError(
+                f"receipt-native source {field} is not a digest"
+            )
+    return MappingProxyType(
+        {field: value[field] for field in RECEIPT_NATIVE_SOURCE_FIELDS}
+    )
+
+
 def validate_ready_manifest_document(payload: Any) -> None:
-    schema = load_ready_manifest_schema()
     if not isinstance(payload, Mapping):
         raise MassResearchDisabledError("ReadyManifest must be an object")
+    fmt = payload.get("format")
+    if fmt == READY_MANIFEST_V2_FORMAT:
+        schema = load_ready_manifest_v2_schema()
+    elif fmt == READY_MANIFEST_FORMAT:
+        schema = load_ready_manifest_schema()
+    else:
+        raise MassResearchDisabledError("ReadyManifest format is unknown")
     try:
         import jsonschema
     except ImportError as exc:
@@ -199,6 +289,7 @@ class ReadyManifest:
     observed_through: str = ""
     format: str = READY_MANIFEST_FORMAT
     manifest_digest: str = ""
+    source: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         body = {
@@ -224,10 +315,6 @@ class ReadyManifest:
             "validation_proof_digest": self.validation_proof_digest,
             "b0_proof_digest": self.b0_proof_digest,
             "b4_proof_digest": self.b4_proof_digest,
-            "source_generation": self.source_generation,
-            "applied_sync_generation": self.applied_sync_generation,
-            "export_cursor": self.export_cursor,
-            "applied_cursor": self.applied_cursor,
             "pit_contract_digests": dict(self.pit_contract_digests),
             "feature_generation": self.feature_generation,
             "catalog_generation": self.catalog_generation,
@@ -235,8 +322,19 @@ class ReadyManifest:
             "published_at": self.published_at,
             "fill_contract_digest": self.fill_contract_digest,
         }
-        if self.observed_through:
-            body["observed_through"] = self.observed_through
+        if self.format == READY_MANIFEST_V2_FORMAT:
+            if self.source is None:
+                raise MassResearchDisabledError(
+                    "receipt-native ReadyManifest source is missing"
+                )
+            body["source"] = dict(self.source)
+        else:
+            body["source_generation"] = self.source_generation
+            body["applied_sync_generation"] = self.applied_sync_generation
+            body["export_cursor"] = self.export_cursor
+            body["applied_cursor"] = self.applied_cursor
+            if self.observed_through:
+                body["observed_through"] = self.observed_through
         digest = self.manifest_digest or _manifest_digest_for(body)
         return {**body, "manifest_digest": digest}
 
@@ -254,6 +352,7 @@ class ReadyManifest:
         validate_ready_manifest_document({**document, **(
             {"manifest_digest": declared} if declared is not None else {}
         )})
+        fmt = str(document.get("format") or "")
         pit_raw = document.get("pit_contract_digests")
         if not isinstance(pit_raw, Mapping) or not pit_raw:
             raise MassResearchDisabledError("ReadyManifest pit_contract_digests missing")
@@ -310,12 +409,6 @@ class ReadyManifest:
             ),
             "b0_proof_digest": proof_or_missing(document.get("b0_proof_digest")),
             "b4_proof_digest": proof_or_missing(document.get("b4_proof_digest")),
-            "source_generation": pin_or_missing(document.get("source_generation")),
-            "applied_sync_generation": pin_or_missing(
-                document.get("applied_sync_generation")
-            ),
-            "export_cursor": pin_or_missing(document.get("export_cursor")),
-            "applied_cursor": pin_or_missing(document.get("applied_cursor")),
             "pit_contract_digests": pit,
             "feature_generation": pin_or_missing(document.get("feature_generation")),
             "catalog_generation": pin_or_missing(document.get("catalog_generation")),
@@ -326,8 +419,31 @@ class ReadyManifest:
                 document.get("fill_contract_digest")
             ),
         }
-        if document.get("observed_through"):
-            body["observed_through"] = pin_or_missing(document.get("observed_through"))
+        if fmt == READY_MANIFEST_V2_FORMAT:
+            for field in GENERATION_PIN_FIELDS[:4]:
+                if field in document:
+                    raise MassResearchDisabledError(
+                        "receipt-native ReadyManifest forbids D1 cursor fields"
+                    )
+            body["format"] = READY_MANIFEST_V2_FORMAT
+            body["source"] = closed_receipt_native_source(document.get("source"))
+            body["source_generation"] = ""
+            body["applied_sync_generation"] = ""
+            body["export_cursor"] = ""
+            body["applied_cursor"] = ""
+        else:
+            body["source_generation"] = pin_or_missing(
+                document.get("source_generation")
+            )
+            body["applied_sync_generation"] = pin_or_missing(
+                document.get("applied_sync_generation")
+            )
+            body["export_cursor"] = pin_or_missing(document.get("export_cursor"))
+            body["applied_cursor"] = pin_or_missing(document.get("applied_cursor"))
+            if document.get("observed_through"):
+                body["observed_through"] = pin_or_missing(
+                    document.get("observed_through")
+                )
         scope = body["publication_scope"]
         identity = body["identity"]
         if scope == "PILOT":
@@ -363,6 +479,17 @@ class ReadyManifest:
 def _manifest_digest_for(body: Mapping[str, Any]) -> str:
     document = dict(body)
     document.pop("manifest_digest", None)
+    if document.get("format") == READY_MANIFEST_V2_FORMAT:
+        for field in (
+            "source_generation",
+            "applied_sync_generation",
+            "export_cursor",
+            "applied_cursor",
+        ):
+            document.pop(field, None)
+        source = document.get("source")
+        if isinstance(source, Mapping):
+            document["source"] = dict(source)
     return canonical_digest(document)
 
 
@@ -465,6 +592,66 @@ def build_ready_manifest(
             "catalog_generation": pin_or_missing(catalog_generation),
             "created_at": created,
             "published_at": published_at or MISSING,
+        }
+    )
+
+
+def build_receipt_native_ready_manifest(
+    source: Mapping[str, Any],
+    *,
+    binding: Any,
+    created_at: str,
+    published_at: str = MISSING,
+) -> ReadyManifest:
+    """Serialize a receipt-native v2 ReadyManifest. Not live READY."""
+
+    from data_contracts.coverage import coverage_policy_set_binding
+    from research.universe_contract import EXACT_FOUR_UNIVERSE_RULE_DIGEST
+
+    closed = closed_receipt_native_source(source)
+    datasets = list(binding.required_datasets)
+    try:
+        policy_set = coverage_policy_set_binding(datasets)
+        coverage_policy_version = str(policy_set["policy_version"])
+        coverage_policy_digest = str(policy_set["policy_digest"])
+    except (KeyError, ValueError):
+        coverage_policy_version = MISSING
+        coverage_policy_digest = MISSING
+    return ReadyManifest.from_dict(
+        {
+            "format": READY_MANIFEST_V2_FORMAT,
+            "identity": CONTROLLED_PILOT_IDENTITY,
+            "snapshot_id": canonical_digest({"source": dict(closed)}),
+            "publication_scope": "PILOT",
+            "profile_id": binding.profile_id,
+            "profile_version": binding.profile_version,
+            "profile_digest": binding.profile_digest,
+            "plan_ids": list(binding.plan_ids),
+            "plan_set_digest": binding.plan_set_digest,
+            "dependency_closure_digest": binding.closure_set_digest,
+            "universe_rule_digest": EXACT_FOUR_UNIVERSE_RULE_DIGEST,
+            "resolved_universe_digest": MISSING,
+            "dataset_ids": datasets,
+            "dataset_membership_digest": compute_dataset_membership_digest(
+                datasets
+            ),
+            "coverage_policy_version": coverage_policy_version,
+            "coverage_policy_digest": coverage_policy_digest,
+            "coverage_proof_digest": MISSING,
+            "raw_proof_digest": MISSING,
+            "receipt_proof_digest": MISSING,
+            "validation_proof_digest": MISSING,
+            "b0_proof_digest": MISSING,
+            "b4_proof_digest": MISSING,
+            "source": dict(closed),
+            "pit_contract_digests": {
+                "dependency_scope": closed["compiled_scope_proof_digest"],
+            },
+            "feature_generation": MISSING,
+            "catalog_generation": MISSING,
+            "created_at": created_at,
+            "published_at": published_at,
+            "fill_contract_digest": CONTROLLED_FILL_CONTRACT_DIGEST,
         }
     )
 
@@ -1635,25 +1822,43 @@ def missing_ready_manifest_proofs(manifest: ReadyManifest) -> list[str]:
     for field in PROOF_DIGEST_FIELDS:
         if not is_sha256_digest(body.get(field)):
             missing.append(field)
-    for field in GENERATION_PIN_FIELDS:
-        value = body.get(field)
-        if not isinstance(value, str) or value.strip() in ABSENT_PROOFS:
-            missing.append(field)
-    if (
-        body.get("source_generation") not in ABSENT_PROOFS
-        and body.get("applied_sync_generation") not in ABSENT_PROOFS
-        and body.get("source_generation") != body.get("applied_sync_generation")
-    ):
-        missing.append("source_generation.current_sync")
-    cursor_values = [
-        body.get("source_generation"),
-        body.get("export_cursor"),
-        body.get("applied_cursor"),
-    ]
-    if all(value not in ABSENT_PROOFS for value in cursor_values) and len(
-        set(cursor_values)
-    ) != 1:
-        missing.append("source_export_applied_cursor.current_sync")
+    if body.get("format") == READY_MANIFEST_V2_FORMAT:
+        source = body.get("source")
+        if not isinstance(source, Mapping):
+            missing.append("source")
+        else:
+            for field in (
+                "authority_instance_digest",
+                "physical_digest",
+                "compiled_scope_proof_digest",
+                "receipt_runset_digest",
+            ):
+                if not is_sha256_digest(source.get(field)):
+                    missing.append(f"source.{field}")
+        for field in ("feature_generation", "catalog_generation"):
+            value = body.get(field)
+            if not isinstance(value, str) or value.strip() in ABSENT_PROOFS:
+                missing.append(field)
+    else:
+        for field in GENERATION_PIN_FIELDS:
+            value = body.get(field)
+            if not isinstance(value, str) or value.strip() in ABSENT_PROOFS:
+                missing.append(field)
+        if (
+            body.get("source_generation") not in ABSENT_PROOFS
+            and body.get("applied_sync_generation") not in ABSENT_PROOFS
+            and body.get("source_generation") != body.get("applied_sync_generation")
+        ):
+            missing.append("source_generation.current_sync")
+        cursor_values = [
+            body.get("source_generation"),
+            body.get("export_cursor"),
+            body.get("applied_cursor"),
+        ]
+        if all(value not in ABSENT_PROOFS for value in cursor_values) and len(
+            set(cursor_values)
+        ) != 1:
+            missing.append("source_export_applied_cursor.current_sync")
     timestamps = {field: _aware_datetime(body.get(field)) for field in TIMESTAMP_FIELDS}
     for field, value in timestamps.items():
         if value is None:
@@ -1846,8 +2051,11 @@ __all__ = [
     "MISSING",
     "PROOF_DIGEST_FIELDS",
     "READY_MANIFEST_FORMAT",
+    "READY_MANIFEST_V2_FORMAT",
     "READY_MANIFEST_SCHEMA",
+    "RECEIPT_NATIVE_SOURCE_KIND",
     "SCHEMA_REL",
+    "SCHEMA_V2_REL",
     "UNKNOWN",
     "TIMESTAMP_FIELDS",
     "CONTROLLED_PILOT_IDENTITY",
@@ -1855,13 +2063,16 @@ __all__ = [
     "ReadyManifest",
     "VerifiedPilotReadyPublication",
     "build_ready_manifest",
+    "build_receipt_native_ready_manifest",
     "build_profile_bound_ready_manifest_from_snapshot_document",
     "canonical_digest",
+    "closed_receipt_native_source",
     "compute_dataset_membership_digest",
     "core_profile_source_capability_gaps",
     "is_sha256_digest",
     "load_ready_manifest",
     "load_ready_manifest_schema",
+    "load_ready_manifest_v2_schema",
     "load_exact_four_pilot_ready_binding",
     "missing_ready_manifest_proofs",
     "pin_or_missing",

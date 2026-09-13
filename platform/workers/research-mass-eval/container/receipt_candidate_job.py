@@ -261,6 +261,13 @@ def _scope_manifest_fields(scope: Mapping[str, Any]) -> dict[str, Any]:
             "observation_checked_at": scope["observation_checked_at"],
             "compiled_scope_proof_digest": scope["compiled_scope_proof_digest"],
             "compiled_scope_physical_digest": scope["physical_db_digest"],
+            "receipt_source_kind": scope["receipt_source"]["kind"],
+            "receipt_runset_digest": scope["receipt_source"][
+                "receipt_runset_digest"
+            ],
+            "receipt_native_manifest_digest": scope[
+                "receipt_native_manifest_digest"
+            ],
         }
     fields: dict[str, Any] = {
         "compiled_scope_status": "FAIL",

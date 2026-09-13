@@ -10,6 +10,12 @@ vi.mock("../../research-mass-eval/src/ops_projection_ready", async (importOrigin
   return { ...actual, verifyOpsProjectionReady: projectionMock };
 });
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import {
+  canonicalJson,
+  sha256Digest,
+} from "../../research-mass-eval/src/controlled_pilot_json";
 import {
   providerVerifiedR2Digest,
   publishPilotReady,
@@ -327,5 +333,72 @@ describe("READY publication physical R2 trust boundary", () => {
       expect(bucket.get).not.toHaveBeenCalled();
       expect(bucket.put).not.toHaveBeenCalled();
     }
+  });
+
+  it("leaves receipt-native v2 PENDING before attestation when a signing key is configured", async () => {
+    const example = JSON.parse(
+      readFileSync(
+        fileURLToPath(
+          new URL(
+            "../../../../specs/ready/ready_manifest_v2.example.json",
+            import.meta.url,
+          ),
+        ),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+    const unsigned = { ...example };
+    delete unsigned.manifest_digest;
+    expect(await sha256Digest(canonicalJson(unsigned))).toBe(example.manifest_digest);
+    const input = candidate();
+    input.ready_manifest = example;
+    const bucket = {
+      head: vi.fn(),
+      get: vi.fn(),
+      put: vi.fn(),
+    } as unknown as R2Bucket;
+    const result = await publishPilotReady({
+      STRUCTURED_BUCKET: bucket,
+      OPS_PROJECTION_ENVIRONMENT: "staging",
+      READY_ED25519_PRIVATE_KEY: await signingSecret(),
+      READY_ED25519_KEY_ID: "ready-test",
+      READY_DECLARED: "false",
+    } as never, input);
+    expect(result).toMatchObject({
+      ok: false,
+      status: "PENDING",
+      error: "receipt-native ready-manifest/v2 is not supported for attestation",
+      ready_declared: false,
+      operational_go: false,
+    });
+    expect(projectionMock).not.toHaveBeenCalled();
+    expect(bucket.put).not.toHaveBeenCalled();
+    const malformed = { ...unsigned, feature_generation: 1 };
+    const malformedDigest = await sha256Digest(canonicalJson(malformed));
+    const malformedResult = await publishPilotReady({
+      STRUCTURED_BUCKET: bucket,
+      OPS_PROJECTION_ENVIRONMENT: "staging",
+      READY_ED25519_PRIVATE_KEY: await signingSecret(),
+      READY_ED25519_KEY_ID: "ready-test",
+      READY_DECLARED: "false",
+    } as never, {
+      ...input,
+      ready_manifest: { ...malformed, manifest_digest: malformedDigest },
+    });
+    expect(malformedResult).toMatchObject({ ok: false, status: "REJECTED" });
+    expect(String(malformedResult.error)).toMatch(/feature_generation/);
+    const cursorPayload = {
+      ...input.ready_manifest,
+      source_generation: "1",
+    };
+    const rejected = await publishPilotReady({
+      STRUCTURED_BUCKET: bucket,
+      OPS_PROJECTION_ENVIRONMENT: "staging",
+      READY_ED25519_PRIVATE_KEY: await signingSecret(),
+      READY_ED25519_KEY_ID: "ready-test",
+      READY_DECLARED: "false",
+    } as never, { ...input, ready_manifest: cursorPayload });
+    expect(rejected).toMatchObject({ ok: false, status: "REJECTED" });
+    expect(String(rejected.error)).toMatch(/cursor|closed/);
   });
 });

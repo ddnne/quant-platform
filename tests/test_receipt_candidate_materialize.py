@@ -613,6 +613,11 @@ def test_committed_candidate_scope_pass_ignores_unsigned_later_receipt(
         RECEIPT_CANDIDATE_SCOPE_DIAGNOSTIC_KIND,
         verify_committed_receipt_candidate_scope,
     )
+    from research.ready_manifest import (
+        READY_MANIFEST_V2_FORMAT,
+        ReadyManifest,
+        build_receipt_native_ready_manifest,
+    )
     from tests.test_ready_policy_fail_closed import _seed_exact_pit_scope
 
     db_path, binding = _seed_exact_pit_scope(
@@ -644,6 +649,30 @@ def test_committed_candidate_scope_pass_ignores_unsigned_later_receipt(
     assert result["physical_db_digest"] == hash_receipt_candidate_snapshot(store)
     assert "source_generation" not in result
     assert "exported_at" not in result
+    source = result["receipt_source"]
+    assert source["kind"] == "governed-receipt-candidate"
+    assert source["environment"] == environment
+    assert source["physical_digest"] == result["physical_db_digest"]
+    assert source["observed_through"] == "2026-08-25T00:00:00+00:00"
+    assert source["receipt_runset_digest"].startswith("sha256:")
+    assert result["receipt_native_manifest_digest"] == (
+        build_receipt_native_ready_manifest(
+            source,
+            binding=binding,
+            created_at="MISSING",
+            published_at="MISSING",
+        ).manifest_digest
+    )
+    manifest = build_receipt_native_ready_manifest(
+        source,
+        binding=binding,
+        created_at="MISSING",
+        published_at="MISSING",
+    )
+    body = manifest.to_dict()
+    assert body["format"] == READY_MANIFEST_V2_FORMAT
+    assert "source_generation" not in body
+    assert ReadyManifest.from_dict(body).to_dict() == body
     store.close()
 
 
@@ -671,4 +700,5 @@ def test_committed_candidate_scope_rejects_corrupted_backing(
     assert result.get("compiled_scope_error")
     assert "compiled_scope_proof_digest" not in result
     assert "observation_checked_at" not in result
+    assert "receipt_source" not in result
     store.close()

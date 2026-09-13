@@ -397,12 +397,18 @@ def _collect_verified_receipt_backings(
     expected_authority_instance_digest: str,
     measure_through: str | None,
     allowed_segments: frozenset[tuple[str, str]] | None,
-) -> tuple[dict[str, dict[str, list[tuple[str, str]]]], set[str], tuple[str, ...]]:
+) -> tuple[
+    dict[str, dict[str, list[tuple[str, str]]]],
+    set[str],
+    tuple[str, ...],
+    tuple[Mapping[str, Any], ...],
+]:
     verified_row_backings: dict[str, dict[str, list[tuple[str, str]]]] = {
         dataset_id: {} for dataset_id in required_datasets
     }
     witness: set[str] = set()
     accepted_clocks: list[str] = []
+    accepted_runset: list[dict[str, Any]] = []
     for raw in collection_receipts:
         stored = dict(raw)
         dataset_id = str(stored["dataset"])
@@ -519,7 +525,37 @@ def _collect_verified_receipt_backings(
         if dataset_id in {"equities_bars_daily", "fins_summary"}:
             witness.update(row_digests)
         accepted_clocks.append(closure.checked_at)
-    return verified_row_backings, witness, tuple(accepted_clocks)
+        accepted_runset.append(
+            {
+                "artifact_digest": str(product["artifact_digest"]),
+                "dataset": str(closure.dataset),
+                "operation_id": str(operation_id),
+                "raw_manifest_digest": str(closure.raw_manifest_digest),
+                "receipt_digest": str(closure.receipt_digest),
+                "run_id": int(closure.run_id),
+                "segment_id": str(closure.segment_id),
+                "structured_digest": str(closure.structured_digest),
+            }
+        )
+    return (
+        verified_row_backings,
+        witness,
+        tuple(accepted_clocks),
+        tuple(accepted_runset),
+    )
+
+
+def _receipt_runset_digest(rows: Sequence[Mapping[str, Any]]) -> str:
+    closed = list(rows)
+    closed.sort(
+        key=lambda row: (
+            str(row["dataset"]),
+            str(row["segment_id"]),
+            int(row["run_id"]),
+            str(row["operation_id"]),
+        )
+    )
+    return canonical_digest(closed)
 
 
 def _prove_exact_four_compiled_scope(
@@ -531,7 +567,7 @@ def _prove_exact_four_compiled_scope(
     snapshot_observed_through: str | None,
     physical_digest: str,
     allowed_segments: frozenset[tuple[str, str]] | None = None,
-) -> tuple[VerifiedPublicationEvidence, str]:
+) -> tuple[VerifiedPublicationEvidence, str, str]:
     period_start, period_end, max_lookback, required_datasets = (
         _require_controlled_exact_four_binding(binding)
     )
@@ -565,7 +601,7 @@ def _prove_exact_four_compiled_scope(
                 expected_authority_instance_digest
             ),
         )
-        verified_row_backings, witness, _accepted = (
+        verified_row_backings, witness, _accepted, runset_rows = (
             _collect_verified_receipt_backings(
                 conn,
                 measure_through=observed_through,
@@ -573,7 +609,7 @@ def _prove_exact_four_compiled_scope(
             )
         )
     else:
-        verified_row_backings, witness, accepted = (
+        verified_row_backings, witness, accepted, runset_rows = (
             _collect_verified_receipt_backings(
                 conn,
                 measure_through=None,
@@ -703,6 +739,7 @@ def _prove_exact_four_compiled_scope(
             {**body, "proof_digest": canonical_digest(body)}
         ),
         observed_through,
+        _receipt_runset_digest(runset_rows),
     )
 
 
@@ -752,7 +789,7 @@ def _verify_publication_on_authenticated_mirror(
         with nullcontext(conn) as conn:
             if _authenticated_applied_mirror_connection_identity(conn) is not registered:
                 raise PitError("READY publication connection identity swapped")
-            evidence, _observed_through = _prove_exact_four_compiled_scope(
+            evidence, _observed_through, _runset_digest = _prove_exact_four_compiled_scope(
                 conn,
                 binding,
                 expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
@@ -822,7 +859,7 @@ def verify_committed_receipt_candidate_scope(
     started = conn.in_transaction
     try:
         conn.row_factory = sqlite3.Row
-        evidence, observed_through = _prove_exact_four_compiled_scope(
+        evidence, observed_through, runset_digest = _prove_exact_four_compiled_scope(
             conn,
             binding,
             expected_environment=environment,
@@ -838,6 +875,29 @@ def verify_committed_receipt_candidate_scope(
             raise MassResearchDisabledError(
                 "physical DB digest does not match the prepared snapshot"
             )
+        receipt_source = {
+            "kind": "governed-receipt-candidate",
+            "environment": environment,
+            "authority_instance_digest": (
+                PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS[environment]
+            ),
+            "physical_digest": physical_digest,
+            "observation_policy": RECEIPT_CANDIDATE_OBSERVATION_POLICY,
+            "observed_through": observed_through,
+            "compiled_scope_proof_digest": payload["proof_digest"],
+            "receipt_runset_digest": runset_digest,
+        }
+        from research.ready_manifest import (
+            MISSING as READY_MISSING,
+            build_receipt_native_ready_manifest,
+        )
+
+        receipt_manifest = build_receipt_native_ready_manifest(
+            receipt_source,
+            binding=binding,
+            created_at=READY_MISSING,
+            published_at=READY_MISSING,
+        )
         return {
             "compiled_scope_status": "PASS",
             "compiled_scope_kind": RECEIPT_CANDIDATE_SCOPE_DIAGNOSTIC_KIND,
@@ -845,6 +905,8 @@ def verify_committed_receipt_candidate_scope(
             "observation_checked_at": observed_through,
             "compiled_scope_proof_digest": payload["proof_digest"],
             "physical_db_digest": physical_digest,
+            "receipt_source": receipt_source,
+            "receipt_native_manifest_digest": receipt_manifest.manifest_digest,
         }
     except (MassResearchDisabledError, PitError, sqlite3.Error) as exc:
         return {

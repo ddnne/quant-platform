@@ -1,0 +1,54 @@
+{
+  "format": "ready-manifest/v2",
+  "identity": "controlled_pilot_v1",
+  "snapshot_id": "sha256:5ae403a009c275789d6eae0716bd12186961a858787974ac30a019aeb35a8c9c",
+  "publication_scope": "PILOT",
+  "profile_id": "controlled-pilot/exact-four",
+  "profile_version": "research-data-profile-set/v1",
+  "profile_digest": "sha256:a79465d7ab88c59bdc14c78d560200c00c87567c56e796b89e13ac11bef98dd1",
+  "plan_ids": [
+    "exp-mdh-hold10-momentum",
+    "exp-xs-hold10-mom5",
+    "exp-event-post-hold5",
+    "exp-fund-hold10-value-mom"
+  ],
+  "plan_set_digest": "sha256:b44265e98bc882dbfdde5d36afc34f41d768e271c430552cd236938845a2ad02",
+  "dependency_closure_digest": "sha256:3bd9d15c4869515fb7b51ccac1a39e4a0f5b1a719ffee4ae4a5942b74337869b",
+  "universe_rule_digest": "sha256:710bd711b107dfebec64da6376a13933a8233d3c55e97562432f27f38c34d351",
+  "resolved_universe_digest": "MISSING",
+  "dataset_ids": [
+    "equities_bars_daily",
+    "equities_master",
+    "fins_summary",
+    "indices_bars_daily_topix",
+    "markets_calendar"
+  ],
+  "dataset_membership_digest": "sha256:1ed847c466a4eb7287d55643a9d1654bb9f03fe5f1ec3c2f92e1eaae5adfc668",
+  "coverage_policy_version": "collection-coverage/v3",
+  "coverage_policy_digest": "sha256:f98d44ec18da2e892fa8c138fa1785e969cc80fa08bf9d519c942ce026ab19d7",
+  "coverage_proof_digest": "MISSING",
+  "raw_proof_digest": "MISSING",
+  "receipt_proof_digest": "MISSING",
+  "validation_proof_digest": "MISSING",
+  "b0_proof_digest": "MISSING",
+  "b4_proof_digest": "MISSING",
+  "pit_contract_digests": {
+    "dependency_scope": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "feature_generation": "MISSING",
+  "catalog_generation": "MISSING",
+  "created_at": "MISSING",
+  "published_at": "MISSING",
+  "fill_contract_digest": "sha256:3691b4c93bbafc1d5a0e8fec25eb14ec26fae9683aaffa07fd44bb80c4f486b8",
+  "source": {
+    "kind": "governed-receipt-candidate",
+    "environment": "production",
+    "authority_instance_digest": "sha256:e6d7df1b9000481d15b8987f5ffda7f3a0b0c051a43cf0051d04a38e58e372a6",
+    "physical_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "observation_policy": "max_verified_claims_checked_at",
+    "observed_through": "2026-08-25T00:00:00+00:00",
+    "compiled_scope_proof_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "receipt_runset_digest": "sha256:abababababababababababababababababababababababababababababababab"
+  },
+  "manifest_digest": "sha256:d4e2e64a72240e8465b75f596375ad280522aeb7b75f339225f1a8a706c2327d"
+}
