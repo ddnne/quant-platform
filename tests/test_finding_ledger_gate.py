@@ -441,7 +441,6 @@ def _cli_fixture_root(tmp_path: Path, *, open_d1: bool) -> Path:
         shutil.copy2(ROOT / "scripts" / script_name, scripts_dir / script_name)
     for name in (
         "active_workers.json",
-        "release_observation_authority.json",
         "d1_migration_manifest.json",
     ):
         shutil.copy2(

@@ -136,13 +136,11 @@ Phase 6 hardening utilities:
   `--rollback` require the original run ID. The small local create-only control
   intent is crash-recovery cache only; remote D1 plus live Cloudflare state are
   authoritative. Whole-file D1 exports are not part of this path.
-- `build_release_evidence.py` — **publication PENDING / fail-closed**. The
-  former normalized JSON format is retained only as a private schema-regression
-  helper; caller-supplied names, UUIDs and digests are not evidence. The private
-  JSDA `/health/ready` collector now runs through the observer Service Binding,
-  but publication remains closed until the release-observation key is active
-  and the exact response bytes are signed. The exact contract is
-  `specs/cloudflare/release_observation_authority.json`.
+- `build_release_evidence.py` — **publication PENDING / fail-closed**. Caller
+  JSON is untrusted. Authenticated collection/publication implementation is
+  missing (not merely unprovisioned keys). A6 remains OPEN. The observer has a
+  private JSDA `/health/ready` Service Binding collector in source; that is not
+  a publication writer or an authenticated client on this CLI path.
 
 Rollback-only production backup example (timestamps and final SHA must be the
 observed values):
@@ -160,8 +158,8 @@ uv run python scripts/encrypt_d1_backup.py encrypt \
 
 The successful JSON output is a path-free rollback-backup candidate object.
 Re-run `verify` against the encrypted artifact, but do not treat that JSON as
-release evidence or publish a release manifest while the signed observation
-authority remains PENDING.
+release evidence or publish a release manifest: authenticated
+collection/publication implementation is missing, and A6 remains OPEN.
 - Paper CLIs (`run_paper_once.py`, `run_agents_paper_once.py`, `rebuild_paper_index.py`) are **deleted**. Paper runtime stays in `packages/research_runtime/paper_runtime/`.
 - `python -m mcp_servers.quant_data --list-tools` — Quant Data Access MCP smoke.
 - `export_ops_projection.py` — verified local Coverage/READY/B0 metadataを bounded
