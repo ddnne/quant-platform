@@ -1006,8 +1006,8 @@ def test_success_archive_excludes_generated_sqlite_and_manifest_is_closed(
     sha = _sqlite(source)
     spec = _job(sha)
 
-    def fake_success(_spec, *, database, output, timeout_seconds):
-        del _spec, database, timeout_seconds
+    def fake_success(_spec, *, database, output, timeout_seconds, deadline, clock):
+        del _spec, database, timeout_seconds, deadline, clock
         summary = _runner_summary(spec, evaluated_count=4, hold_count=0)
         identity = service._personal_cohort_identity(spec.cohort_id)
         summary["execution_mode"] = identity["execution_mode"]
@@ -1131,8 +1131,8 @@ def test_long_short_archive_validates_and_preserves_non_candidate_base_source(
         )
     )
 
-    def completed_source_run(_spec, *, database, output, timeout_seconds):
-        del _spec, database, timeout_seconds
+    def completed_source_run(_spec, *, database, output, timeout_seconds, deadline, clock):
+        del _spec, database, timeout_seconds, deadline, clock
         summary = _write_am_pm_base_sleeve_output(output, spec)
         return _direct_run_from_summary(summary, output)
 
@@ -1247,8 +1247,8 @@ def test_am_execute_job_rejects_tampered_child_execution_mode(
         cohort_id="sector-relative-ls-am-pm-v1",
     )
 
-    def completed_source_run(_spec, *, database, output, timeout_seconds):
-        del _spec, database, timeout_seconds
+    def completed_source_run(_spec, *, database, output, timeout_seconds, deadline, clock):
+        del _spec, database, timeout_seconds, deadline, clock
         summary = _write_base_sleeve_output(output, spec)
         summary["execution_mode"] = "next_close"
         summary["execution_contract_digest"] = "sha256:" + "c" * 64
@@ -1393,8 +1393,8 @@ def test_am_topix_all_cli_report_digest_uses_morning_cutoff(
     def copy_snapshot(_spec, destination):
         destination.write_bytes(source.read_bytes())
 
-    def run_matching(_spec, *, database, output, timeout_seconds):
-        del _spec, database, timeout_seconds
+    def run_matching(_spec, *, database, output, timeout_seconds, deadline, clock):
+        del _spec, database, timeout_seconds, deadline, clock
         summary = _am_cli_summary(spec, output, universe_rule_digest=morning)
         return _direct_run_from_summary(summary, output)
 
@@ -1410,8 +1410,8 @@ def test_am_topix_all_cli_report_digest_uses_morning_cutoff(
     assert completed["status"] == "COMPLETED"
     assert completed["universe_rule_digest"] == morning
 
-    def run_mismatch(_spec, *, database, output, timeout_seconds):
-        del _spec, database, timeout_seconds
+    def run_mismatch(_spec, *, database, output, timeout_seconds, deadline, clock):
+        del _spec, database, timeout_seconds, deadline, clock
         summary = _am_cli_summary(spec, output, universe_rule_digest=session)
         return _direct_run_from_summary(summary, output)
 
@@ -1439,8 +1439,8 @@ def test_exit_two_with_no_evaluated_candidates_archives_completed_result(
     sha = _sqlite(source)
     spec = _job(sha)
 
-    def no_analysis(_spec, *, database, output, timeout_seconds):
-        del _spec, database, timeout_seconds
+    def no_analysis(_spec, *, database, output, timeout_seconds, deadline, clock):
+        del _spec, database, timeout_seconds, deadline, clock
         reports = output / "reports"
         reports.mkdir(parents=True, exist_ok=True)
         (reports / "no-analysis.json").write_text(
@@ -1518,8 +1518,8 @@ def test_runner_exit_and_summary_contract_fail_closed(
     sha = _sqlite(source)
     spec = _job(sha)
     summary = {**_runner_summary(spec), **summary_changes}
-    def fake_direct(_spec, *, database, output, timeout_seconds):
-        del _spec, database, timeout_seconds
+    def fake_direct(_spec, *, database, output, timeout_seconds, deadline, clock):
+        del _spec, database, timeout_seconds, deadline, clock
         if returncode not in {0, 2}:
             raise RuntimeError(f"qp-research exited {returncode}: bounded diagnostic")
         if stdout == "":
@@ -1558,8 +1558,8 @@ def test_exit1_empty_stderr_preserves_candidate_diagnostic_from_report(
     spec = _job(sha)
     detail = "candidate process exited nonzero (1)"
 
-    def failing_candidates(_spec, *, database, output, timeout_seconds):
-        del _spec, database, timeout_seconds
+    def failing_candidates(_spec, *, database, output, timeout_seconds, deadline, clock):
+        del _spec, database, timeout_seconds, deadline, clock
         reports = output / "reports"
         reports.mkdir()
         report = {
@@ -1655,8 +1655,8 @@ def test_completed_summary_requires_report_artifacts_inside_output(
     sha = _sqlite(source)
     spec = _job(sha)
 
-    def missing_report_artifacts(_spec, *, database, output, timeout_seconds):
-        del _spec, database, timeout_seconds
+    def missing_report_artifacts(_spec, *, database, output, timeout_seconds, deadline, clock):
+        del _spec, database, timeout_seconds, deadline, clock
         summary = _runner_summary(
             spec,
             evaluated_count=0,
@@ -1715,7 +1715,7 @@ def test_runner_summary_must_remain_within_fixed_policy(
     monkeypatch.setattr(
         service,
         "_run_direct_research",
-        lambda _spec, *, database, output, timeout_seconds: _direct_run_from_summary(
+        lambda _spec, *, database, output, timeout_seconds, deadline, clock: _direct_run_from_summary(
             summary, output
         ),
     )

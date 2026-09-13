@@ -2237,22 +2237,14 @@ def execute_job(
             if _sha256_file(database) != spec.snapshot_sha256:
                 raise RuntimeError("snapshot sha256 mismatch after persistence")
             verify_sqlite(database)
-            direct_kwargs: dict[str, Any] = {
-                "database": database,
-                "output": output,
-                "timeout_seconds": timeout_seconds,
-            }
-            try:
-                import inspect as _inspect
-
-                params = _inspect.signature(_run_direct_research).parameters
-            except (TypeError, ValueError):
-                params = {}
-            if "deadline" in params:
-                direct_kwargs["deadline"] = deadline
-            if "clock" in params:
-                direct_kwargs["clock"] = clock
-            run = _run_direct_research(spec, **direct_kwargs)
+            run = _run_direct_research(
+                spec,
+                database=database,
+                output=output,
+                timeout_seconds=timeout_seconds,
+                deadline=deadline,
+                clock=clock,
+            )
             returned_reference = getattr(run, "base_sleeve_artifact", None)
             if isinstance(returned_reference, dict):
                 base_sleeve_artifact = dict(returned_reference)
