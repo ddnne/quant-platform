@@ -9,11 +9,12 @@ PIT SQLite DB. No network/D1/CF. CLI: ``scripts/run_phase35_validation.py``.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 from data_contracts.coverage import coverage_contract_for
 from ingestion.jquants.catalog import PREMIUM_CORE_DATASETS, list_datasets
@@ -94,22 +95,32 @@ def _dataset_rowcount(conn: sqlite3.Connection, dataset: str) -> int:
 
 
 def _dataset_event_window(
-    conn: sqlite3.Connection, dataset: str
+    conn: sqlite3.Connection,
+    dataset: str,
+    *,
+    on_or_before: str | None = None,
 ) -> tuple[str | None, str | None]:
     """Min/max ``event_time`` across generic + specialized tables."""
+    cutoff = on_or_before[:10] if on_or_before else None
+    extra = " AND substr(event_time, 1, 10) <= ?" if cutoff else ""
     rows: list[tuple[str, str]] = []
     if _table_exists(conn, "jquants_records"):
+        params: tuple[object, ...] = (dataset,) if cutoff is None else (dataset, cutoff)
         cur = conn.execute(
             "SELECT MIN(event_time), MAX(event_time) FROM jquants_records "
-            "WHERE dataset=?",
-            (dataset,),
+            f"WHERE dataset=?{extra}",
+            params,
         )
         rows.append(tuple(cur.fetchone() or (None, None)))
     spec = _SPECIALIZED.get(dataset)
     if spec and _table_exists(conn, spec):
-        cur = conn.execute(
-            f"SELECT MIN(event_time), MAX(event_time) FROM {spec}"
-        )
+        spec_sql = f"SELECT MIN(event_time), MAX(event_time) FROM {spec}"
+        if cutoff is None:
+            cur = conn.execute(spec_sql)
+        else:
+            cur = conn.execute(
+                spec_sql + " WHERE substr(event_time, 1, 10) <= ?", (cutoff,)
+            )
         rows.append(tuple(cur.fetchone() or (None, None)))
     mins = [r[0] for r in rows if r and r[0]]
     maxs = [r[1] for r in rows if r and r[1]]
@@ -264,69 +275,104 @@ def _codes_with_bars(conn: sqlite3.Connection) -> set[str]:
     return codes
 
 
-def _bar_dates(conn: sqlite3.Connection) -> set[str]:
+def _bar_dates(
+    conn: sqlite3.Connection,
+    *,
+    period_start: str | None = None,
+    period_end: str | None = None,
+) -> set[str]:
     """Distinct calendar dates with at least one daily bar (market-wide)."""
     dates: set[str] = set()
+    payload_date = (
+        "CASE WHEN json_valid(payload) "
+        "THEN NULLIF(json_extract(payload, '$.Date'), '') END"
+    )
+    key_date = (
+        "CASE WHEN json_valid(natural_key) "
+        "THEN NULLIF(json_extract(natural_key, '$.Date'), '') END"
+    )
+    extracted = f"COALESCE({payload_date}, {key_date})"
+    window = ""
+    params: list[object] = []
+    if period_start is not None and period_end is not None:
+        window = f" AND {extracted} >= ? AND {extracted} <= ?"
+        params = [period_start, period_end]
     if _table_exists(conn, "jquants_daily_bars"):
-        cur = conn.execute("SELECT DISTINCT date FROM jquants_daily_bars")
-        dates.update(r[0] for r in cur.fetchall() if r[0])
-    if _table_exists(conn, "jquants_records"):
-        cur = conn.execute(
-            "SELECT natural_key, payload FROM jquants_records "
-            "WHERE dataset='equities_bars_daily'"
+        spec_sql = "SELECT DISTINCT date FROM jquants_daily_bars WHERE date IS NOT NULL"
+        spec_params: list[object] = []
+        if period_start is not None and period_end is not None:
+            spec_sql += " AND date >= ? AND date <= ?"
+            spec_params = [period_start, period_end]
+        dates.update(
+            str(row[0])
+            for row in conn.execute(spec_sql, spec_params)
+            if row[0]
         )
-        for nk, payload in cur.fetchall():
-            # Try payload first (robust); fall back to natural_key parse.
-            d = None
-            if payload:
-                try:
-                    obj = json.loads(payload)
-                    d = obj.get("Date")
-                except (TypeError, ValueError):
-                    d = None
-            if not d and nk:
-                try:
-                    keyobj = json.loads(nk)
-                    d = keyobj.get("Date")
-                except (TypeError, ValueError):
-                    d = None
-            if d:
-                dates.add(str(d))
+    if _table_exists(conn, "jquants_records"):
+        rec_sql = (
+            "SELECT DISTINCT " + extracted + " FROM jquants_records "
+            "WHERE dataset='equities_bars_daily' AND " + extracted + " IS NOT NULL"
+            + window
+        )
+        dates.update(
+            str(row[0]) for row in conn.execute(rec_sql, params) if row[0]
+        )
     return dates
 
 
 def _calendar_dates(
-    conn: sqlite3.Connection, *, trading_only: bool = True
+    conn: sqlite3.Connection,
+    *,
+    trading_only: bool = True,
+    period_start: str | None = None,
+    period_end: str | None = None,
 ) -> set[str]:
     """Dates from ``markets_calendar``. ``trading_only`` keeps HolidayDivision=1."""
     dates: set[str] = set()
+    window = ""
+    params: list[object] = []
+    if period_start is not None and period_end is not None:
+        window = " AND date >= ? AND date <= ?"
+        params = [period_start, period_end]
     if _table_exists(conn, "jquants_market_calendar"):
+        where = "WHERE date IS NOT NULL"
         if trading_only:
-            cur = conn.execute(
+            where += " AND (holiday_division = '1' OR holiday_division = 1)"
+        dates.update(
+            str(row[0])
+            for row in conn.execute(
                 "SELECT DISTINCT date FROM jquants_market_calendar "
-                "WHERE holiday_division = '1' OR holiday_division = 1"
+                + where
+                + window,
+                params,
             )
-        else:
-            cur = conn.execute(
-                "SELECT DISTINCT date FROM jquants_market_calendar"
-            )
-        dates.update(r[0] for r in cur.fetchall() if r[0])
-    if _table_exists(conn, "jquants_records"):
-        cur = conn.execute(
-            "SELECT payload FROM jquants_records WHERE dataset='markets_calendar'"
+            if row[0]
         )
-        for (payload,) in cur.fetchall():
-            if not payload:
+    if _table_exists(conn, "jquants_records"):
+        date_expr = (
+            "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.Date') END"
+        )
+        div_expr = (
+            "CASE WHEN json_valid(payload) = 0 THEN NULL "
+            "WHEN json_type(payload, '$.HolidayDivision') IS NOT NULL "
+            "THEN json_extract(payload, '$.HolidayDivision') "
+            "ELSE json_extract(payload, '$.HolDiv') END"
+        )
+        rec_sql = (
+            "SELECT DISTINCT " + date_expr + ", " + div_expr + " "
+            "FROM jquants_records WHERE dataset='markets_calendar' "
+            "AND json_valid(payload) AND " + date_expr + " IS NOT NULL"
+        )
+        rec_params: list[object] = []
+        if period_start is not None and period_end is not None:
+            rec_sql += " AND " + date_expr + " >= ? AND " + date_expr + " <= ?"
+            rec_params = [period_start, period_end]
+        for day, div in conn.execute(rec_sql, rec_params):
+            if not day:
                 continue
-            try:
-                obj = json.loads(payload)
-            except (TypeError, ValueError):
+            if trading_only and str(div) != "1":
                 continue
-            div = obj.get("HolidayDivision", obj.get("HolDiv"))
-            is_trading = str(div) == "1"
-            d = obj.get("Date")
-            if d and (not trading_only or is_trading):
-                dates.add(str(d))
+            dates.add(str(day))
     return dates
 
 
@@ -497,12 +543,13 @@ def _check_c8(
     *,
     today: str | None = None,
     max_days: int = _DEFAULT_FRESHNESS_DAYS,
+    on_or_before: str | None = None,
 ) -> list[CheckResult]:
     """C8 — latest event_time within N calendar days of ``today`` (or ingested_at)."""
     out: list[CheckResult] = []
     ref = today or _latest_ingested_at(conn)
     for ds in datasets:
-        _, hi = _dataset_event_window(conn, ds)
+        _, hi = _dataset_event_window(conn, ds, on_or_before=on_or_before)
         if not hi:
             if _empty_but_run_ok(conn, ds) or _dataset_rowcount(conn, ds) == 0:
                 out.append(CheckResult("C8", ds, "skip",
@@ -580,29 +627,45 @@ def _check_b2(conn: sqlite3.Connection) -> list[CheckResult]:
     )]
 
 
-def _check_b4(conn: sqlite3.Connection) -> list[CheckResult]:
+def _check_b4(
+    conn: sqlite3.Connection,
+    *,
+    period_start: str | None = None,
+    period_end: str | None = None,
+) -> list[CheckResult]:
     """B4 — market-wide missing trading days inside the bar date window."""
-    bar_dates = _bar_dates(conn)
-    trading_days = _calendar_dates(conn, trading_only=True)
+    bound = period_start is not None and period_end is not None
+    bar_dates = _bar_dates(
+        conn, period_start=period_start, period_end=period_end
+    )
+    trading_days = _calendar_dates(
+        conn,
+        trading_only=True,
+        period_start=period_start,
+        period_end=period_end,
+    )
     if not bar_dates:
         return [CheckResult("B4", "equities_bars_daily", "fail",
-                            "no daily bars observed",
-                            {"bar_dates": 0, "trading_days_in_window": 0,
-                             "missing_days": []})]
+                            "no daily bars observed"
+                            + (" in the bound window" if bound else ""),
+                            {"bar_dates": 0,
+                             "trading_days_in_window": len(trading_days) if bound else 0,
+                             "missing_days": sorted(trading_days) if bound else []})]
     if not trading_days:
-        return [CheckResult("B4", "equities_bars_daily", "warn",
+        return [CheckResult("B4", "equities_bars_daily",
+                            "fail" if bound else "warn",
                             "no markets_calendar rows — cannot assess gaps",
                             {"bar_dates": len(bar_dates),
                              "trading_days_in_window": 0,
                              "missing_days": []})]
-    lo = min(bar_dates)
-    hi = max(bar_dates)
+    lo = period_start if bound else min(bar_dates)
+    hi = period_end if bound else max(bar_dates)
     window = {d for d in trading_days if lo <= d <= hi}
     missing = sorted(window - bar_dates)
     gap_rate = (len(missing) / len(window)) if window else 0.0
     if not missing:
         status: Status = "pass"
-    elif gap_rate <= 0.25 or len(missing) <= 5:
+    elif bound or gap_rate <= 0.25 or len(missing) <= 5:
         status = "fail"
     else:
         status = "warn"
@@ -1560,6 +1623,91 @@ def not_implemented_skips(results: Iterable[CheckResult]) -> list[CheckResult]:
         if r.status == "skip"
         and str(r.metrics.get("reason_code", "")).lower() == "not_implemented"
     ]
+
+
+def _compact_missing_days(metrics: Mapping[str, Any]) -> dict[str, Any]:
+    missing = metrics.get("missing_days")
+    out = dict(metrics)
+    if not isinstance(missing, list):
+        return out
+    encoded = json.dumps(missing, separators=(",", ":")).encode()
+    out["missing_day_count"] = len(missing)
+    out["missing_days_sample"] = missing[:10]
+    out["missing_days_digest"] = (
+        "sha256:" + hashlib.sha256(encoded).hexdigest()
+    )
+    del out["missing_days"]
+    return out
+
+
+def _receipt_measure_status(
+    rows: Sequence[Mapping[str, Any]], *, ok_field: bool = False
+) -> str:
+    if not rows:
+        return "UNKNOWN"
+    if ok_field:
+        return "PASS" if all(row.get("ok") is True for row in rows) else "FAIL"
+    if all(row.get("status") == "pass" for row in rows):
+        return "PASS"
+    return "FAIL"
+
+
+def measure_receipt_snapshot_quality(
+    db_path: str | Path,
+    *,
+    period_start: str,
+    period_end: str,
+    required_datasets: Iterable[str],
+) -> dict[str, Any]:
+    """Read-only snapshot B0 (full sqlite) plus bound-window B4/C8.
+
+    B0 is universe breadth of the whole snapshot. B4/C8 ignore rows after
+    period_end and do not treat official-domain COMPLETE or Ops B0.
+    """
+
+    from storage.live_gates import measure_b0
+
+    required = frozenset(str(item) for item in required_datasets)
+    calendar_series = sorted(
+        {
+            "equities_bars_daily",
+            "indices_bars_daily_topix",
+            "markets_calendar",
+        }
+        & required
+    )
+    b0 = [gate.as_dict() for gate in measure_b0(db_path)]
+    conn = _connect(db_path)
+    try:
+        b4_rows = []
+        if "equities_bars_daily" in required:
+            for row in _check_b4(
+                conn, period_start=period_start, period_end=period_end
+            ):
+                payload = row.as_log_dict()
+                payload["metrics"] = _compact_missing_days(payload["metrics"])
+                b4_rows.append(payload)
+        c8_rows = [
+            row.as_log_dict()
+            for row in _check_c8(
+                conn,
+                calendar_series,
+                today=period_end,
+                on_or_before=period_end,
+            )
+        ]
+    finally:
+        conn.close()
+    return {
+        "period_start": period_start,
+        "period_end": period_end,
+        "b0": b0,
+        "b4": b4_rows,
+        "c8": c8_rows,
+        "b0_status": _receipt_measure_status(b0, ok_field=True),
+        "b4_status": _receipt_measure_status(b4_rows),
+        "c8_status": _receipt_measure_status(c8_rows),
+    }
 
 
 def summarize(results: Iterable[CheckResult]) -> dict[str, int]:

@@ -602,6 +602,9 @@ def build_receipt_native_ready_manifest(
     binding: Any,
     created_at: str,
     published_at: str = MISSING,
+    b0_proof_digest: str = MISSING,
+    b4_proof_digest: str = MISSING,
+    validation_proof_digest: str = MISSING,
 ) -> ReadyManifest:
     """Serialize a receipt-native v2 ReadyManifest. Not live READY."""
 
@@ -640,9 +643,9 @@ def build_receipt_native_ready_manifest(
             "coverage_proof_digest": MISSING,
             "raw_proof_digest": MISSING,
             "receipt_proof_digest": MISSING,
-            "validation_proof_digest": MISSING,
-            "b0_proof_digest": MISSING,
-            "b4_proof_digest": MISSING,
+            "validation_proof_digest": proof_or_missing(validation_proof_digest),
+            "b0_proof_digest": proof_or_missing(b0_proof_digest),
+            "b4_proof_digest": proof_or_missing(b4_proof_digest),
             "source": dict(closed),
             "pit_contract_digests": {
                 "dependency_scope": closed["compiled_scope_proof_digest"],

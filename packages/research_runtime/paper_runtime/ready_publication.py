@@ -822,6 +822,9 @@ RECEIPT_CANDIDATE_OBSERVATION_POLICY = "max_verified_claims_checked_at"
 RECEIPT_CANDIDATE_SCOPE_DIAGNOSTIC_KIND = (
     "receipt-candidate-scope-diagnostic/v1"
 )
+RECEIPT_CANDIDATE_SNAPSHOT_QUALITY_KIND = (
+    "receipt-candidate-snapshot-quality/v1"
+)
 
 
 def verify_committed_receipt_candidate_scope(
@@ -834,15 +837,16 @@ def verify_committed_receipt_candidate_scope(
     """Non-READY compiled-scope diagnostic on a job-owned committed store.
 
     Discards the full pit-dependency-scope-proof body so the 64KiB job
-    terminal stays compact. Not a READY attestation, snapshot document, or
-    signer input. Later B0/B4/READY publication must recompute the full proof
-    in its existing owner.
+    terminal stays compact. Not a READY attestation or signer input.
+    Snapshot B0/B4/C8 are read-only measures on this sqlite, not Ops B0
+    and not official-domain COMPLETE.
     """
 
     from ops.receipt_candidate_materialize import (
         freeze_receipt_candidate_snapshot,
         hash_receipt_candidate_snapshot,
     )
+    from storage.coverage import measure_receipt_snapshot_quality
     from storage.sqlite_store import SqliteStore
 
     if type(store) is not SqliteStore:
@@ -853,10 +857,26 @@ def verify_committed_receipt_candidate_scope(
         raise MassResearchDisabledError(
             "receipt candidate environment is not pinned"
         )
+    periods = {
+        (str(profile.period_start), str(profile.period_end))
+        for profile in binding.profiles
+        if getattr(profile, "period_start", None)
+        and getattr(profile, "period_end", None)
+    }
+    if len(periods) != 1:
+        raise MassResearchDisabledError(
+            "exact-four plans must share one governed universe period"
+        )
+    period_start, period_end = next(iter(periods))
     conn = store._conn  # noqa: SLF001
     freeze_receipt_candidate_snapshot(store)
     physical_digest = hash_receipt_candidate_snapshot(store)
     started = conn.in_transaction
+    compiled: dict[str, Any] = {
+        "compiled_scope_status": "FAIL",
+        "compiled_scope_kind": RECEIPT_CANDIDATE_SCOPE_DIAGNOSTIC_KIND,
+        "physical_db_digest": physical_digest,
+    }
     try:
         conn.row_factory = sqlite3.Row
         evidence, observed_through, runset_digest = _prove_exact_four_compiled_scope(
@@ -887,18 +907,7 @@ def verify_committed_receipt_candidate_scope(
             "compiled_scope_proof_digest": payload["proof_digest"],
             "receipt_runset_digest": runset_digest,
         }
-        from research.ready_manifest import (
-            MISSING as READY_MISSING,
-            build_receipt_native_ready_manifest,
-        )
-
-        receipt_manifest = build_receipt_native_ready_manifest(
-            receipt_source,
-            binding=binding,
-            created_at=READY_MISSING,
-            published_at=READY_MISSING,
-        )
-        return {
+        compiled = {
             "compiled_scope_status": "PASS",
             "compiled_scope_kind": RECEIPT_CANDIDATE_SCOPE_DIAGNOSTIC_KIND,
             "observation_policy": RECEIPT_CANDIDATE_OBSERVATION_POLICY,
@@ -906,22 +915,93 @@ def verify_committed_receipt_candidate_scope(
             "compiled_scope_proof_digest": payload["proof_digest"],
             "physical_db_digest": physical_digest,
             "receipt_source": receipt_source,
-            "receipt_native_manifest_digest": receipt_manifest.manifest_digest,
         }
     except (MassResearchDisabledError, PitError, sqlite3.Error) as exc:
-        return {
+        compiled = {
             "compiled_scope_status": "FAIL",
             "compiled_scope_kind": RECEIPT_CANDIDATE_SCOPE_DIAGNOSTIC_KIND,
             "compiled_scope_error": str(exc),
+            "physical_db_digest": physical_digest,
         }
     finally:
         if conn.in_transaction and not started:
             conn.rollback()
+    if hash_receipt_candidate_snapshot(store) != physical_digest:
+        raise MassResearchDisabledError(
+            "physical DB digest does not match the prepared snapshot"
+        )
+    measured = measure_receipt_snapshot_quality(
+        store.path,
+        period_start=period_start,
+        period_end=period_end,
+        required_datasets=binding.required_datasets,
+    )
+    if hash_receipt_candidate_snapshot(store) != physical_digest:
+        raise MassResearchDisabledError(
+            "physical DB digest does not match the prepared snapshot"
+        )
+    runset_digest = None
+    source = compiled.get("receipt_source")
+    if isinstance(source, Mapping):
+        runset_digest = source.get("receipt_runset_digest")
+    quality = {
+        "kind": RECEIPT_CANDIDATE_SNAPSHOT_QUALITY_KIND,
+        "physical_digest": physical_digest,
+        "profile_digest": binding.profile_digest,
+        "plan_set_digest": binding.plan_set_digest,
+        "dependency_closure_digest": binding.closure_set_digest,
+        "receipt_runset_digest": runset_digest,
+        "observation_policy": RECEIPT_CANDIDATE_OBSERVATION_POLICY,
+        "observed_through": compiled.get("observation_checked_at"),
+        **measured,
+    }
+    quality_digest = canonical_digest(quality)
+    proof_context = {
+        "physical_digest": physical_digest,
+        "profile_digest": binding.profile_digest,
+        "plan_set_digest": binding.plan_set_digest,
+        "dependency_closure_digest": binding.closure_set_digest,
+        "receipt_runset_digest": runset_digest,
+        "period_start": period_start,
+        "period_end": period_end,
+        "observation_policy": RECEIPT_CANDIDATE_OBSERVATION_POLICY,
+        "observed_through": compiled.get("observation_checked_at"),
+    }
+    b0_proof_digest = canonical_digest({**proof_context, "b0": quality["b0"]})
+    b4_proof_digest = canonical_digest({**proof_context, "b4": quality["b4"]})
+    compiled["snapshot_quality_kind"] = RECEIPT_CANDIDATE_SNAPSHOT_QUALITY_KIND
+    compiled["snapshot_quality_digest"] = quality_digest
+    compiled["snapshot_b0_status"] = quality["b0_status"]
+    compiled["snapshot_b4_status"] = quality["b4_status"]
+    compiled["snapshot_c8_status"] = quality["c8_status"]
+    compiled["b0_proof_digest"] = b0_proof_digest
+    compiled["b4_proof_digest"] = b4_proof_digest
+    compiled["validation_proof_digest"] = quality_digest
+    compiled["snapshot_quality"] = quality
+    if compiled.get("compiled_scope_status") == "PASS":
+        from research.ready_manifest import (
+            MISSING as READY_MISSING,
+            build_receipt_native_ready_manifest,
+        )
+
+        receipt_manifest = build_receipt_native_ready_manifest(
+            compiled["receipt_source"],
+            binding=binding,
+            created_at=READY_MISSING,
+            published_at=READY_MISSING,
+            b0_proof_digest=b0_proof_digest,
+            b4_proof_digest=b4_proof_digest,
+            validation_proof_digest=quality_digest,
+        )
+        compiled["receipt_native_manifest"] = receipt_manifest.to_dict()
+        compiled["receipt_native_manifest_digest"] = receipt_manifest.manifest_digest
+    return compiled
 
 
 __all__ = [
     "RECEIPT_CANDIDATE_OBSERVATION_POLICY",
     "RECEIPT_CANDIDATE_SCOPE_DIAGNOSTIC_KIND",
+    "RECEIPT_CANDIDATE_SNAPSHOT_QUALITY_KIND",
     "ReadyPublicationService",
     "VerifiedPublicationEvidence",
     "canonical_digest",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import calendar
 import gzip
 import hashlib
 import io
@@ -19,6 +20,7 @@ from ops.receipt_candidate_materialize import (
     ReceiptCandidateMaterializeError,
     commit_receipt_candidate,
     configure_receipt_candidate_limits,
+    freeze_receipt_candidate_snapshot,
     hash_receipt_candidate_snapshot,
     materialize_receipt_segment,
 )
@@ -41,12 +43,12 @@ CHECKED_AT = "2026-08-25T00:00:00+00:00"
 OPERATION_ID = "sha256:" + "ab" * 32
 
 
-def _bar_rows() -> list[dict[str, str]]:
+def _bar_rows(bar_date: str = "2023-01-04") -> list[dict[str, str]]:
     return normalize_generic(
         [
             {
                 "Code": "1301",
-                "Date": "2023-01-04",
+                "Date": bar_date,
                 "Open": 10.0,
                 "High": 11.0,
                 "Low": 9.0,
@@ -59,8 +61,8 @@ def _bar_rows() -> list[dict[str, str]]:
             }
         ],
         dataset="equities_bars_daily",
-        ingested_at="2023-01-04T16:00:00+09:00",
-        available_at="2023-01-04T16:00:00+09:00",
+        ingested_at=f"{bar_date}T16:00:00+09:00",
+        available_at=f"{bar_date}T16:00:00+09:00",
     )
 
 
@@ -102,32 +104,48 @@ def _write_collection(path: Path) -> tuple[str, str]:
     return "sha256:" + hashlib.sha256(payload).hexdigest(), collection_digest
 
 
-def _signed_bundle(tmp_path: Path, receipt_ed25519_keys, *, raw_bytes_delta: int = 0):
-    rows = _bar_rows()
+def _signed_bundle(
+    tmp_path: Path,
+    receipt_ed25519_keys,
+    *,
+    raw_bytes_delta: int = 0,
+    segment_id: str = "2023-01",
+    run_id: int = 1,
+    operation_id: str = OPERATION_ID,
+    bar_date: str = "2023-01-04",
+):
+    rows = _bar_rows(bar_date)
     product_bytes = canonical_product_artifact_bytes(rows)
-    product_path = tmp_path / "product.jsonl"
+    product_path = tmp_path / f"product-{segment_id}.jsonl"
     product_path.write_bytes(product_bytes)
-    raw_path = tmp_path / "raw.json"
+    raw_path = tmp_path / f"raw-{segment_id}.json"
     file_digest, collection_digest = _write_collection(raw_path)
-    raw_page = b'{"data":[{"Code":"1301","Date":"2023-01-04"}]}'
+    year, month, _day = bar_date.split("-")
+    last_day = calendar.monthrange(int(year), int(month))[1]
+    segment_start = f"{year}-{month}-01"
+    segment_end = f"{year}-{month}-{last_day:02d}"
+    raw_page = json.dumps(
+        {"data": [{"Code": "1301", "Date": bar_date}]},
+        separators=(",", ":"),
+    ).encode()
     required = RequiredCoverageSegment(
         source="jquants",
         dataset="equities_bars_daily",
-        segment_id="2023-01",
-        segment_start="2023-01-01",
-        segment_end="2023-01-31",
+        segment_id=segment_id,
+        segment_start=segment_start,
+        segment_end=segment_end,
         expected_scope={
-            "period_start": "2023-01-01",
-            "period_end": "2023-01-31",
+            "period_start": segment_start,
+            "period_end": segment_end,
             "expected_item_unit": "source_event",
         },
         expected_items=1,
     )
     evidence = reconcile_test_evidence(
         required=required,
-        run_id=1,
+        run_id=run_id,
         raw_pages=[raw_page],
-        raw_records=[{"Code": "1301", "Date": "2023-01-04"}],
+        raw_records=[{"Code": "1301", "Date": bar_date}],
         structured_records=rows,
         checked_at=CHECKED_AT,
         structured_digest=product_artifact_digest(rows),
@@ -147,7 +165,7 @@ def _signed_bundle(tmp_path: Path, receipt_ed25519_keys, *, raw_bytes_delta: int
         "source": receipt.source,
         "dataset": receipt.dataset,
         "segment_id": receipt.segment_id,
-        "operation_id": OPERATION_ID,
+        "operation_id": operation_id,
         "receipt_digest": receipt.digests["body_digest"],
         "signed_receipt": dict(receipt.digests),
         "product": {
@@ -415,6 +433,7 @@ def test_http_job_and_execute_publish_compact_completed_terminal(
         _join_manager_worker,
         service,
     )
+    from paper_runtime.ready_publication import canonical_digest
     from receipt_candidate_job import RECEIPT_CANDIDATE_FORMAT, ReceiptCandidateJobSpec
 
     _rows, product_path, raw_path, descriptor, _receipt = _signed_bundle(
@@ -480,6 +499,10 @@ def test_http_job_and_execute_publish_compact_completed_terminal(
         assert terminal["compiled_scope_status"] == "FAIL"
         assert terminal["compiled_scope_kind"] == (
             "receipt-candidate-scope-diagnostic/v1"
+        )
+        assert terminal["snapshot_b0_status"] == "FAIL"
+        assert canonical_digest(terminal["snapshot_quality"]) == (
+            terminal["snapshot_quality_digest"]
         )
         assert "observation_checked_at" not in terminal
         assert "source_generation" not in terminal
@@ -599,6 +622,8 @@ def test_execute_512_selectors_keeps_compact_terminal(
     assert terminal["compiled_scope_kind"] == (
         "receipt-candidate-scope-diagnostic/v1"
     )
+    assert terminal["snapshot_b0_status"] == "FAIL"
+    assert terminal["snapshot_quality_digest"].startswith("sha256:")
     assert "observation_checked_at" not in terminal
     assert len(
         json.dumps(terminal, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
@@ -613,6 +638,7 @@ def test_committed_candidate_scope_pass_ignores_unsigned_later_receipt(
         RECEIPT_CANDIDATE_SCOPE_DIAGNOSTIC_KIND,
         verify_committed_receipt_candidate_scope,
     )
+    from paper_runtime.ready_publication import canonical_digest
     from research.ready_manifest import (
         READY_MANIFEST_V2_FORMAT,
         ReadyManifest,
@@ -655,22 +681,45 @@ def test_committed_candidate_scope_pass_ignores_unsigned_later_receipt(
     assert source["physical_digest"] == result["physical_db_digest"]
     assert source["observed_through"] == "2026-08-25T00:00:00+00:00"
     assert source["receipt_runset_digest"].startswith("sha256:")
-    assert result["receipt_native_manifest_digest"] == (
-        build_receipt_native_ready_manifest(
-            source,
-            binding=binding,
-            created_at="MISSING",
-            published_at="MISSING",
-        ).manifest_digest
+    assert result["snapshot_b0_status"] == "FAIL"
+    assert result["snapshot_b4_status"] == "PASS"
+    assert result["snapshot_c8_status"] == "PASS"
+    quality = result["snapshot_quality"]
+    assert quality["kind"] == "receipt-candidate-snapshot-quality/v1"
+    assert quality["physical_digest"] == result["physical_db_digest"]
+    assert canonical_digest(quality) == result["snapshot_quality_digest"]
+    proof_context = {
+        "physical_digest": quality["physical_digest"],
+        "profile_digest": quality["profile_digest"],
+        "plan_set_digest": quality["plan_set_digest"],
+        "dependency_closure_digest": quality["dependency_closure_digest"],
+        "receipt_runset_digest": quality["receipt_runset_digest"],
+        "period_start": quality["period_start"],
+        "period_end": quality["period_end"],
+        "observation_policy": quality["observation_policy"],
+        "observed_through": quality["observed_through"],
+    }
+    assert result["b0_proof_digest"] == canonical_digest(
+        {**proof_context, "b0": quality["b0"]}
     )
+    assert result["b4_proof_digest"] == canonical_digest(
+        {**proof_context, "b4": quality["b4"]}
+    )
+    assert result["validation_proof_digest"] == result["snapshot_quality_digest"]
     manifest = build_receipt_native_ready_manifest(
         source,
         binding=binding,
         created_at="MISSING",
         published_at="MISSING",
+        b0_proof_digest=result["b0_proof_digest"],
+        b4_proof_digest=result["b4_proof_digest"],
+        validation_proof_digest=result["validation_proof_digest"],
     )
     body = manifest.to_dict()
+    assert result["receipt_native_manifest_digest"] == body["manifest_digest"]
+    assert result["receipt_native_manifest"] == body
     assert body["format"] == READY_MANIFEST_V2_FORMAT
+    assert body["b0_proof_digest"] != "MISSING"
     assert "source_generation" not in body
     assert ReadyManifest.from_dict(body).to_dict() == body
     store.close()
@@ -701,4 +750,203 @@ def test_committed_candidate_scope_rejects_corrupted_backing(
     assert "compiled_scope_proof_digest" not in result
     assert "observation_checked_at" not in result
     assert "receipt_source" not in result
+    assert result["snapshot_b0_status"] == "FAIL"
+    assert result["snapshot_quality_digest"].startswith("sha256:")
+    store.close()
+
+
+def test_two_bar_segments_distinct_run_ids_keep_quality_bytes(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    from paper_runtime.ready_publication import (
+        verify_committed_receipt_candidate_scope,
+    )
+    from tests.test_ready_policy_fail_closed import _mini_exact_scope_binding
+
+    first = _signed_bundle(
+        tmp_path,
+        receipt_ed25519_keys,
+        segment_id="2023-01",
+        run_id=1,
+        operation_id="sha256:" + "ab" * 32,
+        bar_date="2023-01-04",
+    )
+    second = _signed_bundle(
+        tmp_path,
+        receipt_ed25519_keys,
+        segment_id="2023-02",
+        run_id=2,
+        operation_id="sha256:" + "cd" * 32,
+        bar_date="2023-02-01",
+    )
+    store = SqliteStore(tmp_path / "two-seg.sqlite")
+    configure_receipt_candidate_limits(store, max_database_bytes=5 * 1024 * 1024)
+    for _rows, product_path, raw_path, descriptor, _receipt in (first, second):
+        materialize_receipt_segment(
+            store,
+            environment="production",
+            descriptor=descriptor,
+            product_path=product_path,
+            raw_path=raw_path,
+            calendar_path=None,
+            max_database_bytes=5 * 1024 * 1024,
+        )
+    commit_receipt_candidate(store)
+    runs = [
+        (str(row["segment_id"]), int(row["run_id"]))
+        for row in store._conn.execute(  # noqa: SLF001
+            "SELECT segment_id, run_id FROM collection_receipts "
+            "WHERE dataset='equities_bars_daily' ORDER BY segment_id"
+        )
+    ]
+    assert runs == [("2023-01", 1), ("2023-02", 2)]
+    freeze_receipt_candidate_snapshot(store)
+    before = hash_receipt_candidate_snapshot(store)
+    result = verify_committed_receipt_candidate_scope(
+        store,
+        binding=_mini_exact_scope_binding(),
+        environment="production",
+        allowed_segments=frozenset(
+            {("equities_bars_daily", "2023-01"), ("equities_bars_daily", "2023-02")}
+        ),
+    )
+    assert result["physical_db_digest"] == before
+    assert result["physical_db_digest"] == hash_receipt_candidate_snapshot(store)
+    assert result["snapshot_quality_digest"].startswith("sha256:")
+    assert result["snapshot_b0_status"] == "FAIL"
+    store.close()
+
+
+def test_bar_dates_uses_payload_date_then_natural_key_without_invalid_json(
+    tmp_path: Path,
+) -> None:
+    from storage.coverage import _bar_dates
+
+    store = SqliteStore(tmp_path / "bar-dates.sqlite")
+    conn = store._conn  # noqa: SLF001
+    clock = "2023-01-04T16:00:00+09:00"
+    conn.executemany(
+        "INSERT INTO jquants_records ("
+        "source,dataset,natural_key,event_time,available_at,ingested_at,"
+        "payload,raw_payload) VALUES (?,?,?,?,?,?,?,?)",
+        [
+            (
+                "jquants",
+                "equities_bars_daily",
+                '{"Code":"1301","Date":"ignored"}',
+                clock,
+                clock,
+                clock,
+                '{"Code":"1301","Date":"2023-01-04"}',
+                "{}",
+            ),
+            (
+                "jquants",
+                "equities_bars_daily",
+                '{"Code":"1301","Date":"2023-01-05"}',
+                clock,
+                clock,
+                clock,
+                '{"Code":"1301","Date":""}',
+                "{}",
+            ),
+            (
+                "jquants",
+                "equities_bars_daily",
+                '{"Code":"1301","Date":"2023-01-06"}',
+                clock,
+                clock,
+                clock,
+                "not-json",
+                "{}",
+            ),
+            (
+                "jquants",
+                "equities_bars_daily",
+                "also-not-json",
+                clock,
+                clock,
+                clock,
+                "still-not-json",
+                "{}",
+            ),
+        ],
+    )
+    conn.commit()
+    assert _bar_dates(conn) == {"2023-01-04", "2023-01-05", "2023-01-06"}
+    assert _bar_dates(
+        conn, period_start="2023-01-05", period_end="2023-01-05"
+    ) == {"2023-01-05"}
+    store.close()
+
+
+def test_snapshot_quality_future_rows_do_not_mask_missing_pre_cutoff(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    from paper_runtime.ready_publication import (
+        verify_committed_receipt_candidate_scope,
+    )
+    from tests.test_ready_policy_fail_closed import _seed_exact_pit_scope
+
+    db_path, binding = _seed_exact_pit_scope(tmp_path, receipt_ed25519_keys)
+    store = SqliteStore(db_path)
+    store._conn.execute(  # noqa: SLF001
+        "INSERT INTO jquants_records ("
+        "source,dataset,natural_key,event_time,available_at,ingested_at,"
+        "payload,raw_payload"
+        ") SELECT source,dataset,"
+        "json_set(natural_key,'$.Date','2023-10-20'),"
+        "'2023-10-20T16:00:00+09:00',available_at,ingested_at,"
+        "json_set(payload,'$.Date','2023-10-20'),raw_payload "
+        "FROM jquants_records WHERE dataset='equities_bars_daily' LIMIT 1"
+    )
+    commit_receipt_candidate(store)
+    freeze_receipt_candidate_snapshot(store)
+    before = hash_receipt_candidate_snapshot(store)
+    with_future = verify_committed_receipt_candidate_scope(
+        store,
+        binding=binding,
+        environment="production",
+    )
+    assert with_future["physical_db_digest"] == before
+    assert with_future["snapshot_b0_status"] == "FAIL"
+    assert with_future["snapshot_b4_status"] == "PASS"
+    assert with_future["snapshot_c8_status"] == "PASS"
+    bars_c8 = [
+        row
+        for row in with_future["snapshot_quality"]["c8"]
+        if row["dataset"] == "equities_bars_daily"
+    ]
+    assert len(bars_c8) == 1
+    assert str(bars_c8[0]["metrics"]["latest_event_time"]).startswith("2023-01-06")
+    store._conn.execute(  # noqa: SLF001
+        "DELETE FROM jquants_records WHERE dataset='equities_bars_daily' "
+        "AND substr(event_time,1,10)='2023-01-06'"
+    )
+    commit_receipt_candidate(store)
+    freeze_receipt_candidate_snapshot(store)
+    after = hash_receipt_candidate_snapshot(store)
+    missing = verify_committed_receipt_candidate_scope(
+        store,
+        binding=binding,
+        environment="production",
+    )
+    assert missing["physical_db_digest"] == after
+    assert missing["snapshot_b0_status"] == "FAIL"
+    assert missing["snapshot_b4_status"] == "FAIL"
+    assert missing["snapshot_c8_status"] == "PASS"
+    missing_bars_c8 = [
+        row
+        for row in missing["snapshot_quality"]["c8"]
+        if row["dataset"] == "equities_bars_daily"
+    ]
+    assert len(missing_bars_c8) == 1
+    assert str(missing_bars_c8[0]["metrics"]["latest_event_time"]).startswith(
+        "2023-01-05"
+    )
+    assert "completeness_claim" not in missing
+    assert all(
+        row["dataset"] != "fins_summary" and row["dataset"] != "equities_master"
+        for row in missing["snapshot_quality"]["c8"]
+    )
     store.close()
