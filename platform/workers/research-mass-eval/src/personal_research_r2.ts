@@ -64,6 +64,12 @@ import {
   personalAcquisitionCacheR2Outbound,
 } from "./personal_acquisition_cache_r2";
 import { sha256Hex } from "./sha256";
+import { isRecord } from "./controlled_pilot_json";
+import {
+  receiptNativeManifestBodyDigest,
+  receiptNativeSnapshotId,
+  receiptNativeV2WireError,
+} from "./ready_manifest_v2";
 import { CONTROLLED_PILOT_KEY_PREFIX } from "./controlled_pilot_contract";
 
 const RESULT_MAX_BYTES = 512 * 1024 * 1024;
@@ -430,6 +436,57 @@ function receiptCandidateManifestClosed(
   return null;
 }
 
+// raw_sha256 is caller metadata. R2 checksums compressed gzip bytes only.
+async function receiptCandidateCompletedCorrelation(
+  manifest: Record<string, unknown>,
+  rawDigest: string,
+): Promise<string | null> {
+  const compiledPhysical = manifest.compiled_scope_physical_digest;
+  if (typeof compiledPhysical === "string" && compiledPhysical !== rawDigest) {
+    return "compiled_scope_physical_digest does not match gzip raw_sha256";
+  }
+  const nativePresent =
+    manifest.receipt_native_manifest != null ||
+    manifest.receipt_native_manifest_digest != null;
+  if (manifest.compiled_scope_status === "FAIL") {
+    if (nativePresent) {
+      return "failed compiled-scope must not embed a receipt-native manifest";
+    }
+    return null;
+  }
+  if (!nativePresent) {
+    if (manifest.compiled_scope_status === "PASS") {
+      return "completed compiled-scope PASS missing receipt-native identity";
+    }
+    return null;
+  }
+  if (!isRecord(manifest.receipt_native_manifest)) {
+    return "receipt-native manifest is missing";
+  }
+  const native = manifest.receipt_native_manifest;
+  const wire = receiptNativeV2WireError(native);
+  if (wire) return wire;
+  const bodyDigest = await receiptNativeManifestBodyDigest(native);
+  if (
+    native.manifest_digest !== bodyDigest ||
+    manifest.receipt_native_manifest_digest !== bodyDigest
+  ) {
+    return "receipt-native manifest_digest mismatch";
+  }
+  if (!isRecord(native.source)) return "receipt-native source is missing";
+  if (native.source.physical_digest !== rawDigest) {
+    return "receipt-native physical_digest does not match gzip raw_sha256";
+  }
+  if (compiledPhysical !== rawDigest) {
+    return "compiled_scope_physical_digest does not match gzip raw_sha256";
+  }
+  const expectedSnapshot = await receiptNativeSnapshotId(native.source);
+  if (native.snapshot_id !== expectedSnapshot) {
+    return "receipt-native snapshot_id does not match source";
+  }
+  return null;
+}
+
 const SNAPSHOT_GZIP_KIND: SqliteGzipKind = {
   format: PERSONAL_SNAPSHOT_FORMAT,
   plane: "personal_snapshot",
@@ -571,6 +628,13 @@ async function putSqliteManifest(
         { error: `completed ${kind.label} manifest has no matching object` },
         409,
       );
+    }
+    if (kind.plane === "receipt_candidate") {
+      const correlated = await receiptCandidateCompletedCorrelation(
+        manifest,
+        rawDigest,
+      );
+      if (correlated) return responseJson({ error: correlated }, 400);
     }
   } else if (
     manifest.snapshot_key != null ||

@@ -26,6 +26,11 @@ import {
   parseCanonicalUtc,
   sha256Digest,
 } from "../../research-mass-eval/src/controlled_pilot_json";
+import {
+  READY_MANIFEST_V2_FORMAT,
+  receiptNativeManifestBodyDigest,
+  receiptNativeV2WireError,
+} from "../../research-mass-eval/src/ready_manifest_v2";
 import { PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES } from "../../research-mass-eval/src/personal_research_contract";
 import {
   verifyOpsProjectionReady,
@@ -37,8 +42,7 @@ export const READY_ED25519_SECRET_NAME = "READY_ED25519_PRIVATE_KEY" as const;
 export const READY_ED25519_KEY_ID_VAR = "READY_ED25519_KEY_ID" as const;
 export const READINESS_ATTESTATION_FORMAT = "verified-readiness-attestation/v1";
 export const READY_MANIFEST_FORMAT = "ready-manifest/v1";
-export const READY_MANIFEST_V2_FORMAT = "ready-manifest/v2";
-const RECEIPT_NATIVE_SOURCE_KIND = "governed-receipt-candidate";
+export { READY_MANIFEST_V2_FORMAT };
 const SHA256_RE = /^sha256:[0-9a-f]{64}$/;
 const READY_MANIFEST_FIELDS = new Set([
   "format", "snapshot_id", "publication_scope", "profile_id", "profile_version", "profile_digest",
@@ -49,20 +53,6 @@ const READY_MANIFEST_FIELDS = new Set([
   "applied_sync_generation", "export_cursor", "applied_cursor", "pit_contract_digests",
   "feature_generation", "catalog_generation", "created_at", "published_at", "identity",
   "fill_contract_digest", "observed_through", "manifest_digest",
-]);
-const READY_MANIFEST_V2_FIELDS = new Set([
-  "format", "snapshot_id", "publication_scope", "profile_id", "profile_version", "profile_digest",
-  "plan_ids", "plan_set_digest", "dependency_closure_digest", "universe_rule_digest",
-  "resolved_universe_digest", "dataset_ids", "dataset_membership_digest", "coverage_policy_version",
-  "coverage_policy_digest", "coverage_proof_digest", "raw_proof_digest", "receipt_proof_digest",
-  "validation_proof_digest", "b0_proof_digest", "b4_proof_digest", "source", "pit_contract_digests",
-  "feature_generation", "catalog_generation", "created_at", "published_at", "identity",
-  "fill_contract_digest", "manifest_digest",
-]);
-const RECEIPT_NATIVE_SOURCE_FIELDS = new Set([
-  "kind", "environment", "authority_instance_digest", "physical_digest",
-  "observation_policy", "observed_through", "compiled_scope_proof_digest",
-  "receipt_runset_digest",
 ]);
 
 export type ReadyPublicationResult =
@@ -175,102 +165,22 @@ function verifyControlledPilotBinding(manifest: Record<string, unknown>): string
   return null;
 }
 
-function isProofOrMissing(value: unknown): boolean {
-  return value === "MISSING" || value === "UNKNOWN" || isSha256(value);
-}
-
 function verifyReadyManifestV2(manifest: Record<string, unknown>): string | null {
-  const keys = Object.keys(manifest);
-  if (keys.length !== READY_MANIFEST_V2_FIELDS.size ||
-      keys.some((key) => !READY_MANIFEST_V2_FIELDS.has(key))) {
-    return "ReadyManifest v2 fields are not closed";
-  }
-  if (manifest.format !== READY_MANIFEST_V2_FORMAT) {
-    return "ReadyManifest format is invalid";
-  }
-  for (const field of ["source_generation", "applied_sync_generation", "export_cursor", "applied_cursor"]) {
-    if (field in manifest) return "receipt-native ReadyManifest forbids D1 cursor fields";
-  }
+  const wireError = receiptNativeV2WireError(manifest);
+  if (wireError) return wireError;
   const bindingError = verifyControlledPilotBinding(manifest);
   if (bindingError) return bindingError;
-  if (!isSha256(manifest.snapshot_id)) return "ReadyManifest snapshot_id mismatch";
   if (!isRecord(manifest.source)) return "receipt-native source is missing";
   const source = manifest.source;
-  const sourceKeys = Object.keys(source);
-  if (sourceKeys.length !== RECEIPT_NATIVE_SOURCE_FIELDS.size ||
-      sourceKeys.some((key) => !RECEIPT_NATIVE_SOURCE_FIELDS.has(key))) {
-    return "receipt-native source fields are not closed";
-  }
-  if (source.kind !== RECEIPT_NATIVE_SOURCE_KIND) {
-    return "receipt-native source kind is invalid";
-  }
-  if (source.environment !== "production" && source.environment !== "staging") {
+  const environment = source.environment;
+  if (environment !== "production" && environment !== "staging") {
     return "receipt-native source environment is not pinned";
   }
   if (
     source.authority_instance_digest !==
-      PINNED_RECEIPT_REGISTRY_SCOPE[source.environment].authority_instance_digest
+      PINNED_RECEIPT_REGISTRY_SCOPE[environment].authority_instance_digest
   ) {
     return "receipt-native source authority pin mismatch";
-  }
-  if (source.observation_policy !== "max_verified_claims_checked_at") {
-    return "receipt-native source observation policy is invalid";
-  }
-  if (typeof source.observed_through !== "string" || !source.observed_through) {
-    return "receipt-native source observed_through is missing";
-  }
-  for (const field of [
-    "authority_instance_digest",
-    "physical_digest",
-    "compiled_scope_proof_digest",
-    "receipt_runset_digest",
-  ]) {
-    if (!isSha256(source[field])) return `receipt-native source ${field} is not a digest`;
-  }
-  const proofs = [
-    "coverage_proof_digest",
-    "raw_proof_digest",
-    "receipt_proof_digest",
-    "validation_proof_digest",
-    "b0_proof_digest",
-    "b4_proof_digest",
-    "resolved_universe_digest",
-    "profile_digest",
-    "plan_set_digest",
-    "dependency_closure_digest",
-    "universe_rule_digest",
-    "dataset_membership_digest",
-    "coverage_policy_digest",
-    "fill_contract_digest",
-  ];
-  for (const field of proofs) {
-    const value = manifest[field];
-    if (value !== "MISSING" && value !== "UNKNOWN" && !isSha256(value)) {
-      return `ReadyManifest ${field} is invalid`;
-    }
-  }
-  if (!isRecord(manifest.pit_contract_digests) ||
-      Object.keys(manifest.pit_contract_digests).length < 1) {
-    return "ReadyManifest pit_contract_digests missing";
-  }
-  for (const value of Object.values(manifest.pit_contract_digests)) {
-    if (!isProofOrMissing(value)) {
-      return "ReadyManifest pit_contract_digests missing";
-    }
-  }
-  for (const field of ["feature_generation", "catalog_generation"]) {
-    if (typeof manifest[field] !== "string" || !manifest[field]) {
-      return `ReadyManifest ${field} is invalid`;
-    }
-  }
-  if (typeof manifest.created_at !== "string" || !manifest.created_at) {
-    return "ReadyManifest created_at is invalid";
-  }
-  if (typeof manifest.published_at !== "string" || !manifest.published_at) {
-    return "ReadyManifest published_at is invalid";
-  }
-  if (!isSha256(manifest.manifest_digest)) {
-    return "ReadyManifest manifest_digest mismatch";
   }
   return null;
 }
@@ -383,9 +293,7 @@ export async function publishPilotReady(
     const v2Error = verifyReadyManifestV2(candidate.ready_manifest);
     if (v2Error) return rejected(v2Error);
     const declared = candidate.ready_manifest.manifest_digest;
-    const unsigned = { ...candidate.ready_manifest };
-    delete unsigned.manifest_digest;
-    const digest = await digestOf(unsigned);
+    const digest = await receiptNativeManifestBodyDigest(candidate.ready_manifest);
     if (declared !== digest) {
       return rejected("ReadyManifest manifest_digest mismatch");
     }
