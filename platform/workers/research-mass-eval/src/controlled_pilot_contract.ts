@@ -56,6 +56,9 @@ export type ControlledPhysicalSnapshot = {
   size: number;
 };
 
+export const CONTROLLED_NATIVE_JOB_SPEC_FORMAT =
+  "controlled-pilot-job-spec/receipt-native/v1" as const;
+
 export type ControlledPilotJobSpec = {
   identity: typeof CONTROLLED_PILOT_IDENTITY;
   format: "controlled-pilot-job-spec/v1";
@@ -83,6 +86,19 @@ export type ControlledPilotJobSpec = {
   exact_four_binding_digest: typeof EXACT_FOUR_BINDING_DIGEST;
   runner_version: typeof CONTROLLED_PILOT_RUNNER_VERSION;
 };
+
+export type ControlledPilotNativeJobSpec = Omit<
+  ControlledPilotJobSpec,
+  "format" | "signed_projection_document_digest"
+> & {
+  format: typeof CONTROLLED_NATIVE_JOB_SPEC_FORMAT;
+  admitted_native_digest: string;
+  native_source: Record<string, unknown>;
+};
+
+export type AnyControlledPilotJobSpec =
+  | ControlledPilotJobSpec
+  | ControlledPilotNativeJobSpec;
 
 export type ParseControlledPilotRequest =
   | { ok: true; value: ControlledPilotRequest }
@@ -267,6 +283,36 @@ export function closedControlledPilotJobSpec(
   return {
     identity: CONTROLLED_PILOT_IDENTITY,
     format: "controlled-pilot-job-spec/v1",
+    runner_version: CONTROLLED_PILOT_RUNNER_VERSION,
+    fill_contract_digest: CONTROLLED_FILL_CONTRACT_DIGEST,
+    universe_rule_digest: EXACT_FOUR_UNIVERSE_RULE_DIGEST,
+    max_gross_weight_ppm: CONTROLLED_MAX_GROSS_WEIGHT_PPM,
+    profile_digest: EXACT_FOUR_PROFILE_DIGEST,
+    plan_set_digest: EXACT_FOUR_PLAN_SET_DIGEST,
+    dependency_closure_digest: EXACT_FOUR_CLOSURE_DIGEST,
+    exact_four_binding_digest: EXACT_FOUR_BINDING_DIGEST,
+    ...spec,
+  };
+}
+
+export function closedControlledPilotNativeJobSpec(
+  spec: Omit<
+    ControlledPilotNativeJobSpec,
+    | "identity"
+    | "format"
+    | "fill_contract_digest"
+    | "universe_rule_digest"
+    | "max_gross_weight_ppm"
+    | "profile_digest"
+    | "plan_set_digest"
+    | "dependency_closure_digest"
+    | "exact_four_binding_digest"
+    | "runner_version"
+  >,
+): ControlledPilotNativeJobSpec {
+  return {
+    identity: CONTROLLED_PILOT_IDENTITY,
+    format: CONTROLLED_NATIVE_JOB_SPEC_FORMAT,
     runner_version: CONTROLLED_PILOT_RUNNER_VERSION,
     fill_contract_digest: CONTROLLED_FILL_CONTRACT_DIGEST,
     universe_rule_digest: EXACT_FOUR_UNIVERSE_RULE_DIGEST,
