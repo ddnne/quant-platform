@@ -102,11 +102,14 @@ remote apply results only in immutable release evidence.
   Local and production Mass tagged deploy stay refused while a Container
   image is declared. Worker multipart module-byte verification is not
   Container image rollout or research GO. Image push can follow Worker
-  upload and is not transactional; STOP and treat rollback as a separately
-  assessed operation. Builds default vars:
-  https://developers.cloudflare.com/workers/ci-cd/builds/configuration/
-  Containers deploy:
-  https://developers.cloudflare.com/containers/guides/deploy/
+  upload and is not transactional. The 900s mutate timeout only waits on
+  the Wrangler parent and does not confirm a detached Docker build/push
+  was cancelled; after timeout mark state uncertain, STOP, and read actual
+  Build/Worker/Container state before retry or a separately approved
+  rollback. See [Workers Builds default vars](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/),
+  [Containers deploy](https://developers.cloudflare.com/containers/guides/deploy/),
+  and the 20-minute [Builds execution cap](https://developers.cloudflare.com/workers/ci-cd/builds/limits-and-pricing/)
+  (not a rollback or billing guarantee).
   Smoke must not execute market data or Containers. Global live acceptance
   is the final check, not a blocker for prerequisite Worker code rollout.
   This bounded repair does not run D1 migration, JSDA activation, or DLQ
