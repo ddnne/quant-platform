@@ -17,8 +17,10 @@ import {
   RECEIPT_CANDIDATE_FORMAT,
   isReceiptCandidateManifestKey,
   isReceiptCandidateObjectKey,
+  isReceiptCandidatePhysicalKey,
   personalReceiptCandidateManifestKey,
   personalReceiptCandidateObjectKey,
+  personalReceiptCandidatePhysicalKey,
 } from "./personal_receipt_candidate_contract";
 import {
   isPersonalIndexOverlayFamilyCohort,
@@ -76,6 +78,9 @@ const RESULT_MAX_BYTES = 512 * 1024 * 1024;
 const MANIFEST_MAX_BYTES = 64 * 1024;
 // Gzip PUT is compressed transport, not expanded sqlite.
 const SNAPSHOT_GZIP_MAX_BYTES = PERSONAL_RESEARCH_MAX_SNAPSHOT_BYTES;
+// R2 single-object PUT: 5 GiB minus 5 MiB (Cloudflare R2 limits footnote 4).
+const R2_SINGLE_OBJECT_PUT_MAX_BYTES =
+  5 * 1024 * 1024 * 1024 - 5 * 1024 * 1024;
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
 const SHA_HEX_RE = /^[0-9a-f]{64}$/;
 
@@ -181,6 +186,9 @@ type SqliteGzipKind = {
     manifest: Record<string, unknown>,
     status: string,
   ) => string | null;
+  contentType?: string;
+  maxBytes?: number;
+  requireContentMatchesRaw?: boolean;
 };
 
 async function exactTerminalExists(
@@ -487,6 +495,46 @@ async function receiptCandidateCompletedCorrelation(
   return null;
 }
 
+async function receiptCandidatePhysicalObject(
+  env: R2Env,
+  manifest: Record<string, unknown>,
+  rawDigest: string,
+): Promise<{ error: string; status: 400 | 409 } | null> {
+  if (manifest.physical_key == null) return null;
+  if (manifest.compiled_scope_status === "FAIL") {
+    return {
+      error: "failed compiled-scope must not publish a physical object",
+      status: 400,
+    };
+  }
+  const rawHex = rawDigest.slice("sha256:".length);
+  if (
+    typeof manifest.physical_key !== "string" ||
+    !SHA_HEX_RE.test(rawHex) ||
+    manifest.physical_key !== personalReceiptCandidatePhysicalKey(rawHex)
+  ) {
+    return {
+      error: "completed receipt candidate physical identity is invalid",
+      status: 400,
+    };
+  }
+  const uploaded = await env.STRUCTURED_BUCKET.head(manifest.physical_key);
+  if (
+    !uploaded ||
+    uploaded.customMetadata?.sha256 !== rawDigest ||
+    uploaded.customMetadata?.raw_sha256 !== rawDigest ||
+    uploaded.customMetadata?.format !== RECEIPT_CANDIDATE_FORMAT ||
+    !checksumMatches(uploaded, rawDigest)
+  ) {
+    return {
+      error:
+        "completed receipt candidate manifest has no matching physical object",
+      status: 409,
+    };
+  }
+  return null;
+}
+
 const SNAPSHOT_GZIP_KIND: SqliteGzipKind = {
   format: PERSONAL_SNAPSHOT_FORMAT,
   plane: "personal_snapshot",
@@ -505,6 +553,18 @@ const RECEIPT_CANDIDATE_GZIP_KIND: SqliteGzipKind = {
   closedManifest: receiptCandidateManifestClosed,
 };
 
+const RECEIPT_CANDIDATE_PHYSICAL_KIND: SqliteGzipKind = {
+  format: RECEIPT_CANDIDATE_FORMAT,
+  plane: "receipt_candidate",
+  label: "receipt candidate",
+  objectKey: personalReceiptCandidatePhysicalKey,
+  manifestKey: personalReceiptCandidateManifestKey,
+  closedManifest: receiptCandidateManifestClosed,
+  contentType: "application/vnd.sqlite3",
+  maxBytes: R2_SINGLE_OBJECT_PUT_MAX_BYTES,
+  requireContentMatchesRaw: true,
+};
+
 async function putSqliteGzip(
   request: Request,
   env: R2Env,
@@ -516,11 +576,16 @@ async function putSqliteGzip(
   if (
     !identity ||
     !SHA_HEX_RE.test(rawHex) ||
+    (kind.requireContentMatchesRaw &&
+      identity.contentDigest !== identity.rawDigest) ||
     key !== kind.objectKey(rawHex)
   ) {
     return responseJson({ error: `invalid ${kind.label} identity` }, 400);
   }
-  const length = contentLength(request, SNAPSHOT_GZIP_MAX_BYTES);
+  const length = contentLength(
+    request,
+    kind.maxBytes ?? SNAPSHOT_GZIP_MAX_BYTES,
+  );
   if (length === null || request.body === null) {
     return responseJson({ error: `invalid ${kind.label} length` }, 400);
   }
@@ -536,7 +601,7 @@ async function putSqliteGzip(
   let put: R2Object | null;
   try {
     put = await env.STRUCTURED_BUCKET.put(key, request.body, {
-      httpMetadata: { contentType: "application/gzip" },
+      httpMetadata: { contentType: kind.contentType ?? "application/gzip" },
       customMetadata: {
         plane: kind.plane,
         format: kind.format,
@@ -635,11 +700,20 @@ async function putSqliteManifest(
         rawDigest,
       );
       if (correlated) return responseJson({ error: correlated }, 400);
+      const physical = await receiptCandidatePhysicalObject(
+        env,
+        manifest,
+        rawDigest,
+      );
+      if (physical) {
+        return responseJson({ error: physical.error }, physical.status);
+      }
     }
   } else if (
     manifest.snapshot_key != null ||
     manifest.gzip_sha256 != null ||
-    manifest.raw_sha256 != null
+    manifest.raw_sha256 != null ||
+    manifest.physical_key != null
   ) {
     return responseJson(
       { error: `failed ${kind.label} must not publish an object` },
@@ -984,6 +1058,9 @@ export async function personalResearchR2Outbound(
   if ((request.method === "GET" || request.method === "HEAD") &&
       isPersonalResearchSnapshotKey(key)) {
     return getSnapshot(request, env, key);
+  }
+  if (request.method === "PUT" && isReceiptCandidatePhysicalKey(key)) {
+    return putSqliteGzip(request, env, key, RECEIPT_CANDIDATE_PHYSICAL_KIND);
   }
   if (request.method === "PUT" && isReceiptCandidateObjectKey(key)) {
     return putReceiptCandidateGzip(request, env, key);

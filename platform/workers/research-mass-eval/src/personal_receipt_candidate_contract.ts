@@ -105,6 +105,13 @@ export function personalReceiptCandidateObjectKey(rawSha256Hex: string): string 
   return `research/receipt-candidates/sha256=${rawSha256Hex}.sqlite.gz`;
 }
 
+export function personalReceiptCandidatePhysicalKey(rawSha256Hex: string): string {
+  if (!/^[0-9a-f]{64}$/.test(rawSha256Hex)) {
+    throw new Error("invalid receipt candidate digest");
+  }
+  return `research/receipt-candidates/sha256=${rawSha256Hex}.sqlite`;
+}
+
 export function isReceiptCandidateManifestKey(key: string): boolean {
   return /^research\/receipt-candidates\/job=[a-z0-9][a-z0-9._-]{0,63}\/manifest\.json$/.test(
     key,
@@ -115,6 +122,10 @@ export function isReceiptCandidateObjectKey(key: string): boolean {
   return /^research\/receipt-candidates\/sha256=[0-9a-f]{64}\.sqlite\.gz$/.test(
     key,
   );
+}
+
+export function isReceiptCandidatePhysicalKey(key: string): boolean {
+  return /^research\/receipt-candidates\/sha256=[0-9a-f]{64}\.sqlite$/.test(key);
 }
 
 export function receiptCandidateJobIdFromPath(pathname: string): string | null {
