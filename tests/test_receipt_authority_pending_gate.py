@@ -3,7 +3,9 @@ from __future__ import annotations
 import copy
 import json
 import subprocess
+from io import BytesIO
 from pathlib import Path
+from urllib.request import Request
 
 import pytest
 
@@ -15,6 +17,80 @@ def _write_json(path: Path, document: object) -> None:
         json.dumps(document, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+
+def _check_run(
+    *,
+    sha: str,
+    status: str,
+    conclusion: str | None,
+) -> dict[str, object]:
+    return {
+        "name": pending._NATIVE_CHECK_NAME,
+        "head_sha": sha,
+        "status": status,
+        "conclusion": conclusion,
+        "app": {"id": 85455},
+    }
+
+
+def _check_runs_opener(payload: object):
+    def opener(request: Request, timeout: object = None) -> BytesIO:
+        assert timeout == pending._NATIVE_CHECK_TIMEOUT_SECONDS
+        url = request.full_url
+        assert "status=completed" not in url
+        assert "filter=latest" in url
+        assert "app_id=85455" in url
+        return BytesIO(json.dumps(payload).encode("utf-8"))
+
+    return opener
+
+
+def test_native_required_check_accepts_latest_completed_success() -> None:
+    sha = "e" * 40
+    pending._require_native_required_check(
+        sha,
+        opener=_check_runs_opener(
+            {
+                "total_count": 1,
+                "check_runs": [
+                    _check_run(sha=sha, status="completed", conclusion="success")
+                ],
+            }
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("status", "conclusion", "head_sha", "match"),
+    (
+        ("in_progress", None, "e" * 40, "not completed success"),
+        ("completed", "success", "f" * 40, "identity drifted"),
+    ),
+)
+def test_native_required_check_rejects_unfinished_or_wrong_sha(
+    status: str,
+    conclusion: str | None,
+    head_sha: str,
+    match: str,
+) -> None:
+    expected = "e" * 40
+    with pytest.raises(pending.PendingReceiptAuthorityError, match=match):
+        pending._require_native_required_check(
+            expected,
+            opener=_check_runs_opener(
+                {
+                    "total_count": 1,
+                    "check_runs": [
+                        _check_run(
+                            sha=head_sha,
+                            status=status,
+                            conclusion=conclusion,
+                        )
+                    ],
+                }
+            ),
+        )
 
 
 @pytest.mark.parametrize("environment", ["staging", "production"])

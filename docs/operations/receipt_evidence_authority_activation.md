@@ -73,7 +73,14 @@ ticket. Production and staging must use different values.
 
 Before either deployment:
 
-1. Required Cloudflare CI is green for the exact source SHA.
+1. The exact official `origin/main` merge SHA has native required-check SUCCESS
+   (`Workers Builds: quant-platform-ci-aggregate-staging`, app id 85455).
+   A pre-merge branch SHA is not admissible. PENDING acceptance uses Python 3.11+
+   on PATH for stdlib GitHub admission and does not recreate `.venv` or run
+   all-Worker `npm ci`. After native/source admission it runs locked `npm ci`
+   only for `ingestion-secrets`, `receipt-evidence-authority`, and
+   `ingestion-premium`. Live three-Worker rebuilds still use each Worker's
+   pinned Wrangler 4.125.0.
 2. The active-binding manifest is clean for base, production, and staging.
 3. A D1 backup and checksum evidence exist for the target environment.
 4. Canonical ingestion migrations through
@@ -155,7 +162,7 @@ checkout of that SHA; do not replace it with a short SHA.
 The staging targets, in dependency order, are:
 
 ```sh
-SOURCE_SHA="<FULL_REVIEWED_GIT_SHA>"
+SOURCE_SHA="<OFFICIAL_ORIGIN_MAIN_MERGE_SHA>"
 
 cd platform/workers/ingestion-secrets
 npx wrangler deploy --strict --config wrangler.staging.toml \
@@ -178,16 +185,18 @@ tag and message both retain all 40 source-SHA characters. Use `p` for the
 production environment and each production config/`--env production` only
 after staging acceptance.
 
-Immediately after deployment, run the repository acceptance wrapper from
-repository root. It first runs frozen CI and the source-only PENDING gate, then
-uses `wrangler deployments status`, `wrangler versions view`, and GET-only
-Cloudflare API inventory. It brackets the complete three-Worker chain before
-and after every source download, rebuilds each Worker from the clean reviewed
-Git SHA with a credential-free deterministic `wrangler deploy --dry-run`, and
-requires the live downloaded main-module bytes to match the local build
-exactly. The SHA must also equal both local and remotely observed official
-`origin/main`; version messages and tags are never accepted as source
-provenance by themselves.
+Immediately after deployment, run the repository acceptance wrapper from a
+clean checkout of that merge SHA. The PENDING path admits the public GitHub
+native required-check result for that SHA (latest run only; an in-progress
+check is not masked by an older success) instead of re-running full local
+`verify_ci.sh`. It then runs the source-only PENDING gate, locked `npm ci` for
+the three PENDING Workers only, secret-name inventory, and live module
+acceptance: `wrangler deployments status`,
+`wrangler versions view`, GET-only Cloudflare API inventory, credential-free
+deterministic `wrangler deploy --dry-run` rebuild of the three-Worker chain,
+and exact live main-module byte equality. The SHA must equal both local and
+remotely observed official `origin/main`; version messages and tags are never
+accepted as source provenance by themselves.
 It also verifies exact Worker/version/100% traffic/bindings/resources plus
 workers.dev, previews, routes, custom domains, Cron triggers, Logpush and tail
 consumers for all three Workers, and rejects any extra capability surface.

@@ -16,7 +16,10 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, Callable, NoReturn
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,6 +48,12 @@ SCOPED_REGISTRY_PATHS = {
 }
 _ENVIRONMENTS = frozenset(SCOPED_REGISTRY_PATHS)
 _SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
+_NATIVE_CHECK_NAME = "Workers Builds: quant-platform-ci-aggregate-staging"
+_NATIVE_CHECK_APP_ID = 85455
+_NATIVE_CHECK_OWNER = "ddnne"
+_NATIVE_CHECK_REPO = "quant-platform"
+_NATIVE_CHECK_TIMEOUT_SECONDS = 30
+_NATIVE_CHECK_MAX_BYTES = 262144
 
 
 class PendingReceiptAuthorityError(RuntimeError):
@@ -302,6 +311,87 @@ def _require_exact_clean_source(expected_source_sha: str) -> None:
         )
 
 
+def _require_native_required_check(
+    expected_source_sha: str,
+    *,
+    opener: Callable[..., Any] = urlopen,
+) -> None:
+    """Admit only the latest native Cloudflare required check on this SHA."""
+
+    if _SHA_RE.fullmatch(expected_source_sha) is None:
+        raise PendingReceiptAuthorityError(
+            "Receipt PENDING native required check HOLD: expected source SHA is invalid"
+        )
+    query = urlencode(
+        {
+            "check_name": _NATIVE_CHECK_NAME,
+            "app_id": str(_NATIVE_CHECK_APP_ID),
+            "filter": "latest",
+            "per_page": "100",
+        }
+    )
+    url = (
+        "https://api.github.com/repos/"
+        f"{_NATIVE_CHECK_OWNER}/{_NATIVE_CHECK_REPO}/commits/"
+        f"{expected_source_sha}/check-runs?{query}"
+    )
+    request = Request(
+        url,
+        method="GET",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "quant-platform-receipt-pending-acceptance",
+        },
+    )
+    try:
+        with opener(request, timeout=_NATIVE_CHECK_TIMEOUT_SECONDS) as response:
+            raw = response.read(_NATIVE_CHECK_MAX_BYTES + 1)
+    except TimeoutError as exc:
+        raise PendingReceiptAuthorityError(
+            "Receipt PENDING native required check HOLD: check-runs read timed out"
+        ) from exc
+    except (HTTPError, URLError, OSError) as exc:
+        raise PendingReceiptAuthorityError(
+            "Receipt PENDING native required check HOLD: check-runs are unavailable"
+        ) from exc
+    if type(raw) is not bytes or not raw or len(raw) > _NATIVE_CHECK_MAX_BYTES:
+        raise PendingReceiptAuthorityError(
+            "Receipt PENDING native required check HOLD: check-runs response is unreadable"
+        )
+    try:
+        document = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PendingReceiptAuthorityError(
+            "Receipt PENDING native required check HOLD: check-runs response is unreadable"
+        ) from exc
+    check_runs = document.get("check_runs") if type(document) is dict else None
+    if (
+        type(document) is not dict
+        or document.get("total_count") != 1
+        or type(check_runs) is not list
+        or len(check_runs) != 1
+        or type(check_runs[0]) is not dict
+    ):
+        raise PendingReceiptAuthorityError(
+            "Receipt PENDING native required check HOLD: required check is missing or ambiguous"
+        )
+    run = check_runs[0]
+    app = run.get("app")
+    if (
+        run.get("name") != _NATIVE_CHECK_NAME
+        or type(app) is not dict
+        or app.get("id") != _NATIVE_CHECK_APP_ID
+        or run.get("head_sha") != expected_source_sha
+    ):
+        raise PendingReceiptAuthorityError(
+            "Receipt PENDING native required check HOLD: required check identity drifted"
+        )
+    if run.get("status") != "completed" or run.get("conclusion") != "success":
+        raise PendingReceiptAuthorityError(
+            "Receipt PENDING native required check HOLD: required check is not completed success"
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -311,6 +401,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         _require_exact_clean_source(args.expected_source_sha)
+        _require_native_required_check(args.expected_source_sha)
         result = validate_pending_receipt_authority(args.environment)
     except (PendingReceiptAuthorityError, RuntimeError, ValueError) as exc:
         print(f"Receipt PENDING deployment gate: FAIL: {exc}", file=sys.stderr)
