@@ -6,12 +6,14 @@ import { PERSONAL_SNAPSHOT_FORMAT } from "../src/personal_snapshot_contract";
 import {
   RECEIPT_CANDIDATE_FORMAT,
   personalReceiptCandidatePhysicalKey,
+  personalReceiptCandidateScopeKey,
 } from "../src/personal_receipt_candidate_contract";
 import { PERSONAL_RESEARCH_RUNNER_VERSION } from "../src/personal_research_contract";
 import {
   receiptNativeManifestBodyDigest,
   receiptNativeSnapshotId,
 } from "../src/ready_manifest_v2";
+import { canonicalJson, sha256Digest } from "../src/controlled_pilot_json";
 import exampleNative from "../../../../specs/ready/ready_manifest_v2.example.json";
 
 const runtimeEnv = env as { STRUCTURED_BUCKET: R2Bucket };
@@ -64,9 +66,10 @@ function uploadHeaders(
   jobId: string,
   contentDigest: string,
   rawDigest = RAW_DIGEST,
+  byteLength = 3,
 ): Record<string, string> {
   const headers: Record<string, string> = {
-    "content-length": "3",
+    "content-length": String(byteLength),
     "x-personal-job-id": jobId,
     "x-personal-request-digest": REQUEST_DIGEST,
     "x-content-sha256": contentDigest,
@@ -129,15 +132,21 @@ async function putWithProducer(
   jobId: string,
   mode: ProduceMode,
   contentDigest: string,
-  options?: { key?: string; rawDigest?: string },
+  options?: { key?: string; rawDigest?: string; body?: Uint8Array },
 ): Promise<{
   response: Response;
   producer: PromiseSettledResult<void>;
 }> {
-  const stream = new FixedLengthStream(3);
+  const payload = options?.body ?? BYTES;
+  const stream = new FixedLengthStream(payload.byteLength);
   const producer = (async () => {
     const writer = stream.writable.getWriter();
     try {
+      if (options?.body) {
+        await writer.write(payload);
+        await writer.close();
+        return;
+      }
       if (mode === "abort") {
         await writer.write(BYTES.subarray(0, 1));
         await writer.abort(new Error("test producer abort"));
@@ -170,7 +179,13 @@ async function putWithProducer(
   const response = await personalResearchR2Outbound(
     new Request(`http://research.r2/${options?.key ?? objectKey(kind, jobId)}`, {
       method: "PUT",
-      headers: uploadHeaders(kind, jobId, contentDigest, options?.rawDigest),
+      headers: uploadHeaders(
+        kind,
+        jobId,
+        contentDigest,
+        options?.rawDigest,
+        payload.byteLength,
+      ),
       body: stream.readable,
     }),
     runtimeEnv,
@@ -493,6 +508,82 @@ describe("personalResearchR2Outbound workerd/R2 runtime", () => {
     );
     expect(withPhysical.status).toBe(201);
 
+    const scopeBody = {
+      format: "pit-dependency-scope-proof/v1",
+      status: "PASS",
+      physical_db_digest: CONTENT_DIGEST,
+    };
+    const scopeJson = canonicalJson(scopeBody);
+    const scopeDigest = await sha256Digest(scopeJson);
+    const scopeBytes = new TextEncoder().encode(scopeJson);
+    const scopeNative = await sealedNative(CONTENT_DIGEST, undefined, scopeDigest);
+    const scopeExtra = {
+      ...physicalExtra,
+      compiled_scope_proof_digest: scopeDigest,
+      dependency_scope_key: personalReceiptCandidateScopeKey(
+        scopeDigest.slice("sha256:".length),
+      ),
+      receipt_native_manifest: scopeNative,
+      receipt_native_manifest_digest: scopeNative.manifest_digest,
+    };
+    const missingScope = await putCompletedManifest(
+      "candidate",
+      "r05-candidate-scope-ok",
+      { extra: scopeExtra },
+    );
+    expect(missingScope.status).toBe(409);
+    expect(await missingScope.json()).toEqual({
+      error: "completed receipt candidate manifest has no matching scope object",
+    });
+    expect(
+      await runtimeEnv.STRUCTURED_BUCKET.head(
+        manifestKey("candidate", "r05-candidate-scope-ok"),
+      ),
+    ).toBeNull();
+    const scopePut = await putWithProducer(
+      "candidate",
+      "r05-candidate-scope-ok",
+      "complete",
+      scopeDigest,
+      {
+        key: personalReceiptCandidateScopeKey(scopeDigest.slice("sha256:".length)),
+        rawDigest: CONTENT_DIGEST,
+        body: scopeBytes,
+      },
+    );
+    expect(scopePut.response.status).toBe(201);
+    const omittedStatus = await putCompletedManifest(
+      "candidate",
+      "r05-candidate-scope-anon",
+      {
+        extra: {
+          raw_sha256: CONTENT_DIGEST,
+          gzip_sha256: CONTENT_DIGEST,
+          snapshot_key: `research/receipt-candidates/sha256=${ACTUAL_HEX}.sqlite.gz`,
+          compiled_scope_proof_digest: scopeDigest,
+          dependency_scope_key: personalReceiptCandidateScopeKey(
+            scopeDigest.slice("sha256:".length),
+          ),
+        },
+      },
+    );
+    expect(omittedStatus.status).toBe(400);
+    expect(await omittedStatus.json()).toEqual({
+      error:
+        "completed receipt candidate scope pointer requires compiled-scope PASS",
+    });
+    expect(
+      await runtimeEnv.STRUCTURED_BUCKET.head(
+        manifestKey("candidate", "r05-candidate-scope-anon"),
+      ),
+    ).toBeNull();
+    const withScope = await putCompletedManifest(
+      "candidate",
+      "r05-candidate-scope-ok",
+      { extra: scopeExtra },
+    );
+    expect(withScope.status).toBe(201);
+
     const other = await sealedNative(OTHER_RAW);
     const swappedSnapshot = await sealedNative(RAW_DIGEST, (body) => {
       body.snapshot_id = other.snapshot_id;
@@ -592,11 +683,15 @@ describe("personalResearchR2Outbound workerd/R2 runtime", () => {
 async function sealedNative(
   physicalDigest: string,
   mutate?: (native: Record<string, unknown>) => void,
+  compiledScopeProofDigest?: string,
 ): Promise<Record<string, unknown>> {
   const native = structuredClone(exampleNative) as Record<string, unknown>;
   const source = {
     ...(exampleNative.source as Record<string, unknown>),
     physical_digest: physicalDigest,
+    ...(compiledScopeProofDigest
+      ? { compiled_scope_proof_digest: compiledScopeProofDigest }
+      : {}),
   };
   native.source = source;
   native.snapshot_id = await receiptNativeSnapshotId(source);

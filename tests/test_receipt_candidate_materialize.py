@@ -632,6 +632,7 @@ def test_execute_512_selectors_keeps_compact_terminal(
     assert terminal["snapshot_quality_digest"].startswith("sha256:")
     assert "observation_checked_at" not in terminal
     assert "physical_key" not in terminal
+    assert "dependency_scope_key" not in terminal
     assert len(
         json.dumps(terminal, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
     ) < 64 * 1024
@@ -640,6 +641,7 @@ def test_execute_512_selectors_keeps_compact_terminal(
 def test_execute_pass_streams_closed_sqlite_before_gzip(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from paper_runtime.ready_publication import canonical_digest
     from receipt_candidate_job import ReceiptCandidateJobSpec, execute_receipt_candidate_job
 
     selector = {"dataset": "equities_bars_daily", "segment_id": "2023-01"}
@@ -675,12 +677,17 @@ def test_execute_pass_streams_closed_sqlite_before_gzip(
         del kwargs
         freeze_receipt_candidate_snapshot(store)
         physical = hash_receipt_candidate_snapshot(store)
+        evidence_body = {
+            "format": "pit-dependency-scope-proof/v1",
+            "status": "PASS",
+            "physical_db_digest": physical,
+        }
         return {
             "compiled_scope_status": "PASS",
             "compiled_scope_kind": "receipt-candidate-scope-diagnostic/v1",
             "observation_policy": "max_verified_claims_checked_at",
             "observation_checked_at": "2026-08-25T00:00:00+00:00",
-            "compiled_scope_proof_digest": physical,
+            "compiled_scope_proof_digest": canonical_digest(evidence_body),
             "physical_db_digest": physical,
             "receipt_source": {
                 "kind": "governed-receipt-candidate",
@@ -688,6 +695,7 @@ def test_execute_pass_streams_closed_sqlite_before_gzip(
             },
             "receipt_native_manifest": {"format": "ready-manifest/v2"},
             "receipt_native_manifest_digest": physical,
+            "_receipt_scope_evidence_body": evidence_body,
         }
 
     monkeypatch.setattr(
@@ -706,6 +714,7 @@ def test_execute_pass_streams_closed_sqlite_before_gzip(
                 "content_type": headers.get("content-type"),
                 "raw": headers.get("x-personal-raw-sha256"),
                 "size": data.stat().st_size if isinstance(data, Path) else len(data),
+                "payload": data if isinstance(data, (bytes, bytearray)) else None,
             }
         )
 
@@ -718,20 +727,31 @@ def test_execute_pass_streams_closed_sqlite_before_gzip(
     assert terminal["ready"] is False
     assert terminal["go"] is False
     assert [item["key"] for item in puts] == [
+        terminal["dependency_scope_key"],
         terminal["physical_key"],
         terminal["snapshot_key"],
     ]
+    sidecar = puts[0]
+    assert isinstance(sidecar["payload"], (bytes, bytearray))
+    uploaded = json.loads(sidecar["payload"])
+    assert "proof_digest" not in uploaded
+    assert sidecar["digest"] == terminal["compiled_scope_proof_digest"]
+    assert (
+        "sha256:" + hashlib.sha256(sidecar["payload"]).hexdigest()
+        == terminal["compiled_scope_proof_digest"]
+    )
+    assert uploaded["physical_db_digest"] == terminal["raw_sha256"]
+    assert sidecar["raw"] == terminal["raw_sha256"]
+    assert sidecar["content_type"] == "application/json; charset=utf-8"
     assert str(terminal["physical_key"]).endswith(".sqlite")
     assert not str(terminal["physical_key"]).endswith(".gz")
-    assert puts[0]["digest"] == terminal["raw_sha256"]
-    assert puts[0]["content_type"] == "application/vnd.sqlite3"
-    assert puts[0]["raw"] == terminal["raw_sha256"]
-    assert puts[0]["size"] == terminal["raw_bytes"]
-    assert puts[1]["digest"] == terminal["gzip_sha256"]
+    assert puts[1]["digest"] == terminal["raw_sha256"]
+    assert puts[1]["content_type"] == "application/vnd.sqlite3"
+    assert puts[2]["digest"] == terminal["gzip_sha256"]
 
     def boom(key, data, *, spec, content_digest, extra_headers=None):
         del data, spec, content_digest, extra_headers
-        if str(key).endswith(".sqlite"):
+        if str(key).endswith(".pit-dependency-scope.json"):
             raise RuntimeError("R2 upload returned 502")
 
     failed = execute_receipt_candidate_job(
@@ -739,6 +759,7 @@ def test_execute_pass_streams_closed_sqlite_before_gzip(
     )
     assert failed["status"] == "FAILED"
     assert "physical_key" not in failed
+    assert "dependency_scope_key" not in failed
     assert "snapshot_key" not in failed
 
 
@@ -820,6 +841,12 @@ def test_committed_candidate_scope_pass_ignores_unsigned_later_receipt(
         {**proof_context, "b4": quality["b4"]}
     )
     assert result["validation_proof_digest"] == result["snapshot_quality_digest"]
+    evidence_body = result["_receipt_scope_evidence_body"]
+    assert "proof_digest" not in evidence_body
+    assert evidence_body["format"] == "pit-dependency-scope-proof/v1"
+    assert evidence_body["physical_db_digest"] == result["physical_db_digest"]
+    assert evidence_body["profile_digest"] == binding.profile_digest
+    assert canonical_digest(evidence_body) == result["compiled_scope_proof_digest"]
     first_feature_dependencies = binding.profiles[0].to_dict()[
         "feature_dependencies"
     ]

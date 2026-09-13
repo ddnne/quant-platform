@@ -146,7 +146,7 @@ export type CreateOnlyBytesOptions = {
   customMetadata?: Record<string, string>;
 };
 
-const CREATE_ONLY_COMPARE_MAX_BYTES = 256 * 1024;
+export const CREATE_ONLY_COMPARE_MAX_BYTES = 256 * 1024;
 
 async function compareExisting(
   bucket: R2Bucket,
