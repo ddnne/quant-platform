@@ -1,10 +1,10 @@
 {
   "schema": "quant-platform-work-ledger/v1",
-  "updated_at": "2026-09-13T17:31:00Z",
+  "updated_at": "2026-09-13T19:26:00Z",
   "history": {
-    "git_sha": "15f27cdb7e59834bc5a7d6bb9c0ffffefe05cbc3",
-    "url": "https://github.com/ddnne/quant-platform/blob/15f27cdb7e59834bc5a7d6bb9c0ffffefe05cbc3/docs/operations/current_work_ledger.json",
-    "note": "Prior committed ledger on main 15f (PR168 merge) still described PR167 as latest accepted native and listed native-execution as uncommitted WIP. This dated pre-commit checkpoint records PR168 as the accepted baseline. Not a fresh live Cloudflare product remeasure. This file is not a self-SHA of the current paper-authorization unit."
+    "git_sha": "4e1371b7ccc3b0b7274cdbbe71a8c4f9c9ddaeec",
+    "url": "https://github.com/ddnne/quant-platform/blob/4e1371b7ccc3b0b7274cdbbe71a8c4f9c9ddaeec/docs/operations/current_work_ledger.json",
+    "note": "Prior committed main ledger at PR170 merge 4e137 still listed PR168 as latest accepted native and paper-authorization as uncommitted. This dated 19:26Z observation records PR169/PR170 as accepted baselines and PR171 as native-pending. Not a self-SHA of this docs edit or of final main."
   },
   "open_findings": {
     "preserved_not_exhaustive": ["A2", "C10", "C4", "D2", "D3", "R10", "R11", "R5"],
@@ -13,146 +13,68 @@
   "pr137": "intentional_held_draft",
   "lanes": {
     "source_delivered": {
-      "status": "pr168_merged_main_native_success",
-      "latest_main_sha": "15f27cdb7e59834bc5a7d6bb9c0ffffefe05cbc3",
+      "status": "pr170_merged_main_native_success",
+      "latest_main_sha": "4e1371b7ccc3b0b7274cdbbe71a8c4f9c9ddaeec",
       "required_check_app_id": 85455,
       "required_check_name": "Workers Builds: quant-platform-ci-aggregate-staging",
       "strict": true,
-      "pr168": {
-        "title": "fix: connect receipt-native READY to controlled Paper execution",
-        "url": "https://github.com/ddnne/quant-platform/pull/168",
-        "feature_sha": "089df958e3136b7d143d67599a4f6ef495af608f",
-        "source_check": "103755591452",
-        "source_check_conclusion": "success",
-        "source_check_completed_at": "2026-09-13T16:38:51Z",
-        "source_build": "8f68f561-98a3-4536-bf5f-fe747e8f0604",
-        "source_build_conclusion": "success",
-        "source_build_stopped_at": "2026-09-13T16:38:50.401Z",
-        "merged_main_sha": "15f27cdb7e59834bc5a7d6bb9c0ffffefe05cbc3",
-        "merged_at": "2026-09-13T16:39:50Z",
-        "main_check": "103757347975",
-        "main_check_conclusion": "success",
-        "main_check_completed_at": "2026-09-13T16:52:03Z",
-        "main_build": "f576196e-1555-419b-93d3-39bde37bc426",
-        "main_build_conclusion": "success",
-        "main_build_stopped_at": "2026-09-13T16:52:02.567Z",
-        "deploy_command": "true",
-        "evidence_comment": "https://github.com/ddnne/quant-platform/pull/168#issuecomment-5654677996",
-        "note": "Exact-source and merged-main native SUCCESS. Cloudflare deploy_command string true is CI-only, not product deploy. Native Controlled Pilot execution of receipt-native READY is on main 15f. This is source acceptance of PR168, not product deploy, READY, or GO."
-      },
-      "pr167": {
-        "historical": true,
-        "title": "fix: publish READY pointers after immutable receipt admission",
-        "url": "https://github.com/ddnne/quant-platform/pull/167",
-        "feature_sha": "8804b25e7e12f4fc58ed8e917871e8b3a3a8f8de",
-        "source_check": "103741780805",
-        "source_check_conclusion": "success",
-        "source_check_completed_at": "2026-09-13T14:55:25Z",
-        "source_build": "9152886f-140f-4cc3-84a0-5db1c4c1f4e2",
-        "source_build_conclusion": "success",
-        "source_build_stopped_at": "2026-09-13T14:55:24.944Z",
-        "merged_main_sha": "a92f24fe6b935c708e23f5d9eb35052b0894af1d",
-        "merged_at": "2026-09-13T14:56:19Z",
-        "main_check": "103743825854",
-        "main_check_conclusion": "success",
-        "main_check_completed_at": "2026-09-13T15:10:59Z",
-        "main_build": "bf96bb82-995e-4e46-adc5-0d7259dd37f6",
-        "main_build_conclusion": "success",
-        "main_build_stopped_at": "2026-09-13T15:10:58.345Z",
-        "deploy_command": "true",
-        "evidence_comment": "https://github.com/ddnne/quant-platform/pull/167#issuecomment-5654147167",
-        "branch_removed_after_merge": true,
-        "note": "Prior accepted pointer-RPC native SUCCESS on a92. Superseded as latest main by PR168/15f."
-      },
-      "pr166": {
-        "historical": true,
-        "title": "fix: bind receipt-native READY publication to admitted evidence",
-        "feature_sha": "d05e29b432aa9888712dc7aac0dbb301ae5b83cc",
-        "merged_main_sha": "549598bb235001f15fa236a11d9bdca6c614062c",
-        "merged_at": "2026-09-13T13:22:35Z",
-        "evidence_comment": "https://github.com/ddnne/quant-platform/pull/166#issuecomment-5653614657",
-        "note": "Prior accepted pointer-publisher native SUCCESS on 549598b. Historical after PR167/a92 and PR168/15f."
-      },
-      "mass_worker_build_on_15f": {
-        "id": "9bc2d7f5-7846-42a1-970b-5ca77c3406cd",
-        "check": "103755840836",
-        "conclusion": "failure",
-        "completed_at": "2026-09-13T16:40:40Z",
-        "cause": "DEPLOYMENT HOLD after successful compile/tests",
-        "note": "Intentional HOLD on exact 15f. Not a required-native failure. No retry, no bypass, no product deploy."
-      },
-      "mass_worker_build_on_a92": {
-        "id": "98716fe7-a593-49cb-94da-831d9dcaa112",
-        "check": "103742003997",
-        "conclusion": "failure",
-        "completed_at": "2026-09-13T14:57:12Z",
-        "cause": "DEPLOYMENT HOLD after successful compile/tests",
-        "historical": true,
-        "note": "Historical Mass HOLD on then-main a92. No bypass, no product deploy."
-      },
-      "mass_worker_build_on_549598b": {
-        "id": "1ec10e10-4ea7-4583-94a4-91be22deda40",
-        "check": "103730232356",
-        "conclusion": "failure",
-        "cause": "DEPLOYMENT HOLD after successful compile/tests",
-        "historical": true,
-        "note": "Historical Mass HOLD on then-main 549598b. No bypass, no product deploy."
-      },
-      "mass_worker_build_on_9a8bb52": {
-        "id": "ec19f14b-e665-4b67-84e7-2b156077fa79",
-        "check": "103711612087",
-        "conclusion": "failure",
-        "cause": "DEPLOYMENT HOLD after successful compile/tests",
-        "historical": true,
-        "note": "Historical Mass HOLD on then-main 9a8bb52, not a current-main remeasure. No bypass, no product deploy."
-      },
-      "receipt_completion_ready_rpc_unit": {
-        "status": "merged_pr167",
-        "branch": "fix/receipt-completion-ready-rpc",
-        "branch_removed_after_merge": true,
-        "base_main_sha": "549598bb235001f15fa236a11d9bdca6c614062c",
-        "merged_main_sha": "a92f24fe6b935c708e23f5d9eb35052b0894af1d",
-        "merged_at": "2026-09-13T14:56:19Z",
-        "note": "Former unpushed completion-rpc WIP recorded on the a92 ledger blob. Merged as PR167. Not the current native-execution unit."
-      },
-      "receipt_native_controlled_execution_unit": {
-        "status": "merged_pr168",
-        "branch": "fix/receipt-native-controlled-execution",
-        "base_main_sha": "a92f24fe6b935c708e23f5d9eb35052b0894af1d",
-        "merged_main_sha": "15f27cdb7e59834bc5a7d6bb9c0ffffefe05cbc3",
-        "merged_at": "2026-09-13T16:39:50Z",
-        "note": "Former unpushed native-execution WIP. Merged as PR168. Not the current paper-authorization unit."
-      },
-      "receipt_native_paper_authorization_unit": {
-        "status": "local_precommit_checkpoint",
-        "observed_at": "2026-09-13T17:31:00Z",
-        "branch": "fix/receipt-native-paper-authorization",
-        "base_main_sha": "15f27cdb7e59834bc5a7d6bb9c0ffffefe05cbc3",
-        "committed": false,
-        "pushed": false,
-        "local_checks": {
-          "premium_typecheck": "pass",
-          "mass_typecheck": "pass",
-          "premium_node_unit": "179 tests / 26 files PASS",
-          "premium_workerd": "22 tests / 3 files PASS",
-          "mass_node_unit": "478 tests / 52 files PASS",
-          "mass_workerd": "26 tests / 3 files PASS",
-          "python": [
-            "test_cloudflare_binding_manifest.py PASS",
-            "test_receipt_authority_pending_live_acceptance.py PASS"
-          ],
-          "scripts": [
-            "cloudflare_binding_manifest.py check PASS",
-            "verify_secret_paths.py PASS",
-            "verify_controlled_pilot_v1_drift.py PASS"
-          ],
-          "static_review": "independent critical re-review 2026-09-13T17:30:24Z found no additional P0/P1/strong P2; short-id structurally fixed; read-only static, not live verification",
-          "runtime_stderr": "expected negative stream/disconnect/sourcemap warnings; not a clean log"
+      "accepted_baseline": {
+        "pr170": {
+          "url": "https://github.com/ddnne/quant-platform/pull/170",
+          "feature_sha": "ce298e6cd53ee8a6d2cc26947bf3d5f34b293d09",
+          "merged_main_sha": "4e1371b7ccc3b0b7274cdbbe71a8c4f9c9ddaeec",
+          "merged_at": "2026-09-13T18:25:41Z",
+          "source_check": "103770104513",
+          "source_build": "367473f7-d9bc-4207-8864-2f8bb665fe9b",
+          "source_build_stopped_at": "2026-09-13T18:24:44.607Z",
+          "main_check": "103772504213",
+          "main_build": "515d6ab6-995b-4391-ae2c-4fa472dbe608",
+          "main_check_completed_at": "2026-09-13T18:41:28.203Z",
+          "deploy_command": "true",
+          "evidence_comment": "https://github.com/ddnne/quant-platform/pull/170#issuecomment-5655305697",
+          "note": "Latest accepted main. Slim PENDING release-evidence builder. A6 remains OPEN: authenticated collection/publication SOURCE is absent. deploy_command string true is CI-only. Fresh clone HEAD==origin/main 4e137; 43 distinct Python cases PASS."
         },
-        "scope": "Paired native READY/Trader inside existing Premium publishAdmittedReceiptCandidate; shared verifier and controlledPilotRequestDigest; actual-clock issuance and stored-winner recovery; POST-only reconnect of READY-only pointers; candidate/Controlled Pilot identity 1..64. Tests use synthetic keys/data and mock registries/RPC/native-verifier. No live market data, rollout, READY, or Pilot evidence. TRADER_ED25519_PRIVATE_KEY and ACTIVE trader registry rows were not provisioned by this source unit; live secret/registry state was not remeasured; activation remains pending acceptance.",
-        "note": "Dated pre-commit checkpoint 2026-09-13T17:31:00Z. Uncommitted/unpushed. No invented current-unit SHA, PR number, native CI, or deploy. Final source acceptance must come from actual Git/PR/native check records after this checkpoint. Not a self-SHA documentation/CI loop."
+        "pr169": {
+          "url": "https://github.com/ddnne/quant-platform/pull/169",
+          "feature_sha": "24c67a91d1c40d4cdbe384c4bab41508ec3fd0e2",
+          "merged_main_sha": "59109819411b4388acc4e9ee8b7b8fc2771af9fd",
+          "evidence_comment": "https://github.com/ddnne/quant-platform/pull/169#issuecomment-5655101838",
+          "note": "Paired Paper Trader mint inside existing Premium publishAdmittedReceiptCandidate is on main 591. Live trader secret/registry state was not remeasured; activation remains pending acceptance."
+        }
       },
-      "notes": "Latest accepted native baseline is PR168 on 15f. PR167 on a92 and PR166 on 549598b are Git/PR history. PR137 remains an intentional HELD Draft."
+      "prior_accepted_prs": [
+        {"pr": 168, "url": "https://github.com/ddnne/quant-platform/pull/168", "merged_main_sha": "15f27cdb7e59834bc5a7d6bb9c0ffffefe05cbc3", "evidence_comment": "https://github.com/ddnne/quant-platform/pull/168#issuecomment-5654677996"},
+        {"pr": 167, "url": "https://github.com/ddnne/quant-platform/pull/167", "merged_main_sha": "a92f24fe6b935c708e23f5d9eb35052b0894af1d", "evidence_comment": "https://github.com/ddnne/quant-platform/pull/167#issuecomment-5654147167"},
+        {"pr": 166, "url": "https://github.com/ddnne/quant-platform/pull/166", "merged_main_sha": "549598bb235001f15fa236a11d9bdca6c614062c", "evidence_comment": "https://github.com/ddnne/quant-platform/pull/166#issuecomment-5653614657"}
+      ],
+      "mass_worker_build_on_4e137": {
+        "id": "7846465b-3ef7-4f29-b48e-d5d5c68b7f59",
+        "check": "103770378143",
+        "head": "4e1371b7ccc3b0b7274cdbbe71a8c4f9c9ddaeec",
+        "conclusion": "failure",
+        "completed_at": "2026-09-13T18:26:40Z",
+        "cause": "DEPLOYMENT HOLD after 478 unit + 26 runtime passed",
+        "note": "Intentional HOLD. Not a required-native failure. No retry, no bypass, no product deploy."
+      },
+      "pr171_native_interop": {
+        "url": "https://github.com/ddnne/quant-platform/pull/171",
+        "feature_sha": "fe1b7f1a5b39c4e2a2306aed619da064704f49d8",
+        "created_at": "2026-09-13T19:20:02Z",
+        "commit_at": "2026-09-13T19:19:38Z",
+        "observed_at": "2026-09-13T19:26:00Z",
+        "required_check": "103777783817",
+        "cloudflare_build": "2cdf0ecb-3f75-4cc2-bb79-0c33a472b8f2",
+        "check_status": "in_progress",
+        "app_id": 85455,
+        "deploy_command": "true",
+        "local_checks": {
+          "premium_unit": "14/14 PASS",
+          "mass_unit": "48/48 PASS",
+          "production_typecheck": "both PASS"
+        },
+        "note": "Node Mass native lifecycle consumes Premium-serialized READY+Trader bytes with real verifiers. Workerd publication RPC remains mocked. Lookup acceptance on PR171; native check in_progress at 19:26Z. No CI success forecast. Not live/data/READY activation."
+      },
+      "notes": "Latest accepted main is PR170/4e137. PR137 remains an intentional HELD Draft. Older CI tables live in Git/PR comments, not this current object."
     },
     "staging_deployed": {
       "status": "old_acknowledged_baseline_not_this_sha",
@@ -163,7 +85,7 @@
     },
     "production_deployed": {
       "status": "hold",
-      "notes": "Production auto-deploy remains HOLD. Current Mass HOLD evidence is lanes.source_delivered.mass_worker_build_on_15f (9bc2d7f5 / check 103755840836). Historical a92 HOLD (98716fe7), 549598b HOLD (1ec10e10), and 9a8bb52 HOLD remain labeled historical. Not a product deploy. No retry or bypass."
+      "notes": "Production auto-deploy remains HOLD. Current Mass HOLD evidence is lanes.source_delivered.mass_worker_build_on_4e137 (7846465b / check 103770378143, completed_at 2026-09-13T18:26:40Z). Not a product deploy. No retry or bypass."
     },
     "data_activated": {
       "status": "pending",
@@ -179,27 +101,31 @@
     }
   },
   "live_observation": {
-    "observed_at": "2026-09-13T00:09:20Z",
+    "observed_at": "2026-09-13T18:20:00Z",
     "projection": "STALE",
     "generation": "projgen-ef18b4f86ee946048161d25e2a30a2a8",
     "generated_at": "2026-08-21T12:30:49.152421+00:00",
-    "sourcegeneration": "2026-08-21T12:28:33.345482+00:00",
     "refresh_attempt": false,
     "refresh_success": false,
     "b0": "UNKNOWN",
     "latest_ready_snapshot": null,
-    "sync_status_change_cursor": 2900199,
+    "sync_status_change_cursor": 2900294,
     "applied_feed_cursor": null,
-    "dataset_applied_and_ready_pinned_cursors": "all returned null",
-    "export_watermarks": "vary; do not imply applied",
-    "not_remeasured": ["B4", "tools-list", "schema_parity", "CoverageV3_acceptance", "Access", "deployment", "DLQ"],
-    "note": "Replaces older current live summaries. Prior live-read text is in history.git_sha, not a fresh measurement. envelope-v3 / ops_projection/v3 is not Coverage V3 applied."
+    "dataset_applied_and_ready_pinned_cursors": "all 23 dataset applied/ready-pinned returned null",
+    "access_api": {
+      "observed_at": "2026-09-13T19:06:00Z",
+      "get_organizations": "error 9999 access.api.error.not_enabled; dashboard Enable Access instruction",
+      "note": "Read-only control-plane API. No UI inspected, no config changed. Distinct from Worker Access JWT (ctx.access.aud) required by GET /v1/private/jsda-health-ready. Human initial Access setup may be needed; managed zone is not an established prerequisite."
+    },
+    "not_remeasured": ["B4", "tools-list", "schema_parity", "CoverageV3_acceptance", "JSDA", "latestJQ", "fullWorker-version", "deployment", "DLQ"],
+    "note": "Read-only live 2026-09-13T18:20Z–18:21Z. ops_projection/v3 STALE ~23d. Not Coverage V3 applied. Supersedes 00:09:20Z as current live fields only."
   },
   "next_prerequisite_chain": [
-    "Commit/push/native CI of uncommitted receipt-native paper authorization on fix/receipt-native-paper-authorization over 15f. Local Worker/Python/script checks and static review are not native CI or a PR. No invented SHA. Pointers/digests are not semantic PASS. go:false/ready:false/release_allowed:false.",
-    "Trader-key activation remains pending acceptance: this source unit did not provision TRADER_ED25519_PRIVATE_KEY or an ACTIVE trader registry row; live secret/registry state was not remeasured. Source PENDING when those credentials are absent at runtime. This is activation, not a missing mint RPC.",
-    "Live Receipt-bound products and Ops projection freshness (last measured STALE at 2026-09-13T00:09:20Z, not remeasured).",
-    "Accepted deploy of that existing-plus-connected path. Global live acceptance is the final gate after inactive rollout, not a substitute for missing live evidence. Native pipeline is not globally done."
+    "PR171 native interop: lookup https://github.com/ddnne/quant-platform/pull/171 ; required check 103777783817 in_progress at 2026-09-13T19:26Z. Workerd publication RPC remains mocked. Pointers/digests are not semantic PASS. go:false/ready:false/release_allowed:false.",
+    "Trader-key activation remains pending acceptance: live secret/registry state was not remeasured. Source PENDING when those credentials are absent at runtime.",
+    "A6 authenticated collection/publication SOURCE is still absent (PR170). Distinct from Access enablement (19:06Z control-plane not_enabled) and from Worker Access JWT required by /v1/private/jsda-health-ready.",
+    "Live Receipt-bound products and Ops projection freshness (STALE at 2026-09-13T18:20Z).",
+    "Accepted deploy of that existing-plus-connected path. Mass production deploy remains HOLD."
   ],
   "unknowns": [
     "Affected historic AM+gross-cap engine artifact inventory was not examined; no cloud listing was performed."
@@ -226,12 +152,12 @@
       "notes": "Complete-master, financial compact state, and AM scoped reads exist as source. Compiler/candidate/READY/runtime/Trader still must share the same declared scope. Full-segment receipt reconciliation stays independent. PR137 remains a separate held documentation change. Details in history.git_sha."
     },
     "4_receipt_to_ready_trader": {
-      "status": "publisher_rpc_and_native_execution_on_main_paper_authorization_uncommitted",
-      "notes": "Pointer publisher (PR166), COMPLETED→PILOT_READY_PUBLICATION RPC (PR167), and receipt-native Controlled Pilot execution (PR168/15f, feature 089df95) are on main. Paired Paper Trader mint inside that existing Premium RPC is uncommitted/unpushed on fix/receipt-native-paper-authorization over 15f; no current-unit SHA/PR/native CI. Tests use synthetic keys and mock registries/RPC/native-verifier. TRADER_ED25519_PRIVATE_KEY and ACTIVE trader registry rows were not provisioned by this source unit; live secret/registry state was not remeasured; activation remains pending acceptance. Pointers/digests are not semantic PASS. go:false/ready:false/release_allowed:false."
+      "status": "publisher_rpc_native_execution_and_paired_trader_on_main",
+      "notes": "PR166–170 accepted through main 4e137. Paired Paper Trader mint is on main 591 (PR169). PR171 (fe1b7f1) Node Mass native lifecycle consumes Premium-serialized READY+Trader bytes with real verifiers; workerd RPC remains mocked; required check in_progress at 19:26Z. Live trader secret/registry state was not remeasured; activation remains pending acceptance. Pointers/digests are not semantic PASS. go:false/ready:false/release_allowed:false."
     },
     "5_ci_deploy_entrypoints": {
       "status": "canonical_entrypoint_on_main_new_source_rollout_hold",
-      "notes": "Canonical Worker/environment admission is merged source. Mass production deploy trigger remains HOLD. HOLD evidence: lanes.source_delivered.mass_worker_build_on_15f (9bc2d7f5 / check 103755840836). Read-only trigger check: Premium production has zero build triggers; Premium staging and Mass staging are manual-only (__manual_cloud_deploy__); required native CI main/feature deploy_command is the string true (no-op). Image dry-run is required CI, not product rollout.",
+      "notes": "Canonical Worker/environment admission is merged source. Mass production deploy trigger remains HOLD. HOLD evidence: lanes.source_delivered.mass_worker_build_on_4e137 (7846465b / check 103770378143, completed_at 2026-09-13T18:26:40Z). Premium production has zero build triggers; Premium staging and Mass staging are manual-only (__manual_cloud_deploy__); required native CI deploy_command is the string true (no-op). Image dry-run is required CI, not product rollout.",
       "python_default_offline_boundary": {
         "status": "current_default_socket_guard",
         "implementation_sha": "a012c2c11a91d5a14e1ea1b9ea017f086ca98566",
@@ -289,8 +215,8 @@
       "notes": "New source rollout HOLD is separate from old b121 staging Secrets/Gateway. No production/data/READY/Trader/Pilot/Mass GO. Global live acceptance is the final gate after missing source is implemented and inactive code can roll out."
     },
     "9_push_remote_and_fresh_clone_verify": {
-      "status": "pr168_main_native_success_paper_authorization_uncommitted_unpushed",
-      "notes": "PR168 feature 089df95 source check 103755591452 / build 8f68f561 SUCCESS 2026-09-13T16:38:51Z, merged 15f 2026-09-13T16:39:50Z, main check 103757347975 / build f576196e SUCCESS 2026-09-13T16:52:03Z. CI deploy_command string true is not product deploy. Mass check 103755840836 / build 9bc2d7f5 failure is explicit DEPLOYMENT HOLD, not required-native failure. Paper authorization remains uncommitted/unpushed on fix/receipt-native-paper-authorization; no invented SHA/CI/PR. PR167/a92 and PR166/549598b are prior history. PR137 remains HELD Draft."
+      "status": "pr170_main_accepted_pr171_native_pending",
+      "notes": "Latest accepted main PR170/4e137 (main check 103772504213 SUCCESS 2026-09-13T18:41:28Z). PR169/591 paired Trader mint accepted. PR171 https://github.com/ddnne/quant-platform/pull/171 feature fe1b7f1; required check 103777783817 in_progress at 2026-09-13T19:26Z. Mass HOLD on 4e137 is check 103770378143 completed_at 2026-09-13T18:26:40Z. PR137 remains HELD Draft."
     }
   }
 }
