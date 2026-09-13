@@ -640,10 +640,12 @@ def test_committed_candidate_scope_pass_ignores_unsigned_later_receipt(
     )
     from paper_runtime.ready_publication import canonical_digest
     from research.ready_manifest import (
+        MISSING,
         READY_MANIFEST_V2_FORMAT,
         ReadyManifest,
         build_receipt_native_ready_manifest,
     )
+    from research.universe_contract import ResolvedUniverseMembership
     from tests.test_ready_policy_fail_closed import _seed_exact_pit_scope
 
     db_path, binding = _seed_exact_pit_scope(
@@ -706,6 +708,52 @@ def test_committed_candidate_scope_pass_ignores_unsigned_later_receipt(
         {**proof_context, "b4": quality["b4"]}
     )
     assert result["validation_proof_digest"] == result["snapshot_quality_digest"]
+    first_feature_dependencies = binding.profiles[0].to_dict()[
+        "feature_dependencies"
+    ]
+    first_feature_digests = {
+        canonical_digest(dict(item)) for item in first_feature_dependencies
+    }
+    assert any(
+        canonical_digest(dict(item)) not in first_feature_digests
+        for item in binding.feature_dependencies
+    )
+    expected_feature_generation = canonical_digest(
+        {
+            "profile_digest": binding.profile_digest,
+            "feature_dependencies": binding.feature_dependencies,
+        }
+    )
+    expected_catalog_generation = canonical_digest(
+        {
+            "profile_digest": binding.profile_digest,
+            "contract_versions": binding.contract_versions,
+            "dataset_ids": binding.required_datasets,
+        }
+    )
+    assert expected_feature_generation != canonical_digest(
+        {
+            "profile_digest": binding.profile_digest,
+            "feature_dependencies": first_feature_dependencies,
+        }
+    )
+    expected_resolved_universe_digest = ResolvedUniverseMembership(
+        period_start="2023-01-04",
+        period_end="2023-01-06",
+        decision_memberships=tuple(
+            (day, ("1332",))
+            for day in ("2023-01-04", "2023-01-05", "2023-01-06")
+        ),
+    ).resolved_membership_digest
+    observed = result["receipt_native_manifest"]
+    assert observed["resolved_universe_digest"] == (
+        expected_resolved_universe_digest
+    )
+    assert observed["feature_generation"] == expected_feature_generation
+    assert observed["catalog_generation"] == expected_catalog_generation
+    assert observed["coverage_proof_digest"] == MISSING
+    assert observed["raw_proof_digest"] == MISSING
+    assert observed["receipt_proof_digest"] == MISSING
     manifest = build_receipt_native_ready_manifest(
         source,
         binding=binding,
@@ -714,12 +762,15 @@ def test_committed_candidate_scope_pass_ignores_unsigned_later_receipt(
         b0_proof_digest=result["b0_proof_digest"],
         b4_proof_digest=result["b4_proof_digest"],
         validation_proof_digest=result["validation_proof_digest"],
+        resolved_universe_digest=expected_resolved_universe_digest,
+        feature_generation=expected_feature_generation,
+        catalog_generation=expected_catalog_generation,
     )
     body = manifest.to_dict()
     assert result["receipt_native_manifest_digest"] == body["manifest_digest"]
     assert result["receipt_native_manifest"] == body
     assert body["format"] == READY_MANIFEST_V2_FORMAT
-    assert body["b0_proof_digest"] != "MISSING"
+    assert body["b0_proof_digest"] != MISSING
     assert "source_generation" not in body
     assert ReadyManifest.from_dict(body).to_dict() == body
     store.close()
@@ -750,6 +801,8 @@ def test_committed_candidate_scope_rejects_corrupted_backing(
     assert "compiled_scope_proof_digest" not in result
     assert "observation_checked_at" not in result
     assert "receipt_source" not in result
+    assert "receipt_native_manifest" not in result
+    assert "receipt_native_manifest_digest" not in result
     assert result["snapshot_b0_status"] == "FAIL"
     assert result["snapshot_quality_digest"].startswith("sha256:")
     store.close()

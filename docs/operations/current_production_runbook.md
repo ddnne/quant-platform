@@ -38,9 +38,16 @@ remote apply results only in immutable release evidence.
   `personal_receipt_candidate_contract.ts` submits Container
   `POST /v1/materialize-receipt-candidate`
   (`container/receipt_candidate_job.py`, `ops/receipt_candidate_materialize.py`).
-  A COMPLETED candidate job uploads a receipt-candidate snapshot only; code
-  returns `go: false` / `ready: false` and does not call READY, B0, B4, compiled
-  scope, or the Trader signer. Product bytes use source Service Binding
+  A COMPLETED candidate job freezes one receipt-candidate snapshot and, on that
+  same byte identity, measures compiled-scope diagnostics plus read-only B0/B4/C8
+  quality. Those measures are not B0 PASS and are not READY. A populated
+  receipt-native v2 manifest with verified resolved universe and all-four
+  feature/catalog pins is emitted only when compiled scope passes; compiled-scope
+  FAIL emits no receipt-native manifest. Coverage, raw, and receipt proofs stay
+  MISSING until an authentic proof/consumer contract exists. The job still
+  returns `go: false` / `ready: false`. COMPLETED is not immutable READY. Public
+  v2 attestation and Python publication remain PENDING. There is no Trader
+  connection and no Pilot/GO. Product bytes use source Service Binding
   `INGESTION_PREMIUM` → `PremiumReceiptProductInputService`. Scheduled Ops
   publisher owner is `platform/workers/ingestion-premium/src/ops_projection.ts`
   (`publishOpsProjection` / `publishOpsProjectionBestEffort` from the Premium
@@ -55,12 +62,9 @@ remote apply results only in immutable release evidence.
   no accepted Trader production signer or connection (not remeasured as live
   registry/private-key state in this docs turn). The release builder is
   unconditionally PENDING. Wire the existing trust root; do not add another
-  authority. Activating keys alone does not close these gaps. A metadata-only
-  Ops envelope is not READY. Candidate COMPLETED is not immutable READY.
-  Connecting candidate → same-snapshot compiled scope / B0 / B4 → immutable
-  READY / existing signer → Trader is missing source, not only unaccepted
-  rollout. Global live acceptance is the final gate after that source exists
-  and inactive code can roll out; it is not a prerequisite that forbids
+  authority or Worker. Activating keys alone does not close these gaps. A
+  metadata-only Ops envelope is not READY. Global live acceptance is the final
+  gate after inactive code can roll out; it is not a prerequisite that forbids
   inactive code rollout.
 - **Release evidence:** publication is **PENDING/HOLD**. Normalized caller JSON
   is schema-only and cannot prove any remote response. The dedicated signed
