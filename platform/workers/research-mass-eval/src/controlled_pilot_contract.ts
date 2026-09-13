@@ -29,6 +29,8 @@ export const EXACT_FOUR_COVERAGE_POLICY_VERSION = contract.coverage_policy_versi
 export const EXACT_FOUR_COVERAGE_POLICY_DIGEST = contract.coverage_policy_digest;
 export const CONTROLLED_READY_ENVELOPE_FORMAT =
   "controlled-pilot-ready-envelope/v1" as const;
+export const CONTROLLED_READY_RECEIPT_NATIVE_ENVELOPE_FORMAT =
+  "controlled-pilot-ready-envelope/receipt-native/v1" as const;
 export const CONTROLLED_TRADER_BATCH_FORMAT =
   "controlled-pilot-trader-authorization-batch/v2" as const;
 export const CONTROLLED_PILOT_KEY_PREFIX = "research/controlled_pilot/";
@@ -126,6 +128,29 @@ export const EXACT_FOUR_PLAN_BINDING_DIGESTS = Object.fromEntries(
 export const EXACT_FOUR_STRATEGY_SPEC_VERSIONS = Object.fromEntries(
   contract.plans.map((plan) => [plan.plan_id, plan.strategy_spec_version]),
 ) as Record<string, string>;
+
+export function exactFourUniversePeriod():
+  { period_start: string; period_end: string } | null {
+  const plans = contract.plans as ReadonlyArray<{
+    period_start: unknown;
+    period_end: unknown;
+  }>;
+  if (plans.length !== CONTROLLED_PILOT_PLAN_COUNT) return null;
+  const period_start = plans[0]?.period_start;
+  const period_end = plans[0]?.period_end;
+  if (
+    typeof period_start !== "string" ||
+    typeof period_end !== "string" ||
+    !period_start ||
+    !period_end
+  ) {
+    return null;
+  }
+  if (plans.some((plan) => plan.period_start !== period_start || plan.period_end !== period_end)) {
+    return null;
+  }
+  return { period_start, period_end };
+}
 
 export function parseControlledPilotRequest(
   body: unknown,

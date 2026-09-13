@@ -1,10 +1,10 @@
 {
   "schema": "quant-platform-work-ledger/v1",
-  "updated_at": "2026-09-13T11:15:20Z",
+  "updated_at": "2026-09-13T13:03:01Z",
   "history": {
     "git_sha": "9a8bb5239759c429c4a582bf211a78102c023ca5",
     "url": "https://github.com/ddnne/quant-platform/blob/9a8bb5239759c429c4a582bf211a78102c023ca5/docs/operations/current_work_ledger.json",
-    "note": "Prior ledger text at merged-main 9a8bb52. Not a fresh live Cloudflare remeasure. Scope-sidecar source on this root was uncommitted and not native-accepted at updated_at; this file is not a self-SHA of later commits."
+    "note": "Prior ledger text at merged-main 9a8bb52 recorded PR164 and an uncommitted scope sidecar at 2026-09-13T11:15:20Z. Not a fresh live Cloudflare product remeasure. This file is not a self-SHA of f373e4d or of unpushed publication-branch bytes."
   },
   "open_findings": {
     "preserved_not_exhaustive": ["A2", "C10", "C4", "D2", "D3", "R10", "R11", "R5"],
@@ -13,44 +13,46 @@
   "pr137": "intentional_held_draft",
   "lanes": {
     "source_delivered": {
-      "status": "pr164_merged_main_native_success",
-      "latest_main_sha": "9a8bb5239759c429c4a582bf211a78102c023ca5",
+      "status": "pr165_merged_main_native_success",
+      "latest_main_sha": "f373e4d88c1d218e340771dc82b9d5887ae00b33",
       "required_check_app_id": 85455,
       "required_check_name": "Workers Builds: quant-platform-ci-aggregate-staging",
       "strict": true,
-      "pr164": {
-        "feature_sha": "edebd2bd8812e9198e8d9daf126eff8e08499464",
-        "source_check": "103711448069",
+      "pr165": {
+        "title": "fix: persist compiled receipt dependency scope",
+        "feature_sha": "b0ca1155f369a33ca56cf9507bfe841938f503ab",
+        "source_check": "103716833780",
         "source_check_conclusion": "success",
-        "source_check_completed_at": "2026-09-13T10:42:47Z",
-        "source_build": "84d5fe00-8748-499b-a885-e36784ebc041",
+        "source_check_completed_at": "2026-09-13T11:30:59Z",
+        "source_build": "0beb17b9-5951-4020-80d6-2226275780ae",
         "source_build_conclusion": "success",
-        "source_build_stopped_at": "2026-09-13T10:42:46.704Z",
-        "merged_main_sha": "9a8bb5239759c429c4a582bf211a78102c023ca5",
-        "merged_at": "2026-09-13T10:43:34Z",
-        "main_check": "103712714744",
+        "merged_main_sha": "f373e4d88c1d218e340771dc82b9d5887ae00b33",
+        "merged_at": "2026-09-13T11:32:58Z",
+        "main_check": "103718383156",
         "main_check_conclusion": "success",
-        "main_check_completed_at": "2026-09-13T10:54:22Z",
-        "main_build": "f59c4724-66db-4f02-8281-dbbfe3ad3318",
+        "main_check_completed_at": "2026-09-13T11:44:54Z",
+        "main_build": "598c86ff-7940-4689-8165-114028fa86c4",
         "main_build_conclusion": "success",
-        "main_build_stopped_at": "2026-09-13T10:54:22.066Z",
         "deploy_command": "true",
-        "note": "Exact-source and merged-main native SUCCESS. Cloudflare deploy_command string true is CI-only, not product deploy. Physical sqlite+gzip admission."
+        "note": "Exact-source and merged-main native SUCCESS. Cloudflare deploy_command string true is CI-only, not product deploy. Unsigned pit-dependency-scope sidecar on main."
       },
       "mass_worker_build_on_9a8bb52": {
         "id": "ec19f14b-e665-4b67-84e7-2b156077fa79",
         "check": "103711612087",
         "conclusion": "failure",
         "cause": "DEPLOYMENT HOLD after successful compile/tests",
-        "note": "Intentional HOLD on exact 9a8bb52. No bypass, no product deploy."
+        "historical": true,
+        "note": "Historical Mass HOLD on then-main 9a8bb52, not a current-main remeasure. No bypass, no product deploy."
       },
-      "scope_sidecar_unit": {
-        "status": "uncommitted_not_native_accepted_at_updated_at",
-        "observed_at": "2026-09-13T11:15:20Z",
-        "base_main_sha": "9a8bb5239759c429c4a582bf211a78102c023ca5",
-        "note": "Unsigned pit-dependency-scope sidecar was uncommitted on this root at updated_at. Not a timeless post-commit status and not a future self-SHA."
+      "receipt_native_publication_unit": {
+        "status": "local_source_ci_merge_acceptance_pending",
+        "observed_at": "2026-09-13T13:03:01Z",
+        "branch": "fix/receipt-native-ready-publication",
+        "base_main_sha": "f373e4d88c1d218e340771dc82b9d5887ae00b33",
+        "pushed": false,
+        "note": "Pointer publisher and public verifier source is present on this unpushed branch. Local typechecks pass and Premium ready_publication tests are 14 pass. Not merged, not native-CI accepted, not deployed, not READY. Mass COMPLETED RPC/PILOT_READY binding and native execution/Trader/Paper remain next source units. Native execution currently rejects the receipt-native envelope. No READY key registry change."
       },
-      "notes": "Latest accepted native baseline is PR164 on 9a8bb52. PR152–163 source records are Git/PR history."
+      "notes": "Latest accepted native baseline is PR165 on f373e4d. PR152–164 source records are Git/PR history."
     },
     "staging_deployed": {
       "status": "old_acknowledged_baseline_not_this_sha",
@@ -61,7 +63,7 @@
     },
     "production_deployed": {
       "status": "hold",
-      "notes": "Production auto-deploy remains HOLD. Current Mass HOLD evidence is lanes.source_delivered.mass_worker_build_on_9a8bb52 (ec19f14b). Not a product deploy."
+      "notes": "Production auto-deploy remains HOLD. Historical Mass HOLD evidence is lanes.source_delivered.mass_worker_build_on_9a8bb52 (ec19f14b on 9a8bb52), not a current-main remeasure. Not a product deploy."
     },
     "data_activated": {
       "status": "pending",
@@ -94,7 +96,7 @@
     "note": "Replaces older current live summaries. Prior live-read text is in history.git_sha, not a fresh measurement. envelope-v3 / ops_projection/v3 is not Coverage V3 applied."
   },
   "next_prerequisite_chain": [
-    "Implement missing pointer-based READY publication using the existing Premium signer (ready_publication.ts), then Cloud verifier and verify-only Trader. New READY path must load actual scope payload and physical bytes; optional sidecar/physical pointers are legacy diagnostic admission only, not semantic PASS. go:false/ready:false/release_allowed:false.",
+    "Connect Mass COMPLETED admission to PILOT_READY bindings, then native READY execution/Trader/Paper. Pointer publication/public verifier source exists on unpushed branch fix/receipt-native-ready-publication over f373e4d; source CI/merge acceptance is pending. Native execution currently rejects the receipt-native envelope. Pointers/digests are not semantic PASS. go:false/ready:false/release_allowed:false.",
     "Live Receipt-bound products (not local history).",
     "Accepted deploy of that existing-plus-connected path. Global live acceptance is the final gate after inactive rollout, not a substitute for missing source."
   ],
@@ -124,11 +126,11 @@
     },
     "4_receipt_to_ready_trader": {
       "status": "candidate_compiled_and_physical_on_main_ready_pointer_missing",
-      "notes": "Candidate COMPLETED on main runs same-snapshot compiled scope/B0/B4 and native diagnostic; PR164 admits physical sqlite+gzip. At 2026-09-13T11:15:20Z this root also had uncommitted unsigned scope-sidecar transport, not native-accepted. Pointer-based publication using the existing Premium signer, Cloud verifier consumption, and Trader integration are still missing. Pointers/digests are not semantic PASS. go:false/ready:false/release_allowed:false."
+      "notes": "Candidate COMPLETED on main runs same-snapshot compiled scope/B0/B4 and native diagnostic; PR164 admits physical sqlite+gzip; PR165 persists the unsigned dependency-scope sidecar. Receipt-native pointer publication and public verifier source exists on unpushed branch fix/receipt-native-ready-publication over f373e4d (local typecheck and ready_publication 14 pass at 2026-09-13T13:03:01Z); source CI/merge acceptance pending. Mass COMPLETED RPC/PILOT_READY bindings and native execution/Trader/Paper remain required. Native execution currently rejects the receipt-native envelope. Pointers/digests are not semantic PASS. go:false/ready:false/release_allowed:false."
     },
     "5_ci_deploy_entrypoints": {
       "status": "canonical_entrypoint_on_main_new_source_rollout_hold",
-      "notes": "Canonical Worker/environment admission is merged source. Mass production deploy trigger remains HOLD. HOLD evidence: lanes.source_delivered.mass_worker_build_on_9a8bb52 (ec19f14b). Image dry-run is required CI, not product rollout.",
+      "notes": "Canonical Worker/environment admission is merged source. Mass production deploy trigger remains HOLD. Historical HOLD evidence: lanes.source_delivered.mass_worker_build_on_9a8bb52 (ec19f14b on 9a8bb52), not a current-main remeasure. Image dry-run is required CI, not product rollout.",
       "python_default_offline_boundary": {
         "status": "current_default_socket_guard",
         "implementation_sha": "a012c2c11a91d5a14e1ea1b9ea017f086ca98566",
@@ -186,8 +188,8 @@
       "notes": "New source rollout HOLD is separate from old b121 staging Secrets/Gateway. No production/data/READY/Trader/Pilot/Mass GO. Global live acceptance is the final gate after missing source is implemented and inactive code can roll out."
     },
     "9_push_remote_and_fresh_clone_verify": {
-      "status": "pr164_main_native_success_scope_sidecar_uncommitted_at_updated_at",
-      "notes": "PR164 feature edebd2b source native 84d5fe00 SUCCESS 2026-09-13T10:42:46.704Z, merged 9a8bb52 2026-09-13T10:43:34Z, main native f59c4724 SUCCESS 2026-09-13T10:54:22.066Z. CI deploy_command string true is not product deploy. At updated_at the scope-sidecar unit was uncommitted on this root and not native-accepted. Prior PR152–163 native records are Git/PR history."
+      "status": "pr165_main_native_success_publication_branch_unpushed",
+      "notes": "PR165 feature b0ca115 source native 0beb17b9 SUCCESS 2026-09-13T11:30:59Z, merged f373e4d 2026-09-13T11:32:58Z, main native 598c86ff SUCCESS 2026-09-13T11:44:54Z. CI deploy_command string true is not product deploy. Publication branch fix/receipt-native-ready-publication is not pushed. Prior PR152–164 native records are Git/PR history."
     }
   }
 }

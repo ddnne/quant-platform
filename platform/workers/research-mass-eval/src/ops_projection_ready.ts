@@ -421,20 +421,16 @@ function validateScopeEntry(value: unknown): value is Record<string, unknown> {
   return true;
 }
 
-async function verifyDependencyScope(
-  scope: unknown,
-  manifest: Record<string, unknown>,
-  projectionEnvelope: Record<string, unknown>,
+export async function deriveReceiptNativeSessionScope(
+  scope: Record<string, unknown>,
+  physicalDigest: string,
+  observedThrough: string,
 ): Promise<ControlledSessionScope | null> {
-  if (!isRecord(scope) || !closedShape(scope, SCOPE_FIELDS) ||
+  if (!closedShape(scope, SCOPE_FIELDS) ||
       scope.format !== "pit-dependency-scope-proof/v1" || scope.status !== "PASS" ||
-      scope.profile_digest !== manifest.profile_digest ||
-      scope.plan_set_digest !== manifest.plan_set_digest ||
-      scope.dependency_closure_digest !== manifest.dependency_closure_digest ||
-      scope.universe_rule_digest !== manifest.universe_rule_digest ||
-      scope.resolved_universe_digest !== manifest.resolved_universe_digest ||
       !isSha256(scope.product_materialization_digest) || !isSha256(scope.proof_digest) ||
       !isSha256(scope.physical_db_digest) ||
+      scope.physical_db_digest !== physicalDigest ||
       !Array.isArray(scope.universe_daily_summary) || !Array.isArray(scope.entries) ||
       !Number.isSafeInteger(scope.lookback_trading_days) || Number(scope.lookback_trading_days) < 0 ||
       typeof scope.period_start !== "string" || typeof scope.period_end !== "string") {
@@ -443,14 +439,6 @@ async function verifyDependencyScope(
   const body = { ...scope };
   delete body.proof_digest;
   if ((await sha256Digest(canonicalJson(body))) !== scope.proof_digest) return null;
-  const projectionEvidence = projectionEnvelope.evidence_digests;
-  if (!isRecord(projectionEvidence) ||
-      projectionEvidence.dependency_scope !== scope.proof_digest ||
-      projectionEvidence.product_materializations !== scope.product_materialization_digest) {
-    return null;
-  }
-  if (!isRecord(manifest.pit_contract_digests) ||
-      manifest.pit_contract_digests.dependency_scope !== scope.proof_digest) return null;
   const entries = scope.entries.filter(validateScopeEntry);
   if (entries.length !== scope.entries.length || entries.length !== EXACT_FOUR_DATASET_IDS.length ||
       !jsonEqual(entries.map((entry) => entry.dataset_id).sort(), [...EXACT_FOUR_DATASET_IDS].sort())) {
@@ -463,26 +451,57 @@ async function verifyDependencyScope(
         (await sha256Digest(canonicalJson(receipts))) !== entry.receipt_set_digest ||
         (await sha256Digest(canonicalJson(products))) !== entry.product_artifact_set_digest) return null;
   }
-  const selected = EXACT_FOUR_DATASET_IDS.map((datasetId) => {
-    const entry = entries.find((item) => item.dataset_id === datasetId)!;
-    return {
-      dataset_id: datasetId,
-      natural_key_count: Number(entry.natural_key_count),
-      natural_key_digest: String(entry.natural_key_digest),
-      product_artifact_digests: [...(entry.product_artifact_digests as string[])],
-      product_artifact_set_digest: String(entry.product_artifact_set_digest),
-    } as ControlledSessionScopeEntry;
-  });
-  const observedThrough = manifest.observed_through;
-  const observedMs = typeof observedThrough === "string" ? Date.parse(observedThrough) : Number.NaN;
-  if (!Number.isFinite(observedMs)) return null;
+  if (typeof observedThrough !== "string" || !Number.isFinite(Date.parse(observedThrough))) {
+    return null;
+  }
   return {
     format: "controlled-session-scope/v1",
     dependency_scope_proof_digest: String(scope.proof_digest),
-    physical_db_digest: String(scope.physical_db_digest),
-    observed_through: String(observedThrough),
-    entries: selected,
+    physical_db_digest: physicalDigest,
+    observed_through: observedThrough,
+    entries: EXACT_FOUR_DATASET_IDS.map((datasetId) => {
+      const entry = entries.find((item) => item.dataset_id === datasetId)!;
+      return {
+        dataset_id: datasetId,
+        natural_key_count: Number(entry.natural_key_count),
+        natural_key_digest: String(entry.natural_key_digest),
+        product_artifact_digests: [...(entry.product_artifact_digests as string[])],
+        product_artifact_set_digest: String(entry.product_artifact_set_digest),
+      } as ControlledSessionScopeEntry;
+    }),
   };
+}
+
+async function verifyDependencyScope(
+  scope: unknown,
+  manifest: Record<string, unknown>,
+  projectionEnvelope: Record<string, unknown>,
+): Promise<ControlledSessionScope | null> {
+  if (!isRecord(scope) || !isSha256(scope.physical_db_digest) ||
+      scope.profile_digest !== manifest.profile_digest ||
+      scope.plan_set_digest !== manifest.plan_set_digest ||
+      scope.dependency_closure_digest !== manifest.dependency_closure_digest ||
+      scope.universe_rule_digest !== manifest.universe_rule_digest ||
+      scope.resolved_universe_digest !== manifest.resolved_universe_digest) {
+    return null;
+  }
+  const derived = await deriveReceiptNativeSessionScope(
+    scope,
+    String(scope.physical_db_digest),
+    String(manifest.observed_through),
+  );
+  if (!derived) return null;
+  const projectionEvidence = projectionEnvelope.evidence_digests;
+  if (!isRecord(projectionEvidence) ||
+      projectionEvidence.dependency_scope !== scope.proof_digest ||
+      projectionEvidence.product_materializations !== scope.product_materialization_digest) {
+    return null;
+  }
+  if (!isRecord(manifest.pit_contract_digests) ||
+      manifest.pit_contract_digests.dependency_scope !== scope.proof_digest) {
+    return null;
+  }
+  return derived;
 }
 
 function verifyManifestEvidence(

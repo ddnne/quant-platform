@@ -13,6 +13,7 @@ import {
   CONTROLLED_PILOT_MAX_PARALLEL,
   CONTROLLED_PILOT_PLAN_COUNT,
   CONTROLLED_READY_ENVELOPE_FORMAT,
+  CONTROLLED_READY_RECEIPT_NATIVE_ENVELOPE_FORMAT,
   CONTROLLED_TRADER_BATCH_FORMAT,
   EXACT_FOUR_BINDING_DIGEST,
   EXACT_FOUR_BUDGET_SCOPE_DIGEST,
@@ -291,7 +292,13 @@ export async function verifyControlledReadyEnvelope(
   keys: readonly PinnedVerifyKey[],
   clock: VerifierClock = SYSTEM_CLOCK,
 ): Promise<{ ok: true; value: VerifiedControlledReady } | { ok: false; error: string }> {
-  if (!isRecord(document) || !closedShape(document, ENVELOPE_FIELDS)) {
+  if (!isRecord(document)) {
+    return { ok: false, error: "READY envelope shape is invalid" };
+  }
+  if (document.format === CONTROLLED_READY_RECEIPT_NATIVE_ENVELOPE_FORMAT) {
+    return { ok: false, error: "receipt-native READY execution is not supported" };
+  }
+  if (!closedShape(document, ENVELOPE_FIELDS)) {
     return { ok: false, error: "READY envelope shape is invalid" };
   }
   if (keys.length === 0) return { ok: false, error: "CONTROLLED_AUTHORITY_UNPROVISIONED" };
