@@ -22,7 +22,7 @@ from ingestion.jquants.official_business_calendar import (
 )
 from ops.receipt_product import (
     PRODUCT_ARTIFACT_FIELDS,
-    catalog_owned_product_row_digests,
+    catalog_owns_canonical_product_row,
     iter_product_artifact_body_rows,
     open_stored_product_artifact,
     product_artifact_digest_ordered,
@@ -474,13 +474,7 @@ def _verify_calendar_against_closure(
     return calendar
 
 
-def _owned_product_row_digests(
-    conn: sqlite3.Connection,
-    *,
-    segment_start: str,
-    segment_end: str,
-    observed_through: str,
-) -> set[str]:
+def _catalog_ownership_tables(conn: sqlite3.Connection) -> tuple[str, ...]:
     tables: list[str] = []
     for table in ("jquants_records", "jquants_records_revisions"):
         if not _table_columns(conn, table):
@@ -488,23 +482,17 @@ def _owned_product_row_digests(
         if set(PRODUCT_ARTIFACT_FIELDS) - _table_columns(conn, table):
             raise PitError(f"universe requires canonical {table} schema")
         tables.append(table)
-    if not tables:
-        return set()
-    return catalog_owned_product_row_digests(
-        conn,
-        source="jquants",
-        dataset=_MASTER_DATASET,
-        segment_start=segment_start,
-        segment_end=segment_end,
-        observed_through=observed_through,
-        tables=tuple(tables),
-    )
+    return tuple(tables)
 
 
 def _compact_snapshots_from_artifact(
     body: Any,
     *,
-    owned_digests: set[str],
+    conn: sqlite3.Connection,
+    segment_start: str,
+    segment_end: str,
+    observed_through: str,
+    tables: tuple[str, ...],
     retain_start: str,
     retain_end: str,
 ) -> tuple[int, str, int, dict[str, _GenerationSnapshot]]:
@@ -512,12 +500,21 @@ def _compact_snapshots_from_artifact(
 
     def rows():
         for raw in iter_product_artifact_body_rows(body):
-            digest = product_row_digest(raw)
-            if digest not in owned_digests:
+            if not catalog_owns_canonical_product_row(
+                conn,
+                raw,
+                source="jquants",
+                dataset=_MASTER_DATASET,
+                segment_start=segment_start,
+                segment_end=segment_end,
+                observed_through=observed_through,
+                tables=tables,
+            ):
                 raise PitError(
                     "verified equities_master artifact row is not materialized "
                     "on the owner connection"
                 )
+            digest = product_row_digest(raw)
             event = _event_from_row(raw, insertion=0, dataset=_MASTER_DATASET)
             identity = _version_identity_from_product(raw)
             if identity != event.identity or not event.snapshot_date:
@@ -671,19 +668,18 @@ def _verify_one_generation(
             (closure.dataset, closure.run_id),
         )
     ]
-    owned_digests = _owned_product_row_digests(
-        conn,
-        segment_start=segment_key[0],
-        segment_end=segment_key[1],
-        observed_through=observed_through,
-    )
+    tables = _catalog_ownership_tables(conn)
     try:
         operation_id = str(product["operation_id"])
         with open_stored_product_artifact(conn, operation_id) as artifact:
             observed_count, observed_digest, observed_bytes, snapshots = (
                 _compact_snapshots_from_artifact(
                     artifact,
-                    owned_digests=owned_digests,
+                    conn=conn,
+                    segment_start=segment_key[0],
+                    segment_end=segment_key[1],
+                    observed_through=observed_through,
+                    tables=tables,
                     retain_start=seed,
                     retain_end=period_end,
                 )
@@ -701,8 +697,6 @@ def _verify_one_generation(
             )
     except (PitError, TypeError, ValueError):
         return None
-    finally:
-        owned_digests.clear()
     if closure.structured_row_count < 1 or not snapshots:
         return None
     return _VerifiedGeneration(
