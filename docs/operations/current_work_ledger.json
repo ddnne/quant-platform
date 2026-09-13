@@ -1,10 +1,10 @@
 {
   "schema": "quant-platform-work-ledger/v1",
-  "updated_at": "2026-09-13T14:12:22Z",
+  "updated_at": "2026-09-13T16:13:00Z",
   "history": {
-    "git_sha": "549598bb235001f15fa236a11d9bdca6c614062c",
-    "url": "https://github.com/ddnne/quant-platform/blob/549598bb235001f15fa236a11d9bdca6c614062c/docs/operations/current_work_ledger.json",
-    "note": "Prior ledger text at merged-main 549598b recorded PR165 and an unpushed publication branch. Not a fresh live Cloudflare product remeasure. This file is not a self-SHA of uncommitted completion-rpc WIP."
+    "git_sha": "a92f24fe6b935c708e23f5d9eb35052b0894af1d",
+    "url": "https://github.com/ddnne/quant-platform/blob/a92f24fe6b935c708e23f5d9eb35052b0894af1d/docs/operations/current_work_ledger.json",
+    "note": "Prior ledger blob at merged-main a92 recorded PR166 native SUCCESS plus uncommitted/unpushed completion-rpc WIP on fix/receipt-completion-ready-rpc. Not a fresh live Cloudflare product remeasure. This file is not a self-SHA of the current native-execution precommit."
   },
   "open_findings": {
     "preserved_not_exhaustive": ["A2", "C10", "C4", "D2", "D3", "R10", "R11", "R5"],
@@ -13,38 +13,58 @@
   "pr137": "intentional_held_draft",
   "lanes": {
     "source_delivered": {
-      "status": "pr166_merged_main_native_success",
-      "latest_main_sha": "549598bb235001f15fa236a11d9bdca6c614062c",
+      "status": "pr167_merged_main_native_success",
+      "latest_main_sha": "a92f24fe6b935c708e23f5d9eb35052b0894af1d",
       "required_check_app_id": 85455,
       "required_check_name": "Workers Builds: quant-platform-ci-aggregate-staging",
       "strict": true,
+      "pr167": {
+        "title": "fix: publish READY pointers after immutable receipt admission",
+        "url": "https://github.com/ddnne/quant-platform/pull/167",
+        "feature_sha": "8804b25e7e12f4fc58ed8e917871e8b3a3a8f8de",
+        "source_check": "103741780805",
+        "source_check_conclusion": "success",
+        "source_check_completed_at": "2026-09-13T14:55:25Z",
+        "source_build": "9152886f-140f-4cc3-84a0-5db1c4c1f4e2",
+        "source_build_conclusion": "success",
+        "source_build_stopped_at": "2026-09-13T14:55:24.944Z",
+        "merged_main_sha": "a92f24fe6b935c708e23f5d9eb35052b0894af1d",
+        "merged_at": "2026-09-13T14:56:19Z",
+        "main_check": "103743825854",
+        "main_check_conclusion": "success",
+        "main_check_completed_at": "2026-09-13T15:10:59Z",
+        "main_build": "bf96bb82-995e-4e46-adc5-0d7259dd37f6",
+        "main_build_conclusion": "success",
+        "main_build_stopped_at": "2026-09-13T15:10:58.345Z",
+        "deploy_command": "true",
+        "evidence_comment": "https://github.com/ddnne/quant-platform/pull/167#issuecomment-5654147167",
+        "branch_removed_after_merge": true,
+        "note": "Exact-source and merged-main native SUCCESS. Cloudflare deploy_command string true is CI-only, not product deploy. Pointer RPC after immutable admission is on main a92. This is source acceptance of PR167, not product deploy, READY, or GO."
+      },
       "pr166": {
+        "historical": true,
         "title": "fix: bind receipt-native READY publication to admitted evidence",
         "feature_sha": "d05e29b432aa9888712dc7aac0dbb301ae5b83cc",
-        "source_check": "103729878507",
-        "source_check_conclusion": "success",
-        "source_check_completed_at": "2026-09-13T13:20:40Z",
-        "source_build": "e3d26e23-a3b1-46fc-ad80-777b7469a3ea",
-        "source_build_conclusion": "success",
-        "source_build_stopped_at": "2026-09-13T13:20:39.566Z",
         "merged_main_sha": "549598bb235001f15fa236a11d9bdca6c614062c",
         "merged_at": "2026-09-13T13:22:35Z",
-        "main_check": "103731531191",
-        "main_check_conclusion": "success",
-        "main_check_completed_at": "2026-09-13T13:33:42Z",
-        "main_build": "97f80e45-5bd9-4dd3-b2de-ef8563d2dd8c",
-        "main_build_conclusion": "success",
-        "main_build_stopped_at": "2026-09-13T13:33:41.666Z",
-        "deploy_command": "true",
         "evidence_comment": "https://github.com/ddnne/quant-platform/pull/166#issuecomment-5653614657",
-        "note": "Exact-source and merged-main native SUCCESS. Cloudflare deploy_command string true is CI-only, not product deploy. Pointer publisher/public verifier on main. Native execution still rejects the receipt-native envelope."
+        "note": "Prior accepted pointer-publisher native SUCCESS on 549598b. Superseded as latest main by PR167/a92."
+      },
+      "mass_worker_build_on_a92": {
+        "id": "98716fe7-a593-49cb-94da-831d9dcaa112",
+        "check": "103742003997",
+        "conclusion": "failure",
+        "completed_at": "2026-09-13T14:57:12Z",
+        "cause": "DEPLOYMENT HOLD after successful compile/tests",
+        "note": "Intentional HOLD on exact a92. Not a required-native failure. No retry, no bypass, no product deploy."
       },
       "mass_worker_build_on_549598b": {
         "id": "1ec10e10-4ea7-4583-94a4-91be22deda40",
         "check": "103730232356",
         "conclusion": "failure",
         "cause": "DEPLOYMENT HOLD after successful compile/tests",
-        "note": "Intentional HOLD on exact 549598b. No bypass, no product deploy."
+        "historical": true,
+        "note": "Historical Mass HOLD on then-main 549598b. No bypass, no product deploy."
       },
       "mass_worker_build_on_9a8bb52": {
         "id": "ec19f14b-e665-4b67-84e7-2b156077fa79",
@@ -55,15 +75,38 @@
         "note": "Historical Mass HOLD on then-main 9a8bb52, not a current-main remeasure. No bypass, no product deploy."
       },
       "receipt_completion_ready_rpc_unit": {
-        "status": "local_source_ci_merge_acceptance_pending",
-        "observed_at": "2026-09-13T14:12:22Z",
+        "status": "merged_pr167",
         "branch": "fix/receipt-completion-ready-rpc",
+        "branch_removed_after_merge": true,
         "base_main_sha": "549598bb235001f15fa236a11d9bdca6c614062c",
-        "pushed": false,
-        "committed": false,
-        "note": "Admitted COMPLETED PASS to PILOT_READY_PUBLICATION pointer RPC is uncommitted/unpushed source WIP. No native/merge acceptance yet. Not deployed, not READY. Native execution/Trader/Paper remain next source unit. No READY key registry change."
+        "merged_main_sha": "a92f24fe6b935c708e23f5d9eb35052b0894af1d",
+        "merged_at": "2026-09-13T14:56:19Z",
+        "note": "Former unpushed completion-rpc WIP recorded on the a92 ledger blob. Merged as PR167. Not the current native-execution unit."
       },
-      "notes": "Latest accepted native baseline is PR166 on 549598b. PR152–165 source records are Git/PR history."
+      "receipt_native_controlled_execution_unit": {
+        "status": "local_precommit_checkpoint",
+        "observed_at": "2026-09-13T16:13:00Z",
+        "branch": "fix/receipt-native-controlled-execution",
+        "base_main_sha": "a92f24fe6b935c708e23f5d9eb35052b0894af1d",
+        "committed": false,
+        "pushed": false,
+        "local_checks": {
+          "mass_typecheck": "pass",
+          "controlled_pilot_ts": "48/48",
+          "python_selected_pass": [
+            "test_controlled_pilot_p0",
+            "test_cloud_personal_research_container",
+            "test_plane_import_boundaries",
+            "test_paper_snapshot"
+          ],
+          "mass_unit": "478 tests / 52 files PASS",
+          "runtime": "26 tests / 3 files PASS; stderr included abort/network-disconnect warnings, not a clean log and not production-like native crypto E2E",
+          "static_reviews": "independent Worker and Python static reviews found no additional source P0/P1"
+        },
+        "scope": "Native envelope dispatch, active first-admission/historical resume, closed native job source/provenance, pinned Python identity/Paper reproduction. Worker native publication verifier is mocked. Python tiny synthetic pinned fixture checks producer ID. No live market data, rollout, keys, READY, or Pilot evidence. Does not implement or provision a production Trader signer.",
+        "note": "Dated precommit checkpoint 2026-09-13T16:13:00Z. Source/test patch is 8 files; applying this ledger update makes 9 files. Not a self-SHA and not a timeless unpushed claim. Final PR immutable acceptance comment will carry exact final SHA/CI after push. Do not invent it."
+      },
+      "notes": "Latest accepted native baseline is PR167 on a92. PR166 on 549598b and PR152–165 are Git/PR history. PR137 remains an intentional HELD Draft."
     },
     "staging_deployed": {
       "status": "old_acknowledged_baseline_not_this_sha",
@@ -74,7 +117,7 @@
     },
     "production_deployed": {
       "status": "hold",
-      "notes": "Production auto-deploy remains HOLD. Current Mass HOLD evidence is lanes.source_delivered.mass_worker_build_on_549598b (1ec10e10). Historical 9a8bb52 HOLD remains labeled historical. Not a product deploy."
+      "notes": "Production auto-deploy remains HOLD. Current Mass HOLD evidence is lanes.source_delivered.mass_worker_build_on_a92 (98716fe7 / check 103742003997). Historical 549598b HOLD (1ec10e10) and 9a8bb52 HOLD remain labeled historical. Not a product deploy. No retry or bypass."
     },
     "data_activated": {
       "status": "pending",
@@ -107,9 +150,10 @@
     "note": "Replaces older current live summaries. Prior live-read text is in history.git_sha, not a fresh measurement. envelope-v3 / ops_projection/v3 is not Coverage V3 applied."
   },
   "next_prerequisite_chain": [
-    "Finish native CI/merge of Mass COMPLETED→PILOT_READY_PUBLICATION pointer RPC (uncommitted WIP on fix/receipt-completion-ready-rpc over 549598b), then native READY execution/Trader/Paper. Native execution currently rejects the receipt-native envelope. Pointers/digests are not semantic PASS. go:false/ready:false/release_allowed:false.",
+    "Native CI/merge of uncommitted receipt-native controlled execution on fix/receipt-native-controlled-execution over a92. Local typecheck/48 Worker tests/selected Python/static reviews are not native CI or a PR. Pointers/digests are not semantic PASS. go:false/ready:false/release_allowed:false.",
+    "Further source and operational verification of the existing Trader issuer path. current_production_runbook.md line 68 records no accepted Trader production signer or connection. Main has fixture signing in scripts/generate_controlled_pilot_v1_contract.py plus verify-only product modules. This unit does not implement or provision that signer and does not add an authority.",
     "Live Receipt-bound products (not local history).",
-    "Accepted deploy of that existing-plus-connected path. Global live acceptance is the final gate after inactive rollout, not a substitute for missing source."
+    "Accepted deploy of that existing-plus-connected path. Global live acceptance is the final gate after inactive rollout, not a substitute for missing source. Native pipeline is not globally done."
   ],
   "unknowns": [
     "Affected historic AM+gross-cap engine artifact inventory was not examined; no cloud listing was performed."
@@ -136,12 +180,12 @@
       "notes": "Complete-master, financial compact state, and AM scoped reads exist as source. Compiler/candidate/READY/runtime/Trader still must share the same declared scope. Full-segment receipt reconciliation stays independent. PR137 remains a separate held documentation change. Details in history.git_sha."
     },
     "4_receipt_to_ready_trader": {
-      "status": "publisher_on_main_completion_rpc_source_pending_execution_trader_pending",
-      "notes": "Candidate COMPLETED, physical sqlite+gzip, unsigned dependency-scope sidecar, and pointer publisher/public verifier are on main via PR166 (549598b). Mass COMPLETED→PILOT_READY_PUBLICATION pointer RPC is uncommitted/unpushed source WIP on fix/receipt-completion-ready-rpc; no native/merge acceptance yet. Native execution/Trader/Paper remain required and currently reject the receipt-native envelope. Pointers/digests are not semantic PASS. go:false/ready:false/release_allowed:false."
+      "status": "publisher_and_pointer_rpc_on_main_native_execution_uncommitted_trader_signer_unaccepted",
+      "notes": "Pointer publisher (PR166/549598b) and COMPLETED→PILOT_READY_PUBLICATION RPC (PR167/a92, feature 8804b25) are on main. Receipt-native execution/Trader/Paper consumer compatibility is uncommitted/unpushed on fix/receipt-native-controlled-execution over a92; no native CI/PR yet. Worker tests mock native publication verification; Python tiny fixture checks producer snapshot_id. Production Trader signer is not accepted (runbook line 68); further verification of the existing issuer path is required. Pointers/digests are not semantic PASS. go:false/ready:false/release_allowed:false."
     },
     "5_ci_deploy_entrypoints": {
       "status": "canonical_entrypoint_on_main_new_source_rollout_hold",
-      "notes": "Canonical Worker/environment admission is merged source. Mass production deploy trigger remains HOLD. HOLD evidence: lanes.source_delivered.mass_worker_build_on_549598b (1ec10e10). Image dry-run is required CI, not product rollout.",
+      "notes": "Canonical Worker/environment admission is merged source. Mass production deploy trigger remains HOLD. HOLD evidence: lanes.source_delivered.mass_worker_build_on_a92 (98716fe7 / check 103742003997). Image dry-run is required CI, not product rollout.",
       "python_default_offline_boundary": {
         "status": "current_default_socket_guard",
         "implementation_sha": "a012c2c11a91d5a14e1ea1b9ea017f086ca98566",
@@ -199,8 +243,8 @@
       "notes": "New source rollout HOLD is separate from old b121 staging Secrets/Gateway. No production/data/READY/Trader/Pilot/Mass GO. Global live acceptance is the final gate after missing source is implemented and inactive code can roll out."
     },
     "9_push_remote_and_fresh_clone_verify": {
-      "status": "pr166_main_native_success_completion_rpc_wip_unpushed",
-      "notes": "PR166 feature d05e29b source native e3d26e23 SUCCESS 2026-09-13T13:20:39.566Z, merged 549598b 2026-09-13T13:22:35Z, main native 97f80e45 SUCCESS 2026-09-13T13:33:41.666Z. CI deploy_command string true is not product deploy. Completion-rpc branch fix/receipt-completion-ready-rpc is uncommitted/unpushed with no native/merge acceptance. Prior PR152–165 native records are Git/PR history."
+      "status": "pr167_main_native_success_native_execution_uncommitted_unpushed",
+      "notes": "PR167 feature 8804b25 source check 103741780805 / build 9152886f SUCCESS 2026-09-13T14:55:25Z, merged a92 2026-09-13T14:56:19Z, main check 103743825854 / build bf96bb82 SUCCESS 2026-09-13T15:10:59Z. CI deploy_command string true is not product deploy. Mass check 103742003997 / build 98716fe7 failure is explicit DEPLOYMENT HOLD, not required-native failure. Native execution remains uncommitted/unpushed on fix/receipt-native-controlled-execution; no invented SHA/CI/PR. PR166/549598b is prior history. PR137 remains HELD Draft."
     }
   }
 }
