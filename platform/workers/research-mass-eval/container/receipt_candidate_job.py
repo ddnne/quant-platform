@@ -249,6 +249,29 @@ def _materialization_digest(rows: Sequence[Mapping[str, Any]]) -> str:
     ).hexdigest()
 
 
+def _scope_manifest_fields(scope: Mapping[str, Any]) -> dict[str, Any]:
+    kind = scope.get("compiled_scope_kind")
+    if type(kind) is not str or not kind:
+        kind = "receipt-candidate-scope-diagnostic/v1"
+    if scope.get("compiled_scope_status") == "PASS":
+        return {
+            "compiled_scope_status": "PASS",
+            "compiled_scope_kind": kind,
+            "observation_policy": scope["observation_policy"],
+            "observation_checked_at": scope["observation_checked_at"],
+            "compiled_scope_proof_digest": scope["compiled_scope_proof_digest"],
+            "compiled_scope_physical_digest": scope["physical_db_digest"],
+        }
+    fields: dict[str, Any] = {
+        "compiled_scope_status": "FAIL",
+        "compiled_scope_kind": kind,
+    }
+    error = scope.get("compiled_scope_error")
+    if type(error) is str and error:
+        fields["compiled_scope_error"] = error
+    return fields
+
+
 def _remaining_budget(limit: int, *paths: Path) -> int:
     used = 0
     for path in paths:
@@ -401,14 +424,46 @@ def execute_receipt_candidate_job(
                     if calendar_path is not None:
                         calendar_path.unlink(missing_ok=True)
             commit_receipt_candidate(store)
+            from paper_runtime.ready_publication import (
+                verify_committed_receipt_candidate_scope,
+            )
+            from research.ready_manifest import load_exact_four_pilot_ready_binding
+
+            binding = load_exact_four_pilot_ready_binding()
+            if (
+                binding.profile_id != spec.profile_id
+                or binding.profile_digest != spec.profile_digest
+                or binding.closure_set_digest != spec.dependency_closure_digest
+            ):
+                raise ReceiptCandidateJobInputError("profile pin mismatch")
+            scope = verify_committed_receipt_candidate_scope(
+                store,
+                binding=binding,
+                environment=spec.environment,
+                allowed_segments=frozenset(
+                    (item["dataset"], item["segment_id"]) for item in spec.segments
+                ),
+            )
             store.close()
             store = None
+            wal = Path(str(database) + "-wal")
+            if wal.exists() and wal.stat().st_size != 0:
+                raise ReceiptCandidateMaterializeError(
+                    "receipt candidate sqlite has a live WAL"
+                )
             raw_bytes = database.stat().st_size
             if raw_bytes > spec.max_database_bytes:
                 raise ReceiptCandidateMaterializeError(
                     "receipt candidate sqlite exceeds the builder cap"
                 )
             raw_digest = "sha256:" + _sha256_file(database)
+            if (
+                scope.get("compiled_scope_status") == "PASS"
+                and scope.get("physical_db_digest") != raw_digest
+            ):
+                raise ReceiptCandidateMaterializeError(
+                    "receipt candidate sqlite digest drifted"
+                )
             gzip_path = job_root / "receipt-candidate.sqlite.gz"
             _gzip_file(database, gzip_path)
             gzip_digest = "sha256:" + _sha256_file(gzip_path)
@@ -431,6 +486,7 @@ def execute_receipt_candidate_job(
                 "raw_sha256": raw_digest,
                 "gzip_sha256": gzip_digest,
                 "snapshot_key": gzip_key,
+                **_scope_manifest_fields(scope),
             }
         except Exception as error:
             if store is not None:

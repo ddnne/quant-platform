@@ -76,6 +76,7 @@ from storage.coverage_ledger import (
     _receipt_from_row,
 )
 from storage.receipt_crypto import (
+    PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS,
     PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
     PRODUCTION_RECEIPT_ENVIRONMENT,
 )
@@ -1099,6 +1100,8 @@ def _issue_scope_dataset_product(
     segment_id: str,
     operation: str,
     extra_evidence: dict | None = None,
+    environment: str = PRODUCTION_RECEIPT_ENVIRONMENT,
+    authority_instance_digest: str = PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
 ) -> str:
     event_days = [
         str(row["event_time"])[:10]
@@ -1160,6 +1163,8 @@ def _issue_scope_dataset_product(
         source_request={"fixture": operation},
         structured_digest=artifact_digest,
         extra_evidence=extra_evidence,
+        environment=environment,
+        authority_instance_digest=authority_instance_digest,
     )
     record_collection_receipt(store._conn, authority.issue(evidence))  # noqa: SLF001
     raw_manifest_digest = str(evidence.claims["raw_manifest_digest"])
@@ -1251,6 +1256,7 @@ def _seed_exact_pit_scope(
     include_nonmember_rows: bool = False,
     include_after_decision_rows: bool = False,
     poison_unselected_rows: bool = False,
+    environment: str = PRODUCTION_RECEIPT_ENVIRONMENT,
 ) -> tuple[object, object]:
     """Synthetic five-day exact natural-key closure with governed v4 receipts."""
     db_path = tmp_path / "pit-scope.sqlite"
@@ -1450,6 +1456,9 @@ def _seed_exact_pit_scope(
                 "WHERE dataset='fins_summary' "
                 "AND payload LIKE '%disc-1332-after-close%'"
             )
+        if environment not in PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS:
+            raise AssertionError("fixture environment is not pinned")
+        authority_digest = PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS[environment]
         authority = _TestSignedReceiptAuthority(
             signing_key=receipt_ed25519_keys.signing_key
         )
@@ -1490,6 +1499,8 @@ def _seed_exact_pit_scope(
                 segment_id=f"mini-scope-{dataset_id}",
                 operation="exact-pit-scope",
                 extra_evidence=extra_evidence,
+                environment=environment,
+                authority_instance_digest=authority_digest,
             )
         persist_official_calendar_raw(
             store._conn,  # noqa: SLF001
