@@ -18,10 +18,6 @@ from types import MappingProxyType
 from typing import Any, Iterator, Mapping, Sequence
 
 from data_contracts.read_scopes import DatasetReadRequirement, DatasetReadScope
-from ops.receipt_product import (
-    iter_product_artifact_body_rows,
-    product_row_digest,
-)
 from storage.schema import CATALOG_CODE_SQL
 
 from .errors import PitError
@@ -277,20 +273,6 @@ def _iter_catalog_versions(
         params=bound,
         order_by=order_by,
     )
-
-
-def _index_product_digests(product_artifact_bodies: Sequence[str]) -> frozenset[str]:
-    """One full-segment parse per owner batch. Compact digest witness only."""
-
-    if not product_artifact_bodies:
-        raise ScopedSelectionError(
-            "selected catalog version requires verified full-segment product backing"
-        )
-    digests: set[str] = set()
-    for body in product_artifact_bodies:
-        for row in iter_product_artifact_body_rows(body):
-            digests.add(product_row_digest(row))
-    return frozenset(digests)
 
 
 def _require_product_backing(digest: str | None, witness: frozenset[str]) -> None:
@@ -681,25 +663,6 @@ class _OwnedScopedResearchOwner:
         raise ScopedSelectionError(
             f"no AM research owner for dataset {dataset_id!r}"
         )
-
-
-def _owned_scoped_research_owner(
-    conn: sqlite3.Connection,
-    *,
-    product_artifact_bodies: Sequence[str],
-) -> _OwnedScopedResearchOwner:
-    """Pin full-product row digests once while this connection is in a transaction.
-
-    The transaction check does not prove readonly ownership or verified
-    publication/runtime pinning.
-    """
-
-    _require_active_sqlite_transaction(conn)
-    return _OwnedScopedResearchOwner(
-        _OWNER_TOKEN,
-        conn=conn,
-        witness=_index_product_digests(product_artifact_bodies),
-    )
 
 
 def _owned_scoped_research_owner_from_verified_witness(

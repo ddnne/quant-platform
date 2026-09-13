@@ -16,6 +16,7 @@ from data_contracts.read_scopes import (
 )
 from ops.receipt_product import (
     canonical_product_artifact_bytes,
+    iter_product_artifact_body_rows,
     product_row_digest,
 )
 from pit.query import _iter_query_rows, connect_readonly
@@ -23,7 +24,7 @@ from pit.scoped_selection import (
     ScopedBarView,
     ScopedFinancialView,
     ScopedSelectionError,
-    _owned_scoped_research_owner,
+    _owned_scoped_research_owner_from_verified_witness,
     sqlite_row_code,
     sqlite_row_event_date,
 )
@@ -57,7 +58,13 @@ def _open_tx(path: Path):
 
 
 def _pin_owner(conn, *bodies: str):
-    return _owned_scoped_research_owner(conn, product_artifact_bodies=bodies)
+    witness: set[str] = set()
+    for body in bodies:
+        for row in iter_product_artifact_body_rows(body):
+            witness.add(product_row_digest(row))
+    return _owned_scoped_research_owner_from_verified_witness(
+        conn, witness=frozenset(witness)
+    )
 
 
 def _bars_requirement(*, n: int = 2, split_safety: bool = False) -> DatasetReadRequirement:
