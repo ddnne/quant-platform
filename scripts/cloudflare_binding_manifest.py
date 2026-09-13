@@ -1867,6 +1867,18 @@ _ACCOUNT_ID = re.compile(r"^[0-9a-f]{32}$")
 _UUID = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
+_MASS_BUILDS_IMAGE_MUTATE_TIMEOUT = 900
+_MASS_BUILDS_MUTATE_ENV = (
+    "WORKERS_CI",
+    "WORKERS_CI_BUILD_UUID",
+    "WORKERS_CI_COMMIT_SHA",
+    "WORKERS_CI_BRANCH",
+    "WRANGLER_CI_MATCH_TAG",
+    "WRANGLER_DOCKER_HOST",
+    "DOCKER_HOST",
+    "WRANGLER_DOCKER_BIN",
+    "WRANGLER_CI_OVERRIDE_NETWORK_MODE_HOST",
+)
 
 
 def _generic_wrapper_workers() -> frozenset[str]:
@@ -2060,10 +2072,18 @@ def _canonical_deploy_target(
     containers = section.get("containers")
     if containers is None and environment != "staging":
         containers = data.get("containers")
+    container_builds = False
     if containers:
-        raise ValueError(
-            f"{worker}: local generic deploy is prohibited while a Container image is declared"
+        container_builds = (
+            worker == "research-mass-eval"
+            and environment == "staging"
+            and environ.get("WORKERS_CI") == "1"
+            and bool(_UUID.fullmatch(environ.get("WORKERS_CI_BUILD_UUID") or ""))
         )
+        if not container_builds:
+            raise ValueError(
+                f"{worker}: local generic deploy is prohibited while a Container image is declared"
+            )
     if not isinstance(worker_name, str) or not worker_name:
         raise ValueError(f"{worker}: Worker name is missing")
     if (
@@ -2112,6 +2132,7 @@ def _canonical_deploy_target(
         "executable": directory / "node_modules" / ".bin" / "wrangler",
         "requires_ops_gate": "predeploy_ops_projection_gate.py" in deploy_command,
         "account_id": PROJECT_ACCOUNT_ID,
+        "container_builds": container_builds,
     }
 
 
@@ -2270,6 +2291,13 @@ def deploy_tagged(
     sha = _clean_merged_sha(runner=run)
     if not _SHA40.fullmatch(sha):
         raise ValueError("merged SHA is not 40 hex")
+    if (
+        target["container_builds"]
+        and process_env.get("WORKERS_CI_COMMIT_SHA") != sha
+    ):
+        raise ValueError(
+            "research-mass-eval: WORKERS_CI_COMMIT_SHA is not the merged SHA"
+        )
     executable = _require_pinned_executable(target)
     with tempfile.TemporaryDirectory(prefix="quant-canonical-deploy-") as temporary:
         isolated_root = Path(temporary)
@@ -2291,6 +2319,11 @@ def deploy_tagged(
                 account_id=target["account_id"],
                 api_token=token,
             )
+            if target["container_builds"]:
+                for key in _MASS_BUILDS_MUTATE_ENV:
+                    value = process_env.get(key)
+                    if value:
+                        mutate_env[key] = value
             if target["requires_ops_gate"]:
                 previous_token = os.environ.get("CLOUDFLARE_API_TOKEN")
                 previous_account = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
@@ -2314,16 +2347,19 @@ def deploy_tagged(
                     else:
                         os.environ["CLOUDFLARE_ACCOUNT_ID"] = previous_account
             outfile = isolated_root / "worker.bundle"
+            dry_run_args = [
+                executable,
+                "deploy",
+                "--dry-run",
+                *_wrangler_selector_args(environment),
+                "--outfile",
+                str(outfile),
+            ]
+            if target["container_builds"]:
+                dry_run_args.extend(["--containers-rollout", "none"])
             dry_run = _run_pinned(
                 run,
-                [
-                    executable,
-                    "deploy",
-                    "--dry-run",
-                    * _wrangler_selector_args(environment),
-                    "--outfile",
-                    str(outfile),
-                ],
+                dry_run_args,
                 cwd=target["directory"],
                 command_env=build_env,
                 timeout=120,
@@ -2352,7 +2388,11 @@ def deploy_tagged(
                 ],
                 cwd=target["directory"],
                 command_env=mutate_env,
-                timeout=120,
+                timeout=(
+                    _MASS_BUILDS_IMAGE_MUTATE_TIMEOUT
+                    if target["container_builds"]
+                    else 120
+                ),
             )
             if deploy.returncode != 0:
                 raise ValueError("tagged wrangler deploy failed")

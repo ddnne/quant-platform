@@ -2052,19 +2052,43 @@ def test_deploy_tagged_production_uses_pinned_executable_cwd_and_env(
     assert '"result":"VERIFIED_EXACT_MODULE_BYTES"' in capsys.readouterr().out
 
 
+@pytest.mark.parametrize(
+    "worker,extra_env",
+    (
+        ("ingestion-premium", {}),
+        (
+            "research-mass-eval",
+            {
+                "WORKERS_CI": "1",
+                "WORKERS_CI_BUILD_UUID": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "WORKERS_CI_COMMIT_SHA": _DEPLOY_SHA,
+                "WORKERS_CI_BRANCH": "main",
+                "WRANGLER_CI_MATCH_TAG": "supplied-match-tag",
+                "DOCKER_HOST": "unix:///var/run/docker.sock",
+                "WRANGLER_CI_OVERRIDE_NETWORK_MODE_HOST": "1",
+            },
+        ),
+    ),
+)
 def test_deploy_tagged_staging_omits_env_selector(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    worker: str,
+    extra_env: dict[str, str],
 ) -> None:
     _official_main(monkeypatch)
     executable = _prepare_pin(tmp_path, monkeypatch)
     runner = _canonical_runner(executable=executable)
     manifest_module.deploy_tagged(
-        worker="ingestion-premium",
+        worker=worker,
         environment="staging",
         runner=runner,
         opener=runner.opener,
-        environ={"CLOUDFLARE_API_TOKEN": _TOKEN, "PATH": os.environ.get("PATH", "")},
+        environ={
+            "CLOUDFLARE_API_TOKEN": _TOKEN,
+            "PATH": os.environ.get("PATH", ""),
+            **extra_env,
+        },
     )
     wrangler = _wrangler_argvs(runner, executable)
     deploy = next(
@@ -2077,18 +2101,74 @@ def test_deploy_tagged_staging_omits_env_selector(
         for call in wrangler
         if call[1:3] == ("deployments", "status")
     )
+    if worker != "research-mass-eval":
+        return
+    dry_run = next(
+        row
+        for row in runner.calls
+        if row["argv"]
+        and row["argv"][0] == executable
+        and "--dry-run" in row["argv"]
+    )
+    mutate = next(
+        row
+        for row in runner.calls
+        if row["argv"]
+        and row["argv"][0] == executable
+        and row["argv"][1] == "deploy"
+        and "--dry-run" not in row["argv"]
+    )
+    assert dry_run["argv"][dry_run["argv"].index("--containers-rollout") + 1] == "none"
+    assert "--containers-rollout" not in mutate["argv"]
+    assert dry_run["kwargs"].get("timeout") == 120
+    assert mutate["kwargs"].get("timeout") == 900
+    assert mutate["kwargs"]["env"]["WORKERS_CI"] == "1"
+    assert mutate["kwargs"]["env"]["DOCKER_HOST"] == extra_env["DOCKER_HOST"]
+    assert (
+        mutate["kwargs"]["env"]["WRANGLER_CI_OVERRIDE_NETWORK_MODE_HOST"]
+        == extra_env["WRANGLER_CI_OVERRIDE_NETWORK_MODE_HOST"]
+    )
+    assert "DOCKER_HOST" not in dry_run["kwargs"]["env"]
 
 
 @pytest.mark.parametrize(
-    "worker,match",
+    "worker,environment,environ,match",
     (
-        ("ingestion-jsda", "specialized or PENDING"),
-        ("ingestion-secrets", "specialized or PENDING"),
-        ("research-mass-eval", "Container image"),
+        (
+            "ingestion-jsda",
+            "production",
+            {"CLOUDFLARE_API_TOKEN": _TOKEN},
+            "specialized or PENDING",
+        ),
+        (
+            "ingestion-secrets",
+            "production",
+            {"CLOUDFLARE_API_TOKEN": _TOKEN},
+            "specialized or PENDING",
+        ),
+        (
+            "research-mass-eval",
+            "production",
+            {
+                "CLOUDFLARE_API_TOKEN": _TOKEN,
+                "WORKERS_CI": "1",
+                "WORKERS_CI_BUILD_UUID": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "WORKERS_CI_COMMIT_SHA": _DEPLOY_SHA,
+            },
+            "Container image",
+        ),
+        (
+            "research-mass-eval",
+            "staging",
+            {"CLOUDFLARE_API_TOKEN": _TOKEN, "CI": "true"},
+            "Container image",
+        ),
     ),
 )
 def test_deploy_tagged_rejects_specialized_pending_and_mass_before_mutation(
     worker: str,
+    environment: str,
+    environ: dict[str, str],
     match: str,
 ) -> None:
     calls: list[tuple[str, ...]] = []
@@ -2100,11 +2180,42 @@ def test_deploy_tagged_rejects_specialized_pending_and_mass_before_mutation(
     with pytest.raises(ValueError, match=match):
         manifest_module.deploy_tagged(
             worker=worker,
-            environment="production",
+            environment=environment,
             runner=runner,
-            environ={"CLOUDFLARE_API_TOKEN": _TOKEN},
+            environ=environ,
         )
     assert calls == []
+
+
+def test_deploy_tagged_rejects_mass_staging_stale_workers_ci_commit_sha(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _official_main(monkeypatch)
+    calls: list[tuple[str, ...]] = []
+
+    def runner(command, **_kwargs):
+        argv = tuple(command)
+        calls.append(argv)
+        git = _git_ok(argv)
+        if git is not None:
+            return git
+        raise AssertionError(argv)
+
+    with pytest.raises(
+        ValueError, match="WORKERS_CI_COMMIT_SHA is not the merged SHA"
+    ):
+        manifest_module.deploy_tagged(
+            worker="research-mass-eval",
+            environment="staging",
+            runner=runner,
+            environ={
+                "CLOUDFLARE_API_TOKEN": _TOKEN,
+                "WORKERS_CI": "1",
+                "WORKERS_CI_BUILD_UUID": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "WORKERS_CI_COMMIT_SHA": "b" * 40,
+            },
+        )
+    assert all("deploy" not in call for call in calls)
 
 
 def test_deploy_tagged_requires_quant_ops_gate_before_mutation(
