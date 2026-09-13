@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ready-manifest/v2",
+  "title": "Receipt-native ReadyManifest",
+  "description": "Closed receipt-native ReadyManifest source. Not live READY. Forbids D1 source/export/applied cursor fields. Missing proofs are UNKNOWN or MISSING, never default PASS.",
+  "$defs": {
+    "sha256_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "proof_digest": {
+      "type": "string",
+      "pattern": "^(sha256:[0-9a-f]{64}|UNKNOWN|MISSING)$"
+    },
+    "generation_pin": {
+      "type": "string",
+      "minLength": 1
+    },
+    "iso_datetime": {
+      "type": "string",
+      "minLength": 1
+    },
+    "nonempty_string": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "snapshot_id",
+    "publication_scope",
+    "profile_id",
+    "profile_version",
+    "profile_digest",
+    "plan_ids",
+    "plan_set_digest",
+    "dependency_closure_digest",
+    "universe_rule_digest",
+    "resolved_universe_digest",
+    "dataset_ids",
+    "dataset_membership_digest",
+    "coverage_policy_version",
+    "coverage_policy_digest",
+    "coverage_proof_digest",
+    "raw_proof_digest",
+    "receipt_proof_digest",
+    "validation_proof_digest",
+    "b0_proof_digest",
+    "b4_proof_digest",
+    "source",
+    "pit_contract_digests",
+    "feature_generation",
+    "catalog_generation",
+    "created_at",
+    "published_at",
+    "identity",
+    "fill_contract_digest"
+  ],
+  "properties": {
+    "format": { "const": "ready-manifest/v2" },
+    "snapshot_id": { "$ref": "#/$defs/sha256_digest" },
+    "publication_scope": { "enum": ["PILOT", "MASS"] },
+    "profile_id": { "$ref": "#/$defs/nonempty_string" },
+    "profile_version": { "$ref": "#/$defs/generation_pin" },
+    "profile_digest": { "$ref": "#/$defs/proof_digest" },
+    "plan_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/nonempty_string" }
+    },
+    "plan_set_digest": { "$ref": "#/$defs/proof_digest" },
+    "dependency_closure_digest": { "$ref": "#/$defs/proof_digest" },
+    "universe_rule_digest": { "$ref": "#/$defs/proof_digest" },
+    "resolved_universe_digest": { "$ref": "#/$defs/proof_digest" },
+    "dataset_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/nonempty_string" }
+    },
+    "dataset_membership_digest": { "$ref": "#/$defs/proof_digest" },
+    "coverage_policy_version": { "$ref": "#/$defs/generation_pin" },
+    "coverage_policy_digest": { "$ref": "#/$defs/proof_digest" },
+    "coverage_proof_digest": { "$ref": "#/$defs/proof_digest" },
+    "raw_proof_digest": { "$ref": "#/$defs/proof_digest" },
+    "receipt_proof_digest": { "$ref": "#/$defs/proof_digest" },
+    "validation_proof_digest": { "$ref": "#/$defs/proof_digest" },
+    "b0_proof_digest": { "$ref": "#/$defs/proof_digest" },
+    "b4_proof_digest": { "$ref": "#/$defs/proof_digest" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "environment",
+        "authority_instance_digest",
+        "physical_digest",
+        "observation_policy",
+        "observed_through",
+        "compiled_scope_proof_digest",
+        "receipt_runset_digest"
+      ],
+      "properties": {
+        "kind": { "const": "governed-receipt-candidate" },
+        "environment": { "enum": ["production", "staging"] },
+        "authority_instance_digest": { "$ref": "#/$defs/sha256_digest" },
+        "physical_digest": { "$ref": "#/$defs/sha256_digest" },
+        "observation_policy": { "const": "max_verified_claims_checked_at" },
+        "observed_through": { "$ref": "#/$defs/iso_datetime" },
+        "compiled_scope_proof_digest": { "$ref": "#/$defs/sha256_digest" },
+        "receipt_runset_digest": { "$ref": "#/$defs/sha256_digest" }
+      }
+    },
+    "pit_contract_digests": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/proof_digest" }
+    },
+    "feature_generation": { "$ref": "#/$defs/generation_pin" },
+    "catalog_generation": { "$ref": "#/$defs/generation_pin" },
+    "created_at": { "$ref": "#/$defs/iso_datetime" },
+    "published_at": { "$ref": "#/$defs/iso_datetime" },
+    "identity": { "$ref": "#/$defs/nonempty_string" },
+    "fill_contract_digest": { "$ref": "#/$defs/proof_digest" },
+    "manifest_digest": { "$ref": "#/$defs/sha256_digest" }
+  }
+}

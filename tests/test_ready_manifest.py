@@ -21,11 +21,13 @@ from qp_paths import repo_root
 from research.ready_manifest import (
     MISSING,
     READY_MANIFEST_FORMAT,
+    READY_MANIFEST_V2_FORMAT,
     READY_MANIFEST_SCHEMA,
     UNKNOWN,
     ExactFourPilotReadyBinding,
     ReadyManifest,
     build_ready_manifest,
+    build_receipt_native_ready_manifest,
     canonical_digest,
     core_profile_source_capability_gaps,
     load_exact_four_pilot_ready_binding,
@@ -36,6 +38,7 @@ from research.ready_manifest import (
     serialize_ready_manifest,
 )
 from research.universe_contract import EXACT_FOUR_UNIVERSE_RULE_DIGEST
+from storage.receipt_crypto import PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS
 from research.readiness import (
     GovernedMassReadinessAuthority,
     ReadinessPublicKeyRegistry,
@@ -589,6 +592,40 @@ def test_snapshot_adapter_requires_publisher_owned_outer_bindings() -> None:
     tampered["required_datasets"] = ["equities_master"]
     with pytest.raises(MassResearchDisabledError, match="membership binding"):
         ready_manifest_from_snapshot_document(tampered)
+
+
+def test_receipt_native_v2_codec_forbids_d1_cursors_and_roundtrips() -> None:
+    binding = load_exact_four_pilot_ready_binding()
+    example = json.loads(
+        (repo_root() / "specs" / "ready" / "ready_manifest_v2.example.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    source = example["source"]
+    assert source["authority_instance_digest"] == (
+        PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS["production"]
+    )
+    manifest = build_receipt_native_ready_manifest(
+        source,
+        binding=binding,
+        created_at=example["created_at"],
+        published_at=example["published_at"],
+    )
+    body = manifest.to_dict()
+    assert body == example
+    assert body["format"] == READY_MANIFEST_V2_FORMAT
+    assert "source_generation" not in body
+    assert "applied_sync_generation" not in body
+    assert "export_cursor" not in body
+    assert "applied_cursor" not in body
+    unsigned = dict(body)
+    unsigned.pop("manifest_digest")
+    assert body["manifest_digest"] == canonical_digest(unsigned)
+    assert ReadyManifest.from_dict(body).to_dict() == body
+    with pytest.raises(MassResearchDisabledError, match="schema invalid"):
+        ReadyManifest.from_dict({**body, "source_generation": "1"})
+    with pytest.raises(MassResearchDisabledError, match="format is unknown"):
+        ReadyManifest.from_dict({**body, "format": "ready-manifest/v3"})
 
 
 def test_core_profile_deps_subseteq_source_capability_registry() -> None:
