@@ -26,6 +26,10 @@ import {
 export const RECEIPT_PRODUCT_BYTE_REQUEST =
   "receipt-product-byte-request/v1" as const;
 export const OFFICIAL_CALENDAR_MAX_BYTES = 65_536;
+/** One-invocation page-body verification policy, not an acquisition limit. */
+export const RAW_COLLECTION_VERIFY_PAGES_MAX = 256;
+export const RAW_COLLECTION_VERIFY_BYTES_MAX = 64 * 1024 * 1024;
+export const RAW_COLLECTION_VERIFY_PAGE_BYTES = 16 * 1024 * 1024;
 
 const BYTE_REQUEST_KEYS = [
   "schema_version",
@@ -191,9 +195,14 @@ async function readExactBytes(
     await discardObjectBody(object);
     return "mismatch";
   }
-  const bytes = new Uint8Array(await object.arrayBuffer());
-  if (bytes.byteLength !== expectedSize) return "mismatch";
-  return bytes;
+  try {
+    const bytes = new Uint8Array(await object.arrayBuffer());
+    if (bytes.byteLength !== expectedSize) return "mismatch";
+    return bytes;
+  } catch (error) {
+    await discardObjectBody(object);
+    throw error;
+  }
 }
 
 function calendarEvidence(
@@ -223,7 +232,10 @@ function calendarEvidence(
 
 async function semanticRawManifestDigest(
   collection: Record<string, unknown>,
-): Promise<string | null> {
+): Promise<{
+  digest: string;
+  pages: Array<{ raw_path: string; raw_size: number; raw_digest: string }>;
+} | null> {
   if (
     collection.schema_version !== "jquants-acquisition-collection/v2" ||
     collection.capture_mode !== "LIVE_SERVICE_BINDING_RESPONSE" ||
@@ -234,7 +246,10 @@ async function semanticRawManifestDigest(
   ) {
     return null;
   }
-  const pages: Array<{ index: number; digest: string; size: number }> = [];
+  const pages: Array<{ raw_path: string; raw_size: number; raw_digest: string }> =
+    [];
+  const semanticPages: Array<{ index: number; digest: string; size: number }> =
+    [];
   for (let index = 0; index < collection.pages.length; index += 1) {
     const page = collection.pages[index];
     if (
@@ -245,16 +260,25 @@ async function semanticRawManifestDigest(
     ) {
       return null;
     }
+    const raw_size = Number(page.raw_size);
     pages.push({
+      raw_path: page.raw_path,
+      raw_size,
+      raw_digest: page.raw_digest,
+    });
+    semanticPages.push({
       index,
       digest: page.raw_digest,
-      size: Number(page.raw_size),
+      size: raw_size,
     });
   }
-  return canonicalDigest({
+  return {
+    digest: await canonicalDigest({
+      pages: semanticPages,
+      official_calendar_evidence: collection.official_calendar_evidence,
+    }),
     pages,
-    official_calendar_evidence: collection.official_calendar_evidence,
-  });
+  };
 }
 
 export async function readReceiptProductBytes(
@@ -375,13 +399,74 @@ export async function readReceiptProductBytes(
   const semantic = await semanticRawManifestDigest(collection);
   if (
     semantic === null ||
-    semantic !== claims.raw_manifest_digest ||
+    semantic.digest !== claims.raw_manifest_digest ||
     collection.collection_digest !== extras.acquisition_collection_digest
   ) {
     return hold(env, "UNTRUSTED_CHAIN", selector, registry.registry_digest);
   }
 
   if (request.resource === "raw_collection_manifest") {
+    const pages = semantic.pages;
+    if (
+      pages.length !== claims.raw_page_count ||
+      !Number.isSafeInteger(claims.raw_byte_count) ||
+      claims.raw_byte_count < 1 ||
+      !claims.raw_manifest_key.endsWith("manifest.json")
+    ) {
+      return hold(env, "UNTRUSTED_CHAIN", selector, registry.registry_digest);
+    }
+    const prefix = claims.raw_manifest_key.slice(
+      0,
+      -"manifest.json".length,
+    );
+    let total = 0;
+    for (let index = 0; index < pages.length; index += 1) {
+      const page = pages[index]!;
+      if (
+        page.raw_path !==
+          `${prefix}page-${String(index).padStart(6, "0")}.json`
+      ) {
+        return hold(
+          env,
+          "UNTRUSTED_CHAIN",
+          selector,
+          registry.registry_digest,
+        );
+      }
+      total += page.raw_size;
+    }
+    if (total !== claims.raw_byte_count) {
+      return hold(env, "UNTRUSTED_CHAIN", selector, registry.registry_digest);
+    }
+    if (
+      pages.length > RAW_COLLECTION_VERIFY_PAGES_MAX ||
+      total > RAW_COLLECTION_VERIFY_BYTES_MAX ||
+      pages.some((page) => page.raw_size > RAW_COLLECTION_VERIFY_PAGE_BYTES)
+    ) {
+      return hold(env, "READ_BUDGET", selector, registry.registry_digest);
+    }
+    for (const page of pages) {
+      let pageBytes: Uint8Array | "missing" | "mismatch" | "budget";
+      try {
+        pageBytes = await readExactBytes(
+          env.RAW_BUCKET,
+          page.raw_path,
+          page.raw_size,
+          RAW_COLLECTION_VERIFY_PAGE_BYTES,
+        );
+      } catch {
+        return hold(env, "READ_FAILURE", selector, registry.registry_digest);
+      }
+      if (pageBytes === "missing") {
+        return hold(env, "READ_FAILURE", selector, registry.registry_digest);
+      }
+      if (pageBytes === "budget" || pageBytes === "mismatch") {
+        return hold(env, "UNTRUSTED_CHAIN", selector, registry.registry_digest);
+      }
+      if (await sha256Digest(pageBytes) !== page.raw_digest) {
+        return hold(env, "UNTRUSTED_CHAIN", selector, registry.registry_digest);
+      }
+    }
     return new Response(manifestBytes, {
       status: 200,
       headers: {

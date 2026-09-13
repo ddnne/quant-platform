@@ -48,7 +48,13 @@ remote apply results only in immutable release evidence.
   returns `go: false` / `ready: false`. COMPLETED is not immutable READY. Public
   v2 attestation and Python publication remain PENDING. There is no Trader
   connection and no Pilot/GO. Product bytes use source Service Binding
-  `INGESTION_PREMIUM` → `PremiumReceiptProductInputService`. Scheduled Ops
+  `INGESTION_PREMIUM` → `PremiumReceiptProductInputService`. Source-only
+  `raw_collection_manifest` still returns the same collection-manifest bytes
+  after in-place RAW_BUCKET page-body checks (256 pages / 64MiB total / 16MiB
+  per page are local verification caps, not acquisition or platform limits;
+  over-cap is HOLD). Live R2 page inventory is not verified here. v2 coverage,
+  raw, and receipt proofs stay MISSING; public v2 attestation stays PENDING.
+  Scheduled Ops
   publisher owner is `platform/workers/ingestion-premium/src/ops_projection.ts`
   (`publishOpsProjection` / `publishOpsProjectionBestEffort` from the Premium
   scheduled worker). READY signer owner is

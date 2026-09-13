@@ -14,6 +14,8 @@ import {
 import {
   readReceiptProductBytes,
   RECEIPT_PRODUCT_BYTE_REQUEST,
+  RAW_COLLECTION_VERIFY_BYTES_MAX,
+  RAW_COLLECTION_VERIFY_PAGE_BYTES,
 } from "../src/receipt_product_bytes";
 import {
   RECEIPT_PRODUCT_HOST,
@@ -394,10 +396,14 @@ type SeedSpec = {
   objects: Awaited<ReturnType<typeof seedGovernedObjects>>;
   requestState?: "FINALIZED" | "PREPARED";
   artifactDigest?: string;
+  rawPageCount?: number;
+  rawBytes?: number;
 };
 
 async function seedComplete(db: D1Database, spec: SeedSpec): Promise<void> {
   const expectedScopeJson = JSON.stringify(spec.expectedScope);
+  const rawPageCount = spec.rawPageCount ?? 1;
+  const rawBytes = spec.rawBytes ?? 2;
   const receiptDigest = await canonicalDigest({
     source: "jquants",
     dataset: spec.dataset,
@@ -407,7 +413,7 @@ async function seedComplete(db: D1Database, spec: SeedSpec): Promise<void> {
     expected_scope: spec.expectedScope,
     expected_items: 1,
     observed_items: 1,
-    raw_page_count: 1,
+    raw_page_count: rawPageCount,
     raw_row_count: 2,
     structured_row_count: 2,
     pagination_exhausted: true,
@@ -439,7 +445,7 @@ async function seedComplete(db: D1Database, spec: SeedSpec): Promise<void> {
      ) VALUES (
        ?,?,?,'staging','jquants','jquants_premium_core',?,?,
        '2026-08-01','2026-08-31','COLLECTING','2026-08-01T00:00:00Z','2026-08-01T00:00:00Z',
-       ?,?,1,2,2
+       ?,?,?,2,?
      )`,
   ).bind(
     spec.operationId,
@@ -449,6 +455,8 @@ async function seedComplete(db: D1Database, spec: SeedSpec): Promise<void> {
     spec.segmentId,
     spec.rawKey,
     spec.objects.rawDigest,
+    rawPageCount,
+    rawBytes,
   ).run();
   await db.prepare(
     `INSERT INTO receipt_authority_structured_rows(
@@ -472,7 +480,7 @@ async function seedComplete(db: D1Database, spec: SeedSpec): Promise<void> {
      ) VALUES (
        ?,?,'jquants',?,?,?,?,'',
        2,?, ?,?,?,?,
-       1,2,2,'2026-08-01T00:00:00Z'
+       ?,2,?,'2026-08-01T00:00:00Z'
      )`,
   ).bind(
     spec.operationId,
@@ -486,6 +494,8 @@ async function seedComplete(db: D1Database, spec: SeedSpec): Promise<void> {
     spec.objects.manifestDigest,
     spec.rawKey,
     spec.objects.rawDigest,
+    rawPageCount,
+    rawBytes,
   ).run();
   await db.prepare(
     `UPDATE receipt_authority_operations
@@ -501,12 +511,13 @@ async function seedComplete(db: D1Database, spec: SeedSpec): Promise<void> {
        digests_json,run_id,status,error,checked_at
      ) VALUES (
        'jquants',?,?,'2026-08-01','2026-08-31',?,1,
-       1,1,2,2,1,?,?,'SUCCESS',NULL,'2026-08-01T00:00:00Z'
+       1,?,2,2,1,?,?,'SUCCESS',NULL,'2026-08-01T00:00:00Z'
      )`,
   ).bind(
     spec.dataset,
     spec.segmentId,
     expectedScopeJson,
+    rawPageCount,
     JSON.stringify(spec.envelope),
     spec.runId,
   ).run();
@@ -946,6 +957,138 @@ function masterScope(start = "2026-08-01", end = "2026-08-31") {
   };
 }
 
+async function seedBarsCollectionRead(options: {
+  pageCount?: number;
+  pageSize?: number;
+  putPageBodies: boolean;
+}): Promise<{
+  operationId: string;
+  receiptDigest: string;
+  collectionBytes: Uint8Array;
+  pageKey: string;
+}> {
+  await applyD1Migrations(runtimeEnv.DB, migrations);
+  await seedBase(runtimeEnv.DB);
+  const pair = await crypto.subtle.generateKey(
+    { name: "Ed25519" },
+    true,
+    ["sign", "verify"],
+  );
+  const raw = new Uint8Array(
+    await crypto.subtle.exportKey("raw", pair.publicKey),
+  );
+  installRegistry("staging", await closedActiveStagingRegistry(raw));
+  const objects = await seedGovernedObjects();
+  const prefix =
+    "raw/receipt-authority/staging/equities_bars_daily/2026-08/op-pages/attempt-1/";
+  const rawKey = `${prefix}manifest.json`;
+  const pageCount = options.pageCount ?? 1;
+  const pageSize = options.pageSize ?? 2;
+  const pageBody = new TextEncoder().encode("{}");
+  const pages = [];
+  for (let index = 0; index < pageCount; index += 1) {
+    const digest = pageSize === pageBody.byteLength
+      ? await sha256Prefixed(pageBody)
+      : "sha256:" + index.toString(16).padStart(2, "0").repeat(32);
+    pages.push({
+      raw_path: `${prefix}page-${String(index).padStart(6, "0")}.json`,
+      raw_size: pageSize,
+      raw_digest: digest,
+      response_status: 200,
+      headers: { "content-type": "application/json" },
+      metadata: { pagination_state: "EXHAUSTED" },
+    });
+  }
+  const captureBody = {
+    schema_version: "jquants-acquisition-collection/v2",
+    capture_mode: "LIVE_SERVICE_BINDING_RESPONSE",
+    initial_request: { dataset_id: "equities_bars_daily" },
+    official_calendar_evidence: null,
+    pages,
+  };
+  const collectionDigest = await canonicalDigest(captureBody);
+  const collectionBytes = new TextEncoder().encode(canonicalJson({
+    ...captureBody,
+    collection_digest: collectionDigest,
+  }));
+  const rawManifestDigest = await canonicalDigest({
+    pages: pages.map((page, index) => ({
+      index,
+      digest: page.raw_digest,
+      size: page.raw_size,
+    })),
+    official_calendar_evidence: null,
+  });
+  const rawBytes = pageSize * pageCount;
+  const claims = await canonicalV3Claims({
+    ...objects,
+    rawDigest: rawManifestDigest,
+    rawFileDigest: await sha256Prefixed(collectionBytes),
+    rawBytes: collectionBytes.byteLength,
+  }, {
+    artifact_key: "bars-pages-artifact.jsonl",
+    manifest_key: "bars-pages-manifest.json",
+    raw_manifest_key: rawKey,
+    raw_page_count: pageCount,
+    raw_byte_count: rawBytes,
+    receipt_issue_digest: "sha256:" + "cf".repeat(32),
+    run_id: 4,
+    structured_generation: 4,
+    extra_digests: {
+      acquisition_collection_manifest_file_digest:
+        await sha256Prefixed(collectionBytes),
+      acquisition_collection_digest: collectionDigest,
+      acquisition_terminal_chain_digest: "sha256:" + "13".repeat(32),
+      product_artifact_digest: objects.structured,
+      product_manifest_digest: objects.manifestDigest,
+    },
+  });
+  await seedComplete(runtimeEnv.DB, {
+    dataset: "equities_bars_daily",
+    segmentId: "2026-08",
+    runId: 4,
+    operationId: "op-pages",
+    nonce: "ae".repeat(32),
+    requestDigest: "sha256:" + "cf".repeat(32),
+    expectedScope: barsScope(),
+    artifactKey: "bars-pages-artifact.jsonl",
+    manifestKey: "bars-pages-manifest.json",
+    rawKey,
+    envelope: await signV3Claims(pair, claims),
+    objects: {
+      ...objects,
+      rawDigest: rawManifestDigest,
+      rawFileDigest: await sha256Prefixed(collectionBytes),
+      rawBytes: collectionBytes.byteLength,
+    },
+    rawPageCount: pageCount,
+    rawBytes,
+  });
+  await runtimeEnv.RAW_BUCKET.put(rawKey, collectionBytes);
+  const pageKey = `${prefix}page-000000.json`;
+  if (options.putPageBodies && pageSize === pageBody.byteLength) {
+    for (let index = 0; index < pageCount; index += 1) {
+      await runtimeEnv.RAW_BUCKET.put(
+        `${prefix}page-${String(index).padStart(6, "0")}.json`,
+        pageBody,
+      );
+    }
+  }
+  const described = await postReceiptProducts(exportEnv(), inputRequest([
+    { dataset: "equities_bars_daily", segment_id: "2026-08" },
+  ]));
+  const describedBody = await described!.json() as {
+    segments: Array<{ operation_id: string; receipt_digest: string }>;
+  };
+  const segment = describedBody.segments[0]!;
+  return {
+    operationId: segment.operation_id,
+    receiptDigest: segment.receipt_digest,
+    collectionBytes,
+    pageKey,
+  };
+}
+
 function byteRequest(
   dataset: string,
   segmentId: string,
@@ -1194,4 +1337,67 @@ describe("original receipt product bytes workerd R2", () => {
       hold_reason: "UNTRUSTED_CHAIN",
     });
   });
+
+  it("verifies matching raw page bytes then holds same-size corruption and missing pages",
+    async () => {
+      const seeded = await seedBarsCollectionRead({ putPageBodies: true });
+      const request = byteRequest(
+        "equities_bars_daily",
+        "2026-08",
+        seeded.operationId,
+        seeded.receiptDigest,
+        "raw_collection_manifest",
+      );
+      const matched = await readReceiptProductBytes(runtimeEnv, request);
+      expect(matched.status).toBe(200);
+      expect(matched.headers.get("x-quant-resource")).toBe(
+        "raw_collection_manifest",
+      );
+      expect(new Uint8Array(await matched.arrayBuffer())).toEqual(
+        seeded.collectionBytes,
+      );
+
+      await runtimeEnv.RAW_BUCKET.put(
+        seeded.pageKey,
+        new TextEncoder().encode("[]"),
+      );
+      const corrupted = await readReceiptProductBytes(runtimeEnv, request);
+      expect(corrupted.status).toBe(409);
+      expect(await corrupted.json()).toMatchObject({
+        status: "HOLD",
+        hold_reason: "UNTRUSTED_CHAIN",
+      });
+
+      await runtimeEnv.RAW_BUCKET.delete(seeded.pageKey);
+      const missing = await readReceiptProductBytes(runtimeEnv, request);
+      expect(missing.status).toBe(409);
+      expect(await missing.json()).toMatchObject({
+        status: "HOLD",
+        hold_reason: "READ_FAILURE",
+      });
+    });
+
+  it("holds READ_BUDGET for an over-size signed collection before page GETs",
+    async () => {
+      const oversizePages = Math.floor(
+        RAW_COLLECTION_VERIFY_BYTES_MAX / RAW_COLLECTION_VERIFY_PAGE_BYTES,
+      ) + 1;
+      const seeded = await seedBarsCollectionRead({
+        pageCount: oversizePages,
+        pageSize: RAW_COLLECTION_VERIFY_PAGE_BYTES,
+        putPageBodies: false,
+      });
+      const read = await readReceiptProductBytes(runtimeEnv, byteRequest(
+        "equities_bars_daily",
+        "2026-08",
+        seeded.operationId,
+        seeded.receiptDigest,
+        "raw_collection_manifest",
+      ));
+      expect(read.status).toBe(409);
+      expect(await read.json()).toMatchObject({
+        status: "HOLD",
+        hold_reason: "READ_BUDGET",
+      });
+    });
 });
