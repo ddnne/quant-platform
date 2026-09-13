@@ -982,8 +982,15 @@ def verify_committed_receipt_candidate_scope(
         from research.ready_manifest import (
             MISSING as READY_MISSING,
             build_receipt_native_ready_manifest,
+            generation_pins,
         )
 
+        feature_generation, catalog_generation = generation_pins(
+            profile_digest=binding.profile_digest,
+            feature_dependencies=binding.feature_dependencies,
+            contract_versions=binding.contract_versions,
+            dataset_ids=binding.required_datasets,
+        )
         receipt_manifest = build_receipt_native_ready_manifest(
             compiled["receipt_source"],
             binding=binding,
@@ -992,6 +999,9 @@ def verify_committed_receipt_candidate_scope(
             b0_proof_digest=b0_proof_digest,
             b4_proof_digest=b4_proof_digest,
             validation_proof_digest=quality_digest,
+            resolved_universe_digest=payload["resolved_universe_digest"],
+            feature_generation=feature_generation,
+            catalog_generation=catalog_generation,
         )
         compiled["receipt_native_manifest"] = receipt_manifest.to_dict()
         compiled["receipt_native_manifest_digest"] = receipt_manifest.manifest_digest

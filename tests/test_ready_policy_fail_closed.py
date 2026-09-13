@@ -1053,21 +1053,28 @@ def _mini_exact_scope_binding() -> SimpleNamespace:
         profile_from_dependency_closure,
     )
 
+    canonical = load_exact_four_pilot_ready_binding()
+    plans = []
+    closures = []
     profiles = []
     for plan in load_experiment_plans():
         shortened = replace(
             plan, period_start="2023-01-04", period_end="2023-01-06"
         )
-        profile = profile_from_dependency_closure(
-            build_plan_dependency_closure(
-                shortened, closure_version=PLAN_DEPENDENCY_CLOSURE_VERSION_V2
-            )
+        closure = build_plan_dependency_closure(
+            shortened, closure_version=PLAN_DEPENDENCY_CLOSURE_VERSION_V2
         )
+        profile = profile_from_dependency_closure(closure)
         if profile.profile_version != PROFILE_VERSION_V3:
             raise AssertionError("fixture profiles must be research-data-profile/v3")
+        plans.append(shortened)
+        closures.append(closure)
         profiles.append(profile)
+    closures_t = tuple(closures)
     profiles_t = tuple(profiles)
     binding = SimpleNamespace(
+        plans=tuple(plans),
+        closures=closures_t,
         profiles=profiles_t,
         required_datasets=_SCOPE_DATASETS,
         profile_id="controlled-pilot/exact-four",
@@ -1076,15 +1083,30 @@ def _mini_exact_scope_binding() -> SimpleNamespace:
             [profile.to_dict() for profile in profiles_t]
         ),
         plan_ids=tuple(profile.plan_id for profile in profiles_t),
-        plan_set_digest=canonical_digest({"plans": "mini-exact-four"}),
-        closure_set_digest=canonical_digest({"closure": "mini-exact-four"}),
+        plan_set_digest=canonical_digest(
+            [
+                {"plan_id": closure.plan_id, "plan_digest": closure.plan_digest}
+                for closure in closures_t
+            ]
+        ),
+        closure_set_digest=canonical_digest(
+            [
+                {
+                    "plan_id": closure.plan_id,
+                    "closure_digest": closure.closure_digest,
+                }
+                for closure in closures_t
+            ]
+        ),
         publication_scope="PILOT",
-        feature_dependencies=(),
-        contract_versions={},
+        feature_dependencies=canonical.feature_dependencies,
+        contract_versions=canonical.contract_versions,
     )
     binding.to_dict = lambda: {
-        "feature_dependencies": [],
-        "contract_versions": {},
+        "feature_dependencies": [
+            dict(item) for item in binding.feature_dependencies
+        ],
+        "contract_versions": dict(binding.contract_versions),
     }
     return binding
 

@@ -251,6 +251,29 @@ def compute_dataset_membership_digest(dataset_ids: Sequence[str] | None) -> str:
     return canonical_digest(sorted({str(item) for item in dataset_ids}))
 
 
+def generation_pins(
+    *,
+    profile_digest: str,
+    feature_dependencies: Any,
+    contract_versions: Any,
+    dataset_ids: Any,
+) -> tuple[str, str]:
+    feature_generation = canonical_digest(
+        {
+            "profile_digest": profile_digest,
+            "feature_dependencies": feature_dependencies,
+        }
+    )
+    catalog_generation = canonical_digest(
+        {
+            "profile_digest": profile_digest,
+            "contract_versions": contract_versions,
+            "dataset_ids": dataset_ids,
+        }
+    )
+    return feature_generation, catalog_generation
+
+
 @dataclass(frozen=True)
 class ReadyManifest:
     """Closed ReadyManifest. Not a live READY publish."""
@@ -605,6 +628,9 @@ def build_receipt_native_ready_manifest(
     b0_proof_digest: str = MISSING,
     b4_proof_digest: str = MISSING,
     validation_proof_digest: str = MISSING,
+    resolved_universe_digest: str = MISSING,
+    feature_generation: str = MISSING,
+    catalog_generation: str = MISSING,
 ) -> ReadyManifest:
     """Serialize a receipt-native v2 ReadyManifest. Not live READY."""
 
@@ -633,7 +659,9 @@ def build_receipt_native_ready_manifest(
             "plan_set_digest": binding.plan_set_digest,
             "dependency_closure_digest": binding.closure_set_digest,
             "universe_rule_digest": EXACT_FOUR_UNIVERSE_RULE_DIGEST,
-            "resolved_universe_digest": MISSING,
+            "resolved_universe_digest": proof_or_missing(
+                resolved_universe_digest
+            ),
             "dataset_ids": datasets,
             "dataset_membership_digest": compute_dataset_membership_digest(
                 datasets
@@ -650,8 +678,8 @@ def build_receipt_native_ready_manifest(
             "pit_contract_digests": {
                 "dependency_scope": closed["compiled_scope_proof_digest"],
             },
-            "feature_generation": MISSING,
-            "catalog_generation": MISSING,
+            "feature_generation": pin_or_missing(feature_generation),
+            "catalog_generation": pin_or_missing(catalog_generation),
             "created_at": created_at,
             "published_at": published_at,
             "fill_contract_digest": CONTROLLED_FILL_CONTRACT_DIGEST,
@@ -1319,6 +1347,12 @@ def build_profile_bound_ready_manifest_from_snapshot_document(
     contract_versions = profile_document.get("contract_versions")
     if contract_versions is None:
         contract_versions = dict(profile.contract_versions)
+    feature_generation, catalog_generation = generation_pins(
+        profile_digest=profile.profile_digest,
+        feature_dependencies=feature_dependencies,
+        contract_versions=contract_versions,
+        dataset_ids=profile.required_datasets,
+    )
 
     return build_ready_manifest(
         snapshot_id=str(snapshot_id),
@@ -1372,19 +1406,8 @@ def build_profile_bound_ready_manifest_from_snapshot_document(
             "pit_api": canonical_digest({"pit_api_version": PIT_API_VERSION}),
             "dependency_scope": str(dependency_scope["proof_digest"]),
         },
-        feature_generation=canonical_digest(
-            {
-                "profile_digest": profile.profile_digest,
-                "feature_dependencies": feature_dependencies,
-            }
-        ),
-        catalog_generation=canonical_digest(
-            {
-                "profile_digest": profile.profile_digest,
-                "contract_versions": contract_versions,
-                "dataset_ids": profile.required_datasets,
-            }
-        ),
+        feature_generation=feature_generation,
+        catalog_generation=catalog_generation,
         created_at=str(created_at or MISSING),
         published_at=str(published_at or MISSING),
     )
@@ -2072,6 +2095,7 @@ __all__ = [
     "closed_receipt_native_source",
     "compute_dataset_membership_digest",
     "core_profile_source_capability_gaps",
+    "generation_pins",
     "is_sha256_digest",
     "load_ready_manifest",
     "load_ready_manifest_schema",
