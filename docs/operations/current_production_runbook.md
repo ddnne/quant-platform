@@ -24,11 +24,15 @@ remote apply results only in immutable release evidence.
 
 ## Honest holds
 
-- **Cloudflare Access / Zero Trust:** last recorded HOLD is that
-  `ingestion-secrets` workers.dev is not Access-protected until Zero Trust is
-  initialized; header token remains enabled. Access was **not remeasured** on
-  2026-09-10. Do not treat the HOLD as closed, and do not treat it as a fresh
-  Access observation.
+- **Cloudflare Access / Zero Trust:** HOLD remains. 2026-09-13T19:06Z read-only
+  GET `/accounts/11233bca08d134a9b738eaa46b9751d9/access/organizations` returned
+  error 9999 `access.api.error.not_enabled` with a dashboard Enable Access
+  instruction. No UI inspected, no config changed. A Cloudflare account API
+  token is control-plane auth, not a Worker Access JWT. `GET
+  /v1/private/jsda-health-ready` requires `ctx.access.aud`
+  (`receipt-activation-observer/src/index.ts`). Human initial Access setup may
+  be needed; a managed zone is not an established prerequisite. Header token
+  remains enabled. Do not treat Access as closed.
 - **Controlled Pilot:** **NO-GO** until live evidence in
   `docs/phase62_residual_status.md` passes. Green tests do not arm exact-four.
   Runtime still requires signed READY, signed Trader authorization, an
@@ -40,27 +44,36 @@ remote apply results only in immutable release evidence.
   submits Container `POST /v1/materialize-receipt-candidate`; COMPLETED PASS
   freezes one candidate snapshot and may emit a receipt-native v2 manifest,
   still `go:false` / `ready:false`. Last-recorded live observation
-  (2026-09-13T00:09:20Z, not remeasured) has READY/applied null and B0 UNKNOWN;
-  coverage, raw, and receipt proofs are last-recorded MISSING/unmeasured live
-  evidence, not a claim that source cannot accept complete authentic proofs.
-  Public v2 attestation stays PENDING until that live evidence exists. Product bytes use Service
-  Binding `INGESTION_PREMIUM` → `PremiumReceiptProductInputService`. Source-only
-  `raw_collection_manifest` re-reads collection-manifest bytes after in-place
-  RAW_BUCKET page-body checks (256 pages / 64MiB total / 16MiB per page are
-  local verification caps, not acquisition or platform limits; over-cap is
-  HOLD). Live R2 page inventory is not verified here. Scheduled Ops publisher
-  is `ops_projection.ts`; READY signer is `ready_publication.ts` (undeployed).
+  (2026-09-13T18:20Z) has projection STALE (~23d), B0 UNKNOWN, READY null,
+  applied_feed_cursor null, and all 23 dataset applied/ready-pinned cursors
+  null; not a B4/tools-list/schema/Coverage/JSDA/JQ/full-Worker-version
+  acceptance. Coverage, raw, and receipt proofs are last-recorded
+  MISSING/unmeasured live evidence, not a claim that source cannot accept
+  complete authentic proofs. Public v2 attestation stays PENDING until that
+  live evidence exists. Product bytes use Service Binding `INGESTION_PREMIUM`
+  → `PremiumReceiptProductInputService`. Source-only `raw_collection_manifest`
+  re-reads collection-manifest bytes after in-place RAW_BUCKET page-body
+  checks (256 pages / 64MiB total / 16MiB per page are local verification
+  caps, not acquisition or platform limits; over-cap is HOLD). Live R2 page
+  inventory is not verified here. Scheduled Ops publisher is
+  `ops_projection.ts`; READY signer is `ready_publication.ts` (undeployed).
   Native envelope execution is accepted source (PR168) and consumes
   receipt-native evidence, not legacy `signed_projection_document`. Paired
-  Paper Trader v2 mint is source-only on `publishAdmittedReceiptCandidate` when
-  a dedicated trader secret and one ACTIVE trader key are present at runtime;
-  this source unit did not provision those and did not remeasure live
-  secret/registry state; otherwise PENDING without deleting READY. Existing Mass staging secret
-  history is not this SHA deployed. `POST /v1/export/receipt-products` is
-  undeployed read-only and is not READY. Generic v1/Python publication routes
-  remain distinct. Activating keys is not live READY or GO. Inactive source
-  rollout is not global live acceptance. Wire the existing trust root; do not
-  add another authority or Worker.
+  Paper Trader v2 mint is on main (PR169 / 59109819) inside existing
+  `publishAdmittedReceiptCandidate`; runtime still PENDING without a dedicated
+  trader secret and one ACTIVE trader key. Live secret/registry state was not
+  remeasured; activation remains pending acceptance. PR170 (main 4e137) slimmed
+  the PENDING release-evidence builder; A6 remains OPEN. PR171
+  (https://github.com/ddnne/quant-platform/pull/171, feature `fe1b7f1`) Node Mass
+  native lifecycle consumes Premium-serialized READY+Trader bytes with real
+  verifiers; workerd publication RPC remains mocked; required native check
+  103777783817 was in_progress at 2026-09-13T19:26Z — lookup that PR for
+  acceptance, no success forecast. Existing Mass staging secret history is not
+  this SHA deployed. `POST /v1/export/receipt-products` is undeployed read-only
+  and is not READY. Generic v1/Python publication routes remain distinct.
+  Activating keys is not live READY or GO. Inactive source rollout is not
+  global live acceptance. Wire the existing trust root; do not add another
+  authority or Worker.
 - **Release evidence:** publication is **PENDING/HOLD**. Caller JSON is
   untrusted. Authenticated collection/publication implementation is missing
   (not merely unprovisioned observation keys). A6 remains OPEN until a
