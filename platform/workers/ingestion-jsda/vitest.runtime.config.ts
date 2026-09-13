@@ -16,5 +16,6 @@ export default defineConfig({
     include: ["runtime/**/*.test.ts"],
     provide: { jsdaD1Migrations: d1Migrations },
     testTimeout: 20_000,
+    hookTimeout: 20_000,
   },
 });
