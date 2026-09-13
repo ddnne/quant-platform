@@ -3,6 +3,7 @@ import type {
 } from "../src/index";
 
 export {
+  PilotReadyPublicationService,
   PremiumReceiptAuditEvidenceService,
   PremiumReceiptOperatorService,
   PremiumReceiptProductInputService,

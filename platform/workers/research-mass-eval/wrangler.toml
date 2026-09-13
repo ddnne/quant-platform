@@ -73,6 +73,11 @@ binding = "INGESTION_PREMIUM"
 service = "quant-platform-ingestion-premium"
 entrypoint = "PremiumReceiptProductInputService"
 
+[[services]]
+binding = "PILOT_READY_PUBLICATION"
+service = "quant-platform-ingestion-premium"
+entrypoint = "PilotReadyPublicationService"
+
 [vars]
 ENVIRONMENT = "production"
 MASS_EVAL_VERSION = "research-mass-eval/v155-compact-v8-cloud-history"
@@ -131,6 +136,11 @@ entrypoint = "IngestionSecretsService"
 binding = "INGESTION_PREMIUM"
 service = "quant-platform-ingestion-premium"
 entrypoint = "PremiumReceiptProductInputService"
+
+[[env.production.services]]
+binding = "PILOT_READY_PUBLICATION"
+service = "quant-platform-ingestion-premium"
+entrypoint = "PilotReadyPublicationService"
 
 [env.production.vars]
 ENVIRONMENT = "production"

@@ -76,6 +76,8 @@ import {
 } from "./ready_manifest_v2";
 import { CONTROLLED_PILOT_KEY_PREFIX } from "./controlled_pilot_contract";
 import { CREATE_ONLY_COMPARE_MAX_BYTES } from "./http";
+import { maybePublishAfterAdmittedTerminal } from "./personal_receipt_candidate_publication";
+import type { PilotReadyPublicationRpc } from "../../ingestion-premium/src/pilot_ready_publication_rpc";
 
 const RESULT_MAX_BYTES = 512 * 1024 * 1024;
 const MANIFEST_MAX_BYTES = 64 * 1024;
@@ -87,7 +89,12 @@ const R2_SINGLE_OBJECT_PUT_MAX_BYTES =
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
 const SHA_HEX_RE = /^[0-9a-f]{64}$/;
 
-type R2Env = { STRUCTURED_BUCKET: R2Bucket };
+type R2Env = {
+  STRUCTURED_BUCKET: R2Bucket;
+  ENVIRONMENT?: string;
+  PILOT_READY_PUBLICATION?: PilotReadyPublicationRpc | Service;
+  CF_VERSION_METADATA?: { id?: string };
+};
 
 function responseJson(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
@@ -803,9 +810,15 @@ async function putSqliteManifest(
   }
   const existing = await env.STRUCTURED_BUCKET.head(key);
   if (existing) {
-    return existingMatches(existing, identity)
-      ? responseJson({ ok: true, created: false, key })
-      : responseJson({ error: `immutable ${kind.label} manifest conflict` }, 409);
+    if (!existingMatches(existing, identity)) {
+      return responseJson({ error: `immutable ${kind.label} manifest conflict` }, 409);
+    }
+    return admitReceiptCandidateManifest(
+      env,
+      kind,
+      manifest,
+      responseJson({ ok: true, created: false, key }),
+    );
   }
   let put: R2Object | null;
   try {
@@ -825,11 +838,36 @@ async function putSqliteManifest(
   } catch {
     return responseJson({ error: `${kind.label} manifest upload checksum rejected` }, 502);
   }
-  if (put !== null) return responseJson({ ok: true, created: true, key }, 201);
+  if (put !== null) {
+    return admitReceiptCandidateManifest(
+      env,
+      kind,
+      manifest,
+      responseJson({ ok: true, created: true, key }, 201),
+    );
+  }
   const raced = await env.STRUCTURED_BUCKET.head(key);
-  return raced && existingMatches(raced, identity)
-    ? responseJson({ ok: true, created: false, key })
-    : responseJson({ error: `immutable ${kind.label} manifest conflict` }, 409);
+  if (raced && existingMatches(raced, identity)) {
+    return admitReceiptCandidateManifest(
+      env,
+      kind,
+      manifest,
+      responseJson({ ok: true, created: false, key }),
+    );
+  }
+  return responseJson({ error: `immutable ${kind.label} manifest conflict` }, 409);
+}
+
+async function admitReceiptCandidateManifest(
+  env: R2Env,
+  kind: SqliteGzipKind,
+  manifest: Record<string, unknown>,
+  admitted: Response,
+): Promise<Response> {
+  if (kind.plane === "receipt_candidate") {
+    await maybePublishAfterAdmittedTerminal(env, manifest);
+  }
+  return admitted;
 }
 
 async function putSnapshotGzip(
