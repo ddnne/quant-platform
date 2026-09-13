@@ -91,10 +91,29 @@ remote apply results only in immutable release evidence.
   deploy command:
   `python3 -c "raise SystemExit('DEPLOYMENT HOLD: coordinated staging rollout pending; see current_production_runbook.md')"`.
   Authoritative repo-root CI is unchanged. Restore only after staged then
-  production Secrets→Gateway→Mass code rollout is accepted. Smoke must not
-  execute market data or Containers. Global live acceptance is the final
-  check, not a blocker for prerequisite Worker code rollout. This bounded
-  repair does not run D1 migration, JSDA activation, or DLQ mutation.
+  production code rollout is accepted for Secrets, Receipt, Premium
+  product+READY-publication bindings, Gateway, then Mass. Inactive Worker
+  code rollout is not key activation, READY mint, or Pilot GO. Staging Mass
+  tagged deploy is Cloudflare Builds only and still needs separate human
+  approval; do not restore or retrigger HOLDs here. From the repository root:
+  `python3 scripts/cloudflare_binding_manifest.py --deploy-tagged --worker research-mass-eval --env staging`.
+  From `platform/workers/research-mass-eval`:
+  `python3 ../../../scripts/cloudflare_binding_manifest.py --deploy-tagged --worker research-mass-eval --env staging`.
+  Local and production Mass tagged deploy stay refused while a Container
+  image is declared. Worker multipart module-byte verification is not
+  Container image rollout or research GO. Image push can follow Worker
+  upload and is not transactional. The 900s mutate timeout only waits on
+  the Wrangler parent and does not confirm a detached Docker build/push
+  was cancelled; after timeout mark state uncertain, STOP, and read actual
+  Build/Worker/Container state before retry or a separately approved
+  rollback. See [Workers Builds default vars](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/),
+  [Containers deploy](https://developers.cloudflare.com/containers/guides/deploy/),
+  and the 20-minute [Builds execution cap](https://developers.cloudflare.com/workers/ci-cd/builds/limits-and-pricing/)
+  (not a rollback or billing guarantee).
+  Smoke must not execute market data or Containers. Global live acceptance
+  is the final check, not a blocker for prerequisite Worker code rollout.
+  This bounded repair does not run D1 migration, JSDA activation, or DLQ
+  mutation.
 - **JSDA cutover follow-ups (open):** whole shared-D1 Time Travel restore is
   removed from the operator. A Time Travel bookmark remains recovery-reference
   evidence only; Premium and Receipt writers are not fenced. `--rollback`
