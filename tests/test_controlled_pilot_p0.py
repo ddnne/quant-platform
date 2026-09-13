@@ -1389,6 +1389,149 @@ def _verified_worker_scope_from_db(path, compiled):
     )
 
 
+def test_native_handle_logical_id_uses_frozen_source_not_sqlite_identity(
+    tmp_path, receipt_ed25519_keys, monkeypatch
+) -> None:
+    from _coreseed import TRADING_DAYS, seed_governed_am_pm_session_db
+    from core.strategy_protocol import OrderIntent
+    from paper_runtime import DATA_SNAPSHOT_FORMAT
+    from pit.governed_am_view import (
+        NATIVE_LOGICAL_SNAPSHOT_FORMAT,
+        _open_verified_controlled_snapshot,
+        _session_scope_from_verified_worker_job,
+    )
+    from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED
+    from qp_paths import repo_root
+    from research.ready_manifest import (
+        build_receipt_native_ready_manifest,
+        load_exact_four_pilot_ready_binding,
+    )
+    from research.universe_contract import resolve_tse_prime_with_fins
+    from storage.receipt_crypto import PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS
+    from strategies.paper.runner import _experiment_id, execute_paper_backtest
+    from strategies.paper.types import PaperRunConfig
+
+    code = "1332"
+    days = TRADING_DAYS
+    path = seed_governed_am_pm_session_db(
+        tmp_path,
+        codes=[code],
+        days=days,
+        morning_prices={code: {day: 100.0 for day in days}},
+        afternoon_prices={code: {day: 150.0 for day in days}},
+    )
+    args = _fixture_open_args(path, receipt_ed25519_keys)
+    compiled = args["compiled_selection"]
+    session_scope = _selected_session_scope_from_db(path, compiled)
+    source = {
+        "kind": "governed-receipt-candidate",
+        "environment": "staging",
+        "authority_instance_digest": PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS[
+            "staging"
+        ],
+        "physical_digest": args["verified_physical_digest"],
+        "observation_policy": "max_verified_claims_checked_at",
+        "observed_through": session_scope["observed_through"],
+        "compiled_scope_proof_digest": session_scope[
+            "dependency_scope_proof_digest"
+        ],
+        "receipt_runset_digest": "sha256:" + "11" * 32,
+    }
+    native_scope = _session_scope_from_verified_worker_job(
+        session_scope=session_scope,
+        ready_manifest_digest=session_scope["dependency_scope_proof_digest"],
+        admitted_native_digest=session_scope["dependency_scope_proof_digest"],
+        native_source=source,
+        profile_digest=compiled.profile_digest,
+    )
+    v1_handle = _open_verified_controlled_snapshot(pinned_path=path, **args)
+    try:
+        v1_handle._begin_controlled_batch_reads()
+        sqlite_id = v1_handle.logical_snapshot_id()
+        assert sqlite_id.startswith("sha256:")
+        assert v1_handle.data_snapshot_format() == DATA_SNAPSHOT_FORMAT
+        assert v1_handle.am_session_data_view().logical_snapshot_id() == sqlite_id
+    finally:
+        v1_handle._end_controlled_batch_reads()
+        v1_handle.close()
+
+    native_handle = _open_verified_controlled_snapshot(
+        pinned_path=path,
+        verified_physical_digest=args["verified_physical_digest"],
+        verified_session_scope=native_scope,
+        compiled_selection=compiled,
+        resolve_membership=args["resolve_membership"],
+    )
+
+    class AlwaysLong:
+        strategy_id = "always_long"
+        params: dict = {}
+
+        def on_bar(self, ctx):
+            return [OrderIntent(code=code, target_weight=0.5)]
+
+    def boom(reopened):
+        raise AssertionError(f"reopened generic snapshot id for {reopened}")
+
+    monkeypatch.setattr("strategies.paper.runner.data_snapshot_id", boom)
+    try:
+        native_handle._begin_controlled_batch_reads()
+        native_id = native_handle.logical_snapshot_id()
+        view = native_handle.am_session_data_view()
+        example = json.loads(
+            (repo_root() / "specs" / "ready" / "ready_manifest_v2.example.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        producer = build_receipt_native_ready_manifest(
+            source,
+            binding=load_exact_four_pilot_ready_binding(),
+            created_at=example["created_at"],
+            published_at=example["published_at"],
+        )
+        assert native_id == producer.snapshot_id
+        assert native_id.startswith("sha256:")
+        assert native_id != sqlite_id
+        assert view.logical_snapshot_id() == native_id
+        assert view.data_snapshot_format() == NATIVE_LOGICAL_SNAPSHOT_FORMAT
+        slices = native_handle.universe_day_slices(
+            period_start=compiled.period_start, period_end=compiled.period_end
+        )
+        universe = resolve_tse_prime_with_fins(
+            slices,
+            period_start=compiled.period_start,
+            period_end=compiled.period_end,
+        )
+        backtest, reproduction, experiment_id = execute_paper_backtest(
+            AlwaysLong(),
+            PaperRunConfig(
+                start=compiled.period_start,
+                end=compiled.period_end,
+                db_path=str(path),
+                universe=universe,
+                execution_mode="am_signal_pm_close",
+                price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+                cost_bps=10.0,
+                max_gross_weight=0.5,
+            ),
+            am_session_data_view=view,
+        )
+        assert reproduction["data_snapshot_id"] == native_id
+        assert reproduction["data_snapshot_format"] == NATIVE_LOGICAL_SNAPSHOT_FORMAT
+        sqlite_repro = dict(reproduction)
+        sqlite_repro["data_snapshot_id"] = sqlite_id
+        assert experiment_id == _experiment_id(reproduction)
+        assert experiment_id != _experiment_id(sqlite_repro)
+        assert backtest.metadata["authentic_am_session_evidence"] is False
+        assert (
+            backtest.metadata["price_evidence_mode"]
+            == "historical_daily_reconstruction"
+        )
+    finally:
+        native_handle._end_controlled_batch_reads()
+        native_handle.close()
+
+
 def _fixture_open_args(path, receipt_ed25519_keys) -> dict:
     from research.universe_contract import resolve_tse_prime_with_fins
 
