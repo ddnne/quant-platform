@@ -23,6 +23,7 @@ from ops.receipt_candidate_materialize import (
     freeze_receipt_candidate_snapshot,
     hash_receipt_candidate_snapshot,
     materialize_receipt_segment,
+    persist_official_calendar_raw,
 )
 from ops.receipt_product import (
     PRODUCT_ARTIFACT_FIELDS,
@@ -32,7 +33,12 @@ from ops.receipt_product import (
     open_stored_product_artifact,
     product_artifact_digest,
 )
-from storage.coverage_ledger import RequiredCoverageSegment
+from core.execution import close_as_of
+from storage.coverage_ledger import (
+    RequiredCoverageSegment,
+    declared_coverage_segments,
+    record_collection_receipt,
+)
 from storage.sqlite_store import SqliteStore
 from tests.receipt_test_support import (
     _SignedReceiptAuthority,
@@ -752,8 +758,14 @@ def test_committed_candidate_scope_pass_ignores_unsigned_later_receipt(
     assert observed["feature_generation"] == expected_feature_generation
     assert observed["catalog_generation"] == expected_catalog_generation
     assert observed["coverage_proof_digest"] == MISSING
-    assert observed["raw_proof_digest"] == MISSING
-    assert observed["receipt_proof_digest"] == MISSING
+    assert "equities_bars_daily/2022-09" in str(
+        result.get("coverage_proof_reason")
+    )
+    assert observed["raw_proof_digest"].startswith("sha256:")
+    assert observed["receipt_proof_digest"].startswith("sha256:")
+    assert observed["raw_proof_digest"] != source["receipt_runset_digest"]
+    assert observed["receipt_proof_digest"] != result["compiled_scope_proof_digest"]
+    assert hash_receipt_candidate_snapshot(store) == result["physical_db_digest"]
     manifest = build_receipt_native_ready_manifest(
         source,
         binding=binding,
@@ -765,6 +777,9 @@ def test_committed_candidate_scope_pass_ignores_unsigned_later_receipt(
         resolved_universe_digest=expected_resolved_universe_digest,
         feature_generation=expected_feature_generation,
         catalog_generation=expected_catalog_generation,
+        coverage_proof_digest=MISSING,
+        raw_proof_digest=observed["raw_proof_digest"],
+        receipt_proof_digest=observed["receipt_proof_digest"],
     )
     body = manifest.to_dict()
     assert result["receipt_native_manifest_digest"] == body["manifest_digest"]
@@ -805,6 +820,331 @@ def test_committed_candidate_scope_rejects_corrupted_backing(
     assert "receipt_native_manifest_digest" not in result
     assert result["snapshot_b0_status"] == "FAIL"
     assert result["snapshot_quality_digest"].startswith("sha256:")
+    store.close()
+
+
+def test_declared_coverage_segments_use_selector_windows_and_full_months() -> None:
+    from pit.scoped_selection import split_safety_interval_start
+
+    assert split_safety_interval_start("2022-10-20") == "2022-09-19"
+    warmup = declared_coverage_segments(
+        ("equities_bars_daily",),
+        lookback_start="2022-12-24",
+        period_end="2023-01-06",
+        selected_event_dates={},
+    )
+    assert [item.segment_id for item in warmup] == ["2022-12", "2023-01"]
+    assert warmup[0].segment_start == "2022-12-01"
+    assert warmup[0].segment_end == "2022-12-31"
+    assert warmup[1].segment_start == "2023-01-01"
+    assert warmup[1].segment_end == "2023-01-31"
+    bars = declared_coverage_segments(
+        ("equities_bars_daily",),
+        lookback_start="2022-12-24",
+        period_end="2023-01-06",
+        selected_event_dates={},
+        bar_split_interval_start="2022-09-19",
+    )
+    assert [item.segment_id for item in bars] == [
+        "2022-09",
+        "2022-10",
+        "2022-11",
+        "2022-12",
+        "2023-01",
+    ]
+    fins = declared_coverage_segments(
+        ("fins_summary",),
+        lookback_start="2022-12-24",
+        period_end="2023-02-14",
+        selected_event_dates={"fins_summary": frozenset({"2022-11-15"})},
+    )
+    assert [item.segment_id for item in fins] == [
+        "2022-11",
+        "2022-12",
+        "2023-01",
+        "2023-02",
+    ]
+    master = declared_coverage_segments(
+        ("equities_master",),
+        lookback_start="2022-12-24",
+        period_end="2023-01-06",
+        selected_event_dates={
+            "equities_master": frozenset({"2022-10-03", "2023-01-04"})
+        },
+    )
+    assert [item.segment_id for item in master] == ["2022-10", "2023-01"]
+
+
+def _canonical_month_calendar_raw(*, start: str, end: str) -> bytes:
+    from datetime import date, timedelta
+
+    cursor = date.fromisoformat(start)
+    stop = date.fromisoformat(end)
+    fixture_business_start = date(2022, 10, 3)
+    markets_start = date(2022, 12, 6)
+    rows = []
+    while cursor <= stop:
+        holiday = (
+            "1"
+            if cursor == fixture_business_start or cursor >= markets_start
+            else "0"
+        )
+        rows.append({"Date": cursor.isoformat(), "HolDiv": holiday})
+        cursor += timedelta(days=1)
+    return json.dumps({"data": rows}, separators=(",", ":")).encode("utf-8")
+
+
+def _issue_declared_segment(
+    store: SqliteStore,
+    *,
+    authority: _SignedReceiptAuthority,
+    segment: RequiredCoverageSegment,
+    run_id: int,
+    environment: str,
+    authority_instance_digest: str,
+) -> None:
+    from paper_runtime.ready_publication import canonical_digest
+    from tests.test_ready_policy_fail_closed import _scope_calendar_extras
+
+    structured = [
+        dict(row)
+        for row in store._conn.execute(  # noqa: SLF001
+            "SELECT * FROM jquants_records "
+            "WHERE source='jquants' AND dataset=? "
+            "ORDER BY natural_key",
+            (segment.dataset,),
+        ).fetchall()
+        if segment.segment_start <= str(row["event_time"])[:10] <= segment.segment_end
+    ]
+    if not structured:
+        raise AssertionError(
+            f"{segment.dataset}/{segment.segment_id} has no catalog rows"
+        )
+    raw_records = [json.loads(str(row["payload"])) for row in structured]
+    raw_page = json.dumps({"data": raw_records}, sort_keys=True).encode("utf-8")
+    product_bytes = canonical_product_artifact_bytes(structured)
+    extra_evidence = None
+    if segment.dataset == "equities_master":
+        calendar_raw = _canonical_month_calendar_raw(
+            start=segment.segment_start,
+            end=segment.segment_end,
+        )
+        extra_evidence = _scope_calendar_extras(
+            calendar_raw,
+            start=segment.segment_start,
+            end=segment.segment_end,
+        )
+        persist_official_calendar_raw(
+            store._conn,  # noqa: SLF001
+            body=calendar_raw,
+            expected_digest=extra_evidence["official_calendar_raw_body_digest"],
+        )
+    evidence = reconcile_test_evidence(
+        required=segment,
+        run_id=run_id,
+        raw_pages=[raw_page],
+        raw_records=raw_records,
+        structured_records=structured,
+        checked_at=CHECKED_AT,
+        structured_digest=product_artifact_digest(structured),
+        extra_evidence=extra_evidence,
+        environment=environment,
+        authority_instance_digest=authority_instance_digest,
+        include_master_calendar_digests=segment.dataset == "equities_master",
+        product_artifact_bytes=product_bytes,
+    )
+    record_collection_receipt(store._conn, authority.issue(evidence))  # noqa: SLF001
+    raw_manifest_digest = str(evidence.claims["raw_manifest_digest"])
+    operation_id = canonical_digest(
+        {
+            "operation": "canonical-month",
+            "dataset": segment.dataset,
+            "segment_id": segment.segment_id,
+        }
+    )
+    artifact_body = product_bytes.decode("utf-8")
+    store._conn.execute(  # noqa: SLF001
+        "INSERT INTO ingestion_run_log "
+        "(id,ran_at,source,runtime,status,detail,authority_operation_id) "
+        "VALUES (?,?,'jquants','receipt-evidence-authority','SUCCESS','{}',?)",
+        (run_id, CHECKED_AT, operation_id),
+    )
+    store._conn.execute(  # noqa: SLF001
+        "INSERT INTO raw_retention_manifests "
+        "(dataset,run_id,manifest_key,page_count,row_count,raw_bytes,"
+        "data_digest,completeness,created_at) "
+        "VALUES (?,?,?,?,?,?,?,'COMPLETE',?)",
+        (
+            segment.dataset,
+            run_id,
+            str(evidence.claims["raw_manifest_key"]),
+            1,
+            len(raw_records),
+            len(raw_page),
+            raw_manifest_digest,
+            CHECKED_AT,
+        ),
+    )
+    store._conn.execute(  # noqa: SLF001
+        "INSERT INTO receipt_product_materializations "
+        "(operation_id,run_id,source,dataset,segment_id,artifact_key,"
+        "artifact_digest,artifact_body,row_count,byte_count,manifest_key,"
+        "manifest_digest,raw_manifest_key,raw_manifest_digest,"
+        "raw_page_count,raw_row_count,raw_bytes,committed_at) "
+        "VALUES (?,?,'jquants',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            operation_id,
+            run_id,
+            segment.dataset,
+            segment.segment_id,
+            str(evidence.claims["artifact_key"]),
+            product_artifact_digest(structured),
+            artifact_body,
+            len(structured),
+            len(artifact_body.encode("utf-8")),
+            str(evidence.claims["manifest_key"]),
+            canonical_digest(
+                {"artifact_digest": product_artifact_digest(structured)}
+            ),
+            str(evidence.claims["raw_manifest_key"]),
+            raw_manifest_digest,
+            1,
+            len(raw_records),
+            len(raw_page),
+            CHECKED_AT,
+        ),
+    )
+
+
+def test_committed_candidate_canonical_months_prove_until_unselected_month_removed(
+    tmp_path: Path, receipt_ed25519_keys
+) -> None:
+    from paper_runtime.ready_publication import (
+        verify_committed_receipt_candidate_scope,
+    )
+    from paper_runtime.readiness_attestation import EXACT_FOUR_DATASET_IDS
+    from pit.scoped_selection import split_safety_interval_start
+    from research.ready_manifest import is_sha256_digest
+    from storage.receipt_crypto import (
+        PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS,
+        PRODUCTION_RECEIPT_ENVIRONMENT,
+    )
+    from tests.test_ready_policy_fail_closed import (
+        _daily_equity_bar,
+        _seed_exact_pit_scope,
+    )
+
+    db_path, binding = _seed_exact_pit_scope(tmp_path, receipt_ed25519_keys)
+    interval_start = split_safety_interval_start("2022-10-20")
+    assert interval_start == "2022-09-19"
+    planned = declared_coverage_segments(
+        EXACT_FOUR_DATASET_IDS,
+        lookback_start="2022-12-24",
+        period_end="2023-01-06",
+        selected_event_dates={
+            "fins_summary": frozenset(
+                {"2022-10-20", "2023-01-03", "2023-01-05"}
+            ),
+            "equities_master": frozenset(
+                {"2022-10-03", "2023-01-04", "2023-01-05", "2023-01-06"}
+            ),
+        },
+        bar_split_interval_start=interval_start,
+    )
+    assert [
+        item.segment_id
+        for item in planned
+        if item.dataset == "equities_bars_daily"
+    ] == ["2022-09", "2022-10", "2022-11", "2022-12", "2023-01"]
+    assert any(
+        item.dataset == "fins_summary" and item.segment_id == "2022-11"
+        for item in planned
+    )
+    store = SqliteStore(db_path)
+    for day, bar in (
+        (
+            "2022-09-20",
+            _daily_equity_bar(
+                "9999", "2022-09-20", close=100.0, morning=99.5, volume=1000.0
+            ),
+        ),
+        (
+            "2022-11-15",
+            _daily_equity_bar(
+                "9999", "2022-11-15", close=100.0, morning=99.5, volume=1000.0
+            ),
+        ),
+    ):
+        store.upsert(
+            "jquants_records",
+            normalize_generic(
+                [bar],
+                dataset="equities_bars_daily",
+                ingested_at=close_as_of(day),
+            ),
+        )
+    for disc_date, disc_no in (
+        ("2022-11-15", "disc-9999-nov"),
+        ("2022-12-15", "disc-9999-dec"),
+    ):
+        store.upsert(
+            "jquants_records",
+            normalize_generic(
+                [
+                    {
+                        "Code": "9999",
+                        "DiscDate": disc_date,
+                        "DiscTime": "08:00:00",
+                        "DiscNo": disc_no,
+                        "EPS": 1.0,
+                    }
+                ],
+                dataset="fins_summary",
+                ingested_at=f"{disc_date}T08:00:00+09:00",
+            ),
+        )
+    authority = _SignedReceiptAuthority(
+        signing_key=receipt_ed25519_keys.signing_key
+    )
+    for index, segment in enumerate(planned, start=10):
+        _issue_declared_segment(
+            store,
+            authority=authority,
+            segment=segment,
+            run_id=index,
+            environment=PRODUCTION_RECEIPT_ENVIRONMENT,
+            authority_instance_digest=PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS[
+                "production"
+            ],
+        )
+    commit_receipt_candidate(store)
+    proved = verify_committed_receipt_candidate_scope(
+        store,
+        binding=binding,
+        environment="production",
+    )
+    assert proved["compiled_scope_status"] == "PASS"
+    body = proved["receipt_native_manifest"]
+    assert is_sha256_digest(body["coverage_proof_digest"]), proved.get(
+        "coverage_proof_reason"
+    )
+    assert is_sha256_digest(body["raw_proof_digest"])
+    assert is_sha256_digest(body["receipt_proof_digest"])
+    assert body["coverage_proof_digest"] != body["raw_proof_digest"]
+    assert "coverage_proof_reason" not in proved
+    store._conn.execute(  # noqa: SLF001
+        "DELETE FROM collection_receipts "
+        "WHERE dataset='fins_summary' AND segment_id='2022-11'"
+    )
+    commit_receipt_candidate(store)
+    missing = verify_committed_receipt_candidate_scope(
+        store,
+        binding=binding,
+        environment="production",
+    )
+    assert missing["compiled_scope_status"] == "PASS"
+    assert missing["receipt_native_manifest"]["coverage_proof_digest"] == "MISSING"
+    assert "fins_summary/2022-11" in str(missing.get("coverage_proof_reason"))
     store.close()
 
 

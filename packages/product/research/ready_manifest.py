@@ -631,6 +631,9 @@ def build_receipt_native_ready_manifest(
     resolved_universe_digest: str = MISSING,
     feature_generation: str = MISSING,
     catalog_generation: str = MISSING,
+    coverage_proof_digest: str = MISSING,
+    raw_proof_digest: str = MISSING,
+    receipt_proof_digest: str = MISSING,
 ) -> ReadyManifest:
     """Serialize a receipt-native v2 ReadyManifest. Not live READY."""
 
@@ -668,9 +671,9 @@ def build_receipt_native_ready_manifest(
             ),
             "coverage_policy_version": coverage_policy_version,
             "coverage_policy_digest": coverage_policy_digest,
-            "coverage_proof_digest": MISSING,
-            "raw_proof_digest": MISSING,
-            "receipt_proof_digest": MISSING,
+            "coverage_proof_digest": proof_or_missing(coverage_proof_digest),
+            "raw_proof_digest": proof_or_missing(raw_proof_digest),
+            "receipt_proof_digest": proof_or_missing(receipt_proof_digest),
             "validation_proof_digest": proof_or_missing(validation_proof_digest),
             "b0_proof_digest": proof_or_missing(b0_proof_digest),
             "b4_proof_digest": proof_or_missing(b4_proof_digest),
