@@ -1,8 +1,12 @@
 """Focused replay compatibility for the retired strategy catalog."""
 from __future__ import annotations
 
+import pytest
+
 from research.catalog_compiler import assert_compiled_logic_id_sets
 from research.unique_logic import all_unique_logic_specs, load_catalog_specs
+
+pytestmark = pytest.mark.replay
 
 
 def test_replay_identity_matches_legacy_python_specs() -> None:
@@ -34,6 +38,7 @@ def test_combo_replay_row_round_trip_preserves_closed_fields() -> None:
         "positive_eps",
     }
     assert row.get("go") is not True
+    assert catalog_spec("not_a_real_logic_id_zzz") is None
 
 
 def test_legacy_themes_only_reference_replay_ids() -> None:

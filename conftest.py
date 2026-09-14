@@ -10,6 +10,10 @@
    and ``gethostbyname`` during test execution, not all DNS APIs.
    It does not cover collection or imports, separately exec'd processes, or
    native/Node/Worker runtimes.
+   A CLI ``-m`` replaces addopts ``-m``; it does not AND. Default addopts also
+   select ``not replay``. Explicit ``-m replay`` runs retired catalog
+   compatibility. Native CI spells complete non-live expressions so offline,
+   replay, and toolchain lanes stay disjoint.
 """
 
 from __future__ import annotations

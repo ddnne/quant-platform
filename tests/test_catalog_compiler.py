@@ -90,6 +90,7 @@ def test_replay_freeze_rejects_manifest_count_drift(tmp_path, monkeypatch) -> No
         assert_legacy_catalog_artifact_frozen()
 
 
+@pytest.mark.replay
 def test_surprise_with_flow_gate_is_not_flow_family() -> None:
     from research.catalog_family import classify_catalog_row
 

@@ -1081,7 +1081,11 @@ def test_authoritative_ci_dry_runs_test_harness_configs(
     commands = [r["command"] for r in recs]
     offline_pytest = [
         "python", "-m", "pytest", "-n", "2", "--dist=loadfile",
-        "-m", "not toolchain and not live", "tests/",
+        "-m", "not toolchain and not live and not replay", "tests/",
+    ]
+    replay_pytest = [
+        "python", "-m", "pytest", "-n", "2", "--dist=loadfile",
+        "-m", "replay and not toolchain and not live", "tests/",
     ]
     toolchain_pytest = [
         "python", "-m", "pytest", "-n", "2", "--dist=loadfile",
@@ -1090,10 +1094,11 @@ def test_authoritative_ci_dry_runs_test_harness_configs(
     pytest_invocations = [
         cmd for cmd in commands if cmd[:3] == ["python", "-m", "pytest"]
     ]
-    assert pytest_invocations == [offline_pytest, toolchain_pytest]
+    assert pytest_invocations == [offline_pytest, replay_pytest, toolchain_pytest]
     npm_ci = [i for i, cmd in enumerate(commands) if cmd == ["npm", "ci"]]
     assert len(npm_ci) == 2
-    assert commands.index(offline_pytest) < min(npm_ci)
+    assert commands.index(offline_pytest) < commands.index(replay_pytest)
+    assert commands.index(replay_pytest) < min(npm_ci)
     assert max(npm_ci) < commands.index(toolchain_pytest)
     git_recs = [r for r in recs if r["command"][0] == "git"]
     if fail_production:
