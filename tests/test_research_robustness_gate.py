@@ -68,26 +68,27 @@ def test_gate_fails_sign_disagreement():
     assert out["connected_to_ready"] is False
 
 
-def test_gate_pass_does_not_arm_ready():
-    # Gross well above 10bp so net remains majority +
+@pytest.mark.parametrize(
+    "gross",
+    (
+        (0.003, 0.0025, 0.002),
+        (-0.0005, -0.0003, -0.0008),
+    ),
+)
+def test_gate_pass_does_not_arm_ready(gross):
+    # Positive: gross well above 10bp so net remains majority +.
+    # Negative: consistent weak − majority after cost, still not READY.
     rows = [
         {
-            "period_id": "p1",
-            "gross_signed_mean_active": 0.003,
+            "period_id": period_id,
+            "gross_signed_mean_active": value,
             "n_active_positions": 50,
-        },
-        {
-            "period_id": "p2",
-            "gross_signed_mean_active": 0.0025,
-            "n_active_positions": 50,
-        },
-        {
-            "period_id": "p3",
-            "gross_signed_mean_active": 0.002,
-            "n_active_positions": 50,
-        },
+        }
+        for period_id, value in zip(("p1", "p2", "p3"), gross)
     ]
-    out = evaluate_research_robustness_gate(rows, signal_id="hyp")
+    out = evaluate_research_robustness_gate(
+        rows, signal_id="hyp", require_net_sign_majority=True
+    )
     assert out["passed"] is True
     assert out["cost_aware_passed"] is True
     assert out["ready_declared"] is False
