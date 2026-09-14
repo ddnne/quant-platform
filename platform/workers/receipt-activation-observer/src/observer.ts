@@ -161,20 +161,31 @@ async function requirePremiumEvidence(value: unknown): Promise<PremiumAuditEvide
   return evidence as PremiumAuditEvidence;
 }
 
-export async function collectPrivateJsdaReadiness(
-  env: ObserverEnv,
-): Promise<{
-  schema_version: "quant-platform-release-observation/v1";
+const MAX_JSDA_HEALTH_BYTES = 8 * 1024;
+
+export type JsdaReleaseObservation = {
+  schema_version: "quant-platform-release-observation/v2";
   collector: "private-jsda-health-ready/v1";
   transport: "private-service-binding";
   binding_name: "JSDA_INGESTION";
   endpoint: "/health/ready";
+  eligibility: "AUDIT_ONLY";
   http_status: number;
   exact_response_b64: string;
   exact_response_bytes: number;
   response_digest: string;
   exact_response_utf8: string;
-}> {
+  observer_source_sha: string;
+  observer_worker_version_id: string;
+  observer_worker_version_tag: string;
+  access_aud: string;
+};
+
+export async function collectPrivateJsdaReadiness(
+  env: ObserverEnv,
+  provenance: { sourceSha: string; versionId: string; versionTag: string },
+  accessAud: string,
+): Promise<JsdaReleaseObservation> {
   if (env.JSDA_INGESTION === undefined) {
     throw new Error("JSDA private Service Binding is unprovisioned");
   }
@@ -182,21 +193,61 @@ export async function collectPrivateJsdaReadiness(
     new Request("https://jsda-ingestion/health/ready", { method: "GET" }),
   );
   const bytes = new Uint8Array(await response.arrayBuffer());
-  const exactText = new TextDecoder("utf-8").decode(bytes);
+  if (bytes.byteLength === 0 || bytes.byteLength > MAX_JSDA_HEALTH_BYTES) {
+    throw new Error("JSDA health response is empty or oversized");
+  }
+  let exactText: string;
+  try {
+    exactText = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch {
+    throw new Error("JSDA health response is not UTF-8");
+  }
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   const responseDigest = `sha256:${[...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
   return {
-    schema_version: "quant-platform-release-observation/v1",
+    schema_version: "quant-platform-release-observation/v2",
     collector: "private-jsda-health-ready/v1",
     transport: "private-service-binding",
     binding_name: "JSDA_INGESTION",
     endpoint: "/health/ready",
+    eligibility: "AUDIT_ONLY",
     http_status: response.status,
     exact_response_b64: bytesToBase64(bytes),
     exact_response_bytes: bytes.byteLength,
     response_digest: responseDigest,
     exact_response_utf8: exactText,
+    observer_source_sha: provenance.sourceSha,
+    observer_worker_version_id: provenance.versionId,
+    observer_worker_version_tag: provenance.versionTag,
+    access_aud: accessAud,
   };
+}
+
+export async function handlePrivateJsdaHealthReady(
+  request: Request,
+  env: ObserverEnv,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  if (request.method !== "GET") return closedError(405, "GET_REQUIRED");
+  if (ctx.access === undefined || typeof ctx.access.aud !== "string" ||
+      ctx.access.aud.length === 0) {
+    return closedError(403, "ACCESS_REQUIRED");
+  }
+  if (env.ENVIRONMENT === "disabled") {
+    return closedError(503, "OBSERVER_NOT_ACTIVE");
+  }
+  try {
+    const provenance = observerProvenance(env);
+    const observation = await collectPrivateJsdaReadiness(
+      env, provenance, ctx.access.aud,
+    );
+    return new Response(JSON.stringify(observation), {
+      status: 200,
+      headers: responseHeaders(),
+    });
+  } catch {
+    return closedError(503, "JSDA_COLLECTOR_UNAVAILABLE");
+  }
 }
 
 export async function handleReceiptActivationObserverRequest(

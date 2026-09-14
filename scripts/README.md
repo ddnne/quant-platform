@@ -136,11 +136,13 @@ Phase 6 hardening utilities:
   `--rollback` require the original run ID. The small local create-only control
   intent is crash-recovery cache only; remote D1 plus live Cloudflare state are
   authoritative. Whole-file D1 exports are not part of this path.
-- `build_release_evidence.py` — **publication PENDING / fail-closed**. Caller
-  JSON is untrusted. Authenticated collection/publication implementation is
-  missing (not merely unprovisioned keys). A6 remains OPEN. The observer has a
-  private JSDA `/health/ready` Service Binding collector in source; that is not
-  a publication writer or an authenticated client on this CLI path.
+- `build_release_evidence.py` — authenticated **STAGING JSDA AUDIT_ONLY**
+  intake. Caller JSON is untrusted. The pinned all-P0 ledger gate runs first.
+  Digest-named local output is `STAGED_LOCAL_NOT_PUBLISHED` /
+  `release_allowed=false`, not A6 closure. Eventual publication is a GitHub
+  Release asset plus independent exact-byte readback after immutability is
+  enabled and operational gates pass; GitHub immutable releases are currently
+  disabled. A6 remains OPEN.
 
 Rollback-only production backup example (timestamps and final SHA must be the
 observed values):
@@ -158,8 +160,11 @@ uv run python scripts/encrypt_d1_backup.py encrypt \
 
 The successful JSON output is a path-free rollback-backup candidate object.
 Re-run `verify` against the encrypted artifact, but do not treat that JSON as
-release evidence or publish a release manifest: authenticated
-collection/publication implementation is missing, and A6 remains OPEN.
+release evidence: it is private/encrypted backup, not a public release
+manifest. Bounded STAGING JSDA AUDIT_ONLY intake exists in
+`build_release_evidence.py`; full remote publication and global (staging and
+production) observations are still missing. GitHub Release immutability was
+disabled as of 2026-09-14 JST. A6 remains OPEN.
 - Paper CLIs (`run_paper_once.py`, `run_agents_paper_once.py`, `rebuild_paper_index.py`) are **deleted**. Paper runtime stays in `packages/research_runtime/paper_runtime/`.
 - `python -m mcp_servers.quant_data --list-tools` — Quant Data Access MCP smoke.
 - `export_ops_projection.py` — verified local Coverage/READY/B0 metadataを bounded
