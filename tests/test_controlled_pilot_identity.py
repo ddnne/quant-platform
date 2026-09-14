@@ -416,7 +416,6 @@ def test_personal_paper_service_rejects_paper_lifecycle(tmp_path) -> None:
     config = PaperRunConfig(
         start="2026-01-01",
         end="2026-01-02",
-        db_path=tmp_path / "missing.sqlite",
         lifecycle=Lifecycle.PAPER,
     )
     with pytest.raises(PersonalPaperExecutionRejected, match="DRAFT-only"):

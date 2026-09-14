@@ -16,7 +16,12 @@ from execution.personal_paper_service import (
     PersonalPaperExecutionService,
 )
 from paper_runtime import data_snapshot_id
+from paper_runtime.personal_draft_bind import (
+    run_bound_personal_paper,
+)
 from paper_runtime.personal_prepared_frame import _personal_prepared_frame_scope
+from pit._draft_storage import draft_sqlite_path
+from pit.personal_research_view import OfflineFixtureDataView, SnapshotIdentity
 from research.universe_contract import ResolvedUniverseMembership
 from strategies.paper import Lifecycle, PaperRunConfig, run_paper
 from strategies.spec import FeatureRef, interpret_strategy_spec, iter_feature_refs
@@ -57,32 +62,53 @@ def _case(tmp_path):
     config = PaperRunConfig(
         start=days[0],
         end=days[-1],
-        db_path=db_path,
         universe=universe,
         lookback_days=30,
         lifecycle=Lifecycle.DRAFT,
     )
-    return spec, config, data_snapshot_id(db_path), iter_feature_refs(spec)
+    snapshot_id = data_snapshot_id(db_path)
+    view = OfflineFixtureDataView.bind(
+        db_path,
+        artifact_root=tmp_path / "personal-paper-artifacts",
+        decision_cutoff="session_close",
+    )
+    view.bind_snapshot_identity(
+        SnapshotIdentity(
+            snapshot_id=snapshot_id,
+            logical_data_snapshot_id=snapshot_id,
+            database_sha256=snapshot_id,
+            required_datasets=("equities_bars_daily",),
+            period_start=days[0],
+            period_end=days[-1],
+            closure_digests=("sha256:" + "0" * 64,),
+            manifest={},
+        )
+    )
+    return spec, config, snapshot_id, iter_feature_refs(spec), view, db_path
 
 
-def _execute(service, spec, config, snapshot_id, refs):
+def _execute(service, spec, config, snapshot_id, refs, view):
     return service.execute(
         spec,
         config,
         expected_snapshot_id=snapshot_id,
         approved_feature_refs=refs,
+        view=view,
     )
 
 
 def test_personal_service_executes_exact_draft_against_pinned_snapshot(tmp_path):
-    spec, config, snapshot_id, refs = _case(tmp_path)
+    spec, config, snapshot_id, refs, view, _db_path = _case(tmp_path)
 
     result = _execute(
-        PersonalPaperExecutionService(), spec, config, snapshot_id, refs
+        PersonalPaperExecutionService(), spec, config, snapshot_id, refs, view
     )
 
     assert result.lifecycle is Lifecycle.DRAFT
     assert result.reproducibility["data_snapshot_id"] == snapshot_id
+    assert "db_path" not in result.reproducibility
+    assert "db_path" not in result.backtest.metadata
+    assert result.reproducibility.get("db_locator") == "logical_data_snapshot_id"
     assert result.reproducibility["feature_versions"] == {
         ref.id: ref.version for ref in refs
     }
@@ -92,10 +118,15 @@ def test_personal_service_reuses_one_pit_connection_without_changing_result(
     tmp_path,
     monkeypatch,
 ):
-    spec, config, snapshot_id, refs = _case(tmp_path)
-    baseline = query_module._scoped_read_connection(config.db_path)
+    spec, config, snapshot_id, refs, view, db_path = _case(tmp_path)
+    bound_path = draft_sqlite_path(view)
+    baseline = query_module._scoped_read_connection(bound_path)
     assert baseline is None
-    expected = run_paper(interpret_strategy_spec(spec), config, store=None)
+    expected = run_paper(
+        interpret_strategy_spec(spec),
+        replace(config, db_path=db_path),
+        store=None,
+    )
 
     real_connect = query_module.connect_readonly
     connection_count = 0
@@ -106,19 +137,43 @@ def test_personal_service_reuses_one_pit_connection_without_changing_result(
         return real_connect(db_path)
 
     monkeypatch.setattr(query_module, "connect_readonly", counting_connect)
-    actual = _execute(PersonalPaperExecutionService(), spec, config, snapshot_id, refs)
+    actual = _execute(
+        PersonalPaperExecutionService(), spec, config, snapshot_id, refs, view
+    )
 
     assert connection_count == 1
-    assert actual == expected
-    assert query_module._scoped_read_connection(config.db_path) is None
+    expected_pathless = replace(
+        expected,
+        reproducibility={
+            **{
+                key: value
+                for key, value in expected.reproducibility.items()
+                if key != "db_path"
+            },
+            "db_locator": "logical_data_snapshot_id",
+        },
+        backtest=replace(
+            expected.backtest,
+            metadata={
+                **{
+                    key: value
+                    for key, value in expected.backtest.metadata.items()
+                    if key != "db_path"
+                },
+                "db_locator": "logical_data_snapshot_id",
+            },
+        ),
+    )
+    assert actual == expected_pathless
+    assert query_module._scoped_read_connection(bound_path) is None
 
 
 def test_personal_service_scopes_only_run_paper_not_snapshot_verification(
     tmp_path,
     monkeypatch,
 ):
-    spec, config, snapshot_id, refs = _case(tmp_path)
-    from execution import personal_paper_service as module
+    spec, config, snapshot_id, refs, view, _db_path = _case(tmp_path)
+    from paper_runtime import personal_draft_bind as module
 
     events: list[tuple[str, bool]] = []
     active = False
@@ -148,7 +203,9 @@ def test_personal_service_scopes_only_run_paper_not_snapshot_verification(
     monkeypatch.setattr(module, "data_snapshot_id", observed_snapshot_id)
     monkeypatch.setattr(module, "run_paper", observed_run_paper)
 
-    _execute(PersonalPaperExecutionService(), spec, config, snapshot_id, refs)
+    _execute(
+        PersonalPaperExecutionService(), spec, config, snapshot_id, refs, view
+    )
 
     assert events == [
         ("snapshot", False),
@@ -160,15 +217,36 @@ def test_personal_service_scopes_only_run_paper_not_snapshot_verification(
 
 
 def test_personal_service_rejects_non_draft(tmp_path):
-    spec, config, snapshot_id, refs = _case(tmp_path)
+    spec, config, snapshot_id, refs, view, _db_path = _case(tmp_path)
     config = replace(config, lifecycle=Lifecycle.PAPER)
 
     with pytest.raises(PersonalPaperExecutionRejected, match="DRAFT-only"):
-        _execute(PersonalPaperExecutionService(), spec, config, snapshot_id, refs)
+        _execute(
+            PersonalPaperExecutionService(), spec, config, snapshot_id, refs, view
+        )
+    with pytest.raises(PermissionError, match="DRAFT-only"):
+        run_bound_personal_paper(
+            spec,
+            config,
+            view=view,
+            expected_snapshot_id=snapshot_id,
+        )
+
+
+def test_personal_service_rejects_database_path(tmp_path):
+    spec, config, snapshot_id, refs, view, db_path = _case(tmp_path)
+    config = replace(config, db_path=db_path)
+
+    with pytest.raises(
+        PersonalPaperExecutionRejected, match="does not accept a database path"
+    ):
+        _execute(
+            PersonalPaperExecutionService(), spec, config, snapshot_id, refs, view
+        )
 
 
 def test_personal_service_rejects_initial_snapshot_mismatch(tmp_path):
-    spec, config, _snapshot_id, refs = _case(tmp_path)
+    spec, config, _snapshot_id, refs, view, _db_path = _case(tmp_path)
 
     with pytest.raises(
         PersonalPaperExecutionRejected,
@@ -180,13 +258,14 @@ def test_personal_service_rejects_initial_snapshot_mismatch(tmp_path):
             config,
             "sha256:" + "0" * 64,
             refs,
+            view,
         )
 
 
 def test_personal_service_rejects_miskeyed_prepared_frame(tmp_path):
-    spec, config, snapshot_id, refs = _case(tmp_path)
+    spec, config, snapshot_id, refs, view, _db_path = _case(tmp_path)
     with _personal_prepared_frame_scope(
-        db_path=config.db_path,
+        db_path=draft_sqlite_path(view),
         snapshot_id="sha256:" + "0" * 64,
     ):
         with pytest.raises(
@@ -199,23 +278,26 @@ def test_personal_service_rejects_miskeyed_prepared_frame(tmp_path):
                 config,
                 snapshot_id,
                 refs,
+                view,
             )
 
 
 def test_personal_service_rejects_snapshot_tamper_after_run(tmp_path, monkeypatch):
-    spec, config, snapshot_id, refs = _case(tmp_path)
+    spec, config, snapshot_id, refs, view, _db_path = _case(tmp_path)
     observed = iter((snapshot_id, "sha256:" + "f" * 64))
     monkeypatch.setattr(
-        "execution.personal_paper_service.data_snapshot_id",
+        "paper_runtime.personal_draft_bind.data_snapshot_id",
         lambda _path: next(observed),
     )
 
     with pytest.raises(PersonalPaperExecutionRejected, match="changed during"):
-        _execute(PersonalPaperExecutionService(), spec, config, snapshot_id, refs)
+        _execute(
+            PersonalPaperExecutionService(), spec, config, snapshot_id, refs, view
+        )
 
 
 def test_personal_service_rejects_approved_feature_ref_mismatch(tmp_path):
-    spec, config, snapshot_id, refs = _case(tmp_path)
+    spec, config, snapshot_id, refs, view, _db_path = _case(tmp_path)
     mismatched = FeatureRef(
         id=refs[0].id,
         version="9.9.9",
@@ -232,12 +314,13 @@ def test_personal_service_rejects_approved_feature_ref_mismatch(tmp_path):
             config,
             snapshot_id,
             (mismatched,),
+            view,
         )
 
 
 def test_personal_service_rejects_consumed_feature_mismatch(tmp_path, monkeypatch):
-    spec, config, snapshot_id, refs = _case(tmp_path)
-    from execution import personal_paper_service as module
+    spec, config, snapshot_id, refs, view, _db_path = _case(tmp_path)
+    from paper_runtime import personal_draft_bind as module
 
     real_run_paper = module.run_paper
 
@@ -253,15 +336,17 @@ def test_personal_service_rejects_consumed_feature_mismatch(tmp_path, monkeypatc
         PersonalPaperExecutionRejected,
         match="FeatureRefs do not match",
     ):
-        _execute(PersonalPaperExecutionService(), spec, config, snapshot_id, refs)
+        _execute(
+            PersonalPaperExecutionService(), spec, config, snapshot_id, refs, view
+        )
 
 
 @pytest.mark.parametrize("tamper", ["identity", "body"])
 def test_personal_service_rejects_strategy_result_tamper(
     tmp_path, monkeypatch, tamper
 ):
-    spec, config, snapshot_id, refs = _case(tmp_path)
-    from execution import personal_paper_service as module
+    spec, config, snapshot_id, refs, view, _db_path = _case(tmp_path)
+    from paper_runtime import personal_draft_bind as module
 
     real_run_paper = module.run_paper
 
@@ -285,7 +370,9 @@ def test_personal_service_rejects_strategy_result_tamper(
         PersonalPaperExecutionRejected,
         match="exact StrategySpec",
     ):
-        _execute(PersonalPaperExecutionService(), spec, config, snapshot_id, refs)
+        _execute(
+            PersonalPaperExecutionService(), spec, config, snapshot_id, refs, view
+        )
 
 
 @pytest.mark.parametrize(
@@ -295,8 +382,8 @@ def test_personal_service_rejects_strategy_result_tamper(
 def test_personal_service_rejects_universe_result_tamper(
     tmp_path, monkeypatch, field
 ):
-    spec, config, snapshot_id, refs = _case(tmp_path)
-    from execution import personal_paper_service as module
+    spec, config, snapshot_id, refs, view, _db_path = _case(tmp_path)
+    from paper_runtime import personal_draft_bind as module
 
     real_run_paper = module.run_paper
 
@@ -312,16 +399,20 @@ def test_personal_service_rejects_universe_result_tamper(
         PersonalPaperExecutionRejected,
         match="resolved daily universe",
     ):
-        _execute(PersonalPaperExecutionService(), spec, config, snapshot_id, refs)
+        _execute(
+            PersonalPaperExecutionService(), spec, config, snapshot_id, refs, view
+        )
 
 
 @pytest.mark.parametrize("universe", [None, ("1332", "8697")])
 def test_personal_service_requires_resolved_daily_universe(tmp_path, universe):
-    spec, config, snapshot_id, refs = _case(tmp_path)
+    spec, config, snapshot_id, refs, view, _db_path = _case(tmp_path)
     config = replace(config, universe=universe)
 
     with pytest.raises(
         PersonalPaperExecutionRejected,
         match="resolved daily universe",
     ):
-        _execute(PersonalPaperExecutionService(), spec, config, snapshot_id, refs)
+        _execute(
+            PersonalPaperExecutionService(), spec, config, snapshot_id, refs, view
+        )

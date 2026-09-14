@@ -126,7 +126,11 @@
     "3_dependency_scope": {
       "status": "source_chain_present_not_live",
       "notes": "Caller chain on dad020: packages/product/research/dependency_closure.py DatasetDependencyScope; receipt_candidate_job.py pit-dependency-scope sidecar; receipt_native_ready_publication.ts proof_digest bind; personal_research_service.py CompiledControlledSelection; pit/compiled_dependency_scope.py select. Source-chain-present, not live B0/READY certification. PR137 remains HELD.",
-      "scope": "existence_and_binding_evidence_only"
+      "scope": "existence_and_binding_evidence_only",
+      "personal_paper_path_session": {
+        "status": "source_applied_review_pending",
+        "notes": "Product Personal Paper no longer receives sqlite path or owns read-session; paper_runtime bind pins snapshot/prepared-frame and returns logical db_locator. Existing _portable_paper_document already pops both db_path fields and sets db_locator=logical_data_snapshot_id, so serialized artifact/experiment identity is unchanged. Not merge, native CI, or rollout. Remaining req3: ready_publication/personal_snapshot market SQL ownership; upper-plane import-graph enforcement. Prior HOLDs unchanged."
+      }
     },
     "4_receipt_to_ready_trader": {
       "status": "source_chain_present_not_live",

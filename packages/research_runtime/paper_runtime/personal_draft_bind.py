@@ -9,14 +9,20 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from dataclasses import replace
 from typing import Any
 
-from paper_runtime.personal_prepared_frame import _personal_prepared_frame_scope
+from paper_runtime.personal_prepared_frame import (
+    _active_personal_prepared_frame,
+    _personal_prepared_frame_scope,
+)
+from paper_runtime.personal_read_session import _personal_paper_read_session
 from paper_runtime.personal_snapshot import (
     PersonalSnapshot,
     materialize_personal_snapshot,
     verify_personal_snapshot,
 )
+from paper_runtime.snapshot_identity import data_snapshot_id
 from pit._draft_storage import (
     activate_prepared_sqlite,
     draft_artifact_root,
@@ -27,8 +33,8 @@ from pit.personal_research_view import (
     PersonalResearchViewError,
     SnapshotIdentity,
 )
-from strategies.paper import PaperRunConfig, PaperRunResult
-from strategies.spec import StrategySpec, iter_feature_refs
+from strategies.paper import Lifecycle, PaperRunConfig, PaperRunResult, run_paper
+from strategies.spec import StrategySpec, interpret_strategy_spec, iter_feature_refs
 
 
 def prepare_draft_snapshot(
@@ -97,6 +103,76 @@ def prepared_frame_scope(view: PersonalResearchDataView) -> Iterator[None]:
         yield
 
 
+def _without_physical_db_path(result: PaperRunResult) -> PaperRunResult:
+    reproduction = dict(result.reproducibility)
+    reproduction.pop("db_path", None)
+    reproduction["db_locator"] = "logical_data_snapshot_id"
+    metadata = dict(result.backtest.metadata)
+    metadata.pop("db_path", None)
+    metadata["db_locator"] = "logical_data_snapshot_id"
+    return replace(
+        result,
+        reproducibility=reproduction,
+        backtest=replace(result.backtest, metadata=metadata),
+    )
+
+
+def run_bound_personal_paper(
+    spec: StrategySpec,
+    config: PaperRunConfig,
+    *,
+    view: PersonalResearchDataView,
+    expected_snapshot_id: str,
+) -> PaperRunResult:
+    """Pin, session, and run one DRAFT paper against a bound view."""
+
+    if type(config) is not PaperRunConfig:
+        raise RuntimeError("personal paper execution requires an exact PaperRunConfig")
+    if config.lifecycle is not Lifecycle.DRAFT:
+        raise PermissionError(
+            "local paper runtime is DRAFT-only; controlled execution requires "
+            "Cloudflare/READY evidence (PENDING: CONTROLLED_AUTHORITY_UNPROVISIONED)"
+        )
+    if config.db_path is not None:
+        raise RuntimeError("personal paper execution does not accept a database path")
+    if not isinstance(view, PersonalResearchDataView):
+        raise RuntimeError(
+            "personal paper execution requires a bound PersonalResearchDataView"
+        )
+    db_path = draft_sqlite_path(view)
+    try:
+        before = data_snapshot_id(db_path)
+    except (FileNotFoundError, RuntimeError) as exc:
+        raise RuntimeError(str(exc) or "database snapshot is unavailable") from exc
+    if before != expected_snapshot_id:
+        raise RuntimeError("database snapshot does not match expected_snapshot_id")
+    prepared_frame = _active_personal_prepared_frame(db_path)
+    if (
+        prepared_frame is not None
+        and prepared_frame.snapshot_id != expected_snapshot_id
+    ):
+        raise RuntimeError(
+            "personal prepared frame snapshot does not match expected_snapshot_id"
+        )
+    strategy = interpret_strategy_spec(spec)
+    bound = replace(config, db_path=db_path)
+    with _personal_paper_read_session(db_path):
+        result = run_paper(strategy, bound, store=None)
+    try:
+        after = data_snapshot_id(db_path)
+    except (FileNotFoundError, RuntimeError) as exc:
+        raise RuntimeError(str(exc) or "database snapshot is unavailable") from exc
+    if after != expected_snapshot_id:
+        raise RuntimeError(
+            "database snapshot changed during personal paper execution"
+        )
+    if type(result) is not PaperRunResult:
+        raise RuntimeError(
+            "personal paper execution returned a noncanonical DRAFT result"
+        )
+    return _without_physical_db_path(result)
+
+
 def execute_personal_draft(
     executor: Any,
     spec: StrategySpec,
@@ -121,7 +197,6 @@ def execute_personal_draft(
     config = PaperRunConfig(
         start=period[0],
         end=period[1],
-        db_path=draft_sqlite_path(view),
         universe=universe,
         execution_mode=execution_mode,
         cost_bps=cost_bps,
@@ -140,6 +215,7 @@ def execute_personal_draft(
         config,
         expected_snapshot_id=identity.logical_data_snapshot_id,
         approved_feature_refs=iter_feature_refs(spec),
+        view=view,
     )
 
 
@@ -151,5 +227,6 @@ __all__ = [
     "execute_personal_draft",
     "prepare_draft_snapshot",
     "prepared_frame_scope",
+    "run_bound_personal_paper",
     "verify_draft_snapshot",
 ]
