@@ -24,6 +24,7 @@ from paper_runtime import (
     list_ready_snapshots,
 )
 from paper_runtime.snapshot import _publish_ready_snapshot
+from pit.ready_evidence import ReadyLedgerSession
 from research.research_data_profile import load_core_profile, official_mode
 from selection.budget_ledger import MassResearchDisabledError
 from storage.coverage_ledger import (
@@ -256,12 +257,12 @@ def test_ready_source_run_stays_jquants_and_jsda_watermark_comes_from_receipts(
         (today,),
     )
     selected, _, validations = snapshot_module._latest_complete_run(  # noqa: SLF001
-        store._conn, ("equities_bars_daily",)  # noqa: SLF001
+        ReadyLedgerSession(store._conn), ("equities_bars_daily",)  # noqa: SLF001
     )
     assert selected == run_id and len(validations) == 1
 
     watermarks = snapshot_module._watermarks_for(  # noqa: SLF001
-        store._conn,  # noqa: SLF001
+        ReadyLedgerSession(store._conn),  # noqa: SLF001
         ("equities_bars_daily", "jsda_tokyo_repo_rates"),
         [{
             "dataset": "jsda_tokyo_repo_rates",

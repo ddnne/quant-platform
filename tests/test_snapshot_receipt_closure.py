@@ -204,8 +204,7 @@ def test_persisted_coverage_proof_is_canonical_immutable_and_policy_eligible(
     assert capability.source_generation == capability.applied_generation == 7
     item = _coverage_item(
         collect_typed_evidence(
-            conn,
-            store.path,
+            ReadyLedgerSession(conn),
             (_DATASET,),
             build_id=_BUILD_ID,
             coverage_proof_id=proof_id,
@@ -509,8 +508,7 @@ def test_persisted_coverage_proof_rejects_tampered_unknown_and_stale_ids(
         )
     assert _coverage_item(
         collect_typed_evidence(
-            conn,
-            store.path,
+            ReadyLedgerSession(conn),
             (_DATASET,),
             build_id=_BUILD_ID,
             coverage_proof_id=proof_id,

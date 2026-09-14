@@ -17,7 +17,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterator, NoReturn
-from urllib.parse import quote
 
 if TYPE_CHECKING:
     from paper_runtime.snapshot import ReadySnapshot
@@ -199,69 +198,6 @@ def _read_immutable_regular_file(path: Path, *, label: str) -> bytes:
     return raw
 
 
-def _open_pinned_sqlite(pinned: _PinnedRegularFile) -> sqlite3.Connection:
-    """Open SQLite through the already-pinned inode, never through its name."""
-
-    descriptor_paths = (
-        Path(f"/dev/fd/{pinned.fd}"),
-        Path(f"/proc/self/fd/{pinned.fd}"),
-    )
-    descriptor_path = next(
-        (candidate for candidate in descriptor_paths if candidate.exists()),
-        None,
-    )
-    if descriptor_path is None:
-        raise RuntimeError("READY descriptor-backed SQLite access is unavailable")
-    uri = "file:" + quote(str(descriptor_path)) + "?mode=ro&immutable=1"
-    try:
-        conn = sqlite3.connect(uri, uri=True)
-    except sqlite3.Error as exc:
-        raise RuntimeError("READY descriptor-backed SQLite open failed") from exc
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def _embedded_research_manifest(
-    conn: sqlite3.Connection,
-    snapshot_id: str,
-    *,
-    expected_format: str,
-) -> dict[str, object]:
-    """Load the publisher-retained manifest from the immutable artifact.
-
-    The external manifest and publication marker are replace-last discovery
-    documents, not independent signing authorities.  Production readiness
-    signs the artifact digest, so the exact embedded copy is the authority
-    boundary for every outer field, including volatile ordering fields such as
-    ``committed_at``.
-    """
-    try:
-        rows = conn.execute(
-            "SELECT format, manifest_json FROM local_snapshot_manifests "
-            "WHERE snapshot_id=?",
-            (snapshot_id,),
-        ).fetchall()
-    except sqlite3.Error as exc:
-        raise RuntimeError(
-            "READY snapshot has no readable embedded research manifest"
-        ) from exc
-    if len(rows) != 1 or rows[0][0] != expected_format:
-        raise RuntimeError(
-            "READY snapshot embedded research manifest identity is invalid"
-        )
-    try:
-        embedded = json.loads(rows[0][1])
-    except (TypeError, json.JSONDecodeError) as exc:
-        raise RuntimeError(
-            "READY snapshot embedded research manifest is invalid JSON"
-        ) from exc
-    if not isinstance(embedded, dict):
-        raise RuntimeError(
-            "READY snapshot embedded research manifest is not an object"
-        )
-    return embedded
-
-
 def _describe_snapshot_for_scope(
     snapshot_dir: str | Path,
     snapshot_id: str,
@@ -274,7 +210,6 @@ def _describe_snapshot_for_scope(
         ReadySnapshot,
         _artifact_stem,
         _canonical_digest,
-        _data_snapshot_id_from_open_connection,
         _research_manifest_digest,
         _research_manifest_id,
         RESEARCH_SNAPSHOT_PUBLICATION_FORMAT,
@@ -367,27 +302,25 @@ def _describe_snapshot_for_scope(
         artifact_digest = _hash_pinned_file(artifact)
         if artifact_digest != publication.get("artifact_digest"):
             raise RuntimeError("READY snapshot artifact digest mismatch")
-        artifact_conn = _open_pinned_sqlite(artifact)
-        try:
-            embedded_manifest = _embedded_research_manifest(
-                artifact_conn,
-                snapshot_id,
-                expected_format=RESEARCH_SNAPSHOT_MANIFEST_FORMAT,
+        from pit.ready_evidence import read_pinned_ready_artifact_facts
+
+        embedded_manifest, data_snapshot_id = read_pinned_ready_artifact_facts(
+            artifact.fd,
+            snapshot_id=snapshot_id,
+            expected_format=RESEARCH_SNAPSHOT_MANIFEST_FORMAT,
+            require_data_snapshot_id=publication_scope == "PRODUCTION",
+        )
+        if embedded_manifest != manifest:
+            raise RuntimeError(
+                "external READY snapshot manifest does not match embedded manifest"
             )
-            if embedded_manifest != manifest:
-                raise RuntimeError(
-                    "external READY snapshot manifest does not match embedded manifest"
-                )
-            if (
-                publication_scope == "PRODUCTION"
-                and _data_snapshot_id_from_open_connection(artifact_conn)
-                != snapshot_id
-            ):
-                raise RuntimeError(
-                    "embedded snapshot manifest does not match sidecar"
-                )
-        finally:
-            artifact_conn.close()
+        if (
+            publication_scope == "PRODUCTION"
+            and data_snapshot_id != snapshot_id
+        ):
+            raise RuntimeError(
+                "embedded snapshot manifest does not match sidecar"
+            )
 
         attestation_name = publication.get("readiness_attestation")
         attestation_digest = publication.get("readiness_attestation_digest")
@@ -661,6 +594,8 @@ def _open_fixture_snapshot_connection(
 ) -> sqlite3.Connection:
     """Reopen and transfer one verified test-fixture inode to SQLite."""
 
+    from pit.ready_evidence import open_sqlite_from_pinned_fd
+
     conn: sqlite3.Connection | None = None
     try:
         with _open_immutable_regular_file(
@@ -677,7 +612,7 @@ def _open_fixture_snapshot_connection(
             # alive. Its own descriptor remains on the pinned inode after the
             # context closes. A final hash and fstat reject mutation or rename
             # during descriptor transfer.
-            conn = _open_pinned_sqlite(artifact)
+            conn = open_sqlite_from_pinned_fd(artifact.fd)
             if _hash_pinned_file(artifact) != ready.artifact_digest:
                 raise RuntimeError(f"{label} changed during SQLite open")
         return conn

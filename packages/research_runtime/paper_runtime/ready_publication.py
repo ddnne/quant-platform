@@ -700,7 +700,6 @@ def verify_committed_receipt_candidate_scope(
         freeze_receipt_candidate_snapshot,
         hash_receipt_candidate_snapshot,
     )
-    from storage.coverage import measure_receipt_snapshot_quality
     from storage.sqlite_store import SqliteStore
 
     if type(store) is not SqliteStore:
@@ -729,8 +728,8 @@ def verify_committed_receipt_candidate_scope(
         "compiled_scope_kind": RECEIPT_CANDIDATE_SCOPE_DIAGNOSTIC_KIND,
         "physical_db_digest": physical_digest,
     }
-    try:
-        with compiled_scope_proof_session_from_store(store) as session:
+    with compiled_scope_proof_session_from_store(store) as session:
+        try:
             evidence, observed_through, runset_digest, proof_scope = (
                 _prove_exact_four_compiled_scope(
                     session,
@@ -775,23 +774,18 @@ def verify_committed_receipt_candidate_scope(
                     if key != "proof_digest"
                 },
             }
-    except (MassResearchDisabledError, PitError, sqlite3.Error) as exc:
-        compiled = {
-            "compiled_scope_status": "FAIL",
-            "compiled_scope_kind": RECEIPT_CANDIDATE_SCOPE_DIAGNOSTIC_KIND,
-            "compiled_scope_error": str(exc),
-            "physical_db_digest": physical_digest,
-        }
-    if hash_receipt_candidate_snapshot(store) != physical_digest:
-        raise MassResearchDisabledError(
-            "physical DB digest does not match the prepared snapshot"
+        except (MassResearchDisabledError, PitError, sqlite3.Error) as exc:
+            compiled = {
+                "compiled_scope_status": "FAIL",
+                "compiled_scope_kind": RECEIPT_CANDIDATE_SCOPE_DIAGNOSTIC_KIND,
+                "compiled_scope_error": str(exc),
+                "physical_db_digest": physical_digest,
+            }
+        measured = session.measure_receipt_snapshot_quality(
+            period_start=period_start,
+            period_end=period_end,
+            required_datasets=binding.required_datasets,
         )
-    measured = measure_receipt_snapshot_quality(
-        store.path,
-        period_start=period_start,
-        period_end=period_end,
-        required_datasets=binding.required_datasets,
-    )
     if hash_receipt_candidate_snapshot(store) != physical_digest:
         raise MassResearchDisabledError(
             "physical DB digest does not match the prepared snapshot"

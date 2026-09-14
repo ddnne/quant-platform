@@ -7,9 +7,7 @@ The private runtime publisher must refuse READY transition without policy PASS.
 from __future__ import annotations
 
 import json
-import sqlite3
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
 
 from paper_runtime.coherence import CoherenceGateResult, check_ready_coherence
@@ -219,8 +217,7 @@ class ReadyEvidenceBundle:
 
 
 def collect_typed_evidence(
-    conn: sqlite3.Connection,
-    db_path: str | Path,
+    session: ReadyLedgerSession,
     required_datasets: Sequence[str],
     *,
     run_id: int | None = None,
@@ -228,8 +225,9 @@ def collect_typed_evidence(
     coverage_proof_id: object,
 ) -> list[TypedReadyEvidence]:
     """Collect production evidence; absent ledgers never receive substitutes."""
+    if type(session) is not ReadyLedgerSession:
+        raise TypeError("READY ledger evidence requires ReadyLedgerSession")
     required = tuple(required_datasets)
-    session = ReadyLedgerSession(conn)
     evidence: list[TypedReadyEvidence] = []
 
     evidence.append(
@@ -354,20 +352,21 @@ class ReadyPublicationPolicy:
 
     def evaluate(
         self,
-        conn: sqlite3.Connection,
-        db_path: str | Path,
+        session: ReadyLedgerSession,
         required_datasets: Sequence[str],
         *,
         run_id: int | None = None,
         build_id: str | None = None,
         coverage_proof_id: object,
     ) -> ReadyEvidenceBundle:
+        if type(session) is not ReadyLedgerSession:
+            raise TypeError("READY ledger evidence requires ReadyLedgerSession")
         required = tuple(required_datasets)
         bundle = ReadyEvidenceBundle()
 
         # Coherence suite remains evidence producers (gates → items).
         coherence = check_ready_coherence(
-            conn, db_path, required, run_id=run_id
+            session, required, run_id=run_id
         )
         for gate in coherence:
             bundle.items.append(
@@ -381,8 +380,7 @@ class ReadyPublicationPolicy:
 
         evidence = list(
             collect_typed_evidence(
-                conn,
-                db_path,
+                session,
                 required,
                 run_id=run_id,
                 build_id=build_id,

@@ -310,7 +310,7 @@ def test_manifest_commit_gates_and_identifies_research_snapshot(tmp_path):
     store = SqliteStore(path)
     datasets = ("dataset_a", "dataset_b")
     _seed_snapshot_control(store, datasets)
-    begin_snapshot_sync(store._conn, started_at="2025-04-02T02:00:00Z")  # noqa: SLF001
+    begin_snapshot_sync(store, started_at="2025-04-02T02:00:00Z")
 
     with pytest.raises(RuntimeError, match="not committed"):
         data_snapshot_id(path)
@@ -342,7 +342,7 @@ def test_manifest_rejects_partial_latest_run(tmp_path):
         ("2025-04-03", "jquants", "cloudflare", "partial", "{}"),
     )
     store._conn.commit()  # noqa: SLF001
-    begin_snapshot_sync(store._conn, started_at="2025-04-03T01:00:00Z")  # noqa: SLF001
+    begin_snapshot_sync(store, started_at="2025-04-03T01:00:00Z")
     with pytest.raises(RuntimeError, match="not a complete pass"):
         commit_snapshot_manifest_fixture(
             store._conn, required_datasets=("dataset_a",)  # noqa: SLF001

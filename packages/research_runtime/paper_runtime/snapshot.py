@@ -6,8 +6,8 @@ import hashlib
 import json
 import os
 import re
-import sqlite3
 import tempfile
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,7 +27,6 @@ from pit.sqlite_identity import (
     DATA_SNAPSHOT_FORMAT,
     RESEARCH_SNAPSHOT_MANIFEST_FORMAT,
     _canonical_digest,
-    _data_snapshot_id_from_open_connection,
     _immutable_data_snapshot_id,
     _research_manifest_digest,
     _research_manifest_id,
@@ -36,10 +35,12 @@ from pit.sqlite_identity import (
 from paper_runtime.snapshot_persist import (
     _atomic_bytes,
     _atomic_json,
-    _copy_sqlite,
-    _persist_building_publication,
-    _persist_synced_publication,
+)
+from pit.ready_evidence import (
+    ReadyLedgerSession,
     begin_snapshot_sync,
+    fail_snapshot_sync,
+    ready_publication_session,
 )
 from paper_runtime.snapshot_publish_policy import (
     READY_MANIFEST_SCHEMA,
@@ -93,20 +94,17 @@ def canonical_observed_through_from_authenticated_exported_at(
 
 
 def write_publisher_owned_snapshot_observation_clock(
-    conn: sqlite3.Connection, observed_through: str
+    session: ReadyLedgerSession, observed_through: str
 ) -> str:
     """Write exactly one publisher-owned clock row into a temporary SQLite."""
 
     from pit.errors import PitError
-    from pit.read_clock import (
-        write_publisher_owned_snapshot_observation_clock as write_clock,
-    )
 
     canonical = canonical_observed_through_from_authenticated_exported_at(
         observed_through
     )
     try:
-        return write_clock(conn, canonical)
+        return session.write_observation_clock(canonical)
     except PitError as exc:
         raise SnapshotRejected(str(exc)) from exc
 
@@ -194,38 +192,15 @@ def _file_sha256(path: Path) -> str:
     return "sha256:" + digest.hexdigest()
 
 
-def fail_snapshot_sync(conn: sqlite3.Connection, error: str) -> None:
-    """Keep a partial local DB unavailable to paper research."""
-    conn.execute(
-        """
-        INSERT INTO local_snapshot_policy
-            (singleton, require_manifest, snapshot_ready, last_error,
-             publication_state, active_snapshot_id)
-        VALUES (1, 1, 0, ?, 'REJECTED', NULL)
-        ON CONFLICT(singleton) DO UPDATE SET
-            require_manifest = 1,
-            snapshot_ready = 0,
-            last_error = excluded.last_error,
-            publication_state = 'REJECTED',
-            active_snapshot_id = NULL
-        """,
-        (error[:2000],),
-    )
-    conn.commit()
-
-
 def _latest_complete_run(
-    conn: sqlite3.Connection, required: tuple[str, ...]
+    session: ReadyLedgerSession, required: tuple[str, ...]
 ) -> tuple[int, dict[str, Any], list[dict[str, Any]]]:
-    run = conn.execute(
-        "SELECT id, status, detail FROM ingestion_run_log "
-        "WHERE source='jquants' ORDER BY id DESC LIMIT 1"
-    ).fetchone()
+    run = session.latest_jquants_ingestion_run()
     if run is None:
         raise RuntimeError("no ingestion run is available for snapshot commit")
-    status = str(run["status"] if isinstance(run, sqlite3.Row) else run[1])
-    run_id = int(run["id"] if isinstance(run, sqlite3.Row) else run[0])
-    detail_raw = run["detail"] if isinstance(run, sqlite3.Row) else run[2]
+    status = str(run["status"])
+    run_id = int(run["id"])
+    detail_raw = run["detail"]
     try:
         detail = json.loads(detail_raw or "{}")
     except (TypeError, json.JSONDecodeError) as exc:
@@ -246,19 +221,9 @@ def _latest_complete_run(
             f"ingestion run {run_id} is not the complete {expected}-dataset run"
         )
 
-    rows = conn.execute(
-        "SELECT dataset, status, finished_at, rows_seen, rows_inserted, "
-        "rows_revisions FROM ingestion_validation WHERE run_id = ? "
-        "ORDER BY dataset, id",
-        (run_id,),
-    ).fetchall()
+    rows = session.ingestion_validation_run_rows(run_id)
     latest: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        item = dict(row) if isinstance(row, sqlite3.Row) else {
-            "dataset": row[0], "status": row[1], "finished_at": row[2],
-            "rows_seen": row[3], "rows_inserted": row[4],
-            "rows_revisions": row[5],
-        }
+    for item in rows:
         latest[str(item["dataset"])] = item
     missing = sorted(set(required) - set(latest))
     failed = sorted(
@@ -280,18 +245,11 @@ def _artifact_stem(snapshot_id: str) -> str:
 
 
 def _watermarks_for(
-    conn: sqlite3.Connection,
+    session: ReadyLedgerSession,
     required: tuple[str, ...],
     coverage_rows: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    placeholders = ",".join("?" for _ in required)
-    rows = conn.execute(
-        "SELECT dataset, last_event_date, last_ingested_at "
-        "FROM ingestion_watermarks "
-        f"WHERE dataset IN ({placeholders}) ORDER BY dataset",
-        required,
-    ).fetchall()
-    watermarks = [dict(row) for row in rows]
+    watermarks = [dict(row) for row in session.watermark_rows(required)]
     present = {str(row["dataset"]) for row in watermarks}
     coverage = {
         str(row["dataset"]): row for row in (coverage_rows or [])
@@ -464,8 +422,8 @@ def _snapshot_candidate_engine(
     destination = Path(snapshot_dir).resolve()
     destination.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(str(staging_path))
-    conn.row_factory = sqlite3.Row
+    _session_stack = ExitStack()
+    session = _session_stack.enter_context(ready_publication_session(staging_path))
     build_id = "build-" + uuid4().hex
     created_at = datetime.now(timezone.utc).isoformat()
     contract = f"jquants-premium-core/v{DATASET_CONTRACT_VERSION}"
@@ -487,8 +445,7 @@ def _snapshot_candidate_engine(
     pointer_attempted = False
     publication_marker_attempted = False
     try:
-        _persist_building_publication(
-            conn,
+        session.persist_building_publication(
             build_id=build_id,
             created_at=created_at,
             staging_path=str(staging_path),
@@ -496,14 +453,10 @@ def _snapshot_candidate_engine(
             coverage_policy_version=coverage_policy_version,
             quality_policy_version=quality_policy_version,
         )
-        _transition_policy(conn, "SYNCED")
-        _persist_synced_publication(conn, build_id)
-        _transition_policy(conn, "VALIDATING")
-        conn.execute(
-            "UPDATE snapshot_publications SET state='VALIDATING' WHERE build_id=?",
-            (build_id,),
-        )
-        conn.commit()
+        _transition_policy(session, "SYNCED")
+        session.persist_synced_publication(build_id)
+        _transition_policy(session, "VALIDATING")
+        session.mark_publication_validating(build_id)
 
         try:
             (
@@ -511,23 +464,18 @@ def _snapshot_candidate_engine(
                 quality_summary, quality_failures, raw_manifests,
                 coverage_proof, coverage_proof_id, ready_evidence,
             ) = publication_gate(
-                conn,
+                session,
                 staging_path,
                 build_id=build_id,
                 required=required,
             )
-            watermarks = _watermarks_for(conn, required, coverage_rows)
+            watermarks = _watermarks_for(session, required, coverage_rows)
             if READY_MANIFEST_SCHEMA.get("$id") != "ready-manifest/v1":
                 raise SnapshotRejected("ReadyManifest schema is not the publish gate")
         except Exception as exc:
             reason = str(exc)[:4000]
-            conn.execute(
-                "UPDATE snapshot_publications SET state='REJECTED', "
-                "rejection_reason=? WHERE build_id=?",
-                (reason, build_id),
-            )
-            conn.commit()
-            _transition_policy(conn, "REJECTED", error=reason)
+            session.mark_publication_rejected(build_id, reason)
+            _transition_policy(session, "REJECTED", error=reason)
             if isinstance(exc, SnapshotRejected):
                 raise
             raise SnapshotRejected(reason) from exc
@@ -552,14 +500,11 @@ def _snapshot_candidate_engine(
             ) from exc
         if change_seq <= 0:
             raise SnapshotRejected("production READY applied generation is null")
-        quality_row = conn.execute(
-            "SELECT results_json FROM snapshot_quality_results WHERE build_id=?",
-            (build_id,),
-        ).fetchone()
-        if quality_row is None:
+        quality_json = session.quality_results_json(build_id)
+        if quality_json is None:
             raise SnapshotRejected("production READY quality result ledger is missing")
         try:
-            quality_results = json.loads(str(quality_row[0]))
+            quality_results = json.loads(quality_json)
         except (TypeError, json.JSONDecodeError) as exc:
             raise SnapshotRejected(
                 "production READY quality result ledger is malformed"
@@ -641,17 +586,14 @@ def _snapshot_candidate_engine(
         os.close(fd)
         temp_db = Path(raw_temp)
         try:
-            _copy_sqlite(conn, temp_db)
+            session.backup_sqlite(temp_db)
             if publisher_observed_through is None:
                 raise SnapshotRejected("authenticated exported_at is missing")
-            clock_conn = sqlite3.connect(str(temp_db))
-            try:
+            with ready_publication_session(temp_db) as clock_session:
                 write_publisher_owned_snapshot_observation_clock(
-                    clock_conn, publisher_observed_through
+                    clock_session, publisher_observed_through
                 )
-                clock_conn.commit()
-            finally:
-                clock_conn.close()
+                clock_session.commit()
             snapshot_id = _research_manifest_id(manifest)
             manifest["snapshot_id"] = snapshot_id
             if profile_bound:
@@ -669,48 +611,25 @@ def _snapshot_candidate_engine(
             manifest["artifact"] = artifact_path.name
             manifest["manifest_digest"] = _research_manifest_digest(manifest)
 
-            embedded = sqlite3.connect(str(temp_db))
-            embedded.row_factory = sqlite3.Row
-            try:
+            with ready_publication_session(temp_db) as embedded:
                 manifest_json = json.dumps(
                     manifest, ensure_ascii=True, sort_keys=True,
                     separators=(",", ":"), allow_nan=False,
                 )
-                embedded.execute(
-                    """
-                    INSERT OR REPLACE INTO local_snapshot_manifests
-                        (snapshot_id, format, committed_at, source_run_id,
-                         change_seq, manifest_json)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        snapshot_id, RESEARCH_SNAPSHOT_MANIFEST_FORMAT,
-                        committed_at, run_id, change_seq, manifest_json,
-                    ),
+                embedded.embed_ready_manifest(
+                    snapshot_id=snapshot_id,
+                    committed_at=committed_at,
+                    run_id=run_id,
+                    change_seq=change_seq,
+                    manifest_json=manifest_json,
+                    artifact_path=str(artifact_path),
+                    manifest_path=str(manifest_path),
+                    build_id=build_id,
                 )
-                embedded.execute(
-                    "UPDATE local_snapshot_policy SET snapshot_ready=1, "
-                    "publication_state='READY', active_snapshot_id=?, "
-                    "last_error=NULL WHERE singleton=1",
-                    (snapshot_id,),
-                )
-                embedded.execute(
-                    "UPDATE snapshot_publications SET snapshot_id=?, state='READY', "
-                    "artifact_path=?, manifest_path=?, source_run_id=?, change_seq=?, "
-                    "committed_at=?, rejection_reason=NULL, manifest_json=? "
-                    "WHERE build_id=?",
-                    (
-                        snapshot_id, str(artifact_path), str(manifest_path),
-                        run_id, change_seq, committed_at, manifest_json, build_id,
-                    ),
-                )
-                embedded.commit()
-                integrity = embedded.execute("PRAGMA integrity_check").fetchone()[0]
+                integrity = embedded.integrity_check()
                 if integrity != "ok":
                     raise RuntimeError(f"snapshot integrity check failed: {integrity}")
-                embedded.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            finally:
-                embedded.close()
+                embedded.wal_checkpoint_truncate()
             os.chmod(temp_db, 0o444)
             if artifact_path.exists():
                 existing = (
@@ -736,25 +655,18 @@ def _snapshot_candidate_engine(
             temp_db.unlink(missing_ok=True)
             raise
 
-        conn.execute(
-            "UPDATE snapshot_publications SET snapshot_id=?, state='READY', "
-            "artifact_path=?, manifest_path=?, source_run_id=?, change_seq=?, "
-            "committed_at=?, rejection_reason=NULL, manifest_json=? "
-            "WHERE build_id=?",
-            (
-                snapshot_id, str(artifact_path), str(manifest_path), run_id,
-                change_seq, committed_at,
-                json.dumps(manifest, sort_keys=True, separators=(",", ":")),
-                build_id,
+        session.persist_ready_on_staging(
+            build_id=build_id,
+            snapshot_id=snapshot_id,
+            artifact_path=str(artifact_path),
+            manifest_path=str(manifest_path),
+            run_id=run_id,
+            change_seq=change_seq,
+            committed_at=committed_at,
+            manifest_json=json.dumps(
+                manifest, sort_keys=True, separators=(",", ":")
             ),
         )
-        conn.execute(
-            "UPDATE local_snapshot_policy SET snapshot_ready=0, "
-            "publication_state='READY', active_snapshot_id=?, last_error=NULL "
-            "WHERE singleton=1",
-            (snapshot_id,),
-        )
-        conn.commit()
 
         # Signing is deliberately after the authoritative source transaction:
         # a failed READY commit must never leave a usable signed capability.
@@ -899,27 +811,12 @@ def _snapshot_candidate_engine(
                     "READY publication failed and rejected evidence quarantine "
                     f"failed: {cleanup_exc}; original error: {exc}"
                 )
-        try:
-            conn.rollback()
-            conn.execute(
-                "UPDATE snapshot_publications SET state='REJECTED', "
-                "rejection_reason=? WHERE build_id=?",
-                (str(exc)[:4000], build_id),
-            )
-            conn.execute(
-                "UPDATE local_snapshot_policy SET snapshot_ready=0, "
-                "publication_state='REJECTED', active_snapshot_id=NULL, "
-                "last_error=? WHERE singleton=1",
-                (str(exc)[:4000],),
-            )
-            conn.commit()
-        except sqlite3.Error:
-            conn.rollback()
+        session.reject_publication_after_failure(build_id, str(exc)[:4000])
         if exc is not original_exc:
             raise exc from original_exc
         raise
     finally:
-        conn.close()
+        _session_stack.close()
 
 
 def _publish_exact_four_pilot_ready_snapshot_via_authority_impl(

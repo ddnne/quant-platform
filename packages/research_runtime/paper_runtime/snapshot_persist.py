@@ -9,18 +9,9 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
-import sqlite3
 import tempfile
-import time
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
-
-
-_READY_ARTIFACT_MAX_BYTES = 64 * 1024 * 1024 * 1024
-_READY_COPY_FREE_SPACE_MARGIN_BYTES = 64 * 1024 * 1024
-_READY_COPY_BUDGET_SECONDS = 15 * 60
 
 
 def _atomic_json(path: Path, payload: dict[str, Any], *, mode: int) -> None:
@@ -58,116 +49,3 @@ def _atomic_bytes(path: Path, payload: bytes, *, mode: int) -> None:
     except Exception:
         temp_path.unlink(missing_ok=True)
         raise
-
-
-def _copy_sqlite(source: sqlite3.Connection, target_path: Path) -> None:
-    page_count = int(source.execute("PRAGMA page_count").fetchone()[0])
-    page_size = int(source.execute("PRAGMA page_size").fetchone()[0])
-    expected_bytes = page_count * page_size
-    if expected_bytes <= 0 or expected_bytes > _READY_ARTIFACT_MAX_BYTES:
-        raise RuntimeError("READY SQLite source exceeds the fixed artifact bound")
-    free = shutil.disk_usage(target_path.parent).free
-    if free < expected_bytes + _READY_COPY_FREE_SPACE_MARGIN_BYTES:
-        raise RuntimeError("READY snapshot destination has insufficient free space")
-    deadline = time.monotonic() + _READY_COPY_BUDGET_SECONDS
-
-    def require_copy_budget(
-        _status: int,
-        _remaining: int,
-        _total: int,
-    ) -> None:
-        if time.monotonic() >= deadline:
-            raise TimeoutError("READY SQLite copy deadline exceeded")
-
-    target = sqlite3.connect(str(target_path))
-    try:
-        source.backup(
-            target,
-            pages=1024,
-            progress=require_copy_budget,
-            sleep=0.0,
-        )
-    finally:
-        target.close()
-
-
-def begin_snapshot_sync(conn: sqlite3.Connection, *, started_at: str) -> str:
-    """Invalidate research access and enter BUILDING before any write."""
-    build_id = "build-" + uuid4().hex
-    conn.execute(
-        """
-        INSERT INTO local_snapshot_policy
-            (singleton, require_manifest, snapshot_ready, sync_started_at,
-             last_error, publication_state, active_build_id,
-             active_snapshot_id)
-        VALUES (1, 1, 0, ?, NULL, 'BUILDING', ?, NULL)
-        ON CONFLICT(singleton) DO UPDATE SET
-            require_manifest = 1,
-            snapshot_ready = 0,
-            sync_started_at = excluded.sync_started_at,
-            last_error = NULL,
-            publication_state = 'BUILDING',
-            active_build_id = excluded.active_build_id,
-            active_snapshot_id = NULL
-        """,
-        (started_at, build_id),
-    )
-    conn.commit()
-    return build_id
-
-
-def _persist_building_publication(
-    conn: sqlite3.Connection,
-    *,
-    build_id: str,
-    created_at: str,
-    staging_path: str,
-    contract_version: str,
-    coverage_policy_version: str,
-    quality_policy_version: str,
-) -> None:
-    """Write BUILDING rows. Caller owns READY policy."""
-    conn.execute(
-        """
-        INSERT INTO local_snapshot_policy
-            (singleton, require_manifest, snapshot_ready, sync_started_at,
-             last_error, publication_state, active_build_id,
-             active_snapshot_id)
-        VALUES (1, 1, 0, ?, NULL, 'BUILDING', ?, NULL)
-        ON CONFLICT(singleton) DO UPDATE SET
-            require_manifest=1, snapshot_ready=0, last_error=NULL,
-            publication_state='BUILDING', active_build_id=excluded.active_build_id,
-            active_snapshot_id=NULL
-        """,
-        (created_at, build_id),
-    )
-    conn.execute(
-        """
-        INSERT INTO snapshot_publications
-            (build_id, state, staging_path, contract_version,
-             coverage_policy_version, quality_policy_version, created_at)
-        VALUES (?, 'BUILDING', ?, ?, ?, ?, ?)
-        """,
-        (
-            build_id, staging_path, contract_version,
-            coverage_policy_version, quality_policy_version, created_at,
-        ),
-    )
-    conn.commit()
-
-
-def _persist_synced_publication(conn: sqlite3.Connection, build_id: str) -> None:
-    """Mark snapshot_publications SYNCED. Policy table stays with policy helper."""
-    conn.execute(
-        "UPDATE snapshot_publications SET state='SYNCED' WHERE build_id=?",
-        (build_id,),
-    )
-    conn.commit()
-
-
-def _persist_synced_policy(conn: sqlite3.Connection) -> None:
-    """SYNCED row write for legacy in-place commit. Caller owns the transaction."""
-    conn.execute(
-        "UPDATE local_snapshot_policy SET publication_state='SYNCED' "
-        "WHERE singleton=1"
-    )

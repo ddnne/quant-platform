@@ -6,20 +6,14 @@ READY stays fail-closed. Empty DB and PARTIAL coverage must not publish READY.
 from __future__ import annotations
 
 import json
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from storage.coverage import run_coverage, summarize
 from data_contracts.loader import all_contracts
-from paper_runtime.snapshot_coverage_proof import (
-    _coverage_proof,
-    _validation_cutoff_for_build,
-    persist_coverage_proof,
-)
+from pit.ready_evidence import CoverageProofVerificationError, ReadyLedgerSession
 from qp_paths import repo_root
-from storage.coverage_ledger import refresh_coverage_ledger
 
 READY_MANIFEST_SCHEMA_REL = Path("specs") / "ready" / "ready_manifest.schema.json"
 READY_MANIFEST_FORMAT = "ready-manifest/v1"
@@ -56,7 +50,7 @@ _JQUANTS_DATASETS = frozenset(
 
 
 def _raw_manifests_for(
-    conn: sqlite3.Connection, run_id: int, required: tuple[str, ...]
+    session: ReadyLedgerSession, run_id: int, required: tuple[str, ...]
 ) -> dict[str, dict[str, Any]]:
     """Require one successful raw acquisition per dataset.
 
@@ -66,20 +60,9 @@ def _raw_manifests_for(
     """
     from paper_runtime.snapshot import SnapshotRejected
 
-    table = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' "
-        "AND name='raw_retention_manifests'"
-    ).fetchone()
-    if table is None:
+    rows = session.raw_retention_manifest_rows(run_id, required)
+    if rows is None:
         raise SnapshotRejected("raw retention manifest ledger is missing")
-    placeholders = ",".join("?" for _ in required)
-    rows = conn.execute(
-        "SELECT dataset, run_id, manifest_key, page_count, row_count, "
-        "raw_bytes, data_digest, completeness, created_at "
-        "FROM raw_retention_manifests WHERE run_id=? "
-        f"AND dataset IN ({placeholders}) ORDER BY dataset",
-        (run_id, *required),
-    ).fetchall()
     manifests = {str(row["dataset"]): dict(row) for row in rows}
     missing = sorted(set(required) - set(manifests))
     failed = sorted(
@@ -94,7 +77,7 @@ def _raw_manifests_for(
 
 
 def _transition_policy(
-    conn: sqlite3.Connection,
+    session: ReadyLedgerSession,
     state: str,
     *,
     error: str | None = None,
@@ -105,17 +88,16 @@ def _transition_policy(
 
     if state not in SNAPSHOT_STATES:
         raise ValueError(f"invalid snapshot state: {state}")
-    conn.execute(
-        "UPDATE local_snapshot_policy SET publication_state=?, "
-        "snapshot_ready=?, last_error=?, active_snapshot_id=? "
-        "WHERE singleton=1",
-        (state, int(readable), error, snapshot_id),
+    session.update_local_snapshot_policy(
+        publication_state=state,
+        snapshot_ready=readable,
+        last_error=error,
+        active_snapshot_id=snapshot_id,
     )
-    conn.commit()
 
 
 def _evaluate_publication_gate_impl(
-    conn: sqlite3.Connection,
+    session: ReadyLedgerSession,
     staging_path: Path,
     *,
     build_id: str,
@@ -142,13 +124,13 @@ def _evaluate_publication_gate_impl(
             "READY publication requires the governed J-Quants foundation"
         )
     run_id, run_detail, validations = _latest_complete_run(
-        conn, jquants_required
+        session, jquants_required
     )
-    raw_manifests = _raw_manifests_for(conn, run_id, jquants_required)
+    raw_manifests = _raw_manifests_for(session, run_id, jquants_required)
     # Coverage inventory and refresh share the exact UTC cutoff frozen by the
     # publisher-owned BUILDING row. Wall-clock drift cannot change membership
     # between gate evaluation, proof persistence, and artifact reopen.
-    today = _validation_cutoff_for_build(conn, build_id)
+    today = session.validation_cutoff_for_build(build_id)
     # No year-index HTML on the READY path. Explicit None is fail-closed empty OTC.
     if fixture_compatibility:
         if _fixture_coverage_refresh is None:
@@ -156,7 +138,7 @@ def _evaluate_publication_gate_impl(
                 "fixture Coverage evaluation must be supplied by tests support"
             )
         coverage_rows = _fixture_coverage_refresh(
-            conn,
+            session,
             staging_path,
             required=required,
             today=today,
@@ -167,13 +149,11 @@ def _evaluate_publication_gate_impl(
             raise SnapshotRejected(
                 "production Coverage evaluation cannot accept fixture authority"
             )
-        coverage_rows = refresh_coverage_ledger(
-            conn,
+        coverage_rows = session.refresh_coverage_ledger(
             staging_path,
             datasets=required,
             today=today,
-            index_text=None,
-            _publication_build_id=build_id,
+            build_id=build_id,
         )
     quality_results = run_coverage(
         staging_path,
@@ -210,40 +190,28 @@ def _evaluate_publication_gate_impl(
     proof_failure: str | None = None
     if not fixture_compatibility:
         try:
-            coverage_proof = _coverage_proof(
-                conn,
+            coverage_proof = session.build_coverage_proof(
                 required,
                 coverage_rows,
                 publication_cutoff=today,
             )
-        except SnapshotRejected as exc:
+        except CoverageProofVerificationError as exc:
             proof_failure = str(exc)
     evaluated_at = datetime.now(timezone.utc).isoformat()
     passed = not failures and not incomplete and proof_failure is None
-    conn.execute(
-        """
-        INSERT INTO snapshot_quality_results
-            (build_id, status, policy_version, evaluated_at, summary_json,
-             results_json)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(build_id) DO UPDATE SET
-            status=excluded.status,
-            policy_version=excluded.policy_version,
-            evaluated_at=excluded.evaluated_at,
-            summary_json=excluded.summary_json,
-            results_json=excluded.results_json
-        """,
-        (
-            build_id, "PASS" if passed else "FAIL", QUALITY_POLICY_VERSION,
-            evaluated_at,
-            json.dumps(quality_summary, sort_keys=True, separators=(",", ":")),
-            json.dumps(
-                [result.as_log_dict() for result in quality_results],
-                sort_keys=True, separators=(",", ":"),
-            ),
+    session.persist_quality_results(
+        build_id=build_id,
+        status="PASS" if passed else "FAIL",
+        policy_version=QUALITY_POLICY_VERSION,
+        evaluated_at=evaluated_at,
+        summary_json=json.dumps(
+            quality_summary, sort_keys=True, separators=(",", ":")
+        ),
+        results_json=json.dumps(
+            [result.as_log_dict() for result in quality_results],
+            sort_keys=True, separators=(",", ":"),
         ),
     )
-    conn.commit()
     if not passed:
         parts = []
         if failures:
@@ -270,7 +238,7 @@ def _evaluate_publication_gate_impl(
 
 
 def _evaluate_publication_gate(
-    conn: sqlite3.Connection,
+    session: ReadyLedgerSession,
     staging_path: Path,
     *,
     build_id: str,
@@ -282,18 +250,18 @@ def _evaluate_publication_gate(
 ]:
     """Production B0/Coverage gate; compatibility cannot be selected."""
     result = _evaluate_publication_gate_impl(
-        conn,
+        session,
         staging_path,
         build_id=build_id,
         required=required,
         fixture_compatibility=False,
     )
-    proof_id = persist_coverage_proof(conn, required, build_id=build_id)
+    proof_id = session.persist_coverage_proof(required, build_id=build_id)
     return (*result, proof_id)
 
 
 def evaluate_ready_publication(
-    conn: sqlite3.Connection,
+    session: ReadyLedgerSession,
     staging_path: Path,
     *,
     build_id: str,
@@ -312,7 +280,7 @@ def evaluate_ready_publication(
         raise SnapshotRejected("ReadyManifest schema is not the publish gate")
 
     result = _evaluate_publication_gate(
-        conn,
+        session,
         staging_path,
         build_id=build_id,
         required=required,
@@ -323,8 +291,7 @@ def evaluate_ready_publication(
     ) = result
     policy = ReadyPublicationPolicy()
     bundle = policy.evaluate(
-        conn,
-        staging_path,
+        session,
         required,
         run_id=run_id,
         build_id=build_id,

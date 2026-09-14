@@ -35,7 +35,7 @@ from paper_runtime.ready_policy import (
     ReadyEvidenceItem,
     collect_typed_evidence,
 )
-from paper_runtime.snapshot_persist import _persist_synced_policy
+from pit.ready_evidence import ReadyLedgerSession
 from data_contracts.coverage import (
     coverage_policy_binding,
     coverage_policy_set_binding,
@@ -108,7 +108,7 @@ def _fixture_coverage_proof(
 
 
 def _refresh_fixture_coverage(
-    conn: sqlite3.Connection,
+    session,
     staging_path: Path,
     *,
     required: tuple[str, ...],
@@ -123,6 +123,7 @@ def _refresh_fixture_coverage(
     missing transition authority blocked it.  Product READY readers reject the
     resulting FIXTURE publication marker.
     """
+    conn = session._conn
     rows = refresh_coverage_ledger(
         conn,
         staging_path,
@@ -172,7 +173,7 @@ def _refresh_fixture_coverage(
 
 
 def _evaluate_ready_publication_fixture(
-    conn,
+    session,
     staging_path: Path,
     *,
     build_id: str,
@@ -182,7 +183,7 @@ def _evaluate_ready_publication_fixture(
     if READY_MANIFEST_SCHEMA.get("$id") != READY_MANIFEST_FORMAT:
         raise SnapshotRejected("ReadyManifest schema is not the publish gate")
     result = _evaluate_publication_gate_impl(
-        conn,
+        session,
         staging_path,
         build_id=build_id,
         required=required,
@@ -199,6 +200,7 @@ def _evaluate_ready_publication_fixture(
         _raw_manifests,
         _untrusted_product_coverage_proof,
     ) = result
+    conn = session._conn
     coverage_proof = _fixture_coverage_proof(conn, required)
     result = (*result[:-1], coverage_proof)
     # Older sparse fixtures predate the source change ledger.  Tests may add
@@ -309,7 +311,7 @@ def _evaluate_ready_publication_fixture(
         },
     ))
     for gate in check_ready_coherence(
-        conn, staging_path, required, run_id=run_id
+        session, required, run_id=run_id
     ):
         bundle.items.append(
             ReadyEvidenceItem(
@@ -320,8 +322,7 @@ def _evaluate_ready_publication_fixture(
             )
         )
     for evidence in collect_typed_evidence(
-        conn,
-        staging_path,
+        session,
         required,
         run_id=run_id,
         build_id=build_id,
@@ -368,13 +369,15 @@ def commit_snapshot_manifest_fixture(
     required = tuple(sorted(set(str(item) for item in required_datasets)))
     if not required:
         raise ValueError("required_datasets must not be empty")
-    _persist_synced_policy(conn)
+    ReadyLedgerSession(conn).persist_synced_policy_row()
     conn.execute(
         "UPDATE local_snapshot_policy SET publication_state='VALIDATING' "
         "WHERE singleton=1"
     )
     conn.commit()
-    run_id, detail, validations = _latest_complete_run(conn, required)
+    run_id, detail, validations = _latest_complete_run(
+        ReadyLedgerSession(conn), required
+    )
 
     placeholders = ",".join("?" for _ in required)
     rows = conn.execute(

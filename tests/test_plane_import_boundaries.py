@@ -9,13 +9,13 @@ Invalid relative imports fail the check rather than being skipped. The
 packages.<where-dir>.* index entries are lookup aliases for imported names.
 Dynamic importlib strings and paths outside setuptools where=/py-modules are
 not verified. The same index then applies closed market-read owner-edges:
-ready_publication, ready_policy, personal_draft_bind, and snapshot must not
+ready_publication, ready_policy, personal_draft_bind, snapshot,
+snapshot_publish_policy, snapshot_persist, snapshot_read, and coherence must not
 import connection-private PIT SQL modules; ready_policy also must not import
 storage.coverage_proof. Equivalent aliases resolve to the same owner path.
 This does not ban sqlite3, DataView, or trusted experiment-index/cache/budget
-stores. collector/evaluate still accept sqlite3.Connection because they share
-the staging publication write transaction. Engine resolve_db_path and snapshot
-publication/coherence SQL remain OPEN.
+stores. Publication/coherence/read consumers take ReadyLedgerSession, not a
+raw Connection. Engine resolve_db_path remains OPEN.
 """
 
 from __future__ import annotations
@@ -210,6 +210,10 @@ def test_data_plane_source_does_not_import_other_first_party_planes() -> None:
         ("paper_runtime.ready_policy", private_sql | coverage_sql),
         ("paper_runtime.personal_draft_bind", private_sql),
         ("paper_runtime.snapshot", private_sql),
+        ("paper_runtime.snapshot_publish_policy", private_sql),
+        ("paper_runtime.snapshot_persist", private_sql),
+        ("paper_runtime.snapshot_read", private_sql),
+        ("paper_runtime.coherence", private_sql),
     )
     runtime_violations: list[str] = []
     for module_name, forbidden in closed_edges:

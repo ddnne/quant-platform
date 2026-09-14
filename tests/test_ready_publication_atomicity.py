@@ -101,11 +101,6 @@ def test_public_ready_sqlite_open_stays_closed_with_retained_writer(
         "_open_fixture_snapshot_connection",
         patched_opener,
     )
-    monkeypatch.setattr(
-        snapshot_read_module,
-        "_open_pinned_sqlite",
-        patched_opener,
-    )
 
     try:
         assert artifact.stat().st_mode & 0o777 == 0o444
@@ -729,10 +724,12 @@ def test_database_publication_failure_aborts_before_readiness_is_minted(
         source.commit()
     finally:
         source.close()
-    copy_sqlite = snapshot_module._copy_sqlite
+    from pit.ready_evidence import ReadyLedgerSession
 
-    def copy_without_source_failure_trigger(source, target):
-        copy_sqlite(source, target)
+    copy_sqlite = ReadyLedgerSession.backup_sqlite
+
+    def copy_without_source_failure_trigger(self, target):
+        copy_sqlite(self, target)
         copied = sqlite3.connect(target)
         try:
             copied.execute("DROP TRIGGER reject_ready_publication")
@@ -741,7 +738,7 @@ def test_database_publication_failure_aborts_before_readiness_is_minted(
             copied.close()
 
     monkeypatch.setattr(
-        snapshot_module, "_copy_sqlite", copy_without_source_failure_trigger
+        ReadyLedgerSession, "backup_sqlite", copy_without_source_failure_trigger
     )
 
     def mint_fixture_sidecar(ready):
