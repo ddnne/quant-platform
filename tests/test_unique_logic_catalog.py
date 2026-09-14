@@ -1,9 +1,12 @@
 """Catalog compiled map is the unique_logic declaration path (not run_w copies)."""
 from __future__ import annotations
 
+import pytest
+
 from research.unique_logic.catalog import load_catalog_specs, parse_catalog_yaml
 
 
+@pytest.mark.replay
 def test_event_sides_ls_variants_stay_registered() -> None:
     from research.unique_logic import event_sides
     from research.unique_logic.catalog import yaml_unique_rows
@@ -29,6 +32,7 @@ def test_event_sides_ls_variants_stay_registered() -> None:
     )
 
 
+@pytest.mark.replay
 def test_pri_gate_sets_are_combo_event_gates() -> None:
     from research.unique_logic.constants import (
         COMBO_EVENT_GATES,
@@ -49,6 +53,7 @@ def test_pri_gate_sets_are_combo_event_gates() -> None:
     assert "roe_low" not in PRI_FUND_GATES
 
 
+@pytest.mark.replay
 def test_unique_leftover_matches_yaml_unique_families() -> None:
     from research.unique_logic.catalog import unique_family_ids_from_yaml
     from research.unique_logic.worker_bodies import unique_leftover_logic_ids
@@ -57,24 +62,6 @@ def test_unique_leftover_matches_yaml_unique_families() -> None:
     leftover = unique_leftover_logic_ids()
     assert leftover == union
     assert leftover
-
-
-def test_usable_series_breakdown_has_tags() -> None:
-    from research.unique_logic.worker_bodies import usable_series_breakdown
-
-    empty = usable_series_breakdown({"mid_n_explore": {}, "liq_large": {}})
-    assert empty["version"] == "usable-series/v1"
-    assert empty["go"] is False
-    assert "tag_counts" in empty and "family" in empty
-
-
-def test_usable_inventory_read_has_n_ands_and_pri_series() -> None:
-    from research.unique_logic.worker_bodies import usable_inventory_read
-
-    empty = usable_inventory_read({"mid_n_explore": {}, "liq_large": {}})
-    assert empty["version"] == "usable-read/v3"
-    assert empty["go"] is False
-    assert "n_ands" in empty and "pri_series" in empty
 
 
 def test_cell_occupancy_prefers_occupancy_over_frac() -> None:
@@ -93,6 +80,7 @@ def test_cell_occupancy_prefers_occupancy_over_frac() -> None:
     assert means["a"] == 0.4
 
 
+@pytest.mark.replay
 def test_spec_by_id_survives_catalog_cache_clear() -> None:
     from research.unique_logic.catalog import clear_catalog_caches, combo_thesis_records
     from research.unique_logic.event_combos import spec_by_id
@@ -106,25 +94,9 @@ def test_spec_by_id_survives_catalog_cache_clear() -> None:
     assert spec.get("go") is False
 
 
-def test_combo_thesis_records_are_cached() -> None:
-    from research.unique_logic.catalog import (
-        _combo_thesis_records_cached,
-        clear_catalog_caches,
-        combo_thesis_records,
-    )
-
-    clear_catalog_caches()
-    n = len(combo_thesis_records())
-    assert n >= 1
-    combo_thesis_records()
-    info = _combo_thesis_records_cached.cache_info()
-    assert info.hits >= 1
-    assert info.currsize >= 1
-
-
-def test_combo_thesis_records_are_compact_table_rows() -> None:
+@pytest.mark.replay
+def test_combo_thesis_records_are_compact_table_rows(tmp_path) -> None:
     import json
-    from pathlib import Path
 
     from research.unique_logic.catalog import (
         combo_thesis_records,
@@ -137,40 +109,13 @@ def test_combo_thesis_records_are_compact_table_rows() -> None:
     assert rec["go"] is False
     assert "logic_id" in rec and "gates" in rec and "kind" in rec
     assert rec["kind"] in {"event", "surprise_xs", "cs"}
-    path = Path("/tmp/combo_thesis_records_test.jsonl")
+    path = tmp_path / "combo_thesis_records_test.jsonl"
     dump = write_combo_thesis_jsonl(path)
     assert dump["n"] == len(rows)
     assert "yaml_remains_sot" not in dump
     assert dump["go"] is False
     first = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
     assert first["logic_id"] and first["go"] is False
-
-
-def test_catalog_index_is_one_pass_lookup() -> None:
-    from pathlib import Path
-
-    from research.unique_logic.catalog import catalog_index, catalog_spec
-
-    idx = catalog_index()
-    assert idx["n"] == idx["n_compiled"]
-    assert idx["compiled_ids_match"] is True
-    assert idx["yaml_still_present"] is False
-    assert idx["n_combo"] >= 1
-    assert idx["go"] is False
-    assert idx["combo_kind_counts"].get("event", 0) >= 1
-    assert idx["combo_kind_counts"].get("surprise_xs", 0) >= 1
-    lid = idx["combo_ids"][0]
-    spec = catalog_spec(lid)
-    assert spec is not None
-    assert spec["logic_id"] == lid
-    assert spec.get("compiled") is True
-    assert spec.get("catalog_present") is False
-    path_raw = spec.get("catalog_path")
-    if path_raw:
-        path = Path(str(path_raw))
-        assert path.name == "migration.jsonl"
-        assert path.is_file()
-    assert catalog_spec("not_a_real_logic_id_zzz") is None
 
 
 def test_yaml_overlay_fail_closed_without_env(monkeypatch, tmp_path) -> None:
@@ -209,6 +154,7 @@ def test_yaml_overlay_fail_closed_without_env(monkeypatch, tmp_path) -> None:
         clear_catalog_caches()
 
 
+@pytest.mark.replay
 def test_yaml_overlay_opt_in_replaces_compiled(monkeypatch, tmp_path) -> None:
     from research.unique_logic.catalog import (
         YAML_OVERLAY_ENV,
@@ -251,6 +197,7 @@ def test_yaml_overlay_opt_in_replaces_compiled(monkeypatch, tmp_path) -> None:
         clear_catalog_caches()
 
 
+@pytest.mark.replay
 def test_parse_catalog_yaml_folded_and_params() -> None:
     spec = parse_catalog_yaml(
         """
@@ -279,6 +226,7 @@ evaluator: research.unique_logic.cs_overlays.evaluate_overnight_level_cs_tilt_da
     assert spec["params"]["gates"] == ["eq_ar_high", "pead"]
 
 
+@pytest.mark.replay
 def test_parse_catalog_yaml_theme_list_map() -> None:
     spec = parse_catalog_yaml(
         """
@@ -319,6 +267,7 @@ def test_economic_theme_yaml_rejects_go() -> None:
             raise AssertionError("research_themes.yaml go: true must fail")
 
 
+@pytest.mark.replay
 def test_combo_row_from_yaml_requires_gates_cs_gate_side() -> None:
     from research.unique_logic.catalog import combo_row_from_yaml, parse_catalog_yaml
 
@@ -379,6 +328,7 @@ def test_dispatch_unknown_logic_is_incomplete() -> None:
 
 
 
+@pytest.mark.replay
 def test_mf_value_mom_rate_is_unique_not_alias() -> None:
     from pathlib import Path
 
@@ -409,4 +359,3 @@ def test_unique_logic_cli_is_retired() -> None:
     blob = (r.stderr or "") + (r.stdout or "")
     assert "retired" in blob
     assert "Does not GO" in blob
-

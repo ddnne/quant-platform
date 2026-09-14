@@ -82,31 +82,6 @@ def _catalog_by_id_cached(
     }
 
 
-def catalog_index(*, root: Path | None = None) -> dict[str, Any]:
-    """One-pass catalog lookup. Compiled map is load SoT."""
-    root_key = str((root or repo_root()).resolve())
-    by_id = _catalog_by_id_cached(root_key, yaml_overlay_allowed())
-    records = combo_thesis_records(root=root)
-    kinds: dict[str, int] = {}
-    for rec in records:
-        kind = str(rec.get("kind") or "")
-        kinds[kind] = kinds.get(kind, 0) + 1
-    compiled = compiled_migration_ids(root=root)
-    yaml_still_present = any(catalog_dir(root=root).glob("*.yaml"))
-    return {
-        "by_id": by_id,
-        "n": len(by_id) if yaml_still_present else len(compiled),
-        "n_combo": len(records),
-        "combo_ids": tuple(str(r["logic_id"]) for r in records),
-        "combo_kind_counts": kinds,
-        "n_compiled": len(compiled),
-        "compiled_ids_match": compiled == set(by_id),
-        "yaml_still_present": yaml_still_present,
-        "go": False,
-        "not_a_pass": True,
-    }
-
-
 def catalog_spec(logic_id: str, *, root: Path | None = None) -> dict[str, Any] | None:
     return _catalog_by_id_cached(
         str((root or repo_root()).resolve()), yaml_overlay_allowed()

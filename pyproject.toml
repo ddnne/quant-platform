@@ -77,9 +77,10 @@ storage = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --strict-markers --disable-socket --allow-unix-socket"
+addopts = "-q --strict-markers --disable-socket --allow-unix-socket -m \"not replay\""
 norecursedirs = [".*", "build", "dist"]
 markers = [
     "live: reserved marker for operator-gated live deployment acceptance; CI excludes it. QP_LIVE alone does not enable network",
     "toolchain: tests that require actual Node/npm",
+    "replay: retired full catalog compatibility; default pytest excludes it; a CLI -m replaces addopts -m",
 ]

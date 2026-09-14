@@ -122,9 +122,13 @@ echo "==> Cloudflare canonical D1 migration manifest"
 echo "==> python pytest (2 workers, file-scoped scheduling)"
 # Workers Builds has a bounded build window. Keep complete tests/ collection
 # while using the two build CPUs; file-scoped scheduling avoids splitting tests
-# from the same module across processes. Documented offline selection excludes
-# tests that require actual Node/npm.
-"$py" -m pytest -n 2 --dist=loadfile -m "not toolchain and not live" tests/
+# from the same module across processes. CLI -m replaces addopts -m. Offline
+# selection excludes Node/npm toolchain, live, and retired catalog replay.
+# Replay lane runs immediately after offline and before npm install.
+"$py" -m pytest -n 2 --dist=loadfile -m "not toolchain and not live and not replay" tests/
+
+echo "==> python pytest replay (2 workers, file-scoped scheduling)"
+"$py" -m pytest -n 2 --dist=loadfile -m "replay and not toolchain and not live" tests/
 
 if ! command -v npm >/dev/null 2>&1; then
   echo "npm not found" >&2

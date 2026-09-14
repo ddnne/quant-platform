@@ -5,8 +5,11 @@ default path. Live API paths (if any) are opt-in via env flags and are not part
 of the guard packs below.
 
 ```bash
-# Local developer suite. toolchain / live を除く
-.venv/bin/python -m pytest tests/ -m "not toolchain and not live"
+# Local developer suite. toolchain / live / replay を除く。CLI -m は addopts の -m を置き換える
+.venv/bin/python -m pytest tests/ -m "not toolchain and not live and not replay"
+
+# 退役 catalog 互換
+.venv/bin/python -m pytest tests/ -m replay
 
 # toolchain。live は除く。Node/npm が要る
 .venv/bin/python -m pytest tests/ -m "toolchain and not live"
@@ -33,7 +36,7 @@ Native CI is [`scripts/verify_ci.sh`](../scripts/verify_ci.sh) on Cloudflare Wor
 |------|--------|-------------|------------------|
 | **G0** | Architecture guards — stop the batch if red | named `-k` pack or explicit paths | plane import boundaries, Mass fail-closed, gateway fail-closed, publish guard, sticky COMPLETE, empty-raw ban, core/features/strategies data boundaries |
 | **G1** | Contract / behavior | modules for the change you made | PIT look-ahead, StrategySpec reject, receipt signature, JSDA parse, J-Quants catalog, coverage ledger |
-| **G2** | Full offline | `pytest tests/ -m "not toolchain and not live"` | `tests/` excluding live and Node/npm toolchain |
+| **G2** | Full offline | `pytest tests/ -m "not toolchain and not live and not replay"` | `tests/` excluding live, Node/npm toolchain, and retired catalog replay |
 
 ### G0 named guards (prefer these names in PR bodies)
 

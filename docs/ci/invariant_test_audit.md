@@ -110,5 +110,16 @@ charter for extra hostile-Python tests.
 - Retained serialized fixture/schema/config reads only when the file itself is
   the governed input under test; those reads do not authorize READY or GO.
 
+- Retired full catalog compatibility uses a selected ``replay`` marker. Default
+  addopts are ``not replay``. A CLI ``-m`` replaces addopts ``-m`` and does not
+  AND. Native CI runs three disjoint non-live lanes in this order: ordinary
+  offline (``not toolchain and not live and not replay``), replay
+  (``replay and not toolchain and not live``), npm install, then toolchain
+  (``toolchain and not live``, including any future replay+toolchain). Frozen
+  artifact digest, installed-wheel/Container exclusion, numeric occupancy,
+  unknown dispatch, disabled unique_logic CLI, and live unique_logic
+  numerical/PIT kernels stay in the ordinary offline lane. This is not a claim
+  that every retired catalog consumer is marked.
+
 The final release evidence records suite totals and runtime suites. Test count
 is diagnostic only and is never a GO condition.
