@@ -1466,21 +1466,13 @@ def _run_backtest_impl(
     if governed_am_pm and governed_am_view is None and controlled_hold_reason is None:
         controlled_hold_reason = "missing_verified_production_am_capability"
 
-    resolved_candidates = resolve_injected_universe(
-        universe, db_path=resolved_db_path
-    )
-    daily_resolved = (
-        resolved_candidates
-        if isinstance(resolved_candidates, ResolvedDailyUniverse)
-        else None
-    )
-    fixed_allowlist = (
-        None if daily_resolved is not None else resolved_candidates
-    )
-
     if controlled_hold_reason is not None:
+        resolved_candidates = None
         days: list[str] = []
     else:
+        resolved_candidates = resolve_injected_universe(
+            universe, db_path=resolved_db_path
+        )
         days = _trading_days(
             start,
             end,
@@ -1493,6 +1485,14 @@ def _run_backtest_impl(
                 f"(read as_of={calendar_as_of or close_as_of(end)}); seed the "
                 "calendar with holiday_division='1' rows first."
             )
+    daily_resolved = (
+        resolved_candidates
+        if isinstance(resolved_candidates, ResolvedDailyUniverse)
+        else None
+    )
+    fixed_allowlist = (
+        None if daily_resolved is not None else resolved_candidates
+    )
 
     shares: dict[str, float] = {}
     cash = float(starting_capital)

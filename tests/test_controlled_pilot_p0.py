@@ -1795,7 +1795,7 @@ def test_fixture_view_cannot_enter_controlled(tmp_path) -> None:
 
 
 def test_controlled_pins_same_artifact_and_rejects_replace_mutate_swap(
-    tmp_path, receipt_ed25519_keys
+    tmp_path, receipt_ed25519_keys, monkeypatch
 ) -> None:
     from _coreseed import TRADING_DAYS, seed_governed_am_pm_session_db
     from core import PERSONAL_RETROSPECTIVE_ADJUSTED, run_backtest, standard_cost
@@ -1852,6 +1852,13 @@ def test_controlled_pins_same_artifact_and_rejects_replace_mutate_swap(
     assert res.metrics["selection_eligible"] is False
     assert res.metrics["comparison_eligible"] is False
 
+    default_unopened = tmp_path / "must-not-open-default.sqlite"
+    assert not default_unopened.exists()
+    monkeypatch.setattr("pit.read_clock.DEFAULT_DB_PATH", default_unopened)
+    mixed_universe = {
+        "codes": tuple(universe.keys()),
+        "pit_as_of": universe.pit_as_of,
+    }
     mixed_handle = _verified_snapshot_handle_from_db(db, receipt_ed25519_keys)
     mixed_view = mixed_handle.am_session_data_view()
     try:
@@ -1860,7 +1867,7 @@ def test_controlled_pins_same_artifact_and_rejects_replace_mutate_swap(
             days[0],
             days[-1],
             db_path=None,
-            universe=None,
+            universe=mixed_universe,
             execution_mode="am_signal_pm_close",
             price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
             cost_model=standard_cost(bps=0.0),
@@ -1878,6 +1885,7 @@ def test_controlled_pins_same_artifact_and_rejects_replace_mutate_swap(
     assert mixed.metrics["comparison_eligible"] is False
     held = mixed.metadata["data_quality"]["held_missing_morning_adjustment_close"]
     assert held and "swapped" in str(held[0].get("reason") or "")
+    assert not default_unopened.exists()
 
     with open(db, "ab") as handle:
         handle.write(b"tamper")
