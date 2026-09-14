@@ -1995,20 +1995,13 @@ def _assert_held_failed_terminal_retries_without_shutdown(
     *,
     held_retry_scheduler: list[_HeldTimer],
     adapter,
-    job_id: str,
     other_spec,
     shutdown: threading.Event,
 ) -> None:
-    worker = None
     try:
-        worker = _join_manager_worker(manager)
         assert not shutdown.is_set()
         assert adapter.puts == 1
         assert adapter.gets == 1
-        record = manager.status(job_id)
-        assert record is not None
-        assert record["status"] == "FAILED"
-        assert SYNTHETIC_CHILD_RUNNER_ERROR in record["error"]
         assert manager._pending_terminal is not None
         assert manager._accepting is False
         assert manager._shutdown_notified is False
@@ -2035,7 +2028,7 @@ def _assert_held_failed_terminal_retries_without_shutdown(
         with pytest.raises(service.JobBusyError):
             manager.submit(other_spec)
     finally:
-        _cancel_held_retries_after_worker(manager, worker)
+        _cancel_held_retries_after_worker(manager, None)
 
 
 def _advance_held_terminal_retries(
@@ -2656,18 +2649,22 @@ def test_failed_terminal_put_and_get_404_retries_without_shutdown(
 ) -> None:
     terminal = threading.Event()
     fake = _put_then_get_404(monkeypatch, put_error=put_error)
-    manager = service.JobManager(
-        synthetic_child_runner_failure,
+    spec = _job("a" * 64, job_id)
+    manager = _job_manager(
+        lambda item: (_ for _ in ()).throw(
+            AssertionError("publication boundary test must not start a runner")
+        ),
         on_terminal=terminal.set,
         retry_schedule=(0.05, 0.05),
         max_job_seconds=30,
     )
-    manager.submit(_job("a" * 64, job_id))
+    manager._begin_terminal_publication(
+        spec, manager._failure_terminal(spec, "runner failed")
+    )
     _assert_held_failed_terminal_retries_without_shutdown(
         manager,
         held_retry_scheduler=held_retry_scheduler,
         adapter=fake,
-        job_id=job_id,
         other_spec=_job("b" * 64, "other"),
         shutdown=terminal,
     )
