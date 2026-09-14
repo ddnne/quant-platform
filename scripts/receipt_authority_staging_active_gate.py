@@ -1591,9 +1591,14 @@ def _collect_d1_snapshot(
 ) -> dict[str, Any]:
     surface = build_manifest()["workers"]["ingestion-premium"]["staging"]
     databases = surface["d1_databases"]
-    if len(databases) != 1:
+    selected = [
+        row
+        for row in databases
+        if type(row) is dict and row.get("binding") == "DB"
+    ]
+    database_id = selected[0].get("database_id") if len(selected) == 1 else None
+    if type(database_id) is not str or not database_id:
         raise ReceiptStagingActiveGateError("Premium staging D1 identity drifted")
-    database_id = str(databases[0]["database_id"])
     schema_rows = _d1_select(
         account_id=account_id,
         api_token=api_token,
