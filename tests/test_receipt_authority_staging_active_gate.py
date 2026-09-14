@@ -1087,6 +1087,38 @@ def test_gate_rejects_independent_d1_schema_and_exact_text_drift(
         _validate(evidence, d1_snapshot=drifted)
 
 
+def test_collect_d1_snapshot_selects_canonical_ingest_db_from_multi_binding_surface(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = copy.deepcopy(active.build_manifest())
+    staging = manifest["workers"]["ingestion-premium"]["staging"]
+    ingest = next(row for row in staging["d1_databases"] if row["binding"] == "DB")
+    projection = next(
+        row for row in staging["d1_databases"] if row["binding"] == "OPS_PROJECTION_DB"
+    )
+    staging["d1_databases"] = [projection, ingest]
+    queried: list[str] = []
+
+    def fake_select(*, database_id: str, **_kwargs: Any) -> list[dict[str, Any]]:
+        queried.append(database_id)
+        return [{"ok": True}]
+
+    monkeypatch.setattr(active, "build_manifest", lambda: manifest)
+    monkeypatch.setattr(active, "_d1_select", fake_select)
+    snapshot = active._collect_d1_snapshot(
+        account_id=ACCOUNT,
+        api_token="opaque",
+        source_sha=SHA,
+        caller_version_id="10000000-0000-4000-8000-000000000003",
+    )
+    ingest_id = ingest["database_id"]
+    assert queried == [ingest_id, ingest_id]
+    assert snapshot == {
+        "schema_rows": [{"ok": True}],
+        "attestation_rows": [{"ok": True}],
+    }
+
+
 def test_access_inventory_requires_exact_worker_app_policy_token(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
