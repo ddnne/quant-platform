@@ -345,7 +345,8 @@ describe("BudgetLedger in the Workers runtime", () => {
     await within("seed expired alarm", runInDurableObject(stub, async (_instance: BudgetLedger, state) => {
       const ledger = await state.storage.get<LedgerState>("ledger");
       if (!ledger) throw new Error("ledger state missing");
-      ledger.leases[reserved.lease.lease_id].expires_at = Date.now() - 1;
+      const lease = ledger.leases[reserved.lease.lease_id];
+      lease.expires_at = lease.acquired_at;
       await Promise.all([
         state.storage.put("ledger", ledger),
         state.storage.setAlarm(Date.now()),
@@ -850,7 +851,8 @@ describe("BudgetLedger in the Workers runtime", () => {
       const ledger = await state.storage.get<LedgerState>("ledger");
       if (!ledger) throw new Error("ledger state missing");
       expect(ledger.reservations["runtime-pre-provider-expiry"].provider_started_at).toBeNull();
-      ledger.leases[reserved.lease.lease_id].expires_at = Date.now() - 1;
+      const lease = ledger.leases[reserved.lease.lease_id];
+      lease.expires_at = lease.acquired_at;
       await Promise.all([
         state.storage.put("ledger", ledger),
         state.storage.setAlarm(Date.now()),
