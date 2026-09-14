@@ -1,26 +1,25 @@
 """Minimal paper-only execution boundary for a single-user research loop.
 
 The service accepts only the inputs needed to reproduce one local backtest:
-an exact ``StrategySpec``, a DRAFT ``PaperRunConfig``, the expected logical
-SQLite snapshot id, and the exact approved ``FeatureRef`` objects.  It has no
-READY, Trader, promotion, broker, or authority DTO surface.
+an exact ``StrategySpec``, a pathless DRAFT ``PaperRunConfig``, a bound
+``PersonalResearchDataView``, the expected logical snapshot id, and the exact
+approved ``FeatureRef`` objects.  Storage path, connection, and read-session
+lifetime stay in the paper-runtime bind.  It has no READY, Trader, promotion,
+broker, or authority DTO surface.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import date
-from pathlib import Path
 
 from core.universe import RawFixedUniverseError, ResolvedDailyUniverse
-from paper_runtime.personal_prepared_frame import _active_personal_prepared_frame
-from paper_runtime.personal_read_session import _personal_paper_read_session
-from paper_runtime.snapshot_identity import data_snapshot_id
-from strategies.paper import Lifecycle, PaperRunConfig, PaperRunResult, run_paper
+from paper_runtime.personal_draft_bind import run_bound_personal_paper
+from pit.personal_research_view import PersonalResearchDataView
+from strategies.paper import Lifecycle, PaperRunConfig, PaperRunResult
 from strategies.spec import (
     FeatureRef,
     StrategySpec,
-    interpret_strategy_spec,
     iter_feature_refs,
     resolve_feature_ref,
 )
@@ -123,6 +122,7 @@ class PersonalPaperExecutionService:
         *,
         expected_snapshot_id: str,
         approved_feature_refs: Sequence[FeatureRef],
+        view: PersonalResearchDataView | None = None,
     ) -> PaperRunResult:
         if type(spec) is not StrategySpec:
             raise PersonalPaperExecutionRejected(
@@ -136,9 +136,9 @@ class PersonalPaperExecutionService:
             raise PersonalPaperExecutionRejected(
                 "personal paper execution is DRAFT-only"
             )
-        if config.db_path is None:
+        if config.db_path is not None:
             raise PersonalPaperExecutionRejected(
-                "personal paper execution requires an explicit database path"
+                "personal paper execution does not accept a database path"
             )
 
         _require_explicit_period(config)
@@ -147,40 +147,19 @@ class PersonalPaperExecutionService:
         feature_refs = _require_exact_approved_features(
             spec, approved_feature_refs
         )
-
-        db_path = Path(config.db_path)
+        if not isinstance(view, PersonalResearchDataView):
+            raise PersonalPaperExecutionRejected(
+                "personal paper execution requires a bound PersonalResearchDataView"
+            )
         try:
-            before = data_snapshot_id(db_path)
+            result = run_bound_personal_paper(
+                spec,
+                config,
+                view=view,
+                expected_snapshot_id=expected_snapshot,
+            )
         except (FileNotFoundError, RuntimeError) as exc:
             raise PersonalPaperExecutionRejected(str(exc)) from exc
-        if before != expected_snapshot:
-            raise PersonalPaperExecutionRejected(
-                "database snapshot does not match expected_snapshot_id"
-            )
-        prepared_frame = _active_personal_prepared_frame(db_path)
-        if (
-            prepared_frame is not None
-            and prepared_frame.snapshot_id != expected_snapshot
-        ):
-            raise PersonalPaperExecutionRejected(
-                "personal prepared frame snapshot does not match "
-                "expected_snapshot_id"
-            )
-
-        strategy = interpret_strategy_spec(spec)
-        # Only the immutable paper computation opts into connection reuse.
-        # The before/after snapshot verification remains outside this scope.
-        with _personal_paper_read_session(db_path):
-            result = run_paper(strategy, config, store=None)
-
-        try:
-            after = data_snapshot_id(db_path)
-        except (FileNotFoundError, RuntimeError) as exc:
-            raise PersonalPaperExecutionRejected(str(exc)) from exc
-        if after != expected_snapshot:
-            raise PersonalPaperExecutionRejected(
-                "database snapshot changed during personal paper execution"
-            )
         if (
             type(result) is not PaperRunResult
             or result.lifecycle is not Lifecycle.DRAFT
