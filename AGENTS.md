@@ -1,5 +1,6 @@
 # Development responsibilities
 
+- Do not re-run Grok's source/caller investigation or bounce tiny questions back to Grok inside a coherent work unit. Use Grok's diagnosis, implementation, failure analysis, and self-review at work-unit granularity. Codex independently checks consequential findings against the actual diff, runs the selected checks, and still owns native CI.
 - Grok owns a bounded unit end to end: investigate source and callers, choose the simplest justified design and implementation, edit, run minimal targeted local checks, diagnose failures, and self-review. Prefer that useful investigation, design, implementation, failure analysis, and self-review over patch-only edits.
 - When Grok cannot execute tools directly, Codex may mechanically apply Grok's patch and run Grok's selected checks, then return the results for Grok to diagnose. That fallback is mechanical execution only. Codex may implement when Grok is unavailable or rate-limited; report the fallback.
 - Codex owns high-level policy and direction, independent final review of the actual diff, git commit/push/PR, required native CI, and merge. Evaluate findings against code and behavior; record accepted fixes and evidence-backed rejections. Cross-review does not require automatic agreement or replace tests and exact-source native CI.

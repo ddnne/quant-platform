@@ -14,7 +14,8 @@ multi-tenant enterprise.
 3. Closed DSL/JSON only. Do not build or test hostile same-process Python
    reflection/subclass/frozen-object attacks, root-adversary/WebAuthn/extra
    signers, or extra enterprise authority layers unless a new explicit user
-   need is established. C04 remains pending under that rule.
+   need is established. Cheap production type guards, including ``@final``,
+   do not require hostile-subclass tests; do not add such tests.
 4. Before adding a layer or test, state the concrete current failure it
    catches and whether existing code, library, schema, or test already covers
    it. Prefer deletion/consolidation over a replacement framework. No
@@ -90,6 +91,28 @@ charter for extra hostile-Python tests.
   dynamic importlib strings and paths outside setuptools where=/py-modules
   are not verified. core/features tests observe PIT calls and assert that
   runtime contexts expose no DB handle.
+- C04 personal JSON-boundary (trusted host): removed same-process subclass,
+  stateful mapping, and equality-confused tests from D1 sync, receipt
+  signature, controlled artifacts, ops projection extra-field mix, Gateway
+  FixtureSubclass/budget-subclass/setattr freeze, READY DatasetId/DatasetList
+  and evidence-type subclass, coverage-transition StatefulDocument/EvilString,
+  runtime-attestation EqualityConfusedScope and nested containers, and
+  sync-dataset EvilStr/ConfusedStatus/StatefulPolicy. Retained unsigned D1
+  cursor signature fail, A-signature on B-claims, extra projection envelope
+  field, missing/extra/swapped artifact bytes, Gateway StructuralProvider/
+  lambda constructor contract, fixture duplicate-key/NaN JSON, Mass-disabled
+  missing budget, READY duplicate-key/nonfinite JSON and environment mismatch,
+  signed coverage transition content-addressed COMPLETE, unbounded TTL, and
+  ordinary-dict COMPLETE write remaining PARTIAL. Deleted ops-projection
+  SwitchingEnvelope: it only failed ``exact finite JSON`` on an in-process
+  Mapping; public-wire A-signature/B-payload is already
+  ``test_signed_projection_envelope_binds_content_cursors_and_gate_evidence``
+  (JSON copy, mutated ``applied_cursor``, ``signature is invalid``),
+  frozen observation after mutate, unsigned-B identity isolation, extra
+  envelope field, and strict duplicate/NaN JSON. ``VerifiedPilotReadiness``
+  staying ``@final`` is a cheap production type guard; no hostile-subclass
+  test is required and none should be added. This is the reviewed personal-
+  JSON test slice, not a global all-test or all-finding close.
 - Replaced the remaining aggregate-namespace string scan with that DataPlane
   source-owner check and removed its deferred-phase existence assertion.
 - Removed the research harness's AST/function-name/environment-spelling freeze;

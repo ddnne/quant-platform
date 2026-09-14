@@ -654,7 +654,7 @@ def test_ready_projection_verifier_requires_the_authority_environment(
         )
 
 
-def test_verified_projection_result_is_opaque_final_and_alias_free(
+def test_verified_projection_result_is_opaque_minted_and_immutable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     binding = load_exact_four_pilot_ready_binding()
@@ -664,9 +664,6 @@ def test_verified_projection_result_is_opaque_final_and_alias_free(
 
     with pytest.raises(RuntimeError, match="no public constructor"):
         evidence_type()
-    with pytest.raises(TypeError, match="is final"):
-        class ForgedEvidence(evidence_type):
-            pass
 
     forged = object.__new__(evidence_type)
     with pytest.raises(RuntimeError, match="not verifier-minted"):
@@ -684,30 +681,6 @@ def test_verified_projection_result_is_opaque_final_and_alias_free(
         evidence.rows = {}  # type: ignore[misc]
     with pytest.raises(AttributeError):
         object.__setattr__(evidence, "_rows", {})
-
-
-def test_ready_rejects_dataset_identifier_coercion_and_container_subclasses(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    binding = load_exact_four_pilot_ready_binding()
-    signed, registry = _signed_projection_evidence(binding.required_datasets)
-    _configure_projection_registry_for_test(monkeypatch, registry)
-
-    class DatasetId(str):
-        pass
-
-    class DatasetList(list):
-        pass
-
-    with pytest.raises(MassResearchDisabledError, match="exact unique"):
-        _verified_production_projection_evidence(
-            signed,
-            [DatasetId(binding.required_datasets[0]), *binding.required_datasets[1:]],
-        )
-    with pytest.raises(MassResearchDisabledError, match="exact unique"):
-        _verified_production_projection_evidence(
-            signed, DatasetList(binding.required_datasets)
-        )
 
 
 @pytest.mark.parametrize(

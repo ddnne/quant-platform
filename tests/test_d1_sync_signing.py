@@ -298,7 +298,7 @@ def test_pinned_verifier_accepts_current_closed_audit_and_rejects_tampering(
         )
 
 
-def test_verifier_rejects_a_signed_b_cursor_and_stateful_document(
+def test_verifier_rejects_a_signed_b_cursor(
     tmp_path, monkeypatch
 ):
     private, _registry_path, registry = _install_external_key_registry(
@@ -315,64 +315,6 @@ def test_verifier_rejects_a_signed_b_cursor_and_stateful_document(
         signing.verify_signed_d1_sync_audit(
             unsigned_b, expected_environment="production"
         )
-
-    class StatefulDocument(dict):
-        def __init__(self, first: dict, second: dict):
-            super().__init__(second)
-            self.first = first
-            self.second = second
-            self.observations = 0
-
-        def items(self):
-            self.observations += 1
-            selected = self.first if self.observations == 1 else self.second
-            return selected.items()
-
-    attacker = StatefulDocument(signed_a, unsigned_b)
-    with pytest.raises(signing.D1SyncAuditError, match="exact finite JSON"):
-        signing.verify_signed_d1_sync_audit(
-            attacker, expected_environment="production"
-        )
-    assert attacker.observations == 0
-
-
-def test_verifier_rejects_nested_and_scalar_subclasses(tmp_path, monkeypatch):
-    private, _registry_path, registry = _install_external_key_registry(
-        tmp_path, monkeypatch
-    )
-    now = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
-    monkeypatch.setattr(signing, "_utc_now", lambda: now)
-
-    class DictSubclass(dict):
-        pass
-
-    class ListSubclass(list):
-        pass
-
-    class StrSubclass(str):
-        pass
-
-    documents = []
-    nested_mapping = _signed_document(private, registry, issued_at=now)
-    nested_mapping["envelope"]["table_counts"] = DictSubclass(
-        nested_mapping["envelope"]["table_counts"]
-    )
-    documents.append(nested_mapping)
-    nested_list = _signed_document(private, registry, issued_at=now)
-    nested_list["envelope"]["table_counts"] = ListSubclass([1])
-    documents.append(nested_list)
-    scalar = _signed_document(private, registry, issued_at=now)
-    scalar["issuer_key_id"] = StrSubclass(scalar["issuer_key_id"])
-    documents.append(scalar)
-    documents.append(
-        StrSubclass(json.dumps(_signed_document(private, registry, issued_at=now)))
-    )
-
-    for document in documents:
-        with pytest.raises(signing.D1SyncAuditError, match="exact finite JSON"):
-            signing.verify_signed_d1_sync_audit(
-                document, expected_environment="production"
-            )
 
 
 def test_verified_envelope_is_deep_immutable_and_retained_once(
