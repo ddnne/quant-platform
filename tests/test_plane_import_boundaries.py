@@ -10,12 +10,13 @@ packages.<where-dir>.* index entries are lookup aliases for imported names.
 Dynamic importlib strings and paths outside setuptools where=/py-modules are
 not verified. The same index then applies closed market-read owner-edges:
 ready_publication, ready_policy, personal_draft_bind, snapshot,
-snapshot_publish_policy, snapshot_persist, snapshot_read, and coherence must not
+snapshot_publish_policy, snapshot_persist, snapshot_read, coherence,
+core.engine, core.repo_rates, features.runtime, and data_access.adapter must not
 import connection-private PIT SQL modules; ready_policy also must not import
 storage.coverage_proof. Equivalent aliases resolve to the same owner path.
 This does not ban sqlite3, DataView, or trusted experiment-index/cache/budget
 stores. Publication/coherence/read consumers take ReadyLedgerSession, not a
-raw Connection. Engine resolve_db_path remains OPEN.
+raw Connection. Default DB path and as_of bind through pit.read_clock.
 """
 
 from __future__ import annotations
@@ -214,6 +215,10 @@ def test_data_plane_source_does_not_import_other_first_party_planes() -> None:
         ("paper_runtime.snapshot_persist", private_sql),
         ("paper_runtime.snapshot_read", private_sql),
         ("paper_runtime.coherence", private_sql),
+        ("core.engine", private_sql),
+        ("core.repo_rates", private_sql),
+        ("features.runtime", private_sql),
+        ("data_access.adapter", private_sql),
     )
     runtime_violations: list[str] = []
     for module_name, forbidden in closed_edges:

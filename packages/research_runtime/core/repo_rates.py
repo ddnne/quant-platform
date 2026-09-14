@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any, Mapping, Sequence
 
 import pit
-from pit.query import resolve_db_path
+from pit.read_clock import resolve_db_path
 
 from .costs import PAPER_REPO_TENOR_PREFERENCE, rates_by_date_from_repo_rows
 from .execution import close_as_of

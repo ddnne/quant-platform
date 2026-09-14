@@ -41,7 +41,7 @@ from pit.governed_am_view import (
     OfflineFixtureAmSessionDataView,
     VerifiedControlledSnapshotHandle,
 )
-from pit.query import resolve_db_path
+from pit.read_clock import resolve_db_path
 from price_basis import (
     PERSONAL_RETROSPECTIVE_ADJUSTED,
     RAW,
@@ -1533,7 +1533,7 @@ def _run_backtest_impl(
                 controlled_hold_reason = "missing_verified_production_am_capability"
         else:
             try:
-                candidate.assert_pinned_artifact()
+                candidate.assert_pinned_artifact(resolved_db_path)
                 candidate.bind_engine_reads()
                 governed_am_view = candidate
             except SnapshotObservationClockError as exc:

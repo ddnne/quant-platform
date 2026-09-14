@@ -14,7 +14,7 @@ from typing import Any, Mapping
 
 import features
 import pit
-from pit.query import normalize_as_of
+from pit.read_clock import normalize_as_of
 from data_contracts import (
     all_contracts,
     contract_for,

@@ -3,8 +3,9 @@
 One hard rule lives here: **every** read applies ``available_at <= as_of``
 (and rejects NULL ``available_at``). Optional range / equality filters on the
 event column are *additive* — they never replace the ``available_at`` gate.
-This module owns the read-only connection and the canonical ``as_of``
-normalization; :mod:`pit.api` builds the per-table filters on top.
+This module owns the read-only connection. Canonical ``as_of`` and the default
+DB path live in :mod:`pit.read_clock`; :mod:`pit.api` builds the per-table
+filters on top.
 """
 
 from __future__ import annotations
@@ -14,14 +15,13 @@ import sqlite3
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Optional
 from urllib.parse import quote
 
 from data_contracts.loader import contract_for
 from data_contracts.personal_history_compact import PERSONAL_HISTORY_COMPACT_NATURAL_KEYS
-from ingestion.common.timeutil import ensure_jst, parse_dt, to_iso
+from ingestion.common.timeutil import parse_dt
 from storage.schema import NATURAL_KEYS, REVISION_TABLES
 
 from .errors import (
@@ -31,16 +31,11 @@ from .errors import (
     SnapshotNotReady,
     SnapshotObservationClockError,
 )
-
-# Sentinel default for ``as_of`` on the public API. A bare ``None`` default
-# would collide with an explicit ``None`` argument; this object is distinct,
-# so :func:`normalize_as_of` can tell "caller omitted as_of" apart and raise
-# :class:`AsOfRequired` with a helpful message instead of a bare ``TypeError``.
-_NOT_GIVEN: Any = object()
-
-# Default structured DB location (relative to the process cwd, i.e. the repo
-# root in normal use). Override per-call with ``db_path=``.
-DEFAULT_DB_PATH = Path("data/structured/ingestion.sqlite")
+from .read_clock import (
+    MAX_SNAPSHOT_CLOCK_FUTURE_SKEW,
+    normalize_as_of,
+    resolve_db_path,
+)
 
 # Columns that hold a verbatim/source JSON blob; decoded into Python objects
 # in returned rows when the stored string is valid JSON.
@@ -51,11 +46,6 @@ _JSON_PAYLOAD_COLS = ("raw_payload", "payload")
 # therefore continues to open and close one connection per query. Ordinary
 # callers never receive this box; it is not a writable connection map.
 _READ_SCOPE_STATE = threading.local()
-
-# Publisher and reader share this bound; the exact signed clocks must still
-# agree. This protects a malformed future clock without turning local wall
-# time into an authority for historical visibility.
-MAX_SNAPSHOT_CLOCK_FUTURE_SKEW = timedelta(minutes=5)
 
 
 class _ReadScopeBox:
@@ -99,50 +89,6 @@ class _ReadScopeBox:
 
     def shape_clear(self, key: str) -> None:
         self._shapes.pop(key, None)
-
-
-def normalize_as_of(as_of: Any = _NOT_GIVEN) -> str:
-    """Return a canonical JST ISO string for ``as_of``, or raise.
-
-    * missing (sentinel) / ``None`` / empty string -> :class:`AsOfRequired`
-      (PIT has **no** "latest" default).
-    * unparseable -> :class:`InvalidAsOf`.
-
-    Accepts ISO-8601 strings, aware or naive :class:`~datetime.datetime`
-    (naive assumed JST), and :class:`~datetime.date` (JST midnight). The
-    result is seconds-precision ``+09:00`` — the same canonical form
-    ``available_at`` is stored in (see
-    :func:`ingestion.common.available_at.validate_available_at`) — so the two
-    compare correctly as ISO strings in SQL.
-    """
-    if as_of is None or as_of is _NOT_GIVEN:
-        raise AsOfRequired(
-            "as_of is required (PIT has no 'latest' default); pass an explicit "
-            "Asia/Tokyo instant, e.g. as_of='2025-04-01T00:00:00+09:00'."
-        )
-    if isinstance(as_of, datetime):
-        return to_iso(ensure_jst(as_of))
-    if isinstance(as_of, date):  # datetime is a subclass of date — checked above
-        return to_iso(ensure_jst(datetime(as_of.year, as_of.month, as_of.day)))
-    if isinstance(as_of, str):
-        s = as_of.strip()
-        if not s:
-            raise AsOfRequired("as_of is required (an empty string is not allowed).")
-        try:
-            return to_iso(parse_dt(s))
-        except ValueError as exc:
-            raise InvalidAsOf(
-                f"as_of {as_of!r} is not a valid ISO-8601 instant: {exc}"
-            ) from exc
-    raise InvalidAsOf(
-        f"as_of unsupported type {type(as_of).__name__!r}; "
-        "expected str / datetime / date."
-    )
-
-
-def resolve_db_path(db_path: Any) -> Path:
-    """Resolved DB path: explicit override or :data:`DEFAULT_DB_PATH`."""
-    return Path(db_path) if db_path is not None else DEFAULT_DB_PATH
 
 
 def snapshot_observed_through(

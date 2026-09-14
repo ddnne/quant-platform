@@ -21,7 +21,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping, Protocol
 
 import pit
-from pit.query import resolve_db_path
+from pit.read_clock import normalize_as_of, resolve_db_path
 
 from . import registry as _registry
 from .am_session_features import AM_SESSION_FEATURE_IDS
@@ -369,8 +369,6 @@ def _require_as_of(as_of: Any) -> str:
         raise AsOfRequired(
             "features.compute requires an explicit `as_of` (PIT hard gate)"
         )
-    # Pass through pit's normalizer (raises on invalid input).
-    from pit.query import normalize_as_of
     return normalize_as_of(as_of)
 
 
@@ -596,10 +594,9 @@ def compute(
         registry id (e.g. ``"return_1d"``). When a str, the latest version is
         used; pin a version by passing the resolved definition.
     as_of : str
-        **Required.** PIT decision instant. Anything accepted by
-        ``pit.query.normalize_as_of`` (canonical JST ISO).
+        **Required.** PIT decision instant. Canonicalized by ``pit.read_clock.normalize_as_of``.
     db_path : Any, optional
-        SQLite DB path (resolved via ``pit.query.resolve_db_path``).
+        SQLite DB path (resolved via ``pit.read_clock.resolve_db_path``).
     **inputs :
         Per-feature inputs. Required kwargs are validated against
         ``feature.inputs.required_kwargs``.

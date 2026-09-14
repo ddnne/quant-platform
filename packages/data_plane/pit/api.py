@@ -61,15 +61,14 @@ from .financial_observations import (
 )
 from .models import PIT_API_VERSION, PitResult
 from .query import (
-    _NOT_GIVEN,
     _iter_query_rows,
     _owned_pinned_transaction,
     _probe_standalone_typed_adjustment_candidates,
     _scoped_read_connection,
     connect_readonly,
-    normalize_as_of,
     run_query,
 )
+from .read_clock import _NOT_GIVEN, normalize_as_of
 
 __all__ = [
     "FinancialCatalogState",

@@ -31,15 +31,13 @@ from ops.receipt_product import (
 from storage.schema import CATALOG_CODE_SQL
 
 from .errors import PitError, SnapshotObservationClockError
-from .query import (
-    bind_external_readonly_connection,
-    normalize_as_of,
-    resolve_db_path,
-)
+from .query import bind_external_readonly_connection
 from .read_clock import (
     SNAPSHOT_OBSERVATION_LABEL,
     PitReadClock,
     install_read_clock,
+    normalize_as_of,
+    resolve_db_path,
 )
 from .universe_pit import (
     UniverseDaySlice,

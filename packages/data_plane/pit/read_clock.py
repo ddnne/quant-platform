@@ -2,7 +2,9 @@
 
 Decision visibility is ``event_time`` / ``available_at`` versus ``decision_at``.
 Observation visibility is ``ingested_at`` versus the snapshot's immutable
-``observed_through``. Callers never supply an arbitrary observation cutoff.
+``observed_through``. This module also owns canonical ``as_of`` and the default
+structured DB path used by those reads. Callers never supply an arbitrary
+observation cutoff.
 """
 
 from __future__ import annotations
@@ -10,17 +12,66 @@ from __future__ import annotations
 import sqlite3
 import threading
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any, Iterator
 from contextlib import contextmanager
 
-from ingestion.common.timeutil import now_iso, now_jst, parse_dt
+from ingestion.common.timeutil import ensure_jst, now_iso, now_jst, parse_dt, to_iso
 
-from .errors import InvalidAsOf, PitError
-from .query import MAX_SNAPSHOT_CLOCK_FUTURE_SKEW, normalize_as_of
+from .errors import AsOfRequired, InvalidAsOf, PitError
+
+_NOT_GIVEN: Any = object()
+DEFAULT_DB_PATH = Path("data/structured/ingestion.sqlite")
+MAX_SNAPSHOT_CLOCK_FUTURE_SKEW = timedelta(minutes=5)
 
 _STATE = threading.local()
 DRAFT_OBSERVATION_LABEL = "draft_bind_observation_cutoff"
 SNAPSHOT_OBSERVATION_LABEL = "immutable_snapshot_observed_through"
+
+
+def normalize_as_of(as_of: Any = _NOT_GIVEN) -> str:
+    """Return a canonical JST ISO string for ``as_of``, or raise.
+
+    * missing (sentinel) / ``None`` / empty string -> :class:`AsOfRequired`
+      (PIT has **no** "latest" default).
+    * unparseable -> :class:`InvalidAsOf`.
+
+    Accepts ISO-8601 strings, aware or naive :class:`~datetime.datetime`
+    (naive assumed JST), and :class:`~datetime.date` (JST midnight). The
+    result is seconds-precision ``+09:00`` — the same canonical form
+    ``available_at`` is stored in (see
+    :func:`ingestion.common.available_at.validate_available_at`) — so the two
+    compare correctly as ISO strings in SQL.
+    """
+    if as_of is None or as_of is _NOT_GIVEN:
+        raise AsOfRequired(
+            "as_of is required (PIT has no 'latest' default); pass an explicit "
+            "Asia/Tokyo instant, e.g. as_of='2025-04-01T00:00:00+09:00'."
+        )
+    if isinstance(as_of, datetime):
+        return to_iso(ensure_jst(as_of))
+    if isinstance(as_of, date):  # datetime is a subclass of date — checked above
+        return to_iso(ensure_jst(datetime(as_of.year, as_of.month, as_of.day)))
+    if isinstance(as_of, str):
+        s = as_of.strip()
+        if not s:
+            raise AsOfRequired("as_of is required (an empty string is not allowed).")
+        try:
+            return to_iso(parse_dt(s))
+        except ValueError as exc:
+            raise InvalidAsOf(
+                f"as_of {as_of!r} is not a valid ISO-8601 instant: {exc}"
+            ) from exc
+    raise InvalidAsOf(
+        f"as_of unsupported type {type(as_of).__name__!r}; "
+        "expected str / datetime / date."
+    )
+
+
+def resolve_db_path(db_path: Any) -> Path:
+    """Resolved DB path: explicit override or :data:`DEFAULT_DB_PATH`."""
+    return Path(db_path) if db_path is not None else DEFAULT_DB_PATH
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,9 +283,13 @@ def visibility_predicates(clock: PitReadClock) -> tuple[list[str], list[str]]:
 
 
 __all__ = [
+    "DEFAULT_DB_PATH",
     "DRAFT_OBSERVATION_LABEL",
+    "MAX_SNAPSHOT_CLOCK_FUTURE_SKEW",
     "SNAPSHOT_OBSERVATION_LABEL",
     "PitReadClock",
+    "normalize_as_of",
+    "resolve_db_path",
     "bound_read_clock",
     "clock_for_decision",
     "draft_observation_clock",
