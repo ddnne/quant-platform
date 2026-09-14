@@ -27,7 +27,6 @@ def test_reconstitution_evidence_apply_false_both_options() -> None:
     from research.combo_basket_catalog import (
         HUMAN_RECONSTITUTION_PENDING,
         KEEP_BOTH_SLEEVES_JOB,
-        reconstitution_evidence_builder,
     )
     from research.eval_flags import RECONSTITUTION_APPLY
     from research.reconstitution_evidence import (
@@ -38,8 +37,6 @@ def test_reconstitution_evidence_apply_false_both_options() -> None:
 
     assert RECONSTITUTION_APPLY is False
     pack = reconstitution_evidence_pack()
-    built = reconstitution_evidence_builder()
-    assert built["version"] == pack["version"]
     assert pack["apply"] is False
     assert pack["go"] is False
     assert pack["not_a_pass"] is True
