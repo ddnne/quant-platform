@@ -21,7 +21,8 @@ from ingestion.jquants.normalize import CLOSE_CHANGE_DATE
 
 from .api import get_equity_bars_daily
 from .models import PIT_API_VERSION
-from .query import _NOT_GIVEN, normalize_as_of, snapshot_observed_through
+from .query import snapshot_observed_through
+from .read_clock import _NOT_GIVEN, normalize_as_of
 from ops.receipt_product import _aware_instant
 
 _MORNING_CLOSE_SUFFIX = "T11:30:00+09:00"

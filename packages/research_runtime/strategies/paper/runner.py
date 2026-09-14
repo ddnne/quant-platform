@@ -365,7 +365,7 @@ def execute_paper_backtest(
         strategy,
         config.start,
         config.end,
-        db_path=config.db_path,
+        db_path=configured_path,
         execution_mode=config.execution_mode,
         cost_model=standard_cost(config.cost_bps),
         short_financing=sf_model,

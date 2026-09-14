@@ -1802,7 +1802,6 @@ def test_controlled_pins_same_artifact_and_rejects_replace_mutate_swap(
     from core.execution import morning_close_as_of
     from core.universe import membership_at
     from core.strategy_protocol import OrderIntent
-    from pit.governed_am_view import assemble_governed_am_session_data_view
     from pit.errors import SnapshotObservationClockError
 
     code = "1332"
@@ -1852,6 +1851,33 @@ def test_controlled_pins_same_artifact_and_rejects_replace_mutate_swap(
     )
     assert res.metrics["selection_eligible"] is False
     assert res.metrics["comparison_eligible"] is False
+
+    mixed_handle = _verified_snapshot_handle_from_db(db, receipt_ed25519_keys)
+    mixed_view = mixed_handle.am_session_data_view()
+    try:
+        mixed = run_backtest(
+            AlwaysLong(),
+            days[0],
+            days[-1],
+            db_path=None,
+            universe=None,
+            execution_mode="am_signal_pm_close",
+            price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+            cost_model=standard_cost(bps=0.0),
+            max_gross_weight=0.5,
+            am_session_data_view=mixed_view,
+        )
+    finally:
+        mixed_handle.close()
+    assert mixed.trades == []
+    assert mixed.equity_curve == []
+    assert mixed.metadata["trading_days"] == 0
+    assert mixed.metrics["skipped_decision_count"] == 1
+    assert mixed.metrics["skipped_decision_dates"] == [days[0]]
+    assert mixed.metrics["selection_eligible"] is False
+    assert mixed.metrics["comparison_eligible"] is False
+    held = mixed.metadata["data_quality"]["held_missing_morning_adjustment_close"]
+    assert held and "swapped" in str(held[0].get("reason") or "")
 
     with open(db, "ab") as handle:
         handle.write(b"tamper")
