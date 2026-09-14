@@ -34,6 +34,10 @@ import {
   EXACT_FOUR_PROFILE_ID,
   EXACT_FOUR_PROFILE_VERSION,
   EXACT_FOUR_UNIVERSE_RULE_DIGEST,
+  CONTROLLED_OPS_READY_POINTER_FORMAT,
+  controlledOpsReadyPointerKey,
+  parseOpsReadyPointer,
+  type ControlledOpsReadyPointer,
   controlledPhysicalSnapshotKey,
   controlledPilotRequestDigest,
   controlledReadyKey,
@@ -606,6 +610,99 @@ type NativeEnvelopeWinner = {
   attestationKey: string;
 };
 
+function pointerDecision(
+  candidate: ControlledOpsReadyPointer,
+  stored: ControlledOpsReadyPointer,
+): "same" | "keep" | "replace" {
+  if (candidate.envelope_digest === stored.envelope_digest) return "same";
+  const candidateAt = parseCanonicalUtc(candidate.published_at);
+  const storedAt = parseCanonicalUtc(stored.published_at);
+  if (!Number.isFinite(storedAt) && Number.isFinite(candidateAt)) return "replace";
+  if (!Number.isFinite(candidateAt) || candidateAt < storedAt) return "keep";
+  if (candidateAt > storedAt) return "replace";
+  return candidate.envelope_digest > stored.envelope_digest ? "replace" : "keep";
+}
+
+async function pointerFromEnvelope(
+  envelope: Record<string, unknown>,
+  expected: NativeEnvelopeWinner,
+): Promise<ControlledOpsReadyPointer | null> {
+  const manifest = isRecord(envelope.ready_manifest) ? envelope.ready_manifest : null;
+  const attestation = isRecord(envelope.attestation) ? envelope.attestation : null;
+  if (!manifest || !attestation) return null;
+  if (typeof manifest.published_at !== "string" || !manifest.published_at) return null;
+  if (!Number.isFinite(parseCanonicalUtc(manifest.published_at))) return null;
+  if (typeof attestation.attestation_id !== "string" || !attestation.attestation_id) {
+    return null;
+  }
+  return {
+    format: CONTROLLED_OPS_READY_POINTER_FORMAT,
+    identity: CONTROLLED_PILOT_IDENTITY,
+    environment: expected.environment,
+    envelope_key: expected.envelopeKey,
+    envelope_digest: await digestOf(envelope),
+    published_at: manifest.published_at,
+    attestation_id: attestation.attestation_id,
+    snapshot_id: expected.snapshotId,
+  };
+}
+
+async function casOpsReadyPointerOnce(
+  bucket: R2Bucket,
+  candidate: ControlledOpsReadyPointer,
+): Promise<{ ok: true } | { ok: false; retry: boolean; error: string }> {
+  const key = controlledOpsReadyPointerKey(candidate.environment);
+  const bytes = serializedJsonBytes(candidate);
+  const existing = await bucket.get(key);
+  if (!existing) {
+    const created = await bucket.put(key, bytes, {
+      httpMetadata: { contentType: "application/json; charset=utf-8" },
+      onlyIf: { etagDoesNotMatch: "*" },
+    });
+    if (created === null) {
+      return { ok: false, retry: true, error: "ops READY pointer CAS contention" };
+    }
+    return { ok: true };
+  }
+  const storedBody = await readBoundedJson(existing, CREATE_ONLY_COMPARE_MAX_BYTES);
+  const stored = parseOpsReadyPointer(storedBody);
+  const etag = existing.httpEtag;
+  if (!etag) {
+    return { ok: false, retry: false, error: "ops READY pointer is missing etag" };
+  }
+  if (stored) {
+    const decision = pointerDecision(candidate, stored);
+    if (decision === "same" || decision === "keep") return { ok: true };
+  }
+  const replaced = await bucket.put(key, bytes, {
+    httpMetadata: { contentType: "application/json; charset=utf-8" },
+    onlyIf: { etagMatches: etag },
+  });
+  if (replaced === null) {
+    return { ok: false, retry: true, error: "ops READY pointer CAS contention" };
+  }
+  return { ok: true };
+}
+
+async function casOpsReadyPointer(
+  env: ReadyPublicationEnv,
+  envelope: Record<string, unknown>,
+  expected: NativeEnvelopeWinner,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const candidate = await pointerFromEnvelope(envelope, expected);
+  if (!candidate) {
+    return { ok: false, error: "READY envelope is missing pointer identity" };
+  }
+  let lastError = "ops READY pointer CAS contention";
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const step = await casOpsReadyPointerOnce(env.STRUCTURED_BUCKET, candidate);
+    if (step.ok) return { ok: true };
+    lastError = step.error;
+    if (!step.retry) return { ok: false, error: step.error };
+  }
+  return { ok: false, error: lastError };
+}
+
 async function pairPaperTraderAuthorization(
   env: ReadyPublicationEnv,
   envelope: Record<string, unknown>,
@@ -638,13 +735,17 @@ async function pairPaperTraderAuthorization(
   };
   const digest = await controlledPilotRequestDigest(request);
   const authKey = controlledTraderAuthorizationKey(expected.jobId, attestationId);
-  const success = () => readyPublicationSuccess(
-    attestationId,
-    expected.snapshotId,
-    expected.physicalDigest,
-    expected.envelopeKey,
-    expected.attestationKey,
-  );
+  const success = async () => {
+    const indexed = await casOpsReadyPointer(env, envelope, expected);
+    if (!indexed.ok) return pending(indexed.error);
+    return readyPublicationSuccess(
+      attestationId,
+      expected.snapshotId,
+      expected.physicalDigest,
+      expected.envelopeKey,
+      expected.attestationKey,
+    );
+  };
   const existing = await env.STRUCTURED_BUCKET.get(authKey);
   if (existing) {
     return recoverStoredPaperTrader(
@@ -748,7 +849,7 @@ async function recoverStoredPaperTrader(
   digest: string,
   environment: "production" | "staging",
   readyLifetime: { verifiedAt: string; expiresAt: string },
-  success: () => ReadyPublicationResult,
+  success: () => Promise<ReadyPublicationResult>,
 ): Promise<ReadyPublicationResult> {
   const parsed = await readBoundedJson(object, CREATE_ONLY_COMPARE_MAX_BYTES);
   if (!parsed) return rejected("existing trader authorization is not JSON");

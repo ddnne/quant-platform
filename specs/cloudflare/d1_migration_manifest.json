@@ -285,6 +285,13 @@
           "checksum": "sha256:368327caabf5e077fea65b7c21be2c9ad205166b34cff069fe6c1bc6e47ffc4f",
           "order": 2,
           "depends_on": "quant-ops-projection:0001_ops_projection"
+        },
+        {
+          "migration_id": "quant-ops-projection:0003_ops_ready_snapshots_change_seq_nullable",
+          "path": "platform/workers/quant-ops-mcp/migrations/projection/0003_ops_ready_snapshots_change_seq_nullable.sql",
+          "checksum": "sha256:369060927ca3f641c2594392d1a8f6f797831cdfe04eb2e7375f015cb8777f1b",
+          "order": 3,
+          "depends_on": "quant-ops-projection:0002_receipt_product_materializations"
         }
       ]
     },

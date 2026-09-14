@@ -33,6 +33,8 @@ export const CONTROLLED_READY_RECEIPT_NATIVE_ENVELOPE_FORMAT =
   "controlled-pilot-ready-envelope/receipt-native/v1" as const;
 export const CONTROLLED_TRADER_BATCH_FORMAT =
   "controlled-pilot-trader-authorization-batch/v2" as const;
+export const CONTROLLED_OPS_READY_POINTER_FORMAT =
+  "controlled-pilot-ops-ready-pointer/v1" as const;
 export const CONTROLLED_PILOT_KEY_PREFIX = "research/controlled_pilot/";
 export const CONTROLLED_SNAPSHOT_KEY_PREFIX =
   `${CONTROLLED_PILOT_KEY_PREFIX}v1/snapshots/`;
@@ -234,6 +236,49 @@ export function controlledPhysicalSnapshotKey(immutableDbDigest: string): string
 
 export function controlledReadyKey(attestationId: string): string {
   return `${CONTROLLED_READY_KEY_PREFIX}${encodeURIComponent(attestationId)}.json`;
+}
+
+export function controlledOpsReadyPointerKey(environment: string): string {
+  if (environment !== "production" && environment !== "staging") {
+    throw new Error("ops READY pointer environment is invalid");
+  }
+  return `${CONTROLLED_PILOT_KEY_PREFIX}v1/ops-ready-pointer/environment=${environment}.json`;
+}
+
+export type ControlledOpsReadyPointer = {
+  format: typeof CONTROLLED_OPS_READY_POINTER_FORMAT;
+  identity: typeof CONTROLLED_PILOT_IDENTITY;
+  environment: "production" | "staging";
+  envelope_key: string;
+  envelope_digest: string;
+  published_at: string;
+  attestation_id: string;
+  snapshot_id: string;
+};
+
+export function parseOpsReadyPointer(value: unknown): ControlledOpsReadyPointer | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  if (row.format !== CONTROLLED_OPS_READY_POINTER_FORMAT) return null;
+  if (row.identity !== CONTROLLED_PILOT_IDENTITY) return null;
+  if (row.environment !== "production" && row.environment !== "staging") return null;
+  if (typeof row.envelope_key !== "string" || !row.envelope_key) return null;
+  if (typeof row.envelope_digest !== "string" || !row.envelope_digest.startsWith("sha256:")) {
+    return null;
+  }
+  if (typeof row.published_at !== "string" || !row.published_at) return null;
+  if (typeof row.attestation_id !== "string" || !row.attestation_id) return null;
+  if (typeof row.snapshot_id !== "string" || !row.snapshot_id) return null;
+  return {
+    format: CONTROLLED_OPS_READY_POINTER_FORMAT,
+    identity: CONTROLLED_PILOT_IDENTITY,
+    environment: row.environment,
+    envelope_key: row.envelope_key,
+    envelope_digest: row.envelope_digest,
+    published_at: row.published_at,
+    attestation_id: row.attestation_id,
+    snapshot_id: row.snapshot_id,
+  };
 }
 
 export function controlledJobPrefix(jobId: string): string {

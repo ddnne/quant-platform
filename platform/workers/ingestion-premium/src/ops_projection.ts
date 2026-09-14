@@ -10,6 +10,10 @@ import {
 } from "./ops_projection_policy";
 import { produceImmutableB0B4 } from "./snapshot_quality_evidence";
 import { sha256HexFromBytes, sha256HexFromString } from "./sha256";
+import {
+  nativeReadyEvidenceFingerprint,
+  observeNativeReadyForOps,
+} from "./ops_ready_native_observation";
 
 export { pinnedReceiptRegistryForEnvironment };
 
@@ -1035,6 +1039,12 @@ export async function publishOpsProjection(
   }
 
   const b0b4 = await readAuthoritativeB0B4(source, present);
+  const nativeReady = await observeNativeReadyForOps(
+    env.STRUCTURED_BUCKET,
+    env.OPS_PROJECTION_ENVIRONMENT,
+    { now: () => Date.now() },
+  );
+  const nativeReadyEvidence = nativeReadyEvidenceFingerprint(nativeReady);
   const sourceEvidence = {
     environment,
     source: sourceIdentity,
@@ -1057,6 +1067,7 @@ export async function publishOpsProjection(
       results_digest: await digest(b0b4.results_json),
     },
     b4: { status: b0b4.b4_status, results: b0b4.b4_results },
+    native_ready: nativeReadyEvidence,
   };
   const sourceEvidenceDigest = await digest(sourceEvidence);
   const sourceDbDigest = sourceEvidenceDigest;
@@ -1404,14 +1415,21 @@ export async function publishOpsProjection(
         }),
       },
     ],
-    ops_ready_snapshots: [],
+    ops_ready_snapshots: nativeReady.snapshot ? [nativeReady.snapshot] : [],
     ops_ready_state: [
-      {
-        status: "NOT_READY",
-        snapshot_id: null,
-        reason: "trusted READY evidence is absent from metadata-only source reads",
-        evaluated_at: generatedAt,
-      },
+      nativeReady.eligibility === "READY" && nativeReady.snapshot
+        ? {
+            status: "READY" as const,
+            snapshot_id: nativeReady.snapshot.snapshot_id,
+            reason: nativeReady.reason,
+            evaluated_at: generatedAt,
+          }
+        : {
+            status: "NOT_READY" as const,
+            snapshot_id: null,
+            reason: nativeReady.reason,
+            evaluated_at: generatedAt,
+          },
     ],
     ops_snapshot_quality: [],
     ops_storage_plane_status: [
@@ -1752,6 +1770,19 @@ export async function publishOpsProjection(
     }
     const appliedManifest = observedManifest;
     const appliedDigest = observedDigest;
+    const sealedNativeReady = nativeReadyEvidenceFingerprint(
+      await observeNativeReadyForOps(
+        env.STRUCTURED_BUCKET,
+        env.OPS_PROJECTION_ENVIRONMENT,
+        { now: () => Date.now() },
+      ),
+    );
+    if ((await digest(sealedNativeReady)) !== (await digest(nativeReadyEvidence))) {
+      throw new OpsProjectionPublishError(
+        "native READY evidence changed before seal; aborting without publish",
+        { generation_id: generationId },
+      );
+    }
 
     const finalBatch = await env.OPS_PROJECTION_DB.batch([
       env.OPS_PROJECTION_DB.prepare(
@@ -1761,8 +1792,15 @@ export async function publishOpsProjection(
             AND signed_envelope_json IS NOT NULL
             AND issuer_key_id IS NOT NULL
             AND signature IS NOT NULL
-            AND ${countGuardSql}`,
-      ).bind(generatedAt, generationId, appliedDigest, ...countGuardBinds),
+            AND ${countGuardSql}
+            AND (SELECT generation_id FROM ops_projection_active WHERE singleton=1) IS ?`,
+      ).bind(
+        generatedAt,
+        generationId,
+        appliedDigest,
+        ...countGuardBinds,
+        active?.generation_id ?? null,
+      ),
       env.OPS_PROJECTION_DB.prepare(
         `INSERT INTO ops_projection_active (singleton, generation_id, activated_at)
          SELECT 1, ?, ?
@@ -1771,8 +1809,16 @@ export async function publishOpsProjection(
             AND ${countGuardSql}
          ON CONFLICT(singleton) DO UPDATE SET
            generation_id=excluded.generation_id,
-           activated_at=excluded.activated_at`,
-      ).bind(generationId, generatedAt, generationId, appliedDigest, ...countGuardBinds),
+           activated_at=excluded.activated_at
+         WHERE generation_id IS ?`,
+      ).bind(
+        generationId,
+        generatedAt,
+        generationId,
+        appliedDigest,
+        ...countGuardBinds,
+        active?.generation_id ?? null,
+      ),
     ]);
     if ((finalBatch[0]?.meta?.changes ?? 0) !== 1) {
       throw new OpsProjectionPublishError("OPEN to SEALED did not change exactly one row", {
