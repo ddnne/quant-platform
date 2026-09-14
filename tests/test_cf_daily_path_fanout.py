@@ -190,7 +190,7 @@ def test_mass_eval_spec_drops_unique_but_keeps_bar_native() -> None:
 
 
 def test_mass_eval_screen_is_not_candidate_grade() -> None:
-    from research.cf_mass_eval_job import try_cf_mass_eval_status
+    from research.cf_mass_eval_run import try_cf_mass_eval_status
 
     st = try_cf_mass_eval_status()
     assert st["status"] == "implemented"

@@ -183,7 +183,7 @@ New research:
 - legacy catalog: `artifacts/replay/legacy_strategy_catalog/` (immutable replay only; `specs/research_logics/` YAML is empty)
 - bounded daily path: exact-four only; legacy catalog IDs fail closed
 - local unique CLI (`python -m research.unique_logic`): retired fail-closed stub, not candidate SoT
-- CF screen (auxiliary): `research.cf_mass_eval_job.run_cf_mass_eval_job`
+- CF screen (auxiliary): `research.cf_mass_eval_run.run_cf_mass_eval_job`
 - record: `research.occupancy_audit.run_eval_wave` (R2 `research/eval/job={id}/`; no `run_wNN`)
 
 See [`docs/architecture/adr_research_recording.md`](../docs/architecture/adr_research_recording.md)
