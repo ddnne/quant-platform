@@ -23,9 +23,10 @@ multi-tenant enterprise.
    policy prose.
 5. Review runtime code and tests together for dead code, duplicate ownership,
    and needless abstraction. Delete unused runtime code and its tests
-   together. Test doubles must follow the production contract; production
-   must not keep reflection or compatibility branches only for stale fakes.
-   Small logical commits; do not drop active numerical semantics.
+   together. Do not keep env-flag helpers or constant-equality tests that
+   production never consults. Test doubles must follow the production contract;
+   production must not keep reflection or compatibility branches only for stale
+   fakes. Small logical commits; do not drop active numerical semantics.
 6. Do not weaken authentic data, PIT, budget enforcement, or explicit
    deployment HOLDs merely to simplify.
 

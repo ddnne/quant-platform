@@ -7,6 +7,7 @@ import {
   bytesToBase64,
 } from "../../receipt-evidence-authority/src/canonical";
 import {
+  handlePrivateJsdaHealthReady,
   handleReceiptActivationObserverRequest,
   type ObserverEnv,
   type PremiumAuditEvidence,
@@ -82,6 +83,48 @@ describe("Receipt activation observer runtime boundary", () => {
     );
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(await response.text()).not.toContain("<html");
+  });
+
+  it("JSDA private path is GET-only and Access-gated on the index handler", async () => {
+    const post = await SELF.fetch(new Request(
+      "https://observer.invalid/v1/private/jsda-health-ready",
+      { method: "POST" },
+    ));
+    expect(post.status).toBe(405);
+    const get = await SELF.fetch(new Request(
+      "https://observer.invalid/v1/private/jsda-health-ready",
+    ));
+    expect(get.status).toBe(403);
+  });
+
+  it("captures JSDA 503 health bytes as AUDIT_ONLY observation with provenance", async () => {
+    const inner = '{"ok":false,"product_ready":false,"worker":"ingestion-jsda"}';
+    const environment = {
+      ...envWith(premiumEvidence),
+      JSDA_INGESTION: {
+        fetch: async () => new Response(inner, { status: 503 }),
+      },
+    } as ObserverEnv;
+    const response = await handlePrivateJsdaHealthReady(
+      new Request("https://observer.invalid/v1/private/jsda-health-ready"),
+      environment,
+      context({ aud: "receipt-observer-access-aud" }),
+    );
+    expect(response.status).toBe(200);
+    const body = await response.json() as {
+      schema_version: string;
+      eligibility: string;
+      http_status: number;
+      exact_response_utf8: string;
+      observer_source_sha: string;
+      access_aud: string;
+    };
+    expect(body.schema_version).toBe("quant-platform-release-observation/v2");
+    expect(body.eligibility).toBe("AUDIT_ONLY");
+    expect(body.http_status).toBe(503);
+    expect(body.exact_response_utf8).toBe(inner);
+    expect(body.observer_source_sha).toBe(SHA);
+    expect(body.access_aud).toBe("receipt-observer-access-aud");
   });
 
   it("rejects absent or malformed Access context before invoking Premium", async () => {

@@ -5,7 +5,7 @@ import copy
 import json
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 from urllib.request import Request
 
 import pytest
@@ -40,6 +40,59 @@ def _install_fake_pinned_wrangler(
 
 
 
+def _version_document_for_surface(
+    surface: Mapping[str, Any],
+    *,
+    version_id: str,
+    ordinal: int,
+    annotations: dict[str, str],
+) -> dict[str, Any]:
+    bindings = []
+    for row in live._expected_bindings(surface).values():  # noqa: SLF001
+        materialized = copy.deepcopy(row)
+        if materialized.get("namespace_id") == "<LIVE_NAMESPACE_ID>":
+            materialized["namespace_id"] = f"{ordinal:x}" * 32
+        bindings.append(materialized)
+    handlers = ["fetch"]
+    if surface["crons"]:
+        handlers.append("scheduled")
+    if surface["queue_consumers"]:
+        handlers.append("queue")
+    script_resource: dict[str, Any] = {
+        "etag": f"{ordinal:x}" * 64,
+        "handlers": handlers,
+        "last_deployed_from": "wrangler",
+    }
+    named_handlers = live._expected_named_handlers(surface)  # noqa: SLF001
+    if named_handlers:
+        script_resource["named_handlers"] = copy.deepcopy(named_handlers)
+    script_runtime: dict[str, Any] = {
+        "compatibility_date": surface["compatibility_date"],
+        "usage_model": "standard",
+    }
+    if surface["compatibility_flags"]:
+        script_runtime["compatibility_flags"] = copy.deepcopy(
+            surface["compatibility_flags"]
+        )
+    migration_tag = live._expected_migration_tag(surface)  # noqa: SLF001
+    if migration_tag is not None:
+        script_runtime["migration_tag"] = migration_tag
+    return {
+        "id": version_id,
+        "annotations": annotations,
+        "metadata": {
+            "created_on": "2026-08-27T08:00:00.000000Z",
+            "source": "wrangler",
+            "has_preview": False,
+        },
+        "resources": {
+            "script": script_resource,
+            "script_runtime": script_runtime,
+            "bindings": bindings,
+        },
+    }
+
+
 def _documents(environment: str) -> tuple[
     dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]
 ]:
@@ -63,50 +116,16 @@ def _documents(environment: str) -> tuple[
             },
             "versions": [{"version_id": version_id, "percentage": 100}],
         }
-        bindings = []
-        for row in live._expected_bindings(surface).values():  # noqa: SLF001
-            materialized = copy.deepcopy(row)
-            if materialized.get("namespace_id") == "<LIVE_NAMESPACE_ID>":
-                materialized["namespace_id"] = f"{ordinal:x}" * 32
-            bindings.append(materialized)
-        handlers = ["fetch"] + (["scheduled"] if surface["crons"] else [])
-        script_resource: dict[str, Any] = {
-            "etag": f"{ordinal:x}" * 64,
-            "handlers": handlers,
-            "last_deployed_from": "wrangler",
-        }
-        named_handlers = live._expected_named_handlers(surface)  # noqa: SLF001
-        if named_handlers:
-            script_resource["named_handlers"] = copy.deepcopy(named_handlers)
-        script_runtime: dict[str, Any] = {
-            "compatibility_date": surface["compatibility_date"],
-            "usage_model": "standard",
-        }
-        if surface["compatibility_flags"]:
-            script_runtime["compatibility_flags"] = copy.deepcopy(
-                surface["compatibility_flags"]
-            )
-        migration_tag = live._expected_migration_tag(surface)  # noqa: SLF001
-        if migration_tag is not None:
-            script_runtime["migration_tag"] = migration_tag
-        versions[role] = {
-            "id": version_id,
-            "annotations": {
+        versions[role] = _version_document_for_surface(
+            surface,
+            version_id=version_id,
+            ordinal=ordinal,
+            annotations={
                 "workers/message": live.deployment_message(role, environment, SHA),
                 "workers/tag": live.version_tag(role, environment, SHA),
                 "workers/triggered_by": "version_upload",
             },
-            "metadata": {
-                "created_on": "2026-08-27T08:00:00.000000Z",
-                "source": "wrangler",
-                "has_preview": False,
-            },
-            "resources": {
-                "script": script_resource,
-                "script_runtime": script_runtime,
-                "bindings": bindings,
-            },
-        }
+        )
         public[role] = {
             "subdomain": {
                 "enabled": surface["workers_dev"],
@@ -634,11 +653,23 @@ def _version_modules_envelope(
 
 
 class _FakeResponse:
-    def __init__(self, payload: bytes) -> None:
+    def __init__(self, payload: bytes, *, code: int = 200, url: str = "") -> None:
         self._payload = payload
+        self._code = code
+        self._url = url
+        self.headers = {
+            "content-type": "application/json",
+            "cache-control": "no-store",
+        }
 
     def read(self, _limit: int) -> bytes:
         return self._payload
+
+    def getcode(self) -> int:
+        return self._code
+
+    def geturl(self) -> str:
+        return self._url
 
     def __enter__(self) -> "_FakeResponse":
         return self

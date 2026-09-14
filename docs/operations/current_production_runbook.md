@@ -74,11 +74,13 @@ remote apply results only in immutable release evidence.
   Activating keys is not live READY or GO. Inactive source rollout is not
   global live acceptance. Wire the existing trust root; do not add another
   authority or Worker.
-- **Release evidence:** publication is **PENDING/HOLD**. Caller JSON is
-  untrusted. Authenticated collection/publication implementation is missing
-  (not merely unprovisioned observation keys). A6 remains OPEN until a
-  content-addressed artifact from authentic observation is independently
-  accepted.
+- **Release evidence:** authenticated **STAGING JSDA AUDIT_ONLY** intake exists
+  in `scripts/build_release_evidence.py`. Caller JSON is untrusted. Local
+  digest-named output is `STAGED_LOCAL_NOT_PUBLISHED` / `release_allowed=false`,
+  not a public release. Eventual publication is a GitHub Release asset plus
+  independent exact-byte readback after immutability is enabled and operational
+  gates pass. GitHub Release immutability was disabled as of 2026-09-14 JST.
+  Staging JSDA intake cannot close global A6. A6 remains OPEN.
 - **Mass Research:** **NO-GO**. Mass talks to Gateway only through typed
   Service Binding RPC `GatewayService`. `GATEWAY_TOKEN` is HTTP defense in
   depth if a closed route is attached later; it is not a shared Mass

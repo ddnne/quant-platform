@@ -1272,6 +1272,7 @@ def _cloudflare_api(
     api_token: str,
     method: str = "GET",
     body: Mapping[str, Any] | None = None,
+    opener: Callable[..., Any] | None = None,
 ) -> tuple[Any, Mapping[str, Any] | None]:
     raw_body = None if body is None else _canonical_bytes(body)
     request = Request(
@@ -1286,7 +1287,7 @@ def _cloudflare_api(
     )
     raw = b""
     try:
-        with _pinned_https_opener().open(request, timeout=30) as response:
+        with (opener or _pinned_https_opener().open)(request, timeout=30) as response:
             raw = response.read(MAX_OBSERVER_RESPONSE_BYTES + 1)
     except HTTPError as exc:
         raw = exc.read(MAX_OBSERVER_RESPONSE_BYTES + 1)
@@ -1377,6 +1378,7 @@ def _collect_access_snapshot(
     account_id: str,
     api_token: str,
     access_manifest: Mapping[str, Any],
+    opener: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     account = quote(account_id, safe="")
     application_id = quote(str(access_manifest["application"]["id"]), safe="")
@@ -1384,6 +1386,7 @@ def _collect_access_snapshot(
         f"/accounts/{account}/workers/workers/"
         f"{quote(str(access_manifest['worker']['id']), safe='')}",
         api_token=api_token,
+        opener=opener,
     )
     worker_subdomain = (
         worker_result.get("subdomain") if type(worker_result) is dict else None
@@ -1434,16 +1437,19 @@ def _collect_access_snapshot(
     applications, info = _cloudflare_api(
         f"/accounts/{account}/access/apps?{urlencode({'page': 1, 'per_page': 1000})}",
         api_token=api_token,
+        opener=opener,
     )
     policies, policy_info = _cloudflare_api(
         f"/accounts/{account}/access/apps/{application_id}/policies?"
         + urlencode({"page": 1, "per_page": 1000}),
         api_token=api_token,
+        opener=opener,
     )
     tokens, token_info = _cloudflare_api(
         f"/accounts/{account}/access/service_tokens?"
         + urlencode({"page": 1, "per_page": 1000}),
         api_token=api_token,
+        opener=opener,
     )
     if (
         type(applications) is not list
