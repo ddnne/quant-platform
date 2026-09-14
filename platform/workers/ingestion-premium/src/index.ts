@@ -42,6 +42,7 @@ import {
   type MasterScd2UniverseEvidence,
 } from "./persist_records";
 import { fetchDataset } from "./fetch_jq";
+import { runValuationBackfillTick } from "./valuation_backfill";
 import { todayJst, toJstIso } from "./identity";
 import { sha256HexFromString } from "./sha256";
 import type {
@@ -1008,6 +1009,25 @@ export default {
   async scheduled(
     _controller: ScheduledController, env: Env, ctx: ExecutionContext,
   ): Promise<void> {
+    if (env.RECEIPT_AUTHORITY_ENVIRONMENT === "staging") {
+      const result = await runValuationBackfillTick(
+        env.STRUCTURED_BUCKET,
+        (opts, signal) => runIngestion(
+          env,
+          opts,
+          "cron",
+          (input, init) => fetch(input, { ...init, signal }),
+        ),
+      );
+      console.log(JSON.stringify({
+        event: "valuation_backfill_tick",
+        status: result.status,
+        reason: result.reason,
+        fetched: result.fetched,
+        days: result.days,
+      }));
+      return;
+    }
     ctx.waitUntil((async () => {
       await runIngestion(env, {}, "cron", fetch);
       await recoverPreparedReceipts(env);

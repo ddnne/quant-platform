@@ -2079,6 +2079,14 @@ def test_deploy_tagged_staging_omits_env_selector(
     _official_main(monkeypatch)
     executable = _prepare_pin(tmp_path, monkeypatch)
     runner = _canonical_runner(executable=executable)
+    tagged_kwargs: dict[str, Any] = {}
+    if worker == "ingestion-premium":
+        secrets_file = tmp_path / "premium-staging-secrets.json"
+        secrets_file.write_text(
+            json.dumps({"SYNTHETIC_STAGING_KEY": "1"}), encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+        tagged_kwargs["secrets_file"] = "premium-staging-secrets.json"
     manifest_module.deploy_tagged(
         worker=worker,
         environment="staging",
@@ -2089,6 +2097,7 @@ def test_deploy_tagged_staging_omits_env_selector(
             "PATH": os.environ.get("PATH", ""),
             **extra_env,
         },
+        **tagged_kwargs,
     )
     wrangler = _wrangler_argvs(runner, executable)
     deploy = next(
@@ -2096,6 +2105,15 @@ def test_deploy_tagged_staging_omits_env_selector(
     )
     assert "wrangler.staging.toml" in deploy
     assert "--env" not in deploy
+    if worker == "ingestion-premium":
+        assert "--secrets-file" in deploy
+        secrets_at = deploy.index("--secrets-file")
+        assert deploy[secrets_at + 1] == os.fspath(secrets_file.resolve())
+        assert all(
+            "--secrets-file" not in call
+            for call in wrangler
+            if not (call[1] == "deploy" and "--dry-run" not in call)
+        )
     assert all(
         "--env" not in call
         for call in wrangler

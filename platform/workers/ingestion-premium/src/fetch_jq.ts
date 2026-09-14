@@ -255,7 +255,11 @@ export async function fetchDataset(
         out.error = `invalid json: ${(e as Error).message}`;
         return out;
       }
-      const rows = Array.isArray(parsed?.data) ? parsed.data : [];
+      if (!Array.isArray(parsed?.data)) {
+        out.error = "missing data array";
+        return out;
+      }
+      const rows = parsed.data;
       pageNumber++;
       out.rowsSeen += rows.length;
       if (retainRows) out.rows.push(...rows);

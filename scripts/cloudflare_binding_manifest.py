@@ -283,6 +283,7 @@ STAGING_SECRET_NAMES: dict[str, tuple[str, ...]] = {
     "receipt-activation-observer": (),
     "ingestion-premium": (
         "INGESTION_RUN_TOKEN",
+        "JQUANTS_API_KEY",
         "OPS_PROJECTION_SIGNING_PKCS8_B64",
         "READY_ED25519_PRIVATE_KEY",
         "TRADER_ED25519_PRIVATE_KEY",
@@ -2267,6 +2268,7 @@ def deploy_tagged(
     runner: Any | None = None,
     opener: Any | None = None,
     environ: Mapping[str, str] | None = None,
+    secrets_file: str | None = None,
 ) -> dict[str, Any]:
     from scripts.predeploy_ops_projection_gate import (
         PredeployGateError,
@@ -2285,6 +2287,12 @@ def deploy_tagged(
     run = subprocess.run if runner is None else runner
     transport = urlopen if opener is None else opener
     process_env = os.environ if environ is None else environ
+    mutate_secrets: tuple[str, ...] = ()
+    if secrets_file is not None:
+        secrets_path = Path(secrets_file).resolve()
+        if not secrets_path.is_file() or not os.access(secrets_path, os.R_OK):
+            raise ValueError("secrets-file is not a readable file")
+        mutate_secrets = ("--secrets-file", os.fspath(secrets_path))
     target = _canonical_deploy_target(
         worker=worker, environment=environment, environ=process_env
     )
@@ -2385,6 +2393,7 @@ def deploy_tagged(
                     "--message",
                     sha,
                     *target["environment_args"],
+                    *mutate_secrets,
                 ],
                 cwd=target["directory"],
                 command_env=mutate_env,
@@ -2496,16 +2505,23 @@ def main(argv: list[str] | None = None) -> int:
         help="print canonical active Worker paths, one per line",
     )
     parser.add_argument("--deploy-tagged", action="store_true")
+    parser.add_argument("--secrets-file")
     parser.add_argument("--worker")
     parser.add_argument("--config")
     parser.add_argument("--env", dest="environment", default="production")
     args = parser.parse_args(argv)
+    if args.secrets_file and not args.deploy_tagged:
+        parser.error("--secrets-file is only valid with --deploy-tagged")
     if args.deploy_tagged:
         if args.config is not None:
             parser.error("canonical deploy does not accept a caller config")
         if not args.worker:
             parser.error("--worker is required for --deploy-tagged")
-        deploy_tagged(worker=args.worker, environment=args.environment)
+        deploy_tagged(
+            worker=args.worker,
+            environment=args.environment,
+            secrets_file=args.secrets_file,
+        )
         return 0
     if args.write and args.print_worker_paths:
         parser.error("--write and --print-worker-paths are mutually exclusive")
