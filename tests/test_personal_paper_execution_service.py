@@ -199,7 +199,7 @@ def test_personal_service_scopes_only_run_paper_not_snapshot_verification(
         events.append(("run-paper", active))
         return real_run_paper(*args, **kwargs)
 
-    monkeypatch.setattr(module, "_personal_paper_read_session", observed_scope)
+    monkeypatch.setattr(module, "personal_paper_read_session", observed_scope)
     monkeypatch.setattr(module, "data_snapshot_id", observed_snapshot_id)
     monkeypatch.setattr(module, "run_paper", observed_run_paper)
 

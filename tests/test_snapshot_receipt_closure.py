@@ -17,6 +17,7 @@ from tests.receipt_test_support import (
 )
 from paper_runtime.snapshot import SnapshotRejected
 from paper_runtime.ready_policy import CoverageEvidence, collect_typed_evidence
+from pit.ready_evidence import ReadyLedgerSession
 from paper_runtime.snapshot_coverage_proof import (
     CoverageProofVerificationError,
     VerifiedCoverageProof,
@@ -266,7 +267,7 @@ def test_caller_constructed_verified_value_is_not_policy_authority(
     )
     assert forged.proof["status"] == "COMPLETE"
     assert CoverageEvidence(
-        conn, (_DATASET,), forged.proof_id, _BUILD_ID
+        ReadyLedgerSession(conn), (_DATASET,), forged.proof_id, _BUILD_ID
     ).to_item().passed is False
     store.close()
 

@@ -16,13 +16,13 @@ from paper_runtime.personal_prepared_frame import (
     _active_personal_prepared_frame,
     _personal_prepared_frame_scope,
 )
-from paper_runtime.personal_read_session import _personal_paper_read_session
 from paper_runtime.personal_snapshot import (
     PersonalSnapshot,
     materialize_personal_snapshot,
     verify_personal_snapshot,
 )
 from paper_runtime.snapshot_identity import data_snapshot_id
+from pit.personal_draft import personal_paper_read_session
 from pit._draft_storage import (
     activate_prepared_sqlite,
     draft_artifact_root,
@@ -156,7 +156,7 @@ def run_bound_personal_paper(
         )
     strategy = interpret_strategy_spec(spec)
     bound = replace(config, db_path=db_path)
-    with _personal_paper_read_session(db_path):
+    with personal_paper_read_session(db_path):
         result = run_paper(strategy, bound, store=None)
     try:
         after = data_snapshot_id(db_path)

@@ -13,10 +13,10 @@ from dataclasses import dataclass
 from typing import Any, Iterator
 from contextlib import contextmanager
 
-from ingestion.common.timeutil import now_iso
+from ingestion.common.timeutil import now_iso, now_jst, parse_dt
 
 from .errors import InvalidAsOf, PitError
-from .query import normalize_as_of
+from .query import MAX_SNAPSHOT_CLOCK_FUTURE_SKEW, normalize_as_of
 
 _STATE = threading.local()
 DRAFT_OBSERVATION_LABEL = "draft_bind_observation_cutoff"
@@ -88,6 +88,41 @@ def read_snapshot_observed_through(conn: sqlite3.Connection) -> str | None:
         return _manifest_observed_through(conn)
     except sqlite3.Error as exc:
         raise PitError("snapshot observation clock is unreadable") from exc
+
+
+SNAPSHOT_OBSERVATION_CLOCK_DDL = """
+CREATE TABLE snapshot_observation_clock (
+    singleton INTEGER NOT NULL PRIMARY KEY CHECK (singleton = 1),
+    observed_through TEXT NOT NULL CHECK (length(observed_through) >= 25)
+)
+"""
+
+
+def write_publisher_owned_snapshot_observation_clock(
+    conn: sqlite3.Connection, observed_through: str
+) -> str:
+    """Write exactly one publisher-owned snapshot observation clock row."""
+
+    if type(conn) is not sqlite3.Connection:
+        raise PitError("snapshot observation clock requires sqlite3.Connection")
+    canonical = normalize_as_of(observed_through)
+    if type(observed_through) is not str or observed_through != canonical:
+        raise PitError("snapshot observation clock is noncanonical")
+    if parse_dt(canonical) - now_jst() > MAX_SNAPSHOT_CLOCK_FUTURE_SKEW:
+        raise PitError("snapshot observation clock is in the future")
+    conn.execute("DROP TABLE IF EXISTS snapshot_observation_clock")
+    conn.execute(SNAPSHOT_OBSERVATION_CLOCK_DDL)
+    conn.execute(
+        "INSERT INTO snapshot_observation_clock(singleton, observed_through) "
+        "VALUES (1, ?)",
+        (canonical,),
+    )
+    rows = conn.execute(
+        "SELECT observed_through FROM snapshot_observation_clock"
+    ).fetchall()
+    if len(rows) != 1 or str(rows[0][0]) != canonical:
+        raise PitError("publisher observation clock is not a singleton")
+    return canonical
 
 
 def draft_observation_clock(*, captured_at: str | None = None) -> tuple[str, str]:
@@ -207,4 +242,5 @@ __all__ = [
     "read_snapshot_observed_through",
     "resolve_read_clock",
     "visibility_predicates",
+    "write_publisher_owned_snapshot_observation_clock",
 ]

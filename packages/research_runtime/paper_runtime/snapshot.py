@@ -66,14 +66,6 @@ class SnapshotRejected(RuntimeError):
     """Raised when a staging DB cannot pass the publication gate."""
 
 
-SNAPSHOT_OBSERVATION_CLOCK_DDL = """
-CREATE TABLE snapshot_observation_clock (
-    singleton INTEGER NOT NULL PRIMARY KEY CHECK (singleton = 1),
-    observed_through TEXT NOT NULL CHECK (length(observed_through) >= 25)
-)
-"""
-
-
 def canonical_observed_through_from_authenticated_exported_at(
     exported_at: Any,
 ) -> str:
@@ -84,7 +76,7 @@ def canonical_observed_through_from_authenticated_exported_at(
     accepted source.
     """
     from pit.errors import AsOfRequired, InvalidAsOf
-    from pit.query import MAX_SNAPSHOT_CLOCK_FUTURE_SKEW, normalize_as_of
+    from pit.read_clock import MAX_SNAPSHOT_CLOCK_FUTURE_SKEW, normalize_as_of
     from ingestion.common.timeutil import now_jst, parse_dt
 
     if type(exported_at) is not str or not exported_at.strip():
@@ -105,22 +97,18 @@ def write_publisher_owned_snapshot_observation_clock(
 ) -> str:
     """Write exactly one publisher-owned clock row into a temporary SQLite."""
 
+    from pit.errors import PitError
+    from pit.read_clock import (
+        write_publisher_owned_snapshot_observation_clock as write_clock,
+    )
+
     canonical = canonical_observed_through_from_authenticated_exported_at(
         observed_through
     )
-    conn.execute("DROP TABLE IF EXISTS snapshot_observation_clock")
-    conn.execute(SNAPSHOT_OBSERVATION_CLOCK_DDL)
-    conn.execute(
-        "INSERT INTO snapshot_observation_clock(singleton, observed_through) "
-        "VALUES (1, ?)",
-        (canonical,),
-    )
-    rows = conn.execute(
-        "SELECT observed_through FROM snapshot_observation_clock"
-    ).fetchall()
-    if len(rows) != 1 or str(rows[0][0]) != canonical:
-        raise SnapshotRejected("publisher observation clock is not a singleton")
-    return canonical
+    try:
+        return write_clock(conn, canonical)
+    except PitError as exc:
+        raise SnapshotRejected(str(exc)) from exc
 
 
 def _extract_authenticated_exported_at(ready_evidence: Mapping[str, Any] | None) -> str | None:
