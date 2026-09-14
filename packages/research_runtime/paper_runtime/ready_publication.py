@@ -18,6 +18,7 @@ from core.execution import (
 )
 from data_contracts import coverage_contract_for
 from pit import PitError
+from pit.receipt_scope import load_collection_receipt_scope
 
 from pit.read_clock import (
     PitReadClock,
@@ -184,153 +185,6 @@ def _max_original_checked_at(values: Sequence[str]) -> str:
             best = value
             best_at = instant
     return best
-
-
-def _load_receipt_scope(
-    conn: sqlite3.Connection,
-    datasets: Sequence[str],
-) -> tuple[
-    tuple[dict[str, Any], ...],
-    tuple[dict[str, Any], ...],
-    tuple[dict[str, Any], ...],
-    tuple[dict[str, Any], ...],
-]:
-    catalog_required = {
-        "source",
-        "dataset",
-        "natural_key",
-        "event_time",
-        "available_at",
-        "ingested_at",
-        "payload",
-        "raw_payload",
-    }
-    receipt_required = {
-        "source",
-        "dataset",
-        "segment_id",
-        "segment_start",
-        "segment_end",
-        "expected_scope",
-        "expected_items",
-        "observed_items",
-        "raw_page_count",
-        "raw_row_count",
-        "structured_row_count",
-        "pagination_exhausted",
-        "digests_json",
-        "run_id",
-        "status",
-        "error",
-        "checked_at",
-    }
-    product_required = {
-        "operation_id",
-        "run_id",
-        "source",
-        "dataset",
-        "segment_id",
-        "artifact_key",
-        "artifact_digest",
-        "artifact_body",
-        "row_count",
-        "byte_count",
-        "manifest_key",
-        "manifest_digest",
-        "raw_manifest_key",
-        "raw_manifest_digest",
-        "raw_page_count",
-        "raw_row_count",
-        "raw_bytes",
-        "committed_at",
-    }
-
-    def table_columns(table: str) -> set[str]:
-        return {
-            str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")
-        }
-
-    columns = table_columns("jquants_records")
-    if not catalog_required <= columns:
-        raise PitError(
-            "PIT dependency scope requires canonical jquants_records columns"
-        )
-    revision_columns = table_columns("jquants_records_revisions")
-    if not catalog_required <= revision_columns:
-        raise PitError(
-            "PIT dependency scope requires canonical "
-            "jquants_records_revisions columns"
-        )
-    placeholders = ",".join("?" for _ in datasets)
-    if not receipt_required <= table_columns("collection_receipts"):
-        raise PitError(
-            "PIT dependency scope requires signed collection receipt columns"
-        )
-    if not product_required <= table_columns("receipt_product_materializations"):
-        raise PitError(
-            "PIT dependency scope requires receipt product materializations"
-        )
-    if "authority_operation_id" not in table_columns("ingestion_run_log"):
-        raise PitError(
-            "PIT dependency scope requires authority-bound ingestion runs"
-        )
-    collection_receipts = tuple(
-        dict(row)
-        for row in conn.execute(
-            "SELECT * FROM collection_receipts WHERE source='jquants' "
-            f"AND dataset IN ({placeholders}) ORDER BY checked_at,run_id",
-            tuple(datasets),
-        )
-    )
-    run_ids = tuple(
-        dict.fromkeys(
-            int(row["run_id"])
-            for row in collection_receipts
-            if row.get("run_id") is not None
-        )
-    )
-    if not run_ids:
-        return collection_receipts, (), (), ()
-    run_placeholders = ",".join("?" for _ in run_ids)
-    bound = tuple(datasets) + run_ids
-    product_materializations = tuple(
-        dict(row)
-        for row in conn.execute(
-            "SELECT operation_id,run_id,source,dataset,segment_id,"
-            "artifact_key,artifact_digest,row_count,"
-            "byte_count,manifest_key,manifest_digest,raw_manifest_key,"
-            "raw_manifest_digest,raw_page_count,raw_row_count,"
-            "raw_bytes,committed_at FROM receipt_product_materializations "
-            "WHERE source='jquants' "
-            f"AND dataset IN ({placeholders}) "
-            f"AND run_id IN ({run_placeholders})",
-            bound,
-        )
-    )
-    ingestion_runs = tuple(
-        dict(row)
-        for row in conn.execute(
-            "SELECT id,source,runtime,status,authority_operation_id "
-            f"FROM ingestion_run_log WHERE id IN ({run_placeholders})",
-            run_ids,
-        )
-    )
-    raw_retention_manifests = tuple(
-        dict(row)
-        for row in conn.execute(
-            "SELECT dataset,run_id,manifest_key,page_count,row_count,"
-            "raw_bytes,data_digest FROM raw_retention_manifests "
-            f"WHERE dataset IN ({placeholders}) "
-            f"AND run_id IN ({run_placeholders})",
-            bound,
-        )
-    )
-    return (
-        collection_receipts,
-        product_materializations,
-        ingestion_runs,
-        raw_retention_manifests,
-    )
 
 
 def _resolve_controlled_universe(
@@ -804,7 +658,7 @@ def _prove_exact_four_compiled_scope(
         product_materializations,
         ingestion_runs,
         raw_retention_manifests,
-    ) = _load_receipt_scope(conn, required_datasets)
+    ) = load_collection_receipt_scope(conn, required_datasets)
     backing_kwargs = {
         "collection_receipts": collection_receipts,
         "product_materializations": product_materializations,

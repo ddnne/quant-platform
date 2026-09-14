@@ -19,11 +19,6 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from data_contracts.personal_history_compact import (
-    PERSONAL_HISTORY_COMPACT_BARS_TABLE,
-    PERSONAL_HISTORY_COMPACT_MASTER_TABLE,
-    compact_history_state,
-)
 from pit._draft_storage import (
     PersonalSnapshotError,
     _SHA256_RE,
@@ -32,26 +27,18 @@ from pit._draft_storage import (
     _file_digest,
     _personal_policy_document,
     _publish_file_without_replace,
-    _quick_check,
-    _readonly_connection,
-    _reject_unstable_policy,
     _stem,
-    _table_columns,
-    _verify_personal_draft_policy,
+)
+from pit.personal_catalog_observations import (
+    PersonalCatalogObservations,
+    observe_personal_draft_copy,
+    observe_personal_published_snapshot,
 )
 
 from .snapshot_identity import data_snapshot_id
 
 
 PERSONAL_SNAPSHOT_FORMAT = "personal-paper-snapshot/v1"
-_TYPED_DAILY_BARS_COLUMNS = {
-    "source",
-    "code",
-    "date",
-    "event_time",
-    "available_at",
-}
-
 _MANIFEST_IDENTITY_FIELDS = frozenset(
     {
         "format",
@@ -121,39 +108,6 @@ def _closure_ids(values: Sequence[str]) -> tuple[str, ...]:
     return normalized
 
 
-def _aggregate_observation(
-    connection: sqlite3.Connection,
-    *,
-    dataset_id: str,
-    table: str,
-    date_column: str,
-    where: str = "",
-) -> dict[str, Any] | None:
-    row = connection.execute(
-        f"SELECT '{dataset_id}' AS dataset,COUNT(*) AS row_count,"
-        f"MIN({date_column}) AS min_event_date,MAX({date_column}) AS max_event_date "
-        f"FROM {table}{where}"
-    ).fetchone()
-    if row is None or int(row["row_count"] or 0) < 1:
-        return None
-    return dict(row)
-
-
-def _typed_daily_bars_observation(
-    connection: sqlite3.Connection,
-) -> dict[str, Any] | None:
-    typed_columns = _table_columns(connection, "jquants_daily_bars")
-    if not _TYPED_DAILY_BARS_COLUMNS <= typed_columns:
-        return None
-    return _aggregate_observation(
-        connection,
-        dataset_id="equities_bars_daily",
-        table="jquants_daily_bars",
-        date_column="date",
-        where=" WHERE source='jquants'",
-    )
-
-
 def _identity_from_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
     return {key: manifest.get(key) for key in sorted(_MANIFEST_IDENTITY_FIELDS)}
 
@@ -182,30 +136,13 @@ def _write_manifest_without_replace(path: Path, payload: Mapping[str, Any]) -> N
 
 
 def _observed_dataset_evidence(
-    connection: sqlite3.Connection,
+    observations: PersonalCatalogObservations,
     required_datasets: Sequence[str],
     *,
     period_start: str,
     period_end: str,
 ) -> list[dict[str, Any]]:
-    generic_columns = _table_columns(connection, "jquants_records")
-    required_generic = {"source", "dataset", "event_time", "payload"}
-    by_dataset: dict[str, dict[str, Any]] = {}
-    if required_generic <= generic_columns:
-        placeholders = ",".join("?" for _ in required_datasets)
-        rows = connection.execute(
-            "SELECT dataset,COUNT(*) AS row_count,"
-            "MIN(substr(event_time,1,10)) AS min_event_date,"
-            "MAX(substr(event_time,1,10)) AS max_event_date "
-            "FROM jquants_records WHERE source='jquants' "
-            f"AND dataset IN ({placeholders}) GROUP BY dataset ORDER BY dataset",
-            tuple(required_datasets),
-        ).fetchall()
-        by_dataset.update(
-            (str(row["dataset"]), dict(row)) for row in rows
-        )
-
-    compact_state = compact_history_state(connection)
+    compact_state = observations.compact_state
     if compact_state == "invalid":
         raise PersonalSnapshotError(
             "personal snapshot compact v7 marker or schema is invalid"
@@ -216,28 +153,17 @@ def _observed_dataset_evidence(
             "equity master or bars"
         )
 
+    by_dataset: dict[str, dict[str, Any]] = {
+        key: dict(value)
+        for key, value in observations.generic_by_dataset.items()
+    }
     if compact_state == "compact":
-        if "equities_master" in required_datasets:
-            compact_master = _aggregate_observation(
-                connection,
-                dataset_id="equities_master",
-                table=PERSONAL_HISTORY_COMPACT_MASTER_TABLE,
-                date_column="snapshot_date",
-            )
-            if compact_master is not None:
-                by_dataset["equities_master"] = compact_master
-        if "equities_bars_daily" in required_datasets:
-            compact_bars = _aggregate_observation(
-                connection,
-                dataset_id="equities_bars_daily",
-                table=PERSONAL_HISTORY_COMPACT_BARS_TABLE,
-                date_column="date",
-            )
-            if compact_bars is not None:
-                by_dataset["equities_bars_daily"] = compact_bars
+        if observations.compact_master is not None:
+            by_dataset["equities_master"] = dict(observations.compact_master)
+        if observations.compact_bars is not None:
+            by_dataset["equities_bars_daily"] = dict(observations.compact_bars)
     elif "equities_bars_daily" in required_datasets:
-        typed_bars = _typed_daily_bars_observation(connection)
-        if typed_bars is not None:
+        if observations.typed_daily_bars is not None:
             # The personal hydrator promotes its largest/query-hot partition into
             # the existing indexed typed table at completion. Prefer that
             # representation, while retaining generic observations for older
@@ -247,7 +173,7 @@ def _observed_dataset_evidence(
                 raise PersonalSnapshotError(
                     "personal snapshot cannot mix generic and typed daily bars"
                 )
-            by_dataset["equities_bars_daily"] = typed_bars
+            by_dataset["equities_bars_daily"] = dict(observations.typed_daily_bars)
 
     evidence: list[dict[str, Any]] = []
     for dataset_id in required_datasets:
@@ -289,15 +215,8 @@ def _observed_dataset_evidence(
             raise PersonalSnapshotError(
                 "equities_bars_daily range requires observed markets_calendar rows"
             )
-        calendar_rows = connection.execute(
-            "SELECT substr(event_time,1,10) AS event_date,payload "
-            "FROM jquants_records WHERE source='jquants' "
-            "AND dataset='markets_calendar' "
-            "AND substr(event_time,1,10) BETWEEN ? AND ? ORDER BY event_time",
-            (period_start, period_end),
-        ).fetchall()
         trading_days: list[str] = []
-        for row in calendar_rows:
+        for row in observations.calendar_period_rows:
             try:
                 payload = json.loads(str(row["payload"]))
             except (TypeError, json.JSONDecodeError) as exc:
@@ -362,21 +281,20 @@ def materialize_personal_snapshot(
     temporary = Path(raw_temporary)
     try:
         source_provenance = _backup_sqlite(source_path, temporary)
-        copied = _readonly_connection(temporary)
-        try:
-            observed_datasets = _observed_dataset_evidence(
-                copied,
-                datasets,
-                period_start=start,
-                period_end=end,
-            )
-            _verify_personal_draft_policy(
-                copied,
-                personal_policy=_personal_policy_document(),
-                source_provenance=source_provenance,
-            )
-        finally:
-            copied.close()
+        observations = observe_personal_draft_copy(
+            temporary,
+            datasets,
+            period_start=start,
+            period_end=end,
+            personal_policy=_personal_policy_document(),
+            source_provenance=source_provenance,
+        )
+        observed_datasets = _observed_dataset_evidence(
+            observations,
+            datasets,
+            period_start=start,
+            period_end=end,
+        )
         # The existing logical ``data_snapshot_id`` has a legacy fallback that
         # includes main-file mtime when a small fixture has no watermarks.
         # Normalize it so byte-identical personal artifacts remain idempotent.
@@ -499,27 +417,24 @@ def verify_personal_snapshot(
             raise PersonalSnapshotError(
                 f"personal snapshot artifact is writable: {path}"
             )
-    connection = _readonly_connection(database_path)
-    try:
-        _verify_personal_draft_policy(
-            connection,
-            personal_policy=raw.get("personal_policy"),
-            source_provenance=raw.get("source_policy_provenance"),
+    observations = observe_personal_published_snapshot(
+        database_path,
+        datasets,
+        period_start=start,
+        period_end=end,
+        personal_policy=raw.get("personal_policy"),
+        source_provenance=raw.get("source_policy_provenance"),
+    )
+    observed_datasets = _observed_dataset_evidence(
+        observations,
+        datasets,
+        period_start=start,
+        period_end=end,
+    )
+    if raw.get("observed_datasets") != observed_datasets:
+        raise PersonalSnapshotError(
+            "personal snapshot observed dataset evidence mismatch"
         )
-        observed_datasets = _observed_dataset_evidence(
-            connection,
-            datasets,
-            period_start=start,
-            period_end=end,
-        )
-        if raw.get("observed_datasets") != observed_datasets:
-            raise PersonalSnapshotError(
-                "personal snapshot observed dataset evidence mismatch"
-            )
-        _reject_unstable_policy(connection, where="personal snapshot")
-        _quick_check(connection)
-    finally:
-        connection.close()
 
     verified = PersonalSnapshot(
         snapshot_id=snapshot_id,
