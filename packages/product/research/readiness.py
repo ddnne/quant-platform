@@ -17,7 +17,7 @@ from dataclasses import dataclass, fields
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, ClassVar, Mapping, final
+from typing import Any, ClassVar, Mapping, cast, final
 from uuid import uuid4
 
 from cryptography.exceptions import InvalidSignature
@@ -705,7 +705,7 @@ def _materialize_exact_pilot_readiness(
         )
     frozen: dict[str, Any] = {}
     for field in fields(VerifiedPilotReadiness):
-        value = object.__getattribute__(readiness, field.name)
+        value = getattr(readiness, field.name)
         if field.name in _READINESS_SEQUENCE_FIELDS:
             if (
                 type(value) is not tuple
@@ -723,54 +723,6 @@ def _materialize_exact_pilot_readiness(
                 )
             frozen[field.name] = value
     return frozen
-
-
-def _canonical_pilot_body(values: Mapping[str, Any]) -> dict[str, Any]:
-    """Build signed bytes from the one frozen value set, never dynamic methods."""
-
-    return {
-        "format": VerifiedPilotReadiness.FORMAT,
-        "attestation_id": values["attestation_id"],
-        "environment": values["environment"],
-        "authority_instance_id": values["authority_instance_id"],
-        "authority_resource_digest": values["authority_resource_digest"],
-        "signed_projection_document_digest": values[
-            "signed_projection_document_digest"
-        ],
-        "readiness_scope": values["readiness_scope"],
-        "identity": values["identity"],
-        "snapshot_id": values["snapshot_id"],
-        "profile_id": values["profile_id"],
-        "profile_version": values["profile_version"],
-        "profile_digest": values["profile_digest"],
-        "plan_ids": list(values["plan_ids"]),
-        "plan_set_digest": values["plan_set_digest"],
-        "dependency_closure_digest": values["dependency_closure_digest"],
-        "universe_rule_digest": values["universe_rule_digest"],
-        "resolved_universe_digest": values["resolved_universe_digest"],
-        "dataset_ids": list(values["dataset_ids"]),
-        "ready_state": values["ready_state"],
-        "ready_manifest_digest": values["ready_manifest_digest"],
-        "immutable_db_digest": values["immutable_db_digest"],
-        "coverage_policy_version": values["coverage_policy_version"],
-        "coverage_policy_digest": values["coverage_policy_digest"],
-        "coverage_proof_digest": values["coverage_proof_digest"],
-        "governed_membership_digest": values["governed_membership_digest"],
-        "raw_proof_digest": values["raw_proof_digest"],
-        "receipt_proof_digest": values["receipt_proof_digest"],
-        "validation_proof_digest": values["validation_proof_digest"],
-        "b0_quality_proof_digest": values["b0_quality_proof_digest"],
-        "b4_quality_proof_digest": values["b4_quality_proof_digest"],
-        "source_generation": values["source_generation"],
-        "export_cursor": values["export_cursor"],
-        "applied_cursor": values["applied_cursor"],
-        "verified_at": values["verified_at"],
-        "expires_at": values["expires_at"],
-        "evidence_digest": values["evidence_digest"],
-        "key_id": values["key_id"],
-        "issuer": values["issuer"],
-        "fill_contract_digest": values["fill_contract_digest"],
-    }
 
 
 def _verify_exact_pilot_readiness_values(
@@ -920,7 +872,7 @@ def _verify_exact_pilot_readiness_values(
         raise MassResearchDisabledError(
             "pilot readiness is expired or time-incoherent"
         )
-    key = object.__getattribute__(registry, "_keys").get(
+    key = registry._keys.get(
         (
             expected_environment,
             values["authority_instance_id"],
@@ -929,7 +881,7 @@ def _verify_exact_pilot_readiness_values(
     )
     if key is None:
         raise MassResearchDisabledError("pilot readiness issuer is untrusted")
-    body = _canonical_pilot_body(values)
+    body = cast(VerifiedPilotReadiness, readiness).to_canonical_body()
     try:
         key.verify(_decode_signature(values["signature"]), _canonical_bytes(body))
     except (InvalidSignature, ValueError) as exc:
