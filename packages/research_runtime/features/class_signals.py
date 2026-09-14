@@ -275,10 +275,6 @@ from .class_signals_flow_fund import (
     cross_section_rank_signs,
     fundamental_value_score,
 )
-from .class_signals_docs import (
-    class_signal_definitions,
-    class_signals_document,
-)
 
 
 __all__ = [
@@ -400,8 +396,6 @@ __all__ = [
     "TRADING_DAYS_ANN",
     "amortized_one_way_cost",
     "apply_sticky_hold",
-    "class_signal_definitions",
-    "class_signals_document",
     "compute_cross_section_signal",
     "compute_event_post_signal",
     "compute_flow_demand_signal",

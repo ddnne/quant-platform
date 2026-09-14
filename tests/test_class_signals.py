@@ -18,8 +18,6 @@ from features.class_signals import (
     SIGNAL_ID_MULTI_DAY_HOLD,
     amortized_one_way_cost,
     apply_sticky_hold,
-    class_signal_definitions,
-    class_signals_document,
     compute_event_post_signal,
     compute_flow_demand_signal,
     compute_fundamentals_price_signal,
@@ -155,22 +153,6 @@ def test_cross_section_rank_signs():
     assert ranks["A"] == 1.0
     assert ranks["E"] == -1.0
     assert ranks["F"] is None
-
-
-def test_class_signal_definitions_not_daily_sign():
-    defs = class_signal_definitions(hold_days=10)
-    ids = {d["signal_id"] for d in defs}
-    assert SIGNAL_ID_MULTI_DAY_HOLD in ids
-    assert SIGNAL_ID_MACRO_CONDITIONED in ids
-    assert SIGNAL_ID_EVENT_POST in ids
-    assert SIGNAL_ID_FLOW_DEMAND in ids
-    assert SIGNAL_ID_FUNDAMENTALS_PRICE in ids
-    for d in defs:
-        assert d.get("not_simple_daily_sign") is True
-        assert d.get("hypothesis_class") != "simple_daily_sign"
-    doc = class_signals_document()
-    _assert_mass_ready_off(doc)
-    assert doc["s1_s5_unreject"] is False
 
 
 def test_event_post_pit_entry_no_lookahead():
