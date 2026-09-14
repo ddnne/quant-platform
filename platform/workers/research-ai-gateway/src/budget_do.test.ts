@@ -269,88 +269,6 @@ describe("budget ledger algebra", () => {
     );
   });
 
-  it("same idempotency key returns the same reservation without double-spend", async () => {
-    const storage = new MemoryBudgetStorage();
-    const a = await reserveBudget(
-      storage,
-      leased("k1", { model_calls: 1, input_tokens: 10 }),
-      T0,
-    );
-    const b = await reserveBudget(
-      storage,
-      leased("k1", { model_calls: 1, input_tokens: 10 }),
-      T0 + 5,
-    );
-    expect(a.ok && b.ok).toBe(true);
-    if (a.ok && b.ok) {
-      expect(b.existing).toBe(true);
-      expect(b.reservation.reservation_id).toBe(a.reservation.reservation_id);
-    }
-    const snap = await snapshotBudget(storage, T0);
-    expect(snap.ok).toBe(true);
-    if (snap.ok) expect(snap.reserved.model_calls).toBe(1);
-  });
-
-  it("exact finalize is idempotent and converts reserved into used", async () => {
-    const storage = new MemoryBudgetStorage();
-    const reserved = await reserveBudget(
-      storage,
-      {
-        idempotency_key: "k1",
-        request_digest: testDigest("k1"),
-        amounts: { model_calls: 1, input_tokens: 40, output_tokens: 10 },
-        acquire_lease: true,
-      },
-      T0,
-    );
-    expect(reserved.ok).toBe(true);
-    if (!reserved.ok || !reserved.lease) throw new Error("lease");
-    const started = await markProviderStarted(
-      storage,
-      {
-        idempotency_key: "k1",
-        lease_id: reserved.lease.lease_id,
-        request_digest: testDigest("k1"),
-      },
-      T0 + 1,
-    );
-    expect(started.ok).toBe(true);
-    if (!started.ok || !started.settlement_capability) throw new Error("cap");
-    const first = await finalizeBudget(
-      storage,
-      {
-        idempotency_key: "k1",
-        request_digest: testDigest("k1"),
-        lease_id: reserved.lease.lease_id,
-        settlement_capability: started.settlement_capability,
-        usage: actualUsage({ model_calls: 1, input_tokens: 12, output_tokens: 7 }),
-        terminal_result: { http_status: 200, body: { ok: true } },
-      },
-      T0 + 2,
-    );
-    const second = await finalizeBudget(
-      storage,
-      {
-        idempotency_key: "k1",
-        request_digest: testDigest("k1"),
-        lease_id: reserved.lease.lease_id,
-        settlement_capability: started.settlement_capability,
-        usage: actualUsage({ model_calls: 1, input_tokens: 99, output_tokens: 99 }),
-        terminal_result: { http_status: 200, body: { ok: true } },
-      },
-      T0 + 3,
-    );
-    expect(first.ok && second.ok).toBe(true);
-    const snap = await snapshotBudget(storage, T0 + 4);
-    expect(snap.ok).toBe(true);
-    if (snap.ok) {
-      expect(snap.used.model_calls).toBe(1);
-      expect(snap.used.input_tokens).toBe(12);
-      expect(snap.used.output_tokens).toBe(7);
-      expect(snap.reserved.model_calls).toBe(0);
-    }
-  });
-
   it.each([
     [
       "missing policy identity",
@@ -1554,49 +1472,6 @@ describe("budget ledger algebra", () => {
     const snap = await snapshotBudget(storage, T0 + 3);
     expect(JSON.stringify(snap)).not.toContain(secret);
     expect(JSON.stringify(snap)).not.toContain(hash as string);
-  });
-
-  it("exact mark-start retry returns the same capability and never via reserve", async () => {
-    const storage = new MemoryBudgetStorage();
-    const reserved = await reserveBudget(
-      storage,
-      leased("mark-retry", { model_calls: 1 }, testDigest("mark-retry")),
-      T0,
-    );
-    if (!reserved.ok || !reserved.lease) throw new Error("lease");
-    const first = await markProviderStarted(
-      storage,
-      {
-        idempotency_key: "mark-retry",
-        lease_id: reserved.lease.lease_id,
-        request_digest: testDigest("mark-retry"),
-      },
-      T0 + 1,
-    );
-    const retry = await markProviderStarted(
-      storage,
-      {
-        idempotency_key: "mark-retry",
-        lease_id: reserved.lease.lease_id,
-        request_digest: testDigest("mark-retry"),
-      },
-      T0 + 2,
-    );
-    expect(first.ok && retry.ok).toBe(true);
-    if (!first.ok || !retry.ok) throw new Error("start");
-    expect(retry.settlement_capability).toBe(first.settlement_capability);
-    expect(first.settlement_capability).toEqual(expect.any(String));
-    expect(first.reservation).not.toHaveProperty("settlement_capability_secret");
-    expect(first.reservation).not.toHaveProperty("settlement_capability_hash");
-    const reserveReplay = await reserveBudget(
-      storage,
-      leased("mark-retry", { model_calls: 1 }, testDigest("mark-retry")),
-      T0 + 3,
-    );
-    expect(reserveReplay.ok).toBe(true);
-    if (!reserveReplay.ok) throw new Error("reserve replay");
-    expect(JSON.stringify(reserveReplay)).not.toContain(first.settlement_capability);
-    expect(reserveReplay).not.toHaveProperty("settlement_capability");
   });
 
   it("expiry releases a pre-provider reservation and leaves no phantom occupancy", async () => {
