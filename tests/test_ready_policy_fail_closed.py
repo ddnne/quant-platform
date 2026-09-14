@@ -195,8 +195,7 @@ def _configure_projection_registry_for_test(
 def test_missing_production_ledgers_are_not_pass() -> None:
     conn = sqlite3.connect(":memory:")
     evidence = collect_typed_evidence(
-        conn,
-        ":memory:",
+        ReadyLedgerSession(conn),
         ("equities_bars_daily",),
         run_id=1,
         coverage_proof_id="sha256:" + ("ab" * 32),
@@ -262,8 +261,7 @@ def test_each_missing_production_ledger_fails_its_evidence(
     conn.execute(f"DROP TABLE {missing_table}")
 
     evidence = collect_typed_evidence(
-        conn,
-        ":memory:",
+        ReadyLedgerSession(conn),
         ("equities_bars_daily",),
         run_id=1,
         build_id="build-1",
@@ -300,8 +298,7 @@ def test_validation_requires_one_exact_passing_row_per_required_dataset(
     )
 
     evidence = collect_typed_evidence(
-        conn,
-        ":memory:",
+        ReadyLedgerSession(conn),
         ("equities_bars_daily",),
         run_id=1,
         coverage_proof_id="sha256:" + ("ab" * 32),
@@ -347,8 +344,7 @@ def test_quality_requires_one_exact_build_with_passing_b0_and_b4(
     )
 
     evidence = collect_typed_evidence(
-        conn,
-        ":memory:",
+        ReadyLedgerSession(conn),
         ("equities_bars_daily",),
         build_id="build-1",
         coverage_proof_id="sha256:" + ("ab" * 32),
@@ -375,8 +371,7 @@ def test_raw_retention_rejects_duplicate_required_rows() -> None:
     )
 
     evidence = collect_typed_evidence(
-        conn,
-        ":memory:",
+        ReadyLedgerSession(conn),
         ("equities_bars_daily",),
         run_id=1,
         coverage_proof_id="sha256:" + ("ab" * 32),
@@ -407,8 +402,7 @@ def test_raw_retention_uses_raw_plane_acquisition_semantics(
     )
 
     evidence = collect_typed_evidence(
-        conn,
-        ":memory:",
+        ReadyLedgerSession(conn),
         ("equities_bars_daily",),
         run_id=1,
         coverage_proof_id="sha256:" + ("ab" * 32),
@@ -453,14 +447,16 @@ def test_publication_raw_gate_uses_raw_plane_acquisition_semantics(
 
     if expected_pass:
         manifests = _raw_manifests_for(
-            conn,
+            ReadyLedgerSession(conn),
             1,
             ("equities_bars_daily",),
         )
         assert manifests["equities_bars_daily"]["completeness"] == raw_status
     else:
         with pytest.raises(SnapshotRejected, match="raw retention incomplete"):
-            _raw_manifests_for(conn, 1, ("equities_bars_daily",))
+            _raw_manifests_for(
+                ReadyLedgerSession(conn), 1, ("equities_bars_daily",)
+            )
 
 
 @pytest.mark.parametrize(
@@ -483,8 +479,7 @@ def test_coverage_evidence_rejects_missing_arbitrary_or_unknown_proof_ids(
         ("equities_bars_daily",),
     )
     evidence = collect_typed_evidence(
-        conn,
-        ":memory:",
+        ReadyLedgerSession(conn),
         ("equities_bars_daily",),
         coverage_proof_id=coverage_proof_id,
     )
@@ -512,25 +507,29 @@ def test_coverage_evidence_cannot_be_directly_forged_into_pass() -> None:
 
 def test_old_proof_dict_and_typed_evidence_injection_kwargs_are_removed() -> None:
     conn = sqlite3.connect(":memory:")
+    session = ReadyLedgerSession(conn)
+    with pytest.raises(TypeError, match="ReadyLedgerSession"):
+        collect_typed_evidence(  # type: ignore[arg-type]
+            conn,
+            ("equities_bars_daily",),
+            coverage_proof_id="sha256:" + ("ab" * 32),
+        )
     with pytest.raises(TypeError, match="coverage_proof"):
         collect_typed_evidence(  # type: ignore[call-arg]
-            conn,
-            ":memory:",
+            session,
             ("equities_bars_daily",),
             coverage_proof={"status": "COMPLETE"},
         )
     with pytest.raises(TypeError, match="typed_evidence"):
         ReadyPublicationPolicy().evaluate(  # type: ignore[call-arg]
-            conn,
-            ":memory:",
+            session,
             ("equities_bars_daily",),
             coverage_proof_id="sha256:" + ("ab" * 32),
             typed_evidence=[object()],
         )
     with pytest.raises(TypeError, match="fixture_compatibility"):
         collect_typed_evidence(  # type: ignore[call-arg]
-            conn,
-            ":memory:",
+            session,
             ("equities_bars_daily",),
             coverage_proof_id="sha256:" + ("ab" * 32),
             fixture_compatibility=True,
@@ -538,8 +537,7 @@ def test_old_proof_dict_and_typed_evidence_injection_kwargs_are_removed() -> Non
     for removed_override in ("raw_manifest_ok", "quality_status"):
         with pytest.raises(TypeError, match=removed_override):
             collect_typed_evidence(  # type: ignore[call-arg]
-                conn,
-                ":memory:",
+                session,
                 ("equities_bars_daily",),
                 coverage_proof_id="sha256:" + ("ab" * 32),
                 **{removed_override: True if removed_override == "raw_manifest_ok" else "PASS"},

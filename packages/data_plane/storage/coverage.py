@@ -1653,7 +1653,7 @@ def _receipt_measure_status(
 
 
 def measure_receipt_snapshot_quality(
-    db_path: str | Path,
+    conn: sqlite3.Connection,
     *,
     period_start: str,
     period_end: str,
@@ -1663,9 +1663,10 @@ def measure_receipt_snapshot_quality(
 
     B0 is universe breadth of the whole snapshot. B4/C8 ignore rows after
     period_end and do not treat official-domain COMPLETE or Ops B0.
+    Caller owns the market connection.
     """
 
-    from storage.live_gates import measure_b0
+    from storage.live_gates import measure_b0_on_connection
 
     required = frozenset(str(item) for item in required_datasets)
     calendar_series = sorted(
@@ -1676,28 +1677,24 @@ def measure_receipt_snapshot_quality(
         }
         & required
     )
-    b0 = [gate.as_dict() for gate in measure_b0(db_path)]
-    conn = _connect(db_path)
-    try:
-        b4_rows = []
-        if "equities_bars_daily" in required:
-            for row in _check_b4(
-                conn, period_start=period_start, period_end=period_end
-            ):
-                payload = row.as_log_dict()
-                payload["metrics"] = _compact_missing_days(payload["metrics"])
-                b4_rows.append(payload)
-        c8_rows = [
-            row.as_log_dict()
-            for row in _check_c8(
-                conn,
-                calendar_series,
-                today=period_end,
-                on_or_before=period_end,
-            )
-        ]
-    finally:
-        conn.close()
+    b0 = [gate.as_dict() for gate in measure_b0_on_connection(conn)]
+    b4_rows = []
+    if "equities_bars_daily" in required:
+        for row in _check_b4(
+            conn, period_start=period_start, period_end=period_end
+        ):
+            payload = row.as_log_dict()
+            payload["metrics"] = _compact_missing_days(payload["metrics"])
+            b4_rows.append(payload)
+    c8_rows = [
+        row.as_log_dict()
+        for row in _check_c8(
+            conn,
+            calendar_series,
+            today=period_end,
+            on_or_before=period_end,
+        )
+    ]
     return {
         "period_start": period_start,
         "period_end": period_end,

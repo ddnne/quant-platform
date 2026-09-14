@@ -1934,11 +1934,11 @@ def _finalize_sync_policy(
 ) -> None:
     """Keep production READY profile-bound and closed after every apply path."""
     if failures:
-        fail_snapshot_sync(store._conn, "; ".join(failures))  # noqa: SLF001
+        fail_snapshot_sync(store, "; ".join(failures))
         return
     if args.table:
         fail_snapshot_sync(
-            store._conn,  # noqa: SLF001
+            store,
             "targeted sync completed, but a full required-dataset sync "
             "is required before paper research",
         )
@@ -1950,7 +1950,7 @@ def _finalize_sync_policy(
                 "can authorize production READY; use --wrangler-remote"
             )
             failures.append(message)
-            fail_snapshot_sync(store._conn, message)  # noqa: SLF001
+            fail_snapshot_sync(store, message)
             print(f"[sync] snapshot FAILED: {message}", file=sys.stderr)
             return
         try:
@@ -1976,11 +1976,11 @@ def _finalize_sync_policy(
         except Exception as exc:  # noqa: BLE001 - CLI fail-closed boundary
             message = f"snapshot: signed pilot READY publication failed: {exc}"
             failures.append(message)
-            fail_snapshot_sync(store._conn, message)  # noqa: SLF001
+            fail_snapshot_sync(store, message)
             print(f"[sync] snapshot FAILED: {message}", file=sys.stderr)
         return
-    fail_snapshot_sync(  # noqa: SLF001
-        store._conn,
+    fail_snapshot_sync(
+        store,
         "sync applied; exact-four profile/plan/closure READY evidence "
         "was not supplied",
     )
@@ -2056,7 +2056,7 @@ def main(argv=None) -> int:
 
     store = SqliteStore(Path(args.db))
     begin_snapshot_sync(
-        store._conn,  # noqa: SLF001
+        store,
         started_at=datetime.now(timezone.utc).isoformat(),
     )
     total_seen = total_registered = total_skipped = 0

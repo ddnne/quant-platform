@@ -15,6 +15,7 @@ import pytest
 
 from data_contracts import coverage_contract_for, all_coverage_contracts
 from paper_runtime.coherence import check_ready_coherence, CoherenceGateResult
+from pit.ready_evidence import ReadyLedgerSession
 from storage import (
     CollectionReceipt,
     record_collection_receipt,
@@ -238,7 +239,7 @@ def test_coherence_fails_without_receipts(fixture_db_with_coverage_without_recei
 
     # Check coherence
     results = check_ready_coherence(
-        conn, fixture_db_with_coverage_without_receipts, governed_datasets
+        ReadyLedgerSession(conn), governed_datasets
     )
 
     store.close()
@@ -278,7 +279,7 @@ def test_coherence_passes_with_synthetic_complete_receipts(fixture_db_with_compl
 
     # Check coherence
     results = check_ready_coherence(
-        conn, fixture_db_with_complete_coverage_and_receipts, required_datasets
+        ReadyLedgerSession(conn), required_datasets
     )
 
     store.close()
@@ -308,7 +309,7 @@ def test_coverage_completeness_gate_requires_segments(fixture_db_with_schema):
 
     # No segments recorded
     results = check_ready_coherence(
-        conn, fixture_db_with_schema, ("fins_summary",)
+        ReadyLedgerSession(conn), ("fins_summary",)
     )
 
     store.close()
@@ -377,7 +378,7 @@ def test_receipts_gate_checks_all_requirements(fixture_db_with_schema):
     )
 
     results = check_ready_coherence(
-        conn, fixture_db_with_schema, governed_datasets
+        ReadyLedgerSession(conn), governed_datasets
     )
 
     store.close()

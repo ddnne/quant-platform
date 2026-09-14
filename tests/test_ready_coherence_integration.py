@@ -7,6 +7,7 @@ import sqlite3
 import pytest
 
 from paper_runtime.coherence import check_ready_coherence
+from pit.ready_evidence import ReadyLedgerSession
 from paper_runtime.ready_policy import (
     ReadyEvidenceBundle,
     ReadyEvidenceItem,
@@ -36,7 +37,7 @@ def test_check_ready_coherence_fails_empty_db(tmp_path: Path):
     store = SqliteStore(db)
     conn = store._conn
     results = check_ready_coherence(
-        conn, db, ("markets_calendar",), run_id=None
+        ReadyLedgerSession(conn), ("markets_calendar",), run_id=None
     )
     assert any(not r.passed for r in results)
     store.close()
@@ -63,7 +64,7 @@ def test_populated_natural_keys_do_not_replace_migration_authority(
     conn.row_factory = sqlite3.Row
     conn.execute("CREATE TABLE jquants_records (natural_key TEXT)")
     conn.execute("INSERT INTO jquants_records VALUES ('already-populated')")
-    results = check_ready_coherence(conn, db, ("markets_calendar",))
+    results = check_ready_coherence(ReadyLedgerSession(conn), ("markets_calendar",))
     gate = next(
         item for item in results if item.gate_name == "natural_key_migration_ready"
     )

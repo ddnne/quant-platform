@@ -3131,10 +3131,11 @@ def test_publisher_clock_write_and_reader_rejections(tmp_path) -> None:
         )
 
     path = tmp_path / "clock.sqlite"
-    conn = sqlite3.connect(path)
-    written = write_publisher_owned_snapshot_observation_clock(conn, clock)
-    conn.commit()
-    conn.close()
+    from pit.ready_evidence import ready_publication_session
+
+    with ready_publication_session(path) as session:
+        written = write_publisher_owned_snapshot_observation_clock(session, clock)
+        session.commit()
     assert written == clock
     assert snapshot_observed_through(path) == clock
     assert snapshot_observed_through(path, expected=clock) == clock

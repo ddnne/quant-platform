@@ -283,6 +283,23 @@ class CompiledScopeProofSession:
         except ValueError as exc:
             raise PitError(str(exc)) from exc
 
+    def measure_receipt_snapshot_quality(
+        self,
+        *,
+        period_start: str,
+        period_end: str,
+        required_datasets: Sequence[str],
+    ) -> dict[str, Any]:
+        from storage.coverage import measure_receipt_snapshot_quality
+
+        _require_active_sqlite_transaction(self._conn)
+        return measure_receipt_snapshot_quality(
+            self._conn,
+            period_start=period_start,
+            period_end=period_end,
+            required_datasets=required_datasets,
+        )
+
 
 def _session_on_connection(conn: sqlite3.Connection) -> CompiledScopeProofSession:
     if type(conn) is not sqlite3.Connection:

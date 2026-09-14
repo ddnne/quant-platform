@@ -6,14 +6,12 @@ This module implements the comprehensive checks that must be satisfied.
 
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from data_contracts import all_coverage_contracts
 from data_contracts.coverage import coverage_policy_binding
+from pit.ready_evidence import LedgerTableMissing, ReadyLedgerSession
 
 
 @dataclass(frozen=True)
@@ -35,8 +33,7 @@ class CoherenceGateResult:
 
 
 def check_ready_coherence(
-    conn: sqlite3.Connection,
-    db_path: str | Path,
+    session: ReadyLedgerSession,
     required_datasets: tuple[str, ...],
     *,
     run_id: int | None = None,
@@ -51,50 +48,28 @@ def check_ready_coherence(
     5. B0 quality checks pass for all datasets
     6. Change sequence is advancing
 
-    Args:
-        conn: SQLite connection to staging database
-        db_path: Path to the database file
-        required_datasets: All datasets that must be included
-        run_id: Optional specific run ID to validate
-
-    Returns:
-        List of coherence gate results. All must pass for READY publication.
-
-    Raises:
-        ValueError: If required_datasets is empty
-        sqlite3.Error: If database queries fail
+    Interprets market-ledger facts from ReadyLedgerSession. Does not open SQLite.
     """
+    if type(session) is not ReadyLedgerSession:
+        raise TypeError("READY coherence requires ReadyLedgerSession")
     if not required_datasets:
         raise ValueError("required_datasets must not be empty")
 
     results: list[CoherenceGateResult] = []
-
-    # Gate 1: Coverage segments completeness
-    results.append(_check_coverage_completeness(conn, required_datasets))
-
-    # Gate 2: Receipts with raw retention
-    results.append(_check_receipts_with_raw_retention(conn, required_datasets))
-
-    # Gate 3: Validation passing
+    results.append(_check_coverage_completeness(session, required_datasets))
+    results.append(_check_receipts_with_raw_retention(session, required_datasets))
     if run_id is not None:
-        results.append(_check_validation_passing(conn, required_datasets, run_id))
+        results.append(_check_validation_passing(session, required_datasets, run_id))
     else:
-        results.append(_check_latest_validation_passing(conn, required_datasets))
-
-    # Gate 4: Natural key migration status
-    results.append(_check_natural_key_migration_ready(conn))
-
-    # Gate 5: B0 quality checks
-    results.append(_check_b0_quality_status(conn))
-
-    # Gate 6: Change sequence advancing
-    results.append(_check_change_sequence_advancing(conn))
-
+        results.append(_check_latest_validation_passing(session, required_datasets))
+    results.append(_check_natural_key_migration_ready(session))
+    results.append(_check_b0_quality_status(session))
+    results.append(_check_change_sequence_advancing(session))
     return results
 
 
 def _check_coverage_completeness(
-    conn: sqlite3.Connection,
+    session: ReadyLedgerSession,
     required_datasets: tuple[str, ...],
 ) -> CoherenceGateResult:
     """Gate 1: All required governed datasets have COMPLETE coverage segments."""
@@ -115,18 +90,15 @@ def _check_coverage_completeness(
             detail={"unknown_datasets": unknown_datasets},
         )
 
-    # Use conn.execute to query segments directly instead of read_coverage_segments
-    # to avoid path/connection confusion
     try:
-        segments_cursor = conn.execute("SELECT * FROM coverage_segments")
-    except sqlite3.OperationalError:
+        segments = list(session.coverage_segments())
+    except LedgerTableMissing:
         return CoherenceGateResult(
             gate_name="coverage_completeness",
             passed=False,
             reason="coverage_segments table does not exist",
             detail={"governed_count": len(governed_datasets)},
         )
-    segments = [dict(row) for row in segments_cursor.fetchall()]
     coverage_by_dataset = {
         dataset: [
             row
@@ -169,7 +141,7 @@ def _check_coverage_completeness(
 
 
 def _check_receipts_with_raw_retention(
-    conn: sqlite3.Connection,
+    session: ReadyLedgerSession,
     required_datasets: tuple[str, ...],
 ) -> CoherenceGateResult:
     """Gate 2: All COMPLETE segments have successful receipts with raw retention."""
@@ -180,11 +152,8 @@ def _check_receipts_with_raw_retention(
         if dataset in policies and policies[dataset].governance_tier == "governed"
     )
     try:
-        segments_cursor = conn.execute(
-            "SELECT * FROM coverage_segments WHERE status=?", ("COMPLETE",)
-        )
-        all_segments = [dict(row) for row in segments_cursor.fetchall()]
-    except sqlite3.OperationalError:
+        all_segments = list(session.complete_coverage_segments())
+    except LedgerTableMissing:
         return CoherenceGateResult(
             gate_name="receipts_with_raw_retention",
             passed=False,
@@ -202,15 +171,10 @@ def _check_receipts_with_raw_retention(
     receipts_by_dataset = {}
     try:
         for dataset in governed:
-            receipt_cursor = conn.execute(
-                "SELECT * FROM collection_receipts WHERE dataset=? "
-                "ORDER BY checked_at DESC, run_id DESC",
-                (dataset,),
+            receipts_by_dataset[dataset] = list(
+                session.collection_receipts_for_dataset(dataset)
             )
-            receipts_by_dataset[dataset] = [
-                dict(row) for row in receipt_cursor.fetchall()
-            ]
-    except sqlite3.OperationalError:
+    except LedgerTableMissing:
         return CoherenceGateResult(
             gate_name="receipts_with_raw_retention",
             passed=False,
@@ -287,17 +251,14 @@ def _check_receipts_with_raw_retention(
 
 
 def _check_validation_passing(
-    conn: sqlite3.Connection,
+    session: ReadyLedgerSession,
     required_datasets: tuple[str, ...],
     run_id: int,
 ) -> CoherenceGateResult:
     """Gate 3: All required datasets have passing validation for the given run."""
     try:
-        rows = conn.execute(
-            "SELECT dataset, status FROM ingestion_validation WHERE run_id = ?",
-            (run_id,),
-        ).fetchall()
-    except sqlite3.OperationalError:
+        rows = session.ingestion_validation_status_rows(run_id)
+    except LedgerTableMissing:
         return CoherenceGateResult(
             gate_name="validation_passing",
             passed=False,
@@ -305,7 +266,7 @@ def _check_validation_passing(
             detail={"run_id": run_id},
         )
 
-    validation_by_dataset = {row["dataset"]: row["status"] for row in rows}
+    validation_by_dataset = {dataset: status for dataset, status in rows}
 
     failed = []
     for dataset in required_datasets:
@@ -332,15 +293,13 @@ def _check_validation_passing(
 
 
 def _check_latest_validation_passing(
-    conn: sqlite3.Connection,
+    session: ReadyLedgerSession,
     required_datasets: tuple[str, ...],
 ) -> CoherenceGateResult:
     """Gate 3: All required datasets have passing latest validation."""
     try:
-        run_row = conn.execute(
-            "SELECT MAX(run_id) AS max_run_id FROM ingestion_validation"
-        ).fetchone()
-    except sqlite3.OperationalError:
+        latest_run_id = session.max_ingestion_validation_run_id()
+    except LedgerTableMissing:
         return CoherenceGateResult(
             gate_name="validation_passing",
             passed=False,
@@ -348,7 +307,7 @@ def _check_latest_validation_passing(
             detail={"run_id": None},
         )
 
-    if run_row is None or run_row["max_run_id"] is None:
+    if latest_run_id is None:
         return CoherenceGateResult(
             gate_name="validation_passing",
             passed=False,
@@ -356,28 +315,16 @@ def _check_latest_validation_passing(
             detail={"run_id": None},
         )
 
-    latest_run_id = run_row["max_run_id"]
-    return _check_validation_passing(conn, required_datasets, latest_run_id)
+    return _check_validation_passing(session, required_datasets, latest_run_id)
 
 
 def _check_natural_key_migration_ready(
-    conn: sqlite3.Connection,
+    session: ReadyLedgerSession,
 ) -> CoherenceGateResult:
     """Gate 4: Natural key migration is READY (schema-aligned)."""
-    # Production authority is an explicit migration ledger. Merely observing
-    # populated natural_key values cannot prove that the governed migration
-    # completed, and table absence is UNKNOWN/FAIL rather than fixture PASS.
-    for sql in (
-        "SELECT state FROM natural_key_migrations ORDER BY rowid DESC LIMIT 1",
-        "SELECT state FROM natural_key_migration ORDER BY id DESC LIMIT 1",
-    ):
-        try:
-            row = conn.execute(sql).fetchone()
-        except sqlite3.OperationalError:
-            continue
-        if row is None:
-            continue
-        state = row["state"] if "state" in row.keys() else row[0]
+    probed = session.natural_key_migration_probe()
+    if probed is not None:
+        state, source = probed
         passed = str(state).upper() == "READY"
         return CoherenceGateResult(
             gate_name="natural_key_migration_ready",
@@ -387,7 +334,7 @@ def _check_natural_key_migration_ready(
                 if passed
                 else f"Natural key migration state: {state}"
             ),
-            detail={"state": state, "source": sql.split()[3]},
+            detail={"state": state, "source": source},
         )
 
     return CoherenceGateResult(
@@ -399,17 +346,12 @@ def _check_natural_key_migration_ready(
 
 
 def _check_b0_quality_status(
-    conn: sqlite3.Connection,
+    session: ReadyLedgerSession,
 ) -> CoherenceGateResult:
     """Gate 5: B0 quality checks pass."""
     try:
-        row = conn.execute(
-            """SELECT status, summary_json, evaluated_at
-               FROM snapshot_quality_results
-               ORDER BY evaluated_at DESC
-               LIMIT 1"""
-        ).fetchone()
-    except sqlite3.OperationalError:
+        row = session.latest_snapshot_quality()
+    except LedgerTableMissing:
         return CoherenceGateResult(
             gate_name="b0_quality_status",
             passed=False,
@@ -437,38 +379,18 @@ def _check_b0_quality_status(
         ),
         detail={
             "status": status,
-            "evaluated_at": row["evaluated_at"] if row else None,
-            "summary": row["summary_json"] if row else None,
+            "evaluated_at": row["evaluated_at"],
+            "summary": row["summary"],
         },
     )
 
 
 def _check_change_sequence_advancing(
-    conn: sqlite3.Connection,
+    session: ReadyLedgerSession,
 ) -> CoherenceGateResult:
     """Gate 6: Change sequence is advancing (schema-aligned)."""
-    # Probe known generation tables; only PASS when some generation > 0.
-    # A present table with max_seq=0 is not advancing — try other sources.
-    candidates = [
-        (
-            "SELECT MAX(last_applied_change_seq) AS max_seq "
-            "FROM sync_change_state"
-        ),
-        "SELECT MAX(change_seq) AS max_seq FROM ingestion_change_log",
-        "SELECT MAX(change_seq) AS max_seq FROM change_log",
-    ]
     best: int | None = None
-    for sql in candidates:
-        try:
-            row = conn.execute(sql).fetchone()
-        except sqlite3.OperationalError:
-            continue
-        if row is None:
-            continue
-        max_seq = row["max_seq"] if "max_seq" in row.keys() else row[0]
-        if max_seq is None:
-            continue
-        max_seq = int(max_seq)
+    for max_seq in session.change_sequence_maxima():
         if best is None or max_seq > best:
             best = max_seq
         if max_seq > 0:
