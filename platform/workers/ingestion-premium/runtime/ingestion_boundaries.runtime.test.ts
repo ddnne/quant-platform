@@ -1,8 +1,13 @@
 import { env } from "cloudflare:workers";
-import { applyD1Migrations, reset } from "cloudflare:test";
+import { applyD1Migrations, createExecutionContext, reset } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, inject, vi } from "vitest";
 import worker, { type Env } from "../src/index";
 import { NATURAL_KEY_MIGRATION_ID, rebuildNaturalKeysV2 } from "../src/natural_key_migration";
+import {
+  runValuationBackfillTick,
+  VALUATION_BACKFILL_KEY,
+  type ValuationIngest,
+} from "../src/valuation_backfill";
 
 const migrations = inject<Array<{ name: string; queries: string[] }>>("premiumD1Migrations");
 
@@ -31,6 +36,50 @@ function stubVendor(path: string, query: Record<string, string>, data: unknown[]
     }
     return Promise.resolve(new Response(JSON.stringify({ data }), { status: 200 }));
   });
+}
+
+function scheduledAt(at = "2026-09-12T00:00:00.000Z"): ScheduledController {
+  return {
+    scheduledTime: Date.parse(at),
+    cron: "* * * * *",
+    noRetry() {},
+  };
+}
+
+function canaryDoc(overrides: Record<string, unknown> = {}) {
+  return {
+    schema: "equities-valuation-backfill/v1",
+    dataset: "equities_valuation",
+    job_id: "canary:2026-09-11:2026-09-11",
+    kind: "canary",
+    start: "2026-09-11",
+    end: "2026-09-11",
+    next: "2026-09-11",
+    attempts: 0,
+    lease: null,
+    last: null,
+    ...overrides,
+  };
+}
+
+function cronIngest(testEnv: Env): ValuationIngest {
+  return async (opts, signal) => {
+    const res = await worker.fetch(
+      new Request(
+        `https://ingestion-premium.test/v1/run?dataset=${opts.dataset}&from=${opts.from}&to=${opts.to}`,
+        {
+          method: "POST",
+          headers: { "X-Ingestion-Token": String(testEnv.INGESTION_RUN_TOKEN) },
+          signal,
+        },
+      ),
+      testEnv,
+    );
+    const body = (await res.json()) as {
+      summary: { status: "pass" | "fail" | "partial"; datasetCount: number; rowsInserted: number };
+    };
+    return body.summary;
+  };
 }
 
 async function postRun(testEnv: Env, dataset: string, from: string, to: string): Promise<Response> {
@@ -203,5 +252,231 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
       expect(scope.expected_frequency).toBe(tc.frequency);
       expect(scope.expected_item_unit).toBe(tc.unit);
     }
+  });
+
+  it("absent or invalid valuation job does not fall through to Premium cron", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      throw new Error(`unexpected fetch ${fetchUrl(input).href}`);
+    });
+    const testEnv = runtimeEnv();
+    await worker.scheduled(scheduledAt(), testEnv, createExecutionContext());
+    expect(spy).not.toHaveBeenCalled();
+    expect((await env.DB.prepare("SELECT id FROM ingestion_run_log").all()).results).toEqual([]);
+    await env.STRUCTURED_BUCKET.put(
+      VALUATION_BACKFILL_KEY,
+      JSON.stringify(canaryDoc({
+        job_id: "canary:2026-09-31:2026-09-31",
+        start: "2026-09-31",
+        end: "2026-09-31",
+        next: "2026-09-31",
+      })),
+    );
+    await worker.scheduled(scheduledAt(), testEnv, createExecutionContext());
+    expect(spy).not.toHaveBeenCalled();
+    expect((await env.DB.prepare("SELECT id FROM ingestion_run_log").all()).results).toEqual([]);
+    expect((await env.RAW_BUCKET.list()).objects).toHaveLength(0);
+  });
+
+  it("R2 CAS concurrent claim, thrown error, exhaustion, and resume", async () => {
+    expect((await rebuildNaturalKeysV2(env.DB)).state).toBe("READY");
+    const testEnv = runtimeEnv();
+    await env.STRUCTURED_BUCKET.put(VALUATION_BACKFILL_KEY, JSON.stringify(canaryDoc()));
+    let invocations = 0;
+    let started!: () => void;
+    const startedP = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let crash!: () => void;
+    const hanging: ValuationIngest = () => {
+      invocations += 1;
+      started();
+      return new Promise((_, reject) => {
+        crash = () => reject(new Error("forced crash https://api.jquants.com/secret"));
+      });
+    };
+    const leftP = runValuationBackfillTick(env.STRUCTURED_BUCKET, hanging);
+    const rightP = runValuationBackfillTick(env.STRUCTURED_BUCKET, hanging);
+    await startedP;
+    const loser = await Promise.race([
+      leftP.then((result) => ({ side: "left" as const, result })),
+      rightP.then((result) => ({ side: "right" as const, result })),
+    ]);
+    expect(invocations).toBe(1);
+    expect(["lost", "idle"]).toContain(loser.result.status);
+    crash();
+    expect(await (loser.side === "left" ? rightP : leftP)).toMatchObject({
+      status: "fail",
+      fetched: true,
+      reason: "ingestion_failed",
+    });
+    const afterThrow = JSON.parse(
+      await (await env.STRUCTURED_BUCKET.get(VALUATION_BACKFILL_KEY))!.text(),
+    ) as { next: string; attempts: number; last: { status: string } | null };
+    expect(afterThrow.next).toBe("2026-09-11");
+    expect(afterThrow.attempts).toBe(1);
+    expect(afterThrow.last?.status).toBe("ingestion_failed");
+
+    let forced = 0;
+    const boom: ValuationIngest = async () => {
+      forced += 1;
+      throw new Error("forced crash");
+    };
+    expect(
+      await runValuationBackfillTick(env.STRUCTURED_BUCKET, boom),
+    ).toMatchObject({ status: "fail", reason: "ingestion_failed" });
+    expect(
+      await runValuationBackfillTick(env.STRUCTURED_BUCKET, boom),
+    ).toMatchObject({ status: "fail", reason: "ingestion_failed" });
+    expect(forced).toBe(2);
+    expect(
+      await runValuationBackfillTick(env.STRUCTURED_BUCKET, boom),
+    ).toMatchObject({ status: "stop", fetched: false, reason: "exhausted" });
+    expect(forced).toBe(2);
+
+    await env.STRUCTURED_BUCKET.put(
+      VALUATION_BACKFILL_KEY,
+      JSON.stringify({
+        schema: "equities-valuation-backfill/v1",
+        dataset: "equities_valuation",
+        job_id: "history:2026-09-07:2026-09-13",
+        kind: "history",
+        start: "2026-09-07",
+        end: "2026-09-13",
+        next: "2026-09-07",
+        attempts: 0,
+        lease: null,
+        last: null,
+      }),
+    );
+    let allowEmpty = false;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = fetchUrl(input);
+      const date = url.searchParams.get("date");
+      if (
+        url.origin !== "https://api.jquants.com" ||
+        url.pathname !== "/v2/equities/valuation" ||
+        !date ||
+        date < "2026-09-07" ||
+        date > "2026-09-13"
+      ) {
+        throw new Error(`unexpected fetch ${url.href}`);
+      }
+      if (!allowEmpty) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ message: "unavailable" }), { status: 200 }),
+        );
+      }
+      return Promise.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+    });
+    expect(
+      await runValuationBackfillTick(env.STRUCTURED_BUCKET, cronIngest(testEnv)),
+    ).toMatchObject({ status: "fail", reason: "ingestion_failed" });
+    const blocked = JSON.parse(
+      await (await env.STRUCTURED_BUCKET.get(VALUATION_BACKFILL_KEY))!.text(),
+    ) as { next: string };
+    expect(blocked.next).toBe("2026-09-07");
+    // Seeded expired lease resume only. A live overlapping owner is already
+    // rejected by R2 CAS on stale etag; this does not re-prove stale final.
+    await env.STRUCTURED_BUCKET.put(
+      VALUATION_BACKFILL_KEY,
+      JSON.stringify({
+        schema: "equities-valuation-backfill/v1",
+        dataset: "equities_valuation",
+        job_id: "history:2026-09-07:2026-09-13",
+        kind: "history",
+        start: "2026-09-07",
+        end: "2026-09-13",
+        next: "2026-09-07",
+        attempts: 1,
+        lease: {
+          owner: "stale",
+          until: new Date(Date.now() - 1000).toISOString(),
+        },
+        last: null,
+      }),
+    );
+    allowEmpty = true;
+    expect(
+      await runValuationBackfillTick(env.STRUCTURED_BUCKET, cronIngest(testEnv)),
+    ).toMatchObject({ status: "pass", days: 5, reason: "ok" });
+    const progressed = JSON.parse(
+      await (await env.STRUCTURED_BUCKET.get(VALUATION_BACKFILL_KEY))!.text(),
+    ) as { next: string; attempts: number; last: { day: string; rowsInserted: number } | null };
+    expect(progressed.next).toBe("2026-09-12");
+    expect(progressed.attempts).toBe(0);
+    expect(progressed.last?.day).toBe("2026-09-11");
+    expect(progressed.last?.rowsInserted).toBe(0);
+    expect(
+      await runValuationBackfillTick(env.STRUCTURED_BUCKET, cronIngest(testEnv)),
+    ).toMatchObject({ status: "pass", days: 2, reason: "ok" });
+    const bounded = JSON.parse(
+      await (await env.STRUCTURED_BUCKET.get(VALUATION_BACKFILL_KEY))!.text(),
+    ) as { next: string; last: { day: string } | null };
+    expect(bounded.next).toBe("2026-09-14");
+    expect(bounded.last?.day).toBe("2026-09-13");
+  });
+
+  it("scheduled canary persists D1/R2 unsigned PENDING receipt and stops fetching", async () => {
+    expect((await rebuildNaturalKeysV2(env.DB)).state).toBe("READY");
+    const testEnv = runtimeEnv();
+    await env.STRUCTURED_BUCKET.put(VALUATION_BACKFILL_KEY, JSON.stringify(canaryDoc()));
+    const spy = stubVendor("/v2/equities/valuation", { date: "2026-09-11" }, [{
+      Code: "86970",
+      Date: "2026-09-11",
+      EPS: -12.5,
+      BPS: -1.0,
+      ROE: -0.05,
+      PER: null,
+      PBR: null,
+      MktCap: 1000,
+    }]);
+    await worker.scheduled(scheduledAt(), testEnv, createExecutionContext());
+    expect(spy.mock.calls.length).toBeGreaterThan(0);
+    const control = JSON.parse(
+      await (await env.STRUCTURED_BUCKET.get(VALUATION_BACKFILL_KEY))!.text(),
+    ) as { next: string; last: { rowsInserted: number; status: string } | null };
+    expect(control.next).toBe("2026-09-12");
+    expect(control.last?.status).toBe("pass");
+    expect(control.last?.rowsInserted).toBeGreaterThan(0);
+    expect((await env.RAW_BUCKET.list({ prefix: "raw/equities_valuation/" })).objects.length)
+      .toBeGreaterThan(0);
+    const structured = (
+      await env.STRUCTURED_BUCKET.list({ prefix: "structured/jsonl/equities_valuation/" })
+    ).objects;
+    expect(structured.length).toBeGreaterThan(0);
+    const line = JSON.parse(
+      (await (await env.STRUCTURED_BUCKET.get(structured[0]!.key))!.text()).trim().split("\n")[0]!,
+    ) as { payload: unknown; raw_payload: unknown; natural_key: string };
+    const raw = typeof line.raw_payload === "string"
+      ? JSON.parse(line.raw_payload) as Record<string, unknown>
+      : line.raw_payload as Record<string, unknown>;
+    const payload = typeof line.payload === "string"
+      ? JSON.parse(line.payload) as Record<string, unknown>
+      : line.payload as Record<string, unknown>;
+    expect(raw.EPS).toBe(-12.5);
+    expect(raw.ROE).toBe(-0.05);
+    expect(raw.MktCap).toBe(1000);
+    expect(payload.EPS).toBe(-12.5);
+    expect(payload.ROE).toBe(-0.05);
+    expect(payload.MktCap).toBe(1000);
+    const receipts = await env.DB.prepare(
+      "SELECT status, digests_json FROM collection_receipts WHERE dataset = ?",
+    ).bind("equities_valuation").all<{ status: string; digests_json: string }>();
+    expect(receipts.results).toHaveLength(1);
+    expect(receipts.results[0]?.status).toBe("SUCCESS");
+    expect(JSON.parse(receipts.results[0]!.digests_json)).toMatchObject({
+      eligibility: "RECOVERED_RAW_ONLY",
+      issuer_class: "UnsignedIngestionAudit",
+    });
+    const coverage = await env.DB.prepare(
+      "SELECT status FROM coverage_segments WHERE dataset = ?",
+    ).bind("equities_valuation").all<{ status: string }>();
+    expect(coverage.results.every((row) => row.status !== "COMPLETE")).toBe(true);
+    const calls = spy.mock.calls.length;
+    spy.mockImplementation((input) => {
+      throw new Error(`unexpected fetch ${fetchUrl(input).href}`);
+    });
+    await worker.scheduled(scheduledAt(), testEnv, createExecutionContext());
+    expect(spy.mock.calls.length).toBe(calls);
   });
 });

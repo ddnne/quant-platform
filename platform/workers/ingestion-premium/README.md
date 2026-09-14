@@ -14,7 +14,7 @@ paginated export request have been verified.
 | Kind | Name | Purpose |
 |------|------|---------|
 | R2 | `quant-raw` | Full response pages + digest manifest per dataset/run |
-| R2 | `quant-structured` | Reserved (future parquet/partition dumps) |
+| R2 | `quant-structured` | Structured JSONL partitions; mutable `control/equities_valuation/backfill.json` |
 | D1 | `quant-ingest` | PIT-shaped structured rows (mirror of `storage/schema.py`) + watermarks |
 | Secret | `JQUANTS_API_KEY` | Required for upstream fetch; bind the existing value |
 | Secret | `INGESTION_RUN_TOKEN` | Manual run and migration rebuild only |
@@ -30,6 +30,39 @@ through `/v1/export/d1?table=ingestion_watermarks`; see
 Cron = `"15 * * * *"` (hourly at :15; for example 00:15 UTC == 09:15 JST). Premium publishes
 through the JST trading day; hourly cadence keeps the loop closed without
 stressing the 500 req/min cap. Override in `wrangler.toml`.
+
+## Staging valuation acquisition
+
+Staging cron is `* * * * *` and does **not** run the 24-dataset Premium loop,
+Receipt recovery, OPS projection, or READY. It ticks `equities_valuation` only
+when `STRUCTURED_BUCKET` `control/equities_valuation/backfill.json` is a valid
+job (`kind` `canary` or `history`). Absent object is a no-op; invalid object
+STOPs without fetch. Activation is putting that mutable control object — not a
+GO flag, READY, COMPLETE, Pilot, or Mass.
+
+Canary is one real JST day and requires `rowsInserted > 0`. History may persist
+zero-row days and stays unsigned / non-COMPLETE. Progress is `next`, `attempts`,
+and `lease` on the same ≤8KiB object. Attempts increment **before** fetch (max
+3; a throw/crash consumes budget). At-least-once: a crash after raw persist may
+repeat the day; immutable raw/structured market objects are never overwritten.
+One tick runs at most five sequential days. R2 `onlyIf.etagMatches` CAS leases
+the control; a null put is lost, not success.
+
+Timeout cancels vendor fetch only, not in-flight R2/D1 writes. The lease stays
+until its original expiry to delay retries; storage IO may still finish later.
+This is bounded at-least-once, not exactly-once or transactional abort.
+
+Put the control object to activate (no GO/READY/COMPLETE). Canary must have
+`start === end` and a matching `job_id`. History may span many days; `next`
+walks one calendar day per fetch.
+
+```json
+{"schema":"equities-valuation-backfill/v1","dataset":"equities_valuation","job_id":"canary:2026-09-11:2026-09-11","kind":"canary","start":"2026-09-11","end":"2026-09-11","next":"2026-09-11","attempts":0,"lease":null,"last":null}
+```
+
+History example: same fields with `kind`/`job_id` `history`, `start` ≥
+`2008-07-08`, `end` ≤ last completed JST day, `next` in `[start, end+1]`.
+
 
 ## Endpoints
 
