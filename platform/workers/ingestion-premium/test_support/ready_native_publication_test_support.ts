@@ -84,22 +84,43 @@ export function nativePublishCandidateBucket(
     objectWithChecksum(proofDigest, scopeBytes.byteLength, scopeBytes),
   );
   const stored = new Map<string, Uint8Array>();
+  const etagByKey = new Map<string, string>();
+  let etagSeq = 0;
   const bucket = {
     head: vi.fn(async (key: string) => objects.get(key) ?? null),
     get: vi.fn(async (key: string) => {
       const putBody = stored.get(key);
       if (putBody) {
+        const httpEtag = etagByKey.get(key);
         return {
           size: putBody.byteLength,
+          httpEtag,
+          etag: httpEtag?.replaceAll('"', ""),
           arrayBuffer: () => Promise.resolve(putBody.buffer.slice(0) as ArrayBuffer),
         } as unknown as R2ObjectBody;
       }
       return objects.get(key) ?? null;
     }),
-    put: vi.fn(async (key: string, value: ArrayBuffer | Uint8Array) => {
+    put: vi.fn(async (
+      key: string,
+      value: ArrayBuffer | Uint8Array,
+      options?: { onlyIf?: { etagDoesNotMatch?: string; etagMatches?: string } },
+    ) => {
+      const exists = stored.has(key) || objects.has(key);
+      const currentEtag = etagByKey.get(key);
+      if (options?.onlyIf?.etagDoesNotMatch === "*" && exists) return null;
+      if (
+        options?.onlyIf?.etagMatches !== undefined &&
+        options.onlyIf.etagMatches !== currentEtag
+      ) {
+        return null;
+      }
       const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
       stored.set(key, bytes);
-      return { key, size: bytes.byteLength } as R2Object;
+      etagSeq += 1;
+      const httpEtag = `"etag-${etagSeq}"`;
+      etagByKey.set(key, httpEtag);
+      return { key, size: bytes.byteLength, httpEtag, etag: `etag-${etagSeq}` } as R2Object;
     }),
   } as unknown as R2Bucket;
   return { bucket, stored };
@@ -295,6 +316,8 @@ export async function mintPairedNativeReadyTrader(args: {
   physicalSize: number;
   nativeSource: Record<string, unknown>;
   authorizationDigest: string;
+  bucket: R2Bucket;
+  stored: Map<string, Uint8Array>;
 }> {
   const jobId = args.jobId ?? NATIVE_PUBLISH_JOB_ID;
   const { terminal, native, proofDigest, scopeBytes, phys } = await admittedNativePublication(jobId);
@@ -340,5 +363,7 @@ export async function mintPairedNativeReadyTrader(args: {
     physicalSize: Number(physical.size),
     nativeSource: source,
     authorizationDigest: await sha256Digest(canonicalJson(traderDoc)),
+    bucket,
+    stored,
   };
 }

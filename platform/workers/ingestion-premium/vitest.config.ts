@@ -13,5 +13,6 @@ export default defineConfig({
     include: ["src/**/*.test.ts"],
     environment: "node",
     setupFiles: ["../../worker_support/test_node_crypto.ts"],
+    maxWorkers: 2,
   },
 });

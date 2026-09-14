@@ -6,6 +6,7 @@ import {
   EXACT_FOUR_CLOSURE_DIGEST,
   EXACT_FOUR_PLAN_SET_DIGEST,
   EXACT_FOUR_PROFILE_DIGEST,
+  controlledOpsReadyPointerKey,
   controlledPhysicalSnapshotKey,
   controlledPilotRequestDigest,
   controlledReadyKey,
@@ -13,6 +14,7 @@ import {
 } from "../../research-mass-eval/src/controlled_pilot_contract";
 import { verifyReceiptNativeReadyPublication } from "../../research-mass-eval/src/receipt_native_ready_publication";
 import {
+  personalReceiptCandidateManifestKey,
   personalReceiptCandidateScopeKey,
 } from "../../research-mass-eval/src/personal_receipt_candidate_contract";
 import { PINNED_RECEIPT_REGISTRY_SCOPE } from "./ops_projection_policy";
@@ -646,6 +648,57 @@ describe("pointer receipt-native READY publication", () => {
     expect(stored.get(minted.envelope_key)).toEqual(envelopeBytes);
     expect(stored.get(authKey)).toEqual(authBytes);
     expect(stored.get(`${envelopeKey}.attestation.json`)).toEqual(firstAttestationBytes);
+    const pointerKey = controlledOpsReadyPointerKey("staging");
+    const pointerAfterMint = stored.get(pointerKey);
+    expect(pointerAfterMint).toBeTruthy();
+    expect(JSON.parse(new TextDecoder().decode(pointerAfterMint)).envelope_key).toBe(
+      minted.envelope_key,
+    );
+    stored.delete(pointerKey);
+    const recovered = await publishAdmittedReceiptCandidate(env as never, {
+      job_id: jobId,
+      environment: "staging",
+    });
+    expect(recovered).toMatchObject({
+      ok: true,
+      attestation_id: minted.attestation_id,
+      envelope_key: minted.envelope_key,
+    });
+    expect(stored.get(minted.envelope_key)).toEqual(envelopeBytes);
+    expect(stored.get(authKey)).toEqual(authBytes);
+    const recoveredPointer = JSON.parse(
+      new TextDecoder().decode(stored.get(pointerKey)),
+    ) as { envelope_key: string; published_at: string };
+    expect(recoveredPointer.envelope_key).toBe(minted.envelope_key);
+    const job2 = "r05-candidate-pub-2";
+    const second = await admittedNativePublication(job2);
+    await bucket.put(
+      personalReceiptCandidateManifestKey(job2),
+      new TextEncoder().encode(JSON.stringify(second.terminal)),
+    );
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-02T12:40:00.500Z"));
+    const newer = await publishAdmittedReceiptCandidate(env as never, {
+      job_id: job2,
+      environment: "staging",
+    });
+    expect(newer.ok).toBe(true);
+    if (!newer.ok) throw new Error(String(newer.error));
+    expect(JSON.parse(new TextDecoder().decode(stored.get(pointerKey))).envelope_key).toBe(
+      newer.envelope_key,
+    );
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-02T12:40:01Z"));
+    const olderRetry = await publishAdmittedReceiptCandidate(env as never, {
+      job_id: jobId,
+      environment: "staging",
+    });
+    expect(olderRetry).toMatchObject({
+      ok: true,
+      envelope_key: minted.envelope_key,
+    });
+    expect(JSON.parse(new TextDecoder().decode(stored.get(pointerKey))).envelope_key).toBe(
+      newer.envelope_key,
+    );
+    expect(stored.get(minted.envelope_key)).toEqual(envelopeBytes);
   });
 
   it("rejects outer PASS labels when B0 measure rows are not ok", async () => {

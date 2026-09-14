@@ -402,7 +402,9 @@ def _read_ready(
         "state": "READY",
         "committed_at": committed_at,
         "source_run_id": source_run.get("id") or manifest.get("source_run_id"),
-        "change_seq": int(manifest.get("change_seq") or 0),
+        "change_seq": (
+            None if manifest.get("change_seq") is None else int(manifest["change_seq"])
+        ),
         "coverage_policy_version": str(
             manifest.get("coverage_policy_version") or "unknown"
         ),

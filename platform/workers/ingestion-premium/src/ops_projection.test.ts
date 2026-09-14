@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   dispatchOpsTool,
   OPS_TOOLS,
@@ -33,6 +33,22 @@ import {
   canonicalJson,
 } from "../../receipt-evidence-authority/src/canonical";
 import { canonicalProductBody } from "../../receipt-evidence-authority/src/product_materialization";
+import {
+  mintPairedNativeReadyTrader,
+  nativePublishSigningPair,
+} from "../test_support/ready_native_publication_test_support";
+
+const loadPinnedReadyKeysMock = vi.hoisted(() => vi.fn());
+const loadPinnedTraderKeysMock = vi.hoisted(() => vi.fn());
+vi.mock("cloudflare:workers", () => ({ WorkerEntrypoint: class {} }));
+vi.mock("../../research-mass-eval/src/controlled_pilot_registries", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../research-mass-eval/src/controlled_pilot_registries")>();
+  return {
+    ...actual,
+    loadPinnedReadyKeys: loadPinnedReadyKeysMock,
+    loadPinnedTraderKeys: loadPinnedTraderKeysMock,
+  };
+});
 
 const receiptRegistryDocuments = vi.hoisted(() => {
   const asDocument = (value: unknown): Record<string, unknown> => {
@@ -654,6 +670,8 @@ function wrapR2(hooks: {
   onGet?: (key: string) => void;
 } = {}): R2Bucket {
   const store = new Map<string, Uint8Array>();
+  const etagByKey = new Map<string, string>();
+  let etagSeq = 0;
   const toBytes = (value: unknown): Uint8Array => {
     if (value instanceof Uint8Array) return value;
     if (value instanceof ArrayBuffer) return new Uint8Array(value);
@@ -661,13 +679,19 @@ function wrapR2(hooks: {
   };
   return {
     async head(key: string) {
-      return store.has(key) ? { key } : null;
+      const body = store.get(key);
+      if (body === undefined) return null;
+      return { key, size: body.byteLength, httpEtag: etagByKey.get(key) };
     },
     async get(key: string) {
       hooks.onGet?.(key);
       const body = store.get(key);
       if (body === undefined) return null;
+      const httpEtag = etagByKey.get(key);
       return {
+        size: body.byteLength,
+        httpEtag,
+        etag: httpEtag?.replaceAll('"', ""),
         text: async () => new TextDecoder().decode(body),
         arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
       };
@@ -675,14 +699,24 @@ function wrapR2(hooks: {
     async put(
       key: string,
       value: unknown,
-      options?: { onlyIf?: { etagDoesNotMatch?: string } },
+      options?: { onlyIf?: { etagDoesNotMatch?: string; etagMatches?: string } },
     ) {
       hooks.onPut?.(key);
       if (options?.onlyIf?.etagDoesNotMatch === "*" && store.has(key)) {
         return null;
       }
-      store.set(key, toBytes(value));
-      return { key };
+      if (
+        options?.onlyIf?.etagMatches !== undefined &&
+        options.onlyIf.etagMatches !== etagByKey.get(key)
+      ) {
+        return null;
+      }
+      const bytes = toBytes(value);
+      store.set(key, bytes);
+      etagSeq += 1;
+      const httpEtag = `"etag-${etagSeq}"`;
+      etagByKey.set(key, httpEtag);
+      return { key, httpEtag, etag: `etag-${etagSeq}` };
     },
   } as unknown as R2Bucket;
 }
@@ -721,8 +755,164 @@ async function envFor(
 }
 
 describe("ops projection cloud publisher", () => {
+  beforeEach(() => {
+    loadPinnedReadyKeysMock.mockReset();
+    loadPinnedTraderKeysMock.mockReset();
+    loadPinnedReadyKeysMock.mockResolvedValue([]);
+    loadPinnedTraderKeysMock.mockResolvedValue([]);
+  });
   afterEach(() => {
     receiptRegistryDocuments.restore();
+    vi.useRealTimers();
+    loadPinnedReadyKeysMock.mockReset();
+    loadPinnedTraderKeysMock.mockReset();
+  });
+
+  it("projects native READY appearance, noops, and drops READY when expired", async () => {
+    const source = new DatabaseSync(":memory:");
+    const target = new DatabaseSync(":memory:");
+    applySqlDir(source, ingestionMigrations, "0010_raw_acquisition_status.sql");
+    applySqlDir(target, projectionMigrations);
+    seedBase(source);
+    insertSegment(source, {
+      segment: "2026-08",
+      status: "COMPLETE",
+      start: "2026-08-01",
+      end: "2026-08-31",
+    });
+    const keys = await keyPair();
+    const env = {
+      ...(await envFor(source, target, keys)),
+      OPS_PROJECTION_ENVIRONMENT: "staging" as const,
+    };
+    const absent = await publishOpsProjection(env);
+    expect(absent.status).toBe("published");
+    expect(
+      (
+        target.prepare(
+          "SELECT status FROM ops_ready_state WHERE projection_generation_id=?",
+        ).get(absent.generation_id) as { status: string }
+      ).status,
+    ).toBe("NOT_READY");
+
+    const readyPair = await nativePublishSigningPair();
+    const traderPair = await nativePublishSigningPair();
+    const activeReady = {
+      key_id: "ready-test",
+      public_key: readyPair.publicKey,
+      algorithm: "Ed25519",
+      status: "active",
+      not_before: "2020-01-01T00:00:00Z",
+      not_after: "2099-01-01T00:00:00Z",
+      revoked_at: null,
+      environment: "staging",
+    };
+    const activeTrader = {
+      key_id: "trader-test",
+      public_key: traderPair.publicKey,
+      algorithm: "Ed25519",
+      status: "active",
+      not_before: "2020-01-01T00:00:00Z",
+      not_after: "2099-01-01T00:00:00Z",
+      revoked_at: null,
+      environment: "staging",
+    };
+    loadPinnedReadyKeysMock.mockResolvedValue([activeReady]);
+    loadPinnedTraderKeysMock.mockResolvedValue([activeTrader]);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-02T12:20:00Z"));
+    const minted = await mintPairedNativeReadyTrader({
+      readySecret: readyPair.secret,
+      traderSecret: traderPair.secret,
+    });
+    const expiresAt = (
+      JSON.parse(new TextDecoder().decode(minted.envelopeBytes)) as {
+        attestation?: { expires_at?: string };
+      }
+    ).attestation?.expires_at;
+    if (!expiresAt) throw new Error("minted envelope is missing expires_at");
+    env.STRUCTURED_BUCKET = minted.bucket;
+    const bucketGet = minted.bucket.get as ReturnType<typeof vi.fn>;
+    const innerGet = bucketGet.getMockImplementation();
+    if (!innerGet) throw new Error("native bucket get implementation is missing");
+    let pointerReads = 0;
+    let retireOnLaterPointer = false;
+    bucketGet.mockImplementation(async (key: string) => {
+      if (String(key).includes("ops-ready-pointer")) {
+        pointerReads += 1;
+        if (retireOnLaterPointer && pointerReads >= 2) {
+          loadPinnedReadyKeysMock.mockResolvedValue([{ ...activeReady, status: "retired" }]);
+        }
+      }
+      return innerGet(key);
+    });
+
+    const appeared = await publishOpsProjection(env);
+    expect(appeared.status).toBe("published");
+    expect(appeared.generation_id).not.toBe(absent.generation_id);
+    const readyRow = target.prepare(
+      "SELECT change_seq, state FROM ops_ready_snapshots WHERE projection_generation_id=?",
+    ).get(appeared.generation_id) as { change_seq: number | null; state: string };
+    expect(readyRow.state).toBe("READY");
+    expect(readyRow.change_seq).toBeNull();
+    const db = wrapSqlite(target);
+    const verify = (generation: Record<string, unknown>) =>
+      verifyProjectionGenerationWithSpki(
+        generation,
+        keys.spki,
+        "ops-projection-cloud-test-v1",
+        "staging",
+      );
+    const readySnap = await dispatchOpsTool(db, "latest_ready_snapshot", {}, verify) as {
+      status: string;
+    };
+    expect(readySnap.status).toBe("READY");
+
+    const noop = await publishOpsProjection(env);
+    expect(noop).toMatchObject({ status: "noop", generation_id: appeared.generation_id });
+
+    env.CF_VERSION_METADATA = {
+      id: "20000000-0000-4000-8000-000000000002",
+      tag: "b".repeat(40),
+    };
+    pointerReads = 0;
+    retireOnLaterPointer = true;
+    await expect(publishOpsProjection(env)).rejects.toThrow(
+      /native READY evidence changed before seal/,
+    );
+    retireOnLaterPointer = false;
+    pointerReads = 0;
+    loadPinnedReadyKeysMock.mockResolvedValue([activeReady]);
+    const resumed = await publishOpsProjection(env);
+    expect(resumed.status).toBe("published");
+    expect(
+      (
+        target.prepare(
+          "SELECT state FROM ops_ready_snapshots WHERE projection_generation_id=?",
+        ).get(resumed.generation_id) as { state: string }
+      ).state,
+    ).toBe("READY");
+
+    vi.setSystemTime(new Date(Date.parse(expiresAt) + 1000));
+    const expired = await publishOpsProjection(env);
+    expect(expired.status).toBe("published");
+    expect(expired.generation_id).not.toBe(resumed.generation_id);
+    expect(
+      (
+        target.prepare(
+          "SELECT status FROM ops_ready_state WHERE projection_generation_id=?",
+        ).get(expired.generation_id) as { status: string }
+      ).status,
+    ).toBe("NOT_READY");
+    const expiredSnap = await dispatchOpsTool(db, "latest_ready_snapshot", {}, verify) as {
+      status: string;
+    };
+    expect(expiredSnap.status).not.toBe("READY");
+    expect(() =>
+      target.prepare(
+        "UPDATE ops_ready_snapshots SET coverage_proof_digest=coverage_proof_digest WHERE projection_generation_id=?",
+      ).run(appeared.generation_id),
+    ).toThrow(/immutable/);
   });
 
   it("accepts the checked-in production and staging registries as PENDING", async () => {
@@ -1107,6 +1297,38 @@ describe("ops projection cloud publisher", () => {
     expect(
       (target.prepare("SELECT generated_at FROM ops_projection_generation WHERE generation_id=?").get(open.generation_id) as { generated_at: string }).generated_at,
     ).toBe(open.generated_at);
+    const competingActive = first.generation_id;
+    source.prepare("UPDATE ingestion_run_log SET detail='cas-loser' WHERE id=1").run();
+    await expect(
+      publishOpsProjection(
+        await envFor(source, target, keys, {
+          beforeRun(sql) {
+            if (/SET status='SEALED'/.test(sql)) {
+              target.prepare(
+                "UPDATE ops_projection_active SET generation_id=? WHERE singleton=1",
+              ).run(competingActive);
+            }
+          },
+        }),
+      ),
+    ).rejects.toBeInstanceOf(OpsProjectionPublishError);
+    const loser = target
+      .prepare(
+        "SELECT generation_id, status FROM ops_projection_generation WHERE status='OPEN'",
+      )
+      .get() as { generation_id: string; status: string };
+    expect(loser.status).toBe("OPEN");
+    expect(loser.generation_id).not.toBe(competingActive);
+    expect(
+      (target.prepare("SELECT generation_id FROM ops_projection_active").get() as { generation_id: string })
+        .generation_id,
+    ).toBe(competingActive);
+    const casRetry = await publishOpsProjection(await envFor(source, target, keys));
+    expect(casRetry.generation_id).toBe(loser.generation_id);
+    expect(
+      (target.prepare("SELECT generation_id FROM ops_projection_active").get() as { generation_id: string })
+        .generation_id,
+    ).toBe(loser.generation_id);
   });
 
   // Integration-scale pagination/query-count fixture, not a 5s product SLA.
