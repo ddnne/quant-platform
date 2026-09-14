@@ -66,6 +66,13 @@ _ROUTES: dict[str, dict[str, Any]] = {
                      f"{_CLIENT_ROOT}/jquantsapi/apis/v2/markets.py"],
         "pagination": True, "ignored_response_fields": [],
     },
+    "equities_valuation": {
+        "mode": "calendar_month_sliced", "day_parameter": "date",
+        "disposition": "TARGET_DATE_ROUTE_SELECTED",
+        "evidence": ["https://jpx-jquants.com/ja/spec/eq-valuation.md",
+                     "https://jpx-jquants.com/ja/spec/eq-valuation/calc.md"],
+        "pagination": True, "ignored_response_fields": [],
+    },
     "fins_details": {
         "mode": "calendar_month_sliced", "day_parameter": "date",
         "disposition": "MATCHED",

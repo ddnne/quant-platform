@@ -155,8 +155,12 @@ class ProjectionContractSnapshot:
 
         registry_path = package / "canonical_datasets.json"
         coverage_path = package / "collection_coverage.json"
+        premium_path = package / "jquants_premium_core.json"
+        jsda_path = package / "jsda_governed.json"
         contract_paths = (
             coverage_path,
+            premium_path,
+            jsda_path,
             *capability_paths,
             storage_package
             / "authorities"
@@ -238,9 +242,35 @@ class ProjectionContractSnapshot:
             for contract in canonical_contracts
             if contract.governance_tier == "governed"
         }
-        if len(governed_ids) != 26 or len(canonical_contracts) < 26:
+        relative_premium = premium_path.relative_to(root).as_posix()
+        relative_jsda = jsda_path.relative_to(root).as_posix()
+
+        def _primary_ids(document: dict[str, Any], origin: str) -> set[str]:
+            rows = document.get("datasets")
+            if type(rows) is not list or not rows:
+                raise ValueError(f"{origin} datasets must be a non-empty array")
+            ids: set[str] = set()
+            for raw_row in rows:
+                if type(raw_row) is not dict or type(raw_row.get("dataset_id")) is not str:
+                    raise ValueError(f"{origin} contains an invalid dataset row")
+                dataset_id = raw_row["dataset_id"]
+                if dataset_id in ids:
+                    raise ValueError(f"{origin} duplicate dataset: {dataset_id}")
+                ids.add(dataset_id)
+            return ids
+
+        required_governed = _primary_ids(
+            _decode_object(retained[relative_premium], origin=relative_premium),
+            relative_premium,
+        ) | _primary_ids(
+            _decode_object(retained[relative_jsda], origin=relative_jsda),
+            relative_jsda,
+        )
+        if not required_governed or governed_ids != required_governed:
             raise ValueError(
-                "canonical registry must contain exactly 26 governed datasets"
+                "canonical governed membership must match Premium-core plus JSDA "
+                f"contracts: missing={sorted(required_governed - governed_ids)}, "
+                f"extra={sorted(governed_ids - required_governed)}"
             )
 
         if coverage_document.get("schema_version") != 2:

@@ -21,6 +21,7 @@ from ingestion.jquants.catalog import (
 
 REQUIRED_HANDOFF_IDS = {
     "equities_master", "equities_bars_daily", "equities_bars_daily_am",
+    "equities_valuation",
     "fins_summary", "fins_details", "fins_dividend", "fins_earnings_date",
     "equities_earnings_calendar", "markets_calendar", "equities_investor_types",
     "indices_bars_daily_topix", "indices_bars_daily",
@@ -109,6 +110,8 @@ DATEMODE_EXPECTED = {
     "equities_master": "today",
     "equities_bars_daily": "today",
     "equities_bars_daily_am": "today",
+    # code OR date required; from/to without code is rejected.
+    "equities_valuation": "today",
     "fins_summary": "today",
     "fins_details": "today",
     "fins_dividend": "today",

@@ -14,8 +14,10 @@ def test_inventory_includes_all_premium_including_fins_details():
     ids = inventory_governed_jq_datasets()
     assert "fins_details" in ids
     assert "markets_calendar" in ids
-    # 23 JQ governed (26 total governed minus 3 JSDA)
-    assert len(ids) == 23
+    from data_contracts.loader import all_contracts
+
+    assert "equities_valuation" in ids
+    assert set(ids) == {contract.dataset_id for contract in all_contracts()}
     caps = load_premium_endpoint_capabilities()
     for ds in ids:
         assert ds in caps, f"missing endpoint capability for {ds}"

@@ -1,8 +1,9 @@
 # Data contracts
 
 `jquants_premium_core.json` is the canonical PIT/identity/availability contract
-for the 23 J-Quants Premium-core datasets and is consumed by Python and the
-Cloudflare ingestion runtime.
+for the J-Quants Premium-core datasets and is consumed by Python and the
+Cloudflare ingestion runtime. Membership is the JSON document itself (unique
+non-empty dataset ids), not a frozen numeric count.
 
 `collection_coverage.json` is its one-for-one collection/governance sibling.
 It defines historical targets, frequency and universe semantics, raw and
@@ -39,3 +40,23 @@ The loader rejects unknown fields and unknown `history_mode` values.
 `required_domain_subset_official(contract)` is the helper later lanes call.
 This package does not rewrite `plan_required_segments` and does not invent
 COMPLETE.
+
+## Equities valuation (`GET /v2/equities/valuation`)
+
+Official 2026-09-14 Premium endpoint. Catalog, coverage, SourceCapability, and
+the date-sliced acquisition target route are registered in source. Registering
+the route does not collect data, deploy Workers, or enable READY/Pilot.
+
+- Query: `code` or `date` required; collection uses the existing
+  `calendar_month_sliced` `date` + `pagination_key` route.
+- `event_time` is session close of `Date`. `available_at` is
+  `ingest_time_conservative` (publish is approximately 16:30 JST, not a close
+  instant, and vendor overwrites have no ETag/revision). Historical rows are
+  observation-time available after ingest; they are not vintage observed PIT.
+- Metrics may be null or negative; all-null ETF/ETN rows and REIT MktCap-only
+  rows are retained. `MktCap` is million yen excluding treasury shares and must
+  not replace `equities_bars_daily` market cap.
+- SourceCapability describes bounded history from 2008-07-08 and excludes
+  current `core` / `core_historical` / `controlled-pilot` profiles. Strategy
+  consumption and historical reconstruction are follow-on after a separately
+  held collection/deploy decision.

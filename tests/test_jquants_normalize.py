@@ -54,6 +54,48 @@ def test_zero_volume_preserved_not_dropped():
     assert r["turnover_value"] == 0.0
 
 
+def test_equities_valuation_keeps_null_and_negative_metrics():
+    rows = [
+        {
+            "Date": "2025-04-01",
+            "Code": "13010",
+            "EPS": None,
+            "PER": None,
+            "PBR": None,
+            "MktCap": None,
+        },
+        {
+            "Date": "2025-04-01",
+            "Code": "89510",
+            "EPS": None,
+            "PER": None,
+            "PBR": None,
+            "MktCap": 123.0,
+        },
+        {
+            "Date": "2025-04-01",
+            "Code": "86970",
+            "EPS": -12.5,
+            "BPS": -1.0,
+            "ROE": -0.05,
+            "PER": None,
+            "PBR": None,
+            "MktCap": 1000.0,
+        },
+    ]
+    out = normalize_generic(rows, dataset="equities_valuation", ingested_at=ING)
+    assert len(out) == 3
+    assert len({row["natural_key"] for row in out}) == 3
+    for row in out:
+        assert row["dataset"] == "equities_valuation"
+        assert row["available_at"] == ING
+        assert row["event_time"].startswith("2025-04-01T15:30:00")
+    raw_rows = [json.loads(row["raw_payload"]) for row in out]
+    assert raw_rows[0]["MktCap"] is None and raw_rows[0]["PER"] is None
+    assert raw_rows[1]["MktCap"] == 123.0
+    assert raw_rows[2]["EPS"] == -12.5 and raw_rows[2]["PER"] is None
+
+
 def test_listed_info_short_names():
     rows = [{"Code": "8697", "CoName": "野村ホールディングス", "Sec17Code": "1"}]
     r = normalize_listed_info(rows, ingested_at=ING, snapshot_date="2025-04-01")[0]

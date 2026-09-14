@@ -426,6 +426,24 @@
       "params": ["code", "date"],
       "code_param": true,
       "assumption": "DocId identifies the filing and SubDate+SubTime is its explicit submission timestamp."
+    },
+    {
+      "dataset_id": "equities_valuation",
+      "path": "/v2/equities/valuation",
+      "group": "core",
+      "date_mode": "today",
+      "natural_key_fields": ["Code", "Date"],
+      "event_time_policy": "session_close",
+      "event_time_fields": ["Date"],
+      "available_at_policy": "ingest_time_conservative",
+      "availability_field": null,
+      "known_publication_lag": null,
+      "fallback_policy": "ingest_time_conservative",
+      "observation_grain": "issuer_trading_day",
+      "bulk": "api",
+      "params": ["code", "date", "from", "to"],
+      "code_param": true,
+      "assumption": "Date is the valuation observation day using same-day close/reference price. Vendor publishes approximately 16:30 JST (not guaranteed) and overwrites in place with no revision/ETag; available_at is ingest time, so stored history is observation-time available and is not vintage observed PIT. Noon decision d must not treat same-day close as eligible. EPS/BPS/ROE may be negative; PER is null when EPS<=0 and PBR is null when BPS<=0. ETF/ETN may be all-null including MktCap; REIT may have MktCap only. Null-metric rows are retained. MktCap is million yen excluding treasury shares and is not a substitute for equities_bars_daily MktCap."
     }
   ]
 }

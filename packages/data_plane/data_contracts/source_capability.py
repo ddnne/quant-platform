@@ -46,6 +46,7 @@ _BUNDLED_CONTRACT_FILES = frozenset(
         "equities_bars_daily_am.json",
         "equities_earnings_calendar.json",
         "equities_master.json",
+        "equities_valuation.json",
         "fins_details.json",
         "fins_dividend.json",
         "fins_earnings_date.json",

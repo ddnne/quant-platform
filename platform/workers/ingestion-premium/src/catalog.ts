@@ -68,8 +68,18 @@ export interface CollectionCoveragePolicy {
 
 const rawContracts = contractDocument.datasets as ContractJson[];
 
-if (contractDocument.schema_version !== 2 || rawContracts.length !== 23) {
+const premiumIds = new Set<string>();
+if (contractDocument.schema_version !== 2 || rawContracts.length === 0) {
   throw new Error("invalid J-Quants Premium-core contract document");
+}
+for (const row of rawContracts) {
+  if (typeof row.dataset_id !== "string" || row.dataset_id.length === 0) {
+    throw new Error("invalid J-Quants Premium-core contract document");
+  }
+  if (premiumIds.has(row.dataset_id)) {
+    throw new Error(`duplicate Premium-core dataset ${row.dataset_id}`);
+  }
+  premiumIds.add(row.dataset_id);
 }
 
 const coverageDefaults = coverageDocument.defaults as Omit<
@@ -85,7 +95,7 @@ if (
 ) {
   throw new Error("invalid collection Coverage V2 contract document");
 }
-// Coverage catalog may include JSDA + all governed sets (26); Premium core is 23.
+// Coverage catalog may include JSDA plus every Premium-core dataset.
 // Require every Premium dataset has a coverage row rather than equal counts.
 for (const contract of rawContracts) {
   if (!coverageRows[contract.dataset_id]) {

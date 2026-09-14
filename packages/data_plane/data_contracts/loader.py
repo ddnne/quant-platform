@@ -180,8 +180,8 @@ def _load() -> tuple[int, Mapping[str, DatasetContract]]:
         if contract.dataset_id in contracts:
             raise ValueError(f"duplicate dataset contract: {contract.dataset_id}")
         contracts[contract.dataset_id] = contract
-    if len(contracts) != 23:
-        raise ValueError(f"expected 23 Premium-core contracts, found {len(contracts)}")
+    if not contracts:
+        raise ValueError("Premium-core contract datasets must be non-empty")
     return 2, MappingProxyType(contracts)
 
 

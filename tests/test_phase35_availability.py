@@ -96,7 +96,10 @@ def test_explicit_disclosure_date_uses_conservative_next_calendar_start():
     )
 
 
-@pytest.mark.parametrize("dataset", ["markets_breakdown", "markets_calendar"])
+@pytest.mark.parametrize(
+    "dataset",
+    ["markets_breakdown", "markets_calendar", "equities_valuation"],
+)
 def test_unknown_publication_instant_uses_ingest_time(dataset):
     ingested = "2025-04-02T09:00:00+09:00"
     row = {"Code": "8697", "Date": "2025-04-01"}
@@ -111,10 +114,12 @@ def test_unknown_dataset_fails_safe_like_worker_wrapper():
     )
 
 
-def test_policy_views_are_derived_from_all_23_contracts():
+def test_policy_views_are_derived_from_premium_contracts():
     contracts = all_contracts()
     expected = {contract.dataset_id: contract.available_at_policy for contract in contracts}
-    assert len(contracts) == 23
+    assert contracts
+    assert len({contract.dataset_id for contract in contracts}) == len(contracts)
+    assert expected["equities_valuation"] == "ingest_time_conservative"
     assert DATASET_POLICY == expected
     assert set(POLICIES) == AVAILABLE_AT_POLICIES
     assert DEFAULT_POLICY == "ingest_time_conservative"

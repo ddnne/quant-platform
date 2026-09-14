@@ -367,6 +367,166 @@
           "ingestion": "cf_platform",
           "primary": "jquants_premium_core"
         },
+        "dataset_id": "equities_valuation",
+        "display_name": "Equities Valuation",
+        "enabled": true,
+        "governance_tier": "governed",
+        "inventory_status": "GOVERNED",
+        "sla": {
+          "expected_after": "16:30",
+          "freshness_policy": "trading_day",
+          "timezone": "Asia/Tokyo",
+          "usable_by": null
+        },
+        "source": "jquants_premium_core"
+      },
+      "coverage_policy": {
+        "collection_scope": "jquants_premium_core",
+        "coverage_mode": "trading_calendar",
+        "dataset_id": "equities_valuation",
+        "earliest_official_availability": null,
+        "empty_success_policy": "never_complete",
+        "expected_frequency": "trading_day",
+        "governance_tier": "governed",
+        "history_mode": "bounded_history",
+        "history_target_end_rule": "latest_published_before_collection_cutoff",
+        "history_target_start": "2008-07-08",
+        "not_historical_required_start": null,
+        "official_mode": null,
+        "policy_version": "collection-coverage/v3",
+        "raw_retention_required": true,
+        "required_domain_basis": "calendar_months_from_official_start",
+        "segment_granularity": "calendar_month",
+        "structured_reconciliation_required": true,
+        "universe_rule": "all_listed_equities_at_event_date",
+        "vendor_data_provision_citation": "https://jpx-jquants.com/ja/spec/data-spec.md",
+        "vendor_data_provision_start": "2008-07-08",
+        "vendor_history_policy": null,
+        "vendor_history_policy_citation": null
+      },
+      "premium_contract": {
+        "assumption": "Date is the valuation observation day using same-day close/reference price. Vendor publishes approximately 16:30 JST (not guaranteed) and overwrites in place with no revision/ETag; available_at is ingest time, so stored history is observation-time available and is not vintage observed PIT. Noon decision d must not treat same-day close as eligible. EPS/BPS/ROE may be negative; PER is null when EPS<=0 and PBR is null when BPS<=0. ETF/ETN may be all-null including MktCap; REIT may have MktCap only. Null-metric rows are retained. MktCap is million yen excluding treasury shares and is not a substitute for equities_bars_daily MktCap.",
+        "availability_field": null,
+        "available_at_policy": "ingest_time_conservative",
+        "bulk": "api",
+        "code_param": true,
+        "dataset_id": "equities_valuation",
+        "date_mode": "today",
+        "event_time_fields": [
+          "Date"
+        ],
+        "event_time_policy": "session_close",
+        "fallback_policy": "ingest_time_conservative",
+        "group": "core",
+        "known_publication_lag": null,
+        "natural_key_fields": [
+          "Code",
+          "Date"
+        ],
+        "observation_grain": "issuer_trading_day",
+        "params": [
+          "code",
+          "date",
+          "from",
+          "to"
+        ],
+        "path": "/v2/equities/valuation"
+      },
+      "query_resolution": {
+        "allowed_ignored_response_fields": [],
+        "authority": "target-reviewed-route/v2",
+        "coverage_segment_granularity": "calendar_month",
+        "day_parameter": "date",
+        "mode": "calendar_month_sliced",
+        "official_client_evidence": [
+          "https://jpx-jquants.com/ja/spec/eq-valuation.md",
+          "https://jpx-jquants.com/ja/spec/eq-valuation/calc.md"
+        ],
+        "omitted_optional_parameter_mismatches": [],
+        "pagination": [
+          {
+            "query_parameter": "pagination_key",
+            "response_field": "pagination_key"
+          }
+        ],
+        "pagination_evidence": "https://jpx-jquants.com/ja/spec/eq-valuation.md",
+        "premium_parameter_disposition": "TARGET_DATE_ROUTE_SELECTED"
+      },
+      "source_capability": {
+        "available_at": {
+          "field": null,
+          "known_publication_lag": null,
+          "policy": "ingest_time_conservative"
+        },
+        "collection_window": {
+          "close": "latest_published_before_collection_cutoff",
+          "grain": "calendar_month",
+          "open": "2008-07-08"
+        },
+        "dataset_id": "equities_valuation",
+        "earliest_official_availability": "2008-07-08",
+        "entitlement_semantics": {
+          "clamp_before_earliest": true,
+          "official_data_provision_start": "2008-07-08",
+          "subscription_floor": null
+        },
+        "event_time": {
+          "fields": [
+            "Date"
+          ],
+          "policy": "session_close"
+        },
+        "freshness_sla": {
+          "expected_after": "16:30",
+          "rule": "approximate_daily_publication",
+          "timezone": "Asia/Tokyo"
+        },
+        "historical_research_eligible": true,
+        "history_mode": "bounded_history",
+        "official_evidence_url": "https://jpx-jquants.com/ja/spec/eq-valuation.md",
+        "policy_version": "source-capability/v3",
+        "publication_calendar": {
+          "kind": "jpx_trading_day",
+          "official_history_evidence_url": "https://jpx-jquants.com/ja/spec/data-spec.md",
+          "official_update_around": "16:30",
+          "timezone": "Asia/Tokyo"
+        },
+        "required_domain_semantics": {
+          "basis": "calendar_months_from_official_start",
+          "empty_success_policy": "never_complete"
+        },
+        "research_profile_eligibility": {
+          "exclude_from": [
+            "core",
+            "core_historical",
+            "controlled-pilot"
+          ],
+          "exclusion_reason": "Official GET /v2/equities/valuation is catalogued with bounded history from 2008-07-08, but current READY/Pilot profiles stay on already collected bars/master/calendar/fins. Valuation MktCap is million yen excluding treasury shares and must not substitute equities_bars_daily MktCap. Vendor overwrites have no vintage PIT.",
+          "include_in": []
+        },
+        "revision_semantics": {
+          "generation_on_revision": true,
+          "policy": "source_overwrite_capture_new_generation"
+        },
+        "source": "jquants_premium_core",
+        "supported_query_parameters": [
+          "code",
+          "date",
+          "from",
+          "to",
+          "pagination_key"
+        ],
+        "tip_only_operational": false,
+        "upstream_locator": "/v2/equities/valuation"
+      }
+    },
+    {
+      "canonical_dataset": {
+        "contracts": {
+          "coverage": "collection_coverage/v2",
+          "ingestion": "cf_platform",
+          "primary": "jquants_premium_core"
+        },
         "dataset_id": "fins_details",
         "display_name": "Financial Details",
         "enabled": true,
@@ -1373,7 +1533,7 @@
   "maximum_redirects": 0,
   "maximum_segment_pages": 8192,
   "official_origin": "https://api.jquants.com",
-  "registry_digest": "sha256:1355e440a0a58356c90854646cdb82b5fd1dcc1e39adc8aa6fa5ea48a9211b52",
+  "registry_digest": "sha256:16dcd4edddb474daa1aff8937979e27fc5a214bcf8af7a920945bf2fe88657d7",
   "rpc_surface": {
     "request_fields": [
       "schema_version",

@@ -483,6 +483,7 @@ def _target_registry() -> _TargetRegistry:
     expected_active = {
         "equities_bars_daily",
         "equities_master",
+        "equities_valuation",
         "fins_details",
         "fins_dividend",
         "fins_earnings_date",
