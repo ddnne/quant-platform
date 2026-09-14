@@ -8,7 +8,11 @@ context (setuptools loads packages/data_plane as storage.*, pit.*, …).
 Invalid relative imports fail the check rather than being skipped. The
 packages.<where-dir>.* index entries are lookup aliases for imported names.
 Dynamic importlib strings and paths outside setuptools where=/py-modules are
-not verified.
+not verified. The same index then applies a limited compiled-scope owner-edge:
+paper_runtime.ready_publication must not import connection-private PIT SQL
+modules. Equivalent aliases resolve to the same owner path. This does not ban
+sqlite3, DataView, or trusted experiment-index/cache/budget stores, and it
+does not claim other research_runtime or scripts crossings are closed.
 """
 
 from __future__ import annotations
@@ -185,4 +189,43 @@ def test_data_plane_source_does_not_import_other_first_party_planes() -> None:
             violations.append(f"{path}:{lineno} imports {name!r} -> {hits}")
     assert not violations, (
         "DataPlane source imports another first-party plane:\n" + "\n".join(violations)
+    )
+
+    private_sql = {
+        index[name]
+        for name in (
+            "pit.complete_master",
+            "pit.scoped_selection",
+            "pit.compiled_dependency_scope",
+            "pit.receipt_scope",
+            "pit.query",
+        )
+    }
+    runtime_path = index["paper_runtime.ready_publication"]
+    leaf = next(
+        name
+        for name, found in index.items()
+        if found == runtime_path and not name.startswith("packages.")
+    )
+    package = (
+        leaf if runtime_path.name == "__init__.py" else (leaf.rpartition(".")[0] or None)
+    )
+    tree = ast.parse(
+        runtime_path.read_text(encoding="utf-8"), filename=str(runtime_path)
+    )
+    runtime_violations: list[str] = []
+    for lineno, name in _import_targets(tree, package):
+        if name.startswith("<invalid-relative"):
+            runtime_violations.append(f"{runtime_path}:{lineno} {name}")
+            continue
+        hits = _prefix_hits(name, index, owners)
+        if any(hit_path in private_sql for _, hit_path, _ in hits):
+            runtime_violations.append(
+                f"{runtime_path}:{lineno} imports {name!r} -> {hits}"
+            )
+    assert not runtime_violations, (
+        "ready_publication imports connection-private PIT SQL owners "
+        "(limited compiled-scope edge; other research_runtime/scripts "
+        "crossings remain OPEN):\n"
+        + "\n".join(runtime_violations)
     )

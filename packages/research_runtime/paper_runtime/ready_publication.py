@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -18,7 +17,11 @@ from core.execution import (
 )
 from data_contracts import coverage_contract_for
 from pit import PitError
-from pit.receipt_scope import load_collection_receipt_scope
+from pit.compiled_scope_proof import (
+    CompiledControlledSelection,
+    CompiledScopeProofSession,
+    compiled_scope_proof_session_from_store,
+)
 
 from pit.read_clock import (
     PitReadClock,
@@ -37,17 +40,12 @@ from storage.receipt_crypto import (
     PRODUCTION_RECEIPT_ENVIRONMENT,
 )
 from storage.coverage_ledger import (
-    CollectionReceipt,
     declared_coverage_segments,
     evaluate_segment,
 )
 from ops.receipt_product import (
     _aware_instant,
-    measure_owned_product_artifact_body,
-    open_stored_product_artifact,
-    verify_full_segment_product_materialization,
 )
-from storage.verified_receipt import require_verified_collection_closure
 
 
 def _calendar_dates(start: str, end: str) -> tuple[str, ...]:
@@ -188,7 +186,7 @@ def _max_original_checked_at(values: Sequence[str]) -> str:
 
 
 def _resolve_controlled_universe(
-    conn: sqlite3.Connection,
+    session: CompiledScopeProofSession,
     *,
     period_start: str,
     period_end: str,
@@ -196,31 +194,6 @@ def _resolve_controlled_universe(
     expected_environment: str,
     expected_authority_instance_digest: str,
 ):
-    class _OwnedUniverseVerifier:
-        """Purpose-specific universe capability. Not a SQL/path/row API."""
-
-        def resolve_day_slices(
-            self,
-            *,
-            period_start: str,
-            period_end: str,
-            as_of_for_day: Mapping[str, str],
-        ):
-            from pit.complete_master import (
-                _complete_master_day_slices_from_connection,
-            )
-
-            return _complete_master_day_slices_from_connection(
-                conn,
-                period_start=period_start,
-                period_end=period_end,
-                as_of_for_day=as_of_for_day,
-                expected_environment=expected_environment,
-                expected_authority_instance_digest=(
-                    expected_authority_instance_digest
-                ),
-            )
-
     proof_clock = PitReadClock(
         decision_at=close_as_of(period_end),
         observed_through=observed_through,
@@ -232,10 +205,14 @@ def _resolve_controlled_universe(
         for day in _calendar_dates(period_start, period_end)
     }
     with install_read_clock(proof_clock):
-        slices = _OwnedUniverseVerifier().resolve_day_slices(
+        slices = session.complete_master_day_slices(
             period_start=period_start,
             period_end=period_end,
             as_of_for_day=as_of_for_day,
+            expected_environment=expected_environment,
+            expected_authority_instance_digest=(
+                expected_authority_instance_digest
+            ),
         )
     resolved_universe = resolve_tse_prime_with_fins(
         slices,
@@ -243,183 +220,6 @@ def _resolve_controlled_universe(
         period_end=period_end,
     )
     return proof_clock, slices, resolved_universe
-
-
-def _collect_verified_receipt_backings(
-    conn: sqlite3.Connection,
-    *,
-    collection_receipts: Sequence[Mapping[str, Any]],
-    product_materializations: Sequence[Mapping[str, Any]],
-    ingestion_runs: Sequence[Mapping[str, Any]],
-    raw_retention_manifests: Sequence[Mapping[str, Any]],
-    required_datasets: Sequence[str],
-    expected_environment: str,
-    expected_authority_instance_digest: str,
-    measure_through: str | None,
-    allowed_segments: frozenset[tuple[str, str]] | None,
-) -> tuple[
-    dict[str, dict[str, list[tuple[str, str]]]],
-    set[str],
-    tuple[str, ...],
-    tuple[Mapping[str, Any], ...],
-    tuple[Mapping[str, Any], ...],
-]:
-    verified_row_backings: dict[str, dict[str, list[tuple[str, str]]]] = {
-        dataset_id: {} for dataset_id in required_datasets
-    }
-    witness: set[str] = set()
-    accepted_clocks: list[str] = []
-    accepted_runset: list[dict[str, Any]] = []
-    accepted_bindings: list[dict[str, Any]] = []
-    for raw in collection_receipts:
-        stored = dict(raw)
-        dataset_id = str(stored["dataset"])
-        if allowed_segments is not None and (
-            dataset_id,
-            str(stored["segment_id"]),
-        ) not in allowed_segments:
-            continue
-        try:
-            expected_scope = json.loads(str(stored["expected_scope"]))
-            digests = json.loads(str(stored["digests_json"]))
-            receipt = CollectionReceipt(
-                source=str(stored["source"]),
-                dataset=dataset_id,
-                segment_id=str(stored["segment_id"]),
-                segment_start=str(stored["segment_start"]),
-                segment_end=str(stored["segment_end"]),
-                expected_scope=expected_scope,
-                expected_items=(
-                    None
-                    if stored["expected_items"] is None
-                    else int(stored["expected_items"])
-                ),
-                observed_items=int(stored["observed_items"]),
-                raw_page_count=int(stored["raw_page_count"]),
-                raw_row_count=int(stored["raw_row_count"]),
-                structured_row_count=int(stored["structured_row_count"]),
-                pagination_exhausted=bool(stored["pagination_exhausted"]),
-                digests=digests,
-                run_id=int(stored["run_id"]),
-                status=str(stored["status"]),
-                error=(
-                    None if stored["error"] is None else str(stored["error"])
-                ),
-                checked_at=str(stored["checked_at"]),
-            )
-            closure = require_verified_collection_closure(
-                receipt,
-                expected_environment=expected_environment,
-                expected_authority_instance_digest=(
-                    expected_authority_instance_digest
-                ),
-                expected_policy_version=coverage_contract_for(
-                    dataset_id
-                ).policy_version,
-            )
-            if closure.environment != expected_environment:
-                raise PitError("signed receipt environment does not match")
-            product_rows = [
-                row
-                for row in product_materializations
-                if row.get("source") == closure.source
-                and row.get("dataset") == closure.dataset
-                and row.get("segment_id") == closure.segment_id
-                and row.get("run_id") == closure.run_id
-            ]
-            if len(product_rows) != 1:
-                continue
-            product = dict(product_rows[0])
-            run_rows = [
-                row
-                for row in ingestion_runs
-                if row.get("id") == closure.run_id
-            ]
-            raw_manifests = [
-                row
-                for row in raw_retention_manifests
-                if row.get("dataset") == closure.dataset
-                and row.get("run_id") == closure.run_id
-            ]
-            operation_id = str(product["operation_id"])
-            receipt_clock = (
-                measure_through
-                if measure_through is not None
-                else closure.checked_at
-            )
-            with open_stored_product_artifact(conn, operation_id) as artifact:
-                observed_count, observed_product_digest, observed_bytes, row_digests = (
-                    measure_owned_product_artifact_body(
-                        artifact,
-                        conn=conn,
-                        source="jquants",
-                        dataset=dataset_id,
-                        segment_start=closure.segment_start,
-                        segment_end=closure.segment_end,
-                        observed_through=receipt_clock,
-                        tables=(
-                            "jquants_records",
-                            "jquants_records_revisions",
-                        ),
-                    )
-                )
-            with open_stored_product_artifact(conn, operation_id) as artifact:
-                verify_full_segment_product_materialization(
-                    closure,
-                    product=product,
-                    run=run_rows[0] if len(run_rows) == 1 else None,
-                    raw_manifest=(
-                        raw_manifests[0] if len(raw_manifests) == 1 else None
-                    ),
-                    observed_count=observed_count,
-                    observed_digest=observed_product_digest,
-                    observed_bytes=observed_bytes,
-                    artifact=artifact,
-                )
-        except Exception:
-            continue
-        backings = verified_row_backings[dataset_id]
-        pair = (closure.receipt_digest, closure.structured_digest)
-        for digest in row_digests:
-            bucket = backings.setdefault(digest, [])
-            if pair not in bucket:
-                bucket.append(pair)
-        if dataset_id in {"equities_bars_daily", "fins_summary"}:
-            witness.update(row_digests)
-        accepted_clocks.append(closure.checked_at)
-        accepted_runset.append(
-            {
-                "artifact_digest": str(product["artifact_digest"]),
-                "dataset": str(closure.dataset),
-                "operation_id": str(operation_id),
-                "raw_manifest_digest": str(closure.raw_manifest_digest),
-                "receipt_digest": str(closure.receipt_digest),
-                "run_id": int(closure.run_id),
-                "segment_id": str(closure.segment_id),
-                "structured_digest": str(closure.structured_digest),
-            }
-        )
-        accepted_bindings.append(
-            {
-                "dataset": str(closure.dataset),
-                "raw_manifest": (
-                    dict(raw_manifests[0]) if len(raw_manifests) == 1 else None
-                ),
-                "raw_manifest_digest": str(closure.raw_manifest_digest),
-                "receipt": receipt,
-                "receipt_digest": str(closure.receipt_digest),
-                "run_id": int(closure.run_id),
-                "segment_id": str(closure.segment_id),
-                "source": str(closure.source),
-            }
-        )
-    return (
-        verified_row_backings,
-        witness,
-        tuple(accepted_clocks),
-        tuple(accepted_runset),
-        tuple(accepted_bindings),
-    )
 
 
 def _receipt_runset_digest(rows: Sequence[Mapping[str, Any]]) -> str:
@@ -629,7 +429,7 @@ def _scoped_receipt_native_proofs(
 
 
 def _prove_exact_four_compiled_scope(
-    conn: sqlite3.Connection,
+    session: CompiledScopeProofSession,
     binding: Any,
     *,
     expected_environment: str,
@@ -651,14 +451,12 @@ def _prove_exact_four_compiled_scope(
     period_start, period_end, max_lookback, required_datasets = (
         _require_controlled_exact_four_binding(binding)
     )
-    if not conn.in_transaction:
-        conn.execute("BEGIN")
     (
         collection_receipts,
         product_materializations,
         ingestion_runs,
         raw_retention_manifests,
-    ) = load_collection_receipt_scope(conn, required_datasets)
+    ) = session.load_receipt_scope(required_datasets)
     backing_kwargs = {
         "collection_receipts": collection_receipts,
         "product_materializations": product_materializations,
@@ -672,7 +470,7 @@ def _prove_exact_four_compiled_scope(
     if snapshot_observed_through is not None:
         observed_through = snapshot_observed_through
         proof_clock, slices, resolved_universe = _resolve_controlled_universe(
-            conn,
+            session,
             period_start=period_start,
             period_end=period_end,
             observed_through=observed_through,
@@ -682,23 +480,21 @@ def _prove_exact_four_compiled_scope(
             ),
         )
         verified_row_backings, witness, _accepted, runset_rows, accepted_bindings = (
-            _collect_verified_receipt_backings(
-                conn,
+            session.collect_verified_receipt_backings(
                 measure_through=observed_through,
                 **backing_kwargs,
             )
         )
     else:
         verified_row_backings, witness, accepted, runset_rows, accepted_bindings = (
-            _collect_verified_receipt_backings(
-                conn,
+            session.collect_verified_receipt_backings(
                 measure_through=None,
                 **backing_kwargs,
             )
         )
         observed_through = _max_original_checked_at(accepted)
         proof_clock, slices, resolved_universe = _resolve_controlled_universe(
-            conn,
+            session,
             period_start=period_start,
             period_end=period_end,
             observed_through=observed_through,
@@ -708,36 +504,21 @@ def _prove_exact_four_compiled_scope(
             ),
         )
 
-    from pit.compiled_dependency_scope import (
-        CompiledControlledSelection,
-        _select_compiled_dependency_scope,
-    )
-    from pit.scoped_selection import (
-        _owned_scoped_research_owner_from_verified_witness,
-    )
-
-    owner = _owned_scoped_research_owner_from_verified_witness(
-        conn, witness=frozenset(witness)
-    )
-    try:
-        selected_scope = _select_compiled_dependency_scope(
-            conn,
-            compiled=CompiledControlledSelection(
-                period_start=period_start,
-                period_end=period_end,
-                lookback_trading_days=max_lookback,
-                profile_digest=binding.profile_digest,
-                feature_consumers=tuple(
-                    profile.feature_consumers() for profile in binding.profiles
-                ),
+    selected_scope = session.select_compiled_dependency_scope(
+        compiled=CompiledControlledSelection(
+            period_start=period_start,
+            period_end=period_end,
+            lookback_trading_days=max_lookback,
+            profile_digest=binding.profile_digest,
+            feature_consumers=tuple(
+                profile.feature_consumers() for profile in binding.profiles
             ),
-            observed_through=proof_clock.observed_through,
-            slices=slices,
-            resolved_universe=resolved_universe,
-            scoped_owner=owner,
-        )
-    except ValueError as exc:
-        raise PitError(str(exc)) from exc
+        ),
+        observed_through=proof_clock.observed_through,
+        slices=slices,
+        resolved_universe=resolved_universe,
+        witness=frozenset(witness),
+    )
     selected_keys = {
         dataset_id: set(selected_scope.selected_keys[dataset_id])
         for dataset_id in required_datasets
@@ -830,9 +611,11 @@ def _prove_exact_four_compiled_scope(
 
 
 def _verify_publication_on_authenticated_mirror(
-    conn: sqlite3.Connection,
+    session: CompiledScopeProofSession,
     identity: Mapping[str, object],
     binding: Any,
+    *,
+    physical_digest: str,
 ) -> VerifiedPublicationEvidence:
     """Prove the exact natural-key closure consumed by the controlled pilot.
 
@@ -848,17 +631,15 @@ def _verify_publication_on_authenticated_mirror(
     """
 
     from scripts.sync_d1_to_sqlite import (
-        _authenticated_applied_mirror_connection_identity,
         _canonical_applied_mirror_identity_json,
         _require_canonical_applied_mirror_exported_at,
     )
 
-    if type(conn) is not sqlite3.Connection:
+    if type(session) is not CompiledScopeProofSession:
         raise MassResearchDisabledError(
-            "READY publication requires the pinned applied-mirror connection"
+            "READY publication requires the compiled-scope proof session"
         )
-    registered = _authenticated_applied_mirror_connection_identity(conn)
-    if registered is None:
+    if type(physical_digest) is not str or not physical_digest.startswith("sha256:"):
         raise MassResearchDisabledError(
             "READY publication connection is not the authenticated applied mirror"
         )
@@ -870,13 +651,9 @@ def _verify_publication_on_authenticated_mirror(
         )
         if closed_identity["exported_at"] != exported_at:
             raise PitError("READY publication identity is not canonical")
-        physical_digest = registered.digest
-        conn.row_factory = sqlite3.Row
-        with nullcontext(conn) as conn:
-            if _authenticated_applied_mirror_connection_identity(conn) is not registered:
-                raise PitError("READY publication connection identity swapped")
-            evidence, _observed_through, _runset_digest, _proof_scope = _prove_exact_four_compiled_scope(
-                conn,
+        evidence, _observed_through, _runset_digest, _proof_scope = (
+            _prove_exact_four_compiled_scope(
+                session,
                 binding,
                 expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
                 expected_authority_instance_digest=(
@@ -885,17 +662,8 @@ def _verify_publication_on_authenticated_mirror(
                 snapshot_observed_through=exported_at,
                 physical_digest=physical_digest,
             )
-            final_registered = _authenticated_applied_mirror_connection_identity(
-                conn
-            )
-            if (
-                final_registered is not registered
-                or final_registered.digest != physical_digest
-            ):
-                raise PitError(
-                    "physical DB digest does not match the prepared snapshot"
-                )
-            return evidence
+        )
+        return evidence
     except PitError as exc:
         raise MassResearchDisabledError(str(exc)) from exc
     except sqlite3.Error as exc:
@@ -954,61 +722,59 @@ def verify_committed_receipt_candidate_scope(
             "exact-four plans must share one governed universe period"
         )
     period_start, period_end = next(iter(periods))
-    conn = store._conn  # noqa: SLF001
     freeze_receipt_candidate_snapshot(store)
     physical_digest = hash_receipt_candidate_snapshot(store)
-    started = conn.in_transaction
     compiled: dict[str, Any] = {
         "compiled_scope_status": "FAIL",
         "compiled_scope_kind": RECEIPT_CANDIDATE_SCOPE_DIAGNOSTIC_KIND,
         "physical_db_digest": physical_digest,
     }
     try:
-        conn.row_factory = sqlite3.Row
-        evidence, observed_through, runset_digest, proof_scope = (
-            _prove_exact_four_compiled_scope(
-                conn,
-                binding,
-                expected_environment=environment,
-                expected_authority_instance_digest=(
+        with compiled_scope_proof_session_from_store(store) as session:
+            evidence, observed_through, runset_digest, proof_scope = (
+                _prove_exact_four_compiled_scope(
+                    session,
+                    binding,
+                    expected_environment=environment,
+                    expected_authority_instance_digest=(
+                        PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS[environment]
+                    ),
+                    snapshot_observed_through=None,
+                    physical_digest=physical_digest,
+                    allowed_segments=allowed_segments,
+                )
+            )
+            payload = evidence.as_dict()
+            if payload.get("physical_db_digest") != physical_digest:
+                raise MassResearchDisabledError(
+                    "physical DB digest does not match the prepared snapshot"
+                )
+            receipt_source = {
+                "kind": "governed-receipt-candidate",
+                "environment": environment,
+                "authority_instance_digest": (
                     PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS[environment]
                 ),
-                snapshot_observed_through=None,
-                physical_digest=physical_digest,
-                allowed_segments=allowed_segments,
-            )
-        )
-        payload = evidence.as_dict()
-        if payload.get("physical_db_digest") != physical_digest:
-            raise MassResearchDisabledError(
-                "physical DB digest does not match the prepared snapshot"
-            )
-        receipt_source = {
-            "kind": "governed-receipt-candidate",
-            "environment": environment,
-            "authority_instance_digest": (
-                PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS[environment]
-            ),
-            "physical_digest": physical_digest,
-            "observation_policy": RECEIPT_CANDIDATE_OBSERVATION_POLICY,
-            "observed_through": observed_through,
-            "compiled_scope_proof_digest": payload["proof_digest"],
-            "receipt_runset_digest": runset_digest,
-        }
-        compiled = {
-            "compiled_scope_status": "PASS",
-            "compiled_scope_kind": RECEIPT_CANDIDATE_SCOPE_DIAGNOSTIC_KIND,
-            "observation_policy": RECEIPT_CANDIDATE_OBSERVATION_POLICY,
-            "observation_checked_at": observed_through,
-            "compiled_scope_proof_digest": payload["proof_digest"],
-            "physical_db_digest": physical_digest,
-            "receipt_source": receipt_source,
-            "_receipt_scope_evidence_body": {
-                key: value
-                for key, value in payload.items()
-                if key != "proof_digest"
-            },
-        }
+                "physical_digest": physical_digest,
+                "observation_policy": RECEIPT_CANDIDATE_OBSERVATION_POLICY,
+                "observed_through": observed_through,
+                "compiled_scope_proof_digest": payload["proof_digest"],
+                "receipt_runset_digest": runset_digest,
+            }
+            compiled = {
+                "compiled_scope_status": "PASS",
+                "compiled_scope_kind": RECEIPT_CANDIDATE_SCOPE_DIAGNOSTIC_KIND,
+                "observation_policy": RECEIPT_CANDIDATE_OBSERVATION_POLICY,
+                "observation_checked_at": observed_through,
+                "compiled_scope_proof_digest": payload["proof_digest"],
+                "physical_db_digest": physical_digest,
+                "receipt_source": receipt_source,
+                "_receipt_scope_evidence_body": {
+                    key: value
+                    for key, value in payload.items()
+                    if key != "proof_digest"
+                },
+            }
     except (MassResearchDisabledError, PitError, sqlite3.Error) as exc:
         compiled = {
             "compiled_scope_status": "FAIL",
@@ -1016,9 +782,6 @@ def verify_committed_receipt_candidate_scope(
             "compiled_scope_error": str(exc),
             "physical_db_digest": physical_digest,
         }
-    finally:
-        if conn.in_transaction and not started:
-            conn.rollback()
     if hash_receipt_candidate_snapshot(store) != physical_digest:
         raise MassResearchDisabledError(
             "physical DB digest does not match the prepared snapshot"
