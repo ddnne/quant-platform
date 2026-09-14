@@ -1,17 +1,14 @@
 """R2 object put and get via wrangler. Local FS is not SoT.
 
-Python default_r2_put(create_only=True) is head-then-put TOCTOU, not
-immutable create-if-absent. Worker onlyIf children-then-manifest is the
-immutable authority. Python CLI put is not artifact authority.
-Remote default_r2_put does not CLI-put even with QP_ALLOW_PYTHON_R2_PUT=1.
-Overlay env is not artifact authority and does not resurrect TOCTOU.
-put_children_then_manifest_via_worker is the Worker-client entry; it
-POSTs /v1/children-then-manifest with X-Mass-Eval-Token. It does not
-fall back to CLI put. Unbound Worker URL/token fail closed. Non-JSON
-bodies fail closed. Digests are Worker-computed, never forged here.
-Remote research job artifacts use put_research_artifact (Worker path).
-dry_run staging stays on default_r2_put. QP_ALLOW_PYTHON_R2_PUT does
-not grant CLI put on the Worker path.
+Remote default_r2_put is refused. Head-then-put was a legacy
+non-authoritative TOCTOU path, not create-if-absent. Worker onlyIf
+children-then-manifest is the immutable authority. A prior overlay env
+does not resurrect CLI put. put_children_then_manifest_via_worker POSTs
+/v1/children-then-manifest with X-Mass-Eval-Token. Unbound Worker
+URL/token fail closed. Non-JSON bodies fail closed. Digests are
+Worker-computed, never forged here. Remote research job artifacts use
+put_research_artifact (Worker path). dry_run staging stays on
+default_r2_put.
 """
 
 from __future__ import annotations
@@ -21,7 +18,6 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from ops.json_post import JsonPostError, post_json_object
 from ops.r2_cli import R2CliError, get_r2_object
 
 from qp_paths import repo_root
@@ -45,7 +41,6 @@ _REPO_ROOT = REPO_ROOT
 _DEFAULT_WRANGLER = DEFAULT_WRANGLER
 _DEFAULT_WRANGLER_CONFIG = DEFAULT_WRANGLER_CONFIG
 
-PYTHON_R2_PUT_ENV = "QP_ALLOW_PYTHON_R2_PUT"
 WORKER_PUT_URL_ENV = "MASS_EVAL_WORKER_URL"
 WORKER_PUT_TOKEN_ENV = "MASS_EVAL_TOKEN"
 WORKER_CHILDREN_THEN_MANIFEST_PATH = "/v1/children-then-manifest"
@@ -53,21 +48,9 @@ WORKER_CHILDREN_THEN_MANIFEST_ERROR = (
     "python must use Worker children-then-manifest; CLI put is not authority"
 )
 
-# Comment-level invariant: CLI put is head-then-put TOCTOU, not create-if-absent.
-# Python CLI put is not artifact authority.
-python_cli_put_is_not_immutable_authority: bool = True
-
 
 class R2IOError(ValueError):
     """Invalid R2 wrangler I/O input or put/get failure."""
-
-
-def python_r2_put_allowed() -> bool:
-    """True only when QP_ALLOW_PYTHON_R2_PUT=1. Not artifact authority.
-
-    Overlay does not grant CLI put and does not resurrect TOCTOU.
-    """
-    return os.environ.get(PYTHON_R2_PUT_ENV, "").strip() == "1"
 
 
 def _bound_worker_url(explicit: str | None) -> str:
@@ -142,36 +125,25 @@ def _post_worker_children_then_manifest(
     token: str,
     payload: bytes,
     *,
-    timeout: int,
-    http_post: Callable[..., Any] | None,
+    http_post: Callable[..., Any],
 ) -> dict[str, Any]:
     headers = {
         "Content-Type": "application/json",
         "X-Mass-Eval-Token": token,
     }
-    if http_post is not None:
-        raw_resp = http_post(url=url, body=payload, headers=headers)
-        if isinstance(raw_resp, Mapping):
-            parsed = dict(raw_resp)
-        else:
-            text = raw_resp if isinstance(raw_resp, str) else raw_resp.decode("utf-8")
-            try:
-                loaded = json.loads(text)
-            except json.JSONDecodeError as exc:
-                raise R2IOError(WORKER_CHILDREN_THEN_MANIFEST_ERROR) from exc
-            if not isinstance(loaded, dict):
-                raise R2IOError(WORKER_CHILDREN_THEN_MANIFEST_ERROR)
-            parsed = loaded
-        return parsed
-
-    try:
-        return post_json_object(
-            url=url, body=payload, headers=headers, timeout=timeout
-        )
-    except JsonPostError as exc:
-        raise R2IOError(
-            f"{WORKER_CHILDREN_THEN_MANIFEST_ERROR}: {exc}"
-        ) from exc
+    raw_resp = http_post(url=url, body=payload, headers=headers)
+    if isinstance(raw_resp, Mapping):
+        parsed = dict(raw_resp)
+    else:
+        text = raw_resp if isinstance(raw_resp, str) else raw_resp.decode("utf-8")
+        try:
+            loaded = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise R2IOError(WORKER_CHILDREN_THEN_MANIFEST_ERROR) from exc
+        if not isinstance(loaded, dict):
+            raise R2IOError(WORKER_CHILDREN_THEN_MANIFEST_ERROR)
+        parsed = loaded
+    return parsed
 
 
 def put_children_then_manifest_via_worker(
@@ -182,7 +154,6 @@ def put_children_then_manifest_via_worker(
     token: str | None = None,
     dry_run: bool = False,
     staging_dir: str | Path | None = None,
-    timeout: int = 120,
     http_post: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     """POST children-then-manifest via Worker. CLI put is not authority.
@@ -190,7 +161,7 @@ def put_children_then_manifest_via_worker(
     dry_run stages locally only. Remote POSTs /v1/children-then-manifest with
     X-Mass-Eval-Token (Worker ``authorized``). Unbound URL/token fail closed.
     There is no CLI put fallback and no digest forge. Non-JSON body fail-closes.
-    QP_ALLOW_PYTHON_R2_PUT=1 does not grant CLI put on this path.
+    A prior overlay env does not grant CLI put on this path.
     """
     child_items = [dict(c) for c in children]
     manifest_item = dict(manifest)
@@ -236,7 +207,6 @@ def put_children_then_manifest_via_worker(
         url.rstrip("/") + WORKER_CHILDREN_THEN_MANIFEST_PATH,
         tok,
         body,
-        timeout=timeout,
         http_post=http_post,
     )
     if parsed.get("ok") is not True:
@@ -273,7 +243,7 @@ def put_research_artifact(
     dry_run stages locally via default_r2_put. Remote POSTs Worker
     children-then-manifest: empty children, the object is the manifest
     (same shape as Worker daily_path job keys). CLI put is not authority.
-    QP_ALLOW_PYTHON_R2_PUT=1 does not grant CLI put on the remote path.
+    A prior overlay env does not grant CLI put on the remote path.
     """
     if dry_run:
         return default_r2_put(
@@ -317,9 +287,9 @@ def default_r2_put(
     Worker onlyIf children-then-manifest is. Use
     put_children_then_manifest_via_worker for remote writes.
     ``authoritative=True`` is refused.
-    Remote (non dry_run) does not CLI-put even with QP_ALLOW_PYTHON_R2_PUT=1.
-    Overlay env is not artifact authority and does not resurrect TOCTOU.
-    wrangler/config are accepted for API compatibility and unused on remote.
+    Remote (non dry_run) never CLI-puts. A prior overlay env does not
+    resurrect TOCTOU. wrangler/config are accepted for API compatibility
+    and unused on remote.
     """
     if authoritative:
         raise R2IOError("python CLI put is not artifact authority")
@@ -384,7 +354,6 @@ def try_r2_get_json(bucket: str, key: str, *, timeout: int = 60) -> dict[str, An
 __all__ = [
     "DEFAULT_WRANGLER",
     "DEFAULT_WRANGLER_CONFIG",
-    "PYTHON_R2_PUT_ENV",
     "REPO_ROOT",
     "R2IOError",
     "WORKER_CHILDREN_THEN_MANIFEST_ERROR",
@@ -396,6 +365,4 @@ __all__ = [
     "try_r2_get_json",
     "put_children_then_manifest_via_worker",
     "put_research_artifact",
-    "python_cli_put_is_not_immutable_authority",
-    "python_r2_put_allowed",
 ]
