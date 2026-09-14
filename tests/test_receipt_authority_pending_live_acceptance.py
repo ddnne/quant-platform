@@ -216,6 +216,7 @@ def test_staging_chain_declares_only_minimum_non_proxy_secrets() -> None:
     ]
     assert result["workers"]["caller"]["secret_binding_names"] == [
         "INGESTION_RUN_TOKEN",
+        "JQUANTS_API_KEY",
         "OPS_PROJECTION_SIGNING_PKCS8_B64",
         "READY_ED25519_PRIVATE_KEY",
         "TRADER_ED25519_PRIVATE_KEY",
