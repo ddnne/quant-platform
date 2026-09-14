@@ -2643,6 +2643,11 @@ def _build_applied_mirror_authority():
         from paper_runtime.ready_publication import (
             _verify_publication_on_authenticated_mirror,
         )
+        from pit import PitError
+        from pit.compiled_scope_proof import (
+            compiled_scope_proof_session_from_pinned_connection,
+        )
+        from selection.budget_ledger import MassResearchDisabledError
 
         if type(handle) is not _AuthenticatedAppliedMirror:
             raise RuntimeError(
@@ -2653,9 +2658,50 @@ def _build_applied_mirror_authority():
             conn: sqlite3.Connection,
             identity: Mapping[str, object],
         ) -> _MirrorResult:
-            return _verify_publication_on_authenticated_mirror(
-                conn, identity, binding
-            )
+            if type(conn) is not sqlite3.Connection:
+                raise MassResearchDisabledError(
+                    "READY publication requires the pinned applied-mirror connection"
+                )
+            registered = _authenticated_applied_mirror_connection_identity(conn)
+            if registered is None:
+                raise MassResearchDisabledError(
+                    "READY publication connection is not the authenticated applied mirror"
+                )
+            physical_digest = registered.digest
+            try:
+                with compiled_scope_proof_session_from_pinned_connection(
+                    conn
+                ) as session:
+                    if (
+                        _authenticated_applied_mirror_connection_identity(conn)
+                        is not registered
+                    ):
+                        raise PitError(
+                            "READY publication connection identity swapped"
+                        )
+                    evidence = _verify_publication_on_authenticated_mirror(
+                        session,
+                        identity,
+                        binding,
+                        physical_digest=physical_digest,
+                    )
+                    final_registered = (
+                        _authenticated_applied_mirror_connection_identity(conn)
+                    )
+                    if (
+                        final_registered is not registered
+                        or final_registered.digest != physical_digest
+                    ):
+                        raise PitError(
+                            "physical DB digest does not match the prepared snapshot"
+                        )
+                    return evidence
+            except PitError as exc:
+                raise MassResearchDisabledError(str(exc)) from exc
+            except sqlite3.Error as exc:
+                raise MassResearchDisabledError(
+                    "PIT dependency scope query failed closed"
+                ) from exc
 
         return _consume_owned(handle, consume)
 

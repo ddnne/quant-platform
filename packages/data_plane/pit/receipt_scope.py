@@ -1,7 +1,7 @@
 """Detached collection-receipt rows for READY and receipt-candidate proof.
 
-Owns the SELECT/PRAGMA text. Callers still pass the transactional connection;
-publication policy stays in paper_runtime.
+Owns the SELECT/PRAGMA text. The compiled-scope proof session holds the
+transactional connection; publication policy stays in paper_runtime.
 """
 
 from __future__ import annotations

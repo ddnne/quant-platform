@@ -184,9 +184,9 @@ def test_authentication_freeze_happens_before_ready_verification(
         order.append("authenticate")
         return real_canonical(identity)
 
-    def tracing_verify(conn, identity, bound):
+    def tracing_verify(*args, **kwargs):
         order.append("ready")
-        return real_verify(conn, identity, bound)
+        return real_verify(*args, **kwargs)
 
     monkeypatch.setattr(
         sync, "_canonical_applied_mirror_identity_json", tracing_canonical
