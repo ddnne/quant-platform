@@ -662,6 +662,12 @@ def test_compact_table_content_change_updates_logical_snapshot_id(
         _install_compact_v7(
             second_writer, master_days=("2024-01-02", "2024-06-01")
         )
+        for writer in (first_writer, second_writer):
+            writer.execute(
+                "UPDATE jquants_records SET payload=CAST(x'ff' AS TEXT) "
+                "WHERE dataset='markets_calendar'"
+            )
+            writer.commit()
         first = materialize_personal_snapshot(
             first_source,
             tmp_path / "snapshots-a",

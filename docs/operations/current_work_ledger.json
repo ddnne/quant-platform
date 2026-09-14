@@ -129,7 +129,7 @@
       "scope": "existence_and_binding_evidence_only",
       "personal_paper_path_session": {
         "status": "source_applied_review_pending",
-        "notes": "Product Personal Paper no longer receives sqlite path or owns read-session; paper_runtime bind pins snapshot/prepared-frame and returns logical db_locator. Existing _portable_paper_document already pops both db_path fields and sets db_locator=logical_data_snapshot_id, so serialized artifact/experiment identity is unchanged. Not merge, native CI, or rollout. Remaining req3: ready_publication/personal_snapshot market SQL ownership; upper-plane import-graph enforcement. Prior HOLDs unchanged."
+        "notes": "Product Personal Paper path/session remains as previously applied (PR190). Receipt-scope SELECT/PRAGMA moved to pit.receipt_scope; callers still pass the transactional prove connection. Personal catalog SQL plus draft-policy/quick-check share one data_plane readonly connection; holiday/range/manifest stay in runtime. Remaining req3 OPEN: ready_publication SqliteStore._conn and prove-path product/complete-master/compiled-scope SQL on that same handle; upper-plane import-graph enforcement after those crossings are narrowed (not a blanket sqlite3/DataView ban). Not merge, native CI, or rollout. Prior HOLDs unchanged."
       }
     },
     "4_receipt_to_ready_trader": {
