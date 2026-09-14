@@ -3,9 +3,7 @@
 This module is an audit/replay compatibility boundary.  It does not emit
 Worker source and is not imported by the exact-four Pilot or Mass scheduler.
 It does not generate or execute Python and does not add YAML.
-
-v2 helpers classify active vs legacy identity without rewriting the v1
-digest lock or migration.jsonl.
+It does not rewrite the frozen replay artifact.
 """
 from __future__ import annotations
 
@@ -24,7 +22,6 @@ from research.unique_logic.catalog import (
 
 
 COMPILER_VERSION = "research_catalog_compiler/v1"
-SPLIT_VERSION = "research_catalog_compiler/v2"
 ARTIFACT_REL = Path("artifacts") / "replay" / "legacy_strategy_catalog"
 MANIFEST_NAME = "manifest.json"
 MIGRATION_NAME = "migration.jsonl"
@@ -77,58 +74,6 @@ def catalog_artifact_dir(*, root: Path | None = None) -> Path:
 
 def yaml_files_present(*, root: Path | None = None) -> bool:
     return any(catalog_dir(root=root).glob("*.yaml"))
-
-
-def manifest_payload(pack: Mapping[str, Any], *, root: Path | None = None) -> dict[str, Any]:
-    return {
-        "artifact_class": "immutable_legacy_replay",
-        "digest": str(pack.get("digest") or ""),
-        "go": False,
-        "n": int(pack.get("n") or 0),
-        "runtime_import_allowed": False,
-        "version": str(pack.get("version") or COMPILER_VERSION),
-        "yaml_still_present": bool(
-            pack.get("yaml_still_present", yaml_files_present(root=root))
-        ),
-    }
-
-
-def migration_row(row: Mapping[str, Any]) -> dict[str, Any]:
-    gates = row.get("gates")
-    params = row.get("params") if isinstance(row.get("params"), Mapping) else {}
-    return {
-        "evaluator": str(row.get("evaluator") or ""),
-        "family": row.get("family"),
-        "family_id": str(row.get("family_id") or ""),
-        "gates": list(gates) if isinstance(gates, Sequence) and not isinstance(gates, (str, bytes)) else [],
-        "generation_enabled": bool(row.get("generation_enabled")),
-        "logic_id": str(row.get("logic_id") or ""),
-        "params": dict(params),
-        "position_rule": row.get("position_rule"),
-        "semantic_hash": str(row.get("semantic_hash") or ""),
-        "signal_definition": row.get("signal_definition"),
-        "template_id": str(row.get("template_id") or ""),
-        "thesis": row.get("thesis"),
-        "datasets": row.get("datasets"),
-    }
-
-
-def persist_catalog_artifacts(
-    *,
-    root: Path | None = None,
-    pack: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Write manifest + migration map from compile_catalog(). Not GO. Does not add YAML."""
-    compiled = dict(pack) if pack is not None else compile_catalog()
-    dest = catalog_artifact_dir(root=root)
-    dest.mkdir(parents=True, exist_ok=True)
-    (dest / MANIFEST_NAME).write_text(
-        _dumps(manifest_payload(compiled, root=root)) + "\n", encoding="utf-8"
-    )
-    lines = [_dumps(migration_row(r)) for r in compiled.get("rows") or []]
-    body = "\n".join(lines)
-    (dest / MIGRATION_NAME).write_text(body + ("\n" if body else ""), encoding="utf-8")
-    return compiled
 
 
 def compiled_logic_id_sets(*, root: Path | None = None) -> dict[str, set[str]]:
@@ -212,38 +157,9 @@ def assert_legacy_catalog_artifact_frozen(
     return out
 
 
-def active_logic_ids() -> frozenset[str]:
-    """v2 split compatibility: empty after product-runtime retirement."""
-    from research.catalog_active import active_logic_ids as _ids
-
-    return _ids()
-
-
-def legacy_logic_ids() -> frozenset[str]:
-    """v2 split: compiled identity remainder. Replay/lineage only."""
-    from research.catalog_active import legacy_logic_ids as _ids
-
-    return _ids()
-
-
-def catalog_kind(logic_id: str) -> str:
-    """v2 split: ``active`` or ``legacy``. Unknown IDs fail closed."""
-    from research.catalog_active import catalog_kind as _kind
-
-    return _kind(logic_id)
-
-
-def pilot_candidates() -> frozenset[str]:
-    """ExperimentPlan strategy_spec_ids, separate from the replay artifact."""
-    from research.catalog_active import pilot_candidates as _ids
-
-    return _ids()
-
-
 def compile_catalog(
     specs: Sequence[Mapping[str, Any]] | None = None,
     *,
-    persist: bool = False,
     root: Path | None = None,
 ) -> dict[str, Any]:
     source = specs if specs is not None else load_catalog_specs(root=root)
@@ -251,7 +167,7 @@ def compile_catalog(
     rows.sort(key=lambda r: str(r.get("logic_id") or ""))
     canonical = _dumps({"rows": rows, "version": COMPILER_VERSION})
     digest = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    pack = {
+    return {
         "version": COMPILER_VERSION,
         "n": len(rows),
         "digest": digest,
@@ -260,14 +176,3 @@ def compile_catalog(
         "not_a_pass": True,
         "yaml_still_present": yaml_files_present(root=root),
     }
-    if persist:
-        persist_catalog_artifacts(root=root, pack=pack)
-    return pack
-
-
-def main() -> None:
-    persist_catalog_artifacts()
-
-
-if __name__ == "__main__":
-    main()

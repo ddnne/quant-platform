@@ -121,5 +121,16 @@ charter for extra hostile-Python tests.
   numerical/PIT kernels stay in the ordinary offline lane. This is not a claim
   that every retired catalog consumer is marked.
 
+- T01/C19 ordinary implementation slim: `reconstitution_pending` imports
+  `combo_basket_catalog` symbols directly (no getattr/missing-preview
+  fallback). `catalog_compiler` dropped unused `catalog_active` re-exports
+  and the persist/CLI writer that could rewrite frozen replay bytes;
+  `compile_catalog` and `assert_legacy_catalog_artifact_frozen` remain
+  read-only. Detect-only reconstitution CLI, unique_logic retired CLI stub,
+  unknown dispatch, occupancy_audit wave-pack writer, unique_logic kernels,
+  and Mass/driver refuse probes stay. Frozen digest
+  `sha256:6ad5ba57dfa41ed9a97e5895d9238040fbb5539b310a2ea4aa349172b6cb8c69`
+  is not regenerated. Not whole T01/C19.
+
 The final release evidence records suite totals and runtime suites. Test count
 is diagnostic only and is never a GO condition.
