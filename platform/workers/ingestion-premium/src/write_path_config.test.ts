@@ -13,8 +13,6 @@ describe("premium write-path ids", () => {
   it("exposes the JSON contract dataset_id set, not a second hardcoded catalog", () => {
     const contractIds = contractDocument.datasets.map((row) => row.dataset_id);
 
-    expect(PREMIUM_CORE_DATASET_IDS).toHaveLength(23);
-    expect(contractIds).toHaveLength(23);
     expect(new Set(PREMIUM_CORE_DATASET_IDS)).toEqual(new Set(contractIds));
     expect(PREMIUM_CORE_DATASET_IDS).toEqual(contractIds);
     expect(PREMIUM_CORE_DATASETS.map((spec) => spec.id)).toEqual(contractIds);

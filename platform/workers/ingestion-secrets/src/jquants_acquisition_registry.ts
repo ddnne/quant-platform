@@ -181,8 +181,9 @@ async function registryRows(): Promise<{
     requireObject(requireObject(item, "registry_row").canonical_dataset, "registry_canonical").dataset_id,
   );
   const expectedActive = [
-    "equities_bars_daily", "equities_master", "fins_details", "fins_dividend",
-    "fins_earnings_date", "fins_summary", "indices_bars_daily_topix",
+    "equities_bars_daily", "equities_master", "equities_valuation",
+    "fins_details", "fins_dividend", "fins_earnings_date", "fins_summary",
+    "indices_bars_daily_topix",
     "markets_calendar",
   ];
   const excluded = document.excluded_datasets.map((item) => {

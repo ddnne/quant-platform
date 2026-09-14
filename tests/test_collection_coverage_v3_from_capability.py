@@ -61,6 +61,7 @@ def test_source_capability_contract_inventory_loads() -> None:
         _EARNINGS,
         _OTC,
         "equities_bars_daily",
+        "equities_valuation",
         "fins_details",
         "fins_dividend",
         "fins_earnings_date",
@@ -70,8 +71,6 @@ def test_source_capability_contract_inventory_loads() -> None:
         "markets_calendar",
         _TOPIX,
     }
-    assert len(ids) == 13
-    assert len(ids) != 23
     for dataset_id in sorted(ids):
         contract = source_capability_contract_or_none(dataset_id)
         assert contract is not None

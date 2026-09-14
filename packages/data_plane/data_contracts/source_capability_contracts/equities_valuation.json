@@ -1,0 +1,55 @@
+{
+  "policy_version": "source-capability/v3",
+  "dataset_id": "equities_valuation",
+  "source": "jquants_premium_core",
+  "upstream_locator": "/v2/equities/valuation",
+  "official_evidence_url": "https://jpx-jquants.com/ja/spec/eq-valuation.md",
+  "history_mode": "bounded_history",
+  "earliest_official_availability": "2008-07-08",
+  "historical_research_eligible": true,
+  "tip_only_operational": false,
+  "supported_query_parameters": ["code", "date", "from", "to", "pagination_key"],
+  "publication_calendar": {
+    "kind": "jpx_trading_day",
+    "timezone": "Asia/Tokyo",
+    "official_history_evidence_url": "https://jpx-jquants.com/ja/spec/data-spec.md",
+    "official_update_around": "16:30"
+  },
+  "entitlement_semantics": {
+    "clamp_before_earliest": true,
+    "subscription_floor": null,
+    "official_data_provision_start": "2008-07-08"
+  },
+  "collection_window": {
+    "grain": "calendar_month",
+    "open": "2008-07-08",
+    "close": "latest_published_before_collection_cutoff"
+  },
+  "freshness_sla": {
+    "expected_after": "16:30",
+    "timezone": "Asia/Tokyo",
+    "rule": "approximate_daily_publication"
+  },
+  "event_time": {
+    "policy": "session_close",
+    "fields": ["Date"]
+  },
+  "available_at": {
+    "policy": "ingest_time_conservative",
+    "field": null,
+    "known_publication_lag": null
+  },
+  "revision_semantics": {
+    "policy": "source_overwrite_capture_new_generation",
+    "generation_on_revision": true
+  },
+  "research_profile_eligibility": {
+    "include_in": [],
+    "exclude_from": ["core", "core_historical", "controlled-pilot"],
+    "exclusion_reason": "Official GET /v2/equities/valuation is catalogued with bounded history from 2008-07-08, but current READY/Pilot profiles stay on already collected bars/master/calendar/fins. Valuation MktCap is million yen excluding treasury shares and must not substitute equities_bars_daily MktCap. Vendor overwrites have no vintage PIT."
+  },
+  "required_domain_semantics": {
+    "basis": "calendar_months_from_official_start",
+    "empty_success_policy": "never_complete"
+  }
+}

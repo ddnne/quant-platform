@@ -421,6 +421,25 @@
       }
     },
     {
+      "dataset_id": "equities_valuation",
+      "display_name": "Equities Valuation",
+      "source": "jquants_premium_core",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jquants_premium_core",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "cf_platform"
+      },
+      "inventory_status": "GOVERNED",
+      "enabled": true,
+      "sla": {
+        "expected_after": "16:30",
+        "usable_by": null,
+        "timezone": "Asia/Tokyo",
+        "freshness_policy": "trading_day"
+      }
+    },
+    {
       "dataset_id": "jsda_otc_bond_reference_prices",
       "display_name": "JSDA OTC Bond Reference Prices",
       "source": "jsda_governed",

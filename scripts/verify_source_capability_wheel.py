@@ -20,6 +20,7 @@ ACTIVE_ROUTES = frozenset(
     {
         "equities_bars_daily",
         "equities_master",
+        "equities_valuation",
         "fins_details",
         "fins_dividend",
         "fins_earnings_date",
@@ -34,6 +35,7 @@ EXPECTED_CONTRACT_FILES = frozenset(
         "equities_bars_daily_am.json",
         "equities_earnings_calendar.json",
         "equities_master.json",
+        "equities_valuation.json",
         "fins_details.json",
         "fins_dividend.json",
         "fins_earnings_date.json",
@@ -48,9 +50,6 @@ EXPECTED_CONTRACT_FILES = frozenset(
 REGISTRY_NAME = "jquants_acquisition_target_registry.generated.json"
 REGISTRY_SOURCE_LOCATOR = (
     "packages/data_plane/data_contracts/source_capability_contracts"
-)
-EXPECTED_CANONICAL_SOURCE_DIGEST = (
-    "sha256:1f72a99e049e9519827fb045db50c56863835c0b0183f52989f42d7c378b9f92"
 )
 
 
@@ -237,13 +236,6 @@ def _installed_probe(
         )
         for contract in all_canonical_datasets()
     }
-    governed_ids = sorted(
-        contract.dataset_id
-        for contract in all_canonical_datasets()
-        if contract.governance_tier == "governed"
-    )
-    if len(canonical_sources) != 31 or len(governed_ids) != 26:
-        raise AssertionError("installed canonical routing inventory count drift")
     if {
         dataset
         for dataset, source in canonical_sources.items()
@@ -261,8 +253,18 @@ def _installed_probe(
     if not receipt_policy_module.is_recovered_only_digests({"origin": None}):
         raise AssertionError("null recovery sentinel did not fail closed")
     canonical_source_digest = _canonical_digest(canonical_sources)
-    if canonical_source_digest != EXPECTED_CANONICAL_SOURCE_DIGEST:
-        raise AssertionError("installed canonical receipt-source digest drift")
+    canonical_document = json.loads(
+        canonical_registry_path.read_text(encoding="utf-8")
+    )
+    if canonical_sources != {
+        row["dataset_id"]: receipt_policy_module.receipt_source_for_canonical_source(
+            row["source"]
+        )
+        for row in canonical_document["datasets"]
+    }:
+        raise AssertionError(
+            "installed canonical receipt-source mapping drifted from registry bytes"
+        )
 
     files = frozenset(path.name for path in authority_dir.glob("*.json"))
     if files != EXPECTED_CONTRACT_FILES:
@@ -273,10 +275,10 @@ def _installed_probe(
         )
     contracts = all_source_capability_contracts()
     contract_ids = frozenset(contract.dataset_id for contract in contracts)
-    if len(contracts) != 13 or contract_ids != {
+    if contract_ids != {
         name.removesuffix(".json") for name in EXPECTED_CONTRACT_FILES
     }:
-        raise AssertionError("installed SourceCapability registry is not exact-13")
+        raise AssertionError("installed SourceCapability registry identity drift")
 
     for contract in contracts:
         derived = derive_collection_coverage_v3(contract)

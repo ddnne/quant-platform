@@ -71,4 +71,4 @@ def test_premium_core_datasets_match_catalog_sot():
     """Matrix core ids are the catalog SoT, not a second handwritten list."""
     core_ids = matrix.premium_core_datasets()
     assert core_ids == PREMIUM_CORE_DATASETS
-    assert core_ids == tuple(list_datasets("core")) + tuple(list_datasets("edinet"))
+    assert set(core_ids) == set(list_datasets("core")) | set(list_datasets("edinet"))

@@ -197,15 +197,23 @@ def _load() -> tuple[str, Mapping[str, CanonicalDatasetContract]]:
         dataset_ids.add(contract.dataset_id)
         contracts[contract.dataset_id] = contract
 
-    # Governed membership is fixed at 26 (JQ Premium 23 + JSDA 3). Experimental
-    # add-ons may grow without changing that invariant.
-    governed_count = sum(1 for c in contracts.values() if c.governance_tier == "governed")
-    if governed_count != 26:
+    from .jsda import all_jsda_contracts
+    from .loader import all_contracts
+
+    required_governed = {row.dataset_id for row in all_contracts()} | {
+        row.dataset_id for row in all_jsda_contracts()
+    }
+    actual_governed = {
+        row.dataset_id for row in contracts.values() if row.governance_tier == "governed"
+    }
+    if not required_governed:
+        raise ValueError("primary J-Quants and JSDA contracts are empty")
+    if actual_governed != required_governed:
         raise ValueError(
-            f"canonical registry must have exactly 26 governed datasets, found {governed_count}"
+            "canonical governed membership must match Premium-core plus JSDA "
+            f"contracts: missing={sorted(required_governed - actual_governed)}, "
+            f"extra={sorted(actual_governed - required_governed)}"
         )
-    if len(contracts) < 26:
-        raise ValueError("canonical registry must include at least the 26 governed datasets")
 
     return registry_version, MappingProxyType(contracts)
 

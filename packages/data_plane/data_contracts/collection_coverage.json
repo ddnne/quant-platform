@@ -32,6 +32,18 @@
       "expected_frequency": "trading_day",
       "universe_rule": "all_listed_equities_at_event_date"
     },
+    "equities_valuation": {
+      "policy_version": "collection-coverage/v3",
+      "history_target_start": "2008-07-08",
+      "vendor_data_provision_start": "2008-07-08",
+      "vendor_data_provision_citation": "https://jpx-jquants.com/ja/spec/data-spec.md",
+      "coverage_mode": "trading_calendar",
+      "history_mode": "bounded_history",
+      "required_domain_basis": "calendar_months_from_official_start",
+      "empty_success_policy": "never_complete",
+      "expected_frequency": "trading_day",
+      "universe_rule": "all_listed_equities_at_event_date"
+    },
     "equities_bars_daily_am": {
       "policy_version": "collection-coverage/v3",
       "history_target_start": "2024-01-04",

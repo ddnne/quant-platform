@@ -1,7 +1,7 @@
 /** AUTO-GENERATED from one retained canonical + Coverage snapshot.
  * DO NOT HAND-EDIT. Regenerate: python scripts/generate_governed_js.py
- * membership_digest=sha256:1ae6eae118d6c5a2340b8834ec020cd46072800837aac10c1c8f68fc19b5b343
- * receipt_source_digest=sha256:1f72a99e049e9519827fb045db50c56863835c0b0183f52989f42d7c378b9f92
+ * membership_digest=sha256:7a22fd8412c8e26a39a636ec8a1f04d906aaf9513641a591be37fb790467b583
+ * receipt_source_digest=sha256:e3d24a2facfcdfef0887789bc1e1ce5de10f42da54e03ee2a692cbeccc3795c4
  */
 export const GOVERNED_DATASETS = Object.freeze([
   "derivatives_bars_daily_futures",
@@ -15,6 +15,7 @@ export const GOVERNED_DATASETS = Object.freeze([
   "equities_earnings_calendar",
   "equities_investor_types",
   "equities_master",
+  "equities_valuation",
   "fins_details",
   "fins_dividend",
   "fins_earnings_date",
@@ -32,7 +33,7 @@ export const GOVERNED_DATASETS = Object.freeze([
   "markets_short_sale_report"
 ]);
 
-export const GOVERNED_MEMBERSHIP_DIGEST = "sha256:1ae6eae118d6c5a2340b8834ec020cd46072800837aac10c1c8f68fc19b5b343";
+export const GOVERNED_MEMBERSHIP_DIGEST = "sha256:7a22fd8412c8e26a39a636ec8a1f04d906aaf9513641a591be37fb790467b583";
 
 export const GOVERNED_DATASET_SET = new Set(GOVERNED_DATASETS);
 
@@ -51,6 +52,7 @@ export const CANONICAL_RECEIPT_SOURCE_BY_DATASET = Object.freeze({
   "equities_investor_types": "jquants",
   "equities_master": "jquants",
   "equities_trades": "jquants",
+  "equities_valuation": "jquants",
   "fins_details": "jquants",
   "fins_dividend": "jquants",
   "fins_earnings_date": "jquants",
@@ -71,7 +73,7 @@ export const CANONICAL_RECEIPT_SOURCE_BY_DATASET = Object.freeze({
   "td_list": "jquants"
 });
 
-export const CANONICAL_RECEIPT_SOURCE_DIGEST = "sha256:1f72a99e049e9519827fb045db50c56863835c0b0183f52989f42d7c378b9f92";
+export const CANONICAL_RECEIPT_SOURCE_DIGEST = "sha256:e3d24a2facfcdfef0887789bc1e1ce5de10f42da54e03ee2a692cbeccc3795c4";
 
 export const CANONICAL_JSDA_DATASET_SET = new Set(
   Object.entries(CANONICAL_RECEIPT_SOURCE_BY_DATASET)

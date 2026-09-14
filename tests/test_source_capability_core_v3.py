@@ -110,6 +110,10 @@ def test_per_row_required_domain_semantics_are_frozen() -> None:
             "calendar_months_from_official_start",
             "never_complete",
         ),
+        "equities_valuation": (
+            "calendar_months_from_official_start",
+            "never_complete",
+        ),
         "indices_bars_daily_topix": (
             "calendar_months_from_official_start",
             "never_complete",
