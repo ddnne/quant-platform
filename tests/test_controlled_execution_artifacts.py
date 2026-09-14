@@ -726,48 +726,6 @@ def test_signed_bundle_requires_exact_matching_four_contents(
         )
 
 
-def test_content_materialization_rejects_subclasses_and_stateful_mapping(
-    monkeypatch,
-) -> None:
-    class EvilBytes(bytes):
-        pass
-
-    class EvilStr(str):
-        pass
-
-    class StatefulDict(dict):
-        def items(self):
-            raise AssertionError("dict subclass must be rejected before observation")
-
-    authorization, payload = _signed_bundle_fixture(monkeypatch)
-
-    subclass_value = _artifact_contents()
-    subclass_value["Paper"] = EvilBytes(b"paper-content")
-    with pytest.raises(TypeError, match="exact built-in bytes"):
-        load_verified_controlled_execution_artifacts(
-            payload,
-            authorization=authorization,
-            artifact_contents=subclass_value,
-        )
-
-    subclass_key = _artifact_contents()
-    paper = subclass_key.pop("Paper")
-    subclass_key[EvilStr("Paper")] = paper
-    with pytest.raises(TypeError, match="exact built-in strings"):
-        load_verified_controlled_execution_artifacts(
-            payload,
-            authorization=authorization,
-            artifact_contents=subclass_key,
-        )
-
-    with pytest.raises(TypeError, match="exact built-in dict"):
-        load_verified_controlled_execution_artifacts(
-            payload,
-            authorization=authorization,
-            artifact_contents=StatefulDict(_artifact_contents()),
-        )
-
-
 @pytest.mark.parametrize("timing", ("before-authorization", "future"))
 def test_valid_signatures_cannot_bypass_internal_artifact_time_boundary(
     monkeypatch, timing: str

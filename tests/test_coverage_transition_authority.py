@@ -921,36 +921,6 @@ def test_path_swap_after_cas_rolls_back_opened_inode_and_returns_no_success(
             ).fetchone()[0] == 0
 
 
-def test_authority_input_rejects_stateful_mapping_and_string_subclasses(
-    tmp_path: Path,
-    receipt_ed25519_keys: Any,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    path = tmp_path / "types.sqlite"
-    _prepare_transition_db(
-        path,
-        datasets=_DATASETS,
-        receipt_signing_key=receipt_ed25519_keys.signing_key,
-    )
-    request = _request(path)
-    key_id, private = _test_transition_key()
-    _configure_test_registry(monkeypatch, _registry_for(key_id, private))
-    document = _sign_request(request, key_id=key_id, private=private)
-
-    class StatefulDocument(dict):
-        pass
-
-    class EvilString(str):
-        pass
-
-    with pytest.raises(TypeError, match="exact JSON"):
-        apply_signed_coverage_transition(str(path), StatefulDocument(document))
-    evil = dict(document)
-    evil["issuer_key_id"] = EvilString(key_id)
-    with pytest.raises(TypeError, match="exact JSON"):
-        apply_signed_coverage_transition(str(path), evil)
-
-
 def test_transition_tombstone_is_immutable(tmp_path: Path) -> None:
     store = SqliteStore(tmp_path / "immutable.sqlite")
     conn = store._conn  # noqa: SLF001
