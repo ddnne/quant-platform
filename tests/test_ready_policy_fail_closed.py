@@ -50,6 +50,7 @@ from paper_runtime.ready_policy import (
     SyncGenerationEvidence,
     collect_typed_evidence,
 )
+from pit.ready_evidence import ReadyLedgerSession
 from paper_runtime.snapshot import SnapshotRejected, _publish_ready_snapshot
 from paper_runtime.snapshot_publish_policy import _raw_manifests_for
 import research.research_data_profile as profile_module
@@ -495,7 +496,7 @@ def test_coverage_evidence_rejects_missing_arbitrary_or_unknown_proof_ids(
 def test_coverage_evidence_cannot_be_directly_forged_into_pass() -> None:
     conn = sqlite3.connect(":memory:")
     forged = CoverageEvidence(
-        conn,
+        ReadyLedgerSession(conn),
         ("equities_bars_daily",),
         "sha256:" + ("ab" * 32),
     )

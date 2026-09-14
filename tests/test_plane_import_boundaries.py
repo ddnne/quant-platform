@@ -8,11 +8,14 @@ context (setuptools loads packages/data_plane as storage.*, pit.*, …).
 Invalid relative imports fail the check rather than being skipped. The
 packages.<where-dir>.* index entries are lookup aliases for imported names.
 Dynamic importlib strings and paths outside setuptools where=/py-modules are
-not verified. The same index then applies a limited compiled-scope owner-edge:
-paper_runtime.ready_publication must not import connection-private PIT SQL
-modules. Equivalent aliases resolve to the same owner path. This does not ban
-sqlite3, DataView, or trusted experiment-index/cache/budget stores, and it
-does not claim other research_runtime or scripts crossings are closed.
+not verified. The same index then applies closed market-read owner-edges:
+ready_publication, ready_policy, personal_draft_bind, and snapshot must not
+import connection-private PIT SQL modules; ready_policy also must not import
+storage.coverage_proof. Equivalent aliases resolve to the same owner path.
+This does not ban sqlite3, DataView, or trusted experiment-index/cache/budget
+stores. collector/evaluate still accept sqlite3.Connection because they share
+the staging publication write transaction. Engine resolve_db_path and snapshot
+publication/coherence SQL remain OPEN.
 """
 
 from __future__ import annotations
@@ -201,31 +204,39 @@ def test_data_plane_source_does_not_import_other_first_party_planes() -> None:
             "pit.query",
         )
     }
-    runtime_path = index["paper_runtime.ready_publication"]
-    leaf = next(
-        name
-        for name, found in index.items()
-        if found == runtime_path and not name.startswith("packages.")
-    )
-    package = (
-        leaf if runtime_path.name == "__init__.py" else (leaf.rpartition(".")[0] or None)
-    )
-    tree = ast.parse(
-        runtime_path.read_text(encoding="utf-8"), filename=str(runtime_path)
+    coverage_sql = {index["storage.coverage_proof"]}
+    closed_edges = (
+        ("paper_runtime.ready_publication", private_sql),
+        ("paper_runtime.ready_policy", private_sql | coverage_sql),
+        ("paper_runtime.personal_draft_bind", private_sql),
+        ("paper_runtime.snapshot", private_sql),
     )
     runtime_violations: list[str] = []
-    for lineno, name in _import_targets(tree, package):
-        if name.startswith("<invalid-relative"):
-            runtime_violations.append(f"{runtime_path}:{lineno} {name}")
-            continue
-        hits = _prefix_hits(name, index, owners)
-        if any(hit_path in private_sql for _, hit_path, _ in hits):
-            runtime_violations.append(
-                f"{runtime_path}:{lineno} imports {name!r} -> {hits}"
-            )
+    for module_name, forbidden in closed_edges:
+        runtime_path = index[module_name]
+        leaf = next(
+            name
+            for name, found in index.items()
+            if found == runtime_path and not name.startswith("packages.")
+        )
+        package = (
+            leaf
+            if runtime_path.name == "__init__.py"
+            else (leaf.rpartition(".")[0] or None)
+        )
+        tree = ast.parse(
+            runtime_path.read_text(encoding="utf-8"), filename=str(runtime_path)
+        )
+        for lineno, name in _import_targets(tree, package):
+            if name.startswith("<invalid-relative"):
+                runtime_violations.append(f"{runtime_path}:{lineno} {name}")
+                continue
+            hits = _prefix_hits(name, index, owners)
+            if any(hit_path in forbidden for _, hit_path, _ in hits):
+                runtime_violations.append(
+                    f"{runtime_path}:{lineno} imports {name!r} -> {hits}"
+                )
     assert not runtime_violations, (
-        "ready_publication imports connection-private PIT SQL owners "
-        "(limited compiled-scope edge; other research_runtime/scripts "
-        "crossings remain OPEN):\n"
+        "closed market-read owner-edge imported connection-private SQL:\n"
         + "\n".join(runtime_violations)
     )

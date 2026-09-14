@@ -13,25 +13,21 @@ from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
 
 from paper_runtime.coherence import CoherenceGateResult, check_ready_coherence
-from storage.coverage_proof import (
-    CoverageProofVerificationError,
-    require_persisted_coverage_proof,
-)
+from pit.ready_evidence import CoverageProofVerificationError, ReadyLedgerSession
 
 
 @dataclass(frozen=True, slots=True)
 class CoverageEvidence:
     """Self-verifying Coverage evidence; stored values are never authority."""
 
-    _conn: sqlite3.Connection = field(repr=False)
+    _session: ReadyLedgerSession = field(repr=False)
     _required_datasets: tuple[str, ...]
     _proof_id: object = field(repr=False)
     _build_id: object = field(default=None, repr=False)
 
     def to_item(self) -> "ReadyEvidenceItem":
         try:
-            verified = require_persisted_coverage_proof(
-                self._conn,
+            verified = self._session.require_persisted_coverage_proof(
                 self._required_datasets,
                 self._proof_id,
                 build_id=self._build_id,
@@ -233,11 +229,12 @@ def collect_typed_evidence(
 ) -> list[TypedReadyEvidence]:
     """Collect production evidence; absent ledgers never receive substitutes."""
     required = tuple(required_datasets)
+    session = ReadyLedgerSession(conn)
     evidence: list[TypedReadyEvidence] = []
 
     evidence.append(
         CoverageEvidence(
-            _conn=conn,
+            _session=session,
             _required_datasets=required,
             _proof_id=coverage_proof_id,
             _build_id=build_id,
@@ -247,21 +244,15 @@ def collect_typed_evidence(
     # Raw retention
     manifest_count = 0
     manifests_ok = False
-    try:
-        if run_id is not None:
-            placeholders = ",".join("?" for _ in required)
-            rows = conn.execute(
-                "SELECT dataset, completeness FROM raw_retention_manifests "
-                f"WHERE run_id=? AND dataset IN ({placeholders})",
-                (run_id, *required),
-            ).fetchall()
+    if run_id is not None:
+        rows = session.raw_retention_rows(run_id, required)
+        if rows is not None:
             status_by_dataset: dict[str, str] = {}
             duplicate_dataset = False
-            for row in rows:
-                dataset = str(row[0])
+            for dataset, status in rows:
                 if dataset in status_by_dataset:
                     duplicate_dataset = True
-                status_by_dataset[dataset] = str(row[1])
+                status_by_dataset[dataset] = status
             manifest_count = len(rows)
             manifests_ok = (
                 not duplicate_dataset
@@ -272,8 +263,6 @@ def collect_typed_evidence(
                     for dataset in required
                 )
             )
-    except sqlite3.Error:
-        manifests_ok = False
     evidence.append(
         RawRetentionEvidence(manifests_ok=manifests_ok, manifest_count=manifest_count)
     )
@@ -281,20 +270,14 @@ def collect_typed_evidence(
     # Validation
     val_status = "UNKNOWN"
     if run_id is not None:
-        try:
-            placeholders = ",".join("?" for _ in required)
-            rows = conn.execute(
-                "SELECT dataset, status FROM ingestion_validation "
-                f"WHERE run_id=? AND dataset IN ({placeholders})",
-                (run_id, *required),
-            ).fetchall()
+        rows = session.validation_rows(run_id, required)
+        if rows is not None:
             validation_by_dataset: dict[str, str] = {}
             duplicate_dataset = False
-            for row in rows:
-                dataset = str(row[0])
+            for dataset, status in rows:
                 if dataset in validation_by_dataset:
                     duplicate_dataset = True
-                validation_by_dataset[dataset] = str(row[1])
+                validation_by_dataset[dataset] = status
             val_status = (
                 "PASS"
                 if not duplicate_dataset
@@ -305,19 +288,11 @@ def collect_typed_evidence(
                 )
                 else "FAIL"
             )
-        except sqlite3.Error:
-            val_status = "UNKNOWN"
     evidence.append(ValidationEvidence(status=val_status, run_id=run_id))
 
     # Natural keys
-    nk_state = "UNKNOWN"
-    try:
-        row = conn.execute(
-            "SELECT state FROM natural_key_migrations ORDER BY rowid DESC LIMIT 1"
-        ).fetchone()
-        if row:
-            nk_state = str(row[0])
-    except sqlite3.Error:
+    nk_state = session.latest_natural_key_state()
+    if nk_state is None:
         nk_state = "UNKNOWN"
     evidence.append(NaturalKeyEvidence(state=nk_state))
 
@@ -327,15 +302,11 @@ def collect_typed_evidence(
     b4 = "UNKNOWN"
     q = "UNKNOWN"
     if build_id is not None:
-        try:
-            rows = conn.execute(
-                "SELECT status, results_json FROM snapshot_quality_results "
-                "WHERE build_id=?",
-                (build_id,),
-            ).fetchall()
-            if len(rows) == 1:
-                row = rows[0]
-                q = str(row[0])
+        rows = session.quality_rows(build_id)
+        if rows is not None and len(rows) == 1:
+            row = rows[0]
+            q = str(row[0])
+            try:
                 result_rows = json.loads(str(row[1]))
                 if not isinstance(result_rows, list):
                     raise ValueError("quality results must be a list")
@@ -357,33 +328,19 @@ def collect_typed_evidence(
 
                 b0 = exact_check_status("B0")
                 b4 = exact_check_status("B4")
-        except sqlite3.Error:
-            q = "UNKNOWN"
-        except (TypeError, ValueError, json.JSONDecodeError):
-            b0 = "UNKNOWN"
-            b4 = "UNKNOWN"
-            q = "UNKNOWN"
+            except (TypeError, ValueError, json.JSONDecodeError):
+                b0 = "UNKNOWN"
+                b4 = "UNKNOWN"
+                q = "UNKNOWN"
     evidence.append(
         QualityEvidence(b0_status=b0, b4_status=b4, quality_status=q)
     )
 
-    # Sync generation
-    src_gen = 0
-    sync_gen = 0
-    try:
-        row = conn.execute(
-            "SELECT COALESCE(MAX(change_seq), 0) FROM ingestion_change_log"
-        ).fetchone()
-        src_gen = int(row[0]) if row else 0
-    except sqlite3.Error:
+    src_gen = session.max_change_seq()
+    sync_gen = session.last_applied_change_seq()
+    if src_gen is None:
         src_gen = 0
-    try:
-        row = conn.execute(
-            "SELECT last_applied_change_seq FROM sync_change_state "
-            "WHERE feed='jquants_records'"
-        ).fetchone()
-        sync_gen = int(row[0]) if row else 0
-    except sqlite3.Error:
+    if sync_gen is None:
         sync_gen = 0
     evidence.append(
         SyncGenerationEvidence(source_generation=src_gen, sync_generation=sync_gen)

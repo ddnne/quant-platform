@@ -9,7 +9,10 @@ SQLite remains an implementation detail of the data plane.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from data_contracts.personal_history_compact import (
@@ -49,6 +52,14 @@ _AM_SIGNAL_PRICE_SQL = """COALESCE(
     CASE WHEN json_valid(raw_payload)
          THEN json_extract(raw_payload, '$.MorningAdjustmentClose') END
 )"""
+
+
+@contextmanager
+def personal_paper_read_session(db_path: str | Path) -> Iterator[None]:
+    """Reuse one data-plane read-only market connection for a DRAFT paper run."""
+
+    with _readonly_connection_scope(db_path):
+        yield
 
 
 def _session_close_as_of(day: str) -> str:
@@ -890,6 +901,7 @@ __all__ = [
     "UNMANAGED_DRAFT_BASIS",
     "classify_corporate_action_observations",
     "observed_market_bar_coverage",
+    "personal_paper_read_session",
     "source_sync_evidence",
     "universe_corporate_action_check",
 ]
