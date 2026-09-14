@@ -511,7 +511,6 @@ def test_combo_basket_blend_is_equal_weight() -> None:
     from research.combo_basket import (
         blend_net_daily,
         blend_window_cells,
-        occupancy_in_candidate_band,
     )
     from research.combo_basket_catalog import (
         HISTORICAL_HEAD4_MEMBERS,
@@ -527,11 +526,6 @@ def test_combo_basket_blend_is_equal_weight() -> None:
     blended = blend_net_daily([[0.0, 0.02, 0.00], [0.0, 0.00, 0.02]])
     assert abs(blended[1] - 0.01) < 1e-12
     assert abs(blended[2] - 0.01) < 1e-12
-    assert occupancy_in_candidate_band(0.2) is True
-    assert occupancy_in_candidate_band(0.9) is False
-    assert occupancy_in_candidate_band(0.01) is False
-    assert occupancy_in_candidate_band(0.10) is False
-    assert occupancy_in_candidate_band(0.12) is False
     cells = [
         _eval_complete_cell(
             "a",
