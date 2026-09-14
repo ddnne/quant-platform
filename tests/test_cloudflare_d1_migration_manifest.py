@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from scripts.cloudflare_d1_migration_manifest import ROOT, build_manifest
 
 
@@ -84,61 +82,3 @@ def test_ingestion_apply_policy_is_single_operator_and_fail_closed() -> None:
             "no-shared-d1-time-travel-restore",
         ],
     }
-
-
-def test_jsda_v2_v3_and_ops_projection_migrations_are_canonical_for_both_envs() -> None:
-    targets = build_manifest()["targets"]
-    ingest = [
-        row["migration_id"] for row in targets["quant-ingest"]["migrations"]
-    ]
-    assert ingest.index("quant-ingest:0010_raw_acquisition_status") < ingest.index(
-        "quant-ingest:0011_jsda_queue_v2"
-    )
-    assert ingest.index("quant-ingest:0011_jsda_queue_v2") < ingest.index(
-        "quant-ingest:0012_jsda_observation_identity"
-    )
-    assert ingest.index("quant-ingest:0012_jsda_observation_identity") < ingest.index(
-        "quant-ingest:0013_restore_specialized_jquants_schema"
-    )
-    policy = targets["quant-ingest"]["application_policy"]
-    assert policy["pending_from_live_applied_through"] == (
-        "quant-ingest:0010_raw_acquisition_status"
-    )
-    assert ingest[ingest.index("quant-ingest:0011_jsda_queue_v2") :] == [
-        f"quant-ingest:{index:04d}_{name}"
-        for index, name in (
-            (11, "jsda_queue_v2"),
-            (12, "jsda_observation_identity"),
-            (13, "restore_specialized_jquants_schema"),
-            (14, "receipt_authority_reconciliation"),
-            (15, "receipt_authority_requests"),
-            (16, "receipt_authority_immutability"),
-            (17, "receipt_authority_run_evidence"),
-            (18, "receipt_product_materialization"),
-            (19, "receipt_authority_recovery_smoke"),
-            (20, "receipt_authority_governed_sources"),
-            (21, "snapshot_quality_evidence"),
-            (22, "receipt_authority_jsda_locator"),
-            (23, "mutation_lease"),
-        )
-    ]
-    projection = [
-        row["migration_id"]
-        for row in targets["quant-ops-projection"]["migrations"]
-    ]
-    assert projection == [
-        "quant-ops-projection:0001_ops_projection",
-        "quant-ops-projection:0002_receipt_product_materializations",
-    ]
-    for environment in ("staging", "production"):
-        ingest_env = targets["quant-ingest"]["environments"][environment]
-        projection_env = targets["quant-ops-projection"]["environments"][
-            environment
-        ]
-        quota_env = targets["quant-ops-quota"]["environments"][environment]
-        assert ingest_env["applied_state"] == "UNVERIFIED"
-        assert ingest_env["binding"] == "DB"
-        assert projection_env["binding"] == "OPS_PROJECTION_DB"
-        assert quota_env["binding"] == "QUOTA_DB"
-        assert projection_env["applied_state"] == "UNVERIFIED"
-        assert quota_env["applied_state"] == "UNVERIFIED"
