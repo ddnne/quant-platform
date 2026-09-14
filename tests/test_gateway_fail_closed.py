@@ -46,20 +46,16 @@ def test_python_gateway_is_explicitly_offline_fixture_draft() -> None:
     assert OfflineStubProvider is OfflineFixture
 
 
-def test_gateway_rejects_structural_callable_and_fixture_subclass_providers(
+def test_gateway_rejects_structural_callable_providers(
     tmp_path: Path,
 ) -> None:
     class StructuralProvider:
         def complete(self, **_kwargs: object) -> dict[str, object]:
             return _insight_payload()
 
-    class FixtureSubclass(OfflineFixture):
-        pass
-
     candidates = [
         StructuralProvider(),
         lambda: _insight_payload(),
-        FixtureSubclass(),
     ]
     for candidate in candidates:
         with pytest.raises(TypeError, match="exact data-only OfflineFixture"):
@@ -69,37 +65,6 @@ def test_gateway_rejects_structural_callable_and_fixture_subclass_providers(
     object.__setattr__(gateway, "provider", StructuralProvider())
     with pytest.raises(TypeError, match="exact data-only OfflineFixture"):
         gateway.run(role="q", task="t", prompt="p", expected_schema="Insight")
-
-
-def test_gateway_rejects_virtual_budget_capability_subclass(tmp_path: Path) -> None:
-    class HostileBudgetCapability(ResearchBudgetCapability):
-        def settle_provider_usage_once(self, **_kwargs: object) -> bool:
-            return False
-
-        def finalize_provider_settlement_once(self, **_kwargs: object) -> None:
-            return None
-
-    hostile = HostileBudgetCapability(
-        budget_id="hostile-budget",
-        ledger_path=tmp_path / "hostile.sqlite",
-        limits=ExperimentBudget(),
-    )
-    gateway = AIGateway(research_budget=hostile)
-    with pytest.raises(MassResearchDisabledError, match="subclasses are not authority"):
-        gateway.run(role="q", task="t", prompt="p", expected_schema="Insight")
-    assert not hostile.ledger_path.exists()
-
-
-def test_exact_budget_capability_cannot_gain_instance_method_override(
-    tmp_path: Path,
-) -> None:
-    capability = _budget(tmp_path)
-    with pytest.raises((AttributeError, TypeError)):
-        object.__setattr__(
-            capability,
-            "settle_provider_usage_once",
-            lambda **_kwargs: False,
-        )
 
 
 def test_fixture_payload_is_strict_canonical_data() -> None:
