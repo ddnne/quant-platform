@@ -2256,6 +2256,11 @@ def test_root_exit_with_live_grandchild_is_stopped_before_terminal(tmp_path: Pat
     grandchild_pid = tmp_path / "grandchild.pid"
     observed: list[dict[str, object]] = []
     hold_read, hold_write = os.pipe()
+    grandchild_ready_seconds = 1
+    term_grace_seconds = 0.2
+    kill_grace_seconds = 0.5
+    worker_join_seconds = 2
+    terminal = threading.Event()
     worker = None
     manager = None
     try:
@@ -2290,7 +2295,7 @@ def test_root_exit_with_live_grandchild_is_stopped_before_terminal(tmp_path: Pat
             os.close(hold_read)
             try:
                 os.set_blocking(ready_read, False)
-                deadline = time.monotonic() + 1
+                deadline = time.monotonic() + grandchild_ready_seconds
                 confirmed = b""
                 while time.monotonic() < deadline:
                     try:
@@ -2322,12 +2327,19 @@ def test_root_exit_with_live_grandchild_is_stopped_before_terminal(tmp_path: Pat
         spec = _job("a" * 64, "grandchild-boundary")
         manager = _job_manager(
             runner,
+            on_terminal=terminal.set,
             terminal_uploader=terminal_uploader,
-            process_term_grace_seconds=0.2,
-            process_kill_grace_seconds=0.5,
+            process_term_grace_seconds=term_grace_seconds,
+            process_kill_grace_seconds=kill_grace_seconds,
         )
         manager.submit(spec)
-        worker = _join_manager_worker(manager)
+        assert terminal.wait(
+            grandchild_ready_seconds
+            + term_grace_seconds
+            + kill_grace_seconds
+            + worker_join_seconds
+        )
+        worker = _join_manager_worker(manager, timeout=worker_join_seconds)
         record = manager.status(spec.job_id)
         assert observed
         assert all(
