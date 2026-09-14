@@ -1802,7 +1802,6 @@ def test_controlled_pins_same_artifact_and_rejects_replace_mutate_swap(
     from core.execution import morning_close_as_of
     from core.universe import membership_at
     from core.strategy_protocol import OrderIntent
-    from pit.governed_am_view import assemble_governed_am_session_data_view
     from pit.errors import SnapshotObservationClockError
 
     code = "1332"
@@ -1861,7 +1860,7 @@ def test_controlled_pins_same_artifact_and_rejects_replace_mutate_swap(
             days[0],
             days[-1],
             db_path=None,
-            universe=universe,
+            universe=None,
             execution_mode="am_signal_pm_close",
             price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
             cost_model=standard_cost(bps=0.0),
