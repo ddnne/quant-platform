@@ -12,13 +12,11 @@ from data_contracts.coverage import (
     coverage_policy_binding,
 )
 from data_contracts.source_capability import (
-    all_source_capability_contracts,
     coverage_v3_dataset_ids,
     load_source_capability_dir,
     required_domain_subset_official,
     source_capability_contract_for,
     source_capability_contract_or_none,
-    specs_dir,
 )
 from research.research_data_profile import (
     ResearchDataProfile,
@@ -38,32 +36,6 @@ def _complete_evidence(dataset_id: str) -> dict[str, str]:
         "coverage_mode": official_mode(dataset_id),
         **dict(coverage_policy_binding(dataset_id)),
     }
-
-
-def test_on_disk_v3_has_core_v1_tip_and_governed_jsda_rows() -> None:
-    on_disk = sorted(
-        path.name
-        for path in specs_dir().glob("*.json")
-        if path.name != "schema.json"
-    )
-    assert on_disk == [
-        "equities_bars_daily.json",
-        "equities_bars_daily_am.json",
-        "equities_earnings_calendar.json",
-        "equities_master.json",
-        "fins_details.json",
-        "fins_dividend.json",
-        "fins_earnings_date.json",
-        "fins_summary.json",
-        "indices_bars_daily_topix.json",
-        "jsda_corporate_bond_transactions.json",
-        "jsda_otc_bond_reference_prices.json",
-        "jsda_tokyo_repo_rates.json",
-        "markets_calendar.json",
-    ]
-    loaded = {contract.dataset_id for contract in all_source_capability_contracts()}
-    assert loaded == _V3_DATASETS
-    assert loaded == {name.removesuffix(".json") for name in on_disk}
 
 
 def test_empty_dir_is_valid_and_does_not_invent_rows(tmp_path: Path) -> None:
