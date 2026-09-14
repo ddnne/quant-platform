@@ -1,4 +1,5 @@
 import { putBytesCreateOnly } from "./http";
+import { headMatches, putStreamCreateOnly } from "./r2_stream_create_only";
 import {
   PERSONAL_VOL_AM_PM_EVALUATION_PERIODS,
   PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
@@ -64,34 +65,6 @@ function contentLength(request: Request, maximum: number): number | null {
   return Number.isSafeInteger(value) && value > 0 && value <= maximum
     ? value
     : null;
-}
-
-function digestBytes(digest: string): Uint8Array {
-  const hex = digest.slice("sha256:".length);
-  const bytes = new Uint8Array(32);
-  for (let index = 0; index < bytes.length; index += 1) {
-    bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
-  }
-  return bytes;
-}
-
-function checksumMatches(object: R2Object, digest: string): boolean {
-  const actual = object.checksums?.sha256;
-  if (!actual) return object.customMetadata?.sha256 === digest;
-  const expected = digestBytes(digest);
-  const actualBytes = new Uint8Array(actual);
-  return (
-    actualBytes.byteLength === expected.byteLength &&
-    actualBytes.every((value, index) => value === expected[index])
-  );
-}
-
-function headMatches(object: R2Object, digest: string, size?: number): boolean {
-  if (object.customMetadata?.sha256 && object.customMetadata.sha256 !== digest) {
-    return false;
-  }
-  if (size !== undefined && object.size !== size) return false;
-  return checksumMatches(object, digest);
 }
 
 function listedRef(
@@ -325,43 +298,38 @@ async function putOutput(
       ? json({ error: "immutable vol panel output conflict" }, 409)
       : json({ ok: true, created: stored.created, key }, stored.created ? 201 : 200);
   }
-  const existing = await env.STRUCTURED_BUCKET.head(key);
-  if (existing) {
-    return headMatches(existing, digest, length)
-      ? json({ ok: true, created: false, key })
-      : json({ error: "immutable vol panel output conflict" }, 409);
-  }
-  let put: R2Object | null;
-  try {
-    put = await env.STRUCTURED_BUCKET.put(key, request.body, {
-      httpMetadata: { contentType: "application/json; charset=utf-8" },
+  const storedChild = await putStreamCreateOnly(
+    env.STRUCTURED_BUCKET,
+    key,
+    request.body,
+    {
+      digest,
+      contentType: "application/json; charset=utf-8",
+      size: length,
       customMetadata: {
         plane: "personal_vol_am_pm_panel_writer",
         kind,
         job_id: expected.jobId,
         input_manifest_digest: expected.inputDigest,
-        sha256: digest,
-        immutable: "true",
       },
-      sha256: digestBytes(digest),
-      onlyIf: { etagDoesNotMatch: "*" },
-    });
-  } catch {
+    },
+  );
+  if (storedChild === "checksum_rejected") {
     return json({ error: "vol panel output checksum rejected" }, 400);
   }
-  if (put !== null) {
-    // Cheap diagnostic only: do not delete the shared content-addressed
-    // object. A FAILED terminal racing this PUT can leave an unreferenced
-    // orphan; consumers read only COMPLETED terminal child refs.
-    if (await env.STRUCTURED_BUCKET.head(terminalKey)) {
-      return json({ error: "vol panel child after terminal" }, 409);
-    }
-    return json({ ok: true, created: true, key }, 201);
+  if (storedChild === "conflict") {
+    return json({ error: "immutable vol panel output conflict" }, 409);
   }
-  const raced = await env.STRUCTURED_BUCKET.head(key);
-  return raced && headMatches(raced, digest, length)
-    ? json({ ok: true, created: false, key })
-    : json({ error: "immutable vol panel output conflict" }, 409);
+  if (storedChild === "identical") {
+    return json({ ok: true, created: false, key });
+  }
+  // Cheap diagnostic only: do not delete the shared content-addressed
+  // object. A FAILED terminal racing this PUT can leave an unreferenced
+  // orphan; consumers read only COMPLETED terminal child refs.
+  if (await env.STRUCTURED_BUCKET.head(terminalKey)) {
+    return json({ error: "vol panel child after terminal" }, 409);
+  }
+  return json({ ok: true, created: true, key }, 201);
 }
 
 export function isPersonalVolAmPmPanelOutboundRequest(

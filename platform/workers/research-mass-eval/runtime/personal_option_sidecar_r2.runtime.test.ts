@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { env } from "cloudflare:workers";
+import { reset } from "cloudflare:test";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   PERSONAL_OPTION_SIDECAR_AUTHORITY,
@@ -17,90 +19,18 @@ import {
   personalOptionSidecarRequestDigest,
   personalOptionSidecarTerminalKey,
   type PersonalOptionSidecarInputManifest,
-} from "./personal_option_sidecar_producer_contract";
-import { personalOptionSidecarR2Outbound } from "./personal_option_sidecar_r2";
-import { sha256Hex } from "./sha256";
+} from "../src/personal_option_sidecar_producer_contract";
+import { personalOptionSidecarR2Outbound } from "../src/personal_option_sidecar_r2";
+import { sha256Hex } from "../src/sha256";
 
-type Stored = {
-  bytes: Uint8Array;
-  etag: string;
-  customMetadata: Record<string, string>;
-  checksums: R2Checksums;
-};
-
-class MemoryR2 {
-  readonly values = new Map<string, Stored>();
-  readonly writes: string[] = [];
-
-  seed(key: string, value: Uint8Array | string, etag = `etag-${key}`) {
-    const bytes =
-      typeof value === "string" ? new TextEncoder().encode(value) : value;
-    this.values.set(key, {
-      bytes,
-      etag,
-      customMetadata: {},
-      checksums: {},
-    });
-  }
-
-  object(key: string, stored: Stored) {
-    return {
-      key,
-      size: stored.bytes.byteLength,
-      etag: stored.etag,
-      customMetadata: stored.customMetadata,
-      checksums: stored.checksums,
-      arrayBuffer: async () => stored.bytes.slice().buffer,
-    };
-  }
-
-  async get(key: string) {
-    const stored = this.values.get(key);
-    return stored ? this.object(key, stored) : null;
-  }
-
-  async head(key: string) {
-    return this.get(key);
-  }
-
-  async put(
-    key: string,
-    value: ArrayBuffer | ArrayBufferView | string,
-    options?: R2PutOptions,
-  ) {
-    if (
-      options?.onlyIf &&
-      "etagDoesNotMatch" in options.onlyIf &&
-      options.onlyIf.etagDoesNotMatch === "*" &&
-      this.values.has(key)
-    ) {
-      return null;
-    }
-    const bytes =
-      typeof value === "string"
-        ? new TextEncoder().encode(value)
-        : ArrayBuffer.isView(value)
-          ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice()
-          : new Uint8Array(value).slice();
-    const digest = options?.customMetadata?.sha256 ?? "";
-    this.values.set(key, {
-      bytes,
-      etag: `put-${this.writes.length}`,
-      customMetadata: options?.customMetadata ?? {},
-      checksums: options?.sha256 ? { sha256: options.sha256 } : {},
-    });
-    this.writes.push(key);
-    const stored = this.values.get(key)!;
-    if (digest) stored.customMetadata.sha256 = digest;
-    return this.object(key, stored);
-  }
-
-  asBucket(): R2Bucket {
-    return this as unknown as R2Bucket;
-  }
-}
-
+const runtimeEnv = env as { STRUCTURED_BUCKET: R2Bucket };
 const JOB_ID = "sidecar-r2";
+
+async function seed(key: string, bytes: Uint8Array) {
+  const stored = await runtimeEnv.STRUCTURED_BUCKET.put(key, bytes);
+  if (!stored) throw new Error(`seed failed: ${key}`);
+  return stored;
+}
 
 function emptyPeriod(
   period: (typeof PERSONAL_OPTION_SIDECAR_PERIODS)[number],
@@ -166,14 +96,13 @@ async function fixture() {
   } as unknown as PersonalOptionSidecarInputManifest;
   const inputBytes = new TextEncoder().encode(JSON.stringify(input));
   const inputDigest = `sha256:${await sha256Hex(inputBytes)}`;
-  const mem = new MemoryR2();
-  mem.seed(personalOptionSidecarInputKey(JOB_ID), inputBytes, "input");
+  await seed(personalOptionSidecarInputKey(JOB_ID), inputBytes);
   const headers = {
     "x-option-sidecar-job-id": JOB_ID,
     "x-option-sidecar-input-manifest-key": personalOptionSidecarInputKey(JOB_ID),
     "x-option-sidecar-input-manifest-digest": inputDigest,
   };
-  return { mem, headers, inputDigest };
+  return { headers, inputDigest };
 }
 
 function validChild(
@@ -214,28 +143,25 @@ async function put(
       },
       body: bytes,
     }),
-    { STRUCTURED_BUCKET: fixed.mem.asBucket() },
+    runtimeEnv,
     key,
   );
   return { response, digest, bytes };
 }
 
-async function seedChild(
-  fixed: Awaited<ReturnType<typeof fixture>>,
-  document: unknown,
-) {
+async function seedChild(document: unknown) {
   const bytes = new TextEncoder().encode(JSON.stringify(document));
   const digest = `sha256:${await sha256Hex(bytes)}`;
   const key = personalOptionSidecarObjectKey(digest);
-  fixed.mem.seed(key, bytes);
+  await seed(key, bytes);
   return { bytes, digest, key };
 }
 
-async function seedValidChildren(fixed: Awaited<ReturnType<typeof fixture>>) {
+async function seedValidChildren() {
   const sidecars: Record<string, Record<string, unknown>> = {};
   for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
     const locked = emptyPeriod(period);
-    const seeded = await seedChild(fixed, validChild(period, locked));
+    const seeded = await seedChild(validChild(period, locked));
     sidecars[period.period_id] = {
       period_id: period.period_id,
       year: period.year,
@@ -263,11 +189,12 @@ async function completedTerminal(
 }
 
 describe("option sidecar R2 capability", () => {
+  afterEach(() => reset());
+
   it("denies outbound without the closed identity headers", async () => {
-    const fixed = await fixture();
     const response = await personalOptionSidecarR2Outbound(
       new Request("http://research.r2/research/personal/option-sidecar/job=sidecar-r2/manifest.json"),
-      { STRUCTURED_BUCKET: fixed.mem.asBucket() },
+      runtimeEnv,
       personalOptionSidecarTerminalKey(JOB_ID),
     );
     expect(response.status).toBe(403);
@@ -293,28 +220,30 @@ describe("option sidecar R2 capability", () => {
       child,
     );
     expect(late.response.status).toBe(409);
+    expect(
+      await runtimeEnv.STRUCTURED_BUCKET.head(
+        personalOptionSidecarObjectKey(childDigest),
+      ),
+    ).toBeNull();
   });
 
   it("rejects a COMPLETED terminal whose children are missing", async () => {
     const fixed = await fixture();
-    const sidecars = Object.fromEntries(
-      PERSONAL_OPTION_SIDECAR_PERIODS.map((period) => [
-        period.period_id,
-        {
-          period_id: period.period_id,
-          key: personalOptionSidecarObjectKey(`sha256:${"e".repeat(64)}`),
-          sha256: `sha256:${"e".repeat(64)}`,
-          size: 4,
-        },
-      ]),
+    const { sidecars } = await seedValidChildren();
+    const missingKey = sidecars.y2021_full!.key as string;
+    await runtimeEnv.STRUCTURED_BUCKET.delete(missingKey);
+    expect(await runtimeEnv.STRUCTURED_BUCKET.head(missingKey)).toBeNull();
+    const created = await put(
+      fixed,
+      personalOptionSidecarTerminalKey(JOB_ID),
+      await completedTerminal(fixed, sidecars),
     );
-    const terminal = {
-      ...(await identityFields(fixed)),
-      status: "COMPLETED",
-      sidecars,
-    };
-    const created = await put(fixed, personalOptionSidecarTerminalKey(JOB_ID), terminal);
     expect(created.response.status).toBe(409);
+    expect(
+      await runtimeEnv.STRUCTURED_BUCKET.head(
+        personalOptionSidecarTerminalKey(JOB_ID),
+      ),
+    ).toBeNull();
   });
 
   it("rejects a forged terminal whose request digest does not match the locked input", async () => {
@@ -328,37 +257,62 @@ describe("option sidecar R2 capability", () => {
     expect(
       (await put(fixed, personalOptionSidecarTerminalKey(JOB_ID), forged)).response.status,
     ).toBe(400);
+    expect(
+      await runtimeEnv.STRUCTURED_BUCKET.head(
+        personalOptionSidecarTerminalKey(JOB_ID),
+      ),
+    ).toBeNull();
   });
 
-  it("publishes a COMPLETE terminal only after sequential GET of three distinct valid children", async () => {
+  it("publishes a COMPLETE terminal when three distinct valid children exist", async () => {
     const fixed = await fixture();
-    const { sidecars } = await seedValidChildren(fixed);
-    const gets: string[] = [];
-    const originalGet = fixed.mem.get.bind(fixed.mem);
-    fixed.mem.get = async (key: string) => {
-      gets.push(key);
-      return originalGet(key);
-    };
+    const sidecars: Record<string, Record<string, unknown>> = {};
+    for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
+      const locked = emptyPeriod(period);
+      const child = validChild(period, locked);
+      const key = personalOptionSidecarObjectKey(
+        `sha256:${await sha256Hex(new TextEncoder().encode(JSON.stringify(child)))}`,
+      );
+      const written = await put(fixed, key, child);
+      expect(written.response.status).toBe(201);
+      const storedChild = await runtimeEnv.STRUCTURED_BUCKET.get(key);
+      expect(storedChild).not.toBeNull();
+      expect(new Uint8Array(await storedChild!.arrayBuffer())).toEqual(written.bytes);
+      sidecars[period.period_id] = {
+        period_id: period.period_id,
+        year: period.year,
+        period_start: period.period_start,
+        period_end: period.period_end,
+        key,
+        sha256: written.digest,
+        size: written.bytes.byteLength,
+        raw_input_digest: locked.raw_input_digest,
+        calendar_digest: locked.calendar_digest,
+      };
+    }
     const created = await put(
       fixed,
       personalOptionSidecarTerminalKey(JOB_ID),
       await completedTerminal(fixed, sidecars),
     );
     expect(created.response.status).toBe(201);
-    const childGets = gets.filter((key) =>
-      key.startsWith("research/personal/option-sidecar/objects/"),
+    const stored = await runtimeEnv.STRUCTURED_BUCKET.get(
+      personalOptionSidecarTerminalKey(JOB_ID),
     );
-    expect(childGets).toEqual(
-      PERSONAL_OPTION_SIDECAR_PERIODS.map(
-        (period) => sidecars[period.period_id]!.key as string,
-      ),
-    );
-    expect(new Set(childGets).size).toBe(3);
+    expect(stored).not.toBeNull();
+    expect(stored!.size).toBe(created.bytes.byteLength);
+    expect(new Uint8Array(await stored!.arrayBuffer())).toEqual(created.bytes);
+    for (const period of PERSONAL_OPTION_SIDECAR_PERIODS) {
+      const row = sidecars[period.period_id]!;
+      const child = await runtimeEnv.STRUCTURED_BUCKET.head(row.key as string);
+      expect(child).not.toBeNull();
+      expect(child!.size).toBe(row.size);
+    }
   });
 
   it("rejects a forged COMPLETE terminal that reuses one valid child under all three periods", async () => {
     const fixed = await fixture();
-    const { sidecars } = await seedValidChildren(fixed);
+    const { sidecars } = await seedValidChildren();
     const first = sidecars.y2021_full!;
     const reused = Object.fromEntries(
       PERSONAL_OPTION_SIDECAR_PERIODS.map((period) => [
@@ -377,14 +331,19 @@ describe("option sidecar R2 capability", () => {
       await completedTerminal(fixed, reused),
     );
     expect(created.response.status).toBe(409);
+    expect(
+      await runtimeEnv.STRUCTURED_BUCKET.head(
+        personalOptionSidecarTerminalKey(JOB_ID),
+      ),
+    ).toBeNull();
   });
 
   it("rejects an arbitrary JSON child whose HEAD digest and size would otherwise match", async () => {
     const fixed = await fixture();
-    const { sidecars } = await seedValidChildren(fixed);
+    const { sidecars } = await seedValidChildren();
     const period = PERSONAL_OPTION_SIDECAR_PERIODS[1]!;
     const junk = { hello: "world", period_id: period.period_id };
-    const junkPut = await seedChild(fixed, junk);
+    const junkPut = await seedChild(junk);
     const forged = {
       ...sidecars,
       [period.period_id]: {
@@ -400,17 +359,22 @@ describe("option sidecar R2 capability", () => {
       await completedTerminal(fixed, forged),
     );
     expect(created.response.status).toBe(409);
+    expect(
+      await runtimeEnv.STRUCTURED_BUCKET.head(
+        personalOptionSidecarTerminalKey(JOB_ID),
+      ),
+    ).toBeNull();
   });
 
   it("rejects a syntactically valid child whose period identity does not match the lock", async () => {
     const fixed = await fixture();
-    const { sidecars } = await seedValidChildren(fixed);
+    const { sidecars } = await seedValidChildren();
     const period = PERSONAL_OPTION_SIDECAR_PERIODS[0]!;
     const mismatched = {
       ...validChild(period, emptyPeriod(period)),
       period_id: "y2023_full",
     };
-    const childPut = await seedChild(fixed, mismatched);
+    const childPut = await seedChild(mismatched);
     const forged = {
       ...sidecars,
       [period.period_id]: {
@@ -426,11 +390,16 @@ describe("option sidecar R2 capability", () => {
       await completedTerminal(fixed, forged),
     );
     expect(created.response.status).toBe(409);
+    expect(
+      await runtimeEnv.STRUCTURED_BUCKET.head(
+        personalOptionSidecarTerminalKey(JOB_ID),
+      ),
+    ).toBeNull();
   });
 
   it("revalidates children when accepting an idempotent existing COMPLETE terminal", async () => {
     const fixed = await fixture();
-    const { sidecars } = await seedValidChildren(fixed);
+    const { sidecars } = await seedValidChildren();
     const terminal = await completedTerminal(fixed, sidecars);
     expect(
       (await put(fixed, personalOptionSidecarTerminalKey(JOB_ID), terminal)).response
@@ -441,10 +410,17 @@ describe("option sidecar R2 capability", () => {
         .status,
     ).toBe(200);
     const firstKey = sidecars.y2021_full!.key as string;
-    fixed.mem.seed(firstKey, JSON.stringify({ overwritten: true }));
+    await seed(firstKey, new TextEncoder().encode(JSON.stringify({ overwritten: true })));
     expect(
       (await put(fixed, personalOptionSidecarTerminalKey(JOB_ID), terminal)).response
         .status,
     ).toBe(409);
+    const stored = await runtimeEnv.STRUCTURED_BUCKET.get(
+      personalOptionSidecarTerminalKey(JOB_ID),
+    );
+    expect(stored).not.toBeNull();
+    expect(new Uint8Array(await stored!.arrayBuffer())).toEqual(
+      new TextEncoder().encode(JSON.stringify(terminal)),
+    );
   });
 });

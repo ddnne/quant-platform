@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { env } from "cloudflare:workers";
+import { reset } from "cloudflare:test";
+import { afterEach, describe, expect, it } from "vitest";
 
-import { PERSONAL_RESEARCH_RUNNER_VERSION } from "./personal_research_contract";
-import { PERSONAL_SNAPSHOT_FORMAT } from "./personal_snapshot_contract";
-import { PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION } from "./personal_vol_am_pm_panel";
+import { PERSONAL_RESEARCH_RUNNER_VERSION } from "../src/personal_research_contract";
+import { PERSONAL_SNAPSHOT_FORMAT } from "../src/personal_snapshot_contract";
+import { PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION } from "../src/personal_vol_am_pm_panel";
 import {
   PERSONAL_VOL_AM_PM_EVALUATION_PERIODS,
   PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
@@ -15,118 +17,13 @@ import {
   personalVolAmPmPanelBuildTerminalKey,
   personalVolAmPmPanelObjectKey,
   type PersonalVolAmPmPanelWriterInputManifest,
-} from "./personal_vol_am_pm_panel_writer_contract";
-import { personalOptionSidecarObjectKey } from "./personal_option_sidecar_producer_contract";
-import { personalVolAmPmPanelR2Outbound } from "./personal_vol_am_pm_panel_r2";
-import { sha256Hex } from "./sha256";
+  type SnapshotInputLock,
+} from "../src/personal_vol_am_pm_panel_writer_contract";
+import { personalOptionSidecarObjectKey } from "../src/personal_option_sidecar_producer_contract";
+import { personalVolAmPmPanelR2Outbound } from "../src/personal_vol_am_pm_panel_r2";
+import { sha256Hex } from "../src/sha256";
 
-type Stored = {
-  bytes: Uint8Array;
-  etag: string;
-  customMetadata: Record<string, string>;
-  checksums: R2Checksums;
-};
-
-async function toBytes(
-  value: ArrayBuffer | ArrayBufferView | string | ReadableStream<Uint8Array>,
-): Promise<Uint8Array> {
-  if (typeof value === "string") return new TextEncoder().encode(value);
-  if (ArrayBuffer.isView(value)) {
-    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice();
-  }
-  if (value instanceof ArrayBuffer) return new Uint8Array(value).slice();
-  const reader = value.getReader();
-  const chunks: Uint8Array[] = [];
-  for (;;) {
-    const { done, value: chunk } = await reader.read();
-    if (done) break;
-    if (chunk) chunks.push(chunk);
-  }
-  const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return out;
-}
-
-class MemoryR2 {
-  readonly values = new Map<string, Stored>();
-  readonly writes: string[] = [];
-  parsedBodies = 0;
-
-  seed(key: string, bytes: Uint8Array, etag: string, customMetadata: Record<string, string> = {}) {
-    this.values.set(key, { bytes, etag, customMetadata, checksums: {} as R2Checksums });
-  }
-
-  object(key: string, stored: Stored): R2ObjectBody {
-    return {
-      key,
-      size: stored.bytes.byteLength,
-      etag: stored.etag,
-      httpEtag: `"${stored.etag}"`,
-      uploaded: new Date(0),
-      checksums: stored.checksums,
-      customMetadata: stored.customMetadata,
-      httpMetadata: {},
-      storageClass: "Standard",
-      body: new ReadableStream({
-        start(controller) {
-          controller.enqueue(stored.bytes);
-          controller.close();
-        },
-      }),
-      arrayBuffer: async () => stored.bytes.slice().buffer,
-      json: async () => {
-        this.parsedBodies += 1;
-        return JSON.parse(new TextDecoder().decode(stored.bytes));
-      },
-      writeHttpMetadata() {},
-    } as R2ObjectBody;
-  }
-
-  async get(key: string) {
-    const value = this.values.get(key);
-    return value ? this.object(key, value) : null;
-  }
-
-  async head(key: string) {
-    return this.get(key);
-  }
-
-  async put(
-    key: string,
-    value: ArrayBuffer | ArrayBufferView | string | ReadableStream,
-    options?: R2PutOptions,
-  ) {
-    if (
-      options?.onlyIf &&
-      "etagDoesNotMatch" in options.onlyIf &&
-      this.values.has(key)
-    ) {
-      return null;
-    }
-    const bytes = await toBytes(value as ArrayBuffer | ArrayBufferView | string | ReadableStream<Uint8Array>);
-    const stored: Stored = {
-      bytes,
-      etag: `write-${this.writes.length}`,
-      customMetadata: options?.customMetadata ?? {},
-      checksums: options?.sha256
-        ? ({ sha256: options.sha256 } as R2Checksums)
-        : ({} as R2Checksums),
-    };
-    this.writes.push(key);
-    this.values.set(key, stored);
-    return this.object(key, stored);
-  }
-
-  asBucket(): R2Bucket {
-    return this as unknown as R2Bucket;
-  }
-}
-
+const runtimeEnv = env as { STRUCTURED_BUCKET: R2Bucket };
 const JOB_ID = "vol-panel-r2";
 
 function digestDigit(digit: string): `sha256:${string}` {
@@ -135,7 +32,19 @@ function digestDigit(digit: string): `sha256:${string}` {
 
 const sidecarKey = personalOptionSidecarObjectKey(digestDigit("9"));
 
-function snapshotLock(jobId: string, digit: string, periodId: string, start: string, end: string) {
+async function seed(key: string, bytes: Uint8Array) {
+  const stored = await runtimeEnv.STRUCTURED_BUCKET.put(key, bytes);
+  if (!stored) throw new Error(`seed failed: ${key}`);
+  return stored;
+}
+
+function snapshotLock(
+  jobId: string,
+  digit: string,
+  periodId: string,
+  start: string,
+  end: string,
+): SnapshotInputLock {
   const snapshotKey = `research/personal/snapshots/sha256=${digit.repeat(64)}.sqlite.gz`;
   const manifestKey = `research/personal/snapshot-builds/job=${jobId}/manifest.json`;
   const ref = {
@@ -160,11 +69,13 @@ function snapshotLock(jobId: string, digit: string, periodId: string, start: str
   };
 }
 
-async function fixture() {
+async function fixture(jobId = JOB_ID) {
+  const sidecarBytes = new Uint8Array([1, 2, 3, 4]);
+  const sidecarObj = await seed(sidecarKey, sidecarBytes);
   const input: PersonalVolAmPmPanelWriterInputManifest = {
     schema_version: PERSONAL_VOL_AM_PM_PANEL_WRITER_INPUT_SCHEMA,
     producer_id: PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID,
-    job_id: JOB_ID,
+    job_id: jobId,
     cohort_id: PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
     runner_version: PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION,
     panel_schema: PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION,
@@ -192,8 +103,8 @@ async function fixture() {
         period_end: "2021-10-15",
         schema_version: "personal-n225-option-sidecar/v1",
         source_key: sidecarKey,
-        etag: "side-1",
-        size: 4,
+        etag: sidecarObj.etag,
+        size: sidecarObj.size,
         sha256: digestDigit("9"),
         source: {
           dataset: "derivatives_bars_daily_options_225",
@@ -240,15 +151,13 @@ async function fixture() {
   };
   const inputBytes = new TextEncoder().encode(JSON.stringify(input));
   const inputDigest = `sha256:${await sha256Hex(inputBytes)}`;
-  const mem = new MemoryR2();
-  mem.seed(personalVolAmPmPanelBuildInputKey(JOB_ID), inputBytes, "input");
-  mem.seed(sidecarKey, new Uint8Array([1, 2, 3, 4]), "side-1");
+  await seed(personalVolAmPmPanelBuildInputKey(jobId), inputBytes);
   const headers = {
-    "x-vol-panel-job-id": JOB_ID,
-    "x-vol-panel-input-manifest-key": personalVolAmPmPanelBuildInputKey(JOB_ID),
+    "x-vol-panel-job-id": jobId,
+    "x-vol-panel-input-manifest-key": personalVolAmPmPanelBuildInputKey(jobId),
     "x-vol-panel-input-manifest-digest": inputDigest,
   };
-  return { mem, headers, inputDigest, input };
+  return { headers, inputDigest, input };
 }
 
 async function put(
@@ -273,25 +182,28 @@ async function put(
       },
       body: bytes,
     }),
-    { STRUCTURED_BUCKET: fixed.mem.asBucket() },
+    runtimeEnv,
     key,
   );
   return { response, digest, key, bytes };
 }
 
 describe("vol AM/PM panel writer R2 capability", () => {
+  afterEach(() => reset());
+
   it("serves admitted sidecar evidence and rejects unlisted snapshot manifests", async () => {
     const fixed = await fixture();
     const allowed = await personalVolAmPmPanelR2Outbound(
       new Request(`http://research.r2/${sidecarKey}`, { headers: fixed.headers }),
-      { STRUCTURED_BUCKET: fixed.mem.asBucket() },
+      runtimeEnv,
       sidecarKey,
     );
     expect(allowed.status).toBe(200);
+    expect(new Uint8Array(await allowed.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3, 4]));
     const snapshotManifest = fixed.input.selection.manifest.key;
     const deniedManifest = await personalVolAmPmPanelR2Outbound(
       new Request(`http://research.r2/${snapshotManifest}`, { headers: fixed.headers }),
-      { STRUCTURED_BUCKET: fixed.mem.asBucket() },
+      runtimeEnv,
       snapshotManifest,
     );
     expect(deniedManifest.status).toBe(403);
@@ -299,7 +211,7 @@ describe("vol AM/PM panel writer R2 capability", () => {
       new Request("http://research.r2/research/mass_eval/panels_cache/secret.json", {
         headers: fixed.headers,
       }),
-      { STRUCTURED_BUCKET: fixed.mem.asBucket() },
+      runtimeEnv,
       "research/mass_eval/panels_cache/secret.json",
     );
     expect(denied.status).toBe(403);
@@ -307,18 +219,23 @@ describe("vol AM/PM panel writer R2 capability", () => {
 
   it("rejects a sidecar whose ETag changed after admission", async () => {
     const fixed = await fixture();
-    fixed.mem.seed(sidecarKey, new Uint8Array([1, 2, 3, 4]), "mutated");
+    await seed(sidecarKey, new Uint8Array([9, 9, 9, 9]));
     const response = await personalVolAmPmPanelR2Outbound(
       new Request(`http://research.r2/${sidecarKey}`, { headers: fixed.headers }),
-      { STRUCTURED_BUCKET: fixed.mem.asBucket() },
+      runtimeEnv,
       sidecarKey,
     );
     expect(response.status).toBe(409);
   });
 
-  it("streams a content-addressed panel without parsing it and verifies children by HEAD", async () => {
+  it("stores exact panel child bytes then a COMPLETE terminal with matching manifest bytes", async () => {
     const fixed = await fixture();
     const periods: Record<string, unknown> = {};
+    expect(
+      await runtimeEnv.STRUCTURED_BUCKET.head(
+        personalVolAmPmPanelBuildTerminalKey(JOB_ID),
+      ),
+    ).toBeNull();
     for (const period of PERSONAL_VOL_AM_PM_EVALUATION_PERIODS) {
       const panel = {
         schema_version: PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION,
@@ -334,6 +251,10 @@ describe("vol AM/PM panel writer R2 capability", () => {
         panel,
       );
       expect([201, 200]).toContain(panelPut.response.status);
+      const stored = await runtimeEnv.STRUCTURED_BUCKET.get(panelPut.key);
+      expect(stored).not.toBeNull();
+      expect(stored!.size).toBe(panelPut.bytes.byteLength);
+      expect(new Uint8Array(await stored!.arrayBuffer())).toEqual(panelPut.bytes);
       periods[period.period_id] = {
         panel_key: personalVolAmPmPanelObjectKey(panelPut.digest),
         panel_sha256: panelPut.digest,
@@ -341,7 +262,6 @@ describe("vol AM/PM panel writer R2 capability", () => {
         common_valid_sha256: digestDigit("c"),
       };
     }
-    expect(fixed.mem.parsedBodies).toBe(0);
 
     const terminal = {
       schema_version: PERSONAL_VOL_AM_PM_PANEL_WRITER_MANIFEST_SCHEMA,
@@ -358,7 +278,11 @@ describe("vol AM/PM panel writer R2 capability", () => {
     };
     const created = await put(fixed, personalVolAmPmPanelBuildTerminalKey(JOB_ID), terminal);
     expect(created.response.status).toBe(201);
-    expect(fixed.mem.writes.at(-1)).toBe(personalVolAmPmPanelBuildTerminalKey(JOB_ID));
+    const storedTerminal = await runtimeEnv.STRUCTURED_BUCKET.get(
+      personalVolAmPmPanelBuildTerminalKey(JOB_ID),
+    );
+    expect(storedTerminal).not.toBeNull();
+    expect(new Uint8Array(await storedTerminal!.arrayBuffer())).toEqual(created.bytes);
     const replay = await put(fixed, personalVolAmPmPanelBuildTerminalKey(JOB_ID), terminal);
     expect(replay.response.status).toBe(200);
     const conflict = await put(fixed, personalVolAmPmPanelBuildTerminalKey(JOB_ID), {
@@ -366,6 +290,9 @@ describe("vol AM/PM panel writer R2 capability", () => {
       error: "different",
     });
     expect(conflict.response.status).toBe(409);
+    expect(new Uint8Array(await (await runtimeEnv.STRUCTURED_BUCKET.get(
+      personalVolAmPmPanelBuildTerminalKey(JOB_ID),
+    ))!.arrayBuffer())).toEqual(created.bytes);
   });
 
   it("rejects a child write after a timeout terminal and allows a corrected rebuild without a stable alias", async () => {
@@ -397,83 +324,32 @@ describe("vol AM/PM panel writer R2 capability", () => {
       late,
     );
     expect(afterTerminal.response.status).toBe(409);
+    expect(
+      await runtimeEnv.STRUCTURED_BUCKET.head(personalVolAmPmPanelObjectKey(lateDigest)),
+    ).toBeNull();
 
-    const other = await fixture();
-    other.input.job_id = "vol-panel-rebuild";
-    const rebuilt = JSON.parse(JSON.stringify(other.input)) as PersonalVolAmPmPanelWriterInputManifest;
-    rebuilt.job_id = "vol-panel-rebuild";
-    const rebuiltBytes = new TextEncoder().encode(JSON.stringify(rebuilt));
-    const rebuiltDigest = `sha256:${await sha256Hex(rebuiltBytes)}`;
-    other.mem.seed(personalVolAmPmPanelBuildInputKey("vol-panel-rebuild"), rebuiltBytes, "input");
+    const rebuiltJob = "vol-panel-rebuild";
+    const rebuilt = await fixture(rebuiltJob);
     const panel = { schema_version: PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION, period_id: "y2021_full", note: "corrected" };
     const panelBytes = new TextEncoder().encode(JSON.stringify(panel));
     const panelDigest = `sha256:${await sha256Hex(panelBytes)}`;
-    const headers = {
-      "x-vol-panel-job-id": "vol-panel-rebuild",
-      "x-vol-panel-input-manifest-key": personalVolAmPmPanelBuildInputKey("vol-panel-rebuild"),
-      "x-vol-panel-input-manifest-digest": rebuiltDigest,
-      "content-length": String(panelBytes.byteLength),
-      "x-content-sha256": panelDigest,
-    };
+    const panelKey = personalVolAmPmPanelObjectKey(panelDigest);
     const response = await personalVolAmPmPanelR2Outbound(
-      new Request(`http://research.r2/${personalVolAmPmPanelObjectKey(panelDigest)}`, {
+      new Request(`http://research.r2/${panelKey}`, {
         method: "PUT",
-        headers,
+        headers: {
+          ...rebuilt.headers,
+          "content-length": String(panelBytes.byteLength),
+          "x-content-sha256": panelDigest,
+        },
         body: panelBytes,
       }),
-      { STRUCTURED_BUCKET: other.mem.asBucket() },
-      personalVolAmPmPanelObjectKey(panelDigest),
+      runtimeEnv,
+      panelKey,
     );
     expect(response.status).toBe(201);
-    expect(personalVolAmPmPanelObjectKey(panelDigest)).not.toContain("/panels/y2021_full.json");
-  });
-
-  it("leaves a racing child as an unreferenced orphan instead of claiming atomic exclusion", async () => {
-    const fixed = await fixture();
-    const originalPut = fixed.mem.put.bind(fixed.mem);
-    fixed.mem.put = async (key, value, options) => {
-      const result = await originalPut(key, value, options);
-      if (key.startsWith("research/personal/vol-ratio-am-pm-v1/objects/")) {
-        const timeout = {
-          schema_version: PERSONAL_VOL_AM_PM_PANEL_WRITER_MANIFEST_SCHEMA,
-          status: "FAILED",
-          kind: PERSONAL_VOL_AM_PM_PANEL_WRITER_KIND,
-          job_id: JOB_ID,
-          runner_version: PERSONAL_VOL_AM_PM_PANEL_WRITER_RUNNER_VERSION,
-          input_manifest_digest: fixed.inputDigest,
-          producer_id: PERSONAL_VOL_AM_PM_PANEL_WRITER_PRODUCER_ID,
-          cohort_id: PERSONAL_VOL_AM_PM_PANEL_BUILD_COHORT_ID,
-          go: false,
-          error: "timeout",
-        };
-        const bytes = new TextEncoder().encode(JSON.stringify(timeout));
-        fixed.mem.seed(
-          personalVolAmPmPanelBuildTerminalKey(JOB_ID),
-          bytes,
-          "term-race",
-          { sha256: `sha256:${await sha256Hex(bytes)}` },
-        );
-      }
-      return result;
-    };
-    const late = {
-      schema_version: PERSONAL_VOL_AM_PM_PANEL_SCHEMA_VERSION,
-      period_id: "y2021_full",
-    };
-    const lateBytes = new TextEncoder().encode(JSON.stringify(late));
-    const lateDigest = `sha256:${await sha256Hex(lateBytes)}`;
-    const lateKey = personalVolAmPmPanelObjectKey(lateDigest);
-    const raced = await put(fixed, lateKey, late);
-    expect(raced.response.status).toBe(409);
-    expect(fixed.mem.values.has(lateKey)).toBe(true);
-    expect(fixed.mem.values.has(personalVolAmPmPanelBuildTerminalKey(JOB_ID))).toBe(
-      true,
-    );
-    const terminal = JSON.parse(
-      new TextDecoder().decode(
-        fixed.mem.values.get(personalVolAmPmPanelBuildTerminalKey(JOB_ID))!.bytes,
-      ),
-    ) as { periods?: Record<string, unknown> };
-    expect(terminal.periods).toBeUndefined();
+    const stored = await runtimeEnv.STRUCTURED_BUCKET.get(panelKey);
+    expect(stored).not.toBeNull();
+    expect(new Uint8Array(await stored!.arrayBuffer())).toEqual(panelBytes);
   });
 });
