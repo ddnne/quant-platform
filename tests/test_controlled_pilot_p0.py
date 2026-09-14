@@ -1872,11 +1872,15 @@ def test_controlled_pins_same_artifact_and_rejects_replace_mutate_swap(
 def test_controlled_ctx_feature_sees_d_morning_reconstruction(
     tmp_path, receipt_ed25519_keys
 ) -> None:
+    from dataclasses import replace
+
     from _coreseed import seed_governed_am_pm_session_db
     from core import PERSONAL_RETROSPECTIVE_ADJUSTED, run_backtest, standard_cost
     from core.execution import morning_close_as_of
     from core.universe import membership_at
     from research.ready_manifest import load_exact_four_pilot_ready_binding
+    import features
+    from features.runtime import _BoundScopedFeatureReads, _compute
 
     code = "1332"
     days = [
@@ -1941,6 +1945,35 @@ def test_controlled_ctx_feature_sees_d_morning_reconstruction(
             feature_dependencies=tuple(xs.feature_dependencies),
         )
         assert view.session_profile_digest == handle.session_profile_digest
+        consumer_id = next(iter(xs.feature_consumers()))
+
+        def _inspect_declared_bar_rows(ctx):
+            return features.FeatureOutput(
+                value=list(ctx.get_equity_bars_daily(code=code).rows)
+            )
+
+        inspected = _compute(
+            replace(
+                features.get(
+                    "retrospective_split_adjusted_momentum_n", version="1.0.0"
+                ),
+                compute=_inspect_declared_bar_rows,
+            ),
+            as_of=morning_close_as_of(days[-1]),
+            db_path=db,
+            scoped_feature_reads=_BoundScopedFeatureReads(
+                data_view=view,
+                consumer_id=consumer_id,
+            ),
+            code=code,
+            n=5,
+        )
+        last = inspected.value[-1]
+        assert last == {
+            "code": code,
+            "date": days[-1],
+            "adjustment_close": 100.0,
+        }
         seen: dict[str, float] = {}
 
         class BoundProbe:

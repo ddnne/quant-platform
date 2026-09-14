@@ -495,17 +495,21 @@ def _compute(
                 selected = _declared_selected(
                     "equities_bars_daily", code, split_anchor=split_anchor
                 )
-                rows = [
-                    {
-                        "code": bar.code,
-                        "date": bar.date,
-                        "close": bar.close,
-                        "adjustment_close": bar.adjustment_close,
-                        "volume": bar.volume,
-                        "adjustment_volume": bar.adjustment_volume,
-                    }
-                    for bar in selected
-                ]
+                allowed = frozenset(requirement.scope.fields) | frozenset(
+                    requirement.scope.optional_fields
+                )
+                rows = []
+                for bar in selected:
+                    row = {"code": bar.code, "date": bar.date}
+                    if "close" in allowed:
+                        row["close"] = bar.close
+                    if "adjustment_close" in allowed:
+                        row["adjustment_close"] = bar.adjustment_close
+                    if "volume" in allowed:
+                        row["volume"] = bar.volume
+                    if "adjustment_volume" in allowed:
+                        row["adjustment_volume"] = bar.adjustment_volume
+                    rows.append(row)
                 from_event = kwargs.get("from_event")
                 if from_event is not None:
                     start = str(from_event)[:10]
