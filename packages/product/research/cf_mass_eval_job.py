@@ -90,22 +90,6 @@ def resolve_research_run_token() -> str | None:
     return _resolve()
 
 
-def design_mass_factory_paths(job_id: str) -> dict[str, Any]:
-    jid = str(job_id).strip() or "unknown"
-    prefix = f"{RESEARCH_ARTIFACT_PREFIX}/job={jid}"
-    return {
-        "bucket": RESEARCH_ARTIFACT_BUCKET,
-        "prefix": prefix,
-        "job_id": jid,
-        "manifest_r2_key": f"{prefix}/manifest.json",
-        "input_plan_r2_key": f"{prefix}/input_plan.json",
-        "batch_summary_r2_key": f"{prefix}/batch_summary.json",
-        "results_r2_key": f"{prefix}/results.json",
-        "screens_r2_key": f"{prefix}/screens.json",
-        "ranking_r2_key": f"{prefix}/ranking.json",
-    }
-
-
 def is_unique_period_net_unsupported(logic_id: str) -> bool:
     from research.unique_logic.constants import (
         CF_EVENT_DAILY_PATH_IDS,
@@ -284,24 +268,6 @@ def build_cf_mass_eval_job_spec(
     }
 
 
-def invoke_cf_mass_eval_worker(*args, **kwargs):
-    from research.cf_mass_eval_run import invoke_cf_mass_eval_worker as invoke
-
-    return invoke(*args, **kwargs)
-
-
-def run_cf_mass_eval_job(*args, **kwargs):
-    from research.cf_mass_eval_run import run_cf_mass_eval_job as run
-
-    return run(*args, **kwargs)
-
-
-def try_cf_mass_eval_status(*args, **kwargs):
-    from research.cf_mass_eval_run import try_cf_mass_eval_status as status
-
-    return status(*args, **kwargs)
-
-
 __all__ = [
     "CF_MASS_EVAL_VERSION",
     "CF_MASS_EVAL_WAVE",
@@ -314,14 +280,10 @@ __all__ = [
     "CfMassEvalError",
     "refuse_missing_capability",
     "resolve_research_run_token",
-    "design_mass_factory_paths",
     "default_logic_specs",
     "resolve_or_stage_panels",
     "panels_cache_id",
     "PANELS_CACHE_PREFIX",
     "normalize_period_row",
     "build_cf_mass_eval_job_spec",
-    "invoke_cf_mass_eval_worker",
-    "run_cf_mass_eval_job",
-    "try_cf_mass_eval_status",
 ]

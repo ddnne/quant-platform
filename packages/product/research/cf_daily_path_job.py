@@ -15,9 +15,9 @@ from research.cf_mass_eval_job import (
     DEFAULT_ONE_WAY,
     DEFAULT_WORKER_URL,
     CfMassEvalError,
-    invoke_cf_mass_eval_worker,
     refuse_missing_capability,
 )
+from research.cf_mass_eval_run import invoke_cf_mass_eval_worker
 
 from research.eval_registry import PROTOCOL_DAILY_PATH
 from research.freezes import MASS_RESEARCH

@@ -47,7 +47,7 @@ def test_job_candidate_grade_false_on_partial() -> None:
 
 
 def test_mass_eval_driver_refuses_without_http(monkeypatch) -> None:
-    from research.cf_mass_eval_job import (
+    from research.cf_mass_eval_run import (
         invoke_cf_mass_eval_worker,
         run_cf_mass_eval_job,
     )
@@ -115,7 +115,7 @@ def test_propose_driver_refuses_without_http(monkeypatch) -> None:
 
 
 def test_driver_env_flags_cannot_grant(monkeypatch) -> None:
-    from research.cf_mass_eval_job import invoke_cf_mass_eval_worker
+    from research.cf_mass_eval_run import invoke_cf_mass_eval_worker
     from research.cf_propose_thesis import invoke_cf_propose_thesis
 
     monkeypatch.setenv("MASS_RESEARCH", "GO")
