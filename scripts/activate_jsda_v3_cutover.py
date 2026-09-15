@@ -3,9 +3,11 @@
 
 The path is intentionally small: stop JSDA Cron, observe a stable drain, pause
 the JSDA main Queue, record a Time Travel bookmark as recovery-reference
-evidence, migrate under one D1 lease, verify, deploy, activate, then restore
-the prior JSDA Cron/Queue state.  Whole shared-D1 restore is not performed.
-Failures stay stopped; --rollback refuses with FORWARD_REPAIR_REQUIRED.
+evidence, migrate under one D1 lease, then deploy/activate.  Staging
+--prepare-staging-schema applies the remaining chain, leaves bridge/PENDING,
+never deploys JSDA or writes jsda_v3_cutover_run, and restores captured JSDA
+Cron/Queue.  Whole shared-D1 restore is not performed.  --activate failures
+stay stopped.  --rollback refuses with FORWARD_REPAIR_REQUIRED.
 """
 
 from __future__ import annotations
@@ -299,6 +301,34 @@ def _remove_control_intent(receipt: Mapping[str, Any]) -> None:
     if intent.get("intent_digest") != receipt.get("control_intent_digest"):
         raise JsdaCutoverError("control intent differs from the receipt")
     path.unlink()
+
+
+def _receipt_for_intent(
+    environment: str, intent: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    directory = _root() / environment
+    if not directory.is_dir():
+        return None
+    found: dict[str, Any] | None = None
+    for path in directory.iterdir():
+        if path.suffix != ".json" or "." in path.stem:
+            continue
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if (
+            isinstance(value, dict)
+            and value.get("control_intent_digest") == intent.get("intent_digest")
+            and value.get("lease_owner") == intent.get("lease_owner")
+            and value.get("lease_fence") == intent.get("lease_fence")
+        ):
+            if found is not None:
+                raise JsdaCutoverError("schema-prep receipt is ambiguous")
+            found = value
+    if found is None:
+        return None
+    return _load_receipt(environment, str(found.get("run_id") or ""))
 
 
 def _save_receipt(receipt: Mapping[str, Any]) -> Path:
@@ -683,6 +713,227 @@ def activate(environment: str, *, yes: bool) -> dict[str, Any]:
     return result
 
 
+def _reraise(primary: BaseException | None, cleanup: list[BaseException]) -> None:
+    if primary is None and not cleanup:
+        return
+    if primary is None:
+        raise JsdaCutoverError(
+            "cleanup failed: " + "; ".join(str(item) for item in cleanup)
+        ) from cleanup[0]
+    if not cleanup:
+        raise primary
+    raise JsdaCutoverError(
+        f"{primary}; cleanup: " + "; ".join(str(item) for item in cleanup)
+    ) from primary
+
+
+def _bool_pause(value: object, *, label: str) -> bool:
+    if isinstance(value, Mapping):
+        value = value.get("paused")
+    if type(value) is not bool:
+        raise JsdaCutoverError(f"{label} is unobserved")
+    return value
+
+
+def _restore_jsda_surface(
+    environment: str,
+    intent: Mapping[str, Any],
+    *,
+    token: str,
+    account: str,
+) -> list[BaseException]:
+    errors: list[BaseException] = []
+    try:
+        prior_paused = _bool_pause(
+            intent.get("prior_queue_paused"), label="prior JSDA queue pause"
+        )
+        _queue_action(
+            environment,
+            "pause-delivery" if prior_paused else "resume-delivery",
+            token=token,
+            account=account,
+        )
+        paused = _bool_pause(
+            _queue(str(SURFACE[environment]["queue"]), token=token, account=account),
+            label="JSDA queue pause",
+        )
+        if paused is not prior_paused:
+            raise JsdaCutoverError("JSDA queue pause was not restored")
+    except BaseException as exc:
+        errors.append(exc)
+    try:
+        prior_schedules = intent.get("prior_schedules")
+        if not isinstance(prior_schedules, list):
+            raise JsdaCutoverError("prior JSDA schedules are unobserved")
+        _set_schedules(
+            environment, list(prior_schedules), token=token, account=account
+        )
+        if _schedules(environment, token=token, account=account) != prior_schedules:
+            raise JsdaCutoverError("JSDA Cron was not restored")
+    except BaseException as exc:
+        errors.append(exc)
+    return errors
+
+
+def prepare_staging_schema(environment: str, *, yes: bool) -> dict[str, Any]:
+    if not yes:
+        raise JsdaCutoverError("--prepare-staging-schema requires --yes")
+    if environment != "staging":
+        raise JsdaCutoverError("schema preparation is staging-only")
+    token, account = _credentials()
+    _require_forward_repair_clearance(environment, token=token, account=account)
+    baseline = _observe(environment, token=token, account=account)
+    if baseline.get("cutover_phase") == "v3_active":
+        raise JsdaCutoverError("JSDA cutover is already v3_active")
+    _bool_pause(baseline.get("queue"), label="JSDA queue pause")
+    if not isinstance(baseline.get("schedules"), list):
+        raise JsdaCutoverError("JSDA schedules are unobserved")
+    intent = _control_intent(environment, baseline)
+    if (
+        intent.get("prior_schedules") != baseline["schedules"]
+        or intent.get("prior_queue_paused")
+        is not _bool_pause(baseline.get("queue"), label="JSDA queue pause")
+        or intent.get("prior_version_id") != baseline.get("version_id")
+        or intent.get("prior_deployment_id") != baseline.get("deployment_id")
+        or intent.get("prior_version_tag") != baseline.get("version_tag")
+    ):
+        raise JsdaCutoverError(
+            "control intent does not match observed JSDA surface"
+        )
+    receipt = _receipt_for_intent(environment, intent)
+    identity = migration._identity(environment, str(intent["source_sha"]))
+    runner = _migration_runner(token, account)
+    lease = migration.observe_mutation_lease_authority(
+        environment=environment, runner=runner
+    )
+    owned = (
+        isinstance(lease, Mapping)
+        and lease.get("owner") == intent["lease_owner"]
+        and lease.get("nonce") == intent["lease_fence"]
+        and lease.get("phase") in {"acquired", "verifying"}
+        and lease.get("remote_spawned") == 0
+    )
+    if (
+        lease is not None
+        and lease.get("phase") not in {None, "vacant"}
+        and not owned
+    ):
+        raise JsdaCutoverError("mutation lease is already held")
+    skip_apply = False
+    if owned and lease is not None and lease.get("phase") == "verifying":
+        if baseline.get("pending_migrations"):
+            raise JsdaCutoverError(
+                "mutation lease is verifying with pending migrations"
+            )
+        if receipt is None:
+            raise JsdaCutoverError("schema-prep receipt is missing")
+        skip_apply = True
+    primary: BaseException | None = None
+    result: dict[str, Any] | None = None
+    acquired = False
+    try:
+        if owned:
+            migration.resume_owned_mutation_lease(
+                identity=identity, environment=environment,
+                owner=str(intent["lease_owner"]),
+                nonce=str(intent["lease_fence"]),
+                runner=runner,
+            )
+            acquired = True
+        if not skip_apply:
+            if intent["prior_schedules"]:
+                _set_schedules(environment, [], token=token, account=account)
+            first = _observe(environment, token=token, account=account)
+            time.sleep(2)
+            second = _observe(environment, token=token, account=account)
+            _require_drained(first, after_migration=False)
+            _require_drained(second, after_migration=False)
+            if not _bool_pause(second.get("queue"), label="JSDA queue pause"):
+                _queue_action(
+                    environment, "pause-delivery", token=token, account=account
+                )
+            quiesced = _observe(environment, token=token, account=account)
+            if quiesced["schedules"] or not _bool_pause(
+                quiesced.get("queue"), label="JSDA queue pause"
+            ):
+                raise JsdaCutoverError("Cron and Queue did not quiesce")
+            _require_drained(quiesced, after_migration=False)
+            if receipt is None:
+                travel = migration.time_travel_bookmark(
+                    environment, runner=runner
+                )
+                receipt = _build_receipt(environment, intent, travel)
+                _save_receipt(receipt)
+                _evidence(
+                    receipt, "schema-prep-bookmark",
+                    {"bookmark": travel["bookmark"], "jsda_deployed": False},
+                )
+            if not owned:
+                migration.bootstrap_mutation_lease_authority(
+                    environment=environment, runner=runner,
+                    pre_bootstrap_bookmark=str(receipt["rollback_bookmark"]),
+                    resume_owner_token=str(intent["lease_owner"]),
+                    resume_nonce_token=str(intent["lease_fence"]),
+                )
+                migration.acquire_authorized_mutation_lease(
+                    environment=environment,
+                    source_sha=str(intent["source_sha"]),
+                    runner=runner,
+                    lease_owner_token=str(intent["lease_owner"]),
+                    lease_nonce_token=str(intent["lease_fence"]),
+                )
+                acquired = True
+            if quiesced.get("pending_migrations"):
+                prefix, binding = migration._wrangler_prefix(environment)
+                migration._apply_remote_migrations(
+                    environment=environment, binding=binding, prefix=prefix,
+                    identity=identity,
+                    owner=str(intent["lease_owner"]),
+                    nonce=str(intent["lease_fence"]),
+                    runner=runner,
+                )
+        exact = _observe(environment, token=token, account=account)
+        _require_drained(exact, after_migration=True)
+        if exact.get("cutover_phase") != "bridge":
+            raise JsdaCutoverError("cutover control is not PENDING/bridge")
+        migration.probe_receipt_product_schema(environment, runner=runner)
+        result = {
+            "status": "SCHEMA_PREPARED",
+            "environment": environment,
+            "source_sha": intent["source_sha"],
+            "cutover_phase": "bridge",
+            "jsda_deployed": False,
+            "applied_migrations": exact["applied_migrations"],
+        }
+    except BaseException as exc:
+        primary = exc
+    finally:
+        cleanup: list[BaseException] = [
+            *_restore_jsda_surface(
+                environment, intent, token=token, account=account
+            )
+        ]
+        if acquired:
+            try:
+                migration.release_mutation_lease(
+                    environment=environment,
+                    owner=str(intent["lease_owner"]),
+                    nonce=str(intent["lease_fence"]),
+                    runner=runner,
+                )
+            except BaseException as exc:
+                cleanup.append(exc)
+        if primary is None and not cleanup and receipt is not None:
+            try:
+                _remove_control_intent(receipt)
+            except BaseException as exc:
+                cleanup.append(exc)
+    _reraise(primary, cleanup)
+    if result is None:
+        raise JsdaCutoverError("schema preparation produced no result")
+    return result
+
+
 def resume(environment: str, run_id: str, *, yes: bool) -> dict[str, Any]:
     if not yes:
         raise JsdaCutoverError("--resume requires --yes")
@@ -731,17 +982,23 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--environment", choices=("staging", "production"), required=True)
     mode = parser.add_mutually_exclusive_group(required=True)
-    for name in ("check", "activate", "resume", "rollback"):
+    for name in ("check", "activate", "resume", "rollback", "prepare-staging-schema"):
         mode.add_argument(f"--{name}", action="store_true")
     parser.add_argument("--run-id")
     parser.add_argument("--yes", action="store_true")
     args = parser.parse_args(argv)
-    operation = next(name for name in ("check", "activate", "resume", "rollback")
-                     if getattr(args, name))
+    operation = next(
+        name for name in (
+            "check", "activate", "resume", "rollback", "prepare_staging_schema",
+        )
+        if getattr(args, name)
+    )
     if operation == "check":
         result = check(args.environment)
     elif operation == "activate":
         result = activate(args.environment, yes=args.yes)
+    elif operation == "prepare_staging_schema":
+        result = prepare_staging_schema(args.environment, yes=args.yes)
     else:
         if not args.run_id:
             raise JsdaCutoverError("--run-id is required")

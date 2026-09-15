@@ -337,6 +337,25 @@ def observe_migration_state(
     }
 
 
+RECEIPT_PRODUCT_SCHEMA_PROBES = (
+    "SELECT operation_id, run_id, source, dataset, segment_id, artifact_key, "
+    "artifact_digest, committed_at FROM receipt_product_materializations LIMIT 0",
+    "SELECT operation_id, run_id, environment, source, contract_id, dataset, "
+    "segment_id, state FROM receipt_authority_operations LIMIT 0",
+    "SELECT operation_id, environment, source, contract_id, dataset, "
+    "segment_id, state FROM receipt_authority_requests LIMIT 0",
+    "SELECT operation_id, natural_key, source, dataset "
+    "FROM receipt_authority_structured_rows LIMIT 0",
+)
+
+
+def probe_receipt_product_schema(
+    environment: str, *, runner: Runner = _default_runner
+) -> None:
+    for sql in RECEIPT_PRODUCT_SCHEMA_PROBES:
+        _d1_execute(sql, environment=environment, runner=runner)
+
+
 def _identity(environment: str, source_sha: str) -> dict[str, Any]:
     if not _SHA.fullmatch(source_sha):
         raise GuardedMigrationError("source SHA is invalid")

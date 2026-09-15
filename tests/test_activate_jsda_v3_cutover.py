@@ -12,7 +12,7 @@ from typing import Any, Mapping
 import pytest
 
 from scripts import activate_jsda_v3_cutover as cutover
-from scripts.d1_ingestion_migration_validation import MIGRATION_NAMES
+from scripts.d1_ingestion_migration_validation import MIGRATION_NAMES, MIGRATIONS
 
 
 SHA = "c" * 40
@@ -631,3 +631,211 @@ def test_normal_deploy_commands_cannot_bypass_operator() -> None:
     assert "activate_jsda_v3_cutover.py" in scripts["deploy"]
     assert "activate_jsda_v3_cutover.py" in scripts["deploy:staging"]
     assert scripts["deploy:unsafe-dev"].startswith("wrangler deploy")
+
+
+def test_receipt_schema_probes_against_canonical_sqlite() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.execute("PRAGMA foreign_keys=ON")
+    for path in MIGRATIONS:
+        connection.executescript(path.read_text(encoding="utf-8"))
+    probes = cutover.migration.RECEIPT_PRODUCT_SCHEMA_PROBES
+    for sql in probes:
+        connection.execute(sql)
+    connection.execute("DROP TABLE receipt_authority_requests")
+    with pytest.raises(sqlite3.DatabaseError):
+        connection.execute(probes[2])
+
+
+@pytest.mark.parametrize("succeed", [False, True])
+def test_prepare_staging_schema_cleanup_sequence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, succeed: bool
+) -> None:
+    monkeypatch.setattr(cutover, "STATE_ROOT", tmp_path / "state")
+    monkeypatch.setattr(cutover, "_credentials", lambda: ("token", "account"))
+    no_remote_restore_intent(monkeypatch)
+    monkeypatch.setattr(cutover.time, "sleep", lambda _seconds: None)
+    travel = {
+        "bookmark": BASELINE,
+        "database_id": "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb",
+        "database_name": "quant-ingest-staging",
+        "version": "production",
+        "response_digest": "sha256:" + "f" * 64,
+    }
+    monkeypatch.setattr(
+        cutover.migration, "time_travel_bookmark", lambda *_a, **_k: travel
+    )
+    monkeypatch.setattr(
+        cutover.migration, "bootstrap_mutation_lease_authority", lambda **_k: None
+    )
+    monkeypatch.setattr(
+        cutover.migration, "acquire_authorized_mutation_lease", lambda **_k: None
+    )
+    monkeypatch.setattr(
+        cutover.migration, "_wrangler_prefix", lambda *_a, **_k: (["wrangler"], {})
+    )
+    monkeypatch.setattr(
+        cutover.migration, "_identity", lambda *_a, **_k: {"source_sha": SHA}
+    )
+    monkeypatch.setattr(
+        cutover.migration, "probe_receipt_product_schema", lambda *_a, **_k: None
+    )
+    lease_state: dict[str, Any] = {"row": None}
+
+    def observe_lease(**_k: object) -> dict[str, Any] | None:
+        row = lease_state["row"]
+        return None if row is None else dict(row)
+
+    monkeypatch.setattr(
+        cutover.migration, "observe_mutation_lease_authority", observe_lease
+    )
+    monkeypatch.setattr(
+        cutover.migration, "resume_owned_mutation_lease", lambda **_k: None
+    )
+    monkeypatch.setattr(
+        cutover, "_start",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("cutover run")),
+    )
+    prior = [{"cron": "30 1 * * *"}]
+
+    class Surface:
+        def __init__(self) -> None:
+            self.schedules = list(prior)
+            self.paused = False
+            self.applied = False
+            self.events: list[object] = []
+
+        def observe(self, *_a: object, **_k: object) -> dict[str, Any]:
+            value = state()
+            value["schedules"] = list(self.schedules)
+            value["queue"] = {**value["queue"], "paused": self.paused}
+            if self.applied:
+                value["applied_migrations"] = list(MIGRATION_NAMES)
+                value["pending_migrations"] = []
+                value["schema_observations"] = []
+                value["jobs"] = {key: 0 for key in value["jobs"]}
+                value["cutover_phase"] = "bridge"
+            return value
+
+        def set_schedules(
+            self, _env: str, schedules: list[Any], **_k: object
+        ) -> None:
+            self.events.append(("cron", list(schedules)))
+            self.schedules = list(schedules)
+
+        def queue_action(self, _env: str, action: str, **_k: object) -> None:
+            self.events.append(("queue", action))
+            self.paused = action == "pause-delivery"
+
+        def queue(self, *_a: object, **_k: object) -> dict[str, Any]:
+            return {
+                "id": "queue", "paused": self.paused, "backlog": 0, "bytes": 0
+            }
+
+        def schedules_read(self, *_a: object, **_k: object) -> list[dict[str, str]]:
+            return list(self.schedules)
+
+    surface = Surface()
+    monkeypatch.setattr(cutover, "_observe", surface.observe)
+    monkeypatch.setattr(cutover, "_set_schedules", surface.set_schedules)
+    monkeypatch.setattr(cutover, "_queue_action", surface.queue_action)
+    monkeypatch.setattr(cutover, "_queue", surface.queue)
+    monkeypatch.setattr(cutover, "_schedules", surface.schedules_read)
+    if succeed:
+        applied: list[int] = []
+
+        def apply(**_k: object) -> None:
+            surface.applied = True
+            applied.append(1)
+
+        def release_fail(**_k: object) -> None:
+            surface.events.append("release")
+            raise cutover.migration.GuardedMigrationError(
+                "mutation lease release failed"
+            )
+
+        monkeypatch.setattr(cutover.migration, "_apply_remote_migrations", apply)
+        monkeypatch.setattr(
+            cutover.migration, "release_mutation_lease", release_fail
+        )
+        boots: list[int] = []
+
+        def bootstrap(**_k: object) -> None:
+            boots.append(1)
+            if len(boots) == 1:
+                raise cutover.migration.GuardedMigrationError("bootstrap failed")
+
+        monkeypatch.setattr(
+            cutover.migration, "bootstrap_mutation_lease_authority", bootstrap
+        )
+
+        def receipt_files() -> list[Path]:
+            directory = tmp_path / "state" / "staging"
+            return [
+                path for path in directory.iterdir()
+                if path.suffix == ".json" and "." not in path.stem
+            ]
+
+        with pytest.raises(cutover.migration.GuardedMigrationError, match="bootstrap failed"):
+            cutover.prepare_staging_schema("staging", yes=True)
+        assert len(receipt_files()) == 1
+        intent_path = cutover._intent_path("staging", SHA)
+        assert intent_path.exists()
+        with pytest.raises(cutover.JsdaCutoverError, match="cleanup failed:"):
+            cutover.prepare_staging_schema("staging", yes=True)
+        assert applied == [1]
+        assert len(receipt_files()) == 1
+        saved = json.loads(intent_path.read_text(encoding="utf-8"))
+        lease_state["row"] = {
+            "phase": "verifying",
+            "remote_spawned": 0,
+            "owner": saved["lease_owner"],
+            "nonce": saved["lease_fence"],
+        }
+        monkeypatch.setattr(
+            cutover.migration, "release_mutation_lease",
+            lambda **_k: surface.events.append("release"),
+        )
+        result = cutover.prepare_staging_schema("staging", yes=True)
+        assert result["status"] == "SCHEMA_PREPARED"
+        assert result["jsda_deployed"] is False
+        assert applied == [1]
+        assert len(receipt_files()) == 1
+        assert not intent_path.exists()
+    else:
+        monkeypatch.setattr(
+            cutover.migration, "_apply_remote_migrations",
+            lambda **_k: (_ for _ in ()).throw(RuntimeError("apply failed")),
+        )
+        def release(**_k: object) -> None:
+            surface.events.append("release")
+            raise cutover.migration.GuardedMigrationError(
+                "mutation lease release failed"
+            )
+
+        monkeypatch.setattr(cutover.migration, "release_mutation_lease", release)
+        with pytest.raises(cutover.JsdaCutoverError, match="staging-only"):
+            cutover.prepare_staging_schema("production", yes=True)
+        stale = state()
+        stale["schedules"] = []
+        cutover._control_intent("staging", stale)
+        with pytest.raises(
+            cutover.JsdaCutoverError,
+            match="does not match observed JSDA surface",
+        ):
+            cutover.prepare_staging_schema("staging", yes=True)
+        assert surface.schedules == prior
+        assert surface.events == []
+        cutover._intent_path("staging", SHA).unlink()
+        with pytest.raises(cutover.JsdaCutoverError, match="apply failed; cleanup:"):
+            cutover.prepare_staging_schema("staging", yes=True)
+        assert cutover._intent_path("staging", SHA).exists()
+    assert surface.schedules == prior
+    assert surface.paused is False
+    if not succeed:
+        assert surface.events == [
+            ("cron", []),
+            ("queue", "pause-delivery"),
+            ("queue", "resume-delivery"),
+            ("cron", prior),
+            "release",
+        ]
