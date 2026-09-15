@@ -7,6 +7,7 @@ describe/metadata response cap, never a product-stream cap.
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -23,6 +24,7 @@ RAW_MANIFEST_MAX_BYTES = 4 * 1024 * 1024
 OFFICIAL_CALENDAR_MAX_BYTES = 65_536
 DESCRIBE_BATCH_SEGMENTS = 128
 _IDENTITY_HEADERS = frozenset({"x-quant-resource", "x-quant-receipt-digest"})
+_MONTH_ID = re.compile(r"^[0-9]{4}-[0-9]{2}$")
 
 
 class ReceiptProductTransportError(RuntimeError):
@@ -37,6 +39,39 @@ def _canonical_bytes(value: Mapping[str, Any]) -> bytes:
         separators=(",", ":"),
         allow_nan=False,
     ).encode("utf-8")
+
+
+def _describe_http(
+    payload: Mapping[str, Any],
+    *,
+    opener: Any,
+) -> tuple[int, dict[str, Any]]:
+    body = _canonical_bytes(payload)
+    request = urllib.request.Request(
+        f"{RECEIPT_PRODUCT_ORIGIN}{DESCRIBE_PATH}",
+        data=body,
+        method="POST",
+        headers={
+            "content-type": "application/json; charset=utf-8",
+            "content-length": str(len(body)),
+        },
+    )
+    try:
+        with opener.urlopen(request, timeout=120) as response:
+            raw = response.read(DESCRIBE_MAX_BYTES + 1)
+            status = int(response.status)
+    except urllib.error.HTTPError as error:
+        raw = error.read(DESCRIBE_MAX_BYTES + 1)
+        status = int(error.code)
+    if len(raw) > DESCRIBE_MAX_BYTES:
+        raise ReceiptProductTransportError("describe response exceeds metadata bound")
+    try:
+        parsed = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ReceiptProductTransportError("describe response is not JSON") from exc
+    if type(parsed) is not dict:
+        raise ReceiptProductTransportError("describe response is not JSON")
+    return status, parsed
 
 
 def describe_receipt_product_input(
@@ -59,30 +94,8 @@ def describe_receipt_product_input(
             for item in segments
         ],
     }
-    body = _canonical_bytes(payload)
-    request = urllib.request.Request(
-        f"{RECEIPT_PRODUCT_ORIGIN}{DESCRIBE_PATH}",
-        data=body,
-        method="POST",
-        headers={
-            "content-type": "application/json; charset=utf-8",
-            "content-length": str(len(body)),
-        },
-    )
-    try:
-        with opener.urlopen(request, timeout=120) as response:
-            raw = response.read(DESCRIBE_MAX_BYTES + 1)
-            status = int(response.status)
-    except urllib.error.HTTPError as error:
-        raw = error.read(DESCRIBE_MAX_BYTES + 1)
-        status = int(error.code)
-    if len(raw) > DESCRIBE_MAX_BYTES:
-        raise ReceiptProductTransportError("describe response exceeds metadata bound")
-    try:
-        parsed = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ReceiptProductTransportError("describe response is not JSON") from exc
-    if status != 200 or type(parsed) is not dict or parsed.get("status") != "DESCRIBED":
+    status, parsed = _describe_http(payload, opener=opener)
+    if status != 200 or parsed.get("status") != "DESCRIBED":
         raise ReceiptProductTransportError("receipt product input was not described")
     if parsed.get("schema_version") != RECEIPT_PRODUCT_INPUT_SET:
         raise ReceiptProductTransportError("describe schema mismatch")
@@ -98,8 +111,14 @@ def discover_latest_complete_segment(
     on_or_before: str,
     opener: Any = urllib.request,
 ) -> dict[str, str] | None:
-    """Latest COMPLETE collection month at or before ``on_or_before``."""
+    """Latest COMPLETE collection month at or before ``on_or_before``.
 
+    Only a proven no-match (HOLD MISSING_ROW at the requested bound) is
+    ``None``. Transport, auth, and other service failures raise.
+    """
+
+    if type(dataset) is not str or not dataset or not _MONTH_ID.fullmatch(on_or_before):
+        raise ReceiptProductTransportError("discover bound is invalid")
     payload = {
         "schema_version": RECEIPT_PRODUCT_INPUT_REQUEST,
         "profile_id": profile_id,
@@ -107,40 +126,35 @@ def discover_latest_complete_segment(
         "dependency_closure_digest": dependency_closure_digest,
         "discover": {"dataset": dataset, "on_or_before": on_or_before},
     }
-    body = _canonical_bytes(payload)
-    request = urllib.request.Request(
-        f"{RECEIPT_PRODUCT_ORIGIN}{DESCRIBE_PATH}",
-        data=body,
-        method="POST",
-        headers={
-            "content-type": "application/json; charset=utf-8",
-            "content-length": str(len(body)),
-        },
-    )
-    try:
-        with opener.urlopen(request, timeout=120) as response:
-            raw = response.read(DESCRIBE_MAX_BYTES + 1)
-            status = int(response.status)
-    except urllib.error.HTTPError as error:
-        raw = error.read(DESCRIBE_MAX_BYTES + 1)
-        status = int(error.code)
-    if status != 200:
+    status, parsed = _describe_http(payload, opener=opener)
+    selector = parsed.get("hold_selector")
+    if (
+        status == 409
+        and parsed.get("status") == "HOLD"
+        and parsed.get("hold_reason") == "MISSING_ROW"
+        and type(selector) is dict
+        and selector.get("dataset") == dataset
+        and selector.get("segment_id") == on_or_before
+    ):
         return None
-    if len(raw) > DESCRIBE_MAX_BYTES:
-        raise ReceiptProductTransportError("describe response exceeds metadata bound")
-    try:
-        parsed = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ReceiptProductTransportError("describe response is not JSON") from exc
-    if type(parsed) is not dict or parsed.get("status") != "DESCRIBED":
-        return None
+    if status != 200 or parsed.get("status") != "DESCRIBED":
+        raise ReceiptProductTransportError("receipt product input was not described")
+    if parsed.get("schema_version") != RECEIPT_PRODUCT_INPUT_SET:
+        raise ReceiptProductTransportError("describe schema mismatch")
     rows = parsed.get("segments")
     if type(rows) is not list or len(rows) != 1 or type(rows[0]) is not dict:
-        return None
+        raise ReceiptProductTransportError("discovered selector is invalid")
     dataset_id = rows[0].get("dataset")
     segment_id = rows[0].get("segment_id")
-    if type(dataset_id) is not str or type(segment_id) is not str:
-        return None
+    if (
+        dataset_id != dataset
+        or type(segment_id) is not str
+        or not _MONTH_ID.fullmatch(segment_id)
+        or segment_id > on_or_before
+    ):
+        raise ReceiptProductTransportError(
+            "discovered selector does not match the request"
+        )
     return {"dataset": dataset_id, "segment_id": segment_id}
 
 

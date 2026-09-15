@@ -37,7 +37,9 @@ from core.execution import close_as_of
 from storage.coverage_ledger import (
     RequiredCoverageSegment,
     compiled_period_collection_segments,
+    coverage_contract_for,
     declared_coverage_segments,
+    plan_required_segments,
     record_collection_receipt,
 )
 from storage.sqlite_store import SqliteStore
@@ -73,21 +75,39 @@ def _bar_rows(bar_date: str = "2023-01-04") -> list[dict[str, str]]:
     )
 
 
-def _write_collection(path: Path) -> tuple[str, str]:
+def _write_collection(
+    path: Path,
+    *,
+    dataset: str = "equities_bars_daily",
+    calendar_raw: bytes | None = None,
+    calendar_extras: dict[str, str] | None = None,
+) -> tuple[str, str]:
+    evidence = {
+        "raw_path": "x",
+        "source_path": "x",
+        "raw_size": 1,
+        "raw_digest": "sha256:" + "0" * 64,
+        "calendar_query_digest": "sha256:" + "0" * 64,
+        "business_dates_digest": "sha256:" + "0" * 64,
+        "binding_digest": "sha256:" + "0" * 64,
+        "business_dates": [],
+    }
+    if calendar_raw is not None and calendar_extras is not None:
+        evidence = {
+            "raw_path": "x",
+            "source_path": "x",
+            "raw_size": len(calendar_raw),
+            "raw_digest": calendar_extras["official_calendar_raw_body_digest"],
+            "calendar_query_digest": calendar_extras["official_calendar_query_digest"],
+            "business_dates_digest": calendar_extras["official_business_dates_digest"],
+            "binding_digest": calendar_extras["official_calendar_binding_digest"],
+            "business_dates": [],
+        }
     body = {
         "schema_version": "jquants-acquisition-collection/v2",
         "capture_mode": "LIVE_SERVICE_BINDING_RESPONSE",
-        "initial_request": {"dataset": "equities_bars_daily"},
-        "official_calendar_evidence": {
-            "raw_path": "x",
-            "source_path": "x",
-            "raw_size": 1,
-            "raw_digest": "sha256:" + "0" * 64,
-            "calendar_query_digest": "sha256:" + "0" * 64,
-            "business_dates_digest": "sha256:" + "0" * 64,
-            "binding_digest": "sha256:" + "0" * 64,
-            "business_dates": [],
-        },
+        "initial_request": {"dataset": dataset},
+        "official_calendar_evidence": evidence,
         "pages": [
             {
                 "raw_path": "p",
@@ -123,45 +143,87 @@ def _signed_bundle(
     dataset: str = "equities_bars_daily",
 ):
     rows = _bar_rows(bar_date)
+    return _signed_dataset_bundle(
+        tmp_path,
+        receipt_ed25519_keys,
+        dataset=dataset,
+        segment_id=segment_id,
+        source_rows=rows,
+        raw_records=[{"Code": "1301", "Date": bar_date}],
+        run_id=run_id,
+        operation_id=operation_id,
+        raw_bytes_delta=raw_bytes_delta,
+    )
+
+
+def _signed_dataset_bundle(
+    tmp_path: Path,
+    receipt_ed25519_keys,
+    *,
+    dataset: str,
+    segment_id: str,
+    source_rows: list,
+    raw_records: list,
+    run_id: int,
+    operation_id: str = OPERATION_ID,
+    raw_bytes_delta: int = 0,
+    calendar_raw: bytes | None = None,
+    calendar_extras: dict[str, str] | None = None,
+    required: RequiredCoverageSegment | None = None,
+):
+    rows = source_rows
     product_bytes = canonical_product_artifact_bytes(rows)
-    product_path = tmp_path / f"product-{segment_id}.jsonl"
+    product_path = tmp_path / f"product-{dataset}-{segment_id}.jsonl"
     product_path.write_bytes(product_bytes)
-    raw_path = tmp_path / f"raw-{segment_id}.json"
-    file_digest, collection_digest = _write_collection(raw_path)
-    year, month, _day = bar_date.split("-")
+    raw_path = tmp_path / f"raw-{dataset}-{segment_id}.json"
+    file_digest, collection_digest = _write_collection(
+        raw_path,
+        dataset=dataset,
+        calendar_raw=calendar_raw,
+        calendar_extras=calendar_extras,
+    )
+    year, month = segment_id.split("-")
     last_day = calendar.monthrange(int(year), int(month))[1]
     segment_start = f"{year}-{month}-01"
     segment_end = f"{year}-{month}-{last_day:02d}"
-    raw_page = json.dumps(
-        {"data": [{"Code": "1301", "Date": bar_date}]},
-        separators=(",", ":"),
-    ).encode()
-    required = RequiredCoverageSegment(
-        source="jquants",
-        dataset=dataset,
-        segment_id=segment_id,
-        segment_start=segment_start,
-        segment_end=segment_end,
-        expected_scope={
-            "period_start": segment_start,
-            "period_end": segment_end,
-            "expected_item_unit": "source_event",
-        },
-        expected_items=1,
-    )
+    raw_page = json.dumps({"data": raw_records}, separators=(",", ":")).encode()
+    extra_evidence = {
+        "acquisition_collection_manifest_file_digest": file_digest,
+        "acquisition_collection_digest": collection_digest,
+    }
+    if calendar_extras is not None:
+        extra_evidence.update(calendar_extras)
+    if required is None:
+        planned = plan_required_segments(
+            coverage_contract_for(dataset),
+            segment_end,
+            range_start=segment_start,
+        )
+        required = next(
+            (item for item in planned if item.segment_id == segment_id),
+            None,
+        )
+        if required is None:
+            raise AssertionError(f"{dataset}/{segment_id} is not a coverage month")
+        required = RequiredCoverageSegment(
+            source=required.source,
+            dataset=required.dataset,
+            segment_id=required.segment_id,
+            segment_start=required.segment_start,
+            segment_end=required.segment_end,
+            expected_scope=dict(required.expected_scope),
+            expected_items=len(rows),
+        )
     evidence = reconcile_test_evidence(
         required=required,
         run_id=run_id,
         raw_pages=[raw_page],
-        raw_records=[{"Code": "1301", "Date": bar_date}],
+        raw_records=raw_records,
         structured_records=rows,
         checked_at=CHECKED_AT,
         structured_digest=product_artifact_digest(rows),
-        extra_evidence={
-            "acquisition_collection_manifest_file_digest": file_digest,
-            "acquisition_collection_digest": collection_digest,
-        },
-        include_master_calendar_digests=False,
+        extra_evidence=extra_evidence,
+        include_master_calendar_digests=dataset == "equities_master",
         product_artifact_bytes=product_bytes,
     )
     receipt = _SignedReceiptAuthority(
@@ -192,6 +254,7 @@ def _signed_bundle(
         },
         "_product_bytes": product_bytes,
         "_raw_bytes": raw_path.read_bytes(),
+        "_calendar_bytes": calendar_raw,
     }
     return rows, product_path, raw_path, descriptor, receipt
 
@@ -372,18 +435,43 @@ class _ReceiptTransport:
                     if key[0] == dataset and key[1] <= on_or_before
                 ]
                 if not matches:
-                    return _Http(b'{"status":"HOLD","hold_reason":"MISSING_ROW"}', {}, 409)
+                    missing = json.dumps(
+                        {
+                            "status": "HOLD",
+                            "hold_reason": "MISSING_ROW",
+                            "hold_selector": {
+                                "dataset": dataset,
+                                "segment_id": on_or_before,
+                            },
+                        }
+                    ).encode("utf-8")
+                    return _Http(missing, {}, 409)
                 latest = max(matches, key=lambda item: item[1])
                 raw = dict(self.descriptors[latest])
                 raw.pop("_product_bytes", None)
                 raw.pop("_raw_bytes", None)
+                raw.pop("_calendar_bytes", None)
                 rows = [raw]
             else:
                 rows = []
                 for item in payload["segments"]:
-                    raw = dict(self.descriptors[(item["dataset"], item["segment_id"])])
+                    key = (item["dataset"], item["segment_id"])
+                    if key not in self.descriptors:
+                        missing = json.dumps(
+                            {
+                                "status": "HOLD",
+                                "hold_reason": "MISSING_ROW",
+                                "hold_selector": {
+                                    "dataset": item["dataset"],
+                                    "segment_id": item["segment_id"],
+                                },
+                            }
+                        ).encode("utf-8")
+                        return _Http(missing, {}, 409)
+                    raw = dict(self.descriptors[key])
                     raw.pop("_product_bytes", None)
                     raw.pop("_raw_bytes", None)
+                    raw.pop("_calendar_bytes", None)
                     rows.append(raw)
             body = json.dumps(
                 {
@@ -402,6 +490,8 @@ class _ReceiptTransport:
             blob = descriptor["_product_bytes"]
         elif resource == "raw_collection_manifest" and descriptor.get("_raw_bytes"):
             blob = descriptor["_raw_bytes"]
+        elif resource == "official_calendar_raw" and descriptor.get("_calendar_bytes"):
+            blob = descriptor["_calendar_bytes"]
         else:
             blob = self.blobs[resource]
         headers = {
@@ -432,17 +522,16 @@ def _posted(*, path: str, body: bytes, manager: object):
 
 
 def _worker_document(job_id: str) -> dict[str, object]:
-    from execution.exact_four_binding import controlled_pilot_v1_contract
     from test_cloud_personal_research_container import service
-    from receipt_candidate_job import RECEIPT_CANDIDATE_FORMAT
+    from receipt_candidate_job import RECEIPT_CANDIDATE_FORMAT, _closed_pins
 
-    contract = controlled_pilot_v1_contract()
+    pins = _closed_pins()
     digest_body = {
-        "dependency_closure_digest": contract["dependency_closure_digest"],
+        "dependency_closure_digest": pins["dependency_closure_digest"],
         "format": RECEIPT_CANDIDATE_FORMAT,
         "job_id": job_id,
-        "profile_digest": contract["profile_digest"],
-        "profile_id": contract["profile_id"],
+        "profile_digest": pins["profile_digest"],
+        "profile_id": pins["profile_id"],
         "runner_version": service.RUNNER_VERSION,
     }
     digest = "sha256:" + hashlib.sha256(
@@ -487,14 +576,230 @@ def _skip_materialize(store, **kwargs):
 
 
 def _patch_mini_period(monkeypatch: pytest.MonkeyPatch) -> tuple[str, ...]:
-    from execution.exact_four_binding import controlled_pilot_v1_contract
+    from tests.test_ready_policy_fail_closed import _mini_exact_scope_binding
 
-    datasets = tuple(str(item) for item in controlled_pilot_v1_contract()["dataset_ids"])
+    binding = _mini_exact_scope_binding()
     monkeypatch.setattr(
-        "receipt_candidate_job._profile_period",
-        lambda: ("2023-01-04", "2023-01-06", datasets),
+        "research.ready_manifest.load_exact_four_pilot_ready_binding",
+        lambda root=None: binding,
     )
-    return datasets
+    return tuple(str(item) for item in binding.required_datasets)
+
+
+def _normalize_builder_rows(dataset: str, raw_rows: list[dict]) -> list[dict]:
+    structured: list[dict] = []
+    if dataset == "equities_bars_daily":
+        for row in raw_rows:
+            day = str(row["Date"])
+            structured.extend(
+                normalize_generic(
+                    [row], dataset=dataset, ingested_at=close_as_of(day)
+                )
+            )
+    elif dataset == "equities_master":
+        for row in raw_rows:
+            stamp = f"{row['Date']}T08:00:00+09:00"
+            structured.extend(
+                normalize_generic(
+                    [row],
+                    dataset=dataset,
+                    ingested_at=stamp,
+                    available_at=stamp,
+                )
+            )
+    elif dataset == "fins_summary":
+        for row in raw_rows:
+            disc = str(row["DiscDate"])
+            structured.extend(
+                normalize_generic(
+                    [row],
+                    dataset=dataset,
+                    ingested_at=f"{disc}T08:00:00+09:00",
+                )
+            )
+    elif dataset == "markets_calendar":
+        structured.extend(
+            normalize_generic(
+                raw_rows,
+                dataset=dataset,
+                ingested_at="2023-01-04T00:00:00+09:00",
+            )
+        )
+    else:
+        structured.extend(
+            normalize_generic(
+                raw_rows,
+                dataset=dataset,
+                ingested_at="2023-01-06T16:00:00+09:00",
+            )
+        )
+    return structured
+
+
+def _mini_builder_payloads() -> dict[str, list[dict]]:
+    from tests.test_ready_policy_fail_closed import _daily_equity_bar
+
+    calendar_dates = ["2023-01-04", "2023-01-05", "2023-01-06"]
+    return {
+        "markets_calendar": [
+            {"Date": day, "HolidayDivision": "1"} for day in calendar_dates
+        ],
+        "equities_master": [
+            {
+                "Code": "1332",
+                "Date": day,
+                "CompanyName": "Prime With Fins",
+                "MarketCode": "0111",
+            }
+            for day in ("2022-10-03", "2023-01-04", "2023-01-05", "2023-01-06")
+        ],
+        "fins_summary": [
+            {
+                "Code": "1332",
+                "DiscDate": "2022-10-20",
+                "DiscTime": "08:00:00",
+                "DiscNo": "disc-1332-bps",
+                "BPS": 80.0,
+                "CurPerEn": "2022-10-20",
+            },
+            {
+                "Code": "1332",
+                "DiscDate": "2023-01-03",
+                "DiscTime": "08:00:00",
+                "DiscNo": "disc-1332",
+            },
+            {
+                "Code": "1332",
+                "DiscDate": "2023-01-05",
+                "DiscTime": "08:00:00",
+                "DiscNo": "disc-1332-eps",
+                "EPS": 5.0,
+                "CurPerEn": "2023-03-31",
+            },
+            {
+                "Code": "9999",
+                "DiscDate": "2022-11-15",
+                "DiscTime": "08:00:00",
+                "DiscNo": "disc-9999-nov",
+                "EPS": 1.0,
+            },
+            {
+                "Code": "9999",
+                "DiscDate": "2022-12-15",
+                "DiscTime": "08:00:00",
+                "DiscNo": "disc-9999-dec",
+                "EPS": 1.0,
+            },
+        ],
+        "equities_bars_daily": [
+            _daily_equity_bar(
+                "1332", day, close=100.0, morning=99.5, volume=1000.0
+            )
+            for day in calendar_dates
+        ]
+        + [
+            _daily_equity_bar(
+                "1332", "2022-09-15", close=100.0, morning=99.5, volume=1000.0
+            ),
+            _daily_equity_bar(
+                "1332", "2022-10-21", close=100.0, morning=99.5, volume=1000.0
+            ),
+            _daily_equity_bar(
+                "9999", "2022-11-15", close=100.0, morning=99.5, volume=1000.0
+            ),
+            _daily_equity_bar(
+                "1332", "2022-12-15", close=100.0, morning=99.5, volume=1000.0
+            ),
+        ],
+        "indices_bars_daily_topix": [
+            {
+                "Date": day,
+                "Open": 1900.0,
+                "High": 1910.0,
+                "Low": 1890.0,
+                "Close": 1900.0,
+            }
+            for day in calendar_dates
+        ],
+    }
+
+
+def _mini_builder_descriptors(
+    tmp_path: Path, receipt_ed25519_keys
+) -> dict[tuple[str, str], dict]:
+    from paper_runtime.readiness_attestation import EXACT_FOUR_DATASET_IDS
+    from pit.scoped_selection import split_safety_interval_start
+    from tests.test_ready_policy_fail_closed import _scope_calendar_extras
+
+    payloads = _mini_builder_payloads()
+    planned = declared_coverage_segments(
+        EXACT_FOUR_DATASET_IDS,
+        lookback_start="2023-01-04",
+        period_start="2023-01-04",
+        period_end="2023-01-06",
+        selected_event_dates={
+            "fins_summary": frozenset(
+                {"2022-10-20", "2023-01-03", "2023-01-05"}
+            ),
+            "equities_master": frozenset(
+                {"2022-10-03", "2023-01-04", "2023-01-05", "2023-01-06"}
+            ),
+            "equities_bars_daily": frozenset({"2022-09-15", "2023-01-05"}),
+        },
+        bar_split_interval_start=split_safety_interval_start("2022-10-20"),
+    )
+    descriptors: dict[tuple[str, str], dict] = {}
+    for run_id, segment in enumerate(planned, start=1):
+        month_rows = [
+            row
+            for row in payloads[segment.dataset]
+            if segment.segment_start
+            <= _row_event_day(segment.dataset, row)
+            <= segment.segment_end
+        ]
+        if not month_rows:
+            raise AssertionError(
+                f"{segment.dataset}/{segment.segment_id} has no fixture rows"
+            )
+        structured = _normalize_builder_rows(segment.dataset, month_rows)
+        calendar_raw = None
+        calendar_extras = None
+        if segment.dataset == "equities_master":
+            calendar_raw = _canonical_month_calendar_raw(
+                start=segment.segment_start,
+                end=segment.segment_end,
+            )
+            calendar_extras = _scope_calendar_extras(
+                calendar_raw,
+                start=segment.segment_start,
+                end=segment.segment_end,
+            )
+        dest = tmp_path / f"{segment.dataset}-{segment.segment_id}"
+        dest.mkdir()
+        _rows, _product, _raw, descriptor, _receipt = _signed_dataset_bundle(
+            dest,
+            receipt_ed25519_keys,
+            dataset=segment.dataset,
+            segment_id=segment.segment_id,
+            source_rows=structured,
+            raw_records=month_rows,
+            run_id=run_id,
+            operation_id="sha256:"
+            + hashlib.sha256(
+                f"{segment.dataset}:{segment.segment_id}".encode()
+            ).hexdigest(),
+            calendar_raw=calendar_raw,
+            calendar_extras=calendar_extras,
+            required=segment,
+        )
+        descriptors[(segment.dataset, segment.segment_id)] = descriptor
+    return descriptors
+
+
+def _row_event_day(dataset: str, row: dict) -> str:
+    if dataset == "fins_summary":
+        return str(row["DiscDate"])[:10]
+    return str(row["Date"])[:10]
 
 
 def test_http_job_and_execute_publish_compact_completed_terminal(
@@ -539,7 +844,7 @@ def test_http_job_and_execute_publish_compact_completed_terminal(
     spec = ReceiptCandidateJobSpec.from_document(document)
     assert ("equities_bars_daily", "2023-01") in {
         (item["dataset"], item["segment_id"])
-        for item in compiled_candidate_selectors(opener=None)
+        for item in compiled_candidate_selectors()
     }
     uploads = tmp_path / "uploads"
     uploads.mkdir()
@@ -852,6 +1157,166 @@ def test_execute_pass_streams_closed_sqlite_before_gzip(
     assert "physical_key" not in failed
     assert "dependency_scope_key" not in failed
     assert "snapshot_key" not in failed
+
+
+def test_discover_latest_complete_preserves_service_failure_and_rejects_mismatch() -> None:
+    from receipt_product_byte_client import (
+        ReceiptProductTransportError,
+        discover_latest_complete_segment,
+    )
+
+    class _Opener:
+        def __init__(self, status: int, body: dict) -> None:
+            self.status = status
+            self.body = body
+
+        def urlopen(self, request, timeout=None):
+            del request, timeout
+            return _Http(
+                json.dumps(self.body).encode("utf-8"),
+                {},
+                self.status,
+            )
+
+    pins = {
+        "profile_id": "controlled-pilot/exact-four",
+        "profile_digest": "sha256:" + "11" * 32,
+        "dependency_closure_digest": "sha256:" + "22" * 32,
+        "dataset": "fins_summary",
+        "on_or_before": "2022-12",
+    }
+    none_match = discover_latest_complete_segment(
+        **pins,
+        opener=_Opener(
+            409,
+            {
+                "status": "HOLD",
+                "hold_reason": "MISSING_ROW",
+                "hold_selector": {
+                    "dataset": "fins_summary",
+                    "segment_id": "2022-12",
+                },
+            },
+        ),
+    )
+    assert none_match is None
+    with pytest.raises(ReceiptProductTransportError):
+        discover_latest_complete_segment(
+            **pins,
+            opener=_Opener(500, {"status": "HOLD", "hold_reason": "READ_FAILURE"}),
+        )
+    with pytest.raises(ReceiptProductTransportError):
+        discover_latest_complete_segment(
+            **pins,
+            opener=_Opener(
+                409,
+                {
+                    "status": "HOLD",
+                    "hold_reason": "UNTRUSTED_CHAIN",
+                    "hold_selector": {
+                        "dataset": "fins_summary",
+                        "segment_id": "2022-12",
+                    },
+                },
+            ),
+        )
+    with pytest.raises(ReceiptProductTransportError):
+        discover_latest_complete_segment(
+            **pins,
+            opener=_Opener(
+                200,
+                {
+                    "schema_version": "receipt-product-input-set/v1",
+                    "status": "DESCRIBED",
+                    "segments": [
+                        {"dataset": "equities_master", "segment_id": "2022-11"}
+                    ],
+                },
+            ),
+        )
+
+
+def test_execute_builder_compiled_scope_pass_and_missing_required_month(
+    tmp_path: Path, receipt_ed25519_keys, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from research.ready_manifest import is_sha256_digest
+    from receipt_candidate_job import (
+        ReceiptCandidateJobSpec,
+        execute_receipt_candidate_job,
+    )
+
+    _patch_mini_period(monkeypatch)
+    descriptors = _mini_builder_descriptors(tmp_path, receipt_ed25519_keys)
+    spec = ReceiptCandidateJobSpec.from_document(_worker_document("cand-scope-pass"))
+    transport = _ReceiptTransport(
+        descriptors,
+        {
+            "product_artifact": b"x",
+            "raw_collection_manifest": b"y",
+            "official_calendar_raw": b"z",
+        },
+        tmp_path,
+    )
+    puts: list[str] = []
+
+    def uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del data, spec, content_digest, extra_headers
+        puts.append(str(key))
+
+    pass_root = tmp_path / "pass"
+    pass_root.mkdir()
+    proved = execute_receipt_candidate_job(
+        spec,
+        work_root=pass_root,
+        uploader=uploader,
+        opener=transport,
+    )
+    assert proved["status"] == "COMPLETED", proved.get("error")
+    assert proved["compiled_scope_status"] == "PASS"
+    assert proved["ready"] is False
+    assert proved["go"] is False
+    body = proved["receipt_native_manifest"]
+    assert is_sha256_digest(body["coverage_proof_digest"]), proved.get(
+        "coverage_proof_reason"
+    )
+    assert is_sha256_digest(body["raw_proof_digest"])
+    assert is_sha256_digest(body["receipt_proof_digest"])
+    assert "coverage_proof_reason" not in proved
+    assert ("equities_bars_daily", "2022-09") in descriptors
+    assert ("fins_summary", "2022-11") in descriptors
+    assert proved["segment_count"] >= 11
+    assert any(str(key).endswith(".sqlite") for key in puts)
+
+    missing_map = dict(descriptors)
+    missing_map.pop(("fins_summary", "2022-11"))
+    missing_spec = ReceiptCandidateJobSpec.from_document(
+        _worker_document("cand-scope-missing-month")
+    )
+    missing_transport = _ReceiptTransport(
+        missing_map,
+        {
+            "product_artifact": b"x",
+            "raw_collection_manifest": b"y",
+            "official_calendar_raw": b"z",
+        },
+        tmp_path,
+    )
+    missing_root = tmp_path / "missing"
+    missing_root.mkdir()
+    missing = execute_receipt_candidate_job(
+        missing_spec,
+        work_root=missing_root,
+        uploader=lambda *args, **kwargs: None,
+        opener=missing_transport,
+    )
+    if missing["status"] == "FAILED":
+        assert "physical_key" not in missing
+        assert missing.get("compiled_scope_status") != "PASS"
+    else:
+        assert missing["status"] == "COMPLETED"
+        assert missing["compiled_scope_status"] == "PASS"
+        assert missing["receipt_native_manifest"]["coverage_proof_digest"] == "MISSING"
+        assert "fins_summary/2022-11" in str(missing.get("coverage_proof_reason"))
 
 
 @pytest.mark.parametrize("environment", ["production", "staging"])

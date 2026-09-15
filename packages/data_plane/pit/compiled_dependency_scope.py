@@ -27,6 +27,7 @@ from .read_clock import (
 from .scoped_selection import (
     ScopedBarView,
     ScopedFinancialView,
+    ScopedSelectionError,
     split_safety_interval_start,
 )
 from .universe_pit import _calendar_dates
@@ -281,8 +282,14 @@ def _select_compiled_dependency_scope(
     slices: Sequence[Any],
     resolved_universe: Any,
     scoped_owner: Any,
+    unsatisfied: set[str] | None = None,
 ) -> _CompiledDependencyScopeHits:
-    """Select exact keys and versions from compiled V3 requirements."""
+    """Select exact keys and versions from compiled V3 requirements.
+
+    When ``unsatisfied`` is supplied, missing seed/lookback/split inputs are
+    recorded for the receipt-candidate builder instead of aborting the walk.
+    Malformed rows still raise. Proof callers keep the default strict path.
+    """
 
     from .governed_am_view import (
         am_information_cutoff,
@@ -364,9 +371,13 @@ def _select_compiled_dependency_scope(
     for day in _calendar_dates(period_start, period_end):
         row = calendar_by_date.get(day)
         if row is None:
-            raise PitError(f"markets_calendar missing exact scope date {day}")
+            if unsatisfied is None:
+                raise PitError(f"markets_calendar missing exact scope date {day}")
+            continue
         if row["available_at"] > _require_aware(am_information_cutoff(day), day):
-            raise PitError(f"markets_calendar {day} is late at decision time")
+            if unsatisfied is None:
+                raise PitError(f"markets_calendar {day} is late at decision time")
+            continue
         selected_keys["markets_calendar"].add(row["natural_key"])
         selected_digests["markets_calendar"].add(row["product_row_digest"])
         selected_event_dates["markets_calendar"].add(day)
@@ -381,18 +392,28 @@ def _select_compiled_dependency_scope(
         day for day in trading_dates if period_start <= day <= period_end
     )
     if tuple(resolved_universe.membership_by_date) != in_period_trading:
-        raise PitError(
-            "resolved universe decision dates do not equal the exact calendar"
+        if unsatisfied is None:
+            raise PitError(
+                "resolved universe decision dates do not equal the exact calendar"
+            )
+        in_period_trading = tuple(
+            day
+            for day in in_period_trading
+            if day in set(resolved_universe.membership_by_date)
         )
 
     authorized_master_dates = {str(item.snapshot_date)[:10] for item in slices}
     if not authorized_master_dates:
-        raise PitError("equities_master membership seed snapshot is missing")
+        if unsatisfied is None:
+            raise PitError("equities_master membership seed snapshot is missing")
+        unsatisfied.add("equities_master")
     master_by_date: dict[str, dict[str, dict[str, Any]]] = {}
     for row in _facts(
         "equities_master",
         codes=member_codes,
-        event_start=min(authorized_master_dates),
+        event_start=(
+            min(authorized_master_dates) if authorized_master_dates else period_end
+        ),
     ):
         ingested = _require_aware(row["ingested_at"], "equities_master.ingested_at")
         if ingested > _require_aware(observed_through, "observed_through"):
@@ -440,7 +461,10 @@ def _select_compiled_dependency_scope(
         members = resolved_universe.codes_for(day)
         visible_dates = [stamp for stamp in master_by_date if stamp <= day]
         if not visible_dates:
-            raise PitError(f"equities_master missing daily PIT snapshot for {day}")
+            if unsatisfied is None:
+                raise PitError(f"equities_master missing daily PIT snapshot for {day}")
+            unsatisfied.add("equities_master")
+            continue
         latest_snapshot = max(visible_dates)
         master_by_code = {
             code: row
@@ -450,10 +474,13 @@ def _select_compiled_dependency_scope(
         }
         missing_master = sorted(set(members) - set(master_by_code))
         if missing_master:
-            raise PitError(
-                f"equities_master missing resolved members at {day}: "
-                f"{missing_master[:5]}"
-            )
+            if unsatisfied is None:
+                raise PitError(
+                    f"equities_master missing resolved members at {day}: "
+                    f"{missing_master[:5]}"
+                )
+            unsatisfied.add("equities_master")
+            continue
         for code in members:
             selected_keys["equities_master"].add(master_by_code[code]["natural_key"])
             selected_digests["equities_master"].add(
@@ -480,49 +507,59 @@ def _select_compiled_dependency_scope(
                     for code in members:
                         split_anchor = None
                         if fins_req is not None:
-                            financial = scoped_owner.select_am_research_scope(
-                                requirement=fins_req,
-                                decision_as_of=decision_as_of,
-                                observed_through=observed_through,
-                                codes=(code,),
-                            )
-                            if type(financial) is not ScopedFinancialView:
-                                raise PitError(
-                                    "READY financial consumer did not return "
-                                    "ScopedFinancialView"
+                            try:
+                                financial = scoped_owner.select_am_research_scope(
+                                    requirement=fins_req,
+                                    decision_as_of=decision_as_of,
+                                    observed_through=observed_through,
+                                    codes=(code,),
                                 )
-                            split_anchor = financial.split_safety_anchor
-                            if financial.selected_natural_key:
-                                selected_keys["fins_summary"].add(
-                                    financial.selected_natural_key
-                                )
-                            for natural_key, event_day in financial.visible_identities:
-                                selected_keys["fins_summary"].add(natural_key)
-                                if event_day:
-                                    selected_event_dates["fins_summary"].add(
-                                        str(event_day)
-                                    )
-                            if financial.state.visible_row_count != len(
-                                financial.visible_product_digests
-                            ):
-                                raise PitError(
-                                    "fins_summary visible product digests "
-                                    "do not match counted observations"
-                                )
-                            for digest in financial.visible_product_digests:
-                                if type(digest) is not str or not digest:
+                            except ScopedSelectionError as exc:
+                                if unsatisfied is None:
+                                    raise PitError(str(exc)) from exc
+                                unsatisfied.add("fins_summary")
+                                financial = None
+                            if financial is not None:
+                                if type(financial) is not ScopedFinancialView:
                                     raise PitError(
-                                        "fins_summary visible observation "
-                                        "is missing its product row digest"
+                                        "READY financial consumer did not return "
+                                        "ScopedFinancialView"
                                     )
-                                selected_digests["fins_summary"].add(digest)
-                            if (
-                                financial.state.visible_row_count < 1
-                                and not financial.visible_identities
-                            ):
-                                raise PitError(
-                                    f"fins_summary missing or late for {code} at {day}"
-                                )
+                                split_anchor = financial.split_safety_anchor
+                                if financial.selected_natural_key:
+                                    selected_keys["fins_summary"].add(
+                                        financial.selected_natural_key
+                                    )
+                                for natural_key, event_day in financial.visible_identities:
+                                    selected_keys["fins_summary"].add(natural_key)
+                                    if event_day:
+                                        selected_event_dates["fins_summary"].add(
+                                            str(event_day)
+                                        )
+                                if financial.state.visible_row_count != len(
+                                    financial.visible_product_digests
+                                ):
+                                    raise PitError(
+                                        "fins_summary visible product digests "
+                                        "do not match counted observations"
+                                    )
+                                for digest in financial.visible_product_digests:
+                                    if type(digest) is not str or not digest:
+                                        raise PitError(
+                                            "fins_summary visible observation "
+                                            "is missing its product row digest"
+                                        )
+                                    selected_digests["fins_summary"].add(digest)
+                                if (
+                                    financial.state.visible_row_count < 1
+                                    and not financial.visible_identities
+                                ):
+                                    if unsatisfied is None:
+                                        raise PitError(
+                                            "fins_summary missing or late for "
+                                            f"{code} at {day}"
+                                        )
+                                    unsatisfied.add("fins_summary")
                         if bars_req is not None:
                             if (
                                 bars_req.scope.split_safety_anchor_interval
@@ -536,13 +573,19 @@ def _select_compiled_dependency_scope(
                                     or interval_start < earliest_bar_interval
                                 ):
                                     earliest_bar_interval = interval_start
-                            bars = scoped_owner.select_am_research_scope(
-                                requirement=bars_req,
-                                decision_as_of=decision_as_of,
-                                observed_through=observed_through,
-                                codes=(code,),
-                                split_anchor=split_anchor,
-                            )
+                            try:
+                                bars = scoped_owner.select_am_research_scope(
+                                    requirement=bars_req,
+                                    decision_as_of=decision_as_of,
+                                    observed_through=observed_through,
+                                    codes=(code,),
+                                    split_anchor=split_anchor,
+                                )
+                            except ScopedSelectionError as exc:
+                                if unsatisfied is None:
+                                    raise PitError(str(exc)) from exc
+                                unsatisfied.add("equities_bars_daily")
+                                bars = ()
                             if type(bars) is not tuple:
                                 raise PitError(
                                     "READY bar consumer did not return scoped bars"
@@ -566,6 +609,28 @@ def _select_compiled_dependency_scope(
                                     or bar.date < earliest_bar_interval
                                 ):
                                     earliest_bar_interval = bar.date
+                            if unsatisfied is not None:
+                                count = bars_req.scope.observation_count
+                                latest_n = None if count is None else count.value
+                                if (
+                                    latest_n is not None
+                                    and type(latest_n) is int
+                                    and len(bars) < latest_n
+                                ):
+                                    unsatisfied.add("equities_bars_daily")
+                                if bars_req.scope.split_safety_anchor_interval:
+                                    if not split_anchor:
+                                        unsatisfied.add("fins_summary")
+                                    else:
+                                        interval_start = split_safety_interval_start(
+                                            split_anchor
+                                        )
+                                        if interval_start and not any(
+                                            type(bar) is ScopedBarView
+                                            and bar.date <= interval_start
+                                            for bar in bars
+                                        ):
+                                            unsatisfied.add("equities_bars_daily")
 
     observed_clock = _require_aware(observed_through, "observed_through")
     for day in in_period_trading:
@@ -598,10 +663,12 @@ def _select_compiled_dependency_scope(
                 is not None
             ]
             if len(matches) != 1:
-                raise PitError(
-                    "equities_bars_daily historical MAdjC/AAdjC closure "
-                    f"missing for {code}/{day}: rows={len(matches)}"
-                )
+                if unsatisfied is None:
+                    raise PitError(
+                        "equities_bars_daily historical MAdjC/AAdjC closure "
+                        f"missing for {code}/{day}: rows={len(matches)}"
+                    )
+                continue
             selected_keys["equities_bars_daily"].add(matches[0]["natural_key"])
             selected_digests["equities_bars_daily"].add(
                 matches[0]["product_row_digest"]
@@ -616,10 +683,12 @@ def _select_compiled_dependency_scope(
             and row["available_at"] <= decision_clock
         ]
         if len(topix) != 1:
-            raise PitError(
-                "indices_bars_daily_topix exact trading-date closure "
-                f"missing/late for {day}: rows={len(topix)}"
-            )
+            if unsatisfied is None:
+                raise PitError(
+                    "indices_bars_daily_topix exact trading-date closure "
+                    f"missing/late for {day}: rows={len(topix)}"
+                )
+            continue
         selected_keys["indices_bars_daily_topix"].add(topix[0]["natural_key"])
         selected_digests["indices_bars_daily_topix"].add(
             topix[0]["product_row_digest"]
@@ -642,3 +711,27 @@ def _select_compiled_dependency_scope(
         ),
         bar_split_interval_start=earliest_bar_interval,
     )
+
+
+def collect_compiled_coverage_events(
+    conn: sqlite3.Connection,
+    *,
+    compiled: CompiledControlledSelection,
+    observed_through: str,
+    slices: Sequence[Any],
+    resolved_universe: Any,
+    scoped_owner: Any,
+) -> tuple[_CompiledDependencyScopeHits, frozenset[str]]:
+    """Partial compiled selection for builder inventory, not READY proof."""
+
+    missing: set[str] = set()
+    hits = _select_compiled_dependency_scope(
+        conn,
+        compiled=compiled,
+        observed_through=observed_through,
+        slices=slices,
+        resolved_universe=resolved_universe,
+        scoped_owner=scoped_owner,
+        unsatisfied=missing,
+    )
+    return hits, frozenset(missing)
