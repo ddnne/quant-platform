@@ -1,13 +1,17 @@
 # Phase 6.3.1 operational status
 
-> **Live residual SoT.** Current operational observation:
-> `2026-09-10T00:50+09:00`. The Sept 7 snapshot
+> **GO flags in Decision state remain current.** Dated operational
+> observations in this file (`2026-09-10T00:50+09:00` and earlier) are
+> **history**. Current source, staging-schema, and read-only Ops facts live
+> in [`operations/current_work_ledger.json`](operations/current_work_ledger.json)
+> and [`operations/current_production_runbook.md`](operations/current_production_runbook.md).
+> The Sept 7 snapshot
 > [`proof/phase632-resume-20260907.json`](proof/phase632-resume-20260907.json)
-> is **historical** (ingestion/D1 facts `2026-09-07` JST; projection age in
-> that file `2026-09-06T15:54:43.152Z`). Do not treat `b6880f22` / PR98 Draft
-> as today's baseline. These measurements are not READY evidence. Re-measure
-> before changing any GO decision. No signed release evidence existed at this
-> checkpoint.
+> is also **historical** (ingestion/D1 facts `2026-09-07` JST; projection age
+> in that file `2026-09-06T15:54:43.152Z`). Do not treat `b6880f22` / PR98
+> Draft or the 09-10 table as today's baseline. These measurements are not
+> READY evidence. Re-measure before changing any GO decision. No signed
+> release evidence existed at the 09-10 checkpoint.
 
 The 2026-08-25 baseline is **history**, not current authority. This file holds
 operational facts and GO flags only. Review findings live in
@@ -28,7 +32,7 @@ Green code or a passing Cron does not change these decisions. Exact-four may
 run once only after every Controlled Pilot gate is measured as passing. It may
 not promote automatically.
 
-## Current observation (2026-09-10T00:50+09:00)
+## Historical observation (2026-09-10T00:50+09:00)
 
 Read-only. No market rows downloaded. No production DB/Queue/DLQ/Cron
 mutation. No signed release evidence at this checkpoint. Policy remains
