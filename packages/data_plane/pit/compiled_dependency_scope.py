@@ -358,7 +358,6 @@ def _select_compiled_dependency_scope(
         raise PitError(
             "resolved universe decision dates do not equal the exact calendar"
         )
-    first_membership = resolved_universe.codes_for(in_period_trading[0])
 
     authorized_master_dates = {str(item.snapshot_date)[:10] for item in slices}
     if not authorized_master_dates:
@@ -543,15 +542,11 @@ def _select_compiled_dependency_scope(
                                     earliest_bar_interval = bar.date
 
     observed_clock = _require_aware(observed_through, "observed_through")
-    for day in trading_dates:
+    for day in in_period_trading:
         decision_clock = _require_aware(
             official_afternoon_close_as_of(day), day
         )
-        members = (
-            resolved_universe.codes_for(day)
-            if day >= period_start
-            else first_membership
-        )
+        members = resolved_universe.codes_for(day)
         for code in members:
             matches = [
                 row
