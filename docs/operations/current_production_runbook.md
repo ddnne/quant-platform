@@ -104,12 +104,17 @@ remote apply results only in immutable release evidence.
   checkout of this public repository may present HTTPS origin userinfo
   and unavailable `refs/remotes/origin/main`; tagged deploy still requires
   clean HEAD to equal live `https://github.com/ddnne/quant-platform.git`
-  `refs/heads/main` and must not pass origin credentials to git. From the
-  repository root:
-  `python3 scripts/cloudflare_binding_manifest.py --deploy-tagged --worker research-mass-eval --env staging`.
-  From `platform/workers/research-mass-eval`:
-  `python3 ../../../scripts/cloudflare_binding_manifest.py --deploy-tagged --worker research-mass-eval --env staging`.
-  Local and production Mass tagged deploy stay refused while a Container
+  `refs/heads/main` and must not pass origin credentials to git. Native
+  Node must be on PATH for Wrangler 4.125.0; Python deps use frozen
+  `uv==0.11.26` with `/usr/bin/python3`. The native Builds deploy command,
+  from the repository root with clean HEAD equal to current main, is:
+
+  ```bash
+  p=$(node -p process.execPath) && pipx run --spec "uv==0.11.26" uv sync --frozen --python /usr/bin/python3 && cd platform/workers/research-mass-eval && env -u CLOUDFLARE_ENV PATH="${p%/*}:$PATH" ../../../.venv/bin/python ../../../scripts/cloudflare_binding_manifest.py --deploy-tagged --worker research-mass-eval --env staging
+  ```
+
+  Local CLI invocation from the repository or Worker directory is not a
+  working deployment path. Local and production Mass tagged deploy stay refused while a Container
   image is declared. Worker multipart module-byte verification is not
   Container image rollout or research GO. Image push can follow Worker
   upload and is not transactional. The 900s mutate timeout only waits on
@@ -124,6 +129,21 @@ remote apply results only in immutable release evidence.
   is the final check, not a blocker for prerequisite Worker code rollout.
   This bounded repair does not run D1 migration, JSDA activation, or DLQ
   mutation.
+- **Current staging code rollout (not acceptance):** main `35611b0` Mass
+  staging tagged deploy completed with exact module bytes, Container V5
+  100%, `GET /health` 200, unauthenticated 401, and active instances 0.
+  Authenticated 403 smoke is pending location of existing
+  `MASS_EVAL_TOKEN` (no rotation). See the
+  [operational checkpoint](https://github.com/ddnne/quant-platform/pull/204#issuecomment-5674898739).
+  Worker/Container code rollout is not auth-smoke, data, READY, or Pilot
+  acceptance. Staging `quant-ingest` remains `0001_init` through
+  `0010_raw_acquisition_status`; `--prepare-staging-schema` has not been
+  applied. After current-main native CI is green and the read-only
+  baseline/gates pass, use the staging schema-only command in section 2.
+  That path keeps the live JSDA `version_id` and `deployment_id` when the
+  selected version has no SHA tag (`version_tag` empty/unattested). It does
+  not invent a source SHA and does not run `--activate`. `--activate` and
+  production stay SHA-tag strict.
 - **JSDA cutover follow-ups (open):** whole shared-D1 Time Travel restore is
   removed from the operator. A Time Travel bookmark remains recovery-reference
   evidence only; Premium and Receipt writers are not fenced. `--rollback`
@@ -220,8 +240,15 @@ names all fail closed. Wrangler is `4.125.0`.
 ## 2. D1 migration policy: single Cloudflare operator
 
 Do not hand-loop SQL files or invoke `wrangler d1 migrations apply` directly.
-`ingestion-premium` owns the `quant-ingest` chain; the only staging/production
-mutation entry is:
+`ingestion-premium` owns the `quant-ingest` chain. Staging schema-only
+preparation (no JSDA Worker deploy, no `v3_active`) is:
+
+```bash
+.venv/bin/python scripts/activate_jsda_v3_cutover.py --environment staging --prepare-staging-schema --yes
+```
+
+JSDA product activation is a separate later command and is not implied by
+schema-prep:
 
 ```bash
 .venv/bin/python scripts/activate_jsda_v3_cutover.py --environment staging --activate --yes
