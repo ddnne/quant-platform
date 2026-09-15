@@ -27,6 +27,7 @@ class D1:
         self.connection.executescript(owner.BOOTSTRAP.read_text(encoding="utf-8"))
         self.apply_calls = 0
         self.apply_returncode = 0
+        self.apply_stderr = ""
         self.backend_version: str | None = None
         self.info_uuid: str | None = None
         self.info_name: str | None = None
@@ -65,7 +66,11 @@ class D1:
             )
         if args[1:4] == ["d1", "migrations", "apply"]:
             self.apply_calls += 1
-            return subprocess.CompletedProcess(args, self.apply_returncode, "", "")
+            if "--yes" in args:
+                raise AssertionError(args)
+            return subprocess.CompletedProcess(
+                args, self.apply_returncode, "", self.apply_stderr
+            )
         if "--file" in args:
             self.connection.executescript(
                 Path(args[args.index("--file") + 1]).read_text(encoding="utf-8")
@@ -234,14 +239,24 @@ def test_apply_fences_before_spawn_and_returns_process_free_verifying(
     ).fetchone()) == ("verifying", 0)
 
 
-def test_spawn_failure_is_sticky_and_cannot_be_silently_resumed() -> None:
+@pytest.mark.parametrize(
+    ("stderr", "match"),
+    (
+        ("", "apply failed"),
+        ("Unknown argument: yes", "unsupported argument"),
+    ),
+)
+def test_spawn_failure_is_sticky_and_cannot_be_silently_resumed(
+    stderr: str, match: str
+) -> None:
     store = D1()
     acquire(store)
     store.apply_returncode = 1
     prefix, binding = owner._runner_wrangler_prefix(
         "staging", runner=store.runner
     )
-    with pytest.raises(owner.GuardedMigrationError, match="apply failed"):
+    store.apply_stderr = stderr
+    with pytest.raises(owner.GuardedMigrationError, match=match):
         owner._apply_remote_migrations(
             environment="staging",
             binding=binding,
