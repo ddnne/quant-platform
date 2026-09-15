@@ -4118,8 +4118,7 @@ def test_heartbeat_cas_loss_fences_old_executor_zero_late_success(
         old.submit(spec)
         assert started.wait(2.0)
         assert old._supervisor is not None
-        old_pid = old._supervisor.pid
-        assert old_pid is not None
+        assert old._supervisor.pid is not None
         lease, etag = store.object_reader(spec, spec.lease_key)
         stolen = dict(lease)
         stolen["owner_nonce"] = "newownernewowner"
@@ -4138,8 +4137,26 @@ def test_heartbeat_cas_loss_fences_old_executor_zero_late_success(
         except Exception:
             pass
         assert old.lease_lost()
-        with pytest.raises(ProcessLookupError):
-            os.kill(old_pid, 0)
+        # Prove the supervised child is not still executing. os.kill(pid, 0)
+        # stays true for a zombie and can hit a recycled PID; the Process
+        # handle and process-group probe are the actual executor identity.
+        term_grace = 0.05
+        kill_grace = 0.5
+        deadline = time.monotonic() + term_grace + kill_grace + 0.2
+        while True:
+            supervisor = old._supervisor
+            if supervisor is None:
+                break
+            process_state = supervisor._process_state()
+            group_state = supervisor._group_state()
+            if process_state == "dead" and group_state == "dead":
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    "old executor still live after lease loss "
+                    f"(process={process_state}, group={group_state})"
+                )
+            time.sleep(0.01)
         assert old_done.wait(2.0)
         takeover = new.submit(spec)
         assert takeover["status"] in {"QUEUED", "RUNNING", "COMPLETED"}
