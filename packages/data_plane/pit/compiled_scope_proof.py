@@ -25,6 +25,7 @@ from storage.verified_receipt import require_verified_collection_closure
 from .compiled_dependency_scope import (
     CompiledControlledSelection,
     _select_compiled_dependency_scope,
+    combined_dataset_lookback_trading_days,
 )
 from .complete_master import _complete_master_day_slices_from_connection
 from .errors import PitError
@@ -342,6 +343,7 @@ def compiled_scope_proof_session_from_pinned_connection(
 __all__ = [
     "CompiledControlledSelection",
     "CompiledScopeProofSession",
+    "combined_dataset_lookback_trading_days",
     "compiled_scope_proof_session_from_pinned_connection",
     "compiled_scope_proof_session_from_store",
 ]

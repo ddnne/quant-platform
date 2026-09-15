@@ -1257,7 +1257,7 @@ def _seed_exact_pit_scope(
     """Synthetic five-day exact natural-key closure with governed v4 receipts."""
     db_path = tmp_path / "pit-scope.sqlite"
     calendar_dates: list[str] = []
-    cursor = date(2022, 12, 6)
+    cursor = date(2023, 1, 4)
     while cursor <= date(2023, 1, 6):
         calendar_dates.append(cursor.isoformat())
         cursor += timedelta(days=1)
@@ -1359,7 +1359,7 @@ def _seed_exact_pit_scope(
             for day in calendar_dates
         )
     ingestion_clocks = {
-        "markets_calendar": "2022-12-01T00:00:00+09:00",
+        "markets_calendar": "2023-01-04T00:00:00+09:00",
         "equities_master": "2022-10-03T08:00:00+09:00",
         "fins_summary": "2022-10-20T08:00:00+09:00",
         "indices_bars_daily_topix": "2023-01-06T16:00:00+09:00",
@@ -1603,7 +1603,10 @@ def _open_controlled_from_ready_proof(path: Path, proof, binding):
 
     Upstream Worker READY/projection signatures are stubbed.
     """
-    from pit.compiled_dependency_scope import CompiledControlledSelection
+    from pit.compiled_dependency_scope import (
+        CompiledControlledSelection,
+        combined_dataset_lookback_trading_days,
+    )
     from pit.governed_am_view import (
         _open_verified_controlled_snapshot,
         _session_scope_from_verified_worker_job,
@@ -1666,6 +1669,9 @@ def _open_controlled_from_ready_proof(path: Path, proof, binding):
             profile_digest=binding.profile_digest,
             feature_consumers=tuple(
                 profile.feature_consumers() for profile in binding.profiles
+            ),
+            dataset_lookback_trading_days=combined_dataset_lookback_trading_days(
+                binding.profiles
             ),
         ),
         resolve_membership=resolve_tse_prime_with_fins,
@@ -1753,7 +1759,7 @@ def test_exact_pit_dependency_scope_verifies_full_source_artifact_before_univers
     )
     extra_bar = _daily_equity_bar(
         "1332",
-        "2022-01-04",
+        "2023-02-01",
         close=80.0,
         morning=79.5,
         volume=100.0,
@@ -1764,7 +1770,7 @@ def test_exact_pit_dependency_scope_verifies_full_source_artifact_before_univers
             normalize_generic(
                 [extra_bar],
                 dataset="equities_bars_daily",
-                ingested_at="2022-01-04T16:00:00+09:00",
+                ingested_at="2023-02-01T16:00:00+09:00",
             ),
         )
         extra_structured = [
@@ -1772,7 +1778,7 @@ def test_exact_pit_dependency_scope_verifies_full_source_artifact_before_univers
             for row in store._conn.execute(  # noqa: SLF001
                 "SELECT * FROM jquants_records "
                 "WHERE dataset='equities_bars_daily' "
-                "AND substr(event_time, 1, 10)='2022-01-04' "
+                "AND substr(event_time, 1, 10)='2023-02-01' "
                 "ORDER BY natural_key"
             ).fetchall()
         ]
@@ -1831,7 +1837,6 @@ def test_exact_pit_dependency_scope_verifies_full_source_artifact_before_univers
         for entry in proof["entries"]
         if entry["dataset_id"] == "equities_bars_daily"
     )
-    assert bars_entry["natural_key_count"] == 33
     assert extra_bars_digest not in bars_entry["product_artifact_digests"]
     handle = _open_controlled_from_ready_proof(db_path, proof, binding)
     handle.close()

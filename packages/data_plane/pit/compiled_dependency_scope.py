@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from types import MappingProxyType
 from typing import Any, Iterator, Mapping, Sequence
@@ -51,6 +51,12 @@ class CompiledControlledSelection:
     lookback_trading_days: int
     profile_digest: str
     feature_consumers: tuple[Mapping[str, tuple[Any, ...]], ...]
+    dataset_lookback_trading_days: Mapping[str, int] = field(
+        default_factory=dict
+    )
+
+    def lookback_for(self, dataset_id: str) -> int:
+        return int(self.dataset_lookback_trading_days.get(dataset_id, 0))
 
     def __post_init__(self) -> None:
         if type(self.period_start) is not str or type(self.period_end) is not str:
@@ -67,6 +73,20 @@ class CompiledControlledSelection:
             or not self.profile_digest.startswith("sha256:")
         ):
             raise PitError("compiled profile digest is invalid")
+        packed_lookbacks: dict[str, int] = {}
+        for dataset_id, days in dict(self.dataset_lookback_trading_days).items():
+            if type(dataset_id) is not str or not dataset_id.strip():
+                raise PitError("compiled dataset lookback id is missing")
+            if isinstance(days, bool) or type(days) is not int or days < 0:
+                raise PitError(
+                    f"compiled lookback for {dataset_id} is missing"
+                )
+            packed_lookbacks[dataset_id] = days
+        object.__setattr__(
+            self,
+            "dataset_lookback_trading_days",
+            MappingProxyType(packed_lookbacks),
+        )
         if not self.feature_consumers:
             raise PitError("compiled feature consumers are missing")
         frozen: list[Mapping[str, tuple[Any, ...]]] = []
@@ -96,6 +116,24 @@ class _CompiledDependencyScopeHits:
     lookback_start: str
     selected_event_dates: Mapping[str, frozenset[str]]
     bar_split_interval_start: str | None
+
+
+def combined_dataset_lookback_trading_days(
+    profiles: Sequence[Any],
+) -> dict[str, int]:
+    """Max lookback per dataset across same-dataset consumers only."""
+
+    combined: dict[str, int] = {}
+    for profile in profiles:
+        for scope in getattr(profile, "dataset_scopes", ()) or ():
+            dataset_id = str(scope["dataset_id"])
+            days = int(scope["required_lookback_trading_days"])
+            if days < 0:
+                raise PitError(
+                    f"compiled lookback for {dataset_id} is missing"
+                )
+            combined[dataset_id] = max(combined.get(dataset_id, 0), days)
+    return combined
 
 
 def _require_aware(value: Any, label: str) -> datetime:
@@ -253,7 +291,16 @@ def _select_compiled_dependency_scope(
 
     period_start = compiled.period_start
     period_end = compiled.period_end
-    max_lookback = compiled.lookback_trading_days
+    calendar_lookback = compiled.lookback_for("markets_calendar")
+    topix_lookback = compiled.lookback_for("indices_bars_daily_topix")
+    if calendar_lookback > 0:
+        raise PitError(
+            "markets_calendar lookback is not consumed by compiled selection"
+        )
+    if topix_lookback > 0:
+        raise PitError(
+            "indices_bars_daily_topix lookback is not consumed by compiled selection"
+        )
     catalog_decision_at = official_afternoon_close_as_of(period_end)
     proof_clock = PitReadClock(
         decision_at=catalog_decision_at,
@@ -313,29 +360,8 @@ def _select_compiled_dependency_scope(
             )
         calendar_by_date[day] = row
 
-    start_clock = _require_aware(am_information_cutoff(period_start), "period_start")
-    prior_trading = sorted(
-        day
-        for day, row in calendar_by_date.items()
-        if day < period_start
-        and row["available_at"] <= start_clock
-        and _payload_value(
-            row["payload"], "HolidayDivision", "HolDiv", "holiday_division"
-        )
-        == "1"
-    )
-    if len(prior_trading) < max_lookback:
-        raise PitError(
-            "PIT dependency scope lacks the exact calendar lookback: "
-            f"visible={len(prior_trading)}, required={max_lookback}"
-        )
-    lookback_dates = (
-        () if max_lookback == 0 else tuple(prior_trading[-max_lookback:])
-    )
-    scope_start = lookback_dates[0] if lookback_dates else period_start
-    window_start = lookback_dates[0] if lookback_dates else period_start
     trading_dates: list[str] = []
-    for day in _calendar_dates(scope_start, period_end):
+    for day in _calendar_dates(period_start, period_end):
         row = calendar_by_date.get(day)
         if row is None:
             raise PitError(f"markets_calendar missing exact scope date {day}")
@@ -383,7 +409,7 @@ def _select_compiled_dependency_scope(
         "equities_bars_daily",
         codes=member_codes,
         available_at_cutoff=observed_through,
-        event_start=window_start,
+        event_start=period_start,
     ):
         ingested = _require_aware(
             row["ingested_at"], "equities_bars_daily.ingested_at"
@@ -398,7 +424,7 @@ def _select_compiled_dependency_scope(
     topix_by_day: dict[str, list[dict[str, Any]]] = {}
     for row in _facts(
         "indices_bars_daily_topix",
-        event_start=window_start,
+        event_start=period_start,
     ):
         ingested = _require_aware(
             row["ingested_at"], "indices_bars_daily_topix.ingested_at"
@@ -607,7 +633,7 @@ def _select_compiled_dependency_scope(
         selected_versions=MappingProxyType(
             {key: frozenset(value) for key, value in selected_digests.items()}
         ),
-        lookback_start=scope_start,
+        lookback_start=period_start,
         selected_event_dates=MappingProxyType(
             {
                 key: frozenset(value)

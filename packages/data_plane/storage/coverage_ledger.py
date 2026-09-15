@@ -499,11 +499,14 @@ def declared_coverage_segments(
     period_end: str,
     selected_event_dates: Mapping[str, frozenset[str]],
     bar_split_interval_start: str | None = None,
+    period_start: str | None = None,
 ) -> tuple[RequiredCoverageSegment, ...]:
     """Plan canonical V3 collection months for compiled-declared windows.
 
-    Bars use the selector split-safety interval plus warmup, not observed
-    bar min/max. Financials use seed disclosures through the decision period.
+    Bars use the selector split-safety interval plus bar warmup, not observed
+    bar min/max. Calendar/TOPIX use that dataset's declared window (period
+    start when lookback is 0), not an unrelated bar-lookback maximum.
+    Financials use seed disclosures through the decision period.
     Master keeps snapshot months only. Receipt min/max cannot shrink this set.
     """
     planned: list[RequiredCoverageSegment] = []
@@ -519,7 +522,7 @@ def declared_coverage_segments(
                 floor = min(floor, min(events))
             keep_all = True
         elif dataset_id in _WARMUP_COVERAGE_DATASETS:
-            floor = lookback_start
+            floor = period_start or lookback_start
             keep_all = True
         elif policy.expected_frequency == "event_driven":
             if not events:

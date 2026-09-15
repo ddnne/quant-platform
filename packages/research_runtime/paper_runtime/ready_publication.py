@@ -20,6 +20,7 @@ from pit import PitError
 from pit.compiled_scope_proof import (
     CompiledControlledSelection,
     CompiledScopeProofSession,
+    combined_dataset_lookback_trading_days,
     compiled_scope_proof_session_from_store,
 )
 
@@ -157,11 +158,8 @@ def _require_controlled_exact_four_binding(
         raise MassResearchDisabledError(
             "controlled READY requires four research-data-profile/v3 consumers"
         )
-    max_lookback = max(
-        int(scope["required_lookback_trading_days"])
-        for profile in binding.profiles
-        for scope in profile.dataset_scopes
-    )
+    dataset_lookbacks = combined_dataset_lookback_trading_days(binding.profiles)
+    max_lookback = max(dataset_lookbacks.values(), default=0)
     required_datasets = tuple(binding.required_datasets)
     if set(required_datasets) != frozenset(EXACT_FOUR_DATASET_IDS):
         raise MassResearchDisabledError(
@@ -240,6 +238,7 @@ def _scoped_receipt_native_proofs(
     payload: Mapping[str, Any],
     accepted_bindings: Sequence[Mapping[str, Any]],
     lookback_start: str,
+    period_start: str,
     period_end: str,
     selected_event_dates: Mapping[str, frozenset[str]],
     bar_split_interval_start: str | None,
@@ -332,6 +331,7 @@ def _scoped_receipt_native_proofs(
         planned = declared_coverage_segments(
             tuple(binding.required_datasets),
             lookback_start=lookback_start,
+            period_start=period_start,
             period_end=period_end,
             selected_event_dates=selected_event_dates,
             bar_split_interval_start=bar_split_interval_start,
@@ -512,6 +512,9 @@ def _prove_exact_four_compiled_scope(
             profile_digest=binding.profile_digest,
             feature_consumers=tuple(
                 profile.feature_consumers() for profile in binding.profiles
+            ),
+            dataset_lookback_trading_days=combined_dataset_lookback_trading_days(
+                binding.profiles
             ),
         ),
         observed_through=proof_clock.observed_through,
@@ -852,6 +855,7 @@ def verify_committed_receipt_candidate_scope(
                 payload=payload,
                 accepted_bindings=accepted_bindings,
                 lookback_start=lookback_start,
+                period_start=period_start,
                 period_end=period_end,
                 selected_event_dates=selected_event_dates,
                 bar_split_interval_start=bar_split_interval_start,

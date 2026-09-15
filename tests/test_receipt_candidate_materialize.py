@@ -1021,6 +1021,23 @@ def test_declared_coverage_segments_use_selector_windows_and_full_months() -> No
         },
     )
     assert [item.segment_id for item in master] == ["2022-10", "2023-01"]
+    calendar = declared_coverage_segments(
+        ("markets_calendar", "indices_bars_daily_topix"),
+        lookback_start="2022-12-24",
+        period_start="2023-01-04",
+        period_end="2023-01-06",
+        selected_event_dates={},
+    )
+    assert [
+        item.segment_id
+        for item in calendar
+        if item.dataset == "markets_calendar"
+    ] == ["2023-01"]
+    assert [
+        item.segment_id
+        for item in calendar
+        if item.dataset == "indices_bars_daily_topix"
+    ] == ["2023-01"]
 
 
 def _canonical_month_calendar_raw(*, start: str, end: str) -> bytes:
@@ -1191,7 +1208,8 @@ def test_committed_candidate_canonical_months_prove_until_unselected_month_remov
     assert interval_start == "2022-10-20"
     planned = declared_coverage_segments(
         EXACT_FOUR_DATASET_IDS,
-        lookback_start="2022-12-24",
+        lookback_start="2023-01-04",
+        period_start="2023-01-04",
         period_end="2023-01-06",
         selected_event_dates={
             "fins_summary": frozenset(
@@ -1209,6 +1227,16 @@ def test_committed_candidate_canonical_months_prove_until_unselected_month_remov
         for item in planned
         if item.dataset == "equities_bars_daily"
     ] == ["2022-09", "2022-10", "2022-11", "2022-12", "2023-01"]
+    assert [
+        item.segment_id
+        for item in planned
+        if item.dataset == "markets_calendar"
+    ] == ["2023-01"]
+    assert [
+        item.segment_id
+        for item in planned
+        if item.dataset == "indices_bars_daily_topix"
+    ] == ["2023-01"]
     assert any(
         item.dataset == "fins_summary" and item.segment_id == "2022-11"
         for item in planned
@@ -1225,6 +1253,12 @@ def test_committed_candidate_canonical_months_prove_until_unselected_month_remov
             "2022-11-15",
             _daily_equity_bar(
                 "9999", "2022-11-15", close=100.0, morning=99.5, volume=1000.0
+            ),
+        ),
+        (
+            "2022-12-15",
+            _daily_equity_bar(
+                "1332", "2022-12-15", close=100.0, morning=99.5, volume=1000.0
             ),
         ),
     ):
