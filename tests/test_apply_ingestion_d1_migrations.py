@@ -276,6 +276,85 @@ def test_spawn_failure_is_sticky_and_cannot_be_silently_resumed(
         )
 
 
+def test_incident_recovery_apply_is_once_from_recovery_required_and_stays_sticky() -> None:
+    store = D1()
+    acquire(store)
+    store.connection.execute(
+        "UPDATE quant_ingest_mutation_lease SET phase='recovery_required',"
+        "remote_spawned=1,expires_at='2020-01-01T00:00:00Z'"
+    )
+    prefix, binding = owner._runner_wrangler_prefix(
+        "staging", runner=store.runner
+    )
+    with pytest.raises(owner.GuardedMigrationError, match="CAS failed"):
+        owner._apply_remote_migrations(
+            environment="staging", binding=binding, runner=store.runner,
+            prefix=prefix, identity=identity(), owner=LEASE_OWNER, nonce=NONCE,
+        )
+    assert tuple(store.connection.execute(
+        "SELECT phase,remote_spawned FROM quant_ingest_mutation_lease"
+    ).fetchone()) == ("recovery_required", 1)
+    owner._apply_incident_recovery_migrations(
+        environment="staging", binding=binding, runner=store.runner,
+        prefix=prefix, identity=identity(), owner=LEASE_OWNER, nonce=NONCE,
+    )
+    assert tuple(store.connection.execute(
+        "SELECT phase,remote_spawned FROM quant_ingest_mutation_lease"
+    ).fetchone()) == ("verifying", 0)
+    store.connection.execute(
+        "UPDATE quant_ingest_mutation_lease SET phase='recovery_required',"
+        "remote_spawned=1,expires_at='2020-01-01T00:00:00Z'"
+    )
+    store.apply_returncode = 1
+    with pytest.raises(owner.GuardedMigrationError, match="apply failed"):
+        owner._apply_incident_recovery_migrations(
+            environment="staging", binding=binding, runner=store.runner,
+            prefix=prefix, identity=identity(), owner=LEASE_OWNER, nonce=NONCE,
+        )
+    assert tuple(store.connection.execute(
+        "SELECT phase,remote_spawned FROM quant_ingest_mutation_lease"
+    ).fetchone()) == ("recovery_required", 1)
+    with pytest.raises(owner.GuardedMigrationError, match="identity is not active"):
+        owner.resume_owned_mutation_lease(
+            identity=identity(), environment="staging", owner=LEASE_OWNER,
+            nonce=NONCE, runner=store.runner,
+        )
+
+
+def test_incident_before_spawn_recheck_sees_migrating_and_stays_sticky() -> None:
+    store = D1()
+    acquire(store)
+    store.connection.execute(
+        "UPDATE quant_ingest_mutation_lease SET phase='recovery_required',"
+        "remote_spawned=1,expires_at='2020-01-01T00:00:00Z'"
+    )
+    prefix, binding = owner._runner_wrangler_prefix(
+        "staging", runner=store.runner
+    )
+    seen: list[tuple[str, int]] = []
+
+    def before_spawn() -> None:
+        row = store.connection.execute(
+            "SELECT phase,remote_spawned FROM quant_ingest_mutation_lease"
+        ).fetchone()
+        seen.append((str(row[0]), int(row[1])))
+        raise owner.GuardedMigrationError("incident schema changed before spawn")
+
+    with pytest.raises(
+        owner.GuardedMigrationError, match="schema changed before spawn"
+    ):
+        owner._apply_incident_recovery_migrations(
+            environment="staging", binding=binding, runner=store.runner,
+            prefix=prefix, identity=identity(), owner=LEASE_OWNER, nonce=NONCE,
+            on_spawned=before_spawn,
+        )
+    assert seen == [("migrating", 1)]
+    assert store.apply_calls == 0
+    assert tuple(store.connection.execute(
+        "SELECT phase,remote_spawned FROM quant_ingest_mutation_lease"
+    ).fetchone()) == ("recovery_required", 1)
+
+
 def test_expired_verifying_lease_resumes_only_for_same_process_free_owner() -> None:
     store = D1()
     acquire(store)

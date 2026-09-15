@@ -136,10 +136,18 @@ remote apply results only in immutable release evidence.
   `MASS_EVAL_TOKEN` (no rotation). See the
   [operational checkpoint](https://github.com/ddnne/quant-platform/pull/204#issuecomment-5674898739).
   Worker/Container code rollout is not auth-smoke, data, READY, or Pilot
-  acceptance. Staging `quant-ingest` remains `0001_init` through
-  `0010_raw_acquisition_status`; `--prepare-staging-schema` has not been
-  applied. After current-main native CI is green and the read-only
-  baseline/gates pass, use the staging schema-only command in section 2.
+  acceptance. Staging `quant-ingest` remains exact canonical `0001_init` through
+  `0010_raw_acquisition_status`. One `--prepare-staging-schema` attempt from
+  `d9de3fbcd227eaef8feff99455fb99d6d1ed7c0f` failed at about 2026-09-15
+  05:52 UTC. Live history is still prefix 0001–0010; the original lease is
+  `recovery_required` / `remote_spawned=1`; Queue is resumed with backlog 0;
+  Cron is `[]`; JSDA `version_id` `ba642c80-ce12-40c2-998d-4d55875f3dc4` and
+  `deployment_id` `9ab16913-fb6a-4fa5-806a-f35341156d31` are unchanged; no
+  active cutover runs. PR207 removed unsupported child Wrangler `--yes` and
+  has exact source/main native CI on merged main `3d6a95c`. Do not
+  generic-retry `--prepare-staging-schema`. After current-main native CI is
+  green, use the staging-only reviewed `--repair-staging-schema-incident`
+  command in section 2. Live recovery has not run.
   That path keeps the live JSDA `version_id` and `deployment_id` when the
   selected version has no SHA tag (`version_tag` empty/unattested). It does
   not invent a source SHA and does not run `--activate`. `--activate` and
@@ -240,8 +248,39 @@ names all fail closed. Wrangler is `4.125.0`.
 ## 2. D1 migration policy: single Cloudflare operator
 
 Do not hand-loop SQL files or invoke `wrangler d1 migrations apply` directly.
-`ingestion-premium` owns the `quant-ingest` chain. Staging schema-only
-preparation (no JSDA Worker deploy, no `v3_active`) is:
+`ingestion-premium` owns the `quant-ingest` chain. The 2026-09-15 ~05:52 UTC
+staging `--prepare-staging-schema` attempt from
+`d9de3fbcd227eaef8feff99455fb99d6d1ed7c0f` failed. Live `quant-ingest-staging`
+(`d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb`) is still exact `0001`–`0010` with
+sqlite_master digest
+`sha256:0ac9dc808255c3afe9a7a03c4123a7e3381ee142ad71e2d8474c5b9db4f46ea9`
+(78 objects) and `jsda_v3_cutover_run` count 0. The original
+`recovery_required` / `remote_spawned=1` lease, intent, and receipt remain.
+Do not generic-retry `--prepare-staging-schema` and do not automatically retry
+after a new partial apply. Remaining 0011–0022 include 0017/0022 ADD COLUMN
+and 0020 rebuild, which are not generic-idempotent. After current-main native
+CI is green, the staging-only reviewed repair is:
+
+```bash
+.venv/bin/python scripts/activate_jsda_v3_cutover.py --environment staging --repair-staging-schema-incident --yes
+```
+
+It preserves the original owner/nonce/source/database/manifest binding and the
+frozen 78-object schema digest; the lease source stays `d9de3fb` and is never
+relabelled as current main. Publish non-secret original source, actual repair
+SHA, database, manifest, schema digest, and outcome to the existing mutable
+PR207 checkpoint
+https://github.com/ddnne/quant-platform/pull/207#issuecomment-5676026212
+with exact readback before and after live operation, including failures. That
+comment is operational evidence, not an immutable release. Live recovery has
+not run. Same-host overlapping repairs are refused by a nonblocking flock on
+the existing original control-intent file for the whole operation, including
+finish-only; that is not a distributed lock and does not replace remote D1
+identity or CAS. Finish-only verifies a `verifying` / `remote_spawned=0` lease
+without reapplying migrations. Retire `--repair-staging-schema-incident` after
+this incident closes.
+Normal later staging schema-only preparation (no JSDA Worker deploy, no
+`v3_active`) remains:
 
 ```bash
 .venv/bin/python scripts/activate_jsda_v3_cutover.py --environment staging --prepare-staging-schema --yes

@@ -735,28 +735,18 @@ def _run_apply_process(
     return int(process.returncode or 0)
 
 
-def _apply_remote_migrations(
+def _run_fenced_remote_migrations(
     *, environment: str, binding: Mapping[str, str], runner: Runner,
     prefix: Sequence[str], identity: Mapping[str, Any], owner: str, nonce: str,
     on_spawned: Callable[[], None] | None = None,
 ) -> None:
-    _transition_mutation_lease(
-        identity=identity, environment=environment, owner=owner, nonce=nonce,
-        to_phase="migrating", from_phases=("acquired",), runner=runner,
-        remote_spawned=0,
-    )
-    _transition_mutation_lease(
-        identity=identity, environment=environment, owner=owner, nonce=nonce,
-        to_phase="migrating", from_phases=("migrating",), runner=runner,
-        remote_spawned=1,
-    )
-    if on_spawned:
-        on_spawned()
     argv = (
         *prefix, "d1", "migrations", "apply", binding["database_name"],
         "--remote", *_environment_args(binding),
     )
     try:
+        if on_spawned:
+            on_spawned()
         if _run_apply_process(
             argv, environment=environment, identity=identity, owner=owner,
             nonce=nonce, runner=runner,
@@ -778,6 +768,50 @@ def _apply_remote_migrations(
         except GuardedMigrationError:
             pass
         raise
+
+
+def _apply_remote_migrations(
+    *, environment: str, binding: Mapping[str, str], runner: Runner,
+    prefix: Sequence[str], identity: Mapping[str, Any], owner: str, nonce: str,
+    on_spawned: Callable[[], None] | None = None,
+) -> None:
+    _transition_mutation_lease(
+        identity=identity, environment=environment, owner=owner, nonce=nonce,
+        to_phase="migrating", from_phases=("acquired",), runner=runner,
+        remote_spawned=0,
+    )
+    _transition_mutation_lease(
+        identity=identity, environment=environment, owner=owner, nonce=nonce,
+        to_phase="migrating", from_phases=("migrating",), runner=runner,
+        remote_spawned=1,
+    )
+    _run_fenced_remote_migrations(
+        environment=environment, binding=binding, runner=runner, prefix=prefix,
+        identity=identity, owner=owner, nonce=nonce, on_spawned=on_spawned,
+    )
+
+
+def _apply_incident_recovery_migrations(
+    *, environment: str, binding: Mapping[str, str], runner: Runner,
+    prefix: Sequence[str], identity: Mapping[str, Any], owner: str, nonce: str,
+    on_spawned: Callable[[], None] | None = None,
+) -> None:
+    row = revalidate_mutation_lease(
+        identity=identity, environment=environment, owner=owner, nonce=nonce,
+        runner=runner, require_unexpired=False,
+        allow_phases=frozenset({"recovery_required"}),
+    )
+    if int(row.get("remote_spawned") or 0) != 1:
+        raise GuardedMigrationError("incident recovery requires remote_spawned=1")
+    _transition_mutation_lease(
+        identity=identity, environment=environment, owner=owner, nonce=nonce,
+        to_phase="migrating", from_phases=("recovery_required",), runner=runner,
+        remote_spawned=1, require_unexpired=False,
+    )
+    _run_fenced_remote_migrations(
+        environment=environment, binding=binding, runner=runner, prefix=prefix,
+        identity=identity, owner=owner, nonce=nonce, on_spawned=on_spawned,
+    )
 
 
 def _source_sha() -> str:

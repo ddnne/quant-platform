@@ -898,3 +898,249 @@ def test_schedules_reads_object_result_with_schedules_array(
     )
     with pytest.raises(cutover.JsdaCutoverError, match="unobserved"):
         cutover._schedules("staging", token="token", account="account")
+
+
+def test_repair_staging_schema_incident_holds_before_remote_writes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    with pytest.raises(
+        cutover.JsdaCutoverError,
+        match="--repair-staging-schema-incident requires --yes",
+    ):
+        cutover.repair_staging_schema_incident("staging", yes=False)
+    with pytest.raises(cutover.JsdaCutoverError, match="staging-only"):
+        cutover.repair_staging_schema_incident("production", yes=True)
+    monkeypatch.setattr(cutover, "STATE_ROOT", tmp_path / "state")
+    monkeypatch.setattr(cutover, "_credentials", lambda: ("token", "account"))
+    no_remote_restore_intent(monkeypatch)
+    events: list[str] = []
+    monkeypatch.setattr(cutover, "_observe", lambda *_a, **_k: state())
+    monkeypatch.setattr(
+        cutover, "_set_schedules", lambda *_a, **_k: events.append("cron")
+    )
+    monkeypatch.setattr(
+        cutover, "_queue_action", lambda *_a, **_k: events.append("queue")
+    )
+    monkeypatch.setattr(
+        cutover.migration, "observe_mutation_lease_authority",
+        lambda **_k: {
+            "phase": "recovery_required",
+            "remote_spawned": 1,
+            "owner": "apply:" + "1" * 32,
+            "nonce": "2" * 64,
+        },
+    )
+    with pytest.raises(
+        cutover.JsdaCutoverError,
+        match="schema-prep incident control intent is missing",
+    ):
+        cutover.repair_staging_schema_incident("staging", yes=True)
+    assert events == []
+    live = state()
+    live["version_id"] = cutover.STAGING_SCHEMA_INCIDENT_VERSION_ID
+    live["deployment_id"] = cutover.STAGING_SCHEMA_INCIDENT_DEPLOYMENT_ID
+    live["version_tag"] = ""
+    monkeypatch.setattr(cutover, "_observe", lambda *_a, **_k: deepcopy(live))
+    frozen = deepcopy(live)
+    frozen["source_sha"] = cutover.STAGING_SCHEMA_INCIDENT_SOURCE_SHA
+    cutover._control_intent("staging", frozen)
+    with pytest.raises(
+        cutover.JsdaCutoverError, match="schema-prep receipt is missing"
+    ):
+        cutover.repair_staging_schema_incident("staging", yes=True)
+    assert events == []
+    with pytest.raises(cutover.JsdaCutoverError, match="already held"):
+        cutover.prepare_staging_schema("staging", yes=True)
+    assert events == []
+
+
+def test_repair_staging_schema_incident_retains_fence_until_verify_and_restore(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from tests.test_apply_ingestion_d1_migrations import D1
+
+    monkeypatch.setattr(cutover, "STATE_ROOT", tmp_path / "state")
+    monkeypatch.setattr(cutover, "_credentials", lambda: ("token", "account"))
+    monkeypatch.setattr(cutover.time, "sleep", lambda _seconds: None)
+    meta_rows = [{
+        "type": "table", "name": "t", "tbl_name": "t",
+        "sql": "CREATE TABLE t(id INT)",
+    }]
+    monkeypatch.setattr(
+        cutover, "STAGING_SCHEMA_INCIDENT_SCHEMA_DIGEST",
+        cutover._sqlite_master_digest(meta_rows),
+    )
+
+    def d1_rows(_environment: str, sql: str, **_k: object) -> list[dict[str, Any]]:
+        if "tbl_name,sql" in sql:
+            return list(meta_rows)
+        if "COUNT(*) AS n FROM jsda_v3_cutover_run" in sql:
+            return [{"n": 0}]
+        return []
+
+    monkeypatch.setattr(cutover, "_d1_rows", d1_rows)
+    monkeypatch.setattr(
+        cutover.migration, "_wrangler_prefix",
+        lambda *_a, **_k: (
+            ["wrangler"], cutover.migration.canonical_binding("staging")
+        ),
+    )
+    store = D1()
+    monkeypatch.setattr(cutover, "_migration_runner", lambda *_a, **_k: store.runner)
+    probe_state = {"fail": False}
+
+    def probe(*_a: object, **_k: object) -> None:
+        if probe_state["fail"]:
+            raise cutover.JsdaCutoverError("receipt schema probe failed")
+
+    monkeypatch.setattr(cutover.migration, "probe_receipt_product_schema", probe)
+
+    class Surface:
+        def __init__(self) -> None:
+            self.schedules: list[Any] = []
+            self.paused = False
+            self.applied = False
+            self.events: list[object] = []
+
+        def observe(self, *_a: object, **_k: object) -> dict[str, Any]:
+            value = state()
+            value["source_sha"] = SHA
+            value["version_id"] = cutover.STAGING_SCHEMA_INCIDENT_VERSION_ID
+            value["deployment_id"] = cutover.STAGING_SCHEMA_INCIDENT_DEPLOYMENT_ID
+            value["version_tag"] = ""
+            value["schedules"] = list(self.schedules)
+            value["queue"] = {**value["queue"], "paused": self.paused}
+            if self.applied:
+                value["applied_migrations"] = list(MIGRATION_NAMES)
+                value["pending_migrations"] = []
+                value["schema_observations"] = []
+                value["jobs"] = {key: 0 for key in value["jobs"]}
+                value["cutover_phase"] = "bridge"
+            return value
+
+        def set_schedules(
+            self, _env: str, schedules: list[Any], **_k: object
+        ) -> None:
+            self.events.append(("cron", list(schedules)))
+            self.schedules = list(schedules)
+
+        def queue_action(self, _env: str, action: str, **_k: object) -> None:
+            self.events.append(("queue", action))
+            self.paused = action == "pause-delivery"
+
+        def queue(self, *_a: object, **_k: object) -> dict[str, Any]:
+            return {
+                "id": "queue", "paused": self.paused, "backlog": 0, "bytes": 0
+            }
+
+        def schedules_read(self, *_a: object, **_k: object) -> list[Any]:
+            return list(self.schedules)
+
+    surface = Surface()
+    monkeypatch.setattr(cutover, "_observe", surface.observe)
+    monkeypatch.setattr(cutover, "_set_schedules", surface.set_schedules)
+    monkeypatch.setattr(cutover, "_queue_action", surface.queue_action)
+    monkeypatch.setattr(cutover, "_queue", surface.queue)
+    monkeypatch.setattr(cutover, "_schedules", surface.schedules_read)
+    frozen = surface.observe()
+    frozen["source_sha"] = cutover.STAGING_SCHEMA_INCIDENT_SOURCE_SHA
+    intent = cutover._control_intent("staging", frozen)
+    receipt = cutover._build_receipt(
+        "staging",
+        intent,
+        {
+            "bookmark": BASELINE,
+            "database_id": cutover.STAGING_SCHEMA_INCIDENT_DATABASE_ID,
+            "database_name": "quant-ingest-staging",
+            "version": "production",
+            "response_digest": "sha256:" + "f" * 64,
+        },
+    )
+    cutover._save_receipt(receipt)
+    cutover.migration.acquire_authorized_mutation_lease(
+        environment="staging",
+        source_sha=cutover.STAGING_SCHEMA_INCIDENT_SOURCE_SHA,
+        runner=store.runner,
+        lease_owner_token=str(intent["lease_owner"]),
+        lease_nonce_token=str(intent["lease_fence"]),
+    )
+    store.connection.execute(
+        "UPDATE quant_ingest_mutation_lease SET phase='recovery_required',"
+        "remote_spawned=1,expires_at='2020-01-01T00:00:00Z'"
+    )
+    import fcntl
+    import os
+
+    real_apply = cutover.migration._apply_incident_recovery_migrations
+    applied: list[int] = []
+    pause_fail = {"on": False}
+    restore_fail = {"on": False}
+
+    def queue_action(_env: str, action: str, **_k: object) -> None:
+        surface.events.append(("queue", action))
+        if action == "pause-delivery" and pause_fail["on"]:
+            surface.paused = True
+            raise cutover.JsdaCutoverError("pause delivery lost response")
+        if action == "resume-delivery" and restore_fail["on"]:
+            raise cutover.JsdaCutoverError("JSDA queue pause was not restored")
+        surface.paused = action == "pause-delivery"
+
+    def apply(**kwargs: object) -> None:
+        real_apply(**kwargs)
+        surface.applied = True
+        applied.append(1)
+
+    monkeypatch.setattr(cutover, "_queue_action", queue_action)
+    monkeypatch.setattr(
+        cutover.migration, "_apply_incident_recovery_migrations", apply
+    )
+    intent_path = cutover._intent_path(
+        "staging", cutover.STAGING_SCHEMA_INCIDENT_SOURCE_SHA
+    )
+    lock_fd = os.open(intent_path, os.O_RDONLY)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(
+            cutover.JsdaCutoverError, match="already in progress on this host"
+        ):
+            cutover.repair_staging_schema_incident("staging", yes=True)
+        assert surface.events == []
+        assert applied == []
+    finally:
+        os.close(lock_fd)
+
+    pause_fail["on"] = True
+    with pytest.raises(
+        cutover.JsdaCutoverError, match="pause delivery lost response"
+    ):
+        cutover.repair_staging_schema_incident("staging", yes=True)
+    assert surface.paused is False
+    assert ("queue", "resume-delivery") in surface.events
+    assert intent_path.exists()
+    assert applied == []
+    assert tuple(store.connection.execute(
+        "SELECT phase,remote_spawned FROM quant_ingest_mutation_lease"
+    ).fetchone()) == ("recovery_required", 1)
+
+    pause_fail["on"] = False
+    restore_fail["on"] = True
+    surface.events.clear()
+    with pytest.raises(cutover.JsdaCutoverError, match="cleanup failed:"):
+        cutover.repair_staging_schema_incident("staging", yes=True)
+    assert tuple(store.connection.execute(
+        "SELECT phase,remote_spawned FROM quant_ingest_mutation_lease"
+    ).fetchone()) == ("verifying", 0)
+    assert intent_path.exists()
+    assert applied == [1]
+
+    restore_fail["on"] = False
+    result = cutover.repair_staging_schema_incident("staging", yes=True)
+    assert result["status"] == "SCHEMA_PREPARED"
+    assert result["source_sha"] == cutover.STAGING_SCHEMA_INCIDENT_SOURCE_SHA
+    assert result["repair_source_sha"] == SHA
+    assert result["jsda_deployed"] is False
+    assert applied == [1]
+    assert not intent_path.exists()
+    assert tuple(store.connection.execute(
+        "SELECT phase,remote_spawned FROM quant_ingest_mutation_lease"
+    ).fetchone()) == ("vacant", 0)

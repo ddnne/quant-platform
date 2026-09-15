@@ -6,14 +6,17 @@ the JSDA main Queue, record a Time Travel bookmark as recovery-reference
 evidence, migrate under one D1 lease, then deploy/activate.  Staging
 --prepare-staging-schema applies the remaining chain, leaves bridge/PENDING,
 never deploys JSDA or writes jsda_v3_cutover_run, and restores captured JSDA
-Cron/Queue.  Whole shared-D1 restore is not performed.  --activate failures
-stay stopped.  --rollback refuses with FORWARD_REPAIR_REQUIRED.
+Cron/Queue.  --repair-staging-schema-incident is the one-time 2026-09-15
+05:52 UTC failed-prepare forward repair; it is not a generic retry and
+retires after that incident closes.  Whole shared-D1 restore is not performed.
+--activate failures stay stopped.  --rollback refuses with FORWARD_REPAIR_REQUIRED.
 """
 
 from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import fcntl
 import hashlib
 import json
 import os
@@ -784,11 +787,138 @@ def _restore_jsda_surface(
     return errors
 
 
+STAGING_SCHEMA_INCIDENT_SOURCE_SHA = "d9de3fbcd227eaef8feff99455fb99d6d1ed7c0f"
+STAGING_SCHEMA_INCIDENT_DATABASE_ID = "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb"
+STAGING_SCHEMA_INCIDENT_SCHEMA_DIGEST = (
+    "sha256:0ac9dc808255c3afe9a7a03c4123a7e3381ee142ad71e2d8474c5b9db4f46ea9"
+)
+STAGING_SCHEMA_INCIDENT_VERSION_ID = "ba642c80-ce12-40c2-998d-4d55875f3dc4"
+STAGING_SCHEMA_INCIDENT_DEPLOYMENT_ID = "9ab16913-fb6a-4fa5-806a-f35341156d31"
+STAGING_SCHEMA_INCIDENT_VERSION_TAG = ""
+STAGING_SCHEMA_INCIDENT_METADATA_SQL = (
+    "SELECT type,name,tbl_name,sql FROM sqlite_master "
+    "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name"
+)
+
+
+def _sqlite_master_digest(rows: Sequence[Mapping[str, Any]]) -> str:
+    payload = json.dumps(
+        list(rows), sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    )
+    return "sha256:" + hashlib.sha256(payload.encode("ascii")).hexdigest()
+
+
+def _require_frozen_incident_jsda(
+    state: Mapping[str, Any], *, repair_sha: str, paused: bool | None
+) -> None:
+    queue = state.get("queue")
+    if (
+        str(state.get("source_sha") or "") != repair_sha
+        or state.get("version_id") != STAGING_SCHEMA_INCIDENT_VERSION_ID
+        or state.get("deployment_id") != STAGING_SCHEMA_INCIDENT_DEPLOYMENT_ID
+        or state.get("version_tag") != STAGING_SCHEMA_INCIDENT_VERSION_TAG
+        or state.get("schedules") != []
+        or not isinstance(queue, Mapping)
+        or queue.get("backlog") != 0
+        or (paused is not None and queue.get("paused") is not paused)
+    ):
+        raise JsdaCutoverError(
+            "JSDA surface is not the frozen staging schema incident"
+        )
+
+
+def _require_frozen_incident_schema(
+    environment: str, state: Mapping[str, Any], *, token: str, account: str
+) -> None:
+    if (
+        state.get("applied_migrations") != list(MIGRATION_NAMES[:10])
+        or state.get("pending_migrations") != list(MIGRATION_NAMES[10:])
+    ):
+        raise JsdaCutoverError(
+            "migration history is not the frozen staging schema incident"
+        )
+    if _sqlite_master_digest(
+        _d1_rows(
+            environment, STAGING_SCHEMA_INCIDENT_METADATA_SQL,
+            token=token, account=account,
+        )
+    ) != STAGING_SCHEMA_INCIDENT_SCHEMA_DIGEST:
+        raise JsdaCutoverError("frozen staging schema digest does not match")
+    runs = _d1_rows(
+        environment, "SELECT COUNT(*) AS n FROM jsda_v3_cutover_run",
+        token=token, account=account,
+    )
+    count = runs[0].get("n") if len(runs) == 1 else None
+    if count is None or int(count) != 0:
+        raise JsdaCutoverError("jsda_v3_cutover_run is not empty")
+
+
+def _load_staging_schema_incident_intent(
+    environment: str, baseline: Mapping[str, Any]
+) -> dict[str, Any]:
+    repair_sha = str(baseline.get("source_sha") or "")
+    if repair_sha == STAGING_SCHEMA_INCIDENT_SOURCE_SHA or not _SHA.fullmatch(
+        repair_sha
+    ):
+        raise JsdaCutoverError(
+            "incident repair source must be current clean origin/main, "
+            "not the original source"
+        )
+    path = _intent_path(environment, STAGING_SCHEMA_INCIDENT_SOURCE_SHA)
+    if not path.exists():
+        raise JsdaCutoverError("schema-prep incident control intent is missing")
+    return _control_intent(
+        environment,
+        {**dict(baseline), "source_sha": STAGING_SCHEMA_INCIDENT_SOURCE_SHA},
+    )
+
+
+def _lock_existing_incident_intent(environment: str) -> int:
+    path = _intent_path(environment, STAGING_SCHEMA_INCIDENT_SOURCE_SHA)
+    if not path.is_file() or path.is_symlink():
+        raise JsdaCutoverError("schema-prep incident control intent is missing")
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        os.close(fd)
+        raise JsdaCutoverError(
+            "schema-prep incident is already in progress on this host"
+        ) from exc
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
 def prepare_staging_schema(environment: str, *, yes: bool) -> dict[str, Any]:
     if not yes:
         raise JsdaCutoverError("--prepare-staging-schema requires --yes")
+    return _prepare_staging_schema(environment, incident=False)
+
+
+def repair_staging_schema_incident(
+    environment: str, *, yes: bool
+) -> dict[str, Any]:
+    if not yes:
+        raise JsdaCutoverError("--repair-staging-schema-incident requires --yes")
+    return _prepare_staging_schema(environment, incident=True)
+
+
+def _prepare_staging_schema(environment: str, *, incident: bool) -> dict[str, Any]:
     if environment != "staging":
         raise JsdaCutoverError("schema preparation is staging-only")
+    lock_fd: int | None = None
+    if incident:
+        lock_fd = _lock_existing_incident_intent(environment)
+    try:
+        return _execute_staging_schema_prep(environment, incident=incident)
+    finally:
+        if lock_fd is not None:
+            os.close(lock_fd)
+
+
+def _execute_staging_schema_prep(environment: str, *, incident: bool) -> dict[str, Any]:
     token, account = _credentials()
     _require_forward_repair_clearance(environment, token=token, account=account)
 
@@ -799,19 +929,29 @@ def prepare_staging_schema(environment: str, *, yes: bool) -> dict[str, Any]:
         )
 
     baseline = observe()
+    repair_sha = str(baseline["source_sha"])
     if baseline.get("cutover_phase") == "v3_active":
         raise JsdaCutoverError("JSDA cutover is already v3_active")
     _bool_pause(baseline.get("queue"), label="JSDA queue pause")
     if not isinstance(baseline.get("schedules"), list):
         raise JsdaCutoverError("JSDA schedules are unobserved")
-    intent = _control_intent(environment, baseline)
+    if incident:
+        intent = _load_staging_schema_incident_intent(environment, baseline)
+    else:
+        intent = _control_intent(environment, baseline)
     if (
         intent.get("prior_schedules") != baseline["schedules"]
-        or intent.get("prior_queue_paused")
-        is not _bool_pause(baseline.get("queue"), label="JSDA queue pause")
         or intent.get("prior_version_id") != baseline.get("version_id")
         or intent.get("prior_deployment_id") != baseline.get("deployment_id")
         or intent.get("prior_version_tag") != baseline.get("version_tag")
+    ):
+        raise JsdaCutoverError(
+            "control intent does not match observed JSDA surface"
+        )
+    if (
+        not incident
+        and intent.get("prior_queue_paused")
+        is not _bool_pause(baseline.get("queue"), label="JSDA queue pause")
     ):
         raise JsdaCutoverError(
             "control intent does not match observed JSDA surface"
@@ -822,31 +962,92 @@ def prepare_staging_schema(environment: str, *, yes: bool) -> dict[str, Any]:
     lease = migration.observe_mutation_lease_authority(
         environment=environment, runner=runner
     )
-    owned = (
-        isinstance(lease, Mapping)
-        and lease.get("owner") == intent["lease_owner"]
-        and lease.get("nonce") == intent["lease_fence"]
-        and lease.get("phase") in {"acquired", "verifying"}
-        and lease.get("remote_spawned") == 0
-    )
-    if (
-        lease is not None
-        and lease.get("phase") not in {None, "vacant"}
-        and not owned
-    ):
-        raise JsdaCutoverError("mutation lease is already held")
+    owned = False
     skip_apply = False
-    if owned and lease is not None and lease.get("phase") == "verifying":
-        if baseline.get("pending_migrations"):
-            raise JsdaCutoverError(
-                "mutation lease is verifying with pending migrations"
-            )
+    if incident:
         if receipt is None:
             raise JsdaCutoverError("schema-prep receipt is missing")
-        skip_apply = True
+        database = receipt.get("database")
+        if (
+            identity["database"]["database_id"] != STAGING_SCHEMA_INCIDENT_DATABASE_ID
+            or not isinstance(database, Mapping)
+            or database.get("database_id") != STAGING_SCHEMA_INCIDENT_DATABASE_ID
+            or receipt.get("source_sha") != STAGING_SCHEMA_INCIDENT_SOURCE_SHA
+        ):
+            raise JsdaCutoverError(
+                "schema-prep receipt is not the frozen incident"
+            )
+        if (
+            not isinstance(lease, Mapping)
+            or lease.get("owner") != intent["lease_owner"]
+            or lease.get("nonce") != intent["lease_fence"]
+        ):
+            raise JsdaCutoverError(
+                "mutation lease is not the frozen staging schema incident"
+            )
+        spawned = int(lease.get("remote_spawned") or 0)
+        if lease.get("phase") == "verifying" and spawned == 0:
+            if (
+                baseline.get("pending_migrations")
+                or baseline.get("applied_migrations") != list(MIGRATION_NAMES)
+            ):
+                raise JsdaCutoverError(
+                    "incident finish requires complete canonical migrations"
+                )
+            _require_frozen_incident_jsda(
+                baseline, repair_sha=repair_sha, paused=None
+            )
+            migration.revalidate_mutation_lease(
+                identity=identity, environment=environment,
+                owner=str(intent["lease_owner"]), nonce=str(intent["lease_fence"]),
+                runner=runner, require_unexpired=False,
+                allow_phases=frozenset({"verifying"}),
+            )
+            skip_apply = True
+        elif lease.get("phase") == "recovery_required" and spawned == 1:
+            _require_frozen_incident_jsda(
+                baseline, repair_sha=repair_sha, paused=False
+            )
+            _require_frozen_incident_schema(
+                environment, baseline, token=token, account=account
+            )
+            migration.revalidate_mutation_lease(
+                identity=identity, environment=environment,
+                owner=str(intent["lease_owner"]), nonce=str(intent["lease_fence"]),
+                runner=runner, require_unexpired=False,
+                allow_phases=frozenset({"recovery_required"}),
+            )
+        else:
+            raise JsdaCutoverError(
+                "mutation lease is not the frozen staging schema incident"
+            )
+    else:
+        owned = (
+            isinstance(lease, Mapping)
+            and lease.get("owner") == intent["lease_owner"]
+            and lease.get("nonce") == intent["lease_fence"]
+            and lease.get("phase") in {"acquired", "verifying"}
+            and lease.get("remote_spawned") == 0
+        )
+        if (
+            lease is not None
+            and lease.get("phase") not in {None, "vacant"}
+            and not owned
+        ):
+            raise JsdaCutoverError("mutation lease is already held")
+        if owned and lease is not None and lease.get("phase") == "verifying":
+            if baseline.get("pending_migrations"):
+                raise JsdaCutoverError(
+                    "mutation lease is verifying with pending migrations"
+                )
+            if receipt is None:
+                raise JsdaCutoverError("schema-prep receipt is missing")
+            skip_apply = True
     primary: BaseException | None = None
     result: dict[str, Any] | None = None
     acquired = False
+    paused_here = False
+    verified = False
     try:
         if owned:
             migration.resume_owned_mutation_lease(
@@ -865,15 +1066,25 @@ def prepare_staging_schema(environment: str, *, yes: bool) -> dict[str, Any]:
             _require_drained(first, after_migration=False)
             _require_drained(second, after_migration=False)
             if not _bool_pause(second.get("queue"), label="JSDA queue pause"):
+                paused_here = True
                 _queue_action(
                     environment, "pause-delivery", token=token, account=account
                 )
+            else:
+                paused_here = True
             quiesced = observe()
             if quiesced["schedules"] or not _bool_pause(
                 quiesced.get("queue"), label="JSDA queue pause"
             ):
                 raise JsdaCutoverError("Cron and Queue did not quiesce")
             _require_drained(quiesced, after_migration=False)
+            if incident:
+                _require_frozen_incident_jsda(
+                    quiesced, repair_sha=repair_sha, paused=True
+                )
+                _require_frozen_incident_schema(
+                    environment, quiesced, token=token, account=account
+                )
             if receipt is None:
                 travel = migration.time_travel_bookmark(
                     environment, runner=runner
@@ -884,7 +1095,7 @@ def prepare_staging_schema(environment: str, *, yes: bool) -> dict[str, Any]:
                     receipt, "schema-prep-bookmark",
                     {"bookmark": travel["bookmark"], "jsda_deployed": False},
                 )
-            if not owned:
+            if not owned and not incident:
                 migration.bootstrap_mutation_lease_authority(
                     environment=environment, runner=runner,
                     pre_bootstrap_bookmark=str(receipt["rollback_bookmark"]),
@@ -901,17 +1112,36 @@ def prepare_staging_schema(environment: str, *, yes: bool) -> dict[str, Any]:
                 acquired = True
             if quiesced.get("pending_migrations"):
                 prefix, binding = migration._wrangler_prefix(environment)
-                migration._apply_remote_migrations(
-                    environment=environment, binding=binding, prefix=prefix,
-                    identity=identity,
-                    owner=str(intent["lease_owner"]),
-                    nonce=str(intent["lease_fence"]),
-                    runner=runner,
-                )
+                if incident:
+                    def before_spawn() -> None:
+                        _require_frozen_incident_schema(
+                            environment, observe(), token=token, account=account
+                        )
+
+                    migration._apply_incident_recovery_migrations(
+                        environment=environment, binding=binding, prefix=prefix,
+                        identity=identity,
+                        owner=str(intent["lease_owner"]),
+                        nonce=str(intent["lease_fence"]),
+                        runner=runner,
+                        on_spawned=before_spawn,
+                    )
+                else:
+                    migration._apply_remote_migrations(
+                        environment=environment, binding=binding, prefix=prefix,
+                        identity=identity,
+                        owner=str(intent["lease_owner"]),
+                        nonce=str(intent["lease_fence"]),
+                        runner=runner,
+                    )
         exact = observe()
         _require_drained(exact, after_migration=True)
         if exact.get("cutover_phase") != "bridge":
             raise JsdaCutoverError("cutover control is not PENDING/bridge")
+        if incident:
+            _require_frozen_incident_jsda(
+                exact, repair_sha=repair_sha, paused=None if skip_apply else True
+            )
         migration.probe_receipt_product_schema(environment, runner=runner)
         result = {
             "status": "SCHEMA_PREPARED",
@@ -921,15 +1151,32 @@ def prepare_staging_schema(environment: str, *, yes: bool) -> dict[str, Any]:
             "jsda_deployed": False,
             "applied_migrations": exact["applied_migrations"],
         }
+        if incident:
+            result["repair_source_sha"] = repair_sha
+        verified = True
     except BaseException as exc:
         primary = exc
     finally:
-        cleanup: list[BaseException] = [
-            *_restore_jsda_surface(
-                environment, intent, token=token, account=account
+        cleanup: list[BaseException] = []
+        should_restore = (not incident) or skip_apply or paused_here
+        if should_restore:
+            cleanup.extend(
+                _restore_jsda_surface(
+                    environment, intent, token=token, account=account
+                )
             )
-        ]
-        if acquired:
+        if incident:
+            if verified and should_restore and not cleanup:
+                try:
+                    migration.release_mutation_lease(
+                        environment=environment,
+                        owner=str(intent["lease_owner"]),
+                        nonce=str(intent["lease_fence"]),
+                        runner=runner,
+                    )
+                except BaseException as exc:
+                    cleanup.append(exc)
+        elif acquired:
             try:
                 migration.release_mutation_lease(
                     environment=environment,
@@ -998,7 +1245,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--environment", choices=("staging", "production"), required=True)
     mode = parser.add_mutually_exclusive_group(required=True)
-    for name in ("check", "activate", "resume", "rollback", "prepare-staging-schema"):
+    for name in (
+        "check", "activate", "resume", "rollback", "prepare-staging-schema",
+        "repair-staging-schema-incident",
+    ):
         mode.add_argument(f"--{name}", action="store_true")
     parser.add_argument("--run-id")
     parser.add_argument("--yes", action="store_true")
@@ -1006,6 +1256,7 @@ def main(argv: list[str] | None = None) -> int:
     operation = next(
         name for name in (
             "check", "activate", "resume", "rollback", "prepare_staging_schema",
+            "repair_staging_schema_incident",
         )
         if getattr(args, name)
     )
@@ -1015,6 +1266,8 @@ def main(argv: list[str] | None = None) -> int:
         result = activate(args.environment, yes=args.yes)
     elif operation == "prepare_staging_schema":
         result = prepare_staging_schema(args.environment, yes=args.yes)
+    elif operation == "repair_staging_schema_incident":
+        result = repair_staging_schema_incident(args.environment, yes=args.yes)
     else:
         if not args.run_id:
             raise JsdaCutoverError("--run-id is required")
