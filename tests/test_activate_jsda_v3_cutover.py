@@ -839,3 +839,46 @@ def test_prepare_staging_schema_cleanup_sequence(
             ("cron", prior),
             "release",
         ]
+
+
+def test_schema_prep_records_unattested_staging_version_without_inventing_sha(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployment = {
+        "id": "9ab16913-fb6a-4fa5-806a-f35341156d31",
+        "versions": [{"version_id": "ba642c80-ce12-40c2-998d-4d55875f3dc4"}],
+    }
+    viewed = {"annotations": {"workers/message": "Phase 6.2"}}
+
+    def wrangler_json(args: list[str], **_k: object) -> dict[str, object]:
+        if args[:2] == ["deployments", "status"]:
+            return deployment
+        return viewed
+
+    monkeypatch.setattr(cutover.cloudflare, "_wrangler_json", wrangler_json)
+    with pytest.raises(cutover.JsdaCutoverError, match="no source tag"):
+        cutover._selected("staging", token="token", account="account")
+    selected = cutover._selected(
+        "staging",
+        token="token",
+        account="account",
+        allow_unattested_tag=True,
+    )
+    assert selected["version_id"] == "ba642c80-ce12-40c2-998d-4d55875f3dc4"
+    assert selected["deployment_id"] == "9ab16913-fb6a-4fa5-806a-f35341156d31"
+    assert selected["version_tag"] == ""
+    with pytest.raises(cutover.JsdaCutoverError, match="no source tag"):
+        cutover._selected(
+            "production",
+            token="token",
+            account="account",
+            allow_unattested_tag=True,
+        )
+    deployment["versions"] = [{"version_id": ""}]
+    with pytest.raises(cutover.JsdaCutoverError, match="unobserved"):
+        cutover._selected(
+            "staging",
+            token="token",
+            account="account",
+            allow_unattested_tag=True,
+        )
