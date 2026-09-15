@@ -1250,6 +1250,7 @@ def _seed_exact_pit_scope(
     include_nonmember_rows: bool = False,
     include_after_decision_rows: bool = False,
     poison_unselected_rows: bool = False,
+    split_predecessor_day: str = "2022-10-20",
     environment: str = PRODUCTION_RECEIPT_ENVIRONMENT,
 ) -> tuple[object, object]:
     """Synthetic five-day exact natural-key closure with governed v4 receipts."""
@@ -1310,7 +1311,7 @@ def _seed_exact_pit_scope(
         + [
             _daily_equity_bar(
                 "1332",
-                "2022-10-20",
+                split_predecessor_day,
                 close=100.0,
                 morning=99.5,
                 volume=1000.0,

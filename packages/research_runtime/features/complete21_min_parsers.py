@@ -9,7 +9,7 @@ Permanent DEFER is enforced by compute before these parsers run.
 from __future__ import annotations
 
 import json
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from pit.financial_observations import (
     _as_float_or_none,
@@ -184,6 +184,50 @@ def _latest_fins_eps_bps(
                 or disc_date
             )
     return eps, bps, {"fins_rows": n, "disc_date": disc_date}
+
+
+def _split_safety_bar_rows(
+    ctx: Any,
+    *,
+    code: str,
+    anchor: str,
+    to_event: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """Bars from the last session on or before the event date through ``to_event``.
+
+    Uses the existing PIT/scoped ``get_equity_bars_daily`` bounds. The
+    predecessor is the latest bar with ``date <=`` the statement/split event
+    date; there is no calendar-day pad. Missing predecessor evidence is
+    returned as a closed failure, not an empty PASS window.
+    """
+
+    from pit.scoped_selection import split_safety_interval_start
+
+    event_date = split_safety_interval_start(str(anchor))
+    if event_date is None:
+        return [], {"reason": "invalid_split_safety_anchor"}
+    predecessor = ctx.get_equity_bars_daily(
+        code=code, to_event=event_date, latest_n=1
+    )
+    pred_rows = (
+        list(predecessor.rows)
+        if predecessor is not None and predecessor.rows
+        else []
+    )
+    start = str(pred_rows[-1].get("date") or "")[:10] if pred_rows else ""
+    if len(start) != 10:
+        return [], {
+            "reason": "missing_pre_anchor_factor_baseline",
+            "anchor": event_date,
+            "rows_seen": 0,
+        }
+    safety = ctx.get_equity_bars_daily(
+        code=code, from_event=start, to_event=to_event
+    )
+    rows: Sequence[Any] = (
+        list(safety.rows) if safety is not None and safety.rows else []
+    )
+    return [dict(row) for row in rows], None
 
 
 def _retrospective_split_safety(

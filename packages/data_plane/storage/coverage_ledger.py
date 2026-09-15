@@ -515,6 +515,8 @@ def declared_coverage_segments(
             floor = lookback_start
             if bar_split_interval_start:
                 floor = min(floor, bar_split_interval_start)
+            if events:
+                floor = min(floor, min(events))
             keep_all = True
         elif dataset_id in _WARMUP_COVERAGE_DATASETS:
             floor = lookback_start

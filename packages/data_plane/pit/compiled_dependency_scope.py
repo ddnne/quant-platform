@@ -536,6 +536,11 @@ def _select_compiled_dependency_scope(
                                 selected_event_dates["equities_bars_daily"].add(
                                     bar.date
                                 )
+                                if (
+                                    earliest_bar_interval is None
+                                    or bar.date < earliest_bar_interval
+                                ):
+                                    earliest_bar_interval = bar.date
 
     observed_clock = _require_aware(observed_through, "observed_through")
     for day in trading_dates:
