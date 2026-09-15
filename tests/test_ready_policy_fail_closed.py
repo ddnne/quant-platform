@@ -1257,7 +1257,7 @@ def _seed_exact_pit_scope(
     """Synthetic five-day exact natural-key closure with governed v4 receipts."""
     db_path = tmp_path / "pit-scope.sqlite"
     calendar_dates: list[str] = []
-    cursor = date(2022, 12, 6)
+    cursor = date(2023, 1, 4)
     while cursor <= date(2023, 1, 6):
         calendar_dates.append(cursor.isoformat())
         cursor += timedelta(days=1)
@@ -1359,7 +1359,7 @@ def _seed_exact_pit_scope(
             for day in calendar_dates
         )
     ingestion_clocks = {
-        "markets_calendar": "2022-12-01T00:00:00+09:00",
+        "markets_calendar": "2023-01-04T00:00:00+09:00",
         "equities_master": "2022-10-03T08:00:00+09:00",
         "fins_summary": "2022-10-20T08:00:00+09:00",
         "indices_bars_daily_topix": "2023-01-06T16:00:00+09:00",
