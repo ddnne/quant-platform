@@ -177,18 +177,26 @@ def _queue(name: str, *, token: str, account: str) -> dict[str, Any]:
 
 
 def _schedules(environment: str, *, token: str, account: str) -> list[dict[str, str]]:
-    rows = _api(
+    payload = _api(
         "GET",
         f"/accounts/{account}/workers/scripts/{SURFACE[environment]['script']}/schedules",
         token=token,
     )
+    if not isinstance(payload, Mapping):
+        raise JsdaCutoverError("Cron schedules are unobserved")
+    rows = payload.get("schedules")
     if not isinstance(rows, list):
         raise JsdaCutoverError("Cron schedules are unobserved")
-    return sorted(
-        [{"cron": str(row["cron"])} for row in rows
-         if isinstance(row, Mapping) and row.get("cron")],
-        key=lambda row: row["cron"],
-    )
+    schedules: list[dict[str, str]] = []
+    for row in rows:
+        if (
+            not isinstance(row, Mapping)
+            or type(row.get("cron")) is not str
+            or not row["cron"]
+        ):
+            raise JsdaCutoverError("Cron schedules are unobserved")
+        schedules.append({"cron": row["cron"]})
+    return sorted(schedules, key=lambda row: row["cron"])
 
 
 def _set_schedules(
