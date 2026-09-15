@@ -655,6 +655,75 @@ def _validate_version(
     return accepted
 
 
+def _validate_observability_settings(
+    observed_value: Any,
+    expected_value: Any,
+    *,
+    role: str,
+) -> tuple[Any, Any]:
+    """Compare live GET /script-settings observability to Wrangler [observability].
+
+    Reviewed source is only enabled plus head_sampling_rate. Official OpenAPI
+    workers_observability and Wrangler 4.125.0 expand logs/traces with defaults:
+    logs inherit enablement/sampling, invocation_logs=true, persist=true,
+    destinations=[], traces.enabled=false. Nested destinations and
+    traces.enabled=true are governed. Other API fields are annotations.
+    """
+
+    observed = _mapping(
+        observed_value, label=f"{role} observability settings"
+    )
+    expected = _mapping(
+        expected_value, label=f"{role} reviewed observability"
+    )
+    if set(expected) != {"enabled", "head_sampling_rate"}:
+        raise ReceiptPendingLiveAcceptanceError(
+            f"{role} reviewed observability is not the supported "
+            "enabled/head_sampling_rate surface"
+        )
+    enabled = expected["enabled"]
+    rate = expected["head_sampling_rate"]
+    if (
+        type(enabled) is not bool
+        or type(rate) is bool
+        or type(rate) not in (int, float)
+        or observed.get("enabled") is not enabled
+        or type(observed.get("head_sampling_rate")) is bool
+        or type(observed.get("head_sampling_rate")) not in (int, float)
+        or observed.get("head_sampling_rate") != rate
+    ):
+        raise ReceiptPendingLiveAcceptanceError(
+            f"{role} live observability settings drifted"
+        )
+    logs = observed.get("logs")
+    if logs is not None:
+        logs = _mapping(logs, label=f"{role} observability logs")
+        logs_rate = logs.get("head_sampling_rate", rate)
+        if (
+            logs.get("enabled", enabled) is not enabled
+            or type(logs_rate) is bool
+            or type(logs_rate) not in (int, float)
+            or logs_rate != rate
+            or logs.get("invocation_logs", True) is not True
+            or logs.get("persist", True) is not True
+            or logs.get("destinations") not in (None, [])
+        ):
+            raise ReceiptPendingLiveAcceptanceError(
+                f"{role} live observability settings drifted"
+            )
+    traces = observed.get("traces")
+    if traces is not None:
+        traces = _mapping(traces, label=f"{role} observability traces")
+        if (
+            traces.get("enabled", False) is not False
+            or traces.get("destinations") not in (None, [])
+        ):
+            raise ReceiptPendingLiveAcceptanceError(
+                f"{role} live observability settings drifted"
+            )
+    return enabled, observed["head_sampling_rate"]
+
+
 def _validate_public_surface(
     value: Any,
     *,
@@ -733,19 +802,11 @@ def _validate_public_surface(
         raise ReceiptPendingLiveAcceptanceError(
             f"{role} live log export or tail-consumer capability drifted"
         )
-    observability = _mapping(
-        settings.get("observability"), label=f"{role} observability settings"
+    observability_enabled, observability_rate = _validate_observability_settings(
+        settings.get("observability"),
+        surface["observability"],
+        role=role,
     )
-    expected_observability = surface["observability"]
-    if (
-        set(observability) != set(expected_observability)
-        or observability.get("enabled") is not expected_observability["enabled"]
-        or observability.get("head_sampling_rate")
-        != expected_observability["head_sampling_rate"]
-    ):
-        raise ReceiptPendingLiveAcceptanceError(
-            f"{role} live observability settings drifted"
-        )
     return {
         "workers_dev": subdomain["enabled"],
         "preview_urls": subdomain["previews_enabled"],
@@ -754,8 +815,8 @@ def _validate_public_surface(
         "cron_triggers": sorted(observed_crons),
         "logpush": False,
         "tail_consumer_count": 0,
-        "observability_enabled": observability["enabled"],
-        "observability_head_sampling_rate": observability["head_sampling_rate"],
+        "observability_enabled": observability_enabled,
+        "observability_head_sampling_rate": observability_rate,
     }
 
 
