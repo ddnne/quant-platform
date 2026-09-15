@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from types import MappingProxyType
 from typing import Any, Iterator, Mapping, Sequence
 
@@ -32,7 +32,6 @@ from .read_clock import resolve_read_clock
 
 
 THROUGH_BOUND_DECISION_VISIBLE_VIEW = "bound_decision_visible_view"
-_SPLIT_SAFETY_LOOKBACK_DAYS = 31
 _BARS_DATASET = "equities_bars_daily"
 _FINS_DATASET = "fins_summary"
 _MASTER_DATASET = "equities_master"
@@ -460,17 +459,56 @@ def _select_prior_bars(
     return collected
 
 
+def _select_predecessor_bars(
+    conn: sqlite3.Connection,
+    *,
+    scope: DatasetReadScope,
+    decision_as_of: str,
+    codes: Sequence[str],
+    on_or_before: str,
+    witness: frozenset[str],
+) -> dict[str, ScopedBarView]:
+    """Last catalog bar on or before the statement/split event date."""
+
+    decision_day = decision_as_of[:10]
+    wanted = {str(code) for code in codes}
+    found: dict[str, ScopedBarView] = {}
+    if not wanted:
+        return found
+    for raw in _iter_catalog_versions(
+        conn,
+        dataset_id=_BARS_DATASET,
+        as_of=decision_as_of,
+        codes=codes,
+        extra_where="substr(event_time, 1, 10) < ? AND substr(event_time, 1, 10) <= ?",
+        params=(decision_day, on_or_before),
+        order_by=_PAGE_DESC,
+    ):
+        payload = _payload_dict(raw)
+        code = _row_code(payload, raw)
+        if code not in wanted or code in found:
+            continue
+        found[code] = _public_bar_view(
+            raw,
+            scope=scope,
+            decision_day=decision_day,
+            witness=witness,
+        )
+        if len(found) == len(wanted):
+            break
+    return found
+
+
 def split_safety_interval_start(split_anchor: str | None) -> str | None:
-    """Declared bar split-safety window start: anchor date minus 31 days."""
+    """Inclusive statement/split event date. Predecessor bars are selected separately."""
     text = str(split_anchor or "").strip()
     if not text:
         return None
     try:
-        return (
-            date.fromisoformat(text) - timedelta(days=_SPLIT_SAFETY_LOOKBACK_DAYS)
-        ).isoformat()
+        date.fromisoformat(text)
     except ValueError:
         return None
+    return text
 
 
 def _select_bars(
@@ -499,8 +537,24 @@ def _select_bars(
         witness=witness,
     )
     interval_start = None
+    predecessor: dict[str, ScopedBarView] = {}
     if scope.split_safety_anchor_interval and split_anchor:
         interval_start = split_safety_interval_start(split_anchor)
+        if interval_start is not None:
+            predecessor = _select_predecessor_bars(
+                conn,
+                scope=scope,
+                decision_as_of=decision_as_of,
+                codes=codes,
+                on_or_before=interval_start,
+                witness=witness,
+            )
+            earliest = min(
+                (row.date for row in predecessor.values()),
+                default=interval_start,
+            )
+            if earliest < interval_start:
+                interval_start = earliest
     prior_limit = None
     if latest_n is not None:
         prior_limit = {
@@ -522,6 +576,11 @@ def _select_bars(
     selected: list[ScopedBarView] = []
     for code in codes:
         rows = list(prior.get(code, ()))
+        pred = predecessor.get(str(code))
+        if pred is not None and all(
+            row.product_row_digest != pred.product_row_digest for row in rows
+        ):
+            rows = [pred, *rows]
         d_row = same_day.get(code)
         if d_row is not None:
             rows.append(d_row)

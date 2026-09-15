@@ -1250,6 +1250,8 @@ def _seed_exact_pit_scope(
     include_nonmember_rows: bool = False,
     include_after_decision_rows: bool = False,
     poison_unselected_rows: bool = False,
+    omit_bar_dates: tuple[str, ...] = (),
+    split_predecessor_day: str = "2022-10-20",
     environment: str = PRODUCTION_RECEIPT_ENVIRONMENT,
 ) -> tuple[object, object]:
     """Synthetic five-day exact natural-key closure with governed v4 receipts."""
@@ -1306,11 +1308,12 @@ def _seed_exact_pit_scope(
                 volume=1000.0,
             )
             for day in calendar_dates
+            if day not in omit_bar_dates
         ]
         + [
             _daily_equity_bar(
                 "1332",
-                "2022-10-20",
+                split_predecessor_day,
                 close=100.0,
                 morning=99.5,
                 volume=1000.0,
@@ -1707,6 +1710,21 @@ def test_exact_pit_dependency_scope_accepts_complete_receipt_bound_fixture(
     finally:
         listing_conn.close()
     assert listing is None
+
+
+def test_preperiod_missing_bar_does_not_fail_in_period_ready(
+    tmp_path,
+    receipt_ed25519_keys,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path, binding = _seed_exact_pit_scope(
+        tmp_path,
+        receipt_ed25519_keys,
+        omit_bar_dates=("2022-12-30",),
+    )
+    proof = _verify_scope(db_path, binding, monkeypatch)
+    assert proof["status"] == "PASS"
+    assert proof["period_start"] == "2023-01-04"
 
 
 def test_ready_rejects_missing_official_calendar_raw(

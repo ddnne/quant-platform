@@ -2192,6 +2192,79 @@ def test_controlled_bound_v3_current_plan_numeric_and_rejects_foreign_consumer(
     assert res.metadata["price_evidence_mode"] == "historical_daily_reconstruction"
 
 
+def test_scoped_split_safety_keeps_predecessor_older_than_31_days(
+    tmp_path, receipt_ed25519_keys
+) -> None:
+    from _coreseed import seed_governed_am_pm_session_db
+    from core.execution import morning_close_as_of
+    from research.ready_manifest import load_exact_four_pilot_ready_binding
+    import features
+    from features.runtime import _BoundScopedFeatureReads, _compute
+
+    code = "1332"
+    predecessor = "2024-12-02"
+    decision = "2025-02-03"
+    days = [predecessor, decision]
+    db = seed_governed_am_pm_session_db(
+        tmp_path,
+        codes=[code],
+        days=days,
+        morning_prices={code: {day: 100.0 for day in days}},
+        afternoon_prices={code: {day: 100.0 for day in days}},
+        extra_fins_payloads=[
+            {
+                "Code": code,
+                "DiscDate": decision,
+                "DiscTime": "08:00:00",
+                "DiscNo": f"bps-{code}",
+                "BPS": 80.0,
+                "CurPerEn": "2025-01-31",
+            }
+        ],
+    )
+    ready = load_exact_four_pilot_ready_binding()
+    fund = next(
+        profile
+        for profile in ready.profiles
+        if profile.plan_id == "exp-fund-hold10-value-mom"
+    )
+    consumer_id = next(
+        cid
+        for cid in fund.feature_consumers()
+        if cid.startswith("retrospective_split_safe_fundamental_value_score@")
+    )
+    handle = _verified_snapshot_handle_from_db(db, receipt_ed25519_keys)
+    try:
+        handle._begin_controlled_batch_reads()
+        handle._bind_current_plan_feature_consumers(
+            plan_id=fund.plan_id,
+            profile_version=fund.profile_version,
+            profile_set_digest=handle.session_profile_digest,
+            consumers=fund.feature_consumers(),
+            feature_dependencies=tuple(fund.feature_dependencies),
+        )
+        output = _compute(
+            features.get(
+                "retrospective_split_safe_fundamental_value_score",
+                version="1.0.0",
+            ),
+            as_of=morning_close_as_of(decision),
+            db_path=db,
+            scoped_feature_reads=_BoundScopedFeatureReads(
+                data_view=handle.am_session_data_view(),
+                consumer_id=consumer_id,
+            ),
+            code=code,
+        )
+    finally:
+        handle._end_controlled_batch_reads()
+        handle.close()
+    assert output.value == pytest.approx(80.0 / 100.0)
+    assert output.metadata["reason"] == "split_safe"
+    assert output.metadata["split_safety_anchor"] == "2025-01-31"
+    assert output.metadata["rows_seen"] >= 2
+
+
 def test_controlled_open_rejects_symlink_and_wal_sidecar(
     tmp_path, receipt_ed25519_keys
 ) -> None:

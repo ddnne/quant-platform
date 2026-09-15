@@ -7,13 +7,16 @@ These are new versioned identities. They do not change
 
 from __future__ import annotations
 
-from datetime import date, timedelta
 from statistics import median
 from typing import Any, Mapping
 
 from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED
 
-from .complete21_min_parsers import _retrospective_split_safety, _row_payload
+from .complete21_min_parsers import (
+    _retrospective_split_safety,
+    _row_payload,
+    _split_safety_bar_rows,
+)
 from .dataset_guard import require_feature_datasets
 from .ratio_features import (
     FUNDAMENTAL_RATIO_MODES,
@@ -383,19 +386,17 @@ def _am_per_share_ratio(
             },
         )
     last_date = str(price_row.get("date") or "")[:10]
-    try:
-        safety_start = (
-            date.fromisoformat(anchor[:10]) - timedelta(days=31)
-        ).isoformat()
-    except ValueError:
+    safety_rows, fetch_error = _split_safety_bar_rows(
+        ctx, code=code, anchor=anchor[:10], to_event=last_date
+    )
+    if fetch_error:
+        reason = fetch_error.get("reason")
+        if reason == "invalid_split_safety_anchor":
+            reason = "invalid split-safety anchor"
         return FeatureOutput(
             value=None,
-            metadata={**common, "reason": "invalid split-safety anchor"},
+            metadata={**common, **fetch_error, "reason": reason},
         )
-    safety = ctx.get_equity_bars_daily(
-        code=code, from_event=safety_start, to_event=last_date
-    )
-    safety_rows = list(safety.rows) if safety is not None and safety.rows else []
     safe, evidence = _retrospective_split_safety(safety_rows, anchor=anchor[:10])
     metadata = {
         **common,

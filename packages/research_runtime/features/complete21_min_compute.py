@@ -6,7 +6,6 @@ any PIT read. Dataset tuples are COMPLETE 21 only. No READY / Mass / GO.
 
 from __future__ import annotations
 
-from datetime import date, timedelta
 from typing import Any
 
 from .complete21_min_parsers import (
@@ -18,6 +17,7 @@ from .complete21_min_parsers import (
     _parse_margin_interest_rows,
     _parse_volume_rows,
     _retrospective_split_safety,
+    _split_safety_bar_rows,
 )
 from .dataset_guard import require_feature_datasets
 from .types import FeatureOutput
@@ -652,30 +652,19 @@ def _retrospective_split_safe_fundamental_value_score(ctx) -> FeatureOutput:
                 "reason": "per_share_metric_has_no_statement_or_disclosure_anchor",
             },
         )
-    try:
-        safety_start = (
-            date.fromisoformat(str(anchor)) - timedelta(days=31)
-        ).isoformat()
-    except ValueError:
+    safety_rows, fetch_error = _split_safety_bar_rows(
+        ctx, code=code, anchor=str(anchor), to_event=last_date
+    )
+    if fetch_error:
         return FeatureOutput(
             value=None,
             metadata={
                 **observation,
                 "code": code,
                 "last_date": last_date,
-                "reason": "invalid_split_safety_anchor",
+                **fetch_error,
             },
         )
-    safety_res = ctx.get_equity_bars_daily(
-        code=code,
-        from_event=safety_start,
-        to_event=last_date,
-    )
-    safety_rows = (
-        list(safety_res.rows)
-        if safety_res is not None and safety_res.rows
-        else []
-    )
     safe, safety = _retrospective_split_safety(
         safety_rows, anchor=str(anchor)
     )

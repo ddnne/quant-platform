@@ -891,7 +891,7 @@ def test_committed_candidate_scope_pass_ignores_unsigned_later_receipt(
     assert observed["feature_generation"] == expected_feature_generation
     assert observed["catalog_generation"] == expected_catalog_generation
     assert observed["coverage_proof_digest"] == MISSING
-    assert "equities_bars_daily/2022-09" in str(
+    assert "equities_bars_daily/2022-10" in str(
         result.get("coverage_proof_reason")
     )
     assert observed["raw_proof_digest"].startswith("sha256:")
@@ -959,7 +959,7 @@ def test_committed_candidate_scope_rejects_corrupted_backing(
 def test_declared_coverage_segments_use_selector_windows_and_full_months() -> None:
     from pit.scoped_selection import split_safety_interval_start
 
-    assert split_safety_interval_start("2022-10-20") == "2022-09-19"
+    assert split_safety_interval_start("2022-10-20") == "2022-10-20"
     warmup = declared_coverage_segments(
         ("equities_bars_daily",),
         lookback_start="2022-12-24",
@@ -976,9 +976,24 @@ def test_declared_coverage_segments_use_selector_windows_and_full_months() -> No
         lookback_start="2022-12-24",
         period_end="2023-01-06",
         selected_event_dates={},
-        bar_split_interval_start="2022-09-19",
+        bar_split_interval_start="2022-10-20",
     )
     assert [item.segment_id for item in bars] == [
+        "2022-10",
+        "2022-11",
+        "2022-12",
+        "2023-01",
+    ]
+    predecessor_month = declared_coverage_segments(
+        ("equities_bars_daily",),
+        lookback_start="2022-12-24",
+        period_end="2023-01-06",
+        selected_event_dates={
+            "equities_bars_daily": frozenset({"2022-09-15", "2023-01-05"})
+        },
+        bar_split_interval_start="2022-10-20",
+    )
+    assert [item.segment_id for item in predecessor_month] == [
         "2022-09",
         "2022-10",
         "2022-11",
@@ -1167,9 +1182,13 @@ def test_committed_candidate_canonical_months_prove_until_unselected_month_remov
         _seed_exact_pit_scope,
     )
 
-    db_path, binding = _seed_exact_pit_scope(tmp_path, receipt_ed25519_keys)
+    db_path, binding = _seed_exact_pit_scope(
+        tmp_path,
+        receipt_ed25519_keys,
+        split_predecessor_day="2022-09-15",
+    )
     interval_start = split_safety_interval_start("2022-10-20")
-    assert interval_start == "2022-09-19"
+    assert interval_start == "2022-10-20"
     planned = declared_coverage_segments(
         EXACT_FOUR_DATASET_IDS,
         lookback_start="2022-12-24",
@@ -1181,6 +1200,7 @@ def test_committed_candidate_canonical_months_prove_until_unselected_month_remov
             "equities_master": frozenset(
                 {"2022-10-03", "2023-01-04", "2023-01-05", "2023-01-06"}
             ),
+            "equities_bars_daily": frozenset({"2022-09-15", "2023-01-05"}),
         },
         bar_split_interval_start=interval_start,
     )
@@ -1196,9 +1216,9 @@ def test_committed_candidate_canonical_months_prove_until_unselected_month_remov
     store = SqliteStore(db_path)
     for day, bar in (
         (
-            "2022-09-20",
+            "2022-10-21",
             _daily_equity_bar(
-                "9999", "2022-09-20", close=100.0, morning=99.5, volume=1000.0
+                "1332", "2022-10-21", close=100.0, morning=99.5, volume=1000.0
             ),
         ),
         (
