@@ -474,7 +474,7 @@ WORKER_ENTRYPOINT_RPC_POLICY: dict[
         ),
         "PilotReadyPublicationService": (
             True,
-            ("publishAdmittedReceiptCandidate", "publishPilotReady"),
+            ("publishAdmittedReceiptCandidate",),
         ),
     },
     "ingestion-jsda": {
