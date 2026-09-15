@@ -1,0 +1,120 @@
+{
+  "provenance": {
+    "ingestion-premium": "live_observed_staging_versions_view",
+    "ingestion-secrets": "live_observed_staging_versions_view",
+    "receipt-evidence-authority": "live_observed_staging_versions_view",
+    "ingestion-jsda": "source_defined_representative",
+    "quant-ops-mcp": "source_defined_representative",
+    "receipt-activation-observer": "source_defined_representative",
+    "research-ai-gateway": "source_defined_representative",
+    "research-mass-eval": "source_defined_representative"
+  },
+  "roles": {
+    "acquisition": "ingestion-secrets",
+    "authority": "receipt-evidence-authority",
+    "caller": "ingestion-premium",
+    "observer": "receipt-activation-observer"
+  },
+  "workers": {
+    "ingestion-jsda": {
+      "handlers": ["fetch", "scheduled", "queue"],
+      "named_handlers": [
+        {"name": "JsdaReadinessService", "handlers": ["fetch"]}
+      ]
+    },
+    "ingestion-premium": {
+      "handlers": ["fetch", "scheduled"],
+      "named_handlers": [
+        {
+          "name": "PilotReadyPublicationService",
+          "handlers": [
+            "fetch",
+            "publishPilotReady",
+            "publishAdmittedReceiptCandidate"
+          ]
+        },
+        {
+          "name": "PremiumReceiptAuditEvidenceService",
+          "handlers": ["staging_recovery_audit_evidence"]
+        },
+        {
+          "name": "PremiumReceiptOperatorService",
+          "handlers": ["pending_public_key_registration"]
+        },
+        {
+          "name": "PremiumReceiptProductInputService",
+          "handlers": [
+            "read_receipt_product_bytes",
+            "describe_receipt_product_input"
+          ]
+        }
+      ]
+    },
+    "ingestion-secrets": {
+      "handlers": ["fetch", "fetch_governed_page"],
+      "named_handlers": [
+        {
+          "name": "IngestionSecretsService",
+          "handlers": ["fetch", "fetch_governed_page"]
+        }
+      ]
+    },
+    "quant-ops-mcp": {
+      "handlers": ["fetch"],
+      "named_handlers": [
+        {"name": "QuantOpsMcpAgent", "handlers": ["class"]}
+      ]
+    },
+    "receipt-activation-observer": {
+      "handlers": ["fetch"],
+      "named_handlers": []
+    },
+    "receipt-evidence-authority": {
+      "handlers": [
+        "fetch",
+        "issue_for_segment",
+        "recover_issue",
+        "begin_audit_recovery_canary",
+        "recover_audit_recovery_canary",
+        "public_key_registration"
+      ],
+      "named_handlers": [
+        {"name": "ReceiptEvidenceAuthority", "handlers": ["class"]},
+        {
+          "name": "ReceiptAuthorityService",
+          "handlers": [
+            "fetch",
+            "issue_for_segment",
+            "recover_issue",
+            "begin_audit_recovery_canary",
+            "recover_audit_recovery_canary",
+            "public_key_registration"
+          ]
+        }
+      ]
+    },
+    "research-ai-gateway": {
+      "handlers": ["fetch"],
+      "named_handlers": [
+        {"name": "BudgetLedger", "handlers": ["class"]},
+        {
+          "name": "GatewayService",
+          "handlers": [
+            "cancelControlledPaper",
+            "complete",
+            "finalizeControlledPaper",
+            "heartbeatControlledPaper",
+            "queryControlledPaper",
+            "reserveControlledPaper"
+          ]
+        }
+      ]
+    },
+    "research-mass-eval": {
+      "handlers": ["fetch"],
+      "named_handlers": [
+        {"name": "PersonalResearchContainer", "handlers": ["class"]}
+      ]
+    }
+  }
+}

@@ -21,6 +21,13 @@ from scripts import receipt_authority_staging_active_gate as active
 
 SHA = "1" * 40
 ACCOUNT = "2" * 32
+_HANDLER_SURFACES = json.loads(
+    (
+        Path(__file__).resolve().parent
+        / "fixtures"
+        / "cloudflare_version_handler_surfaces.json"
+    ).read_text(encoding="utf-8")
+)
 ACCESS_AUD = "3" * 64
 ACCESS_APP_ID = "30000000-0000-4000-8000-000000000001"
 ACCESS_POLICY_ID = "30000000-0000-4000-8000-000000000002"
@@ -248,14 +255,14 @@ def _chain_documents(
             if materialized.get("namespace_id") == "<LIVE_NAMESPACE_ID>":
                 materialized["namespace_id"] = f"{ordinal:x}" * 32
             bindings.append(materialized)
+        observed = _HANDLER_SURFACES["workers"][_HANDLER_SURFACES["roles"][role]]
         script: dict[str, Any] = {
             "etag": f"{ordinal:x}" * 64,
-            "handlers": ["fetch"] + (["scheduled"] if surface["crons"] else []),
+            "handlers": list(observed["handlers"]),
             "last_deployed_from": "wrangler",
         }
-        named = live._expected_named_handlers(surface)
-        if named:
-            script["named_handlers"] = copy.deepcopy(named)
+        if observed["named_handlers"]:
+            script["named_handlers"] = copy.deepcopy(observed["named_handlers"])
         runtime: dict[str, Any] = {
             "compatibility_date": surface["compatibility_date"],
             "usage_model": "standard",
