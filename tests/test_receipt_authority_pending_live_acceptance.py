@@ -150,7 +150,29 @@ def _documents(environment: str) -> tuple[
             },
             "script_settings": {
                 "logpush": False,
-                "observability": copy.deepcopy(surface["observability"]),
+                "observability": {
+                    "enabled": surface["observability"]["enabled"],
+                    "head_sampling_rate": surface["observability"][
+                        "head_sampling_rate"
+                    ],
+                    "redact_query_string": True,
+                    "logs": {
+                        "enabled": surface["observability"]["enabled"],
+                        "head_sampling_rate": surface["observability"][
+                            "head_sampling_rate"
+                        ],
+                        "persist": True,
+                        "invocation_logs": True,
+                    },
+                    "traces": {
+                        "enabled": False,
+                        "persist": True,
+                        "head_sampling_rate": surface["observability"][
+                            "head_sampling_rate"
+                        ],
+                    },
+                    "telemetry_dataset": "workers",
+                },
                 "tail_consumers": copy.deepcopy(surface["tail_consumers"]),
             },
         }
@@ -351,7 +373,13 @@ def test_live_chain_rejects_extra_resource_capability_surface() -> None:
         (
             lambda _versions, public: public["authority"]["script_settings"][
                 "observability"
-            ].update({"logs": {"destinations": ["external-log-sink"]}}),
+            ]["logs"].update({"destinations": ["external-log-sink"]}),
+            "observability settings drifted",
+        ),
+        (
+            lambda _versions, public: public["authority"]["script_settings"][
+                "observability"
+            ]["traces"].update({"enabled": True}),
             "observability settings drifted",
         ),
         (
