@@ -882,3 +882,19 @@ def test_schema_prep_records_unattested_staging_version_without_inventing_sha(
             account="account",
             allow_unattested_tag=True,
         )
+
+
+def test_schedules_reads_object_result_with_schedules_array(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cutover.cloudflare, "_api",
+        lambda *_a, **_k: {"schedules": []},
+    )
+    assert cutover._schedules("staging", token="token", account="account") == []
+    monkeypatch.setattr(
+        cutover.cloudflare, "_api",
+        lambda *_a, **_k: [],
+    )
+    with pytest.raises(cutover.JsdaCutoverError, match="unobserved"):
+        cutover._schedules("staging", token="token", account="account")
