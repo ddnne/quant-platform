@@ -173,6 +173,18 @@ def _row_code(row: Mapping[str, Any]) -> str:
     return _payload_value(row["payload"], "Code", "code")
 
 
+def _compiled_requirement_gap(
+    unsatisfied: set[str] | None,
+    dataset: str,
+    message: str,
+) -> None:
+    """Inventory records the dataset; strict proof refuses a complete scope."""
+
+    if unsatisfied is None:
+        raise PitError(message)
+    unsatisfied.add(dataset)
+
+
 def _compact_fact(dataset_id: str, fact: Mapping[str, Any]) -> dict[str, Any]:
     payload = fact["payload"]
     expected_key = contract_natural_key(payload, dataset_id)
@@ -609,28 +621,44 @@ def _select_compiled_dependency_scope(
                                     or bar.date < earliest_bar_interval
                                 ):
                                     earliest_bar_interval = bar.date
-                            if unsatisfied is not None:
-                                count = bars_req.scope.observation_count
-                                latest_n = None if count is None else count.value
-                                if (
-                                    latest_n is not None
-                                    and type(latest_n) is int
-                                    and len(bars) < latest_n
-                                ):
-                                    unsatisfied.add("equities_bars_daily")
-                                if bars_req.scope.split_safety_anchor_interval:
-                                    if not split_anchor:
-                                        unsatisfied.add("fins_summary")
-                                    else:
-                                        interval_start = split_safety_interval_start(
-                                            split_anchor
+                            count = bars_req.scope.observation_count
+                            latest_n = None if count is None else count.value
+                            if (
+                                latest_n is not None
+                                and type(latest_n) is int
+                                and len(bars) < latest_n
+                            ):
+                                _compiled_requirement_gap(
+                                    unsatisfied,
+                                    "equities_bars_daily",
+                                    "equities_bars_daily observation count "
+                                    f"short for {code} at {day}: "
+                                    f"have={len(bars)} need={latest_n}",
+                                )
+                            if bars_req.scope.split_safety_anchor_interval:
+                                if not split_anchor:
+                                    _compiled_requirement_gap(
+                                        unsatisfied,
+                                        "fins_summary",
+                                        "fins_summary split-safety anchor "
+                                        f"missing for {code} at {day}",
+                                    )
+                                else:
+                                    interval_start = split_safety_interval_start(
+                                        split_anchor
+                                    )
+                                    if interval_start and not any(
+                                        type(bar) is ScopedBarView
+                                        and bar.date <= interval_start
+                                        for bar in bars
+                                    ):
+                                        _compiled_requirement_gap(
+                                            unsatisfied,
+                                            "equities_bars_daily",
+                                            "equities_bars_daily split "
+                                            "predecessor missing for "
+                                            f"{code} at {day}",
                                         )
-                                        if interval_start and not any(
-                                            type(bar) is ScopedBarView
-                                            and bar.date <= interval_start
-                                            for bar in bars
-                                        ):
-                                            unsatisfied.add("equities_bars_daily")
 
     observed_clock = _require_aware(observed_through, "observed_through")
     for day in in_period_trading:

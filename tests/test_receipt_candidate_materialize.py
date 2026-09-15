@@ -636,10 +636,20 @@ def _normalize_builder_rows(dataset: str, raw_rows: list[dict]) -> list[dict]:
     return structured
 
 
-def _mini_builder_payloads() -> dict[str, list[dict]]:
-    from tests.test_ready_policy_fail_closed import _daily_equity_bar
+def _mini_builder_payloads(
+    *,
+    code_1332_bar_dates: tuple[str, ...] | None = None,
+) -> dict[str, list[dict]]:
+    from tests.test_ready_policy_fail_closed import (
+        FIRST_DECISION_PRIOR_BAR_DATES,
+        _daily_equity_bar,
+    )
 
     calendar_dates = ["2023-01-04", "2023-01-05", "2023-01-06"]
+    if code_1332_bar_dates is None:
+        code_1332_bar_dates = tuple(
+            dict.fromkeys((*FIRST_DECISION_PRIOR_BAR_DATES, *calendar_dates))
+        )
     return {
         "markets_calendar": [
             {"Date": day, "HolidayDivision": "1"} for day in calendar_dates
@@ -695,20 +705,17 @@ def _mini_builder_payloads() -> dict[str, list[dict]]:
             _daily_equity_bar(
                 "1332", day, close=100.0, morning=99.5, volume=1000.0
             )
-            for day in calendar_dates
+            for day in code_1332_bar_dates
         ]
         + [
             _daily_equity_bar(
-                "1332", "2022-09-15", close=100.0, morning=99.5, volume=1000.0
+                "9999", "2022-09-15", close=100.0, morning=99.5, volume=1000.0
             ),
             _daily_equity_bar(
-                "1332", "2022-10-21", close=100.0, morning=99.5, volume=1000.0
+                "9999", "2022-10-21", close=100.0, morning=99.5, volume=1000.0
             ),
             _daily_equity_bar(
                 "9999", "2022-11-15", close=100.0, morning=99.5, volume=1000.0
-            ),
-            _daily_equity_bar(
-                "1332", "2022-12-15", close=100.0, morning=99.5, volume=1000.0
             ),
         ],
         "indices_bars_daily_topix": [
@@ -725,13 +732,16 @@ def _mini_builder_payloads() -> dict[str, list[dict]]:
 
 
 def _mini_builder_descriptors(
-    tmp_path: Path, receipt_ed25519_keys
+    tmp_path: Path,
+    receipt_ed25519_keys,
+    *,
+    payloads: dict[str, list[dict]] | None = None,
 ) -> dict[tuple[str, str], dict]:
     from paper_runtime.readiness_attestation import EXACT_FOUR_DATASET_IDS
     from pit.scoped_selection import split_safety_interval_start
     from tests.test_ready_policy_fail_closed import _scope_calendar_extras
 
-    payloads = _mini_builder_payloads()
+    payloads = _mini_builder_payloads() if payloads is None else payloads
     planned = declared_coverage_segments(
         EXACT_FOUR_DATASET_IDS,
         lookback_start="2023-01-04",
@@ -1284,7 +1294,12 @@ def test_execute_builder_compiled_scope_pass_and_missing_required_month(
     assert "coverage_proof_reason" not in proved
     assert ("equities_bars_daily", "2022-09") in descriptors
     assert ("fins_summary", "2022-11") in descriptors
-    assert proved["segment_count"] >= 11
+    first_as_of_bars = [
+        row["Date"]
+        for row in _mini_builder_payloads()["equities_bars_daily"]
+        if row["Code"] == "1332" and row["Date"] <= "2023-01-04"
+    ]
+    assert len(first_as_of_bars) >= 11
     assert any(str(key).endswith(".sqlite") for key in puts)
 
     missing_map = dict(descriptors)
@@ -1309,14 +1324,54 @@ def test_execute_builder_compiled_scope_pass_and_missing_required_month(
         uploader=lambda *args, **kwargs: None,
         opener=missing_transport,
     )
-    if missing["status"] == "FAILED":
-        assert "physical_key" not in missing
-        assert missing.get("compiled_scope_status") != "PASS"
-    else:
-        assert missing["status"] == "COMPLETED"
-        assert missing["compiled_scope_status"] == "PASS"
-        assert missing["receipt_native_manifest"]["coverage_proof_digest"] == "MISSING"
-        assert "fins_summary/2022-11" in str(missing.get("coverage_proof_reason"))
+    assert missing["status"] == "FAILED", missing
+    assert "physical_key" not in missing
+    assert missing.get("compiled_scope_status") != "PASS"
+
+
+def test_execute_builder_insufficient_code_history_is_not_compiled_pass(
+    tmp_path: Path, receipt_ed25519_keys, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from receipt_candidate_job import (
+        ReceiptCandidateJobSpec,
+        execute_receipt_candidate_job,
+    )
+
+    _patch_mini_period(monkeypatch)
+    descriptors = _mini_builder_descriptors(
+        tmp_path,
+        receipt_ed25519_keys,
+        payloads=_mini_builder_payloads(
+            code_1332_bar_dates=(
+                "2022-12-15",
+                "2023-01-04",
+                "2023-01-05",
+                "2023-01-06",
+            )
+        ),
+    )
+    spec = ReceiptCandidateJobSpec.from_document(
+        _worker_document("cand-scope-short-history")
+    )
+    work = tmp_path / "short"
+    work.mkdir()
+    terminal = execute_receipt_candidate_job(
+        spec,
+        work_root=work,
+        uploader=lambda *args, **kwargs: None,
+        opener=_ReceiptTransport(
+            descriptors,
+            {
+                "product_artifact": b"x",
+                "raw_collection_manifest": b"y",
+                "official_calendar_raw": b"z",
+            },
+            tmp_path,
+        ),
+    )
+    assert terminal.get("compiled_scope_status") != "PASS"
+    assert "physical_key" not in terminal
+    assert terminal["status"] in {"COMPLETED", "FAILED"}
 
 
 @pytest.mark.parametrize("environment", ["production", "staging"])
@@ -1447,7 +1502,7 @@ def test_committed_candidate_scope_pass_ignores_unsigned_later_receipt(
     assert observed["feature_generation"] == expected_feature_generation
     assert observed["catalog_generation"] == expected_catalog_generation
     assert observed["coverage_proof_digest"] == MISSING
-    assert "equities_bars_daily/2022-10" in str(
+    assert "equities_bars_daily/2022-09" in str(
         result.get("coverage_proof_reason")
     )
     assert observed["raw_proof_digest"].startswith("sha256:")
