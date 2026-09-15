@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import shutil
+import sqlite3
 import tempfile
 import urllib.request
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ from receipt_product_byte_client import (
     RAW_MANIFEST_MAX_BYTES,
     ReceiptProductTransportError,
     describe_receipt_product_input,
+    discover_latest_complete_segment,
     spool_receipt_product_bytes,
 )
 from storage.sqlite_store import SqliteStore
@@ -32,6 +34,10 @@ from storage.sqlite_store import SqliteStore
 RECEIPT_CANDIDATE_FORMAT = "receipt-candidate/v1"
 RECEIPT_CANDIDATE_MAX_SEGMENTS = 512
 RECEIPT_CANDIDATE_MAX_REQUEST_BYTES = 64 * 1024
+_SEED_DATASETS = ("equities_bars_daily", "equities_master", "fins_summary")
+_IN_PERIOD_COVERAGE_DATASETS = frozenset(
+    {"equities_bars_daily", "indices_bars_daily_topix", "markets_calendar"}
+)
 # R2 single-object PUT ceiling: 5 GiB minus 5 MiB (Cloudflare R2 limits footnote 4).
 RECEIPT_CANDIDATE_RAW_PUT_MAX_BYTES = (5 * 1024 * 1024 * 1024) - (5 * 1024 * 1024)
 # Matches CREATE_ONLY_COMPARE_MAX_BYTES in platform/workers/research-mass-eval/src/http.ts.
@@ -54,42 +60,68 @@ def _canonical_bytes(value: Mapping[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
-def _closed_pins() -> dict[str, Any]:
-    from execution.exact_four_binding import controlled_pilot_v1_contract
+def _load_compiled_binding() -> Any:
+    from research.ready_manifest import load_exact_four_pilot_ready_binding
 
-    contract = controlled_pilot_v1_contract()
-    datasets = contract["dataset_ids"]
-    if type(datasets) is not list or not datasets:
+    return load_exact_four_pilot_ready_binding()
+
+
+def _closed_pins() -> dict[str, Any]:
+    binding = _load_compiled_binding()
+    datasets = tuple(str(item) for item in binding.required_datasets)
+    if not datasets:
         raise ReceiptCandidateJobInputError("profile datasets are missing")
     return {
-        "profile_id": contract["profile_id"],
-        "profile_digest": contract["profile_digest"],
-        "dependency_closure_digest": contract["dependency_closure_digest"],
-        "datasets": frozenset(str(item) for item in datasets),
+        "profile_id": binding.profile_id,
+        "profile_digest": binding.profile_digest,
+        "dependency_closure_digest": binding.closure_set_digest,
+        "datasets": frozenset(datasets),
     }
 
 
-def _parse_segments(raw: Any, *, datasets: frozenset[str]) -> tuple[dict[str, str], ...]:
-    if type(raw) is not list or not 1 <= len(raw) <= RECEIPT_CANDIDATE_MAX_SEGMENTS:
+def _profile_period() -> tuple[str, str, tuple[str, ...]]:
+    binding = _load_compiled_binding()
+    periods = {
+        (str(profile.period_start), str(profile.period_end))
+        for profile in binding.profiles
+        if getattr(profile, "period_start", None)
+        and getattr(profile, "period_end", None)
+    }
+    if len(periods) != 1:
+        raise ReceiptCandidateJobInputError("profile period is missing")
+    period_start, period_end = next(iter(periods))
+    datasets = tuple(str(item) for item in binding.required_datasets)
+    if not datasets:
+        raise ReceiptCandidateJobInputError("profile datasets are missing")
+    return period_start, period_end, datasets
+
+
+def _previous_month(month_id: str) -> str:
+    year = int(month_id[:4])
+    month = int(month_id[5:7])
+    if month == 1:
+        return f"{year - 1:04d}-12"
+    return f"{year:04d}-{month - 1:02d}"
+
+
+def compiled_candidate_selectors() -> tuple[dict[str, str], ...]:
+    """In-period collection months. Pre-period seeds are filled after evaluate."""
+
+    from storage.coverage_ledger import compiled_period_collection_segments
+
+    period_start, period_end, datasets = _profile_period()
+    planned = compiled_period_collection_segments(
+        datasets,
+        period_start=period_start,
+        period_end=period_end,
+    )
+    selectors = [
+        {"dataset": item.dataset, "segment_id": item.segment_id} for item in planned
+    ]
+    selectors.sort(key=lambda row: (row["dataset"], row["segment_id"]))
+    if not 1 <= len(selectors) <= RECEIPT_CANDIDATE_MAX_SEGMENTS:
         raise ReceiptCandidateJobInputError("segments out of range")
-    seen: set[tuple[str, str]] = set()
-    segments: list[dict[str, str]] = []
-    for item in raw:
-        if type(item) is not dict or set(item) != {"dataset", "segment_id"}:
-            raise ReceiptCandidateJobInputError("segment fields are closed")
-        dataset = item["dataset"]
-        segment_id = item["segment_id"]
-        if type(dataset) is not str or type(segment_id) is not str:
-            raise ReceiptCandidateJobInputError("segment fields are closed strings")
-        if dataset not in datasets or not segment_id:
-            raise ReceiptCandidateJobInputError("dataset not in profile")
-        key = (dataset, segment_id)
-        if key in seen:
-            raise ReceiptCandidateJobInputError("duplicate selector")
-        seen.add(key)
-        segments.append({"dataset": dataset, "segment_id": segment_id})
-    segments.sort(key=lambda row: (row["dataset"], row["segment_id"]))
-    return tuple(segments)
+    return tuple(selectors)
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,7 +155,6 @@ class ReceiptCandidateJobSpec:
             "profile_id",
             "request_digest",
             "runner_version",
-            "segments",
         }
         if set(document) != required:
             raise ReceiptCandidateJobInputError("receipt candidate job fields are closed")
@@ -135,7 +166,7 @@ class ReceiptCandidateJobSpec:
 
         if type(max_bytes) is not int or max_bytes != SNAPSHOT_MAX_DATABASE_BYTES:
             raise ReceiptCandidateJobInputError("max_database_bytes is invalid")
-        string_fields = required - {"max_database_bytes", "segments"}
+        string_fields = required - {"max_database_bytes"}
         if not all(isinstance(document[field], str) for field in string_fields):
             raise ReceiptCandidateJobInputError("receipt candidate string fields are closed")
         pins = _closed_pins()
@@ -151,7 +182,7 @@ class ReceiptCandidateJobSpec:
             profile_id=document["profile_id"],
             profile_digest=document["profile_digest"],
             dependency_closure_digest=document["dependency_closure_digest"],
-            segments=_parse_segments(document["segments"], datasets=pins["datasets"]),
+            segments=compiled_candidate_selectors(),
         )
         if spec.runner_version != RUNNER_VERSION:
             raise ReceiptCandidateJobInputError("runner version mismatch")
@@ -191,7 +222,6 @@ class ReceiptCandidateJobSpec:
             "profile_digest": self.profile_digest,
             "profile_id": self.profile_id,
             "runner_version": self.runner_version,
-            "segments": list(self.segments),
         }
         return "sha256:" + hashlib.sha256(_canonical_bytes(body)).hexdigest()
 
@@ -273,7 +303,7 @@ def _scope_manifest_fields(scope: Mapping[str, Any]) -> dict[str, Any]:
             "validation_proof_digest": scope.get("validation_proof_digest"),
         }
     if scope.get("compiled_scope_status") == "PASS":
-        return {
+        fields = {
             "compiled_scope_status": "PASS",
             "compiled_scope_kind": kind,
             "observation_policy": scope["observation_policy"],
@@ -290,6 +320,10 @@ def _scope_manifest_fields(scope: Mapping[str, Any]) -> dict[str, Any]:
             "receipt_native_manifest": scope["receipt_native_manifest"],
             **quality,
         }
+        reason = scope.get("coverage_proof_reason")
+        if type(reason) is str and reason:
+            fields["coverage_proof_reason"] = reason
+        return fields
     fields: dict[str, Any] = {
         "compiled_scope_status": "FAIL",
         "compiled_scope_kind": kind,
@@ -317,6 +351,269 @@ def _remaining_budget(limit: int, *paths: Path) -> int:
             "receipt candidate sqlite exceeds the builder cap"
         )
     return limit - used
+
+
+def _selector_key(item: Mapping[str, str]) -> tuple[str, str]:
+    return item["dataset"], item["segment_id"]
+
+
+def _discover_bound(
+    dataset: str,
+    have: set[tuple[str, str]],
+    pending: set[tuple[str, str]],
+    period_start: str,
+) -> str:
+    months = [segment_id for name, segment_id in have | pending if name == dataset]
+    if months:
+        return _previous_month(min(months))
+    return _previous_month(period_start[:7])
+
+
+def _missing_compiled_segments(
+    store: SqliteStore,
+    *,
+    spec: ReceiptCandidateJobSpec,
+    have: set[tuple[str, str]],
+) -> tuple[list[dict[str, str]], set[str]]:
+    from paper_runtime.ready_publication import (
+        _max_original_checked_at,
+        _require_controlled_exact_four_binding,
+        _resolve_controlled_universe,
+    )
+    from pit.compiled_dependency_scope import (
+        CompiledControlledSelection,
+        collect_compiled_coverage_events,
+        combined_dataset_lookback_trading_days,
+    )
+    from pit.compiled_scope_proof import compiled_scope_proof_session_from_store
+    from pit.errors import PitError
+    from pit.scoped_selection import _owned_scoped_research_owner_from_verified_witness
+    from selection.budget_ledger import MassResearchDisabledError
+    from storage.coverage_ledger import declared_coverage_segments
+    from storage.receipt_crypto import PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS
+
+    binding = _load_compiled_binding()
+    if (
+        binding.profile_id != spec.profile_id
+        or binding.profile_digest != spec.profile_digest
+        or binding.closure_set_digest != spec.dependency_closure_digest
+    ):
+        raise ReceiptCandidateJobInputError("profile pin mismatch")
+    period_start, period_end, max_lookback, required_datasets = (
+        _require_controlled_exact_four_binding(binding)
+    )
+    extra: list[dict[str, str]] = []
+    need_older: set[str] = set()
+    conn = store._conn  # noqa: SLF001
+    previous_factory = conn.row_factory
+    try:
+        with compiled_scope_proof_session_from_store(store) as session:
+            (
+                collection_receipts,
+                product_materializations,
+                ingestion_runs,
+                raw_retention_manifests,
+            ) = session.load_receipt_scope(required_datasets)
+            (
+                _backings,
+                witness,
+                accepted,
+                _runset,
+                _bindings,
+            ) = session.collect_verified_receipt_backings(
+                collection_receipts=collection_receipts,
+                product_materializations=product_materializations,
+                ingestion_runs=ingestion_runs,
+                raw_retention_manifests=raw_retention_manifests,
+                required_datasets=required_datasets,
+                expected_environment=spec.environment,
+                expected_authority_instance_digest=(
+                    PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS[spec.environment]
+                ),
+                measure_through=None,
+                allowed_segments=frozenset(have),
+            )
+            observed_through = _max_original_checked_at(accepted)
+            proof_clock, slices, resolved_universe = _resolve_controlled_universe(
+                session,
+                period_start=period_start,
+                period_end=period_end,
+                observed_through=observed_through,
+                expected_environment=spec.environment,
+                expected_authority_instance_digest=(
+                    PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS[spec.environment]
+                ),
+            )
+            owner = _owned_scoped_research_owner_from_verified_witness(
+                conn,
+                witness=frozenset(witness),
+            )
+            hits, missing = collect_compiled_coverage_events(
+                conn,
+                compiled=CompiledControlledSelection(
+                    period_start=period_start,
+                    period_end=period_end,
+                    lookback_trading_days=max_lookback,
+                    profile_digest=binding.profile_digest,
+                    feature_consumers=tuple(
+                        profile.feature_consumers() for profile in binding.profiles
+                    ),
+                    dataset_lookback_trading_days=combined_dataset_lookback_trading_days(
+                        binding.profiles
+                    ),
+                ),
+                observed_through=proof_clock.observed_through,
+                slices=slices,
+                resolved_universe=resolved_universe,
+                scoped_owner=owner,
+            )
+            events = {
+                dataset_id: frozenset(hits.selected_event_dates.get(dataset_id) or ())
+                for dataset_id in required_datasets
+            }
+            need_older.update(missing)
+    except (PitError, MassResearchDisabledError, sqlite3.Error):
+        return extra, set(_SEED_DATASETS)
+    finally:
+        conn.row_factory = previous_factory
+
+    plannable: list[str] = []
+    for dataset_id in required_datasets:
+        if dataset_id in _IN_PERIOD_COVERAGE_DATASETS or events.get(dataset_id):
+            plannable.append(dataset_id)
+        elif dataset_id in _SEED_DATASETS:
+            need_older.add(dataset_id)
+    if plannable:
+        try:
+            planned = declared_coverage_segments(
+                plannable,
+                lookback_start=period_start,
+                period_start=period_start,
+                period_end=period_end,
+                selected_event_dates=events,
+                bar_split_interval_start=hits.bar_split_interval_start,
+            )
+        except ValueError:
+            planned = ()
+            need_older.update(
+                dataset_id
+                for dataset_id in _SEED_DATASETS
+                if not events.get(dataset_id)
+            )
+        for item in planned:
+            key = (item.dataset, item.segment_id)
+            if key not in have:
+                extra.append({"dataset": item.dataset, "segment_id": item.segment_id})
+    return extra, need_older  # extra is the declared inventory still missing from have
+
+
+def _materialize_described_batch(
+    *,
+    store: SqliteStore,
+    spec: ReceiptCandidateJobSpec,
+    transport: Any,
+    job_root: Path,
+    database: Path,
+    batch: Sequence[Mapping[str, str]],
+    materialized: list[dict[str, Any]],
+) -> None:
+    from pit.cooperative_deadline import check_deadline
+
+    described = describe_receipt_product_input(
+        profile_id=spec.profile_id,
+        profile_digest=spec.profile_digest,
+        dependency_closure_digest=spec.dependency_closure_digest,
+        segments=batch,
+        opener=transport,
+    )
+    if described.get("environment") != spec.environment:
+        raise ReceiptCandidateMaterializeError(
+            "described environment does not match worker capability"
+        )
+    rows = described.get("segments")
+    if type(rows) is not list or len(rows) != len(batch):
+        raise ReceiptCandidateMaterializeError("described selectors drifted")
+    wanted = {_selector_key(item) for item in batch}
+    got = {
+        (str(item.get("dataset")), str(item.get("segment_id")))
+        for item in rows
+        if type(item) is dict
+    }
+    if wanted != got:
+        raise ReceiptCandidateMaterializeError("described selectors drifted")
+    for item in rows:
+        check_deadline()
+        dataset = str(item["dataset"])
+        segment_id = str(item["segment_id"])
+        operation_id = str(item["operation_id"])
+        receipt_digest = str(item["receipt_digest"])
+        product_path = job_root / f"product-{dataset}-{segment_id}.jsonl"
+        raw_path = job_root / f"raw-{dataset}-{segment_id}.json"
+        calendar_path = None
+        left = _remaining_budget(spec.max_database_bytes, database)
+        spool_receipt_product_bytes(
+            destination=product_path,
+            profile_id=spec.profile_id,
+            profile_digest=spec.profile_digest,
+            dependency_closure_digest=spec.dependency_closure_digest,
+            dataset=dataset,
+            segment_id=segment_id,
+            operation_id=operation_id,
+            receipt_digest=receipt_digest,
+            resource="product_artifact",
+            max_bytes=left,
+            opener=transport,
+        )
+        left = _remaining_budget(spec.max_database_bytes, database, product_path)
+        spool_receipt_product_bytes(
+            destination=raw_path,
+            profile_id=spec.profile_id,
+            profile_digest=spec.profile_digest,
+            dependency_closure_digest=spec.dependency_closure_digest,
+            dataset=dataset,
+            segment_id=segment_id,
+            operation_id=operation_id,
+            receipt_digest=receipt_digest,
+            resource="raw_collection_manifest",
+            max_bytes=min(RAW_MANIFEST_MAX_BYTES, left),
+            opener=transport,
+        )
+        if dataset == "equities_master":
+            calendar_path = job_root / f"calendar-{segment_id}.json"
+            left = _remaining_budget(
+                spec.max_database_bytes,
+                database,
+                product_path,
+                raw_path,
+            )
+            spool_receipt_product_bytes(
+                destination=calendar_path,
+                profile_id=spec.profile_id,
+                profile_digest=spec.profile_digest,
+                dependency_closure_digest=spec.dependency_closure_digest,
+                dataset=dataset,
+                segment_id=segment_id,
+                operation_id=operation_id,
+                receipt_digest=receipt_digest,
+                resource="official_calendar_raw",
+                max_bytes=min(OFFICIAL_CALENDAR_MAX_BYTES, left),
+                opener=transport,
+            )
+        materialized.append(
+            materialize_receipt_segment(
+                store,
+                environment=spec.environment,
+                descriptor=item,
+                product_path=product_path,
+                raw_path=raw_path,
+                calendar_path=calendar_path,
+                max_database_bytes=spec.max_database_bytes,
+            )
+        )
+        product_path.unlink(missing_ok=True)
+        raw_path.unlink(missing_ok=True)
+        if calendar_path is not None:
+            calendar_path.unlink(missing_ok=True)
 
 
 def execute_receipt_candidate_job(
@@ -351,116 +648,78 @@ def execute_receipt_candidate_job(
                 store, max_database_bytes=spec.max_database_bytes
             )
             materialized: list[dict[str, Any]] = []
-            remaining_selectors = list(spec.segments)
-            while remaining_selectors:
-                batch = remaining_selectors[:DESCRIBE_BATCH_SEGMENTS]
-                remaining_selectors = remaining_selectors[DESCRIBE_BATCH_SEGMENTS:]
-                described = describe_receipt_product_input(
-                    profile_id=spec.profile_id,
-                    profile_digest=spec.profile_digest,
-                    dependency_closure_digest=spec.dependency_closure_digest,
-                    segments=batch,
-                    opener=transport,
+            pending = list(compiled_candidate_selectors())
+            have: set[tuple[str, str]] = set()
+            discovered_bounds: set[tuple[str, str]] = set()
+            period_start, _period_end, _datasets = _profile_period()
+            while pending:
+                unique = have | {_selector_key(item) for item in pending}
+                if len(unique) > RECEIPT_CANDIDATE_MAX_SEGMENTS:
+                    raise ReceiptCandidateJobInputError("segments out of range")
+                remaining = list(pending)
+                pending = []
+                while remaining:
+                    batch = remaining[:DESCRIBE_BATCH_SEGMENTS]
+                    remaining = remaining[DESCRIBE_BATCH_SEGMENTS:]
+                    _materialize_described_batch(
+                        store=store,
+                        spec=spec,
+                        transport=transport,
+                        job_root=job_root,
+                        database=database,
+                        batch=batch,
+                        materialized=materialized,
+                    )
+                    have.update(_selector_key(item) for item in batch)
+                extra, need_older = _missing_compiled_segments(
+                    store, spec=spec, have=have
                 )
-                if described.get("environment") != spec.environment:
-                    raise ReceiptCandidateMaterializeError(
-                        "described environment does not match worker capability"
+                pending_keys = set()
+                for item in extra:
+                    key = _selector_key(item)
+                    if key in have or key in pending_keys:
+                        continue
+                    pending.append(item)
+                    pending_keys.add(key)
+                for dataset in sorted(need_older):
+                    if dataset not in _SEED_DATASETS:
+                        continue
+                    bound = _discover_bound(
+                        dataset, have, pending_keys, period_start
                     )
-                rows = described.get("segments")
-                if type(rows) is not list or len(rows) != len(batch):
-                    raise ReceiptCandidateMaterializeError("described selectors drifted")
-                wanted = {(item["dataset"], item["segment_id"]) for item in batch}
-                got = {
-                    (str(item.get("dataset")), str(item.get("segment_id")))
-                    for item in rows
-                    if type(item) is dict
-                }
-                if wanted != got:
-                    raise ReceiptCandidateMaterializeError("described selectors drifted")
-                for item in rows:
-                    check_deadline()
-                    dataset = str(item["dataset"])
-                    segment_id = str(item["segment_id"])
-                    operation_id = str(item["operation_id"])
-                    receipt_digest = str(item["receipt_digest"])
-                    product_path = job_root / f"product-{dataset}-{segment_id}.jsonl"
-                    raw_path = job_root / f"raw-{dataset}-{segment_id}.json"
-                    calendar_path = None
-                    left = _remaining_budget(spec.max_database_bytes, database)
-                    spool_receipt_product_bytes(
-                        destination=product_path,
+                    request_bound = bound
+                    while (dataset, request_bound) in discovered_bounds:
+                        nxt = _previous_month(request_bound)
+                        if nxt >= request_bound:
+                            request_bound = ""
+                            break
+                        request_bound = nxt
+                    if not request_bound:
+                        continue
+                    discovered_bounds.add((dataset, request_bound))
+                    found = discover_latest_complete_segment(
                         profile_id=spec.profile_id,
                         profile_digest=spec.profile_digest,
                         dependency_closure_digest=spec.dependency_closure_digest,
                         dataset=dataset,
-                        segment_id=segment_id,
-                        operation_id=operation_id,
-                        receipt_digest=receipt_digest,
-                        resource="product_artifact",
-                        max_bytes=left,
+                        on_or_before=request_bound,
                         opener=transport,
                     )
-                    left = _remaining_budget(
-                        spec.max_database_bytes, database, product_path
-                    )
-                    spool_receipt_product_bytes(
-                        destination=raw_path,
-                        profile_id=spec.profile_id,
-                        profile_digest=spec.profile_digest,
-                        dependency_closure_digest=spec.dependency_closure_digest,
-                        dataset=dataset,
-                        segment_id=segment_id,
-                        operation_id=operation_id,
-                        receipt_digest=receipt_digest,
-                        resource="raw_collection_manifest",
-                        max_bytes=min(RAW_MANIFEST_MAX_BYTES, left),
-                        opener=transport,
-                    )
-                    if dataset == "equities_master":
-                        calendar_path = job_root / f"calendar-{segment_id}.json"
-                        left = _remaining_budget(
-                            spec.max_database_bytes,
-                            database,
-                            product_path,
-                            raw_path,
-                        )
-                        spool_receipt_product_bytes(
-                            destination=calendar_path,
-                            profile_id=spec.profile_id,
-                            profile_digest=spec.profile_digest,
-                            dependency_closure_digest=spec.dependency_closure_digest,
-                            dataset=dataset,
-                            segment_id=segment_id,
-                            operation_id=operation_id,
-                            receipt_digest=receipt_digest,
-                            resource="official_calendar_raw",
-                            max_bytes=min(OFFICIAL_CALENDAR_MAX_BYTES, left),
-                            opener=transport,
-                        )
-                    materialized.append(
-                        materialize_receipt_segment(
-                            store,
-                            environment=spec.environment,
-                            descriptor=item,
-                            product_path=product_path,
-                            raw_path=raw_path,
-                            calendar_path=calendar_path,
-                            max_database_bytes=spec.max_database_bytes,
-                        )
-                    )
-                    product_path.unlink(missing_ok=True)
-                    raw_path.unlink(missing_ok=True)
-                    if calendar_path is not None:
-                        calendar_path.unlink(missing_ok=True)
+                    if found is None:
+                        continue
+                    key = _selector_key(found)
+                    if key in have or key in pending_keys:
+                        continue
+                    pending.append(found)
+                    pending_keys.add(key)
             commit_receipt_candidate(store)
             from paper_runtime.ready_publication import (
                 canonical_digest,
                 canonical_json_bytes,
                 verify_committed_receipt_candidate_scope,
             )
-            from research.ready_manifest import load_exact_four_pilot_ready_binding
 
-            binding = load_exact_four_pilot_ready_binding()
+            binding = _load_compiled_binding()
             if (
                 binding.profile_id != spec.profile_id
                 or binding.profile_digest != spec.profile_digest
@@ -471,9 +730,7 @@ def execute_receipt_candidate_job(
                 store,
                 binding=binding,
                 environment=spec.environment,
-                allowed_segments=frozenset(
-                    (item["dataset"], item["segment_id"]) for item in spec.segments
-                ),
+                allowed_segments=frozenset(have),
             )
             store.close()
             store = None

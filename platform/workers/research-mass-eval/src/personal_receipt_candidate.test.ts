@@ -33,7 +33,6 @@ function ready(): Response {
 
 const REQUEST = parseReceiptCandidateRequest({
   job_id: "cand-one",
-  segments: [{ dataset: "equities_bars_daily", segment_id: "2023-01" }],
 });
 if (!REQUEST.ok) throw new Error(REQUEST.error);
 
@@ -42,7 +41,6 @@ describe("personal receipt candidate Worker dispatch", () => {
     const parsed = parseReceiptCandidateRequest({
       job_id: "cand-one",
       environment: "staging",
-      segments: [{ dataset: "equities_bars_daily", segment_id: "2023-01" }],
     });
     expect(parsed.ok).toBe(false);
   });

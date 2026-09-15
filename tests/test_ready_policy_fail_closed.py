@@ -991,6 +991,21 @@ _SCOPE_DATASETS = EXACT_FOUR_DATASET_IDS
 _LATE_AFTER_OBSERVED = "2026-08-25T12:00:01+00:00"
 
 
+# Ten prior 1332 sessions plus 2023-01-04 same-day close the n+1=11 first as_of.
+FIRST_DECISION_PRIOR_BAR_DATES = (
+    "2022-09-15",
+    "2022-09-16",
+    "2022-09-20",
+    "2022-10-18",
+    "2022-10-19",
+    "2022-10-21",
+    "2022-11-10",
+    "2022-11-11",
+    "2022-11-14",
+    "2022-12-15",
+)
+
+
 def _daily_equity_bar(
     code: str,
     day: str,
@@ -1307,17 +1322,14 @@ def _seed_exact_pit_scope(
                 morning=99.5,
                 volume=1000.0,
             )
-            for day in calendar_dates
-            if day not in omit_bar_dates
-        ]
-        + [
-            _daily_equity_bar(
-                "1332",
-                split_predecessor_day,
-                close=100.0,
-                morning=99.5,
-                volume=1000.0,
+            for day in dict.fromkeys(
+                (
+                    *calendar_dates,
+                    *FIRST_DECISION_PRIOR_BAR_DATES,
+                    split_predecessor_day,
+                )
             )
+            if day not in omit_bar_dates
         ],
         "indices_bars_daily_topix": [
             {

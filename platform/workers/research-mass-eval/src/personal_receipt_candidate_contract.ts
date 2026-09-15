@@ -5,7 +5,6 @@ import {
 } from "./personal_research_contract";
 import {
   EXACT_FOUR_CLOSURE_DIGEST,
-  EXACT_FOUR_DATASET_IDS,
   EXACT_FOUR_PROFILE_DIGEST,
   EXACT_FOUR_PROFILE_ID,
 } from "./controlled_pilot_contract";
@@ -18,13 +17,10 @@ export const RECEIPT_CANDIDATE_DESCRIBE_BATCH_SEGMENTS = 128;
 export const RECEIPT_CANDIDATE_MAX_DATABASE_BYTES =
   PERSONAL_SNAPSHOT_MAX_DATABASE_BYTES;
 
-const CALLER_KEYS = ["job_id", "segments"] as const;
-const SEGMENT_KEYS = ["dataset", "segment_id"] as const;
-const PROFILE_DATASETS = new Set(EXACT_FOUR_DATASET_IDS);
+const CALLER_KEYS = ["job_id"] as const;
 
 export type ReceiptCandidateRequest = {
   job_id: string;
-  segments: Array<{ dataset: string; segment_id: string }>;
 };
 
 export type ReceiptCandidateParseResult =
@@ -51,44 +47,7 @@ export function parseReceiptCandidateRequest(
   if (!isPersonalResearchJobId(jobId)) {
     return { ok: false, error: "job_id is invalid" };
   }
-  if (!Array.isArray(raw.segments)) {
-    return { ok: false, error: "segments out of range" };
-  }
-  if (
-    raw.segments.length < 1 ||
-    raw.segments.length > RECEIPT_CANDIDATE_MAX_SEGMENTS
-  ) {
-    return { ok: false, error: "segments out of range" };
-  }
-  const seen = new Set<string>();
-  const segments: Array<{ dataset: string; segment_id: string }> = [];
-  for (const item of raw.segments) {
-    if (
-      typeof item !== "object" ||
-      item === null ||
-      Array.isArray(item) ||
-      !closedKeys(item, SEGMENT_KEYS)
-    ) {
-      return { ok: false, error: "segment fields are closed" };
-    }
-    const dataset = (item as { dataset: unknown }).dataset;
-    const segmentId = (item as { segment_id: unknown }).segment_id;
-    if (typeof dataset !== "string" || typeof segmentId !== "string") {
-      return { ok: false, error: "segment fields are closed strings" };
-    }
-    if (!PROFILE_DATASETS.has(dataset) || segmentId.length === 0) {
-      return { ok: false, error: "dataset not in profile" };
-    }
-    const key = `${dataset}\0${segmentId}`;
-    if (seen.has(key)) return { ok: false, error: "duplicate selector" };
-    seen.add(key);
-    segments.push({ dataset, segment_id: segmentId });
-  }
-  segments.sort((left, right) => {
-    const dataset = left.dataset.localeCompare(right.dataset);
-    return dataset !== 0 ? dataset : left.segment_id.localeCompare(right.segment_id);
-  });
-  return { ok: true, value: { job_id: jobId, segments } };
+  return { ok: true, value: { job_id: jobId } };
 }
 
 export function personalReceiptCandidateManifestKey(jobId: string): string {
@@ -165,7 +124,6 @@ export async function receiptCandidateRequestDigest(
     profile_digest: EXACT_FOUR_PROFILE_DIGEST,
     profile_id: EXACT_FOUR_PROFILE_ID,
     runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
-    segments: request.segments,
   });
   return `sha256:${await sha256Hex(new TextEncoder().encode(canonical))}`;
 }

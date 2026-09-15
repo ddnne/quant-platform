@@ -562,6 +562,36 @@ def declared_coverage_segments(
     return tuple(planned)
 
 
+def compiled_period_collection_segments(
+    datasets: Sequence[str],
+    *,
+    period_start: str,
+    period_end: str,
+) -> tuple[RequiredCoverageSegment, ...]:
+    """In-period full collection months from the compiled decision window.
+
+    Pre-period seeds and split-predecessor months are not guessed here.
+    """
+
+    planned: list[RequiredCoverageSegment] = []
+    for dataset_id in datasets:
+        policy = coverage_contract_for(dataset_id)
+        range_start, range_end = _full_collection_month_range(
+            period_start, period_end
+        )
+        segments = plan_required_segments(
+            policy,
+            range_end,
+            range_start=range_start,
+        )
+        if not segments:
+            raise ValueError(
+                f"declared coverage inventory is empty for {dataset_id}"
+            )
+        planned.extend(segments)
+    return tuple(planned)
+
+
 _DETERMINISTIC_READY_INVENTORY_GRAINS = frozenset({"calendar_month"})
 
 

@@ -7,6 +7,7 @@ describe/metadata response cap, never a product-stream cap.
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -23,6 +24,7 @@ RAW_MANIFEST_MAX_BYTES = 4 * 1024 * 1024
 OFFICIAL_CALENDAR_MAX_BYTES = 65_536
 DESCRIBE_BATCH_SEGMENTS = 128
 _IDENTITY_HEADERS = frozenset({"x-quant-resource", "x-quant-receipt-digest"})
+_MONTH_ID = re.compile(r"^[0-9]{4}-[0-9]{2}$")
 
 
 class ReceiptProductTransportError(RuntimeError):
@@ -39,26 +41,11 @@ def _canonical_bytes(value: Mapping[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
-def describe_receipt_product_input(
+def _describe_http(
+    payload: Mapping[str, Any],
     *,
-    profile_id: str,
-    profile_digest: str,
-    dependency_closure_digest: str,
-    segments: Sequence[Mapping[str, str]],
-    opener: Any = urllib.request,
-) -> dict[str, Any]:
-    if not 1 <= len(segments) <= DESCRIBE_BATCH_SEGMENTS:
-        raise ReceiptProductTransportError("describe batch is out of range")
-    payload = {
-        "schema_version": RECEIPT_PRODUCT_INPUT_REQUEST,
-        "profile_id": profile_id,
-        "profile_digest": profile_digest,
-        "dependency_closure_digest": dependency_closure_digest,
-        "segments": [
-            {"dataset": item["dataset"], "segment_id": item["segment_id"]}
-            for item in segments
-        ],
-    }
+    opener: Any,
+) -> tuple[int, dict[str, Any]]:
     body = _canonical_bytes(payload)
     request = urllib.request.Request(
         f"{RECEIPT_PRODUCT_ORIGIN}{DESCRIBE_PATH}",
@@ -82,11 +69,93 @@ def describe_receipt_product_input(
         parsed = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ReceiptProductTransportError("describe response is not JSON") from exc
-    if status != 200 or type(parsed) is not dict or parsed.get("status") != "DESCRIBED":
+    if type(parsed) is not dict:
+        raise ReceiptProductTransportError("describe response is not JSON")
+    return status, parsed
+
+
+def describe_receipt_product_input(
+    *,
+    profile_id: str,
+    profile_digest: str,
+    dependency_closure_digest: str,
+    segments: Sequence[Mapping[str, str]],
+    opener: Any = urllib.request,
+) -> dict[str, Any]:
+    if not 1 <= len(segments) <= DESCRIBE_BATCH_SEGMENTS:
+        raise ReceiptProductTransportError("describe batch is out of range")
+    payload = {
+        "schema_version": RECEIPT_PRODUCT_INPUT_REQUEST,
+        "profile_id": profile_id,
+        "profile_digest": profile_digest,
+        "dependency_closure_digest": dependency_closure_digest,
+        "segments": [
+            {"dataset": item["dataset"], "segment_id": item["segment_id"]}
+            for item in segments
+        ],
+    }
+    status, parsed = _describe_http(payload, opener=opener)
+    if status != 200 or parsed.get("status") != "DESCRIBED":
         raise ReceiptProductTransportError("receipt product input was not described")
     if parsed.get("schema_version") != RECEIPT_PRODUCT_INPUT_SET:
         raise ReceiptProductTransportError("describe schema mismatch")
     return parsed
+
+
+def discover_latest_complete_segment(
+    *,
+    profile_id: str,
+    profile_digest: str,
+    dependency_closure_digest: str,
+    dataset: str,
+    on_or_before: str,
+    opener: Any = urllib.request,
+) -> dict[str, str] | None:
+    """Latest COMPLETE collection month at or before ``on_or_before``.
+
+    Only a proven no-match (HOLD MISSING_ROW at the requested bound) is
+    ``None``. Transport, auth, and other service failures raise.
+    """
+
+    if type(dataset) is not str or not dataset or not _MONTH_ID.fullmatch(on_or_before):
+        raise ReceiptProductTransportError("discover bound is invalid")
+    payload = {
+        "schema_version": RECEIPT_PRODUCT_INPUT_REQUEST,
+        "profile_id": profile_id,
+        "profile_digest": profile_digest,
+        "dependency_closure_digest": dependency_closure_digest,
+        "discover": {"dataset": dataset, "on_or_before": on_or_before},
+    }
+    status, parsed = _describe_http(payload, opener=opener)
+    selector = parsed.get("hold_selector")
+    if (
+        status == 409
+        and parsed.get("status") == "HOLD"
+        and parsed.get("hold_reason") == "MISSING_ROW"
+        and type(selector) is dict
+        and selector.get("dataset") == dataset
+        and selector.get("segment_id") == on_or_before
+    ):
+        return None
+    if status != 200 or parsed.get("status") != "DESCRIBED":
+        raise ReceiptProductTransportError("receipt product input was not described")
+    if parsed.get("schema_version") != RECEIPT_PRODUCT_INPUT_SET:
+        raise ReceiptProductTransportError("describe schema mismatch")
+    rows = parsed.get("segments")
+    if type(rows) is not list or len(rows) != 1 or type(rows[0]) is not dict:
+        raise ReceiptProductTransportError("discovered selector is invalid")
+    dataset_id = rows[0].get("dataset")
+    segment_id = rows[0].get("segment_id")
+    if (
+        dataset_id != dataset
+        or type(segment_id) is not str
+        or not _MONTH_ID.fullmatch(segment_id)
+        or segment_id > on_or_before
+    ):
+        raise ReceiptProductTransportError(
+            "discovered selector does not match the request"
+        )
+    return {"dataset": dataset_id, "segment_id": segment_id}
 
 
 def spool_receipt_product_bytes(

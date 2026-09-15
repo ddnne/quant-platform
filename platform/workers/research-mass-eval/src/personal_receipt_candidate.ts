@@ -119,7 +119,6 @@ export async function submitPersonalReceiptCandidate(
           profile_id: EXACT_FOUR_PROFILE_ID,
           request_digest: requestDigest,
           runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
-          segments: request.segments,
         }),
       }),
     );

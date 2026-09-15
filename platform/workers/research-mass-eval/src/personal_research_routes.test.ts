@@ -108,7 +108,6 @@ describe("personal snapshot and batch HTTP routes", () => {
         method: "POST",
         body: JSON.stringify({
           job_id: "cand-1",
-          segments: [{ dataset: "equities_bars_daily", segment_id: "2023-01" }],
         }),
       }),
       env(),
