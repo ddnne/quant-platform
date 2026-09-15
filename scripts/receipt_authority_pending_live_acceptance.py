@@ -29,7 +29,7 @@ import sys
 import tempfile
 from typing import Any, Callable, Iterable, Mapping, NoReturn, Sequence
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 
@@ -85,9 +85,11 @@ _DISPOSITION_FILENAME = re.compile(
 )
 _MODULE_INVENTORY_FIELDS = frozenset({"name", "content_type", "bytes", "digest"})
 _SOURCE_PROVENANCE_FIELDS = frozenset({"main_module", "modules"})
-_OFFICIAL_ORIGIN_URLS = frozenset({
-    "https://github.com/ddnne/quant-platform",
-    "https://github.com/ddnne/quant-platform.git",
+_OFFICIAL_REMOTE_MAIN_URL = "https://github.com/ddnne/quant-platform.git"
+_OFFICIAL_ORIGIN_HOST = "github.com"
+_OFFICIAL_ORIGIN_PATHS = frozenset({
+    "ddnne/quant-platform",
+    "ddnne/quant-platform.git",
 })
 _SCRIPT_SETTING_KEYS = frozenset({
     "logpush",
@@ -781,6 +783,26 @@ def _isolated_command_environment(
     return environment
 
 
+def _official_https_github_origin(origin_url: str) -> bool:
+    raw = origin_url.strip()
+    if not raw or any(character.isspace() for character in raw):
+        return False
+    try:
+        parsed = urlsplit(raw)
+        port = parsed.port
+    except ValueError:
+        return False
+    if (
+        parsed.scheme != "https"
+        or parsed.query
+        or parsed.fragment
+        or port is not None
+        or parsed.hostname != _OFFICIAL_ORIGIN_HOST
+    ):
+        return False
+    return parsed.path.lstrip("/") in _OFFICIAL_ORIGIN_PATHS
+
+
 def _require_official_origin_main(
     expected_source_sha: str,
     *,
@@ -789,35 +811,48 @@ def _require_official_origin_main(
     """Bind the caller-selected SHA to the official remote main branch."""
 
     reviewed_sha = _source_sha(expected_source_sha)
-    commands = (
-        ("git", "remote", "get-url", "origin"),
-        ("git", "rev-parse", "--verify", "refs/remotes/origin/main^{commit}"),
-    )
-    results: list[subprocess.CompletedProcess[str]] = []
-    for command in commands:
-        try:
-            completed = runner(
-                command,
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=30,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise ReceiptPendingLiveAcceptanceError(
-                "official origin/main provenance could not be verified"
-            ) from exc
-        if completed.returncode != 0:
-            raise ReceiptPendingLiveAcceptanceError(
-                "official origin/main provenance could not be verified"
-            )
-        results.append(completed)
-    origin_url = results[0].stdout.strip()
-    local_origin_main = results[1].stdout.strip()
-    if origin_url not in _OFFICIAL_ORIGIN_URLS or local_origin_main != reviewed_sha:
+    try:
+        origin = runner(
+            ("git", "remote", "get-url", "origin"),
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        tracking = runner(
+            (
+                "git",
+                "rev-parse",
+                "--verify",
+                "refs/remotes/origin/main^{commit}",
+            ),
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ReceiptPendingLiveAcceptanceError(
+            "official origin/main provenance could not be verified"
+        ) from exc
+    if origin.returncode != 0:
+        raise ReceiptPendingLiveAcceptanceError(
+            "official origin/main provenance could not be verified"
+        )
+    if not _official_https_github_origin(origin.stdout.strip()):
         raise ReceiptPendingLiveAcceptanceError(
             "reviewed source SHA is not the pinned official origin/main"
+        )
+    if tracking.returncode == 0:
+        if tracking.stdout.strip() != reviewed_sha:
+            raise ReceiptPendingLiveAcceptanceError(
+                "reviewed source SHA is not the pinned official origin/main"
+            )
+    elif tracking.returncode != 128:
+        raise ReceiptPendingLiveAcceptanceError(
+            "official origin/main provenance could not be verified"
         )
     with tempfile.TemporaryDirectory(prefix="receipt-origin-main-") as temporary:
         git_environment = _isolated_command_environment(Path(temporary))
@@ -834,7 +869,7 @@ def _require_official_origin_main(
                     "ls-remote",
                     "--exit-code",
                     "--refs",
-                    origin_url,
+                    _OFFICIAL_REMOTE_MAIN_URL,
                     "refs/heads/main",
                 ),
                 cwd=Path(temporary),
@@ -844,10 +879,10 @@ def _require_official_origin_main(
                 timeout=30,
                 env=git_environment,
             )
-        except (OSError, subprocess.SubprocessError) as exc:
+        except (OSError, subprocess.SubprocessError):
             raise ReceiptPendingLiveAcceptanceError(
                 "official remote main could not be verified"
-            ) from exc
+            ) from None
     expected_row = f"{reviewed_sha}\trefs/heads/main"
     if remote.returncode != 0 or remote.stdout.strip() != expected_row:
         raise ReceiptPendingLiveAcceptanceError(
