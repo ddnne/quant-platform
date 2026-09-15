@@ -4,7 +4,10 @@
 
 This is the **only executable production operations document**. Historical
 Phase 6.1 / 6.2 runbooks are non-executable. Live GO flags live in
-[`../phase62_residual_status.md`](../phase62_residual_status.md). Review findings
+[`../phase62_residual_status.md`](../phase62_residual_status.md); dated
+observation tables there are history. Current source, staging-schema, and
+read-only Ops facts live in
+[`current_work_ledger.json`](current_work_ledger.json). Review findings
 live in [`../phase633_finding_ledger.md`](../phase633_finding_ledger.md).
 
 Do not print secret values. Check presence only.
@@ -24,15 +27,25 @@ remote apply results only in immutable release evidence.
 
 ## Honest holds
 
-- **Cloudflare Access / Zero Trust:** HOLD remains. 2026-09-13T19:06Z read-only
-  GET `/accounts/11233bca08d134a9b738eaa46b9751d9/access/organizations` returned
+- **Cloudflare Access / Zero Trust:** HOLD remains for Worker Access
+  JWT/hostname protection only. Dated 2026-09-13T19:06Z and
+  2026-09-14T00:56:19Z read-only GET
+  `/accounts/11233bca08d134a9b738eaa46b9751d9/access/organizations` returned
   error 9999 `access.api.error.not_enabled` with a dashboard Enable Access
-  instruction. No UI inspected, no config changed. A Cloudflare account API
+  instruction. A 2026-09-15 GET recheck also returned 9999 `not_enabled`;
+  no exact Sep 15 call timestamp is supplied. No UI inspected, no config
+  changed, no ToS/domain selection established. A Cloudflare account API
   token is control-plane auth, not a Worker Access JWT. `GET
   /v1/private/jsda-health-ready` requires `ctx.access.aud`
-  (`receipt-activation-observer/src/index.ts`). Human initial Access setup may
-  be needed; a managed zone is not an established prerequisite. Header token
-  remains enabled. Do not treat Access as closed.
+  (`receipt-activation-observer/src/index.ts`). This is not a precondition
+  for schema recovery, read-only Ops checks, or ordinary source fixes. A
+  managed zone is not an established prerequisite. Header token remains
+  enabled. Do not treat Access as closed, and do not serialize it before
+  all other work. Existing Wrangler OAuth works for real staging
+  reads/migration. Separate Grok MCP auth errors remain; they are not a
+  global source-work stop. Agreed Codex mechanical fallback may apply
+  authorized operations after a Grok permission denial; that is not a HOLD
+  bypass. No paid API fallback.
 - **Controlled Pilot:** **NO-GO** until live evidence in
   `docs/phase62_residual_status.md` passes. Green tests do not arm exact-four.
   Runtime still requires signed READY, signed Trader authorization, an
@@ -43,11 +56,15 @@ remote apply results only in immutable release evidence.
 - **READY publication path:** live publication is PENDING/undeployed. Mass
   submits Container `POST /v1/materialize-receipt-candidate`; COMPLETED PASS
   freezes one candidate snapshot and may emit a receipt-native v2 manifest,
-  still `go:false` / `ready:false`. Last-recorded live observation
-  (2026-09-13T18:20Z) has projection STALE (~23d), B0 UNKNOWN, READY null,
-  applied_feed_cursor null, and all 23 dataset applied/ready-pinned cursors
-  null; not a B4/tools-list/schema/Coverage/JSDA/JQ/full-Worker-version
-  acceptance. Coverage, raw, and receipt proofs are last-recorded
+  still `go:false` / `ready:false`. Read-only global Ops remeasure by
+  2026-09-15T08:24:35Z remains projection STALE, B0 UNKNOWN, READY snapshot
+  null, applied_feed_cursor null (generation still 2026-08-21
+  `projgen-ef18b4f86ee946048161d25e2a30a2a8`). Exact cursors and the
+  unmeasured list live in `current_work_ledger.json`. Ops projection/v3 is
+  not proof of Coverage V3 deployment. Do not replace unmeasured with 0 or
+  close global GO. STALE/null/UNKNOWN are technical gaps, not a
+  completed-READY gate on inactive code rollout and not an all-26-COMPLETE
+  gate on Ops refresh. Coverage, raw, and receipt proofs are last-recorded
   MISSING/unmeasured live evidence, not a claim that source cannot accept
   complete authentic proofs. Public v2 attestation stays PENDING until that
   live evidence exists. Product bytes use Service Binding `INGESTION_PREMIUM`
@@ -67,8 +84,8 @@ remote apply results only in immutable release evidence.
   (https://github.com/ddnne/quant-platform/pull/171, feature `fe1b7f1`) Node Mass
   native lifecycle consumes Premium-serialized READY+Trader bytes with real
   verifiers; workerd publication RPC remains mocked; required native check
-  103777783817 was in_progress at 2026-09-13T19:26Z — lookup that PR for
-  acceptance, no success forecast. Existing Mass staging secret history is not
+  103777783817 was in_progress at 2026-09-13T19:26Z (historical; lookup
+  that PR for later acceptance, no success forecast from that timestamp). Existing Mass staging secret history is not
   this SHA deployed. `POST /v1/export/receipt-products` is undeployed read-only
   and is not READY. Generic v1/Python publication routes remain distinct.
   Activating keys is not live READY or GO. Inactive source rollout is not
@@ -129,29 +146,20 @@ remote apply results only in immutable release evidence.
   is the final check, not a blocker for prerequisite Worker code rollout.
   This bounded repair does not run D1 migration, JSDA activation, or DLQ
   mutation.
-- **Current staging code rollout (not acceptance):** main `35611b0` Mass
-  staging tagged deploy completed with exact module bytes, Container V5
-  100%, `GET /health` 200, unauthenticated 401, and active instances 0.
+- **Current staging code rollout (not acceptance):** Mass staging remains
+  source `35611b0` at an earlier checkpoint, not remeasured now:
+  [Mass operational checkpoint](https://github.com/ddnne/quant-platform/pull/204#issuecomment-5674898739).
   Authenticated 403 smoke is pending location of existing
-  `MASS_EVAL_TOKEN` (no rotation). See the
-  [operational checkpoint](https://github.com/ddnne/quant-platform/pull/204#issuecomment-5674898739).
-  Worker/Container code rollout is not auth-smoke, data, READY, or Pilot
-  acceptance. Staging `quant-ingest` remains exact canonical `0001_init` through
-  `0010_raw_acquisition_status`. One `--prepare-staging-schema` attempt from
-  `d9de3fbcd227eaef8feff99455fb99d6d1ed7c0f` failed at about 2026-09-15
-  05:52 UTC. Live history is still prefix 0001–0010; the original lease is
-  `recovery_required` / `remote_spawned=1`; Queue is resumed with backlog 0;
-  Cron is `[]`; JSDA `version_id` `ba642c80-ce12-40c2-998d-4d55875f3dc4` and
-  `deployment_id` `9ab16913-fb6a-4fa5-806a-f35341156d31` are unchanged; no
-  active cutover runs. PR207 removed unsupported child Wrangler `--yes` and
-  has exact source/main native CI on merged main `3d6a95c`. Do not
-  generic-retry `--prepare-staging-schema`. After current-main native CI is
-  green, use the staging-only reviewed `--repair-staging-schema-incident`
-  command in section 2. Live recovery has not run.
-  That path keeps the live JSDA `version_id` and `deployment_id` when the
-  selected version has no SHA tag (`version_tag` empty/unattested). It does
-  not invent a source SHA and does not run `--activate`. `--activate` and
-  production stay SHA-tag strict.
+  `MASS_EVAL_TOKEN` (no rotation; ask only location or already-set process
+  env; never print values). That gap blocks only that smoke. Worker/Container
+  code rollout is not auth-smoke, data, READY, or Pilot, and not all Workers
+  are on current main `e07158a`. Staging schema is `SCHEMA_PREPARED`
+  (canonical `0001`–`0023`), distinct from Worker code and from JSDA
+  `--activate`. Structured facts live in `current_work_ledger.json`; exact
+  live readback:
+  https://github.com/ddnne/quant-platform/pull/207#issuecomment-5676026212
+  (mutable; not an immutable release). `--activate` and production stay
+  SHA-tag strict.
 - **JSDA cutover follow-ups (open):** whole shared-D1 Time Travel restore is
   removed from the operator. A Time Travel bookmark remains recovery-reference
   evidence only; Premium and Receipt writers are not fenced. `--rollback`
@@ -248,37 +256,32 @@ names all fail closed. Wrangler is `4.125.0`.
 ## 2. D1 migration policy: single Cloudflare operator
 
 Do not hand-loop SQL files or invoke `wrangler d1 migrations apply` directly.
-`ingestion-premium` owns the `quant-ingest` chain. The 2026-09-15 ~05:52 UTC
-staging `--prepare-staging-schema` attempt from
-`d9de3fbcd227eaef8feff99455fb99d6d1ed7c0f` failed. Live `quant-ingest-staging`
-(`d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb`) is still exact `0001`–`0010` with
-sqlite_master digest
-`sha256:0ac9dc808255c3afe9a7a03c4123a7e3381ee142ad71e2d8474c5b9db4f46ea9`
-(78 objects) and `jsda_v3_cutover_run` count 0. The original
-`recovery_required` / `remote_spawned=1` lease, intent, and receipt remain.
-Do not generic-retry `--prepare-staging-schema` and do not automatically retry
-after a new partial apply. Remaining 0011–0022 include 0017/0022 ADD COLUMN
-and 0020 rebuild, which are not generic-idempotent. After current-main native
-CI is green, the staging-only reviewed repair is:
+`ingestion-premium` owns the `quant-ingest` chain.
+
+Staging schema is `SCHEMA_PREPARED` (canonical `0001`–`0023`). Do not
+generic-retry the failed `--prepare-staging-schema` incident, do not
+automatically retry after a new partial apply, and do not rerun
+`--repair-staging-schema-incident` (still in source; operationally closed).
+Remaining 0011–0022 include 0017/0022 ADD COLUMN and 0020 rebuild, which are
+not generic-idempotent. Exact live readback:
+https://github.com/ddnne/quant-platform/pull/207#issuecomment-5676026212
+(mutable operational evidence, not an immutable release). Original private
+receipt/intent identity stayed original. The successful normal release left
+the live lease vacant (`remote_spawned=0`, empty `source_sha`, expires 1970);
+a vacant lease does not retain source. The pre-apply 78-object fingerprint
+in the work ledger is PRE-APPLY ONLY: independently checked before and after
+CAS before remote spawn, not a SQL CAS input/predicate, not the current
+post-migration fingerprint, and not retry authority. Same-host overlapping
+repairs remain refused by a nonblocking flock on the existing original
+control-intent file; that is not a distributed lock and does not replace
+remote D1 identity or CAS. Finish-only verifies a `verifying` /
+`remote_spawned=0` lease without reapplying migrations.
+
+Historical closed-incident command (do not rerun; not deleted from source):
 
 ```bash
 .venv/bin/python scripts/activate_jsda_v3_cutover.py --environment staging --repair-staging-schema-incident --yes
 ```
-
-It preserves the original owner/nonce/source/database/manifest binding and the
-frozen 78-object schema digest; the lease source stays `d9de3fb` and is never
-relabelled as current main. Publish non-secret original source, actual repair
-SHA, database, manifest, schema digest, and outcome to the existing mutable
-PR207 checkpoint
-https://github.com/ddnne/quant-platform/pull/207#issuecomment-5676026212
-with exact readback before and after live operation, including failures. That
-comment is operational evidence, not an immutable release. Live recovery has
-not run. Same-host overlapping repairs are refused by a nonblocking flock on
-the existing original control-intent file for the whole operation, including
-finish-only; that is not a distributed lock and does not replace remote D1
-identity or CAS. Finish-only verifies a `verifying` / `remote_spawned=0` lease
-without reapplying migrations. Retire `--repair-staging-schema-incident` after
-this incident closes.
 Normal later staging schema-only preparation (no JSDA Worker deploy, no
 `v3_active`) remains:
 
@@ -445,4 +448,7 @@ curl -fsS -X POST \
 - Persist D1/R2 evidence before Queue ack. Evidence-write failure retries.
 - Invalid Queue bodies keep reject/DLQ audit evidence without caller values.
 - Controlled Pilot and Mass remain NO-GO until residual live evidence passes.
-- Access HOLD remains open until a human initializes Zero Trust.
+- Access 9999 remains open for Worker Access JWT/hostname protection only;
+  it is not a stop on ordinary source fixes, read-only Ops, or already
+  authorized staging schema work. Explicit production/data/JSDA-activate/
+  key/READY/Pilot/Ops-publication HOLDs are unchanged by generic continue.
