@@ -69,27 +69,38 @@ def _closed_pins() -> dict[str, Any]:
     }
 
 
-def _parse_segments(raw: Any, *, datasets: frozenset[str]) -> tuple[dict[str, str], ...]:
-    if type(raw) is not list or not 1 <= len(raw) <= RECEIPT_CANDIDATE_MAX_SEGMENTS:
+def compiled_candidate_selectors() -> tuple[dict[str, str], ...]:
+    """Collection months implied by the pinned exact-four period."""
+
+    from execution.exact_four_binding import controlled_pilot_v1_contract
+    from storage.coverage_ledger import compiled_period_collection_segments
+
+    contract = controlled_pilot_v1_contract()
+    plans = contract["plans"]
+    if type(plans) is not list or not plans:
+        raise ReceiptCandidateJobInputError("profile period is missing")
+    period_start = plans[0]["period_start"]
+    period_end = plans[0]["period_end"]
+    if type(period_start) is not str or type(period_end) is not str:
+        raise ReceiptCandidateJobInputError("profile period is missing")
+    if any(
+        item.get("period_start") != period_start or item.get("period_end") != period_end
+        for item in plans
+        if type(item) is dict
+    ):
+        raise ReceiptCandidateJobInputError("profile period is missing")
+    datasets = tuple(str(item) for item in contract["dataset_ids"])
+    planned = compiled_period_collection_segments(
+        datasets,
+        period_start=period_start,
+        period_end=period_end,
+    )
+    selectors = tuple(
+        {"dataset": item.dataset, "segment_id": item.segment_id} for item in planned
+    )
+    if not 1 <= len(selectors) <= RECEIPT_CANDIDATE_MAX_SEGMENTS:
         raise ReceiptCandidateJobInputError("segments out of range")
-    seen: set[tuple[str, str]] = set()
-    segments: list[dict[str, str]] = []
-    for item in raw:
-        if type(item) is not dict or set(item) != {"dataset", "segment_id"}:
-            raise ReceiptCandidateJobInputError("segment fields are closed")
-        dataset = item["dataset"]
-        segment_id = item["segment_id"]
-        if type(dataset) is not str or type(segment_id) is not str:
-            raise ReceiptCandidateJobInputError("segment fields are closed strings")
-        if dataset not in datasets or not segment_id:
-            raise ReceiptCandidateJobInputError("dataset not in profile")
-        key = (dataset, segment_id)
-        if key in seen:
-            raise ReceiptCandidateJobInputError("duplicate selector")
-        seen.add(key)
-        segments.append({"dataset": dataset, "segment_id": segment_id})
-    segments.sort(key=lambda row: (row["dataset"], row["segment_id"]))
-    return tuple(segments)
+    return selectors
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,7 +134,6 @@ class ReceiptCandidateJobSpec:
             "profile_id",
             "request_digest",
             "runner_version",
-            "segments",
         }
         if set(document) != required:
             raise ReceiptCandidateJobInputError("receipt candidate job fields are closed")
@@ -135,7 +145,7 @@ class ReceiptCandidateJobSpec:
 
         if type(max_bytes) is not int or max_bytes != SNAPSHOT_MAX_DATABASE_BYTES:
             raise ReceiptCandidateJobInputError("max_database_bytes is invalid")
-        string_fields = required - {"max_database_bytes", "segments"}
+        string_fields = required - {"max_database_bytes"}
         if not all(isinstance(document[field], str) for field in string_fields):
             raise ReceiptCandidateJobInputError("receipt candidate string fields are closed")
         pins = _closed_pins()
@@ -151,7 +161,7 @@ class ReceiptCandidateJobSpec:
             profile_id=document["profile_id"],
             profile_digest=document["profile_digest"],
             dependency_closure_digest=document["dependency_closure_digest"],
-            segments=_parse_segments(document["segments"], datasets=pins["datasets"]),
+            segments=compiled_candidate_selectors(),
         )
         if spec.runner_version != RUNNER_VERSION:
             raise ReceiptCandidateJobInputError("runner version mismatch")
@@ -191,7 +201,6 @@ class ReceiptCandidateJobSpec:
             "profile_digest": self.profile_digest,
             "profile_id": self.profile_id,
             "runner_version": self.runner_version,
-            "segments": list(self.segments),
         }
         return "sha256:" + hashlib.sha256(_canonical_bytes(body)).hexdigest()
 

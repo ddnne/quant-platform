@@ -714,7 +714,6 @@ describe("personalResearchR2Outbound workerd/R2 runtime", () => {
   it("publishes after admitted PASS without rematerializing on retry", async () => {
     const parsed = parseReceiptCandidateRequest({
       job_id: "r05-candidate-pub",
-      segments: [{ dataset: "equities_bars_daily", segment_id: "2023-01" }],
     });
     if (!parsed.ok) throw new Error(parsed.error);
     const pubDigest = await receiptCandidateRequestDigest(parsed.value);

@@ -524,19 +524,16 @@ def declared_coverage_segments(
         elif dataset_id in _WARMUP_COVERAGE_DATASETS:
             floor = period_start or lookback_start
             keep_all = True
-        elif policy.expected_frequency == "event_driven":
-            if not events:
-                raise ValueError(
-                    f"declared coverage events are missing for {dataset_id}"
-                )
+        elif events:
             floor = min(events)
+            keep_all = policy.expected_frequency == "event_driven" or keep_all
+        elif period_start:
+            floor = period_start
             keep_all = True
         else:
-            if not events:
-                raise ValueError(
-                    f"declared coverage events are missing for {dataset_id}"
-                )
-            floor = min(events)
+            raise ValueError(
+                f"declared coverage events are missing for {dataset_id}"
+            )
         range_start, range_end = _full_collection_month_range(floor, period_end)
         segments = plan_required_segments(
             policy,
@@ -560,6 +557,29 @@ def declared_coverage_segments(
             )
         planned.extend(kept)
     return tuple(planned)
+
+
+def compiled_period_collection_segments(
+    datasets: Sequence[str],
+    *,
+    period_start: str,
+    period_end: str,
+) -> tuple[RequiredCoverageSegment, ...]:
+    """Full collection months for the compiled decision period.
+
+    Candidate planning has no selected event dates yet. In-period months are
+    required for every profile dataset. Pre-period financial/master seeds and
+    split-predecessor bar months are discovered later by compiled proof, not
+    guessed here.
+    """
+
+    return declared_coverage_segments(
+        datasets,
+        lookback_start=period_start,
+        period_start=period_start,
+        period_end=period_end,
+        selected_event_dates={},
+    )
 
 
 _DETERMINISTIC_READY_INVENTORY_GRAINS = frozenset({"calendar_month"})

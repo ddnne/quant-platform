@@ -36,6 +36,7 @@ from ops.receipt_product import (
 from core.execution import close_as_of
 from storage.coverage_ledger import (
     RequiredCoverageSegment,
+    compiled_period_collection_segments,
     declared_coverage_segments,
     record_collection_receipt,
 )
@@ -400,7 +401,7 @@ def _posted(*, path: str, body: bytes, manager: object):
     return handler
 
 
-def _worker_document(job_id: str, segments: list[dict[str, str]]) -> dict[str, object]:
+def _worker_document(job_id: str) -> dict[str, object]:
     from execution.exact_four_binding import controlled_pilot_v1_contract
     from test_cloud_personal_research_container import service
     from receipt_candidate_job import RECEIPT_CANDIDATE_FORMAT
@@ -413,7 +414,6 @@ def _worker_document(job_id: str, segments: list[dict[str, str]]) -> dict[str, o
         "profile_digest": contract["profile_digest"],
         "profile_id": contract["profile_id"],
         "runner_version": service.RUNNER_VERSION,
-        "segments": segments,
     }
     digest = "sha256:" + hashlib.sha256(
         json.dumps(
@@ -430,6 +430,32 @@ def _worker_document(job_id: str, segments: list[dict[str, str]]) -> dict[str, o
     }
 
 
+def _compiled_descriptor_map() -> dict[tuple[str, str], dict[str, str]]:
+    from receipt_candidate_job import compiled_candidate_selectors
+
+    mapped: dict[tuple[str, str], dict[str, str]] = {}
+    for selector in compiled_candidate_selectors():
+        digest = "sha256:" + hashlib.sha256(
+            f"{selector['dataset']}:{selector['segment_id']}".encode()
+        ).hexdigest()
+        mapped[(selector["dataset"], selector["segment_id"])] = {
+            **selector,
+            "operation_id": digest,
+            "receipt_digest": digest,
+        }
+    return mapped
+
+
+def _skip_materialize(store, **kwargs):
+    del store
+    item = kwargs["descriptor"]
+    return {
+        "dataset": item["dataset"],
+        "segment_id": item["segment_id"],
+        "receipt_digest": item["receipt_digest"],
+    }
+
+
 def test_http_job_and_execute_publish_compact_completed_terminal(
     tmp_path: Path, receipt_ed25519_keys, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -442,26 +468,23 @@ def test_http_job_and_execute_publish_compact_completed_terminal(
     from paper_runtime.ready_publication import canonical_digest
     from receipt_candidate_job import RECEIPT_CANDIDATE_FORMAT, ReceiptCandidateJobSpec
 
-    _rows, product_path, raw_path, descriptor, _receipt = _signed_bundle(
-        tmp_path, receipt_ed25519_keys
-    )
-    selector = {
-        "dataset": descriptor["dataset"],
-        "segment_id": descriptor["segment_id"],
-    }
-    document = _worker_document("cand-exec-1", [selector])
+    document = _worker_document("cand-exec-1")
     spec = ReceiptCandidateJobSpec.from_document(document)
     uploads = tmp_path / "uploads"
     uploads.mkdir()
     transport = _ReceiptTransport(
-        {(selector["dataset"], selector["segment_id"]): descriptor},
+        _compiled_descriptor_map(),
         {
-            "product_artifact": product_path.read_bytes(),
-            "raw_collection_manifest": raw_path.read_bytes(),
+            "product_artifact": b"x",
+            "raw_collection_manifest": b"y",
+            "official_calendar_raw": b"z",
         },
         uploads,
     )
     monkeypatch.setattr(urllib.request, "urlopen", transport.urlopen)
+    monkeypatch.setattr(
+        "receipt_candidate_job.materialize_receipt_segment", _skip_materialize
+    )
     stored: dict[str, dict] = {}
     published = threading.Event()
 
@@ -513,7 +536,7 @@ def test_http_job_and_execute_publish_compact_completed_terminal(
         assert "observation_checked_at" not in terminal
         assert "source_generation" not in terminal
         assert "materialized_segments" not in terminal
-        assert terminal["segment_count"] == 1
+        assert terminal["segment_count"] == len(spec.segments)
         gzip_path = uploads / "candidate.sqlite.gz"
         put = json.loads((uploads / "put.json").read_text(encoding="utf-8"))
         gzip_bytes = gzip_path.read_bytes()
@@ -530,44 +553,26 @@ def test_http_job_and_execute_publish_compact_completed_terminal(
             manager._watchdog.cancel()
 
 
-def test_execute_512_selectors_keeps_compact_terminal(
+def test_execute_compiled_selectors_keeps_compact_terminal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from execution.exact_four_binding import controlled_pilot_v1_contract
-    from test_cloud_personal_research_container import service
     from receipt_candidate_job import (
         RECEIPT_CANDIDATE_MAX_REQUEST_BYTES,
         RECEIPT_CANDIDATE_MAX_SEGMENTS,
         ReceiptCandidateJobSpec,
+        compiled_candidate_selectors,
         execute_receipt_candidate_job,
     )
 
-    datasets = sorted(str(item) for item in controlled_pilot_v1_contract()["dataset_ids"])
-    segments: list[dict[str, str]] = []
-    descriptors: dict[tuple[str, str], dict] = {}
-    for index in range(RECEIPT_CANDIDATE_MAX_SEGMENTS):
-        month = index // len(datasets)
-        year = 2000 + month // 12
-        month_number = 1 + month % 12
-        selector = {
-            "dataset": datasets[index % len(datasets)],
-            "segment_id": f"{year:04d}-{month_number:02d}",
-        }
-        digest = "sha256:" + hashlib.sha256(str(index).encode()).hexdigest()
-        segments.append(selector)
-        descriptors[(selector["dataset"], selector["segment_id"])] = {
-            **selector,
-            "operation_id": digest,
-            "receipt_digest": digest,
-        }
-    segments.sort(key=lambda item: (item["dataset"], item["segment_id"]))
-    document = _worker_document("cand-512", segments)
+    selectors = compiled_candidate_selectors()
+    assert 1 <= len(selectors) <= RECEIPT_CANDIDATE_MAX_SEGMENTS
+    document = _worker_document("cand-compiled")
     encoded = json.dumps(
         document, ensure_ascii=True, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
-    assert service.MAX_REQUEST_BYTES < len(encoded) <= RECEIPT_CANDIDATE_MAX_REQUEST_BYTES
+    assert len(encoded) <= RECEIPT_CANDIDATE_MAX_REQUEST_BYTES
     transport = _ReceiptTransport(
-        descriptors,
+        _compiled_descriptor_map(),
         {
             "product_artifact": b"x",
             "raw_collection_manifest": b"y",
@@ -575,16 +580,6 @@ def test_execute_512_selectors_keeps_compact_terminal(
         },
         tmp_path,
     )
-
-    def _skip_materialize(store, **kwargs):
-        del store
-        item = kwargs["descriptor"]
-        return {
-            "dataset": item["dataset"],
-            "segment_id": item["segment_id"],
-            "receipt_digest": item["receipt_digest"],
-        }
-
     monkeypatch.setattr(
         "receipt_candidate_job.materialize_receipt_segment", _skip_materialize
     )
@@ -620,7 +615,7 @@ def test_execute_512_selectors_keeps_compact_terminal(
     terminal = adapter.terminal
     assert terminal is not None
     assert terminal["status"] == "COMPLETED"
-    assert terminal["segment_count"] == RECEIPT_CANDIDATE_MAX_SEGMENTS
+    assert terminal["segment_count"] == len(selectors)
     assert "materialized_segments" not in terminal
     assert terminal["ready"] is False
     assert terminal["go"] is False
@@ -638,25 +633,47 @@ def test_execute_512_selectors_keeps_compact_terminal(
     ) < 64 * 1024
 
 
+def test_compiled_candidate_missing_required_segment_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from receipt_candidate_job import (
+        ReceiptCandidateJobSpec,
+        execute_receipt_candidate_job,
+    )
+
+    mapped = _compiled_descriptor_map()
+    mapped.pop(next(iter(mapped)))
+    spec = ReceiptCandidateJobSpec.from_document(_worker_document("cand-missing"))
+    transport = _ReceiptTransport(
+        mapped,
+        {
+            "product_artifact": b"x",
+            "raw_collection_manifest": b"y",
+            "official_calendar_raw": b"z",
+        },
+        tmp_path,
+    )
+    monkeypatch.setattr(
+        "receipt_candidate_job.materialize_receipt_segment", _skip_materialize
+    )
+    failed = execute_receipt_candidate_job(
+        spec, work_root=tmp_path, uploader=lambda *args, **kwargs: None, opener=transport
+    )
+    assert failed["status"] == "FAILED"
+    assert "physical_key" not in failed
+
+
 def test_execute_pass_streams_closed_sqlite_before_gzip(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from paper_runtime.ready_publication import canonical_digest
     from receipt_candidate_job import ReceiptCandidateJobSpec, execute_receipt_candidate_job
 
-    selector = {"dataset": "equities_bars_daily", "segment_id": "2023-01"}
     spec = ReceiptCandidateJobSpec.from_document(
-        _worker_document("cand-phys-1", [selector])
+        _worker_document("cand-phys-1")
     )
-    digest = "sha256:" + "1" * 64
     transport = _ReceiptTransport(
-        {
-            (selector["dataset"], selector["segment_id"]): {
-                **selector,
-                "receipt_digest": digest,
-                "operation_id": digest,
-            }
-        },
+        _compiled_descriptor_map(),
         {
             "product_artifact": b"x",
             "raw_collection_manifest": b"y",
@@ -1038,6 +1055,27 @@ def test_declared_coverage_segments_use_selector_windows_and_full_months() -> No
         for item in calendar
         if item.dataset == "indices_bars_daily_topix"
     ] == ["2023-01"]
+    compiled = compiled_period_collection_segments(
+        ("markets_calendar", "equities_bars_daily"),
+        period_start="2023-01-04",
+        period_end="2023-10-13",
+    )
+    assert [
+        item.segment_id
+        for item in compiled
+        if item.dataset == "markets_calendar"
+    ] == [
+        "2023-01",
+        "2023-02",
+        "2023-03",
+        "2023-04",
+        "2023-05",
+        "2023-06",
+        "2023-07",
+        "2023-08",
+        "2023-09",
+        "2023-10",
+    ]
 
 
 def _canonical_month_calendar_raw(*, start: str, end: str) -> bytes:
