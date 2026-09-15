@@ -71,7 +71,20 @@ const REQUEST_KEYS_WITH_DIGEST = [
   ...REQUEST_KEYS,
   "expected_current_digest",
 ] as const;
+const DISCOVER_KEYS = [
+  "schema_version",
+  "profile_id",
+  "profile_digest",
+  "dependency_closure_digest",
+  "discover",
+] as const;
+const DISCOVER_KEYS_WITH_DIGEST = [
+  ...DISCOVER_KEYS,
+  "expected_current_digest",
+] as const;
 const SEGMENT_KEYS = ["dataset", "segment_id"] as const;
+const DISCOVER_SHAPE = ["dataset", "on_or_before"] as const;
+const MONTH_ID = /^[0-9]{4}-[0-9]{2}$/;
 
 export type ReceiptProductInputEnv = {
   DB: D1Database;
@@ -93,6 +106,7 @@ export type HoldSelector = { dataset: string; segment_id: string };
 
 type ClosedRequest = {
   segments: Array<{ dataset: string; segment_id: string }>;
+  discover?: { dataset: string; on_or_before: string };
   expected_current_digest?: string;
 };
 
@@ -286,10 +300,17 @@ export function parseReceiptProductInputRequest(
     value,
     "expected_current_digest",
   );
+  const hasDiscover = Object.prototype.hasOwnProperty.call(value, "discover");
+  const hasSegments = Object.prototype.hasOwnProperty.call(value, "segments");
+  if (hasDiscover === hasSegments) {
+    return { ok: false, error: "invalid request" };
+  }
   if (
     !exactKeys(
       value,
-      hasExpected ? REQUEST_KEYS_WITH_DIGEST : REQUEST_KEYS,
+      hasDiscover
+        ? (hasExpected ? DISCOVER_KEYS_WITH_DIGEST : DISCOVER_KEYS)
+        : (hasExpected ? REQUEST_KEYS_WITH_DIGEST : REQUEST_KEYS),
     )
   ) {
     return { ok: false, error: "unknown field" };
@@ -304,6 +325,30 @@ export function parseReceiptProductInputRequest(
   }
   if (hasExpected && !isSha256(value.expected_current_digest)) {
     return { ok: false, error: "invalid digest" };
+  }
+  if (hasDiscover) {
+    const discover = value.discover;
+    if (!isPlainObject(discover) || !exactKeys(discover, DISCOVER_SHAPE)) {
+      return { ok: false, error: "unknown field" };
+    }
+    const dataset = discover.dataset;
+    const onOrBefore = discover.on_or_before;
+    if (typeof dataset !== "string" || typeof onOrBefore !== "string") {
+      return { ok: false, error: "invalid request" };
+    }
+    if (!PROFILE_DATASETS.has(dataset) || !MONTH_ID.test(onOrBefore)) {
+      return { ok: false, error: "dataset not in profile" };
+    }
+    return {
+      ok: true,
+      request: {
+        segments: [],
+        discover: { dataset, on_or_before: onOrBefore },
+        expected_current_digest: hasExpected
+          ? String(value.expected_current_digest)
+          : undefined,
+      },
+    };
   }
   if (!Array.isArray(value.segments)) {
     return { ok: false, error: "invalid request" };
@@ -527,7 +572,39 @@ async function describeFromDb(
     )
     : null;
 
-  const frozen = await loadCoverage(db, budget, request.segments, catalogById);
+  let selectors = request.segments;
+  if (request.discover) {
+    const latest = await sourceFirst<{ segment_id: string }>(
+      db,
+      budget,
+      `SELECT coverage.segment_id AS segment_id
+         FROM coverage_segments AS coverage
+        WHERE coverage.dataset = ?
+          AND coverage.policy_version = ?
+          AND coverage.status = 'COMPLETE'
+          AND coverage.segment_id <= ?
+        ORDER BY coverage.segment_id DESC
+        LIMIT 1`,
+      [
+        request.discover.dataset,
+        COVERAGE_POLICY_VERSION,
+        request.discover.on_or_before,
+      ],
+    );
+    if (!latest?.segment_id) {
+      throw new HoldError("MISSING_ROW", {
+        dataset: request.discover.dataset,
+        segment_id: request.discover.on_or_before,
+      });
+    }
+    selectors = [
+      {
+        dataset: request.discover.dataset,
+        segment_id: String(latest.segment_id),
+      },
+    ];
+  }
+  const frozen = await loadCoverage(db, budget, selectors, catalogById);
   const wanted = frozenWanted(frozen);
 
   const receiptMeta = await sourceAll<Record<string, unknown>>(

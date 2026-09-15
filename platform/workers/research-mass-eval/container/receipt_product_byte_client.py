@@ -89,6 +89,61 @@ def describe_receipt_product_input(
     return parsed
 
 
+def discover_latest_complete_segment(
+    *,
+    profile_id: str,
+    profile_digest: str,
+    dependency_closure_digest: str,
+    dataset: str,
+    on_or_before: str,
+    opener: Any = urllib.request,
+) -> dict[str, str] | None:
+    """Latest COMPLETE collection month at or before ``on_or_before``."""
+
+    payload = {
+        "schema_version": RECEIPT_PRODUCT_INPUT_REQUEST,
+        "profile_id": profile_id,
+        "profile_digest": profile_digest,
+        "dependency_closure_digest": dependency_closure_digest,
+        "discover": {"dataset": dataset, "on_or_before": on_or_before},
+    }
+    body = _canonical_bytes(payload)
+    request = urllib.request.Request(
+        f"{RECEIPT_PRODUCT_ORIGIN}{DESCRIBE_PATH}",
+        data=body,
+        method="POST",
+        headers={
+            "content-type": "application/json; charset=utf-8",
+            "content-length": str(len(body)),
+        },
+    )
+    try:
+        with opener.urlopen(request, timeout=120) as response:
+            raw = response.read(DESCRIBE_MAX_BYTES + 1)
+            status = int(response.status)
+    except urllib.error.HTTPError as error:
+        raw = error.read(DESCRIBE_MAX_BYTES + 1)
+        status = int(error.code)
+    if status != 200:
+        return None
+    if len(raw) > DESCRIBE_MAX_BYTES:
+        raise ReceiptProductTransportError("describe response exceeds metadata bound")
+    try:
+        parsed = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ReceiptProductTransportError("describe response is not JSON") from exc
+    if type(parsed) is not dict or parsed.get("status") != "DESCRIBED":
+        return None
+    rows = parsed.get("segments")
+    if type(rows) is not list or len(rows) != 1 or type(rows[0]) is not dict:
+        return None
+    dataset_id = rows[0].get("dataset")
+    segment_id = rows[0].get("segment_id")
+    if type(dataset_id) is not str or type(segment_id) is not str:
+        return None
+    return {"dataset": dataset_id, "segment_id": segment_id}
+
+
 def spool_receipt_product_bytes(
     *,
     destination: Path,

@@ -524,16 +524,19 @@ def declared_coverage_segments(
         elif dataset_id in _WARMUP_COVERAGE_DATASETS:
             floor = period_start or lookback_start
             keep_all = True
-        elif events:
+        elif policy.expected_frequency == "event_driven":
+            if not events:
+                raise ValueError(
+                    f"declared coverage events are missing for {dataset_id}"
+                )
             floor = min(events)
-            keep_all = policy.expected_frequency == "event_driven" or keep_all
-        elif period_start:
-            floor = period_start
             keep_all = True
         else:
-            raise ValueError(
-                f"declared coverage events are missing for {dataset_id}"
-            )
+            if not events:
+                raise ValueError(
+                    f"declared coverage events are missing for {dataset_id}"
+                )
+            floor = min(events)
         range_start, range_end = _full_collection_month_range(floor, period_end)
         segments = plan_required_segments(
             policy,
@@ -565,21 +568,28 @@ def compiled_period_collection_segments(
     period_start: str,
     period_end: str,
 ) -> tuple[RequiredCoverageSegment, ...]:
-    """Full collection months for the compiled decision period.
+    """In-period full collection months from the compiled decision window.
 
-    Candidate planning has no selected event dates yet. In-period months are
-    required for every profile dataset. Pre-period financial/master seeds and
-    split-predecessor bar months are discovered later by compiled proof, not
-    guessed here.
+    Pre-period seeds and split-predecessor months are not guessed here.
     """
 
-    return declared_coverage_segments(
-        datasets,
-        lookback_start=period_start,
-        period_start=period_start,
-        period_end=period_end,
-        selected_event_dates={},
-    )
+    planned: list[RequiredCoverageSegment] = []
+    for dataset_id in datasets:
+        policy = coverage_contract_for(dataset_id)
+        range_start, range_end = _full_collection_month_range(
+            period_start, period_end
+        )
+        segments = plan_required_segments(
+            policy,
+            range_end,
+            range_start=range_start,
+        )
+        if not segments:
+            raise ValueError(
+                f"declared coverage inventory is empty for {dataset_id}"
+            )
+        planned.extend(segments)
+    return tuple(planned)
 
 
 _DETERMINISTIC_READY_INVENTORY_GRAINS = frozenset({"calendar_month"})

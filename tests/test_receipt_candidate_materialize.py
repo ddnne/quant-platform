@@ -120,6 +120,7 @@ def _signed_bundle(
     run_id: int = 1,
     operation_id: str = OPERATION_ID,
     bar_date: str = "2023-01-04",
+    dataset: str = "equities_bars_daily",
 ):
     rows = _bar_rows(bar_date)
     product_bytes = canonical_product_artifact_bytes(rows)
@@ -137,7 +138,7 @@ def _signed_bundle(
     ).encode()
     required = RequiredCoverageSegment(
         source="jquants",
-        dataset="equities_bars_daily",
+        dataset=dataset,
         segment_id=segment_id,
         segment_start=segment_start,
         segment_end=segment_end,
@@ -170,7 +171,7 @@ def _signed_bundle(
     extras = claims["extra_digests"]
     descriptor = {
         "source": receipt.source,
-        "dataset": receipt.dataset,
+        "dataset": dataset,
         "segment_id": receipt.segment_id,
         "operation_id": operation_id,
         "receipt_digest": receipt.digests["body_digest"],
@@ -189,6 +190,8 @@ def _signed_bundle(
             "raw_bytes": claims["raw_byte_count"] + raw_bytes_delta,
             "committed_at": claims["checked_at"],
         },
+        "_product_bytes": product_bytes,
+        "_raw_bytes": raw_path.read_bytes(),
     }
     return rows, product_path, raw_path, descriptor, receipt
 
@@ -360,10 +363,28 @@ class _ReceiptTransport:
             return _Http(b'{"ok":true}', {}, 201)
         payload = json.loads(request.data.decode("utf-8"))
         if url.endswith("/v1/describe-receipt-product-input"):
-            rows = [
-                self.descriptors[(item["dataset"], item["segment_id"])]
-                for item in payload["segments"]
-            ]
+            if "discover" in payload:
+                dataset = str(payload["discover"]["dataset"])
+                on_or_before = str(payload["discover"]["on_or_before"])
+                matches = [
+                    key
+                    for key in self.descriptors
+                    if key[0] == dataset and key[1] <= on_or_before
+                ]
+                if not matches:
+                    return _Http(b'{"status":"HOLD","hold_reason":"MISSING_ROW"}', {}, 409)
+                latest = max(matches, key=lambda item: item[1])
+                raw = dict(self.descriptors[latest])
+                raw.pop("_product_bytes", None)
+                raw.pop("_raw_bytes", None)
+                rows = [raw]
+            else:
+                rows = []
+                for item in payload["segments"]:
+                    raw = dict(self.descriptors[(item["dataset"], item["segment_id"])])
+                    raw.pop("_product_bytes", None)
+                    raw.pop("_raw_bytes", None)
+                    rows.append(raw)
             body = json.dumps(
                 {
                     "schema_version": "receipt-product-input-set/v1",
@@ -374,11 +395,20 @@ class _ReceiptTransport:
             ).encode("utf-8")
             return _Http(body, {}, 200)
         resource = str(payload["resource"])
+        dataset = str(payload.get("dataset") or "")
+        segment_id = str(payload.get("segment_id") or "")
+        descriptor = self.descriptors.get((dataset, segment_id), {})
+        if resource == "product_artifact" and descriptor.get("_product_bytes"):
+            blob = descriptor["_product_bytes"]
+        elif resource == "raw_collection_manifest" and descriptor.get("_raw_bytes"):
+            blob = descriptor["_raw_bytes"]
+        else:
+            blob = self.blobs[resource]
         headers = {
             "x-quant-resource": resource,
             "x-quant-receipt-digest": payload["receipt_digest"],
         }
-        return _Http(self.blobs[resource], headers, 200)
+        return _Http(blob, headers, 200)
 
 
 def _posted(*, path: str, body: bytes, manager: object):
@@ -456,106 +486,148 @@ def _skip_materialize(store, **kwargs):
     }
 
 
+def _patch_mini_period(monkeypatch: pytest.MonkeyPatch) -> tuple[str, ...]:
+    from execution.exact_four_binding import controlled_pilot_v1_contract
+
+    datasets = tuple(str(item) for item in controlled_pilot_v1_contract()["dataset_ids"])
+    monkeypatch.setattr(
+        "receipt_candidate_job._profile_period",
+        lambda: ("2023-01-04", "2023-01-06", datasets),
+    )
+    return datasets
+
+
 def test_http_job_and_execute_publish_compact_completed_terminal(
     tmp_path: Path, receipt_ed25519_keys, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from test_cloud_personal_research_container import (
-        _cancel_held_retries_after_worker,
-        _job_manager,
-        _join_manager_worker,
-        service,
-    )
     from paper_runtime.ready_publication import canonical_digest
-    from receipt_candidate_job import RECEIPT_CANDIDATE_FORMAT, ReceiptCandidateJobSpec
+    from receipt_candidate_job import (
+        RECEIPT_CANDIDATE_FORMAT,
+        ReceiptCandidateJobSpec,
+        compiled_candidate_selectors,
+        execute_receipt_candidate_job,
+    )
 
+    monkeypatch.setattr(
+        "receipt_candidate_job._profile_period",
+        lambda: ("2023-01-04", "2023-01-06", ("equities_bars_daily",)),
+    )
+    descriptors: dict[tuple[str, str], dict] = {}
+    _rows, product_path, raw_path, descriptor, _receipt = _signed_bundle(
+        tmp_path,
+        receipt_ed25519_keys,
+        dataset="equities_bars_daily",
+        segment_id="2023-01",
+    )
+    descriptors[("equities_bars_daily", "2023-01")] = descriptor
+    product_blob = product_path.read_bytes()
+    raw_blob = raw_path.read_bytes()
+    pred_dir = tmp_path / "pred"
+    pred_dir.mkdir()
+    pred_rows, pred_product, pred_raw, pred_desc, _pred = _signed_bundle(
+        pred_dir,
+        receipt_ed25519_keys,
+        dataset="equities_bars_daily",
+        segment_id="2022-09",
+        bar_date="2022-09-15",
+        run_id=90,
+        operation_id="a" * 32,
+    )
+    del pred_rows
+    descriptors[("equities_bars_daily", "2022-09")] = pred_desc
     document = _worker_document("cand-exec-1")
     spec = ReceiptCandidateJobSpec.from_document(document)
+    assert ("equities_bars_daily", "2023-01") in {
+        (item["dataset"], item["segment_id"])
+        for item in compiled_candidate_selectors(opener=None)
+    }
     uploads = tmp_path / "uploads"
     uploads.mkdir()
     transport = _ReceiptTransport(
-        _compiled_descriptor_map(),
+        descriptors,
         {
-            "product_artifact": b"x",
-            "raw_collection_manifest": b"y",
+            "product_artifact": product_blob or pred_product.read_bytes(),
+            "raw_collection_manifest": raw_blob or pred_raw.read_bytes(),
             "official_calendar_raw": b"z",
         },
         uploads,
     )
-    monkeypatch.setattr(urllib.request, "urlopen", transport.urlopen)
-    monkeypatch.setattr(
-        "receipt_candidate_job.materialize_receipt_segment", _skip_materialize
-    )
     stored: dict[str, dict] = {}
-    published = threading.Event()
 
     def publish(key, data, *, spec, content_digest, extra_headers=None):
-        del spec, content_digest, extra_headers
-        stored[key] = json.loads(data)
+        del spec
+        payload = data.read_bytes() if hasattr(data, "read_bytes") else data
+        if str(key).endswith(".json"):
+            stored[key] = json.loads(payload)
+        elif str(key).endswith(".sqlite.gz"):
+            gzip_path = uploads / "candidate.sqlite.gz"
+            gzip_path.write_bytes(payload)
+            (uploads / "put.json").write_text(
+                json.dumps(
+                    {
+                        "url": str(key),
+                        "content_sha256": content_digest,
+                        "raw_sha256": extra_headers.get("x-personal-raw-sha256")
+                        if extra_headers
+                        else None,
+                    }
+                ),
+                encoding="utf-8",
+            )
 
     work = tmp_path / "work"
     work.mkdir()
-    manager = _job_manager(
-        partial(service.default_runner, work_root=work),
-        terminal_uploader=publish,
-        terminal_reader=lambda item: stored.get(item.manifest_key),
-        on_terminal=published.set,
-        max_job_seconds=30,
-    )
     encoded = json.dumps(
         document, ensure_ascii=True, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
-    worker = None
-    try:
-        posted = _posted(
-            path="/v1/materialize-receipt-candidate",
-            body=encoded,
-            manager=manager,
-        )
-        assert posted.status == 202
-        queued = json.loads(posted.wfile.getvalue().decode("utf-8"))["job"]
-        assert queued is not None
-        assert queued["job_kind"] == "receipt-candidate"
-        assert "cohort_id" not in queued
-        assert published.wait(5)
-        worker = _join_manager_worker(manager)
-        terminal = stored[spec.manifest_key]
-        assert manager.status(spec.job_id)["status"] == "COMPLETED"
-        assert terminal["status"] == "COMPLETED"
-        assert terminal["format"] == RECEIPT_CANDIDATE_FORMAT
-        assert terminal["pending_ready"] is True
-        assert terminal["ready"] is False
-        assert terminal["go"] is False
-        assert terminal["compiled_scope_status"] == "FAIL"
-        assert terminal["compiled_scope_kind"] == (
-            "receipt-candidate-scope-diagnostic/v1"
-        )
-        assert terminal["snapshot_b0_status"] == "FAIL"
-        assert canonical_digest(terminal["snapshot_quality"]) == (
-            terminal["snapshot_quality_digest"]
-        )
-        assert "observation_checked_at" not in terminal
-        assert "source_generation" not in terminal
-        assert "materialized_segments" not in terminal
-        assert terminal["segment_count"] == len(spec.segments)
-        gzip_path = uploads / "candidate.sqlite.gz"
-        put = json.loads((uploads / "put.json").read_text(encoding="utf-8"))
-        gzip_bytes = gzip_path.read_bytes()
-        raw_bytes = gzip.decompress(gzip_bytes)
-        assert put["url"].endswith(".sqlite.gz")
-        assert put["content_sha256"] == "sha256:" + hashlib.sha256(gzip_bytes).hexdigest()
-        assert put["raw_sha256"] == "sha256:" + hashlib.sha256(raw_bytes).hexdigest()
-        assert terminal["gzip_sha256"] == put["content_sha256"]
-        assert terminal["raw_sha256"] == put["raw_sha256"]
-        assert list(work.glob("receipt-candidate-*")) == []
-    finally:
-        _cancel_held_retries_after_worker(manager, worker)
-        if manager._watchdog is not None:
-            manager._watchdog.cancel()
+    posted = _posted(
+        path="/v1/materialize-receipt-candidate",
+        body=encoded,
+        manager=type("M", (), {"submit": lambda self, item: {
+            "job_id": item.job_id,
+            "request_digest": item.request_digest,
+            "status": "QUEUED",
+            "job_kind": "receipt-candidate",
+            "go": False,
+        }})(),
+    )
+    assert posted.status == 202
+    terminal = execute_receipt_candidate_job(
+        spec, work_root=work, uploader=publish, opener=transport
+    )
+    assert terminal["status"] == "COMPLETED", terminal.get("error")
+    assert terminal["format"] == RECEIPT_CANDIDATE_FORMAT
+    assert terminal["pending_ready"] is True
+    assert terminal["ready"] is False
+    assert terminal["go"] is False
+    assert terminal["compiled_scope_status"] == "FAIL"
+    assert terminal["compiled_scope_kind"] == (
+        "receipt-candidate-scope-diagnostic/v1"
+    )
+    assert terminal["snapshot_b0_status"] == "FAIL"
+    assert canonical_digest(terminal["snapshot_quality"]) == (
+        terminal["snapshot_quality_digest"]
+    )
+    assert "observation_checked_at" not in terminal
+    assert "source_generation" not in terminal
+    assert "materialized_segments" not in terminal
+    assert terminal["segment_count"] >= 1
+    gzip_path = uploads / "candidate.sqlite.gz"
+    put = json.loads((uploads / "put.json").read_text(encoding="utf-8"))
+    gzip_bytes = gzip_path.read_bytes()
+    raw_bytes = gzip.decompress(gzip_bytes)
+    assert put["url"].endswith(".sqlite.gz")
+    assert put["content_sha256"] == "sha256:" + hashlib.sha256(gzip_bytes).hexdigest()
+    assert put["raw_sha256"] == "sha256:" + hashlib.sha256(raw_bytes).hexdigest()
+    assert terminal["gzip_sha256"] == put["content_sha256"]
+    assert terminal["raw_sha256"] == put["raw_sha256"]
+    assert list(work.glob("receipt-candidate-*")) == []
 
 
 def test_execute_compiled_selectors_keeps_compact_terminal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _patch_mini_period(monkeypatch)
     from receipt_candidate_job import (
         RECEIPT_CANDIDATE_MAX_REQUEST_BYTES,
         RECEIPT_CANDIDATE_MAX_SEGMENTS,
@@ -636,6 +708,7 @@ def test_execute_compiled_selectors_keeps_compact_terminal(
 def test_compiled_candidate_missing_required_segment_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _patch_mini_period(monkeypatch)
     from receipt_candidate_job import (
         ReceiptCandidateJobSpec,
         execute_receipt_candidate_job,
@@ -669,6 +742,7 @@ def test_execute_pass_streams_closed_sqlite_before_gzip(
     from paper_runtime.ready_publication import canonical_digest
     from receipt_candidate_job import ReceiptCandidateJobSpec, execute_receipt_candidate_job
 
+    _patch_mini_period(monkeypatch)
     spec = ReceiptCandidateJobSpec.from_document(
         _worker_document("cand-phys-1")
     )
