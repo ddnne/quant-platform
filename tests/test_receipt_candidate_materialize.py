@@ -891,7 +891,7 @@ def test_committed_candidate_scope_pass_ignores_unsigned_later_receipt(
     assert observed["feature_generation"] == expected_feature_generation
     assert observed["catalog_generation"] == expected_catalog_generation
     assert observed["coverage_proof_digest"] == MISSING
-    assert "equities_bars_daily/2022-09" in str(
+    assert "equities_bars_daily/2022-10" in str(
         result.get("coverage_proof_reason")
     )
     assert observed["raw_proof_digest"].startswith("sha256:")
