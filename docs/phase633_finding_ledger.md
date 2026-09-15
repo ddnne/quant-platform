@@ -89,7 +89,7 @@ typed error envelope.
 
 | ID | Finding | Status | Evidence / closure condition |
 |----|---------|--------|------------------------------|
-| C5 | 17 MCP tools lacked closed output schemas and deployment schema-digest acceptance | OPEN | Repository code now defines 17 closed input/output schemas and pins aggregate digest `sha256:dad7cd29ef002e76ee1f9802b8685a179f94fcbd0bb2e6df685858e41c1778d3`, but live `tools/list` still exposes 16 tools and omits `storage_plane_status`; close only after deployment acceptance proves exact name/schema parity |
+| C5 | 17 MCP tools lacked closed output schemas and deployment schema-digest acceptance | OPEN | Canonical pin is `specs/ops_projection/mcp_tool_schema_acceptance.json`; runtime digest is derived from that document. Connector inventory lists 16 registered tools and omits `storage_plane_status`; that is not a remeasured raw `tools/list` or schema-digest parity. Close only after deployment acceptance proves exact name/schema parity |
 | C6 | Production Cron triggers disappeared under non-inherited named environments | FIXED | `6a37f61f`; Premium and JSDA production triggers explicit |
 | C7 | `ingestion-secrets` workers.dev endpoint is not protected by Access | HOLD | Zero Trust account activation requires explicit human agreement; header token remains enabled |
 | C8 | Seven isolated active-Worker lockfiles remain instead of one npm workspace | DEFERRED | Build-isolation exception in `architecture/adr_worker_dependency_isolation.md`; the seventh is the reviewed dedicated Receipt-authority/rollback boundary, and exact dependency parity remains required |
