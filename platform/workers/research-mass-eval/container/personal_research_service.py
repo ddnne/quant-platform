@@ -1116,7 +1116,10 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
         verify_sqlite(destination)
         from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED
         from agents.risk_agent import RiskAgent
-        from pit.compiled_dependency_scope import CompiledControlledSelection
+        from pit.compiled_dependency_scope import (
+            CompiledControlledSelection,
+            combined_dataset_lookback_trading_days,
+        )
         from research.dependency_closure import resolve_strategy_spec
         from research.experiment_plans import PILOT_COST_SCENARIO
         from research.ready_manifest import load_exact_four_pilot_ready_binding
@@ -1151,18 +1154,18 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
         if len(periods) != 1:
             raise JobInputError("exact-four plans must share one governed universe period")
         period_start, period_end = next(iter(periods))
+        dataset_lookbacks = combined_dataset_lookback_trading_days(
+            ready_binding.profiles
+        )
         compiled_selection = CompiledControlledSelection(
             period_start=period_start,
             period_end=period_end,
-            lookback_trading_days=max(
-                int(scope["required_lookback_trading_days"])
-                for profile in ready_binding.profiles
-                for scope in profile.dataset_scopes
-            ),
+            lookback_trading_days=max(dataset_lookbacks.values(), default=0),
             profile_digest=ready_binding.profile_digest,
             feature_consumers=tuple(
                 profile.feature_consumers() for profile in ready_binding.profiles
             ),
+            dataset_lookback_trading_days=dataset_lookbacks,
         )
         controlled_handle = _mint_controlled_am_view(
             destination,

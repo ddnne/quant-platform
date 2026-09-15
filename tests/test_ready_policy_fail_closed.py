@@ -1603,7 +1603,10 @@ def _open_controlled_from_ready_proof(path: Path, proof, binding):
 
     Upstream Worker READY/projection signatures are stubbed.
     """
-    from pit.compiled_dependency_scope import CompiledControlledSelection
+    from pit.compiled_dependency_scope import (
+        CompiledControlledSelection,
+        combined_dataset_lookback_trading_days,
+    )
     from pit.governed_am_view import (
         _open_verified_controlled_snapshot,
         _session_scope_from_verified_worker_job,
@@ -1666,6 +1669,9 @@ def _open_controlled_from_ready_proof(path: Path, proof, binding):
             profile_digest=binding.profile_digest,
             feature_consumers=tuple(
                 profile.feature_consumers() for profile in binding.profiles
+            ),
+            dataset_lookback_trading_days=combined_dataset_lookback_trading_days(
+                binding.profiles
             ),
         ),
         resolve_membership=resolve_tse_prime_with_fins,

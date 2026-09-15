@@ -1021,6 +1021,23 @@ def test_declared_coverage_segments_use_selector_windows_and_full_months() -> No
         },
     )
     assert [item.segment_id for item in master] == ["2022-10", "2023-01"]
+    calendar = declared_coverage_segments(
+        ("markets_calendar", "indices_bars_daily_topix"),
+        lookback_start="2022-12-24",
+        period_start="2023-01-04",
+        period_end="2023-01-06",
+        selected_event_dates={},
+    )
+    assert [
+        item.segment_id
+        for item in calendar
+        if item.dataset == "markets_calendar"
+    ] == ["2023-01"]
+    assert [
+        item.segment_id
+        for item in calendar
+        if item.dataset == "indices_bars_daily_topix"
+    ] == ["2023-01"]
 
 
 def _canonical_month_calendar_raw(*, start: str, end: str) -> bytes:
