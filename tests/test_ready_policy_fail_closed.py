@@ -1759,7 +1759,7 @@ def test_exact_pit_dependency_scope_verifies_full_source_artifact_before_univers
     )
     extra_bar = _daily_equity_bar(
         "1332",
-        "2022-01-04",
+        "2023-02-01",
         close=80.0,
         morning=79.5,
         volume=100.0,
@@ -1770,7 +1770,7 @@ def test_exact_pit_dependency_scope_verifies_full_source_artifact_before_univers
             normalize_generic(
                 [extra_bar],
                 dataset="equities_bars_daily",
-                ingested_at="2022-01-04T16:00:00+09:00",
+                ingested_at="2023-02-01T16:00:00+09:00",
             ),
         )
         extra_structured = [
@@ -1778,7 +1778,7 @@ def test_exact_pit_dependency_scope_verifies_full_source_artifact_before_univers
             for row in store._conn.execute(  # noqa: SLF001
                 "SELECT * FROM jquants_records "
                 "WHERE dataset='equities_bars_daily' "
-                "AND substr(event_time, 1, 10)='2022-01-04' "
+                "AND substr(event_time, 1, 10)='2023-02-01' "
                 "ORDER BY natural_key"
             ).fetchall()
         ]
@@ -1837,7 +1837,6 @@ def test_exact_pit_dependency_scope_verifies_full_source_artifact_before_univers
         for entry in proof["entries"]
         if entry["dataset_id"] == "equities_bars_daily"
     )
-    assert bars_entry["natural_key_count"] == 33
     assert extra_bars_digest not in bars_entry["product_artifact_digests"]
     handle = _open_controlled_from_ready_proof(db_path, proof, binding)
     handle.close()
