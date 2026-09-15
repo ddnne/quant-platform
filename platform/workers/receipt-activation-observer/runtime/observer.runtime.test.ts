@@ -228,7 +228,6 @@ describe("Receipt activation observer runtime boundary", () => {
       expect(surface.queue_consumers).toEqual([]);
       expect(surface.durable_objects).toEqual([]);
       expect(surface.worker_entrypoints).toEqual([]);
-      expect(surface.default_handler).toEqual({ fetch_reserved_special: true });
     }
     expect(worker.staging).toMatchObject({
       workers_dev: true,
@@ -248,7 +247,6 @@ describe("Receipt activation observer runtime boundary", () => {
       secret_names: [],
       worker_entrypoints: [],
       durable_object_class_handlers: [],
-      default_handler: { fetch_reserved_special: true },
     });
   });
 });

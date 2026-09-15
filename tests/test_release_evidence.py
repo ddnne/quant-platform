@@ -134,6 +134,7 @@ def _collect_seams(
     workers = live.build_manifest()["workers"]
     observer_version = _version_document_for_surface(
         workers["receipt-activation-observer"]["staging"],
+        worker="receipt-activation-observer",
         version_id=OBSERVER_VERSION,
         ordinal=1,
         annotations={
@@ -144,6 +145,7 @@ def _collect_seams(
     )
     jsda_version = _version_document_for_surface(
         workers["ingestion-jsda"]["staging"],
+        worker="ingestion-jsda",
         version_id=JSDA_VERSION,
         ordinal=2,
         annotations={"workers/triggered_by": "version_upload"},

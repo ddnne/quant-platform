@@ -509,6 +509,19 @@ DEFAULT_FETCH_RESERVED_SPECIAL_POLICY = frozenset(
     }
 )
 
+# Default `export default` specials from Worker source. Independent of Cron
+# trigger config: JSDA staging has no crons and still exports scheduled().
+DEFAULT_EXPORT_HANDLER_POLICY: dict[str, tuple[str, ...]] = {
+    "ingestion-jsda": ("fetch", "scheduled", "queue"),
+    "ingestion-premium": ("fetch", "scheduled"),
+    "ingestion-secrets": ("fetch",),
+    "quant-ops-mcp": ("fetch",),
+    "receipt-activation-observer": ("fetch",),
+    "receipt-evidence-authority": ("fetch",),
+    "research-ai-gateway": ("fetch",),
+    "research-mass-eval": ("fetch",),
+}
+
 DURABLE_OBJECT_RPC_POLICY: dict[str, dict[str, tuple[str, ...]]] = {
     "receipt-evidence-authority": {
         "ReceiptEvidenceAuthority": (
@@ -1121,6 +1134,7 @@ def _effective_surface(
         "default_handler": {
             "fetch_reserved_special": worker
             in DEFAULT_FETCH_RESERVED_SPECIAL_POLICY,
+            "handlers": list(DEFAULT_EXPORT_HANDLER_POLICY[worker]),
         },
         "worker_entrypoints": [
             {
@@ -1242,6 +1256,8 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         raise ValueError("binding manifest project account id drift")
     if DEFAULT_FETCH_RESERVED_SPECIAL_POLICY != frozenset(ACTIVE_WORKERS):
         raise ValueError("default fetch reserved-special policy drift")
+    if set(DEFAULT_EXPORT_HANDLER_POLICY) != set(ACTIVE_WORKERS):
+        raise ValueError("default export handler policy drift")
     if manifest["config_key_policy"] != CONFIG_KEY_POLICY:
         raise ValueError("Wrangler config-key policy drift")
     if manifest["active_workers"] != list(ACTIVE_WORKERS):
@@ -1330,6 +1346,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         for environment, surface in environments.items():
             if surface.get("default_handler") != {
                 "fetch_reserved_special": True,
+                "handlers": list(DEFAULT_EXPORT_HANDLER_POLICY[worker]),
             }:
                 raise ValueError(
                     f"{worker}/{environment}: default fetch reserved-special drift"

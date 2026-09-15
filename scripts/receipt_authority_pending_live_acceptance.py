@@ -353,16 +353,115 @@ def _validate_bindings(
     return normalized, namespace_id
 
 
-def _expected_named_handlers(surface: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Return the complete frozen named class capability surface."""
+def _canonical_handler_names(value: Any, *, label: str) -> list[str]:
+    rows = _sequence(value, label=label)
+    if any(type(item) is not str or not item for item in rows):
+        raise ReceiptPendingLiveAcceptanceError(f"{label} are not exact names")
+    return sorted(rows)
 
-    return [
-        {"name": row["name"], "handlers": list(row["handlers"])}
-        for row in (
-            *surface["worker_entrypoints"],
-            *surface["durable_object_class_handlers"],
+
+def _canonical_named_handlers(value: Any, *, label: str) -> list[dict[str, Any]]:
+    """Normalize Cloudflare versions.view named_handlers to an exact membership list."""
+
+    canonical: list[dict[str, Any]] = []
+    names: list[str] = []
+    for item in _sequence(value, label=label):
+        row = _mapping(item, label=label)
+        if set(row) != {"name", "handlers"}:
+            raise ReceiptPendingLiveAcceptanceError(
+                f"{label} fields are not the closed name/handlers pair"
+            )
+        name = row.get("name")
+        if type(name) is not str or not name or name in names:
+            raise ReceiptPendingLiveAcceptanceError(
+                f"{label} names are invalid or duplicated"
+            )
+        names.append(name)
+        canonical.append({
+            "name": name,
+            "handlers": _canonical_handler_names(
+                row.get("handlers"), label=f"{label} {name} handlers"
+            ),
+        })
+    return sorted(canonical, key=lambda row: row["name"])
+
+
+# `export default` aliases. Other single WorkerEntrypoints (GatewayService,
+# JsdaReadinessService) are named-only; their RPC names stay off the default list.
+_DEFAULT_EXPORT_WORKER_ENTRYPOINTS = frozenset({
+    "IngestionSecretsService",
+    "ReceiptAuthorityService",
+})
+
+
+def _expected_script_handlers(surface: Mapping[str, Any]) -> list[str]:
+    """Return default-script handlers from the frozen export-default surface.
+
+    Cron triggers stay on the public schedules check. JSDA staging has no crons
+    and still exports scheduled().
+    """
+
+    default_handler = _mapping(
+        surface.get("default_handler"), label="default handler"
+    )
+    if (
+        set(default_handler) != {"fetch_reserved_special", "handlers"}
+        or default_handler.get("fetch_reserved_special") is not True
+    ):
+        raise ReceiptPendingLiveAcceptanceError("default handler surface drifted")
+    handlers = list(
+        _sequence(
+            default_handler.get("handlers"), label="default export handlers"
         )
-    ]
+    )
+    for row in _sequence(
+        surface.get("worker_entrypoints"), label="worker entrypoints"
+    ):
+        entrypoint = _mapping(row, label="worker entrypoint")
+        if entrypoint.get("name") not in _DEFAULT_EXPORT_WORKER_ENTRYPOINTS:
+            continue
+        handlers.extend(
+            _sequence(
+                entrypoint.get("rpc_methods") or [],
+                label="default export rpc",
+            )
+        )
+    return handlers
+
+
+def _expected_named_handlers(surface: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Return Cloudflare versions.view named_handlers for the frozen RPC surface.
+
+    WorkerEntrypoint `handlers` is the reserved `fetch` special, when declared,
+    plus the exact ordinary RPC names. Durable Object classes keep the `class`
+    export marker; their RPC names are frozen on the WorkerEntrypoint that
+    fronts them, not repeated on the DO row.
+    """
+
+    expected: list[dict[str, Any]] = []
+    for row in _sequence(
+        surface.get("worker_entrypoints"), label="worker entrypoints"
+    ):
+        entrypoint = _mapping(row, label="worker entrypoint")
+        handlers: list[str] = []
+        if entrypoint.get("fetch_reserved_special") is True:
+            handlers.append("fetch")
+        handlers.extend(
+            _sequence(
+                entrypoint.get("rpc_methods") or [],
+                label=f"{entrypoint.get('name')} rpc",
+            )
+        )
+        expected.append({"name": entrypoint["name"], "handlers": handlers})
+    for row in _sequence(
+        surface.get("durable_object_class_handlers"),
+        label="durable object class handlers",
+    ):
+        durable = _mapping(row, label="durable object class")
+        expected.append({"name": durable["name"], "handlers": ["class"]})
+    return _canonical_named_handlers(
+        expected, label="reviewed named handlers"
+    )
 
 
 def _expected_migration_tag(surface: Mapping[str, Any]) -> str | None:
@@ -438,7 +537,12 @@ def _validate_version_runtime_surface(
             f"{role} deployment selected a different version"
         )
     metadata = _mapping(version.get("metadata"), label=f"{role} version metadata")
-    if metadata.get("source") != "wrangler" or metadata.get("has_preview") is not False:
+    # Wrangler 4.125.0 copies API metadata.has_preview from version upload, then
+    # only emits a preview URL when GET /subdomain.previews_enabled is true.
+    # Staging configs set preview_urls=false; that public flag is checked in
+    # _validate_public_surface. has_preview=true on a version is not a preview
+    # route.
+    if metadata.get("source") != "wrangler" or type(metadata.get("has_preview")) is not bool:
         raise ReceiptPendingLiveAcceptanceError(
             f"{role} version source or preview state drifted"
         )
@@ -452,21 +556,23 @@ def _validate_version_runtime_surface(
         )
     script = _mapping(resources.get("script"), label=f"{role} script resource")
     handlers = script.get("handlers")
-    expected_handlers = ["fetch"]
-    if surface["crons"]:
-        expected_handlers.append("scheduled")
-    if surface["queue_consumers"]:
-        expected_handlers.append("queue")
+    expected_handlers = _canonical_handler_names(
+        _expected_script_handlers(surface), label=f"{role} reviewed handlers"
+    )
     expected_named_handlers = _expected_named_handlers(surface)
     expected_script_keys = {"etag", "handlers", "last_deployed_from"}
     if expected_named_handlers:
         expected_script_keys.add("named_handlers")
     if (
         set(script) != expected_script_keys
-        or handlers != expected_handlers
+        or _canonical_handler_names(handlers, label=f"{role} live handlers")
+        != expected_handlers
         or (
             expected_named_handlers
-            and script.get("named_handlers") != expected_named_handlers
+            and _canonical_named_handlers(
+                script.get("named_handlers"), label=f"{role} live named handlers"
+            )
+            != expected_named_handlers
         )
         or script.get("last_deployed_from") != "wrangler"
         or type(script.get("etag")) is not str

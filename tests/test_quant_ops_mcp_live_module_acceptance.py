@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+from pathlib import Path
 
 import pytest
 
@@ -10,7 +11,6 @@ from scripts.cloudflare_binding_manifest import build_manifest
 from scripts.receipt_authority_pending_live_acceptance import (
     _expected_bindings,
     _expected_migration_tag,
-    _expected_named_handlers,
 )
 
 
@@ -28,6 +28,13 @@ def _deployment() -> dict[str, object]:
 
 
 WASM_DIGEST = "sha256:" + "e" * 64
+_HANDLER_SURFACES = json.loads(
+    (
+        Path(__file__).resolve().parent
+        / "fixtures"
+        / "cloudflare_version_handler_surfaces.json"
+    ).read_text(encoding="utf-8")
+)
 
 
 def _provenance() -> dict[str, object]:
@@ -70,19 +77,14 @@ def _version(
     migration_tag = _expected_migration_tag(surface)
     if migration_tag is not None:
         runtime["migration_tag"] = migration_tag
-    handlers = ["fetch"]
-    if surface["crons"]:
-        handlers.append("scheduled")
-    if surface["queue_consumers"]:
-        handlers.append("queue")
+    observed = _HANDLER_SURFACES["workers"][worker]
     script = {
         "etag": "e" * 64,
-        "handlers": handlers,
+        "handlers": list(observed["handlers"]),
         "last_deployed_from": "wrangler",
     }
-    named_handlers = _expected_named_handlers(surface)
-    if named_handlers:
-        script["named_handlers"] = named_handlers
+    if observed["named_handlers"]:
+        script["named_handlers"] = copy.deepcopy(observed["named_handlers"])
     return {
         "id": VERSION,
         "metadata": {

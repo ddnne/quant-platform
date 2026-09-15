@@ -102,6 +102,9 @@ def test_all_named_entrypoints_and_governed_dos_have_exact_rpc_inventories() -> 
         for worker in manifest_module.ACTIVE_WORKERS:
             assert manifest["workers"][worker][environment]["default_handler"] == {
                 "fetch_reserved_special": True,
+                "handlers": list(
+                    manifest_module.DEFAULT_EXPORT_HANDLER_POLICY[worker]
+                ),
             }
         premium = manifest["workers"]["ingestion-premium"][environment]
         assert premium["durable_object_class_handlers"] == []

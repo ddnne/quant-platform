@@ -15,6 +15,13 @@ from scripts import receipt_authority_pending_live_acceptance as live
 
 SHA = "1" * 40
 ACCOUNT = "2" * 32
+_HANDLER_SURFACES = json.loads(
+    (
+        Path(__file__).resolve().parent
+        / "fixtures"
+        / "cloudflare_version_handler_surfaces.json"
+    ).read_text(encoding="utf-8")
+)
 
 def _install_fake_pinned_wrangler(
     tmp_path: Path,
@@ -43,6 +50,7 @@ def _install_fake_pinned_wrangler(
 def _version_document_for_surface(
     surface: Mapping[str, Any],
     *,
+    worker: str,
     version_id: str,
     ordinal: int,
     annotations: dict[str, str],
@@ -53,19 +61,14 @@ def _version_document_for_surface(
         if materialized.get("namespace_id") == "<LIVE_NAMESPACE_ID>":
             materialized["namespace_id"] = f"{ordinal:x}" * 32
         bindings.append(materialized)
-    handlers = ["fetch"]
-    if surface["crons"]:
-        handlers.append("scheduled")
-    if surface["queue_consumers"]:
-        handlers.append("queue")
+    observed = _HANDLER_SURFACES["workers"][worker]
     script_resource: dict[str, Any] = {
         "etag": f"{ordinal:x}" * 64,
-        "handlers": handlers,
+        "handlers": list(observed["handlers"]),
         "last_deployed_from": "wrangler",
     }
-    named_handlers = live._expected_named_handlers(surface)  # noqa: SLF001
-    if named_handlers:
-        script_resource["named_handlers"] = copy.deepcopy(named_handlers)
+    if observed["named_handlers"]:
+        script_resource["named_handlers"] = copy.deepcopy(observed["named_handlers"])
     script_runtime: dict[str, Any] = {
         "compatibility_date": surface["compatibility_date"],
         "usage_model": "standard",
@@ -118,6 +121,7 @@ def _documents(environment: str) -> tuple[
         }
         versions[role] = _version_document_for_surface(
             surface,
+            worker=worker,
             version_id=version_id,
             ordinal=ordinal,
             annotations={
@@ -472,6 +476,78 @@ def test_live_chain_requires_the_closed_premium_operator_entrypoint() -> None:
             public_surfaces=public,
             source_provenance=source_provenance,
         )
+
+
+def test_version_has_preview_true_is_not_a_public_preview_route() -> None:
+    deployments, versions, public, source_provenance = _documents("staging")
+    for role in versions:
+        versions[role]["metadata"]["has_preview"] = True
+        assert public[role]["subdomain"]["previews_enabled"] is False
+    result = live.validate_live_pending_receipt_chain(
+        environment="staging",
+        source_sha=SHA,
+        account_id=ACCOUNT,
+        deployments=deployments,
+        versions=versions,
+        public_surfaces=public,
+        source_provenance=source_provenance,
+    )
+    assert result["authorization_scope"] == "PENDING_LIVE_ACCEPTANCE_ONLY"
+    public["caller"]["subdomain"]["previews_enabled"] = True
+    with pytest.raises(
+        live.ReceiptPendingLiveAcceptanceError,
+        match="workers.dev or preview surface drifted",
+    ):
+        live.validate_live_pending_receipt_chain(
+            environment="staging",
+            source_sha=SHA,
+            account_id=ACCOUNT,
+            deployments=deployments,
+            versions=versions,
+            public_surfaces=public,
+            source_provenance=source_provenance,
+        )
+
+
+def test_named_handlers_match_frozen_rpc_and_specials_not_class_markers() -> None:
+    deployments, versions, public, source_provenance = _documents("staging")
+    authority = versions["authority"]["resources"]["script"]["named_handlers"]
+    service = next(
+        row for row in authority if row["name"] == "ReceiptAuthorityService"
+    )
+    assert "fetch" in service["handlers"]
+    assert "public_key_registration" in service["handlers"]
+    observed = list(service["handlers"])
+    service["handlers"] = list(reversed(observed))
+    live.validate_live_pending_receipt_chain(
+        environment="staging",
+        source_sha=SHA,
+        account_id=ACCOUNT,
+        deployments=deployments,
+        versions=versions,
+        public_surfaces=public,
+        source_provenance=source_provenance,
+    )
+    for handlers in (
+        observed + ["unexpected_rpc"],
+        observed + [observed[0]],
+        [name for name in observed if name != "public_key_registration"],
+        ["class"],
+    ):
+        service["handlers"] = handlers
+        with pytest.raises(
+            live.ReceiptPendingLiveAcceptanceError,
+            match="script handler, source, or etag drifted",
+        ):
+            live.validate_live_pending_receipt_chain(
+                environment="staging",
+                source_sha=SHA,
+                account_id=ACCOUNT,
+                deployments=deployments,
+                versions=versions,
+                public_surfaces=public,
+                source_provenance=source_provenance,
+            )
 
 
 def test_live_chain_rejects_module_bytes_not_built_from_reviewed_source() -> None:
