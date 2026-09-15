@@ -4051,6 +4051,7 @@ def test_heartbeat_cas_loss_fences_old_executor_zero_late_success(
     frozen_lease_now = time.time()
     old = None
     new = None
+    exit_fd = None
 
     def lease_clock() -> float:
         return frozen_lease_now
@@ -4118,7 +4119,10 @@ def test_heartbeat_cas_loss_fences_old_executor_zero_late_success(
         old.submit(spec)
         assert started.wait(2.0)
         assert old._supervisor is not None
-        assert old._supervisor.pid is not None
+        child = old._supervisor._process
+        assert child is not None and child.pid is not None
+        # Dup before lease loss: supervisor.wait/close may close Process.sentinel.
+        exit_fd = os.dup(child.sentinel)
         lease, etag = store.object_reader(spec, spec.lease_key)
         stolen = dict(lease)
         stolen["owner_nonce"] = "newownernewowner"
@@ -4137,26 +4141,10 @@ def test_heartbeat_cas_loss_fences_old_executor_zero_late_success(
         except Exception:
             pass
         assert old.lease_lost()
-        # Prove the supervised child is not still executing. os.kill(pid, 0)
-        # stays true for a zombie and can hit a recycled PID; the Process
-        # handle and process-group probe are the actual executor identity.
-        term_grace = 0.05
-        kill_grace = 0.5
-        deadline = time.monotonic() + term_grace + kill_grace + 0.2
-        while True:
-            supervisor = old._supervisor
-            if supervisor is None:
-                break
-            process_state = supervisor._process_state()
-            group_state = supervisor._group_state()
-            if process_state == "dead" and group_state == "dead":
-                break
-            if time.monotonic() >= deadline:
-                raise AssertionError(
-                    "old executor still live after lease loss "
-                    f"(process={process_state}, group={group_state})"
-                )
-            time.sleep(0.01)
+        assert multiprocessing.connection.wait(
+            [exit_fd],
+            timeout=0.05 + 0.5 + 0.2,
+        ), "old executor did not exit after lease loss"
         assert old_done.wait(2.0)
         takeover = new.submit(spec)
         assert takeover["status"] in {"QUEUED", "RUNNING", "COMPLETED"}
@@ -4197,6 +4185,8 @@ def test_heartbeat_cas_loss_fences_old_executor_zero_late_success(
         assert successes[0]["owner_nonce"] != lease["owner_nonce"], diagnostic
         assert authorized.value == 0, diagnostic
     finally:
+        if exit_fd is not None:
+            os.close(exit_fd)
         reap(old)
         reap(new)
         # Child already SIGKILL'd by supervisor.stop; Event.set would wait on a dead waiter.
