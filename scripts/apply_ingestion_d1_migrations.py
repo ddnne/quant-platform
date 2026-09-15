@@ -698,7 +698,15 @@ def _run_apply_process(
     owner: str, nonce: str, runner: Runner,
 ) -> int:
     if runner is not _default_runner:
-        return runner(argv, WORKER).returncode
+        result = runner(argv, WORKER)
+        code = int(result.returncode or 0)
+        if code != 0:
+            blob = f"{result.stderr or ''}\n{result.stdout or ''}".lower()
+            if "unknown argument" in blob or "unknown option" in blob:
+                raise GuardedMigrationError(
+                    "Wrangler migration apply failed: unsupported argument"
+                )
+        return code
     try:
         process = subprocess.Popen(
             list(argv), cwd=WORKER, stdout=subprocess.DEVNULL,
@@ -746,7 +754,7 @@ def _apply_remote_migrations(
         on_spawned()
     argv = (
         *prefix, "d1", "migrations", "apply", binding["database_name"],
-        "--remote", "--yes", *_environment_args(binding),
+        "--remote", *_environment_args(binding),
     )
     try:
         if _run_apply_process(
