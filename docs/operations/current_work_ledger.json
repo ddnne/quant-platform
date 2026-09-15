@@ -1,34 +1,43 @@
 {
   "schema": "quant-platform-work-ledger/v1",
-  "updated_at": "2026-09-15T08:24:35Z",
+  "updated_at": "2026-09-15T13:50:00Z",
   "history": {
-    "git_sha": "e07158a26c59b59a3b16e19545ddc04d075b9b31",
-    "url": "https://github.com/ddnne/quant-platform/blob/e07158a26c59b59a3b16e19545ddc04d075b9b31/docs/operations/current_work_ledger.json",
-    "note": "Prior committed main ledger at accepted main e07158a (stale PR175/dad020 current wording). Older release acceptances live in Git history and PR comments. This object is an accepted-baseline observation of main e07158a BEFORE this docs edit, not a self-SHA of the edit or a future merge."
+    "git_sha": "d37ef73e5c226a7b2499f0523f4bcca4090b511b",
+    "url": "https://github.com/ddnne/quant-platform/blob/d37ef73e5c226a7b2499f0523f4bcca4090b511b/docs/operations/current_work_ledger.json",
+    "note": "Accepted main d37ef73 (PR211) BEFORE this docs edit. Older release acceptances live in Git history and PR comments. This object is not a self-SHA of the edit or a future merge."
   },
   "open_findings": {
-    "preserved_not_exhaustive": ["A2", "C10", "C4", "D2", "D3", "R10", "R11", "R5"],
+    "preserved_not_exhaustive": [
+      "A2",
+      "C10",
+      "C4",
+      "D2",
+      "D3",
+      "R10",
+      "R11",
+      "R5"
+    ],
     "note": "Copied from the prior ledger as still OPEN. Not a freshly audited complete P0 inventory."
   },
   "pr137": "intentional_held_draft",
   "lanes": {
     "source_delivered": {
-      "status": "pr208_merged_main_native_success",
-      "latest_main_sha": "e07158a26c59b59a3b16e19545ddc04d075b9b31",
+      "status": "pr211_merged_main_native_success",
+      "latest_main_sha": "d37ef73e5c226a7b2499f0523f4bcca4090b511b",
       "required_check_app_id": 85455,
       "required_check_name": "Workers Builds: quant-platform-ci-aggregate-staging",
       "strict": true,
       "accepted_baseline": {
-        "pr208": {
-          "url": "https://github.com/ddnne/quant-platform/pull/208",
-          "feature_sha": "1e84b0bb071e48161da616a109b5b18dd238e9e4",
-          "merged_main_sha": "e07158a26c59b59a3b16e19545ddc04d075b9b31",
-          "feature_build": "938feb48-a241-4fa8-ae21-2b3640168255",
-          "feature_build_stopped_at": "2026-09-15T07:58:12.072Z",
-          "main_build": "706a2927-42a0-4eac-b953-501fb6d2a05d",
-          "main_build_stopped_at": "2026-09-15T08:15:29.806Z",
-          "required_app85455_success_at": "2026-09-15T08:15:30Z",
-          "note": "Accepted main BEFORE this docs edit. deploy_command string true remains CI-only. Fresh clone HEAD==origin/main e071, clean, unpushed 0, source-only 26MiB; completed feature branch removed. Targeted migration/cutover 36 passed. Not all Workers deployed current main. A6 GLOBAL remains OPEN."
+        "pr211": {
+          "url": "https://github.com/ddnne/quant-platform/pull/211",
+          "feature_sha": "5049fbba408d0cfcd0fb22068df05519d1d38cac",
+          "merged_main_sha": "d37ef73e5c226a7b2499f0523f4bcca4090b511b",
+          "feature_check": "104401424406",
+          "feature_build": "e8e8c2e5-df58-40f3-9fcf-18753e30bf5e",
+          "main_check": "104406618815",
+          "main_build": "5f401591-4b85-4ed3-8ec4-182c7911c3d2",
+          "required_app85455_success_at": "2026-09-15T13:43:24Z",
+          "note": "Accepted main BEFORE this docs edit. deploy_command string true remains CI-only. Fresh clone HEAD==origin/main d37ef73, clean, unpushed 0. Completed feature branch removed. A6 GLOBAL remains OPEN. Not production/READY/Pilot."
         }
       },
       "mass_worker_build_on_dad020": {
@@ -39,7 +48,7 @@
         "cause": "intentional DEPLOYMENT HOLD after successful tests",
         "note": "Historical HOLD evidence on dad020. Not a required-native failure. Not a code-acceptance failure. Not current-main Mass deploy. No retry, no bypass, no product deploy."
       },
-      "notes": "Latest accepted main is PR208/e07158a. Do not imply all Workers deployed that SHA. PR137 remains an intentional HELD Draft. Older CI tables live in Git/PR comments, not this current object."
+      "notes": "Latest accepted main is PR211/d37ef73. Staging Secrets/Receipt/Premium PENDING are accepted at that SHA. Mass/Gateway/JSDA/Ops/observer were not accepted or reverified at this SHA. PR137 remains an intentional HELD Draft. Older CI tables live in Git/PR comments."
     },
     "staging_schema_prepared": {
       "status": "schema_prepared_once",
@@ -57,9 +66,41 @@
       "notes": "Exactly one reviewed staging recovery. Original private receipt/intent identity d9de3fb stayed original; repair source e071 recorded separately. Successful normal release reset the live lease to vacant / remote_spawned 0 with source_sha empty and expires 1970; the vacant lease does not retain source. Pre-apply fingerprint is PRE-APPLY ONLY: independently checked before and after CAS before remote spawn, not a SQL CAS input/predicate, not the current post-migration fingerprint, and not retry authority. Mutable PR comment, not immutable final release. Refer to that one record for lease/Queue/Cron/cutover SELECT readback rather than duplicating every UUID/count here. Not JSDA deploy/activate, not shared-D1 restore, not production."
     },
     "staging_deployed": {
-      "status": "mass_35611b0_not_all_workers_current_main",
+      "status": "receipt_chain_d37ef73_pending_accepted_mass_not_current",
+      "receipt_chain_pending": {
+        "source_sha": "d37ef73e5c226a7b2499f0523f4bcca4090b511b",
+        "canonical": "scripts/verify_cloudflare_deployment_acceptance.sh --pending-receipt-authority staging --expected-source-sha d37ef73e5c226a7b2499f0523f4bcca4090b511b",
+        "outcome": "ok (staging)",
+        "evidence": "https://github.com/ddnne/quant-platform/pull/211#issuecomment-5681285373",
+        "workers": {
+          "ingestion-secrets": {
+            "version_id": "64b7047c-b6bb-4018-9d50-7d795a9649e1",
+            "deployment_id": "304d12fd-7d87-425c-8ac0-822d9d87a3ef",
+            "tag": "rp-s-a-d37ef73e5c226a7b2499f0523f4bcca4090b511b"
+          },
+          "receipt-evidence-authority": {
+            "version_id": "a111e85c-0c9f-41f3-a79a-1b10e90ad76f",
+            "deployment_id": "0b9cb474-9b72-4db5-b64d-6faac3d630f4",
+            "tag": "rp-s-r-d37ef73e5c226a7b2499f0523f4bcca4090b511b",
+            "durable_object_namespace_id": "e24d619fbd734073829e6ff8fc07ef1f",
+            "migration_tag": "v1",
+            "authority_mode": "PENDING"
+          },
+          "ingestion-premium": {
+            "version_id": "fb5ad302-d9e6-4144-9bee-25e03e0a4ac8",
+            "deployment_id": "d8a11015-232c-4d30-8e1c-025bbdb484c6",
+            "tag": "rp-s-c-d37ef73e5c226a7b2499f0523f4bcca4090b511b",
+            "ready_declared": "false",
+            "receipt_authority_operation_mode": "PENDING",
+            "cron": "* * * * *"
+          }
+        },
+        "public": "workers.dev/previews/routes off",
+        "control_hash": "4bc393ae15f2bd8520b28b700643c28f6b0b97979bfabf88cb9b7b645e8ac61c",
+        "note": "Inactive PENDING code only. Mutable PR comment, not A6/READY/Pilot."
+      },
       "mass_staging": {
-        "observation": "earlier checkpoint, not remeasured 2026-09-15",
+        "observation": "earlier checkpoint, not remeasured 2026-09-15T13:50Z",
         "evidence": "https://github.com/ddnne/quant-platform/pull/204#issuecomment-5674898739",
         "source_sha": "35611b0",
         "version_id": "3cf6156f-e05c-4b49-949b-867cb1d2385e",
@@ -69,7 +110,7 @@
         "health": "GET /health 200 and unauthenticated 401 at that earlier checkpoint",
         "authenticated_403_smoke": "blocked only on location of existing MASS_EVAL_TOKEN or already-set process env; prior scoped project/env/Build-env searches failed; no rotation; never print values"
       },
-      "notes": "Mass source/version/deployment/V5/instances/health facts are the earlier PR204 checkpoint, not remeasured 2026-09-15. Worker/Container code rollout is not auth-smoke, data, READY, or Pilot. Not all Workers deployed current main e071. Dated 2026-09-14 Worker version metadata remains in Git history of this file and is not this SHA deployed. That capture said Premium staging names INGESTION_RUN_TOKEN and JQUANTS_API_KEY; OPS/READY/Trader signer names required by current source were absent; Mass staging still had old READY_ED25519_PRIVATE_KEY and must not reuse it; current eval is verify-only. Those secret-name facts were not remeasured on 2026-09-15. Dedicated staging key prep is agent work under applicable approval, not a separate inventory-approval step. MASS_EVAL_TOKEN location gap blocks only authenticated 403 smoke."
+      "notes": "Secrets/Receipt/Premium staging PENDING are accepted at d37ef73. Mass/Gateway/JSDA/Ops/observer were not accepted or reverified at this SHA; Mass facts remain the earlier PR204 checkpoint. Worker code rollout is not auth-smoke, data, READY, or Pilot. MASS_EVAL_TOKEN location gap blocks only authenticated 403 smoke."
     },
     "production_deployed": {
       "status": "hold",
@@ -89,35 +130,54 @@
     }
   },
   "live_observation": {
-    "observed_by": "2026-09-15T08:24:35Z",
+    "observed_by": "2026-09-15 Codex READONLY quant-mcp projection_status",
     "projection": "STALE",
     "generation": "projgen-ef18b4f86ee946048161d25e2a30a2a8",
     "generated_at": "2026-08-21T12:30:49.152421+00:00",
-    "source_generated_at": "2026-08-21T12:28:33.345482+00:00",
     "refresh_attempt": false,
     "refresh_success": false,
     "b0": "UNKNOWN",
+    "b0_reason": "snapshot quality/B0 projection is unavailable",
     "latest_ready_snapshot": null,
-    "latest_change_seq": 2900867,
-    "latest_source_change_seq": 2900867,
+    "connector_tools": {
+      "registered_count": 16,
+      "omits": [
+        "storage_plane_status"
+      ],
+      "note": "Connector inventory, not a remeasured raw tools/list or schema-digest deployment parity."
+    },
+    "sync_status": {
+      "observed_by": "2026-09-15 Codex READONLY quant-mcp sync_status",
+      "applied_feed_cursor": null,
+      "latest_change_seq": 2901021,
+      "latest_source_change_seq": 2901021,
+      "all_applied_and_ready_pins": null
+    },
     "applied_feed_cursor": null,
-    "all_23_dataset_applied_and_ready_pinned_cursors": null,
-    "null_export_cursor_count": 0,
     "wrangler_oauth": "works for real staging reads/migration",
     "grok_mcp_auth": "errors remain; not a global source-work stop; Codex mechanical fallback allowed for authorized operations; never HOLD bypass; no paid API fallback",
     "access_api": {
       "observed_at": "2026-09-14T00:56:19Z",
-      "get_organizations": "error 9999 access.api.error.not_enabled; dashboard Enable Access instruction",
+      "get_organizations": "error 9999 access.api.error.not_enabled",
       "recheck": "2026-09-15 GET again returned 9999 not_enabled; no UI inspected; no exact call timestamp supplied",
-      "note": "Conditional account setup only for Worker Access JWT/hostname protection. Not a precondition for schema recovery, read-only Ops checks, or ordinary source fixes. No ToS/domain selection established. Distinct from Worker Access JWT (ctx.access.aud) required by GET /v1/private/jsda-health-ready. A managed zone is not an established prerequisite."
+      "note": "API reports Access/Zero Trust organizations not enabled. No UI was inspected, so this is not a claim that a ToS or team-domain prompt is currently required. Conditional only for Worker Access JWT/hostname protection; not a precondition for schema recovery, read-only Ops checks, or ordinary source fixes."
     },
-    "not_remeasured": ["B4", "tools-list", "schema_parity", "CoverageV3_acceptance", "global_JSDA", "latestJQ", "all_worker_deployment", "DLQ"],
-    "note": "Read-only global Ops remeasure by 2026-09-15T08:24:35Z. Ops projection/v3 is not proof of Coverage V3 deployment. Unmeasured fields are not replaced with 0. null_export_cursor_count 0 means no null export cursors, not zero exports. Not global GO. STALE/applied-null/B0 UNKNOWN/READY-snapshot-null are technical gaps, not inherently human judgments."
+    "not_remeasured": [
+      "B4",
+      "raw_tools_list",
+      "schema_parity",
+      "CoverageV3_acceptance",
+      "global_JSDA",
+      "latestJQ",
+      "all_worker_deployment",
+      "DLQ"
+    ],
+    "note": "Current evidence, not GO. Staging Premium scheduled() returns after valuation_backfill_tick when RECEIPT_AUTHORITY_ENVIRONMENT is staging, before runIngestion/recover/publishOpsProjectionBestEffort (those run only in the non-staging branch). Production projection-stale cause is unproven. Unmeasured fields are not replaced with 0. Not global GO."
   },
   "next_prerequisite_chain": [
-    "Do not serialize Access 9999 or Grok MCP auth failure as a global stop. Access is conditional Worker Access JWT/hostname setup only (9999 not_enabled at 2026-09-14T00:56:19Z and a 2026-09-15 recheck; no exact Sep 15 timestamp; no UI inspected; no ToS/domain selection established). It is not a precondition for schema recovery, read-only Ops checks, or ordinary source fixes. Codex mechanical fallback may apply authorized operations after a Grok permission denial; never bypass HOLDs; no paid API fallback. Staging schema recovery already ran once: SCHEMA_PREPARED.",
-    "Next authorized progress, without waiting for all-26 COMPLETE or completed READY: remaining inactive staging Worker code rollout under existing individual approval (Mass staging still 35611b0 at the earlier checkpoint, not remeasured now; not all Workers on e071). Ops projection refresh is a technical gap (STALE, applied_feed_cursor null, B0 UNKNOWN, READY snapshot null). Agent prepares/provisions dedicated scoped keys under that approval; never old/revoked/Mass signer fallback. Ask only the location of existing MASS_EVAL_TOKEN or use already-set process env for authenticated 403 smoke; that gap blocks only that smoke.",
-    "Explicit HOLDs unchanged; generic continue is not their release: production deploy, data activation, JSDA --activate, key activation, READY publication, Pilot/exact-four, Ops projection publication, Mass/FoF/broker. Exact-four and budget remain NO-GO. No new Worker/signer roles. A6 GLOBAL remains OPEN: non-secret content-addressed manifest including production, private encrypted backup checksum, and immutable remote publish/readback are unproven. Staging JSDA AUDIT_ONLY intake is not A6 closure."
+    "Do not serialize Access 9999 or Grok MCP auth failure as a global stop. Access GET organizations returned 9999 not_enabled (API not enabled). No UI was inspected. Conditional only for Worker Access JWT/hostname protection; not a precondition for schema recovery, read-only Ops checks, or ordinary source fixes. Codex mechanical fallback may apply authorized operations after a Grok permission denial; never bypass HOLDs; no paid API fallback. Staging schema recovery already ran once: SCHEMA_PREPARED.",
+    "Secrets/Receipt/Premium staging PENDING at d37ef73 is complete. Next inactive staging code (Gateway, then Mass Worker/Container) needs its own individual approval: it was not in the last 3-Worker unit. Do not deploy Mass/container, activate keys, publish Ops, or mint READY from this continue. Current STALE/B0/READY/sync facts are live_observation (projection_status and 2026-09-15 sync_status). Staging Premium scheduled() returns after valuation_backfill_tick when RECEIPT_AUTHORITY_ENVIRONMENT is staging and does not reach publishOpsProjectionBestEffort; production cause of the same STALE generation is unproven. Publication remains HOLD. MASS_EVAL_TOKEN location gap blocks only authenticated 403 smoke.",
+    "Explicit HOLDs unchanged; generic continue is not their release: production deploy, data activation, JSDA --activate, key activation, READY publication, Pilot/exact-four, Ops projection publication, Mass/FoF/broker. Exact-four and budget remain NO-GO. No new Worker/signer roles. A6 GLOBAL remains OPEN: missing backup recipient and 32-byte key custody is a real choice. GitHub Release immutability and production collection are repo/API or later-auth work, not inherently human-only; existing content-addressed R2/JSDA AUDIT_ONLY paths are not A6 closure. Staging JSDA AUDIT_ONLY intake is source-partial."
   ],
   "unknowns": [
     "Affected historic AM+gross-cap engine artifact inventory was not examined; no cloud listing was performed.",
@@ -135,8 +195,8 @@
   ],
   "items": {
     "1_fresh_clone_and_ledger": {
-      "status": "pr208_main_accepted_before_this_docs_edit",
-      "notes": "Accepted main e07158a HEAD==origin/main, clean, unpushed 0, source-only 26MiB. Completed feature branch removed. Nested historical transcripts live at history.git_sha."
+      "status": "pr211_main_accepted_before_this_docs_edit",
+      "notes": "Accepted main d37ef73 HEAD==origin/main, clean, unpushed 0. Completed feature branch removed. Nested historical transcripts live at history.git_sha."
     },
     "2_am_order_quantity_causality": {
       "status": "source_merged_not_deployed",
@@ -213,11 +273,11 @@
     },
     "8_rollout_and_research_go": {
       "status": "pending",
-      "notes": "Source-delivered, staging-schema-prepared, staging-code, production, data, READY, and Pilot remain distinct. Staging SCHEMA_PREPARED is not JSDA activate, not all-Workers-current, not production/data/READY/Pilot GO. A6 staging JSDA AUDIT_ONLY intake is source-partial; A6 GLOBAL remains OPEN. No production/data/READY/Trader/Pilot/Mass GO."
+      "notes": "Source-delivered and staging Secrets/Receipt/Premium PENDING are distinct from remaining staging Gateway/Mass, production, data, READY, and Pilot. SCHEMA_PREPARED is not JSDA activate. A6 staging JSDA AUDIT_ONLY intake is source-partial; A6 GLOBAL remains OPEN. No production/data/READY/Trader/Pilot/Mass GO."
     },
     "9_push_remote_and_fresh_clone_verify": {
-      "status": "pr208_main_accepted",
-      "notes": "Latest accepted main PR208/e07158a. Feature 1e84b0bb native build 938feb48 SUCCESS stopped 2026-09-15T07:58:12.072Z; merged-main native build 706a2927 SUCCESS stopped 2026-09-15T08:15:29.806Z; exact required app85455 success 2026-09-15T08:15:30Z. Fresh clone clean, unpushed 0. Open PR only 137 HELD Draft. Targeted migration/cutover 36 passed. Not all Workers deployed current main. Historical Mass HOLD on dad020 is check 103821504107 (feea0136), intentional after successful tests."
+      "status": "pr211_main_accepted",
+      "notes": "Latest accepted main PR211/d37ef73. Feature 5049fbb native check 104401424406/build e8e8c2e5 SUCCESS; merged-main check 104406618815/build 5f401591 SUCCESS 2026-09-15T13:43:24Z. Fresh clone clean, unpushed 0. Open PR only 137 HELD Draft. Historical Mass HOLD on dad020 is check 103821504107 (feea0136), intentional after successful tests."
     }
   }
 }
