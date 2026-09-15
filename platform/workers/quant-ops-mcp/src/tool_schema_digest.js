@@ -1,5 +1,7 @@
 /** Frozen acceptance digest for the public MCP tool schema surface. */
 
+import acceptance from "../../../../specs/ops_projection/mcp_tool_schema_acceptance.json" with { type: "json" };
+
 import { projectionSha256 } from "./projection_signature.js";
 
 export const OPS_MCP_SERVER_NAME = "quant-ops-read";
@@ -7,9 +9,8 @@ export const OPS_MCP_SERVER_VERSION = "0.2.0";
 export const OPS_MCP_PROTOCOL_VERSION = "2025-06-18";
 export const OPS_TOOL_SCHEMA_DOCUMENT_VERSION = "quant-ops-mcp-tool-schemas/v2";
 
-// Updated only after review of an intentional tools/list contract change.
-export const ACCEPTED_OPS_TOOL_SCHEMA_DIGEST =
-  "sha256:227465ce16df9ebd496bc102b198dcb5cc5c9660a26a8820b0449f824a5b67bc";
+// Derived from the generated acceptance manifest. Do not hand-copy the hash.
+export const ACCEPTED_OPS_TOOL_SCHEMA_DIGEST = acceptance.schema_digest;
 
 /**
  * @param {ReadonlyArray<{name:string,description:string,inputSchema:Record<string,unknown>,outputSchema:Record<string,unknown>}>} tools

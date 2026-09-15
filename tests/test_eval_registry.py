@@ -205,6 +205,7 @@ def test_near_duplicate_is_not_candidate() -> None:
     assert row["main_pool"] is False
 
 
+@pytest.mark.replay
 def test_economic_themes_exist_in_catalog() -> None:
     from research.unique_logic.constants import ECONOMIC_THEME_IDS
     from research.unique_logic.event_combos import NEW_COMBO_LOGIC, spec_by_id
