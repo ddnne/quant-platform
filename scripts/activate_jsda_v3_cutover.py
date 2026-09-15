@@ -116,12 +116,21 @@ def _source_sha() -> str:
     return sha
 
 
-def _observe(environment: str, *, token: str, account: str) -> dict[str, Any]:
+def _observe(
+    environment: str,
+    *,
+    token: str,
+    account: str,
+    allow_unattested_tag: bool = False,
+) -> dict[str, Any]:
     state = migration.observe_migration_state(
         environment, runner=_migration_runner(token, account)
     )
     queue = _queue(str(SURFACE[environment]["queue"]), token=token, account=account)
-    selected = _selected(environment, token=token, account=account)
+    selected = _selected(
+        environment, token=token, account=account,
+        allow_unattested_tag=allow_unattested_tag,
+    )
     tables = {
         row["name"] for row in _d1_rows(
             environment, "SELECT name FROM sqlite_master WHERE type='table'",
@@ -782,7 +791,14 @@ def prepare_staging_schema(environment: str, *, yes: bool) -> dict[str, Any]:
         raise JsdaCutoverError("schema preparation is staging-only")
     token, account = _credentials()
     _require_forward_repair_clearance(environment, token=token, account=account)
-    baseline = _observe(environment, token=token, account=account)
+
+    def observe() -> dict[str, Any]:
+        return _observe(
+            environment, token=token, account=account,
+            allow_unattested_tag=True,
+        )
+
+    baseline = observe()
     if baseline.get("cutover_phase") == "v3_active":
         raise JsdaCutoverError("JSDA cutover is already v3_active")
     _bool_pause(baseline.get("queue"), label="JSDA queue pause")
@@ -843,16 +859,16 @@ def prepare_staging_schema(environment: str, *, yes: bool) -> dict[str, Any]:
         if not skip_apply:
             if intent["prior_schedules"]:
                 _set_schedules(environment, [], token=token, account=account)
-            first = _observe(environment, token=token, account=account)
+            first = observe()
             time.sleep(2)
-            second = _observe(environment, token=token, account=account)
+            second = observe()
             _require_drained(first, after_migration=False)
             _require_drained(second, after_migration=False)
             if not _bool_pause(second.get("queue"), label="JSDA queue pause"):
                 _queue_action(
                     environment, "pause-delivery", token=token, account=account
                 )
-            quiesced = _observe(environment, token=token, account=account)
+            quiesced = observe()
             if quiesced["schedules"] or not _bool_pause(
                 quiesced.get("queue"), label="JSDA queue pause"
             ):
@@ -892,7 +908,7 @@ def prepare_staging_schema(environment: str, *, yes: bool) -> dict[str, Any]:
                     nonce=str(intent["lease_fence"]),
                     runner=runner,
                 )
-        exact = _observe(environment, token=token, account=account)
+        exact = observe()
         _require_drained(exact, after_migration=True)
         if exact.get("cutover_phase") != "bridge":
             raise JsdaCutoverError("cutover control is not PENDING/bridge")

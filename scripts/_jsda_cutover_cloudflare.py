@@ -245,7 +245,13 @@ def _d1_rows(
     return [dict(row) for row in result]
 
 
-def _selected(environment: str, *, token: str, account: str) -> dict[str, str]:
+def _selected(
+    environment: str,
+    *,
+    token: str,
+    account: str,
+    allow_unattested_tag: bool = False,
+) -> dict[str, str]:
     deployment = _wrangler_json(
         ["deployments", "status", "--json"], environment=environment,
         token=token, account=account,
@@ -256,6 +262,8 @@ def _selected(environment: str, *, token: str, account: str) -> dict[str, str]:
     if len(versions) != 1 or not isinstance(versions[0], Mapping):
         raise JsdaCutoverError("deployment must select one version")
     version_id = str(versions[0].get("version_id") or "")
+    if not version_id:
+        raise JsdaCutoverError("selected version is unobserved")
     version = _wrangler_json(
         ["versions", "view", version_id, "--json"], environment=environment,
         token=token, account=account,
@@ -265,10 +273,17 @@ def _selected(environment: str, *, token: str, account: str) -> dict[str, str]:
     annotations = version.get("annotations")
     annotations = annotations if isinstance(annotations, Mapping) else {}
     tag = str(annotations.get("workers/tag") or annotations.get("workers/message") or "")
-    if not _SHA.fullmatch(tag):
+    if _SHA.fullmatch(tag):
+        attested = tag
+    elif allow_unattested_tag and environment == "staging":
+        attested = ""
+    else:
         raise JsdaCutoverError("selected version has no source tag")
+    deployment_id = str(deployment.get("id") or "")
+    if not deployment_id:
+        raise JsdaCutoverError("selected deployment is unobserved")
     return {
-        "deployment_id": str(deployment.get("id") or ""),
+        "deployment_id": deployment_id,
         "version_id": version_id,
-        "version_tag": tag,
+        "version_tag": attested,
     }
