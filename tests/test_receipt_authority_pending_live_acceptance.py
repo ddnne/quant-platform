@@ -904,6 +904,46 @@ def test_official_origin_main_rejects_lookalike_remote() -> None:
         live._require_official_origin_main(SHA, runner=runner)  # noqa: SLF001
 
 
+@pytest.mark.parametrize("remote_sha,mismatch", ((SHA, False), ("f" * 40, True)))
+def test_official_origin_main_https_userinfo_unavailable_tracking(
+    remote_sha: str, mismatch: bool
+) -> None:
+    origin = (
+        "https://x-access-token:fake-token@github.com/ddnne/quant-platform.git"
+    )
+    calls: list[tuple[str, ...]] = []
+
+    def runner(command, **kwargs):
+        del kwargs
+        command = tuple(command)
+        calls.append(command)
+        if command == ("git", "remote", "get-url", "origin"):
+            return subprocess.CompletedProcess(command, 0, origin + "\n", "")
+        if command == (
+            "git",
+            "rev-parse",
+            "--verify",
+            "refs/remotes/origin/main^{commit}",
+        ):
+            return subprocess.CompletedProcess(command, 128, "", "")
+        if command[:4] == ("git", "ls-remote", "--exit-code", "--refs"):
+            return subprocess.CompletedProcess(
+                command, 0, f"{remote_sha}\trefs/heads/main\n", ""
+            )
+        raise AssertionError(command)
+
+    if mismatch:
+        with pytest.raises(
+            live.ReceiptPendingLiveAcceptanceError,
+            match="not current on official remote main",
+        ):
+            live._require_official_origin_main(SHA, runner=runner)  # noqa: SLF001
+    else:
+        live._require_official_origin_main(SHA, runner=runner)  # noqa: SLF001
+    assert calls[2][4] == "https://github.com/ddnne/quant-platform.git"
+    assert "fake-token" not in "".join(calls[2])
+
+
 def test_collection_rejects_change_after_an_earlier_worker_local_bracket(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

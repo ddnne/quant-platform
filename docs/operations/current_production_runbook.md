@@ -96,8 +96,16 @@ remote apply results only in immutable release evidence.
   production code rollout is accepted for Secrets, Receipt, Premium
   product+READY-publication bindings, Gateway, then Mass. Inactive Worker
   code rollout is not key activation, READY mint, or Pilot GO. Staging Mass
-  tagged deploy is Cloudflare Builds only and still needs separate human
-  approval; do not restore or retrigger HOLDs here. From the repository root:
+  tagged deploy is Cloudflare Builds only and requires approved rollout
+  scope; ordinary same-scope bug fixes and reverification do not need a
+  fresh approval. Do not restore or retrigger production, data, READY,
+  Pilot, or key HOLDs, and do not retry blindly after uncertain mutation:
+  read back live Build/Worker/Container state. Native Cloudflare Builds
+  checkout of this public repository may present HTTPS origin userinfo
+  and unavailable `refs/remotes/origin/main`; tagged deploy still requires
+  clean HEAD to equal live `https://github.com/ddnne/quant-platform.git`
+  `refs/heads/main` and must not pass origin credentials to git. From the
+  repository root:
   `python3 scripts/cloudflare_binding_manifest.py --deploy-tagged --worker research-mass-eval --env staging`.
   From `platform/workers/research-mass-eval`:
   `python3 ../../../scripts/cloudflare_binding_manifest.py --deploy-tagged --worker research-mass-eval --env staging`.
