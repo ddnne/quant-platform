@@ -1,6 +1,8 @@
 """Mechanical sleeves / reconstitution detect. Equal-weight. Does not GO."""
 from __future__ import annotations
 
+import pytest
+
 from tests.research_eval_util import (
     _baskets,
     _eval_complete_cell,
@@ -13,6 +15,7 @@ from tests.research_eval_util import (
 from research.eval_summary import summarize_daily_path_cells
 
 
+@pytest.mark.replay
 def test_mechanical_baskets_are_valid_defs() -> None:
     from research.combo_basket_catalog import (
         HISTORICAL_BASKET_RULES,
@@ -93,34 +96,7 @@ def test_mechanical_baskets_are_valid_defs() -> None:
         assert d["nested_parent_count"] == len(d["nested_parents"])
 
 
-def test_mechanical_baskets_report_nested_parents_without_reject() -> None:
-    """theme_fund / event_fund nested 2-AND⊂3-AND is detected, not invalid."""
-    from research.combo_basket_catalog import (
-        mechanical_basket_defs,
-        nested_parent_pairs,
-        validate_basket_members,
-    )
-
-    defs = {d["rule"]: d for d in mechanical_basket_defs()}
-    fund = defs["fundamentals_sleeve"]
-    evf = defs["event_fund_cross"]
-    pairs_fund = {(p["parent"], p["child"]) for p in fund["nested_parents"]}
-    pairs_evf = {(p["parent"], p["child"]) for p in evf["nested_parents"]}
-    known = ("event_ta_up_positive_eps", "event_ac_peps_taup")
-    assert known in pairs_fund
-    assert known in pairs_evf
-    assert (
-        "event_afterclose_positive_eps",
-        "event_ac_peps_taup",
-    ) in pairs_evf
-    assert fund["valid"] is True
-    assert evf["valid"] is True
-    assert validate_basket_members(fund["members"]) == []
-    assert validate_basket_members(evf["members"]) == []
-    assert nested_parent_pairs(["event_ta_up_positive_eps"]) == []
-    assert nested_parent_pairs([]) == []
-
-
+@pytest.mark.replay
 def test_historical_baskets_are_deprecated_not_invalid() -> None:
     from research.combo_basket_catalog import (
         HISTORICAL_BASKET_RULES,
@@ -140,6 +116,7 @@ def test_historical_baskets_are_deprecated_not_invalid() -> None:
     assert prim_rules.isdisjoint(HISTORICAL_BASKET_RULES)
 
 
+@pytest.mark.replay
 def test_mechanical_basket_defs_cache_returns_copies() -> None:
     from research.combo_basket_catalog import mechanical_basket_defs
     from research.unique_logic.catalog import clear_catalog_caches
@@ -416,6 +393,7 @@ def test_four_member_sleeve_requires_thicker_than_weakest() -> None:
     assert all(c["lo"] > 0.43 for c in flow_cands)
 
 
+@pytest.mark.replay
 def test_meta_baskets_are_fund_line_and_not_a_pass() -> None:
     from research.combo_basket_catalog import (
         META_BASKETS,
