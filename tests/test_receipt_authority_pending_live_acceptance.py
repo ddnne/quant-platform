@@ -50,7 +50,7 @@ def _install_fake_pinned_wrangler(
 def _version_document_for_surface(
     surface: Mapping[str, Any],
     *,
-    role: str,
+    worker: str,
     version_id: str,
     ordinal: int,
     annotations: dict[str, str],
@@ -61,13 +61,14 @@ def _version_document_for_surface(
         if materialized.get("namespace_id") == "<LIVE_NAMESPACE_ID>":
             materialized["namespace_id"] = f"{ordinal:x}" * 32
         bindings.append(materialized)
-    observed = _HANDLER_SURFACES["workers"][_HANDLER_SURFACES["roles"][role]]
+    observed = _HANDLER_SURFACES["workers"][worker]
     script_resource: dict[str, Any] = {
         "etag": f"{ordinal:x}" * 64,
         "handlers": list(observed["handlers"]),
         "last_deployed_from": "wrangler",
-        "named_handlers": copy.deepcopy(observed["named_handlers"]),
     }
+    if observed["named_handlers"]:
+        script_resource["named_handlers"] = copy.deepcopy(observed["named_handlers"])
     script_runtime: dict[str, Any] = {
         "compatibility_date": surface["compatibility_date"],
         "usage_model": "standard",
@@ -120,7 +121,7 @@ def _documents(environment: str) -> tuple[
         }
         versions[role] = _version_document_for_surface(
             surface,
-            role=role,
+            worker=worker,
             version_id=version_id,
             ordinal=ordinal,
             annotations={

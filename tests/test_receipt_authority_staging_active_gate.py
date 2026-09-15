@@ -224,7 +224,7 @@ def _chain_documents(
     versions: dict[str, Any] = {}
     public: dict[str, Any] = {}
     provenance: dict[str, Any] = {}
-    for ordinal, (role, _worker) in enumerate(active.ACTIVE_CHAIN, start=1):
+    for ordinal, (role, worker) in enumerate(active.ACTIVE_CHAIN, start=1):
         surface = surfaces[role]
         deployment_id = f"00000000-0000-4000-8000-{ordinal:012d}"
         version_id = f"10000000-0000-4000-8000-{ordinal:012d}"
@@ -255,7 +255,7 @@ def _chain_documents(
             if materialized.get("namespace_id") == "<LIVE_NAMESPACE_ID>":
                 materialized["namespace_id"] = f"{ordinal:x}" * 32
             bindings.append(materialized)
-        observed = _HANDLER_SURFACES["workers"][_HANDLER_SURFACES["roles"][role]]
+        observed = _HANDLER_SURFACES["workers"][worker]
         script: dict[str, Any] = {
             "etag": f"{ordinal:x}" * 64,
             "handlers": list(observed["handlers"]),

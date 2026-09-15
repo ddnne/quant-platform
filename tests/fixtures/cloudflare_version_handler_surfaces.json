@@ -9,12 +9,6 @@
     "research-ai-gateway": "source_defined_representative",
     "research-mass-eval": "source_defined_representative"
   },
-  "roles": {
-    "acquisition": "ingestion-secrets",
-    "authority": "receipt-evidence-authority",
-    "caller": "ingestion-premium",
-    "observer": "receipt-activation-observer"
-  },
   "workers": {
     "ingestion-jsda": {
       "handlers": ["fetch", "scheduled", "queue"],

@@ -60,7 +60,7 @@
     ],
     "unclassified": "REJECT"
   },
-  "manifest_digest": "sha256:fd56c4425bcfe0e979d2fc246a45cc3f330692568899da580ddcab8d49a08652",
+  "manifest_digest": "sha256:155c831f3b34df26360e98fcfe6a56ffbcce8ce647ef73b50eabffc9c37919dd",
   "ops_binding_identity_digest": "sha256:881176391253aed791eeca79c264384838fe9f6edfc8f33e48c2353e450cb6e3",
   "project_account_id": "11233bca08d134a9b738eaa46b9751d9",
   "schema_version": "cloudflare-active-worker-bindings/v11",
@@ -82,7 +82,12 @@
         }
       ],
       "default_handler": {
-        "fetch_reserved_special": true
+        "fetch_reserved_special": true,
+        "handlers": [
+          "fetch",
+          "scheduled",
+          "queue"
+        ]
       },
       "durable_object_class_handlers": [],
       "durable_objects": [],
@@ -160,7 +165,11 @@
         }
       ],
       "default_handler": {
-        "fetch_reserved_special": true
+        "fetch_reserved_special": true,
+        "handlers": [
+          "fetch",
+          "scheduled"
+        ]
       },
       "durable_object_class_handlers": [],
       "durable_objects": [],
@@ -266,7 +275,10 @@
       "crons": [],
       "d1_databases": [],
       "default_handler": {
-        "fetch_reserved_special": true
+        "fetch_reserved_special": true,
+        "handlers": [
+          "fetch"
+        ]
       },
       "durable_object_class_handlers": [],
       "durable_objects": [],
@@ -350,7 +362,10 @@
         }
       ],
       "default_handler": {
-        "fetch_reserved_special": true
+        "fetch_reserved_special": true,
+        "handlers": [
+          "fetch"
+        ]
       },
       "durable_object_class_handlers": [
         {
@@ -486,7 +501,10 @@
       "crons": [],
       "d1_databases": [],
       "default_handler": {
-        "fetch_reserved_special": true
+        "fetch_reserved_special": true,
+        "handlers": [
+          "fetch"
+        ]
       },
       "durable_object_class_handlers": [],
       "durable_objects": [],
@@ -543,7 +561,10 @@
         }
       ],
       "default_handler": {
-        "fetch_reserved_special": true
+        "fetch_reserved_special": true,
+        "handlers": [
+          "fetch"
+        ]
       },
       "durable_object_class_handlers": [
         {
@@ -649,7 +670,10 @@
       "crons": [],
       "d1_databases": [],
       "default_handler": {
-        "fetch_reserved_special": true
+        "fetch_reserved_special": true,
+        "handlers": [
+          "fetch"
+        ]
       },
       "durable_object_class_handlers": [
         {
@@ -741,7 +765,10 @@
       "crons": [],
       "d1_databases": [],
       "default_handler": {
-        "fetch_reserved_special": true
+        "fetch_reserved_special": true,
+        "handlers": [
+          "fetch"
+        ]
       },
       "durable_object_class_handlers": [],
       "durable_objects": [],
@@ -902,7 +929,12 @@
           }
         ],
         "default_handler": {
-          "fetch_reserved_special": true
+          "fetch_reserved_special": true,
+          "handlers": [
+            "fetch",
+            "scheduled",
+            "queue"
+          ]
         },
         "durable_object_class_handlers": [],
         "durable_objects": [],
@@ -999,7 +1031,12 @@
           }
         ],
         "default_handler": {
-          "fetch_reserved_special": true
+          "fetch_reserved_special": true,
+          "handlers": [
+            "fetch",
+            "scheduled",
+            "queue"
+          ]
         },
         "durable_object_class_handlers": [],
         "durable_objects": [],
@@ -1094,7 +1131,12 @@
           }
         ],
         "default_handler": {
-          "fetch_reserved_special": true
+          "fetch_reserved_special": true,
+          "handlers": [
+            "fetch",
+            "scheduled",
+            "queue"
+          ]
         },
         "durable_object_class_handlers": [],
         "durable_objects": [],
@@ -1208,7 +1250,11 @@
           }
         ],
         "default_handler": {
-          "fetch_reserved_special": true
+          "fetch_reserved_special": true,
+          "handlers": [
+            "fetch",
+            "scheduled"
+          ]
         },
         "durable_object_class_handlers": [],
         "durable_objects": [],
@@ -1347,7 +1393,11 @@
           }
         ],
         "default_handler": {
-          "fetch_reserved_special": true
+          "fetch_reserved_special": true,
+          "handlers": [
+            "fetch",
+            "scheduled"
+          ]
         },
         "durable_object_class_handlers": [],
         "durable_objects": [],
@@ -1487,7 +1537,11 @@
           }
         ],
         "default_handler": {
-          "fetch_reserved_special": true
+          "fetch_reserved_special": true,
+          "handlers": [
+            "fetch",
+            "scheduled"
+          ]
         },
         "durable_object_class_handlers": [],
         "durable_objects": [],
@@ -1611,7 +1665,10 @@
         "crons": [],
         "d1_databases": [],
         "default_handler": {
-          "fetch_reserved_special": true
+          "fetch_reserved_special": true,
+          "handlers": [
+            "fetch"
+          ]
         },
         "durable_object_class_handlers": [],
         "durable_objects": [],
@@ -1684,7 +1741,10 @@
         "crons": [],
         "d1_databases": [],
         "default_handler": {
-          "fetch_reserved_special": true
+          "fetch_reserved_special": true,
+          "handlers": [
+            "fetch"
+          ]
         },
         "durable_object_class_handlers": [],
         "durable_objects": [],
@@ -1757,7 +1817,10 @@
         "crons": [],
         "d1_databases": [],
         "default_handler": {
-          "fetch_reserved_special": true
+          "fetch_reserved_special": true,
+          "handlers": [
+            "fetch"
+          ]
         },
         "durable_object_class_handlers": [],
         "durable_objects": [],
@@ -1848,7 +1911,10 @@
           }
         ],
         "default_handler": {
-          "fetch_reserved_special": true
+          "fetch_reserved_special": true,
+          "handlers": [
+            "fetch"
+          ]
         },
         "durable_object_class_handlers": [
           {
@@ -2012,7 +2078,10 @@
           }
         ],
         "default_handler": {
-          "fetch_reserved_special": true
+          "fetch_reserved_special": true,
+          "handlers": [
+            "fetch"
+          ]
         },
         "durable_object_class_handlers": [
           {
@@ -2176,7 +2245,10 @@
           }
         ],
         "default_handler": {
-          "fetch_reserved_special": true
+          "fetch_reserved_special": true,
+          "handlers": [
+            "fetch"
+          ]
         },
         "durable_object_class_handlers": [
           {
@@ -2320,7 +2392,10 @@
         "crons": [],
         "d1_databases": [],
         "default_handler": {
-          "fetch_reserved_special": true
+          "fetch_reserved_special": true,
+          "handlers": [
+            "fetch"
+          ]
         },
         "durable_object_class_handlers": [],
         "durable_objects": [],
@@ -2369,7 +2444,10 @@
         "crons": [],
         "d1_databases": [],
         "default_handler": {
-          "fetch_reserved_special": true
+          "fetch_reserved_special": true,
+          "handlers": [
+            "fetch"
+          ]
         },
         "durable_object_class_handlers": [],
         "durable_objects": [],
@@ -2424,7 +2502,10 @@
         "crons": [],
         "d1_databases": [],
         "default_handler": {
-          "fetch_reserved_special": true
+          "fetch_reserved_special": true,
+          "handlers": [
+            "fetch"
+          ]
         },
         "durable_object_class_handlers": [],
         "durable_objects": [],
@@ -2494,7 +2575,10 @@
           }
         ],
         "default_handler": {
-          "fetch_reserved_special": true
+          "fetch_reserved_special": true,
+          "handlers": [
+            "fetch"
+          ]
         },
         "durable_object_class_handlers": [
           {
@@ -2617,7 +2701,10 @@
           }
         ],
         "default_handler": {
-          "fetch_reserved_special": true
+          "fetch_reserved_special": true,
+          "handlers": [
+            "fetch"
+          ]
         },
         "durable_object_class_handlers": [
           {
@@ -2740,7 +2827,10 @@
           }
         ],
         "default_handler": {
-          "fetch_reserved_special": true
+          "fetch_reserved_special": true,
+          "handlers": [
+            "fetch"
+          ]
         },
         "durable_object_class_handlers": [
           {
@@ -2859,7 +2949,10 @@
         "crons": [],
         "d1_databases": [],
         "default_handler": {
-          "fetch_reserved_special": true
+          "fetch_reserved_special": true,
+          "handlers": [
+            "fetch"
+          ]
         },
         "durable_object_class_handlers": [
           {
@@ -2960,7 +3053,10 @@
         "crons": [],
         "d1_databases": [],
         "default_handler": {
-          "fetch_reserved_special": true
+          "fetch_reserved_special": true,
+          "handlers": [
+            "fetch"
+          ]
         },
         "durable_object_class_handlers": [
           {
@@ -3061,7 +3157,10 @@
         "crons": [],
         "d1_databases": [],
         "default_handler": {
-          "fetch_reserved_special": true
+          "fetch_reserved_special": true,
+          "handlers": [
+            "fetch"
+          ]
         },
         "durable_object_class_handlers": [
           {
@@ -3169,7 +3268,10 @@
         "crons": [],
         "d1_databases": [],
         "default_handler": {
-          "fetch_reserved_special": true
+          "fetch_reserved_special": true,
+          "handlers": [
+            "fetch"
+          ]
         },
         "durable_object_class_handlers": [
           {
@@ -3285,7 +3387,10 @@
         "crons": [],
         "d1_databases": [],
         "default_handler": {
-          "fetch_reserved_special": true
+          "fetch_reserved_special": true,
+          "handlers": [
+            "fetch"
+          ]
         },
         "durable_object_class_handlers": [
           {
@@ -3401,7 +3506,10 @@
         "crons": [],
         "d1_databases": [],
         "default_handler": {
-          "fetch_reserved_special": true
+          "fetch_reserved_special": true,
+          "handlers": [
+            "fetch"
+          ]
         },
         "durable_object_class_handlers": [
           {

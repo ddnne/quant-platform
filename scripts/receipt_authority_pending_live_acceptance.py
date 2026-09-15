@@ -395,18 +395,25 @@ _DEFAULT_EXPORT_WORKER_ENTRYPOINTS = frozenset({
 
 
 def _expected_script_handlers(surface: Mapping[str, Any]) -> list[str]:
-    """Return default-script handlers Cloudflare reports for this frozen surface."""
+    """Return default-script handlers from the frozen export-default surface.
 
-    handlers: list[str] = []
+    Cron triggers stay on the public schedules check. JSDA staging has no crons
+    and still exports scheduled().
+    """
+
     default_handler = _mapping(
         surface.get("default_handler"), label="default handler"
     )
-    if default_handler.get("fetch_reserved_special") is True:
-        handlers.append("fetch")
-    if surface["crons"]:
-        handlers.append("scheduled")
-    if surface["queue_consumers"]:
-        handlers.append("queue")
+    if (
+        set(default_handler) != {"fetch_reserved_special", "handlers"}
+        or default_handler.get("fetch_reserved_special") is not True
+    ):
+        raise ReceiptPendingLiveAcceptanceError("default handler surface drifted")
+    handlers = list(
+        _sequence(
+            default_handler.get("handlers"), label="default export handlers"
+        )
+    )
     for row in _sequence(
         surface.get("worker_entrypoints"), label="worker entrypoints"
     ):
