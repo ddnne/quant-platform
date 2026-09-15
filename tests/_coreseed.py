@@ -9,6 +9,8 @@ them back exclusively through ``pit``.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import date as date_cls
+from datetime import timedelta
 import json
 from pathlib import Path
 from typing import Iterable, Iterator
@@ -23,6 +25,23 @@ from storage.sqlite_store import SqliteStore
 # Four consecutive weekdays in April 2025 (post 2024-11-05 close-time change).
 TRADING_DAYS = ["2025-04-01", "2025-04-02", "2025-04-03", "2025-04-04"]
 CODES = ["8697", "1332"]
+# Exact-four momentum n=10 needs n+1 visible bars at the first compiled as_of.
+FIRST_AS_OF_BAR_OBSERVATIONS = 11
+
+
+def weekdays_before(first: str, count: int, *, exclude: Iterable[str] = ()) -> list[str]:
+    """``count`` weekdays strictly before ``first``, skipping ``exclude``."""
+
+    skipped = {str(day)[:10] for day in exclude}
+    cursor = date_cls.fromisoformat(str(first)[:10]) - timedelta(days=1)
+    found: list[str] = []
+    while len(found) < count:
+        text = cursor.isoformat()
+        if cursor.weekday() < 5 and text not in skipped:
+            found.append(text)
+        cursor -= timedelta(days=1)
+    found.reverse()
+    return found
 
 
 def close_iso(date: str) -> str:
@@ -285,20 +304,45 @@ def seed_governed_am_pm_session_db(
     afternoon_prices: dict | None = None,
     extra_fins_payloads: list[dict] | None = None,
 ) -> Path:
-    """Positive Controlled fixture: AM row at 11:30, PM revision at close."""
+    """Positive Controlled fixture: AM row at 11:30, PM revision at close.
+
+    Bar history includes n+1 sessions at ``days[0]`` so compiled exact-four
+    proof can close. ``markets_calendar`` catalog stays ``days`` (period bound).
+    Default fins carries BPS/CurPerEn so split-safety has an anchor; extra
+    per-share rows still override later observations.
+    """
 
     codes = codes or CODES
     days = days or TRADING_DAYS
+    history_days = weekdays_before(
+        days[0],
+        FIRST_AS_OF_BAR_OBSERVATIONS - 1,
+        exclude=days,
+    ) + list(days)
     morning_prices = morning_prices or rising_prices(codes, days, start=100.0)
     afternoon_prices = afternoon_prices or rising_prices(codes, days, start=100.0)
+    morning_prices = {
+        code: {
+            **{day: morning_prices[code][days[0]] for day in history_days},
+            **morning_prices[code],
+        }
+        for code in codes
+    }
+    afternoon_prices = {
+        code: {
+            **{day: afternoon_prices[code][days[0]] for day in history_days},
+            **afternoon_prices[code],
+        }
+        for code in codes
+    }
     path = tmp_path / "ing.sqlite"
     store = SqliteStore(path)
-    store.upsert("jquants_market_calendar", _calendar_rows(days))
+    store.upsert("jquants_market_calendar", _calendar_rows(history_days))
     store.upsert("jquants_listed_info", _master_rows(codes))
     am_rows: list[dict] = []
     pm_rows: list[dict] = []
     for code in codes:
-        for day in days:
+        for day in history_days:
             morning = float(morning_prices[code][day])
             afternoon = float(afternoon_prices[code][day])
             am_rows.append(
@@ -360,7 +404,7 @@ def seed_governed_am_pm_session_db(
     store.upsert("jquants_daily_bars", pm_rows)
     am_catalog: list[dict] = []
     for code in codes:
-        for day in days:
+        for day in history_days:
             morning = float(morning_prices[code][day])
             event = morning_iso(day)
             payload = {
@@ -386,7 +430,7 @@ def seed_governed_am_pm_session_db(
     store.upsert("jquants_records", am_catalog)
     daily_catalog: list[dict] = []
     for code in codes:
-        for day in days:
+        for day in history_days:
             payload = {
                 "Code": code,
                 "Date": day,
@@ -441,6 +485,8 @@ def seed_governed_am_pm_session_db(
             "DiscDate": first,
             "DiscTime": "08:00:00",
             "DiscNo": f"fixture-{code}",
+            "BPS": 1.0,
+            "CurPerEn": first,
         }
         closure_catalog.append(
             {
