@@ -622,7 +622,7 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
     ).toMatchObject({ status: "idle", fetched: false, reason: "leased" });
     expect(invocations).toBe(1);
 
-    nowMs += 120_000;
+    nowMs += 300_000;
     expect(
       await runExactFiveAcquisitionTick(env.STRUCTURED_BUCKET, hanging, { clock, fetchTimeoutMs: 60_000 }),
     ).toMatchObject({ status: "idle", fetched: false, reason: "unresolved" });
