@@ -715,9 +715,17 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
          digests_json, run_id, status, error, checked_at
        ) VALUES (
          'jquants', 'markets_calendar', '2023-01', '2023-01-01', '2023-01-31',
-         '{}', 1, 0, 1, 0, 0, 0, ?, 1, 'SUCCESS', NULL, '2023-01-31T00:00:00Z'
+         ?, 1, 0, 1, 0, 0, 1, ?, 1, 'SUCCESS', NULL, '2023-01-31T00:00:00Z'
        )`,
     ).bind(JSON.stringify({
+      coverage_mode: "calendar",
+      expected_frequency: "calendar_day",
+      expected_item_unit: "source_query",
+      segment_end: "2023-01-31",
+      segment_start: "2023-01-01",
+      universe_rule: "jpx_calendar_days",
+      segment_granularity: "calendar_month",
+    }), JSON.stringify({
       eligibility: "RECOVERED_RAW_ONLY",
       issuer_class: "UnsignedIngestionAudit",
     })).run();
