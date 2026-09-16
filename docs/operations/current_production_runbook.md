@@ -219,9 +219,22 @@ remote apply results only in immutable release evidence.
   `control/equities_valuation/backfill.json`):
   `control/receipt_pending_registration.json` invokes the existing
   `pending_public_key_registration` path once, idempotently, PENDING-only,
-  public evidence only; `control/exact_five_compiled_acquisition.json` runs a
-  finite exact-five `runIngestion` queue (max 24 jobs, 1/tick, 31-day windows,
-  3 attempts). Absent objects are no-ops. They are not deployed until a later
+  and persists the validated public operator envelope (the 19-field
+  registration plus caller provenance; never wrapped/private key);
+  `control/exact_five_compiled_acquisition.json` admits explicit
+  `{dataset, segment_id}` jobs pinned to the generated exact-four
+  profile/closure/period and derives canonical calendar-month windows from
+  the catalog (1/tick, 3 attempts, max 64 jobs). Full compiled selector
+  compilation, including post-evaluate pre-period seeds, remains
+  `compiled_candidate_selectors` /
+  `compiled_period_collection_segments`. Exact-five runs only when
+  valuation is absent or complete, not leased/CAS/error. Fetch abort is 30s
+  on the ingest callback only; it does not cancel D1/R2/Receipt and the 90s
+  lease is not proof the prior owner stopped. Absent objects are no-ops.
+  PENDING staging Cron does not run `recoverPreparedReceipts` (no governed
+  issue). ACTIVE staging Cron may recover PREPARED identities; the ACTIVE
+  audit canary stays off this path because it requires `ra-s-c` provenance
+  while Premium deploys `rp-s-c`. They are not deployed until a later
   SHA-align. Writing either control object is a later approved mutation, not
   authorized by source merge. Do not add a public Premium route. Mass remains
   verify-only. This is still operational HOLD for ACTIVE keys, READY, and

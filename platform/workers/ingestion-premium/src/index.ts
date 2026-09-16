@@ -42,7 +42,10 @@ import {
   type MasterScd2UniverseEvidence,
 } from "./persist_records";
 import { fetchDataset } from "./fetch_jq";
-import { runValuationBackfillTick } from "./valuation_backfill";
+import {
+  runValuationBackfillTick,
+  valuationIdleForExactFive,
+} from "./valuation_backfill";
 import { runPendingRegistrationTick } from "./pending_registration_tick";
 import { runExactFiveAcquisitionTick } from "./exact_five_acquisition_tick";
 import { todayJst, toJstIso } from "./identity";
@@ -1053,7 +1056,7 @@ export default {
         reason: registration.reason,
         called: registration.called,
       }));
-      if (!valuation.fetched) {
+      if (valuationIdleForExactFive(valuation)) {
         const acquisition = await runExactFiveAcquisitionTick(
           env.STRUCTURED_BUCKET,
           ingest,
@@ -1065,6 +1068,13 @@ export default {
           fetched: acquisition.fetched,
           jobs: acquisition.jobs,
         }));
+      }
+      // PENDING staging does not issue governed PREPARED receipts.
+      // ACTIVE staging may recover leftover PREPARED identities via the
+      // existing sweep. The ACTIVE audit canary is not invoked here: it
+      // requires ra-s-c provenance, while Premium deploys rp-s-c.
+      if (env.RECEIPT_AUTHORITY_OPERATION_MODE === "ACTIVE") {
+        await recoverPreparedReceipts(env);
       }
       return;
     }

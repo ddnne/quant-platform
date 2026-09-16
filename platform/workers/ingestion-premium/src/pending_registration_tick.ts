@@ -1,15 +1,29 @@
 /**
  * Staging R2 control for one PENDING public-key registration.
  * Absent/idle/completed is a no-op. Does not mint READY or issue receipts.
+ * Persists the validated public operator envelope; never wrapped/private key.
  */
+
+import type { ReceiptPublicKeyRegistrationV1 } from "../../receipt-evidence-authority/src/types";
+import {
+  canonicalDigest,
+  exactKeys,
+  isPlainObject,
+  isSha256,
+} from "../../receipt-evidence-authority/src/canonical";
+import {
+  casPutJson,
+  CONTROL_LEASE_MS,
+  CONTROL_MAX_BYTES,
+  parseControlLease,
+  type ControlLease,
+} from "./control_cas";
 
 export const PENDING_REGISTRATION_KEY =
   "control/receipt_pending_registration.json";
 
 const SCHEMA = "receipt-pending-registration/v1";
-const CONTROL_MAX_BYTES = 8 * 1024;
 const MAX_ATTEMPTS = 3;
-const LEASE_MS = 90_000;
 
 const CONTROL_KEYS = [
   "schema",
@@ -20,21 +34,51 @@ const CONTROL_KEYS = [
   "last",
 ] as const;
 
+const OPERATOR_KEYS = [
+  "schema_version",
+  "authority",
+  "action",
+  "environment",
+  "caller_worker_version_id",
+  "caller_worker_version_tag",
+  "registration",
+] as const;
+
+const REGISTRATION_FIELDS = [
+  "schema_version",
+  "purpose",
+  "environment",
+  "authority_instance_digest",
+  "authority_resource_digest",
+  "authority_status",
+  "action",
+  "deployment_source_sha",
+  "authority_worker_version_id",
+  "authority_worker_version_tag",
+  "operation_binding_digest",
+  "key_id",
+  "key_generation",
+  "algorithm",
+  "public_key_base64",
+  "private_key_extractable",
+  "status",
+  "generated_at",
+  "registration_digest",
+] as const;
+
 type RegistrationState = "idle" | "requested" | "completed";
 
-type ControlLease = { owner: string; until: string } | null;
-
-export type PublicRegistrationEvidence = {
-  status: "pass";
-  key_id: string;
-  public_key_base64: string;
-  registration_digest: string;
-  authority_status: "PENDING";
+export type PendingRegistrationOutput = {
+  schema_version: "receipt-operator-registration/v1";
+  authority: "receipt-evidence-authority";
+  action: "public_key_registration";
+  environment: "staging" | "production";
   caller_worker_version_id: string;
   caller_worker_version_tag: string;
+  registration: ReceiptPublicKeyRegistrationV1;
 };
 
-type RegistrationLast = PublicRegistrationEvidence | {
+type RegistrationLast = PendingRegistrationOutput | {
   status: "fail";
   detail: string;
 } | null;
@@ -60,81 +104,58 @@ export type PendingRegistrationPolicy = {
   readyDeclared: string | undefined;
 };
 
-export type PendingRegistrationOutput = {
-  registration: {
-    key_id: string;
-    public_key_base64: string;
-    registration_digest: string;
-    authority_status: "PENDING";
-  };
-  caller_worker_version_id: string;
-  caller_worker_version_tag: string;
-};
-
-const LAST_PASS_KEYS = [
-  "status",
-  "key_id",
-  "public_key_base64",
-  "registration_digest",
-  "authority_status",
-  "caller_worker_version_id",
-  "caller_worker_version_tag",
-] as const;
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function parseLease(value: unknown): ControlLease | undefined {
-  if (value === null) return null;
-  if (!isPlainObject(value) || Object.keys(value).length !== 2) return undefined;
-  if (typeof value.owner !== "string" || value.owner.length === 0) return undefined;
-  if (typeof value.until !== "string") return undefined;
-  const until = new Date(value.until);
-  if (Number.isNaN(until.getTime()) || until.toISOString() !== value.until) {
+function parseFailLast(value: Record<string, unknown>): RegistrationLast | undefined {
+  const keys = Object.keys(value);
+  if (keys.length !== 2 || typeof value.detail !== "string" || value.detail.length === 0) {
     return undefined;
   }
-  return { owner: value.owner, until: value.until };
+  return { status: "fail", detail: value.detail };
+}
+
+function parseOperatorEnvelope(
+  value: Record<string, unknown>,
+): PendingRegistrationOutput | undefined {
+  if (!exactKeys(value, OPERATOR_KEYS)) return undefined;
+  if (
+    value.schema_version !== "receipt-operator-registration/v1" ||
+    value.authority !== "receipt-evidence-authority" ||
+    value.action !== "public_key_registration" ||
+    (value.environment !== "staging" && value.environment !== "production") ||
+    typeof value.caller_worker_version_id !== "string" ||
+    typeof value.caller_worker_version_tag !== "string"
+  ) {
+    return undefined;
+  }
+  const registration = value.registration;
+  if (!isPlainObject(registration) || !exactKeys(registration, REGISTRATION_FIELDS)) {
+    return undefined;
+  }
+  if (
+    registration.schema_version !== "receipt-public-key-registration/v1" ||
+    registration.purpose !== "receipt_verification" ||
+    registration.authority_status !== "PENDING" ||
+    registration.algorithm !== "Ed25519" ||
+    registration.private_key_extractable !== false ||
+    registration.status !== "pending" ||
+    typeof registration.key_id !== "string" ||
+    typeof registration.public_key_base64 !== "string" ||
+    typeof registration.key_generation !== "number" ||
+    !Number.isSafeInteger(registration.key_generation) ||
+    !isSha256(registration.registration_digest) ||
+    !isSha256(registration.authority_instance_digest) ||
+    !isSha256(registration.authority_resource_digest) ||
+    !isSha256(registration.operation_binding_digest)
+  ) {
+    return undefined;
+  }
+  return value as unknown as PendingRegistrationOutput;
 }
 
 function parseLast(value: unknown): RegistrationLast | undefined {
   if (value === null) return null;
   if (!isPlainObject(value)) return undefined;
-  const keys = Object.keys(value);
-  if (value.status === "fail") {
-    if (keys.length !== 2 || typeof value.detail !== "string" || value.detail.length === 0) {
-      return undefined;
-    }
-    return { status: "fail", detail: value.detail };
-  }
-  if (value.status !== "pass") return undefined;
-  if (keys.length !== LAST_PASS_KEYS.length) return undefined;
-  const keyId = value.key_id;
-  const publicKey = value.public_key_base64;
-  const digest = value.registration_digest;
-  const authorityStatus = value.authority_status;
-  const callerId = value.caller_worker_version_id;
-  const callerTag = value.caller_worker_version_tag;
-  if (
-    typeof keyId !== "string" ||
-    typeof publicKey !== "string" ||
-    typeof digest !== "string" ||
-    typeof callerId !== "string" ||
-    typeof callerTag !== "string"
-  ) {
-    return undefined;
-  }
-  if (authorityStatus !== "PENDING") return undefined;
-  if (!/^sha256:[0-9a-f]{64}$/.test(digest)) return undefined;
-  return {
-    status: "pass",
-    key_id: keyId,
-    public_key_base64: publicKey,
-    registration_digest: digest,
-    authority_status: "PENDING",
-    caller_worker_version_id: callerId,
-    caller_worker_version_tag: callerTag,
-  };
+  if (value.status === "fail") return parseFailLast(value);
+  return parseOperatorEnvelope(value);
 }
 
 function parseControl(raw: string): RegistrationControl | null {
@@ -166,7 +187,7 @@ function parseControl(raw: string): RegistrationControl | null {
   ) {
     return null;
   }
-  const lease = parseLease(parsed.lease);
+  const lease = parseControlLease(parsed.lease);
   const last = parseLast(parsed.last);
   if (lease === undefined || last === undefined) return null;
   return {
@@ -179,35 +200,19 @@ function parseControl(raw: string): RegistrationControl | null {
   };
 }
 
-function serialize(control: RegistrationControl): string {
-  return JSON.stringify(control);
+async function publicEnvelopeDigestMatches(
+  output: PendingRegistrationOutput,
+): Promise<boolean> {
+  const { registration_digest: supplied, ...body } = output.registration;
+  return supplied === await canonicalDigest(body);
 }
 
-async function casPut(
+function casPut(
   bucket: R2Bucket,
   control: RegistrationControl,
   etag: string,
 ): Promise<R2Object | null> {
-  const body = serialize(control);
-  if (new TextEncoder().encode(body).byteLength > CONTROL_MAX_BYTES) return null;
-  return bucket.put(PENDING_REGISTRATION_KEY, body, {
-    httpMetadata: { contentType: "application/json; charset=utf-8" },
-    onlyIf: { etagMatches: etag },
-  });
-}
-
-function publicEvidence(
-  output: PendingRegistrationOutput,
-): PublicRegistrationEvidence {
-  return {
-    status: "pass",
-    key_id: output.registration.key_id,
-    public_key_base64: output.registration.public_key_base64,
-    registration_digest: output.registration.registration_digest,
-    authority_status: "PENDING",
-    caller_worker_version_id: output.caller_worker_version_id,
-    caller_worker_version_tag: output.caller_worker_version_tag,
-  };
+  return casPutJson(bucket, PENDING_REGISTRATION_KEY, control, etag);
 }
 
 export async function runPendingRegistrationTick(
@@ -239,7 +244,10 @@ export async function runPendingRegistrationTick(
   ) {
     return { status: "stop", called: false, reason: "policy" };
   }
-  if (control.last?.status === "pass") {
+  if (control.last && !("status" in control.last)) {
+    if (!await publicEnvelopeDigestMatches(control.last)) {
+      return { status: "stop", called: false, reason: "invalid" };
+    }
     control.state = "completed";
     control.lease = null;
     const written = await casPut(bucket, control, object.etag);
@@ -255,7 +263,7 @@ export async function runPendingRegistrationTick(
   }
 
   const owner = crypto.randomUUID();
-  const until = new Date(now.getTime() + LEASE_MS).toISOString();
+  const until = new Date(now.getTime() + CONTROL_LEASE_MS).toISOString();
   control.attempts += 1;
   control.lease = { owner, until };
   const claimed = await casPut(bucket, control, object.etag);
@@ -264,7 +272,11 @@ export async function runPendingRegistrationTick(
   }
 
   try {
-    const output = publicEvidence(await register());
+    const output = await register();
+    const envelope = parseOperatorEnvelope(output as unknown as Record<string, unknown>);
+    if (!envelope || !await publicEnvelopeDigestMatches(envelope)) {
+      throw new Error("registration_failed");
+    }
     const reportNow = clock();
     const leaseUntil = control.lease?.until;
     if (!leaseUntil || leaseUntil <= reportNow.toISOString()) {
@@ -273,21 +285,18 @@ export async function runPendingRegistrationTick(
     control.state = "completed";
     control.attempts = 0;
     control.lease = null;
-    control.last = output;
+    control.last = envelope;
     const written = await casPut(bucket, control, claimed.etag);
     if (written === null) return { status: "lost", called: true, reason: "cas" };
     return { status: "pass", called: true, reason: "ok" };
-  } catch (error) {
+  } catch {
     const reportNow = clock();
     const leaseUntil = control.lease?.until;
     if (!leaseUntil || leaseUntil <= reportNow.toISOString()) {
       return { status: "lost", called: true, reason: "expired" };
     }
     control.lease = null;
-    control.last = {
-      status: "fail",
-      detail: error instanceof Error ? "registration_failed" : "registration_failed",
-    };
+    control.last = { status: "fail", detail: "registration_failed" };
     const written = await casPut(bucket, control, claimed.etag);
     if (written === null) return { status: "lost", called: true, reason: "cas" };
     return { status: "fail", called: true, reason: "registration_failed" };

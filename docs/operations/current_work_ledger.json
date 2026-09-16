@@ -213,7 +213,7 @@
     },
     "4_receipt_to_ready_trader": {
       "status": "source_chain_present_not_live",
-      "notes": "Mass still binds PremiumReceiptProductInputService and PilotReadyPublicationService and verifies READY; it does not mint. Premium HTTP /v1/run and /v1/export remain unreachable (workers_dev=false, no routes). Source adds idle R2 controls on staging Cron for one PENDING public registration and a finite exact-five runIngestion queue. Absent control = no-op. Not deployed, not live certification. Local cf_premium_backfill HTTP is not the staging path.",
+      "notes": "Mass still binds PremiumReceiptProductInputService and PilotReadyPublicationService and verifies READY; it does not mint. Premium HTTP /v1/run and /v1/export remain unreachable (workers_dev=false, no routes). Source adds idle R2 controls on staging Cron for one PENDING public registration (full public operator envelope) and a finite exact-five queue of compiled dataset/segment jobs. Absent control = no-op. Not deployed, not live certification. Local cf_premium_backfill HTTP is not the staging path.",
       "scope": "existence_and_binding_evidence_only"
     },
     "5_ci_deploy_entrypoints": {

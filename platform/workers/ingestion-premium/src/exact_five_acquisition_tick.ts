@@ -1,24 +1,46 @@
 /**
  * Staging R2 control for a finite exact-five compiled acquisition queue.
  * Absent/idle is a no-op. Does not mint Coverage COMPLETE or READY.
+ *
+ * Compilation of the full selector set, including post-evaluate pre-period
+ * seeds, belongs to `compiled_candidate_selectors()` /
+ * `compiled_period_collection_segments` in the receipt-candidate producer.
+ * This tick admits explicit `{dataset, segment_id}` jobs that pin the current
+ * generated profile/closure and overlap the generated exact-four period, then
+ * derives canonical calendar-month collection windows from the catalog.
  */
 
-import { COMPILED_EXACT_FIVE_DATASET_IDS } from "./receipt_product_input";
+import { datasetById } from "./catalog";
+import {
+  casPutJson,
+  CONTROL_LEASE_MS,
+  CONTROL_MAX_BYTES,
+  parseControlLease,
+  type ControlLease,
+} from "./control_cas";
+import { todayJst } from "./identity";
+import {
+  COMPILED_CLOSURE_DIGEST,
+  COMPILED_EXACT_FIVE_DATASET_IDS,
+  COMPILED_EXACT_FOUR_PERIOD,
+  COMPILED_PROFILE_DIGEST,
+  COMPILED_PROFILE_ID,
+} from "./receipt_product_input";
 
 export const EXACT_FIVE_ACQUISITION_KEY =
   "control/exact_five_compiled_acquisition.json";
 
 const SCHEMA = "exact-five-compiled-acquisition/v1";
-const CONTROL_MAX_BYTES = 8 * 1024;
-const MAX_JOBS = 24;
-const MAX_JOBS_PER_TICK = 1;
+const MAX_JOBS = 64;
 const MAX_ATTEMPTS = 3;
-const MAX_INCLUSIVE_DAYS = 31;
 const FETCH_TIMEOUT_MS = 30_000;
-const LEASE_MS = 90_000;
+const MONTH_ID = /^[0-9]{4}-[0-9]{2}$/;
 
 const CONTROL_KEYS = [
   "schema",
+  "profile_id",
+  "profile_digest",
+  "dependency_closure_digest",
   "jobs",
   "cursor",
   "attempts",
@@ -26,18 +48,16 @@ const CONTROL_KEYS = [
   "last",
 ] as const;
 
-const JOB_KEYS = ["dataset", "from", "to"] as const;
-
-type ControlLease = { owner: string; until: string } | null;
+const JOB_KEYS = ["dataset", "segment_id"] as const;
 
 export type ExactFiveJob = {
   dataset: string;
-  from: string;
-  to: string;
+  segment_id: string;
 };
 
 type AcquisitionLast = {
   dataset: string;
+  segment_id: string;
   from: string;
   to: string;
   rowsInserted: number;
@@ -46,6 +66,9 @@ type AcquisitionLast = {
 
 type AcquisitionControl = {
   schema: typeof SCHEMA;
+  profile_id: string;
+  profile_digest: string;
+  dependency_closure_digest: string;
   jobs: ExactFiveJob[];
   cursor: number;
   attempts: number;
@@ -69,28 +92,37 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isCalendarDay(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const date = new Date(`${value}T00:00:00Z`);
-  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+function monthEnd(month: string): string {
+  const [year, monthNum] = month.split("-").map(Number);
+  return new Date(Date.UTC(year, monthNum, 0)).toISOString().slice(0, 10);
 }
 
-function inclusiveDays(from: string, to: string): number {
-  const start = Date.parse(`${from}T00:00:00Z`);
-  const end = Date.parse(`${to}T00:00:00Z`);
-  return Math.floor((end - start) / 86_400_000) + 1;
-}
-
-function parseLease(value: unknown): ControlLease | undefined {
-  if (value === null) return null;
-  if (!isPlainObject(value) || Object.keys(value).length !== 2) return undefined;
-  if (typeof value.owner !== "string" || value.owner.length === 0) return undefined;
-  if (typeof value.until !== "string") return undefined;
-  const until = new Date(value.until);
-  if (Number.isNaN(until.getTime()) || until.toISOString() !== value.until) {
-    return undefined;
+/** Catalog canonical-month window for an explicit compiled selector. */
+export function compiledCollectionWindow(
+  dataset: string,
+  segmentId: string,
+): { from: string; to: string } | null {
+  if (!COMPILED_EXACT_FIVE_DATASET_IDS.has(dataset) || !MONTH_ID.test(segmentId)) {
+    return null;
   }
-  return { owner: value.owner, until: value.until };
+  const spec = datasetById(dataset);
+  if (!spec || spec.coverage.segment_granularity !== "calendar_month") return null;
+  const periodStart = COMPILED_EXACT_FOUR_PERIOD.start;
+  const periodEnd = COMPILED_EXACT_FOUR_PERIOD.end;
+  if (
+    segmentId < periodStart.slice(0, 7) ||
+    segmentId > periodEnd.slice(0, 7)
+  ) {
+    return null;
+  }
+  const historyStart = spec.coverage.history_target_start;
+  const from = historyStart.slice(0, 7) === segmentId
+    ? historyStart
+    : `${segmentId}-01`;
+  const currentDay = todayJst();
+  const to = currentDay.slice(0, 7) === segmentId ? currentDay : monthEnd(segmentId);
+  if (from > to) return null;
+  return { from, to };
 }
 
 function parseJob(value: unknown): ExactFiveJob | null {
@@ -98,30 +130,25 @@ function parseJob(value: unknown): ExactFiveJob | null {
   const keys = Object.keys(value);
   if (keys.length !== JOB_KEYS.length) return null;
   const dataset = value.dataset;
-  const from = value.from;
-  const to = value.to;
-  if (typeof dataset !== "string" || typeof from !== "string" || typeof to !== "string") {
-    return null;
-  }
-  if (!COMPILED_EXACT_FIVE_DATASET_IDS.has(dataset)) return null;
-  if (!isCalendarDay(from) || !isCalendarDay(to)) return null;
-  if (from > to) return null;
-  if (inclusiveDays(from, to) > MAX_INCLUSIVE_DAYS) return null;
-  return { dataset, from, to };
+  const segmentId = value.segment_id;
+  if (typeof dataset !== "string" || typeof segmentId !== "string") return null;
+  if (!compiledCollectionWindow(dataset, segmentId)) return null;
+  return { dataset, segment_id: segmentId };
 }
 
 function parseLast(value: unknown): AcquisitionLast | undefined {
   if (value === null) return null;
-  if (!isPlainObject(value) || Object.keys(value).length !== 5) return undefined;
+  if (!isPlainObject(value) || Object.keys(value).length !== 6) return undefined;
   const dataset = value.dataset;
+  const segmentId = value.segment_id;
   const from = value.from;
   const to = value.to;
   const status = value.status;
-  if (typeof dataset !== "string" || !COMPILED_EXACT_FIVE_DATASET_IDS.has(dataset)) {
-    return undefined;
-  }
+  if (typeof dataset !== "string" || typeof segmentId !== "string") return undefined;
+  const window = compiledCollectionWindow(dataset, segmentId);
+  if (!window) return undefined;
   if (typeof from !== "string" || typeof to !== "string") return undefined;
-  if (!isCalendarDay(from) || !isCalendarDay(to)) return undefined;
+  if (from !== window.from || to !== window.to) return undefined;
   if (
     typeof value.rowsInserted !== "number" ||
     !Number.isSafeInteger(value.rowsInserted) ||
@@ -132,6 +159,7 @@ function parseLast(value: unknown): AcquisitionLast | undefined {
   if (typeof status !== "string" || status.length === 0) return undefined;
   return {
     dataset,
+    segment_id: segmentId,
     from,
     to,
     rowsInserted: value.rowsInserted,
@@ -154,13 +182,24 @@ function parseControl(raw: string): AcquisitionControl | null {
     if (!keys.includes(key)) return null;
   }
   if (parsed.schema !== SCHEMA) return null;
+  if (
+    parsed.profile_id !== COMPILED_PROFILE_ID ||
+    parsed.profile_digest !== COMPILED_PROFILE_DIGEST ||
+    parsed.dependency_closure_digest !== COMPILED_CLOSURE_DIGEST
+  ) {
+    return null;
+  }
   if (!Array.isArray(parsed.jobs) || parsed.jobs.length < 1 || parsed.jobs.length > MAX_JOBS) {
     return null;
   }
   const jobs: ExactFiveJob[] = [];
+  const seen = new Set<string>();
   for (const row of parsed.jobs) {
     const job = parseJob(row);
     if (!job) return null;
+    const key = `${job.dataset}\0${job.segment_id}`;
+    if (seen.has(key)) return null;
+    seen.add(key);
     jobs.push(job);
   }
   if (
@@ -178,11 +217,14 @@ function parseControl(raw: string): AcquisitionControl | null {
   ) {
     return null;
   }
-  const lease = parseLease(parsed.lease);
+  const lease = parseControlLease(parsed.lease);
   const last = parseLast(parsed.last);
   if (lease === undefined || last === undefined) return null;
   return {
     schema: SCHEMA,
+    profile_id: COMPILED_PROFILE_ID,
+    profile_digest: COMPILED_PROFILE_DIGEST,
+    dependency_closure_digest: COMPILED_CLOSURE_DIGEST,
     jobs,
     cursor: parsed.cursor,
     attempts: parsed.attempts,
@@ -191,26 +233,22 @@ function parseControl(raw: string): AcquisitionControl | null {
   };
 }
 
-function serialize(control: AcquisitionControl): string {
-  return JSON.stringify(control);
-}
-
-async function casPut(
+function casPut(
   bucket: R2Bucket,
   control: AcquisitionControl,
   etag: string,
 ): Promise<R2Object | null> {
-  const body = serialize(control);
-  if (new TextEncoder().encode(body).byteLength > CONTROL_MAX_BYTES) return null;
-  return bucket.put(EXACT_FIVE_ACQUISITION_KEY, body, {
-    httpMetadata: { contentType: "application/json; charset=utf-8" },
-    onlyIf: { etagMatches: etag },
-  });
+  return casPutJson(bucket, EXACT_FIVE_ACQUISITION_KEY, control, etag);
 }
 
+/**
+ * Abort covers the ingest callback only. It does not cancel in-flight D1/R2
+ * or Receipt writes, and the 90s lease is not proof the prior owner stopped.
+ */
 async function ingestJob(
   ingest: ExactFiveIngest,
   job: ExactFiveJob,
+  window: { from: string; to: string },
 ): Promise<{ status: "pass" | "fail" | "partial"; datasetCount: number; rowsInserted: number }> {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
@@ -222,7 +260,7 @@ async function ingestJob(
         return;
       }
       ac.signal.addEventListener("abort", onAbort, { once: true });
-      ingest(job, ac.signal).then(
+      ingest({ dataset: job.dataset, from: window.from, to: window.to }, ac.signal).then(
         (summary) => {
           ac.signal.removeEventListener("abort", onAbort);
           resolve(summary);
@@ -265,107 +303,97 @@ export async function runExactFiveAcquisitionTick(
   if (!control || !object.etag) {
     return { status: "stop", fetched: false, jobs: 0, reason: "invalid" };
   }
+  if (control.cursor >= control.jobs.length) {
+    return { status: "idle", fetched: false, jobs: 0, reason: "complete" };
+  }
+  if (control.attempts >= MAX_ATTEMPTS) {
+    return { status: "stop", fetched: false, jobs: 0, reason: "exhausted" };
+  }
+  const now = clock();
+  if (control.lease && control.lease.until > now.toISOString()) {
+    return { status: "idle", fetched: false, jobs: 0, reason: "leased" };
+  }
 
-  let etag = object.etag;
-  let fetched = false;
-  let ran = 0;
+  const job = control.jobs[control.cursor]!;
+  const window = compiledCollectionWindow(job.dataset, job.segment_id);
+  if (!window) {
+    return { status: "stop", fetched: false, jobs: 0, reason: "invalid" };
+  }
+  const owner = crypto.randomUUID();
+  const until = new Date(now.getTime() + CONTROL_LEASE_MS).toISOString();
+  control.attempts += 1;
+  control.lease = { owner, until };
+  const claimed = await casPut(bucket, control, object.etag);
+  if (claimed === null || !claimed.etag) {
+    return { status: "lost", fetched: false, jobs: 0, reason: "cas" };
+  }
+  const etag = claimed.etag;
 
-  for (let i = 0; i < MAX_JOBS_PER_TICK; i++) {
-    if (control.cursor >= control.jobs.length) {
-      return {
-        status: ran > 0 ? "pass" : "idle",
-        fetched,
-        jobs: ran,
-        reason: ran > 0 ? "ok" : "complete",
-      };
-    }
-    if (control.attempts >= MAX_ATTEMPTS) {
-      return { status: "stop", fetched, jobs: ran, reason: "exhausted" };
-    }
-    const now = clock();
-    if (control.lease && control.lease.until > now.toISOString()) {
-      return { status: "idle", fetched, jobs: ran, reason: "leased" };
-    }
-
-    const job = control.jobs[control.cursor]!;
-    const owner = crypto.randomUUID();
-    const until = new Date(now.getTime() + LEASE_MS).toISOString();
-    control.attempts += 1;
-    control.lease = { owner, until };
-    const claimed = await casPut(bucket, control, etag);
-    if (claimed === null || !claimed.etag) {
-      return { status: "lost", fetched, jobs: ran, reason: "cas" };
-    }
-    etag = claimed.etag;
-    fetched = true;
-    ran += 1;
-
-    let summary: { status: "pass" | "fail" | "partial"; datasetCount: number; rowsInserted: number };
-    try {
-      summary = await ingestJob(ingest, job);
-    } catch (error) {
-      const reportNow = clock();
-      if (control.lease.until <= reportNow.toISOString()) {
-        return { status: "lost", fetched, jobs: ran, reason: "expired" };
-      }
-      const timedOut = error instanceof Error &&
-        error.message === "exact-five job fetch timeout";
-      if (!timedOut) control.lease = null;
-      control.last = {
-        dataset: job.dataset,
-        from: job.from,
-        to: job.to,
-        rowsInserted: 0,
-        status: timedOut ? "timeout" : "ingestion_failed",
-      };
-      const written = await casPut(bucket, control, etag);
-      if (written === null) return { status: "lost", fetched, jobs: ran, reason: "cas" };
-      return {
-        status: "fail",
-        fetched,
-        jobs: ran,
-        reason: timedOut ? "timeout" : "ingestion_failed",
-      };
-    }
-
+  let summary: { status: "pass" | "fail" | "partial"; datasetCount: number; rowsInserted: number };
+  try {
+    summary = await ingestJob(ingest, job, window);
+  } catch (error) {
     const reportNow = clock();
     if (control.lease.until <= reportNow.toISOString()) {
-      return { status: "lost", fetched, jobs: ran, reason: "expired" };
+      return { status: "lost", fetched: true, jobs: 1, reason: "expired" };
     }
-    const rowsInserted = Number.isSafeInteger(summary.rowsInserted) &&
-        summary.rowsInserted >= 0
-      ? summary.rowsInserted
-      : 0;
-    if (!summaryAccepted(summary)) {
-      control.lease = null;
-      control.last = {
-        dataset: job.dataset,
-        from: job.from,
-        to: job.to,
-        rowsInserted,
-        status: "ingestion_failed",
-      };
-      const written = await casPut(bucket, control, etag);
-      if (written === null) return { status: "lost", fetched, jobs: ran, reason: "cas" };
-      return { status: "fail", fetched, jobs: ran, reason: "ingestion_failed" };
-    }
+    const timedOut = error instanceof Error &&
+      error.message === "exact-five job fetch timeout";
+    // Abort covers fetch only; delay retries while prior storage IO may still finish.
+    if (!timedOut) control.lease = null;
+    control.last = {
+      dataset: job.dataset,
+      segment_id: job.segment_id,
+      from: window.from,
+      to: window.to,
+      rowsInserted: 0,
+      status: timedOut ? "timeout" : "ingestion_failed",
+    };
+    const written = await casPut(bucket, control, etag);
+    if (written === null) return { status: "lost", fetched: true, jobs: 1, reason: "cas" };
+    return {
+      status: "fail",
+      fetched: true,
+      jobs: 1,
+      reason: timedOut ? "timeout" : "ingestion_failed",
+    };
+  }
 
-    control.cursor += 1;
-    control.attempts = 0;
+  const reportNow = clock();
+  if (control.lease.until <= reportNow.toISOString()) {
+    return { status: "lost", fetched: true, jobs: 1, reason: "expired" };
+  }
+  const rowsInserted = Number.isSafeInteger(summary.rowsInserted) &&
+      summary.rowsInserted >= 0
+    ? summary.rowsInserted
+    : 0;
+  if (!summaryAccepted(summary)) {
     control.lease = null;
     control.last = {
       dataset: job.dataset,
-      from: job.from,
-      to: job.to,
-      rowsInserted: summary.rowsInserted,
-      status: "pass",
+      segment_id: job.segment_id,
+      from: window.from,
+      to: window.to,
+      rowsInserted,
+      status: "ingestion_failed",
     };
     const written = await casPut(bucket, control, etag);
-    if (written === null || !written.etag) {
-      return { status: "lost", fetched, jobs: ran, reason: "cas" };
-    }
-    etag = written.etag;
+    if (written === null) return { status: "lost", fetched: true, jobs: 1, reason: "cas" };
+    return { status: "fail", fetched: true, jobs: 1, reason: "ingestion_failed" };
   }
 
-  return { status: "pass", fetched, jobs: ran, reason: "ok" };
+  control.cursor += 1;
+  control.attempts = 0;
+  control.lease = null;
+  control.last = {
+    dataset: job.dataset,
+    segment_id: job.segment_id,
+    from: window.from,
+    to: window.to,
+    rowsInserted: summary.rowsInserted,
+    status: "pass",
+  };
+  const written = await casPut(bucket, control, etag);
+  if (written === null) return { status: "lost", fetched: true, jobs: 1, reason: "cas" };
+  return { status: "pass", fetched: true, jobs: 1, reason: "ok" };
 }

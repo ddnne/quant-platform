@@ -49,9 +49,37 @@ const PROFILE_DATASETS = new Set(
     : [],
 );
 
-/** Compiled exact-five dataset ids; windows stay on the control object. */
+function compiledExactFourPeriod(): { start: string; end: string } {
+  const plans = Array.isArray(controlledPilot.plans) ? controlledPilot.plans : [];
+  const starts = new Set<string>();
+  const ends = new Set<string>();
+  for (const plan of plans) {
+    if (!isPlainObject(plan)) {
+      throw new Error("controlled pilot period pins are invalid");
+    }
+    if (
+      typeof plan.period_start !== "string" ||
+      typeof plan.period_end !== "string"
+    ) {
+      throw new Error("controlled pilot period pins are invalid");
+    }
+    starts.add(plan.period_start);
+    ends.add(plan.period_end);
+  }
+  if (starts.size !== 1 || ends.size !== 1) {
+    throw new Error("controlled pilot period pins are invalid");
+  }
+  return { start: [...starts][0]!, end: [...ends][0]! };
+}
+
+/** Compiled exact-five dataset ids from the generated exact-four binding. */
 export const COMPILED_EXACT_FIVE_DATASET_IDS: ReadonlySet<string> =
   PROFILE_DATASETS;
+export const COMPILED_PROFILE_ID = PROFILE_ID;
+export const COMPILED_PROFILE_DIGEST = PROFILE_DIGEST;
+export const COMPILED_CLOSURE_DIGEST = CLOSURE_DIGEST;
+/** Unique exact-four decision period from the generated plans. */
+export const COMPILED_EXACT_FOUR_PERIOD = compiledExactFourPeriod();
 
 if (
   typeof PROFILE_ID !== "string" ||

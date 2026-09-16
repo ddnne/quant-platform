@@ -10,6 +10,16 @@ import {
 } from "../src/valuation_backfill";
 import { EXACT_FIVE_ACQUISITION_KEY } from "../src/exact_five_acquisition_tick";
 import { PENDING_REGISTRATION_KEY } from "../src/pending_registration_tick";
+import {
+  COMPILED_CLOSURE_DIGEST,
+  COMPILED_PROFILE_DIGEST,
+  COMPILED_PROFILE_ID,
+} from "../src/receipt_product_input";
+import {
+  base64ToBytes,
+  canonicalDigest,
+  sha256Digest,
+} from "../../receipt-evidence-authority/src/canonical";
 
 const migrations = inject<Array<{ name: string; queries: string[] }>>("premiumD1Migrations");
 
@@ -62,6 +72,93 @@ function canaryDoc(overrides: Record<string, unknown> = {}) {
     last: null,
     ...overrides,
   };
+}
+
+const CALLER_SHA = "1".repeat(40);
+
+function exactFiveDoc(overrides: Record<string, unknown> = {}) {
+  return {
+    schema: "exact-five-compiled-acquisition/v1",
+    profile_id: COMPILED_PROFILE_ID,
+    profile_digest: COMPILED_PROFILE_DIGEST,
+    dependency_closure_digest: COMPILED_CLOSURE_DIGEST,
+    jobs: [{ dataset: "markets_calendar", segment_id: "2023-01" }],
+    cursor: 0,
+    attempts: 0,
+    lease: null,
+    last: null,
+    ...overrides,
+  };
+}
+
+function requestedRegistrationDoc(overrides: Record<string, unknown> = {}) {
+  return {
+    schema: "receipt-pending-registration/v1",
+    environment: "staging",
+    state: "requested",
+    attempts: 0,
+    lease: null,
+    last: null,
+    ...overrides,
+  };
+}
+
+async function publicRegistration(): Promise<Record<string, unknown>> {
+  const publicKeyBase64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+  const keyDigest = await sha256Digest(base64ToBytes(publicKeyBase64));
+  const keyId = `receipt-staging-${keyDigest.slice(7, 23)}`;
+  const operationBody = {
+    schema_version: "receipt-registration-operation/v1",
+    authority: "receipt-evidence-authority",
+    action: "public_key_registration",
+    environment: "staging",
+    authority_resource_digest: `sha256:${"a".repeat(64)}`,
+    deployment_source_sha: CALLER_SHA,
+    authority_worker_version_id: "10000000-0000-4000-8000-000000000002",
+    authority_worker_version_tag: `rp-s-r-${CALLER_SHA}`,
+    key_id: keyId,
+    key_generation: 1,
+    generated_at: "2026-08-27T08:00:00.000Z",
+  } as const;
+  const body = {
+    schema_version: "receipt-public-key-registration/v1" as const,
+    purpose: "receipt_verification" as const,
+    environment: "staging" as const,
+    authority_instance_digest: `sha256:${"a".repeat(64)}`,
+    authority_resource_digest: `sha256:${"a".repeat(64)}`,
+    authority_status: "PENDING" as const,
+    action: "public_key_registration" as const,
+    deployment_source_sha: CALLER_SHA,
+    authority_worker_version_id: "10000000-0000-4000-8000-000000000002",
+    authority_worker_version_tag: `rp-s-r-${CALLER_SHA}`,
+    operation_binding_digest: await canonicalDigest(operationBody),
+    key_id: keyId,
+    key_generation: 1,
+    algorithm: "Ed25519" as const,
+    public_key_base64: publicKeyBase64,
+    private_key_extractable: false as const,
+    status: "pending" as const,
+    generated_at: "2026-08-27T08:00:00.000Z",
+  };
+  return { ...body, registration_digest: await canonicalDigest(body) };
+}
+
+function registrationEnv(overrides: Partial<Env> = {}): Env {
+  return runtimeEnv({
+    CF_VERSION_METADATA: {
+      id: "10000000-0000-4000-8000-000000000003",
+      tag: `rp-s-c-${CALLER_SHA}`,
+      timestamp: "2026-08-27T08:00:00.000Z",
+    },
+    RECEIPT_EVIDENCE_AUTHORITY: {
+      public_key_registration: vi.fn(publicRegistration),
+      issue_for_segment: vi.fn(),
+      recover_issue: vi.fn(),
+      begin_audit_recovery_canary: vi.fn(),
+      recover_audit_recovery_canary: vi.fn(),
+    },
+    ...overrides,
+  });
 }
 
 function cronIngest(testEnv: Env): ValuationIngest {
@@ -279,62 +376,121 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
     expect((await env.RAW_BUCKET.list()).objects).toHaveLength(0);
   });
 
-  it("invalid exact-five control and idle registration do not ingest or register", async () => {
+  it("rejects one-day/out-of-period exact-five jobs and READY-declared registration", async () => {
     const spy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       throw new Error(`unexpected fetch ${fetchUrl(input).href}`);
     });
-    const publicKey = vi.fn();
-    const testEnv = runtimeEnv({
-      RECEIPT_EVIDENCE_AUTHORITY: {
-        public_key_registration: publicKey,
-        issue_for_segment: vi.fn(),
-        recover_issue: vi.fn(),
-        begin_audit_recovery_canary: vi.fn(),
-        recover_audit_recovery_canary: vi.fn(),
-      },
+    const testEnv = registrationEnv({
+      READY_DECLARED: "true" as unknown as "false",
     });
     await env.STRUCTURED_BUCKET.put(
       EXACT_FIVE_ACQUISITION_KEY,
-      JSON.stringify({
-        schema: "exact-five-compiled-acquisition/v1",
-        jobs: [{ dataset: "equities_valuation", from: "2023-01-04", to: "2023-01-04" }],
-        cursor: 0,
-        attempts: 0,
-        lease: null,
-        last: null,
-      }),
+      JSON.stringify(exactFiveDoc({
+        jobs: [{ dataset: "markets_calendar", from: "2023-01-04", to: "2023-01-04" }],
+      })),
+    );
+    await env.STRUCTURED_BUCKET.put(
+      PENDING_REGISTRATION_KEY,
+      JSON.stringify(requestedRegistrationDoc()),
     );
     await worker.scheduled(scheduledAt(), testEnv, createExecutionContext());
     expect(spy).not.toHaveBeenCalled();
-    expect(publicKey).not.toHaveBeenCalled();
+    expect(testEnv.RECEIPT_EVIDENCE_AUTHORITY.public_key_registration)
+      .not.toHaveBeenCalled();
+    expect((await env.DB.prepare("SELECT id FROM ingestion_run_log").all()).results).toEqual([]);
+
+    await env.STRUCTURED_BUCKET.put(
+      EXACT_FIVE_ACQUISITION_KEY,
+      JSON.stringify(exactFiveDoc({
+        jobs: [{ dataset: "markets_calendar", segment_id: "2024-06" }],
+      })),
+    );
+    await worker.scheduled(scheduledAt(), testEnv, createExecutionContext());
+    expect(spy).not.toHaveBeenCalled();
     expect((await env.DB.prepare("SELECT id FROM ingestion_run_log").all()).results).toEqual([]);
   });
 
-  it("requested registration is skipped while READY is declared", async () => {
-    const publicKey = vi.fn();
-    const testEnv = runtimeEnv({
-      READY_DECLARED: "true" as unknown as "false",
-      RECEIPT_EVIDENCE_AUTHORITY: {
-        public_key_registration: publicKey,
-        issue_for_segment: vi.fn(),
-        recover_issue: vi.fn(),
-        begin_audit_recovery_canary: vi.fn(),
-        recover_audit_recovery_canary: vi.fn(),
-      },
-    });
+  it("scheduled requested registration persists the full public envelope once", async () => {
+    const testEnv = registrationEnv();
     await env.STRUCTURED_BUCKET.put(
       PENDING_REGISTRATION_KEY,
-      JSON.stringify({
-        schema: "receipt-pending-registration/v1",
-        environment: "staging",
-        state: "requested",
-        attempts: 0,
-        lease: null,
-        last: null,
-      }),
+      JSON.stringify(requestedRegistrationDoc()),
     );
     await worker.scheduled(scheduledAt(), testEnv, createExecutionContext());
-    expect(publicKey).not.toHaveBeenCalled();
+    expect(testEnv.RECEIPT_EVIDENCE_AUTHORITY.public_key_registration)
+      .toHaveBeenCalledOnce();
+    const stored = JSON.parse(
+      await (await env.STRUCTURED_BUCKET.get(PENDING_REGISTRATION_KEY))!.text(),
+    ) as {
+      state: string;
+      last: {
+        schema_version: string;
+        registration: Record<string, unknown> & { registration_digest: string };
+      };
+    };
+    expect(stored.state).toBe("completed");
+    expect(stored.last.schema_version).toBe("receipt-operator-registration/v1");
+    expect(stored.last.registration).toMatchObject({
+      algorithm: "Ed25519",
+      environment: "staging",
+      authority_status: "PENDING",
+      key_generation: 1,
+      private_key_extractable: false,
+    });
+    expect(stored.last.registration.authority_instance_digest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    const { registration_digest: supplied, ...body } = stored.last.registration;
+    expect(await canonicalDigest(body)).toBe(supplied);
+    expect(JSON.stringify(stored.last)).not.toMatch(/private_key_pkcs8|wrapped_key/);
+    await worker.scheduled(scheduledAt(), testEnv, createExecutionContext());
+    expect(testEnv.RECEIPT_EVIDENCE_AUTHORITY.public_key_registration)
+      .toHaveBeenCalledOnce();
+  });
+
+  it("scheduled exact-five runs one compiled month then is idle, and skips while valuation is leased", async () => {
+    expect((await rebuildNaturalKeysV2(env.DB)).state).toBe("READY");
+    const testEnv = runtimeEnv();
+    await env.STRUCTURED_BUCKET.put(
+      EXACT_FIVE_ACQUISITION_KEY,
+      JSON.stringify(exactFiveDoc({
+        jobs: [
+          { dataset: "markets_calendar", segment_id: "2023-01" },
+          { dataset: "markets_calendar", segment_id: "2023-02" },
+        ],
+      })),
+    );
+    const spy = stubVendor("/v2/markets/calendar", { from: "2023-01-01", to: "2023-01-31" }, []);
+    await worker.scheduled(scheduledAt(), testEnv, createExecutionContext());
+    expect(spy).toHaveBeenCalledTimes(1);
+    const vendor = fetchUrl(spy.mock.calls[0]![0]);
+    expect(vendor.searchParams.get("from")).toBe("2023-01-01");
+    expect(vendor.searchParams.get("to")).toBe("2023-01-31");
+    const coverage = await env.DB.prepare(
+      "SELECT dataset, segment_id, status FROM coverage_segments",
+    ).all<{ dataset: string; segment_id: string; status: string }>();
+    expect(coverage.results).toEqual([
+      { dataset: "markets_calendar", segment_id: "2023-01", status: "UNKNOWN" },
+    ]);
+    const control = JSON.parse(
+      await (await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY))!.text(),
+    ) as { cursor: number; last: { from: string; to: string; status: string } };
+    expect(control.cursor).toBe(1);
+    expect(control.last).toMatchObject({
+      from: "2023-01-01",
+      to: "2023-01-31",
+      status: "pass",
+    });
+
+    spy.mockImplementation((input) => {
+      throw new Error(`unexpected fetch ${fetchUrl(input).href}`);
+    });
+    await env.STRUCTURED_BUCKET.put(VALUATION_BACKFILL_KEY, JSON.stringify(canaryDoc({
+      lease: { owner: "cron-a", until: new Date(Date.now() + 60_000).toISOString() },
+    })));
+    await worker.scheduled(scheduledAt(), testEnv, createExecutionContext());
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(
+      await (await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY))!.text(),
+    ).cursor).toBe(1);
   });
 
   it("R2 CAS concurrent claim, thrown error, exhaustion, and resume", async () => {

@@ -232,13 +232,26 @@ The in-cloud registration caller is the existing Premium staging Cron plus
 absent-by-default R2 object `control/receipt_pending_registration.json`
 (`state=requested` once). It calls the same
 `PremiumReceiptOperatorService.pending_public_key_registration` implementation,
-persists only public fields, and will not recur after `completed`. It is
+persists that already-validated public operator envelope (`receipt-operator-registration/v1`
+wrapping the 19-field `receipt-public-key-registration/v1`, including
+`algorithm`, `environment`, `authority_instance_digest`, `key_generation`,
+and `registration_digest`), and will not recur after `completed`. It never
+persists wrapped or private key material. It is
 source-only until that SHA is deployed; putting the control object is a later
 approved mutation. The observer still cannot register. Adding a public Premium
 route remains prohibited. Do not generate a key or claim registration or
 activation is live until that control is accepted and the PENDING authority
 returns the public registration. Access-protected observer acceptance remains
 required before ACTIVE, not before this PENDING one-shot.
+
+Callable recovery/activation after this source unit: PENDING staging Cron
+does not issue governed receipts, so `recoverPreparedReceipts` is not on
+that path. ACTIVE staging Cron may run the existing PREPARED sweep.
+`runStagingReceiptAuditRecoveryCanary` remains existing ACTIVE-only logic
+and is still not invoked from Premium Cron (`ra-s-c` vs `rp-s-c`).
+Read-only observation remains `PremiumReceiptAuditEvidenceService`.
+Positive Receipt issue remains `issueGovernedReceipt` during ACTIVE
+canonical-month ingest, not this PENDING registration tick.
 
 Preserve the non-secret response, source/deployment SHA, environment, Worker
 version, Durable Object generation, and response digest as immutable release
