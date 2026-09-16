@@ -4,6 +4,15 @@ import type { ReceiptProductBytesRpc } from "../../ingestion-premium/src/receipt
 import type { PilotReadyPublicationRpc } from "../../ingestion-premium/src/pilot_ready_publication_rpc";
 import type { PersonalResearchContainer } from "./personal_research_container";
 
+declare global {
+  namespace Cloudflare {
+    interface Env {
+      D1_BACKUP_EXPORT_BUNDLE?: string;
+      D1_BACKUP_KEY?: string;
+    }
+  }
+}
+
 /** Generated bindings with typed Gateway RPC; secrets stay string-only. */
 export type Env = Omit<
   Cloudflare.Env,

@@ -15,11 +15,6 @@ const MAX_REDIRECTS = 3;
 const DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000;
 const KEY_BYTES = 32;
 
-export type D1ExportEnv = {
-  D1_BACKUP_EXPORT_BUNDLE?: string;
-  D1_BACKUP_KEY?: string;
-};
-
 function backupJobIdentity(request: Request): boolean {
   const jobId = request.headers.get("x-personal-job-id") ?? "";
   const digest = request.headers.get("x-personal-request-digest") ?? "";
@@ -123,7 +118,7 @@ async function streamSignedExport(
  */
 export async function d1ExportSourceOutbound(
   request: Request,
-  env: D1ExportEnv,
+  env: Cloudflare.Env,
 ): Promise<Response> {
   const url = new URL(request.url);
   if (
