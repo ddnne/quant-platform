@@ -120,7 +120,7 @@ async function closedActiveStagingRegistry(
   const body = {
     schema_version: 3,
     purpose: "receipt_verification",
-    generation: pin.generation,
+    generation: 2,
     authority_status: "ACTIVE" as const,
     environment: "staging",
     authority_instance_digest: pin.authority_instance_digest,

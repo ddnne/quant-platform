@@ -160,7 +160,7 @@ async function closedScopedRegistry(
   const body = {
     schema_version: 3,
     purpose: "receipt_verification",
-    generation: options.generation ?? pin.generation,
+    generation: options.generation ?? 2,
     authority_status: options.authority_status ?? "ACTIVE",
     environment,
     authority_instance_digest: options.authority_instance_digest ?? pin.authority_instance_digest,
@@ -927,11 +927,14 @@ describe("ops projection cloud publisher", () => {
         purpose: "receipt_verification",
         environment,
         authority_status: "PENDING",
-        generation: pin.generation,
+        generation: document.generation,
         authority_instance_digest: pin.authority_instance_digest,
-        keys: [],
         registry_digest: document.registry_digest,
       });
+      expect(registry!.keys.every((row) => row.status !== "active")).toBe(true);
+      expect(
+        registry!.keys.filter((row) => row.status === "pending").length,
+      ).toBeLessThanOrEqual(1);
       expect(await pinnedReceiptRegistryForEnvironment(environment)).toEqual(registry);
     }
     expect(
@@ -956,8 +959,8 @@ describe("ops projection cloud publisher", () => {
 
     const wrongGeneration = await closedScopedRegistry([], {
       authority_status: "PENDING",
-      generation: 1,
-      prior_registry_digest: null,
+      generation: 0,
+      prior_registry_digest: production.prior_registry_digest,
     });
     expect(await closedReceiptVerifyRegistry(wrongGeneration, "production")).toBeNull();
 

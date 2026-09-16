@@ -295,13 +295,23 @@ export async function closedReceiptVerifyRegistry(
     document.purpose !== "receipt_verification" ||
     document.environment !== expectedEnvironment ||
     document.authority_instance_digest !== pin.authority_instance_digest ||
-    document.generation !== pin.generation ||
+    typeof document.generation !== "number" ||
+    !Number.isSafeInteger(document.generation) ||
+    document.generation < 1 ||
     (document.authority_status !== "ACTIVE" && document.authority_status !== "PENDING") ||
     !isSha256(document.registry_digest) ||
-    !isSha256(document.prior_registry_digest) ||
     !Array.isArray(document.keys) ||
     document.keys.length > 16
   ) return null;
+  let priorRegistryDigest: string | null;
+  if (document.generation === 1) {
+    if (document.prior_registry_digest !== null) return null;
+    priorRegistryDigest = null;
+  } else if (!isSha256(document.prior_registry_digest)) {
+    return null;
+  } else {
+    priorRegistryDigest = document.prior_registry_digest;
+  }
 
   const seenIds = new Set<string>();
   const seenPublicKeys = new Map<string, string>();
@@ -350,7 +360,7 @@ export async function closedReceiptVerifyRegistry(
     authority_status: document.authority_status,
     environment: document.environment,
     authority_instance_digest: document.authority_instance_digest,
-    prior_registry_digest: document.prior_registry_digest,
+    prior_registry_digest: priorRegistryDigest,
     keys: document.keys,
   };
   if (await canonicalDigest(body) !== document.registry_digest) return null;
@@ -358,11 +368,11 @@ export async function closedReceiptVerifyRegistry(
   return {
     schema_version: 3,
     purpose: "receipt_verification",
-    generation: pin.generation,
+    generation: document.generation,
     authority_status: document.authority_status,
     environment: expectedEnvironment,
     authority_instance_digest: pin.authority_instance_digest,
-    prior_registry_digest: document.prior_registry_digest,
+    prior_registry_digest: priorRegistryDigest,
     registry_digest: document.registry_digest,
     keys: closedKeys,
   };
