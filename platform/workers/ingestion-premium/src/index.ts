@@ -1070,11 +1070,12 @@ export default {
         }));
       }
       // PENDING staging does not issue governed PREPARED receipts.
-      // ACTIVE staging may recover leftover PREPARED identities via the
-      // existing sweep. The ACTIVE audit canary is not invoked here: it
-      // requires ra-s-c provenance, while Premium deploys rp-s-c.
+      // ACTIVE staging uses tag ra-s-c (PENDING uses rp-s-c). Recover
+      // leftover PREPARED identities, then run the existing AUDIT_ONLY
+      // canary. PENDING does not invoke the canary.
       if (env.RECEIPT_AUTHORITY_OPERATION_MODE === "ACTIVE") {
         await recoverPreparedReceipts(env);
+        await runStagingReceiptAuditRecoveryCanary(env);
       }
       return;
     }

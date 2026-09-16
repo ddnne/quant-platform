@@ -24,3 +24,12 @@ This is a personal single-user Cloudflare quant research product. Prefer deletin
 - Trusted host, closed DSL/JSON, no arbitrary generated Python. Do not build or test hostile same-process Python reflection/subclass/frozen-object attacks, root-adversary/WebAuthn/extra signers, or enterprise authority layers unless a new explicit user need is established.
 - Before adding a layer or test, state the concrete current failure it catches and whether existing code/library/schema/test already covers it. One representative numeric/behavioral regression per distinct real failure. No test-count/coverage targets, source-name/phase-label tests, exhaustive input-form matrices, just-in-case retention, or a test of this policy prose.
 - Do not weaken authentic data, PIT, budget enforcement, or explicit deployment HOLDs merely to simplify.
+
+## One-outcome approval
+
+Ask once for a work outcome: targets, finite cost basis, stages and smokes,
+rollback, and exclusions. Ordinary same-scope source fixes, tests, Git,
+native CI, and PREPARED-identity recovery are included in that ask. Re-ask
+only when the outcome's scope, cost, or destructive surface materially
+changes. Never bypass explicit HOLDs (production auto-deploy, Mass research
+GO, READY/Pilot, public Premium HTTP, local authentic market SQL).

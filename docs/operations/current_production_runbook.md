@@ -237,9 +237,10 @@ remote apply results only in immutable release evidence.
   on the ingest callback only; it does not cancel D1/R2/Receipt and the 90s
   lease is not proof the prior owner stopped. Absent objects are no-ops.
   PENDING staging Cron does not run `recoverPreparedReceipts` (no governed
-  issue). ACTIVE staging Cron may recover PREPARED identities; the ACTIVE
-  audit canary stays off this path because it requires `ra-s-c` provenance
-  while Premium deploys `rp-s-c`. They are not deployed until a later
+  issue). ACTIVE staging Cron recovers PREPARED identities then runs the
+  existing AUDIT_ONLY canary. Tag alphabet is `rp-` PENDING / `ra-` ACTIVE
+  (`ra-s-c` is the ACTIVE Premium caller, not a different Worker). PENDING
+  Cron does not invoke the canary. They are not deployed until a later
   SHA-align. Writing either control object is a later approved mutation, not
   authorized by source merge. Do not add a public Premium route. Mass remains
   verify-only. This is still operational HOLD for ACTIVE keys, READY, and
