@@ -98,10 +98,23 @@ remote apply results only in immutable release evidence.
 - **Encrypted D1 backup (source, not executed):** Mass
   `POST /v1/d1-backup-encrypt` (MASS_EVAL_TOKEN, `go: false`) forwards to the
   existing snapshot Container `POST /v1/encrypt-d1-backup`. Container internet
-  stays off. Operator helper `scripts/d1_export_poll_descriptor.py --initiate`
-  polls the D1 export API (metadata only; SQL never touches the Mac) and writes
-  one 0600 bundle (DB identity, `at_bookmark`, observed `export_completed_at`,
-  `signed_url`). Worker secret `D1_BACKUP_EXPORT_BUNDLE` plus `D1_BACKUP_KEY`
+  stays off. Operator helper from the repo root (project environment; it
+  imports `scripts.encrypt_d1_backup`, so `python3 scripts/...` fails):
+  `uv run --frozen python -m scripts.d1_export_poll_descriptor --help`.
+  `--environment` and `--output` are required. Example only — do not run
+  `--initiate` until combined approval; live export interrupts D1:
+
+  ```bash
+  uv run --frozen python -m scripts.d1_export_poll_descriptor \
+    --environment staging \
+    --output "$HOME/.local/share/quant-platform/private/d1-export-bundle.json" \
+    --initiate
+  ```
+
+  The helper polls the D1 export API (metadata only; SQL never touches the Mac)
+  and writes one 0600 bundle (DB identity, `at_bookmark`, observed
+  `export_completed_at`, `signed_url`). Worker secret
+  `D1_BACKUP_EXPORT_BUNDLE` plus `D1_BACKUP_KEY`
   are checked before SUBMITTED/Container boot. Job digest includes
   `signed_url` sha256; `d1.export` download requires that fingerprint to match
   the current bundle. `children-then-manifest` cannot carry the dump.
