@@ -10,7 +10,7 @@ from urllib.request import Request
 import pytest
 
 from scripts import receipt_authority_pending_gate as pending
-from storage.receipt_crypto import _parse_scoped_registry_document
+from storage.receipt_crypto import load_scoped_verify_keys
 
 
 def _write_json(path: Path, document: object) -> None:
@@ -113,12 +113,13 @@ def test_exact_pending_surface_is_provisioning_only(environment: str) -> None:
     assert evidence["strict_release_gate_applied"] is False
     assert evidence["strict_release_gate_unchanged"] is True
     assert evidence["authorization_scope"] == "PENDING_PROVISIONING_ONLY"
-    parsed = _parse_scoped_registry_document(
-        pending.SCOPED_REGISTRY_PATHS[environment].read_bytes()
+    assert (
+        load_scoped_verify_keys(
+            expected_environment=environment,
+            expected_authority_instance_digest=evidence["authority_instance_digest"],
+        )
+        == {}
     )
-    assert parsed.environment == environment
-    assert parsed.authority_status == "PENDING"
-    assert parsed.active_keys == ()
 
 
 def test_active_or_cross_environment_registry_cannot_use_pending_gate(
