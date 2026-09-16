@@ -504,6 +504,58 @@ export async function pinnedReceiptRegistryForEnvironment(
   return closedReceiptVerifyRegistry(document, environment);
 }
 
+export async function trustedSignedCollectionReceipt(
+  receipt: Record<string, unknown>,
+  environment: string,
+  registry: ReceiptVerifyRegistry | null,
+): Promise<SignedReceiptClaimsV3 | null> {
+  if (receipt.status !== "SUCCESS") return null;
+  if (receipt.pagination_exhausted !== 1 || receipt.error !== null) return null;
+  const envelope = parseDigests(receipt.digests_json ?? receipt.digests);
+  if (!envelope) return null;
+  if (!registry || registry.authority_status !== "ACTIVE") return null;
+  const claims = await verifySignedReceiptEnvelope(envelope, registry, environment);
+  if (!claims) return null;
+  const dataset = typeof receipt.dataset === "string" ? receipt.dataset : "";
+  const catalog = catalogProjectionRows().find((item) => item.dataset_id === dataset);
+  const source = typeof receipt.source === "string" ? receipt.source : "";
+  const segment = typeof receipt.segment_id === "string" ? receipt.segment_id : "";
+  if (!datasetById(dataset) || catalog?.coverage.policy_version !== COVERAGE_POLICY_VERSION) {
+    return null;
+  }
+  if (source !== catalog.source) return null;
+  if (
+    claims.source !== source || claims.dataset !== dataset || claims.segment_id !== segment ||
+    claims.contract_id !== catalog.coverage.collection_scope ||
+    claims.environment !== environment
+  ) {
+    return null;
+  }
+  if (claims.segment_start !== receipt.segment_start || claims.segment_end !== receipt.segment_end) {
+    return null;
+  }
+  if (claims.run_id !== receipt.run_id) return null;
+  const receiptScope = parseDigests(receipt.expected_scope);
+  if (
+    !receiptScope ||
+    !sameJson(claims.expected_scope, receiptScope) ||
+    claims.expected_items !== receipt.expected_items
+  ) return null;
+  if (!exactPositiveInteger(receipt.raw_page_count)) {
+    return null;
+  }
+  if (
+    claims.observed_items !== receipt.observed_items ||
+    claims.raw_page_count !== receipt.raw_page_count ||
+    claims.raw_count !== receipt.raw_row_count ||
+    claims.structured_count !== receipt.structured_row_count ||
+    claims.checked_at !== receipt.checked_at
+  ) {
+    return null;
+  }
+  return claims;
+}
+
 export async function trustedComplete(
   row: Record<string, unknown>,
   receipts: Record<string, unknown>[],
@@ -535,47 +587,21 @@ export async function trustedComplete(
       item.run_id === receiptRun,
   );
   if (!receipt) return false;
-  if (receipt.pagination_exhausted !== 1 || receipt.error !== null) return false;
-  const envelope = parseDigests(receipt.digests_json ?? receipt.digests);
-  if (!envelope) return false;
-  if (!registry || registry.authority_status !== "ACTIVE") return false;
-  const claims = await verifySignedReceiptEnvelope(envelope, registry, environment);
+  const claims = await trustedSignedCollectionReceipt(receipt, environment, registry);
   if (!claims) return false;
-  if (
-    claims.source !== source || claims.dataset !== dataset || claims.segment_id !== segment ||
-    claims.contract_id !== catalog.coverage.collection_scope ||
-    claims.environment !== environment
-  ) {
-    return false;
-  }
   if (claims.segment_start !== row.segment_start || claims.segment_end !== row.segment_end) {
-    return false;
-  }
-  if (claims.segment_start !== receipt.segment_start || claims.segment_end !== receipt.segment_end) {
     return false;
   }
   if (claims.run_id !== receipt.run_id || claims.run_id !== receiptRun) return false;
   const requiredScope = parseDigests(row.expected_scope);
-  const receiptScope = parseDigests(receipt.expected_scope);
   if (
-    !requiredScope || !receiptScope ||
+    !requiredScope ||
     !sameJson(claims.expected_scope, requiredScope) ||
-    !sameJson(claims.expected_scope, receiptScope) ||
     claims.expected_items !== row.expected_items ||
     claims.expected_items !== receipt.expected_items
   ) return false;
-  if (!exactPositiveInteger(receipt.raw_page_count)) {
-    return false;
-  }
-  if (
-    claims.observed_items !== receipt.observed_items ||
-    claims.raw_page_count !== receipt.raw_page_count ||
-    claims.raw_count !== receipt.raw_row_count ||
-    claims.structured_count !== receipt.structured_row_count ||
-    claims.checked_at !== receipt.checked_at
-  ) {
-    return false;
-  }
+  const envelope = parseDigests(receipt.digests_json ?? receipt.digests);
+  if (!envelope) return false;
   const receiptDigest = await canonicalDigest({
     source: claims.source,
     dataset: claims.dataset,

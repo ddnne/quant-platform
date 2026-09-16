@@ -23,9 +23,14 @@ import {
 import {
   base64ToBytes,
   canonicalDigest,
+  canonicalJson,
   sha256Digest,
 } from "../../receipt-evidence-authority/src/canonical";
 import { sha256HexFromString } from "../src/sha256";
+import {
+  closedReceiptVerifyRegistry,
+  PINNED_RECEIPT_REGISTRY_SCOPE,
+} from "../src/ops_projection_policy";
 
 const migrations = inject<Array<{ name: string; queries: string[] }>>("premiumD1Migrations");
 
@@ -697,6 +702,255 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
     ) as { cursor: number; last: { status: string } };
     expect(recovered.cursor).toBe(1);
     expect(recovered.last.status).toBe("pass");
+  });
+
+  it("ACTIVE unsigned SUCCESS does not skip a compiled calendar month", async () => {
+    expect((await rebuildNaturalKeysV2(env.DB)).state).toBe("READY");
+    await env.STRUCTURED_BUCKET.put(EXACT_FIVE_ACQUISITION_KEY, JSON.stringify(exactFiveDoc()));
+    await env.DB.prepare(
+      `INSERT INTO collection_receipts (
+         source, dataset, segment_id, segment_start, segment_end,
+         expected_scope, expected_items, observed_items, raw_page_count,
+         raw_row_count, structured_row_count, pagination_exhausted,
+         digests_json, run_id, status, error, checked_at
+       ) VALUES (
+         'jquants', 'markets_calendar', '2023-01', '2023-01-01', '2023-01-31',
+         ?, 1, 0, 1, 0, 0, 1, ?, 1, 'SUCCESS', NULL, '2023-01-31T00:00:00Z'
+       )`,
+    ).bind(JSON.stringify({
+      coverage_mode: "calendar",
+      expected_frequency: "calendar_day",
+      expected_item_unit: "source_query",
+      segment_end: "2023-01-31",
+      segment_start: "2023-01-01",
+      universe_rule: "jpx_calendar_days",
+      segment_granularity: "calendar_month",
+    }), JSON.stringify({
+      eligibility: "RECOVERED_RAW_ONLY",
+      issuer_class: "UnsignedIngestionAudit",
+    })).run();
+    let ingested = 0;
+    const result = await runExactFiveAcquisitionTick(
+      env.STRUCTURED_BUCKET,
+      async () => {
+        ingested += 1;
+        throw new Error("must ingest unsigned SUCCESS");
+      },
+      {
+        clock: () => new Date("2026-09-12T00:00:00.000Z"),
+        observe: (job, window, operation) =>
+          observeExactFiveReceipt(env.DB, job, window, operation, {
+            operationMode: "ACTIVE",
+            environment: "staging",
+          }),
+      },
+    );
+    expect(ingested).toBe(1);
+    expect(result).toMatchObject({ status: "fail", fetched: true, reason: "ingestion_failed" });
+    const stored = JSON.parse(
+      await (await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY))!.text(),
+    ) as { cursor: number };
+    expect(stored.cursor).toBe(0);
+  });
+
+  it("ACTIVE trusted signed collection receipt may skip the exact window", async () => {
+    const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+    const publicKeyRaw = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
+    let binary = "";
+    for (const byte of publicKeyRaw) binary += String.fromCharCode(byte);
+    const publicKeyBase64 = btoa(binary);
+    const pin = PINNED_RECEIPT_REGISTRY_SCOPE.staging;
+    const body = {
+      schema_version: 3,
+      purpose: "receipt_verification",
+      generation: 2,
+      authority_status: "ACTIVE" as const,
+      environment: "staging",
+      authority_instance_digest: pin.authority_instance_digest,
+      prior_registry_digest: "sha256:" + "10".repeat(32),
+      keys: [{
+        key_id: "receipt-test-v1",
+        algorithm: "Ed25519",
+        public_key_base64: publicKeyBase64,
+        status: "active",
+      }],
+    };
+    const registry = await closedReceiptVerifyRegistry(
+      { ...body, registry_digest: await canonicalDigest(body) },
+      "staging",
+    );
+    if (!registry) throw new Error("test receipt registry is not closed");
+    const expectedScope = {
+      coverage_mode: "calendar",
+      expected_frequency: "calendar_day",
+      expected_item_unit: "source_query",
+      segment_end: "2023-01-31",
+      segment_start: "2023-01-01",
+      universe_rule: "jpx_calendar_days",
+      segment_granularity: "calendar_month",
+    };
+    const digest = "sha256:" + "ab".repeat(32);
+    const extras = {
+      acquisition_collection_manifest_file_digest: digest,
+      acquisition_collection_digest: digest,
+      acquisition_terminal_chain_digest: digest,
+      product_artifact_digest: digest,
+      product_manifest_digest: digest,
+    };
+    const claimsBase = {
+      environment: "staging",
+      authority_instance_digest: pin.authority_instance_digest,
+      coverage_policy_version: "collection-coverage/v3",
+      source: "jquants",
+      contract_id: "jquants_premium_core",
+      dataset: "markets_calendar",
+      segment_id: "2023-01",
+      segment_start: "2023-01-01",
+      segment_end: "2023-01-31",
+      receipt_issue_digest: digest,
+      artifact_key: "artifact.jsonl",
+      artifact_byte_count: 1,
+      manifest_key: "manifest.json",
+      manifest_byte_count: 1,
+      raw_manifest_key: "raw.json",
+      raw_manifest_byte_count: 1,
+      raw_byte_count: 1,
+      natural_key_digest: digest,
+      expected_items: 1,
+      observed_items: 1,
+      raw_page_count: 1,
+      raw_count: 1,
+      structured_count: 1,
+      status: "SUCCESS",
+      error: null,
+      pagination_exhausted: true,
+      discovery_exhausted: true,
+      source_request_digest: digest,
+      raw_manifest_digest: digest,
+      raw_digest: digest,
+      structured_digest: digest,
+      structured_generation: 1,
+      run_id: 1,
+      checked_at: "2023-01-31T00:00:00Z",
+      extra_digests: extras,
+      expected_scope: expectedScope,
+    };
+    const scope = {
+      environment: claimsBase.environment,
+      authority_instance_digest: claimsBase.authority_instance_digest,
+      coverage_policy_version: claimsBase.coverage_policy_version,
+      source: claimsBase.source,
+      contract_id: claimsBase.contract_id,
+      dataset: claimsBase.dataset,
+      segment_id: claimsBase.segment_id,
+      segment_start: claimsBase.segment_start,
+      segment_end: claimsBase.segment_end,
+      expected_scope: expectedScope,
+      expected_items: claimsBase.expected_items,
+    };
+    const observation = {
+      ...scope,
+      observed_items: claimsBase.observed_items,
+      raw_page_count: claimsBase.raw_page_count,
+      raw_count: claimsBase.raw_count,
+      structured_count: claimsBase.structured_count,
+      status: claimsBase.status,
+      error: claimsBase.error,
+      pagination_exhausted: claimsBase.pagination_exhausted,
+      discovery_exhausted: claimsBase.discovery_exhausted,
+      receipt_issue_digest: claimsBase.receipt_issue_digest,
+      artifact_key: claimsBase.artifact_key,
+      artifact_byte_count: claimsBase.artifact_byte_count,
+      manifest_key: claimsBase.manifest_key,
+      manifest_byte_count: claimsBase.manifest_byte_count,
+      raw_manifest_key: claimsBase.raw_manifest_key,
+      raw_manifest_byte_count: claimsBase.raw_manifest_byte_count,
+      raw_byte_count: claimsBase.raw_byte_count,
+      natural_key_digest: claimsBase.natural_key_digest,
+      source_request_digest: claimsBase.source_request_digest,
+      raw_manifest_digest: claimsBase.raw_manifest_digest,
+      raw_digest: claimsBase.raw_digest,
+      structured_digest: claimsBase.structured_digest,
+      structured_generation: claimsBase.structured_generation,
+      scope_digest: await canonicalDigest(scope),
+      run_id: claimsBase.run_id,
+      checked_at: claimsBase.checked_at,
+      extra_digests: extras,
+    };
+    const claims = {
+      ...observation,
+      observation_digest: await canonicalDigest(observation),
+      version: "signed-receipt-claims/v3",
+      parser_normalizer_version: "coverage-receipt/v4-ed25519-closure",
+      issuer_id: "receipt-test-v1",
+      issued_at: "2026-08-01T00:00:00Z",
+    };
+    const bodyBytes = new TextEncoder().encode(canonicalJson(claims));
+    const signature = new Uint8Array(
+      await crypto.subtle.sign("Ed25519", pair.privateKey, bodyBytes),
+    );
+    let sigBinary = "";
+    for (const byte of signature) sigBinary += String.fromCharCode(byte);
+    let bodyBinary = "";
+    for (const byte of bodyBytes) bodyBinary += String.fromCharCode(byte);
+    const envelope = {
+      eligibility: "TRUSTED_COLLECTION",
+      issuer_class: "SignedReceiptAuthority",
+      issuer_key_id: "receipt-test-v1",
+      issuer_id: "receipt-test-v1",
+      environment: "staging",
+      authority_instance_digest: pin.authority_instance_digest,
+      parser_normalizer_version: "coverage-receipt/v4-ed25519-closure",
+      signed_body_b64: btoa(bodyBinary),
+      signature: `ed25519:${btoa(sigBinary)}`,
+      body_digest: await sha256Digest(bodyBytes).then((d) => d.startsWith("sha256:") ? d : `sha256:${d}`),
+      issued_at: claims.issued_at,
+      checked_at: claims.checked_at,
+      source_request_digest: digest,
+      raw_manifest_digest: digest,
+      raw: digest,
+      structured_generation: 1,
+      structured_digest: digest,
+      scope_digest: claims.scope_digest,
+      observation_digest: claims.observation_digest,
+      extra_digests: extras,
+      ...extras,
+    };
+    await env.STRUCTURED_BUCKET.put(EXACT_FIVE_ACQUISITION_KEY, JSON.stringify(exactFiveDoc()));
+    await env.DB.prepare(
+      `INSERT INTO collection_receipts (
+         source, dataset, segment_id, segment_start, segment_end,
+         expected_scope, expected_items, observed_items, raw_page_count,
+         raw_row_count, structured_row_count, pagination_exhausted,
+         digests_json, run_id, status, error, checked_at
+       ) VALUES (
+         'jquants', 'markets_calendar', '2023-01', '2023-01-01', '2023-01-31',
+         ?, 1, 1, 1, 1, 1, 1, ?, 1, 'SUCCESS', NULL, '2023-01-31T00:00:00Z'
+       )`,
+    ).bind(JSON.stringify(expectedScope), JSON.stringify(envelope)).run();
+    let ingested = 0;
+    const result = await runExactFiveAcquisitionTick(
+      env.STRUCTURED_BUCKET,
+      async () => {
+        ingested += 1;
+        throw new Error("must not ingest");
+      },
+      {
+        clock: () => new Date("2026-09-12T00:00:00.000Z"),
+        observe: (job, window, operation) =>
+          observeExactFiveReceipt(env.DB, job, window, operation, {
+            operationMode: "ACTIVE",
+            environment: "staging",
+            registry,
+          }),
+      },
+    );
+    expect(result).toMatchObject({ status: "pass", fetched: false, reason: "ok" });
+    expect(ingested).toBe(0);
+    const stored = JSON.parse(
+      await (await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY))!.text(),
+    ) as { cursor: number };
+    expect(stored.cursor).toBe(1);
   });
 
   it("ACTIVE authority SUCCESS for the initiating operation advances without a second ingest", async () => {

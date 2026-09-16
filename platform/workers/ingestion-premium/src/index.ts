@@ -1090,7 +1090,10 @@ export default {
           ingest,
           {
             observe: (job, window, operation) =>
-              observeExactFiveReceipt(env.DB, job, window, operation),
+              observeExactFiveReceipt(env.DB, job, window, operation, {
+                operationMode: env.RECEIPT_AUTHORITY_OPERATION_MODE,
+                environment: env.RECEIPT_AUTHORITY_ENVIRONMENT,
+              }),
           },
         );
         console.log(JSON.stringify({
