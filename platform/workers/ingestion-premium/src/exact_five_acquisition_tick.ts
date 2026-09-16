@@ -13,8 +13,12 @@
  * callback to settle and commits that outcome even after the claim lease
  * expires. The claim lease is longer than the fetch abort so overlapping
  * minute Cron ticks do not recapture an in-flight month. Elapsed lease is
- * not proof the prior owner stopped: reconcile a SUCCESS collection receipt
- * for the pending job before any replay.
+* not proof the prior owner stopped: reconcile a SUCCESS collection receipt
+* for the pending job before any replay.
+ * PENDING no-operation skip still treats unsigned SUCCESS as already collected
+ * for that audit path. ACTIVE no-operation skip requires a trusted signed
+ * full-segment collection receipt for the exact window. Operation-bound
+ * observation still finishes the initiating claim from that operation's rows.
  * Coverage presence is not liveness. A fail validation or FAILED receipt
  * for this operation and exact window is terminal only when no matching
  * PREPARED request remains. A matching PREPARED keeps the initiating
@@ -30,15 +34,20 @@ import {
   parseControlLease,
   type ControlLease,
 } from "./control_cas";
- import { todayJst, validDate } from "./identity";
- import {
-   COMPILED_CLOSURE_DIGEST,
-   COMPILED_EXACT_FIVE_DATASET_IDS,
-   COMPILED_EXACT_FOUR_PERIOD,
-   COMPILED_PROFILE_DIGEST,
-   COMPILED_PROFILE_ID,
- } from "./receipt_product_input";
- import { sha256HexFromString } from "./sha256";
+import { todayJst, validDate } from "./identity";
+import {
+  COMPILED_CLOSURE_DIGEST,
+  COMPILED_EXACT_FIVE_DATASET_IDS,
+  COMPILED_EXACT_FOUR_PERIOD,
+  COMPILED_PROFILE_DIGEST,
+  COMPILED_PROFILE_ID,
+} from "./receipt_product_input";
+import {
+  pinnedReceiptRegistryForEnvironment,
+  trustedSignedCollectionReceipt,
+  type ReceiptVerifyRegistry,
+} from "./ops_projection_policy";
+import { sha256HexFromString } from "./sha256";
 
 export const EXACT_FIVE_ACQUISITION_KEY =
   "control/exact_five_compiled_acquisition.json";
@@ -119,34 +128,65 @@ export type ExactFiveTickOptions = {
   observe?: ExactFiveObserve;
 };
 
- /** Durable job completion is a SUCCESS collection receipt, not the ingest promise. */
- export async function observeExactFiveReceipt(
-   db: D1Database,
-   job: ExactFiveJob,
-   window: { from: string; to: string },
-   operation?: string,
- ): Promise<ExactFiveObservation> {
+export type ExactFiveObserveOptions = {
+  operationMode?: "PENDING" | "ACTIVE";
+  environment?: "staging" | "production";
+  registry?: ReceiptVerifyRegistry | null;
+};
+
+/** Durable job completion is a collection receipt for this window, not the ingest promise. */
+export async function observeExactFiveReceipt(
+  db: D1Database,
+  job: ExactFiveJob,
+  window: { from: string; to: string },
+  operation?: string,
+  options: ExactFiveObserveOptions = {},
+): Promise<ExactFiveObservation> {
    if (operation) {
      const bound = await observeBoundExactFive(db, job, window, operation);
      if (bound) return bound;
    }
+  const operationMode = options.operationMode ?? "PENDING";
+  const environment = options.environment ?? "staging";
    const success = await db.prepare(
-     `SELECT structured_row_count
-        FROM collection_receipts
-       WHERE source = 'jquants' AND dataset = ? AND segment_id = ?
-         AND segment_start = ? AND segment_end = ? AND status = 'SUCCESS'
-       ORDER BY checked_at DESC, run_id DESC
-       LIMIT 1`,
-   ).bind(job.dataset, job.segment_id, window.from, window.to).first<{
-     structured_row_count: number;
-   }>();
-   if (success && !operation) {
-     const rowsInserted = Number.isSafeInteger(success.structured_row_count) &&
-         success.structured_row_count >= 0
-       ? success.structured_row_count
-       : 0;
-     return { status: "pass", rowsInserted };
-   }
+     `SELECT source, dataset, segment_id, segment_start, segment_end, status, error,
+             pagination_exhausted, structured_row_count, observed_items, expected_items,
+             expected_scope, raw_page_count, raw_row_count, run_id, checked_at, digests_json
+       FROM collection_receipts
+      WHERE source = 'jquants' AND dataset = ? AND segment_id = ?
+        AND segment_start = ? AND segment_end = ? AND status = 'SUCCESS'
+      ORDER BY checked_at DESC, run_id DESC
+      LIMIT 1`,
+    ).bind(job.dataset, job.segment_id, window.from, window.to).first<Record<string, unknown>>();
+    if (success && !operation) {
+      if (operationMode === "ACTIVE") {
+        const registry = options.registry !== undefined
+          ? options.registry
+          : await pinnedReceiptRegistryForEnvironment(environment);
+        const claims = await trustedSignedCollectionReceipt(
+          success,
+          environment,
+          registry,
+        );
+        if (
+          claims &&
+          claims.segment_start === window.from &&
+          claims.segment_end === window.to
+        ) {
+          const rowsInserted = Number.isSafeInteger(success.structured_row_count) &&
+            (success.structured_row_count as number) >= 0
+            ? (success.structured_row_count as number)
+            : 0;
+          return { status: "pass", rowsInserted };
+        }
+      } else {
+        const rowsInserted = Number.isSafeInteger(success.structured_row_count) &&
+          (success.structured_row_count as number) >= 0
+          ? (success.structured_row_count as number)
+          : 0;
+        return { status: "pass", rowsInserted };
+      }
+    }
    if (!operation && await preparedExactFiveRequest(db, job)) {
      return { status: "started", rowsInserted: 0 };
    }
