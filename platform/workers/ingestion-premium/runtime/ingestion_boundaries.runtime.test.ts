@@ -8,7 +8,12 @@ import {
   VALUATION_BACKFILL_KEY,
   type ValuationIngest,
 } from "../src/valuation_backfill";
-import { EXACT_FIVE_ACQUISITION_KEY } from "../src/exact_five_acquisition_tick";
+import {
+  EXACT_FIVE_ACQUISITION_KEY,
+  observeExactFiveReceipt,
+  runExactFiveAcquisitionTick,
+  type ExactFiveIngest,
+} from "../src/exact_five_acquisition_tick";
 import { PENDING_REGISTRATION_KEY } from "../src/pending_registration_tick";
 import {
   COMPILED_CLOSURE_DIGEST,
@@ -20,6 +25,7 @@ import {
   canonicalDigest,
   sha256Digest,
 } from "../../receipt-evidence-authority/src/canonical";
+import { sha256HexFromString } from "../src/sha256";
 
 const migrations = inject<Array<{ name: string; queries: string[] }>>("premiumD1Migrations");
 
@@ -543,6 +549,360 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
     expect(JSON.parse(
       await (await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY))!.text(),
     ).cursor).toBe(1);
+  });
+
+  it("records a late ingest pass after fetch abort instead of timeout-zero", async () => {
+    await env.STRUCTURED_BUCKET.put(
+      EXACT_FIVE_ACQUISITION_KEY,
+      JSON.stringify(exactFiveDoc()),
+    );
+    let aborted = false;
+    const ingest: ExactFiveIngest = (_opts, signal) =>
+      new Promise((resolve) => {
+        const finish = () => {
+          aborted = signal.aborted;
+          resolve({ status: "pass", datasetCount: 1, rowsInserted: 7 });
+        };
+        if (signal.aborted) {
+          queueMicrotask(finish);
+          return;
+        }
+        signal.addEventListener("abort", () => queueMicrotask(finish), { once: true });
+      });
+    const result = await runExactFiveAcquisitionTick(
+      env.STRUCTURED_BUCKET,
+      ingest,
+      {
+        clock: () => new Date("2026-09-12T00:00:00.000Z"),
+        fetchTimeoutMs: 5,
+      },
+    );
+    expect(aborted).toBe(true);
+    expect(result).toMatchObject({ status: "pass", fetched: true, reason: "ok" });
+    const control = JSON.parse(
+      await (await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY))!.text(),
+    ) as { cursor: number; attempts: number; last: { rowsInserted: number; status: string } };
+    expect(control.cursor).toBe(1);
+    expect(control.attempts).toBe(0);
+    expect(control.last).toMatchObject({ rowsInserted: 7, status: "pass" });
+  });
+
+  it("fences an expired running claim and commits the original late pass on CAS retry", async () => {
+    await env.STRUCTURED_BUCKET.put(
+      EXACT_FIVE_ACQUISITION_KEY,
+      JSON.stringify(exactFiveDoc()),
+    );
+    let nowMs = Date.parse("2026-09-12T00:00:00.000Z");
+    const clock = () => new Date(nowMs);
+    let release!: (summary: {
+      status: "pass" | "fail" | "partial";
+      datasetCount: number;
+      rowsInserted: number;
+    }) => void;
+    let invocations = 0;
+    const hanging: ExactFiveIngest = () => {
+      invocations += 1;
+      return new Promise((resolve) => {
+        release = resolve;
+      });
+    };
+    const first = runExactFiveAcquisitionTick(
+      env.STRUCTURED_BUCKET,
+      hanging,
+      { clock, fetchTimeoutMs: 60_000 },
+    );
+    for (let i = 0; i < 50; i++) {
+      const raw = await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY);
+      const parsed = JSON.parse(await raw!.text()) as { last: { status: string } | null };
+      if (parsed.last?.status === "running") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(
+      await runExactFiveAcquisitionTick(env.STRUCTURED_BUCKET, hanging, { clock, fetchTimeoutMs: 60_000 }),
+    ).toMatchObject({ status: "idle", fetched: false, reason: "leased" });
+    expect(invocations).toBe(1);
+
+    nowMs += 120_000;
+    expect(
+      await runExactFiveAcquisitionTick(env.STRUCTURED_BUCKET, hanging, { clock, fetchTimeoutMs: 60_000 }),
+    ).toMatchObject({ status: "idle", fetched: false, reason: "unresolved" });
+    expect(invocations).toBe(1);
+    const fenced = JSON.parse(
+      await (await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY))!.text(),
+    ) as { cursor: number; last: { status: string } };
+    expect(fenced.cursor).toBe(0);
+    expect(fenced.last.status).toBe("unresolved");
+
+    release({ status: "pass", datasetCount: 1, rowsInserted: 3 });
+    expect(await first).toMatchObject({ status: "pass", fetched: true, reason: "ok" });
+    const control = JSON.parse(
+      await (await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY))!.text(),
+    ) as { cursor: number; attempts: number; lease: null; last: { rowsInserted: number; status: string } };
+    expect(control.cursor).toBe(1);
+    expect(control.attempts).toBe(0);
+    expect(control.lease).toBeNull();
+    expect(control.last).toMatchObject({ rowsInserted: 3, status: "pass" });
+    expect(invocations).toBe(1);
+  });
+
+  it("completed exact-five persistence advances a later expired claim without a second fetch", async () => {
+    expect((await rebuildNaturalKeysV2(env.DB)).state).toBe("READY");
+    const testEnv = runtimeEnv();
+    await env.STRUCTURED_BUCKET.put(EXACT_FIVE_ACQUISITION_KEY, JSON.stringify(exactFiveDoc()));
+    const spy = stubVendor("/v2/markets/calendar", { from: "2023-01-01", to: "2023-01-31" }, []);
+    await worker.scheduled(scheduledAt(), testEnv, createExecutionContext());
+    expect(spy).toHaveBeenCalledTimes(1);
+    const run = await env.DB.prepare(
+      `SELECT id, status, detail FROM ingestion_run_log
+        WHERE source = 'jquants' AND runtime = 'cloudflare'`,
+    ).first<{ id: number; status: string; detail: string }>();
+    expect(run?.status).toBe("pass");
+    const detail = JSON.parse(run!.detail) as {
+      status: string;
+      opts: { dataset: string; from: string; to: string; operation: string };
+    };
+    expect(detail.status).toBe("pass");
+    expect(detail.opts).toMatchObject({
+      dataset: "markets_calendar",
+      from: "2023-01-01",
+      to: "2023-01-31",
+    });
+    expect(detail.opts.operation.length).toBeGreaterThan(0);
+    expect(await env.DB.prepare(
+      "SELECT run_id, status FROM collection_receipts",
+    ).first()).toMatchObject({ run_id: run!.id, status: "SUCCESS" });
+
+    await env.STRUCTURED_BUCKET.put(
+      EXACT_FIVE_ACQUISITION_KEY,
+      JSON.stringify(exactFiveDoc({
+        attempts: 1,
+        lease: { owner: detail.opts.operation, until: "2026-09-11T23:58:30.000Z" },
+        last: {
+          dataset: "markets_calendar",
+          segment_id: "2023-01",
+          from: "2023-01-01",
+          to: "2023-01-31",
+          rowsInserted: 0,
+          status: "running",
+        },
+      })),
+    );
+    spy.mockImplementation((input) => {
+      throw new Error(`unexpected fetch ${fetchUrl(input).href}`);
+    });
+    await worker.scheduled(scheduledAt("2026-09-12T00:02:00.000Z"), testEnv, createExecutionContext());
+    expect(spy).toHaveBeenCalledTimes(1);
+    const recovered = JSON.parse(
+      await (await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY))!.text(),
+    ) as { cursor: number; last: { status: string } };
+    expect(recovered.cursor).toBe(1);
+    expect(recovered.last.status).toBe("pass");
+  });
+
+  it("ACTIVE authority SUCCESS for the initiating operation advances without a second ingest", async () => {
+    const owner = "dead-isolate";
+    const nonce = await sha256HexFromString(owner);
+    const operationId = `sha256:${"ab".repeat(32)}`;
+    await env.STRUCTURED_BUCKET.put(
+      EXACT_FIVE_ACQUISITION_KEY,
+      JSON.stringify(exactFiveDoc({
+        attempts: 1,
+        lease: { owner, until: "2026-09-11T23:58:30.000Z" },
+        last: {
+          dataset: "markets_calendar",
+          segment_id: "2023-01",
+          from: "2023-01-01",
+          to: "2023-01-31",
+          rowsInserted: 0,
+          status: "running",
+        },
+      })),
+    );
+    await env.DB.prepare(
+      `INSERT INTO ingestion_run_log (id, ran_at, source, runtime, status, detail)
+       VALUES (11, '2023-01-31T00:00:00Z', 'jquants', 'cloudflare', 'running', ?)`,
+    ).bind(JSON.stringify({
+      triggeredBy: "cron",
+      opts: {
+        dataset: "markets_calendar",
+        from: "2023-01-01",
+        to: "2023-01-31",
+        operation: owner,
+      },
+    })).run();
+    await env.DB.prepare(
+      `INSERT INTO ingestion_validation (
+         run_id, dataset, started_at, finished_at, status, rows_seen, rows_inserted,
+         rows_revisions, available_at_min, available_at_max, detail
+       ) VALUES (
+         11, 'markets_calendar', '2023-01-31T00:00:00Z', '2023-01-31T00:00:01Z',
+         'fail', 0, 0, 0, NULL, NULL, 'issue rpc lost'
+       )`,
+    ).run();
+    await env.DB.prepare(
+      `INSERT INTO receipt_authority_requests(
+         operation_id,request_nonce,environment,source,contract_id,dataset,segment_id,state,
+         receipt_digest,created_at,updated_at
+       ) VALUES (
+         ?, ?, 'staging', 'jquants', 'jquants_premium_core', 'markets_calendar', '2023-01',
+         'PREPARED', NULL, '2023-01-31T00:00:00Z', '2023-01-31T00:00:00Z'
+       )`,
+    ).bind(operationId, nonce).run();
+    let invocations = 0;
+    const ingest: ExactFiveIngest = async () => {
+      invocations += 1;
+      return { status: "pass", datasetCount: 1, rowsInserted: 99 };
+    };
+    const held = await runExactFiveAcquisitionTick(env.STRUCTURED_BUCKET, ingest, {
+      clock: () => new Date("2026-09-12T00:00:00.000Z"),
+      observe: (job, window, operation) =>
+        observeExactFiveReceipt(env.DB, job, window, operation),
+    });
+    expect(held).toMatchObject({ status: "idle", fetched: false, reason: "unresolved" });
+    expect(invocations).toBe(0);
+    const heldControl = JSON.parse(
+      await (await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY))!.text(),
+    ) as { cursor: number; lease: { owner: string }; last: { status: string } };
+    expect(heldControl.cursor).toBe(0);
+    expect(heldControl.lease.owner).toBe(owner);
+    expect(heldControl.last.status).toBe("unresolved");
+    expect(await env.DB.prepare(
+      "SELECT request_nonce, state FROM receipt_authority_requests",
+    ).first()).toMatchObject({ request_nonce: nonce, state: "PREPARED" });
+
+    await env.DB.prepare(
+      `INSERT INTO ingestion_run_log
+         (id, ran_at, source, runtime, status, detail, authority_operation_id)
+       VALUES (
+         99, '2023-01-31T00:00:00Z', 'jquants', 'receipt-evidence-authority',
+         'SUCCESS', '{}', ?
+       )`,
+    ).bind(operationId).run();
+    await env.DB.prepare(
+      `INSERT INTO receipt_authority_operations(
+         operation_id,request_digest,run_id,environment,source,contract_id,dataset,segment_id,
+         segment_start,segment_end,state,checked_at,updated_at,raw_manifest_key,
+         raw_manifest_digest,raw_page_count,raw_row_count,raw_bytes
+       ) VALUES (
+         ?, 'sha256:${"cd".repeat(32)}', 99, 'staging', 'jquants', 'jquants_premium_core',
+         'markets_calendar', '2023-01', '2023-01-01', '2023-01-31', 'COLLECTING',
+         '2023-01-31T00:00:00Z', '2023-01-31T00:00:00Z',
+         'raw/markets_calendar/99/manifest.json', 'sha256:${"11".repeat(32)}', 1, 4, 8
+       )`,
+    ).bind(operationId).run();
+    await env.DB.prepare(
+      `UPDATE receipt_authority_operations
+          SET state='STRUCTURED_COMMITTED',
+              structured_manifest_key='structured/markets_calendar/99.json',
+              structured_digest='sha256:${"22".repeat(32)}'
+        WHERE operation_id=?`,
+    ).bind(operationId).run();
+    await env.DB.prepare(
+      `INSERT INTO collection_receipts (
+         source, dataset, segment_id, segment_start, segment_end,
+         expected_scope, expected_items, observed_items, raw_page_count,
+         raw_row_count, structured_row_count, pagination_exhausted,
+         digests_json, run_id, status, error, checked_at
+       ) VALUES (
+         'jquants', 'markets_calendar', '2023-01', '2023-01-01', '2023-01-31',
+         '{}', 1, 1, 1, 4, 4, 1, '{}', 99, 'SUCCESS', NULL, '2023-01-31T00:00:00Z'
+       )`,
+    ).run();
+    await env.DB.prepare(
+      `UPDATE receipt_authority_operations
+          SET state='RECEIPT_COMMITTED', receipt_digest='sha256:${"33".repeat(32)}'
+        WHERE operation_id=?`,
+    ).bind(operationId).run();
+    await env.DB.prepare(
+      `UPDATE receipt_authority_requests
+          SET state='FINALIZED',
+              receipt_digest='sha256:${"33".repeat(32)}',
+              updated_at='2023-01-31T00:00:02Z'
+        WHERE operation_id=? AND request_nonce=? AND state='PREPARED'`,
+    ).bind(operationId, nonce).run();
+    const finished = await runExactFiveAcquisitionTick(env.STRUCTURED_BUCKET, ingest, {
+      clock: () => new Date("2026-09-12T00:02:00.000Z"),
+      observe: (job, window, operation) =>
+        observeExactFiveReceipt(env.DB, job, window, operation),
+    });
+    expect(finished).toMatchObject({ status: "pass", fetched: false, reason: "ok" });
+    expect(invocations).toBe(0);
+    const stored = JSON.parse(
+      await (await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY))!.text(),
+    ) as { cursor: number; last: { rowsInserted: number; status: string } };
+    expect(stored.cursor).toBe(1);
+    expect(stored.last).toMatchObject({ rowsInserted: 4, status: "pass" });
+  });
+
+  it("fail validation after coverage is terminal for the pending operation", async () => {
+    const owner = "dead-isolate";
+    await env.STRUCTURED_BUCKET.put(
+      EXACT_FIVE_ACQUISITION_KEY,
+      JSON.stringify(exactFiveDoc({
+        attempts: 1,
+        lease: { owner, until: "2026-09-11T23:58:30.000Z" },
+        last: {
+          dataset: "markets_calendar",
+          segment_id: "2023-01",
+          from: "2023-01-01",
+          to: "2023-01-31",
+          rowsInserted: 0,
+          status: "running",
+        },
+      })),
+    );
+    await env.DB.prepare(
+      `INSERT INTO coverage_segments (
+         source, dataset, segment_id, policy_version, segment_start, segment_end,
+         expected_scope, expected_items, status, receipt_run_id, evaluated_at, detail_json
+       ) VALUES (
+         'jquants', 'markets_calendar', '2023-01', 'collection-coverage/v3',
+         '2023-01-01', '2023-01-31', '{}', 1, 'UNKNOWN', NULL,
+         '2023-01-31T00:00:00Z', '{}'
+       )`,
+    ).run();
+    await env.DB.prepare(
+      `INSERT INTO ingestion_run_log (id, ran_at, source, runtime, status, detail)
+       VALUES (11, '2023-01-31T00:00:00Z', 'jquants', 'cloudflare', 'running', ?)`,
+    ).bind(JSON.stringify({
+      triggeredBy: "cron",
+      opts: {
+        dataset: "markets_calendar",
+        from: "2023-01-01",
+        to: "2023-01-31",
+        operation: owner,
+      },
+    })).run();
+    await env.DB.prepare(
+      `INSERT INTO ingestion_validation (
+         run_id, dataset, started_at, finished_at, status, rows_seen, rows_inserted,
+         rows_revisions, available_at_min, available_at_max, detail
+       ) VALUES (
+         11, 'markets_calendar', '2023-01-31T00:00:00Z', '2023-01-31T00:00:01Z',
+         'fail', 0, 0, 0, NULL, NULL, 'r2 put failed'
+       )`,
+    ).run();
+    let invocations = 0;
+    const ingest: ExactFiveIngest = async () => {
+      invocations += 1;
+      return { status: "pass", datasetCount: 1, rowsInserted: 99 };
+    };
+    const result = await runExactFiveAcquisitionTick(env.STRUCTURED_BUCKET, ingest, {
+      clock: () => new Date("2026-09-12T00:00:00.000Z"),
+      observe: (job, window, operation) =>
+        observeExactFiveReceipt(env.DB, job, window, operation),
+    });
+    expect(result).toMatchObject({
+      status: "fail",
+      fetched: false,
+      reason: "ingestion_failed",
+    });
+    expect(invocations).toBe(0);
+    const stored = JSON.parse(
+      await (await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY))!.text(),
+    ) as { cursor: number; last: { status: string } };
+    expect(stored.cursor).toBe(0);
+    expect(stored.last.status).toBe("ingestion_failed");
   });
 
   it("R2 CAS concurrent claim, thrown error, exhaustion, and resume", async () => {

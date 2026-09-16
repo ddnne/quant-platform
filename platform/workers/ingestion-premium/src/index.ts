@@ -47,7 +47,10 @@ import {
   valuationIdleForExactFive,
 } from "./valuation_backfill";
 import { runPendingRegistrationTick } from "./pending_registration_tick";
-import { runExactFiveAcquisitionTick } from "./exact_five_acquisition_tick";
+import {
+  observeExactFiveReceipt,
+  runExactFiveAcquisitionTick,
+} from "./exact_five_acquisition_tick";
 import { todayJst, toJstIso } from "./identity";
 import { sha256HexFromString } from "./sha256";
 import type {
@@ -267,7 +270,7 @@ function masterUniverseEvidence(
 async function ingestOne(
   env: Env,
   spec: DatasetSpec,
-  opts: { from?: string; to?: string; today?: string },
+  opts: { from?: string; to?: string; today?: string; operation?: string },
   fetchImpl: typeof fetch,
   runId: number | null,
   limiter: RateLimiter,
@@ -438,6 +441,8 @@ async function ingestOne(
       receiptEnvironment(env),
       spec.id,
       collected.id,
+      undefined,
+      opts.operation ? await sha256HexFromString(opts.operation) : undefined,
     );
   } else {
     await writeCollectionReceipt(env, spec, runId, collected, {
@@ -543,7 +548,7 @@ async function lastRunSummary(env: Env): Promise<RunSummary | null> {
 
 async function runIngestion(
   env: Env,
-  opts: { from?: string; to?: string; today?: string; dataset?: string },
+  opts: { from?: string; to?: string; today?: string; dataset?: string; operation?: string },
   triggeredBy: "cron" | "manual",
   fetchImpl: typeof fetch,
 ): Promise<RunSummary> {
@@ -656,7 +661,7 @@ async function runIngestion(
   if (runId !== null) {
     await env.DB.prepare(
       `UPDATE ingestion_run_log SET status = ?, detail = ? WHERE id = ?`,
-    ).bind(status, JSON.stringify(summary).slice(0, 8000), runId).run();
+    ).bind(status, JSON.stringify({ ...summary, opts }), runId).run();
   }
 
   return summary;
@@ -1022,7 +1027,7 @@ export default {
   ): Promise<void> {
     if (env.RECEIPT_AUTHORITY_ENVIRONMENT === "staging") {
       const ingest = (
-        opts: { dataset: string; from: string; to: string },
+        opts: { dataset: string; from: string; to: string; operation?: string },
         signal: AbortSignal,
       ) => runIngestion(
         env,
@@ -1060,6 +1065,10 @@ export default {
         const acquisition = await runExactFiveAcquisitionTick(
           env.STRUCTURED_BUCKET,
           ingest,
+          {
+            observe: (job, window, operation) =>
+              observeExactFiveReceipt(env.DB, job, window, operation),
+          },
         );
         console.log(JSON.stringify({
           event: "exact_five_acquisition_tick",

@@ -339,8 +339,9 @@ export async function issueGovernedReceipt(
   datasetId: string,
   segmentId: string,
   locator?: JsdaReceiptLocator,
+  requestNonce?: string,
 ): Promise<{ requestNonce: string; result: ReceiptIssueResultV1 }> {
-  const requestNonce = locator === undefined
+  const nonce = requestNonce ?? (locator === undefined
     ? randomNonce()
     : (await canonicalDigest({
       work_key: locator.work_key,
@@ -348,13 +349,13 @@ export async function issueGovernedReceipt(
       expected_contract_digest: locator.expected_contract_digest,
       dataset_id: datasetId,
       segment_id: segmentId,
-    })).slice("sha256:".length);
+    })).slice("sha256:".length));
   return issueGovernedReceiptWithNonce(
     env,
     environment,
     datasetId,
     segmentId,
-    requestNonce,
+    nonce,
     locator,
   );
 }
