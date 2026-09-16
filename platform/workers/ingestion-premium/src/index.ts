@@ -307,11 +307,12 @@ type AcquiredRaw = {
   rawBytes: number;
   dataDigest: string;
   pages: AcquiredRawPage[];
+  fetchedAt: string;
 };
 
 type StructuredProgress = {
   next_page: number;
-  rows_upserted: number;
+  logical_rows: number;
 };
 
 async function readAcquiredRaw(
@@ -321,6 +322,7 @@ async function readAcquiredRaw(
 ): Promise<AcquiredRaw | null> {
   const row = await env.DB.prepare(
     `SELECT manifest_key, page_count, row_count, raw_bytes, data_digest, completeness
+            , created_at
        FROM raw_retention_manifests
       WHERE dataset = ? AND run_id = ?
       LIMIT 1`,
@@ -331,6 +333,7 @@ async function readAcquiredRaw(
     raw_bytes: number;
     data_digest: string;
     completeness: string;
+    created_at: string;
   }>();
   if (!row || row.completeness !== "ACQUIRED") return null;
   if (
@@ -378,6 +381,9 @@ async function readAcquiredRaw(
     });
   }
   pages.sort((left, right) => left.page - right.page);
+  const fetchedAt = typeof (parsed as { fetched_at?: unknown }).fetched_at === "string"
+    ? (parsed as { fetched_at: string }).fetched_at
+    : row.created_at;
   return {
     rawKey: row.manifest_key,
     pageCount: row.page_count,
@@ -385,6 +391,7 @@ async function readAcquiredRaw(
     rawBytes: Number.isSafeInteger(row.raw_bytes) ? row.raw_bytes : 0,
     dataDigest: row.data_digest,
     pages,
+    fetchedAt,
   };
 }
 
@@ -393,19 +400,19 @@ async function readStructuredProgress(
   prefix: string,
 ): Promise<StructuredProgress> {
   const object = await bucket.get(`${prefix}/${STRUCTURED_PROGRESS_NAME}`);
-  if (!object) return { next_page: 1, rows_upserted: 0 };
+  if (!object) return { next_page: 1, logical_rows: 0 };
   try {
     const parsed = JSON.parse(await object.text()) as StructuredProgress;
     if (
       Number.isSafeInteger(parsed.next_page) && parsed.next_page >= 1 &&
-      Number.isSafeInteger(parsed.rows_upserted) && parsed.rows_upserted >= 0
+      Number.isSafeInteger(parsed.logical_rows) && parsed.logical_rows >= 0
     ) {
-      return { next_page: parsed.next_page, rows_upserted: parsed.rows_upserted };
+      return { next_page: parsed.next_page, logical_rows: parsed.logical_rows };
     }
   } catch {
-    /* restart the slice from page 1; upsert is idempotent */
+    /* restart the slice from page 1; structured object identity is stable */
   }
-  return { next_page: 1, rows_upserted: 0 };
+  return { next_page: 1, logical_rows: 0 };
 }
 
 async function writeStructuredProgress(
@@ -416,15 +423,15 @@ async function writeStructuredProgress(
   await bucket.put(`${prefix}/${STRUCTURED_PROGRESS_NAME}`, JSON.stringify(progress), {
     customMetadata: {
       next_page: String(progress.next_page),
-      rows_upserted: String(progress.rows_upserted),
+      logical_rows: String(progress.logical_rows),
     },
   });
 }
 
-async function continueAcquiredStructured(
+async function persistAcquiredStructured(
   env: Env,
   spec: DatasetSpec,
-  opts: { from?: string; to?: string; today?: string; operation?: string },
+  opts: { from?: string; to?: string; today?: string; operation?: string; resumeAcquired?: boolean },
   runId: number,
   acquired: AcquiredRaw,
   startedAt: string,
@@ -432,15 +439,44 @@ async function continueAcquiredStructured(
 ): Promise<DatasetResult> {
   const rawPrefix = rawRunPrefix(spec.id, runId, when);
   const progress = await readStructuredProgress(env.RAW_BUCKET, rawPrefix);
-  let insertedTotal = progress.rows_upserted;
+  const capturedMs = Date.parse(acquired.fetchedAt);
+  const capturedWhen = Number.isFinite(capturedMs) ? new Date(capturedMs) : when;
+  let logicalRows = progress.logical_rows;
   let lastEvent: string | null = null;
   let processed = 0;
+  const queries = requestQueries(spec, opts);
+  if (spec.id === "equities_master") {
+    const allRows: Record<string, unknown>[] = [];
+    for (const page of acquired.pages) {
+      const object = await env.RAW_BUCKET.get(page.key);
+      if (!object) throw new Error(`acquired raw page missing: ${page.key}`);
+      const parsed = JSON.parse(await object.text()) as { data?: unknown };
+      if (!Array.isArray(parsed.data)) {
+        throw new Error(`acquired raw page missing data array: ${page.key}`);
+      }
+      allRows.push(...(parsed.data as Record<string, unknown>[]));
+    }
+    await upsertRecords(
+      env,
+      spec,
+      allRows,
+      capturedWhen,
+      masterUniverseEvidence(spec, {
+        error: "",
+        paginationErrors: 0,
+        queries,
+      }),
+      `run${runId}-master`,
+    );
+    logicalRows = allRows.length;
+    lastEvent = latestEventDate(allRows);
+  } else {
   for (const page of acquired.pages) {
     if (page.page < progress.next_page) continue;
     if (processed >= STRUCTURED_SLICE_PAGES) {
       await writeStructuredProgress(env.RAW_BUCKET, rawPrefix, {
         next_page: page.page,
-        rows_upserted: insertedTotal,
+        logical_rows: logicalRows,
       });
       const finishedAt = toJstIso(new Date());
       return {
@@ -449,7 +485,7 @@ async function continueAcquiredStructured(
         startedAt,
         finishedAt,
         rowsSeen: acquired.rowCount,
-        rowsInserted: insertedTotal,
+        rowsInserted: logicalRows,
         rowsRevisions: 0,
         availableAtMin: null,
         availableAtMax: null,
@@ -467,34 +503,31 @@ async function continueAcquiredStructured(
       throw new Error(`acquired raw page missing data array: ${page.key}`);
     }
     const pageRows = parsed.data as Record<string, unknown>[];
-    const upserted = await upsertRecords(
+    await upsertRecords(
       env,
       spec,
       pageRows,
-      when,
-      masterUniverseEvidence(spec, {
-        error: "",
-        paginationErrors: 0,
-        queries: requestQueries(spec, opts),
-      }),
+      capturedWhen,
+      undefined,
+      `run${runId}-p${page.page}`,
     );
-    insertedTotal += upserted.inserted;
+    logicalRows += pageRows.length;
     const ev = latestEventDate(pageRows);
     if (ev && (lastEvent === null || ev > lastEvent)) lastEvent = ev;
     processed += 1;
     await writeStructuredProgress(env.RAW_BUCKET, rawPrefix, {
       next_page: page.page + 1,
-      rows_upserted: insertedTotal,
+      logical_rows: logicalRows,
     });
   }
+  }
 
-  const queries = requestQueries(spec, opts);
   const segment = collectionSegment(spec, queries);
   if (segment.canonicalMonth) {
     await writeRequiredCoverageSegment(env, spec, segment);
   }
   const paginationExhausted = true;
-  const structuredRowCount = insertedTotal;
+  const structuredRowCount = logicalRows;
   if (
     env.RECEIPT_AUTHORITY_OPERATION_MODE === "ACTIVE" &&
     paginationExhausted &&
@@ -529,7 +562,7 @@ async function continueAcquiredStructured(
             startedAt,
             finishedAt,
             rowsSeen: acquired.rowCount,
-            rowsInserted: insertedTotal,
+            rowsInserted: logicalRows,
             rowsRevisions: 0,
             availableAtMin: null,
             availableAtMax: null,
@@ -558,7 +591,7 @@ async function continueAcquiredStructured(
   }
 
   const availableBounds = await selectAvailableBounds(env, spec.id);
-  const ingestedAt = toJstIso(when);
+  const ingestedAt = toJstIso(capturedWhen);
   let watermarkDetail = "";
   try {
     await upsertWatermark(env, spec.id, lastEvent, ingestedAt);
@@ -572,11 +605,11 @@ async function continueAcquiredStructured(
     startedAt,
     finishedAt,
     rowsSeen: acquired.rowCount,
-    rowsInserted: insertedTotal,
+    rowsInserted: logicalRows,
     rowsRevisions: 0,
     availableAtMin: availableBounds.min,
     availableAtMax: availableBounds.max,
-    detail: `raw=${acquired.rawKey}${watermarkDetail}; acquired_raw_resume=1`,
+    detail: `raw=${acquired.rawKey}${watermarkDetail}; structured_from_acquired=1`,
     rawKey: acquired.rawKey,
     rawBytes: acquired.rawBytes,
   };
@@ -588,7 +621,13 @@ async function continueAcquiredStructured(
 async function ingestOne(
   env: Env,
   spec: DatasetSpec,
-  opts: { from?: string; to?: string; today?: string; operation?: string },
+  opts: {
+    from?: string;
+    to?: string;
+    today?: string;
+    operation?: string;
+    resumeAcquired?: boolean;
+  },
   fetchImpl: typeof fetch,
   runId: number | null,
   limiter: RateLimiter,
@@ -598,8 +637,11 @@ async function ingestOne(
   const acquired = runId !== null
     ? await readAcquiredRaw(env, spec.id, runId)
     : null;
-  if (acquired && runId !== null) {
-    return continueAcquiredStructured(env, spec, opts, runId, acquired, startedAt, when);
+  if (opts.resumeAcquired) {
+    if (!acquired || runId === null) {
+      throw new Error("acquired raw required for uncounted continuation");
+    }
+    return persistAcquiredStructured(env, spec, opts, runId, acquired, startedAt, when);
   }
   const streamD1 = /options/i.test(spec.id);
   let insertedTotal = 0;
@@ -652,7 +694,7 @@ async function ingestOne(
   };
 
   const outcome = await fetchDataset(
-    env, spec, opts, fetchImpl, limiter, onPage, !streamD1, onPlan,
+    env, spec, opts, fetchImpl, limiter, onPage, false, onPlan,
   );
 
   const rawKey = `${rawPrefix}/manifest.json`;
@@ -736,17 +778,13 @@ async function ingestOne(
   }
 
   if (!streamD1) {
-    const inserted = await upsertRecords(
-      env,
-      spec,
-      outcome.rows,
-      when,
-      masterUniverseEvidence(spec, outcome),
+    const persisted = await readAcquiredRaw(env, spec.id, runId);
+    if (!persisted) {
+      throw new Error("acquired raw missing after successful fetch");
+    }
+    return persistAcquiredStructured(
+      env, spec, opts, runId, persisted, startedAt, when,
     );
-    insertedTotal = inserted.inserted;
-    revisionsTotal = inserted.revisions;
-    structuredRowCount = outcome.rows.length;
-    lastEvent = latestEventDate(outcome.rows);
   }
 
   if (segment === null) {
@@ -872,7 +910,14 @@ async function lastRunSummary(env: Env): Promise<RunSummary | null> {
 
 async function runIngestion(
   env: Env,
-  opts: { from?: string; to?: string; today?: string; dataset?: string; operation?: string },
+  opts: {
+    from?: string;
+    to?: string;
+    today?: string;
+    dataset?: string;
+    operation?: string;
+    resumeAcquired?: boolean;
+  },
   triggeredBy: "cron" | "manual",
   fetchImpl: typeof fetch,
 ): Promise<RunSummary> {
@@ -881,7 +926,7 @@ async function runIngestion(
   await requireNaturalKeysV2Ready(env.DB);
 
   let runId: number | null = null;
-  if (opts.operation && opts.dataset && opts.from && opts.to) {
+  if (opts.resumeAcquired && opts.operation && opts.dataset && opts.from && opts.to) {
     const existing = await env.DB.prepare(
       `SELECT id FROM ingestion_run_log
         WHERE source = 'jquants' AND runtime = 'cloudflare' AND status = 'running'
@@ -949,21 +994,24 @@ async function runIngestion(
       res = await ingestOne(env, spec, opts, fetchImpl, runId, limiter);
     } catch (e) {
       const detail = `ingest exception: ${(e as Error).message || String(e)}`;
+      const acquired = runId !== null && spec.id
+        ? await readAcquiredRaw(env, spec.id, runId)
+        : null;
       res = {
         dataset: spec.id,
-        status: "fail",
+        status: acquired ? "partial" : "fail",
         startedAt: datasetStartedAt,
         finishedAt: toJstIso(new Date()),
-        rowsSeen: 0,
+        rowsSeen: acquired?.rowCount ?? 0,
         rowsInserted: 0,
         rowsRevisions: 0,
         availableAtMin: null,
         availableAtMax: null,
         detail,
-        rawKey: null,
-        rawBytes: 0,
+        rawKey: acquired?.rawKey ?? null,
+        rawBytes: acquired?.rawBytes ?? 0,
       };
-      if (runId !== null) {
+      if (runId !== null && !acquired) {
         try {
           await writeValidation(env, runId, res);
         } catch (validationError) {
@@ -1382,7 +1430,13 @@ export default {
   ): Promise<void> {
     if (env.RECEIPT_AUTHORITY_ENVIRONMENT === "staging") {
       const ingest = (
-        opts: { dataset: string; from: string; to: string; operation?: string },
+        opts: {
+          dataset: string;
+          from: string;
+          to: string;
+          operation?: string;
+          resumeAcquired?: boolean;
+        },
         signal: AbortSignal,
       ) => runIngestion(
         env,

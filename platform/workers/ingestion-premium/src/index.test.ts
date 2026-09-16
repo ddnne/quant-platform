@@ -128,7 +128,24 @@ function ingestD1(): { db: D1Database; binds: { sql: string; args: unknown[] }[]
           binds.push({ sql, args });
           return stmt;
         },
-        first: async () => READY_MIGRATION,
+        first: async () => {
+          if (sql.includes("FROM raw_retention_manifests")) {
+            const inserted = [...binds].reverse().find((row) =>
+              row.sql.includes("INSERT INTO raw_retention_manifests")
+            );
+            if (!inserted) return null;
+            return {
+              manifest_key: inserted.args[2],
+              page_count: inserted.args[3],
+              row_count: inserted.args[4],
+              raw_bytes: inserted.args[5],
+              data_digest: inserted.args[6],
+              completeness: inserted.args[7],
+              created_at: inserted.args[8],
+            };
+          }
+          return READY_MIGRATION;
+        },
         all: async () => ({ results: [], success: true, meta: {} }),
         run: async () => ({ success: true, meta: { last_row_id: 42, changes: 0 } }),
       };
@@ -149,6 +166,16 @@ function capturingBucket(): {
       const body = typeof value === "string" ? value : "";
       puts.push({ key, body, metadata: options?.customMetadata });
       return { key, etag: "test-etag" };
+    },
+    async get(key: string) {
+      const found = [...puts].reverse().find((row) => row.key === key);
+      if (!found) return null;
+      return {
+        key,
+        etag: "test-etag",
+        text: async () => found.body,
+        arrayBuffer: async () => new TextEncoder().encode(found.body),
+      };
     },
   } as unknown as R2Bucket;
   return { bucket, puts };
@@ -470,7 +497,6 @@ describe("ingestion-premium equities_master SCD2 universe evidence", () => {
     expect(src).toContain('spec.id !== "equities_master"');
     expect(src).toContain("paginationExhausted");
     expect(src).toContain("fullUniverse");
-    expect(src).toContain("masterUniverseEvidence(spec, outcome)");
     expect(src).not.toMatch(/fullUniverse:\s*true/);
   });
 

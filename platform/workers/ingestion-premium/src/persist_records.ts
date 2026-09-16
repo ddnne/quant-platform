@@ -106,6 +106,7 @@ export async function upsertRecords(
   rows: Record<string, unknown>[],
   when: Date,
   evidence?: MasterScd2UniverseEvidence,
+  persistId?: string,
 ): Promise<UpsertSummary> {
   if (rows.length === 0) return { inserted: 0, revisions: 0 };
   const ingestedAt = toJstIso(when);
@@ -170,10 +171,11 @@ export async function upsertRecords(
     }
 
     const runId = newRunId(`r2-${spec.id}`);
+    const objectId = persistId && persistId.length > 0 ? persistId : runId;
     const r2Result = await writeJsonlToR2(
       env.STRUCTURED_BUCKET,
       spec.id,
-      runId,
+      objectId,
       records.map((record) => ({
         source: record.source,
         dataset: record.dataset,
@@ -203,7 +205,7 @@ export async function upsertRecords(
              VALUES ('jquants_records_r2', 'jquants', ?, ?, ?, ?, ?, ?, NULL, ?)`,
           ).bind(
             spec.id,
-            `r2-summary:${runId}`,
+            `r2-summary:${objectId}`,
             toJstIso(when),
             toJstIso(when),
             toJstIso(when),
