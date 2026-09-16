@@ -38,7 +38,10 @@ KEY_BYTES = 32
 HEADER_LENGTH_BYTES = 4
 MAX_HEADER_BYTES = 64 * 1024
 CHUNK_BYTES = 4 * 1024 * 1024
+# Accepted restored sqlite after restore completes. Not a runtime disk cap.
 MAX_RESTORED_SQLITE_BYTES = 5 * 1024 * 1024 * 1024
+# standard-4 provisioned disk (image/files share it). Runtime structural bound.
+STANDARD_4_PHYSICAL_DISK_BYTES = 20 * 1024 * 1024 * 1024
 BACKUP_FORMAT = "quant-platform-d1-backup/aes-256-gcm-v3"
 SCHEMA_PROFILES = {
     "production": "quant-ingest-production/v1",
@@ -139,11 +142,18 @@ def _digest_bytes(value: bytes) -> str:
 
 
 def _digest_file(path: Path) -> str:
+    digest, _total = _source_digest_and_bytes(path)
+    return digest
+
+
+def _source_digest_and_bytes(path: Path) -> tuple[str, int]:
     digest = hashlib.sha256()
+    total = 0
     with path.open("rb") as handle:
         while chunk := handle.read(CHUNK_BYTES):
             digest.update(chunk)
-    return "sha256:" + digest.hexdigest()
+            total += len(chunk)
+    return "sha256:" + digest.hexdigest(), total
 
 
 def _utc_now() -> str:
@@ -291,41 +301,6 @@ def _validate_database_identity(
     return governed
 
 
-def _scratch_bytes(directory: Path) -> int:
-    total = 0
-    try:
-        for root, _dirs, files in os.walk(directory, onerror=lambda _exc: None):
-            for name in files:
-                try:
-                    total += (Path(root) / name).stat().st_size
-                except OSError:
-                    continue
-    except OSError:
-        return total
-    return total
-
-
-def _kill_if_scratch_exceeds(process: subprocess.Popen[bytes], directory: Path, max_bytes: int) -> None:
-    if _scratch_bytes(directory) <= max_bytes:
-        return
-    process.kill()
-    process.wait()
-    raise ValueError("restored D1 database exceeds the sqlite byte bound")
-
-
-def _wait_sqlite_bounded(
-    process: subprocess.Popen[bytes],
-    directory: Path,
-    max_bytes: int,
-) -> int:
-    while True:
-        _kill_if_scratch_exceeds(process, directory, max_bytes)
-        try:
-            return int(process.wait(timeout=0.05))
-        except subprocess.TimeoutExpired:
-            continue
-
-
 def _restore_and_validate_export(
     source: Path,
     *,
@@ -348,6 +323,9 @@ def _restore_and_validate_export(
         raise ValueError("D1 backup source must be a regular file")
     if source.stat().st_size <= 0:
         raise ValueError("D1 backup source must be non-empty")
+    source_digest, source_bytes = _source_digest_and_bytes(source)
+    if source_bytes <= 0:
+        raise ValueError("D1 backup source must be non-empty")
 
     executable = sqlite3_binary or shutil.which("sqlite3")
     if not executable:
@@ -365,38 +343,23 @@ def _restore_and_validate_export(
         child_env["TMP"] = directory
         child_env["SQLITE_TMPDIR"] = directory
         restored = scratch / "restored.sqlite3"
-        digest = hashlib.sha256()
-        source_bytes = 0
         # No shell is involved, and stdout/stderr are discarded deliberately:
         # a malformed export must not echo SQL rows or secrets into release logs.
-        process = subprocess.Popen(
-            [executable, "-batch", "-bail", str(restored)],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=child_env,
-        )
-        assert process.stdin is not None
-        try:
-            with source.open("rb") as handle:
-                while chunk := handle.read(CHUNK_BYTES):
-                    _kill_if_scratch_exceeds(process, scratch, max_restored_sqlite_bytes)
-                    digest.update(chunk)
-                    source_bytes += len(chunk)
-                    process.stdin.write(chunk)
-            process.stdin.close()
-            return_code = _wait_sqlite_bounded(
-                process, scratch, max_restored_sqlite_bytes
+        with source.open("rb") as handle:
+            process = subprocess.Popen(
+                [executable, "-batch", "-bail", str(restored)],
+                stdin=handle,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=child_env,
             )
-        except BrokenPipeError as exc:
-            process.stdin.close()
-            process.wait()
-            raise ValueError("D1 SQL export could not be restored") from exc
-        except BaseException:
-            process.kill()
-            process.wait()
-            raise
-        if return_code != 0 or source_bytes <= 0 or not restored.is_file():
+            try:
+                return_code = process.wait()
+            except BaseException:
+                process.kill()
+                process.wait()
+                raise
+        if return_code != 0 or not restored.is_file():
             raise ValueError("D1 SQL export could not be restored")
         restored_bytes = restored.stat().st_size
         if restored_bytes < 1 or restored_bytes > max_restored_sqlite_bytes:
@@ -466,7 +429,7 @@ def _restore_and_validate_export(
             "schema_digest": schema_digest,
             "table_count": table_count,
         }
-        return restore, "sha256:" + digest.hexdigest(), source_bytes
+        return restore, source_digest, source_bytes
 
 
 def _header_payload(

@@ -107,9 +107,15 @@ remote apply results only in immutable release evidence.
   the current bundle. `children-then-manifest` cannot carry the dump.
   Ciphertext is a streaming create-only `research.r2` PUT under
   `research/d1-backups/`. Restore/schema/`integrity_check` stay
-  `encrypt_d1_backup.py` QPDBENC2 on Container scratch with sqlite3 CLI;
-  restored sqlite plus sqlite temp under child TMPDIR is capped during the
-  subprocess (5 GiB). D1 `file_size` is not dump size. Do not POST D1 export,
+  `encrypt_d1_backup.py` QPDBENC2 on Container scratch with sqlite3 CLI.
+  Accepted restored sqlite is a postcondition (<= 5 GiB), not a hard runtime
+  disk cap. SQL dump stream is 4 GiB; ciphertext is dump plus QPDBENC2
+  framing. Runtime structural bound is the existing standard-4 Container
+  20 GB physical disk (image/files share it; not all usable scratch). The
+  180-minute process-group watchdog is a finite bound, not exact billing;
+  terminal publication, retry, shutdown, and cleanup can add time. Create-only
+  R2; COMPLETE is not issued before verification and upload succeed. D1
+  `file_size` is not dump size. Do not POST D1 export,
   generate keys, or deploy this image until one combined approval. Whole-DB
   restore after shared writers resume remains prohibited.
 - **Mass product-lane deploy trigger:** deployment leg held. Trigger

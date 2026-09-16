@@ -526,30 +526,17 @@ def test_encrypt_streams_in_bounded_chunks(
     assert max(sizes) <= backup.CHUNK_BYTES
 
 
-def test_restore_kills_sqlite_when_scratch_exceeds_bound(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    bloated = tmp_path / "sqlite3-bloat"
-    bloated.write_text(
-        "#!" + sys.executable + "\n" + """
-import os, sys, time
-from pathlib import Path
-tmp = Path(os.environ["TMPDIR"])
-(tmp / "blob").write_bytes(b"x" * 200000)
-time.sleep(30)
-Path(sys.argv[3]).write_bytes(b"SQLite format 3")
-""",
-        encoding="utf-8",
-    )
-    bloated.chmod(0o700)
-    monkeypatch.setattr(backup.shutil, "which", lambda name: str(bloated) if name == "sqlite3" else None)
-    monkeypatch.setenv("TMPDIR", str(tmp_path))
-    source = tmp_path / "tiny.sql"
-    source.write_text("CREATE TABLE t(id INTEGER);\n", encoding="utf-8")
+def test_restore_rejects_restored_sqlite_above_accepted_size(tmp_path: Path) -> None:
+    source = governed_d1_export(tmp_path)
     with pytest.raises(ValueError, match="sqlite byte bound"):
         backup._restore_and_validate_export(
             source,
-            max_restored_sqlite_bytes=1024,
+            max_restored_sqlite_bytes=1,
             **identity_kwargs(),
         )
+
+
+def test_accepted_restored_sqlite_is_below_standard_4_physical_disk() -> None:
+    assert backup.MAX_RESTORED_SQLITE_BYTES == 5 * 1024 * 1024 * 1024
+    assert backup.STANDARD_4_PHYSICAL_DISK_BYTES == 20 * 1024 * 1024 * 1024
+    assert backup.MAX_RESTORED_SQLITE_BYTES < backup.STANDARD_4_PHYSICAL_DISK_BYTES

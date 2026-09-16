@@ -25,11 +25,11 @@ from scripts.encrypt_d1_backup import encrypt_backup, verify_encrypted
 D1_BACKUP_ENCRYPT_FORMAT = "d1-backup-encrypt/v1"
 QPDBENC2_MAX_FRAMING_BYTES = 8 + 4 + 64 * 1024 + 16
 D1_BACKUP_MAX_SQL_BYTES = 4 * 1024 * 1024 * 1024
+# Accepted restored sqlite after restore completes. Not a runtime disk cap.
 D1_BACKUP_MAX_RESTORED_SQLITE_BYTES = 5 * 1024 * 1024 * 1024
 D1_BACKUP_MAX_CIPHERTEXT_BYTES = D1_BACKUP_MAX_SQL_BYTES + QPDBENC2_MAX_FRAMING_BYTES
-D1_BACKUP_MAX_SCRATCH_BYTES = (
-    D1_BACKUP_MAX_SQL_BYTES + D1_BACKUP_MAX_RESTORED_SQLITE_BYTES
-)
+# standard-4 provisioned disk (image/files share it). Runtime structural bound.
+STANDARD_4_PHYSICAL_DISK_BYTES = 20 * 1024 * 1024 * 1024
 D1_EXPORT_ORIGIN = "http://d1.export"
 _JOB_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")

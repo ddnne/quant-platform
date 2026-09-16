@@ -8,15 +8,14 @@ export const D1_BACKUP_ENCRYPT_FORMAT = "d1-backup-encrypt/v1";
 export const D1_BACKUP_ENCRYPT_MAX_REQUEST_BYTES = 8 * 1024;
 /** QPDBENC2 MAGIC + length + max header + GCM tag. Not dump size. */
 export const QPDBENC2_MAX_FRAMING_BYTES = 8 + 4 + 64 * 1024 + 16;
-/** SQL dump cap on Container scratch. D1 file_size is not dump size. */
+/** SQL dump stream cap. D1 file_size is not dump size. */
 export const D1_BACKUP_MAX_SQL_BYTES = 4 * 1024 * 1024 * 1024;
-/** Restored sqlite during integrity_check; independent of dump bytes. */
+/** Max accepted restored sqlite after restore. Postcondition, not a disk cap. */
 export const D1_BACKUP_MAX_RESTORED_SQLITE_BYTES = 5 * 1024 * 1024 * 1024;
 export const D1_BACKUP_MAX_CIPHERTEXT_BYTES =
   D1_BACKUP_MAX_SQL_BYTES + QPDBENC2_MAX_FRAMING_BYTES;
-/** Peak scratch is dump + restored sqlite before ciphertext publication. */
-export const D1_BACKUP_MAX_SCRATCH_BYTES =
-  D1_BACKUP_MAX_SQL_BYTES + D1_BACKUP_MAX_RESTORED_SQLITE_BYTES;
+/** standard-4 provisioned disk (image/files share it). Runtime structural bound. */
+export const STANDARD_4_PHYSICAL_DISK_BYTES = 20 * 1024 * 1024 * 1024;
 export const D1_BACKUP_ENVIRONMENTS = ["staging", "production"] as const;
 export type D1BackupEnvironment = (typeof D1_BACKUP_ENVIRONMENTS)[number];
 

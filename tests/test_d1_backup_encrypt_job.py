@@ -84,6 +84,13 @@ def _spec() -> job.D1BackupEncryptJobSpec:
     )
 
 
+def test_accepted_restored_sqlite_is_below_standard_4_physical_disk() -> None:
+    assert job.D1_BACKUP_MAX_RESTORED_SQLITE_BYTES == 5 * 1024 * 1024 * 1024
+    assert job.STANDARD_4_PHYSICAL_DISK_BYTES == 20 * 1024 * 1024 * 1024
+    assert job.D1_BACKUP_MAX_RESTORED_SQLITE_BYTES < job.STANDARD_4_PHYSICAL_DISK_BYTES
+    assert not hasattr(job, "D1_BACKUP_MAX_SCRATCH_BYTES")
+
+
 def test_spool_streams_sql_from_export_origin(tmp_path: Path) -> None:
     body = b"CREATE TABLE t(id INTEGER);\n"
 

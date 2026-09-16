@@ -127,7 +127,9 @@ Phase 6 hardening utilities:
   `d1.export` stream from one `D1_BACKUP_EXPORT_BUNDLE` and `research.r2`
   ciphertext PUT. Mac must not hold authentic SQL. Operator helper
   `d1_export_poll_descriptor.py --initiate` writes a 0600 bundle (no SQL).
-  Do not run Wrangler `d1 export` from this README.
+  Accepted restored sqlite is a postcondition (<= 5 GiB). Runtime disk is the
+  existing standard-4 20 GB physical volume (image/files share it). Do not
+  run Wrangler `d1 export` from this README.
 - `d1_ingestion_migration_validation.py` — validate the canonical migration
   history, schema, triggers and populated v2-to-v3 preservation on an isolated
   ephemeral database. Recorded partial or malformed states fail.
