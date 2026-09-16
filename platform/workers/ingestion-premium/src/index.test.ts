@@ -1,11 +1,6 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import worker, { type Env } from "./index";
 import { MASTER_EVENT_TYPES } from "./master_scd2/types";
-
-const here = dirname(fileURLToPath(import.meta.url));
 
 const EXPORT_TOKEN = "premium-test-export-token-do-not-leak";
 const API_KEY = "premium-test-jquants-key-do-not-leak";
@@ -128,7 +123,24 @@ function ingestD1(): { db: D1Database; binds: { sql: string; args: unknown[] }[]
           binds.push({ sql, args });
           return stmt;
         },
-        first: async () => READY_MIGRATION,
+        first: async () => {
+          if (sql.includes("FROM raw_retention_manifests")) {
+            const inserted = [...binds].reverse().find((row) =>
+              row.sql.includes("INSERT INTO raw_retention_manifests")
+            );
+            if (!inserted) return null;
+            return {
+              manifest_key: inserted.args[2],
+              page_count: inserted.args[3],
+              row_count: inserted.args[4],
+              raw_bytes: inserted.args[5],
+              data_digest: inserted.args[6],
+              completeness: inserted.args[7],
+              created_at: inserted.args[8],
+            };
+          }
+          return READY_MIGRATION;
+        },
         all: async () => ({ results: [], success: true, meta: {} }),
         run: async () => ({ success: true, meta: { last_row_id: 42, changes: 0 } }),
       };
@@ -149,6 +161,16 @@ function capturingBucket(): {
       const body = typeof value === "string" ? value : "";
       puts.push({ key, body, metadata: options?.customMetadata });
       return { key, etag: "test-etag" };
+    },
+    async get(key: string) {
+      const found = [...puts].reverse().find((row) => row.key === key);
+      if (!found) return null;
+      return {
+        key,
+        etag: "test-etag",
+        text: async () => found.body,
+        arrayBuffer: async () => new TextEncoder().encode(found.body),
+      };
     },
   } as unknown as R2Bucket;
   return { bucket, puts };
@@ -173,6 +195,7 @@ describe("ingestion-premium raw acquisition status", () => {
       }),
       d1,
       raw,
+      structured,
     };
   }
 
@@ -240,15 +263,21 @@ describe("ingestion-premium raw acquisition status", () => {
     let calls = 0;
     globalThis.fetch = (async () => {
       calls += 1;
-      if (calls === 1) {
+      if (calls < 5) {
         return new Response(
-          JSON.stringify({ data: [], pagination_key: "page-2" }),
+          JSON.stringify({
+            data: [{ Date: `2024-06-0${calls}` }],
+            pagination_key: `page-${calls + 1}`,
+          }),
           { status: 200 },
         );
       }
-      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      return new Response(
+        JSON.stringify({ data: [{ Date: "2024-06-05" }] }),
+        { status: 200 },
+      );
     }) as typeof fetch;
-    const { env, raw } = runEnv();
+    const { env, raw, structured } = runEnv();
     const res = await worker.fetch(
       new Request(
         "https://ingestion-premium.test/v1/run?dataset=markets_calendar&from=2024-06-03&to=2024-06-03",
@@ -260,13 +289,22 @@ describe("ingestion-premium raw acquisition status", () => {
       env,
     );
     expect(res.status).toBe(200);
+    const payload = await res.json() as { ok: boolean; summary: { status: string; rowsInserted: number } };
+    expect(payload.ok).toBe(true);
+    expect(payload.summary.status).toBe("pass");
+    expect(payload.summary.rowsInserted).toBe(5);
     const pagePuts = raw.puts.filter((put) => /\/page-\d{6}\.json$/.test(put.key));
     expect(pagePuts.map((put) => put.key.slice(put.key.lastIndexOf("/") + 1))).toEqual([
       "page-000001.json",
       "page-000002.json",
+      "page-000003.json",
+      "page-000004.json",
+      "page-000005.json",
     ]);
     const prefix = pagePuts[0]!.key.slice(0, pagePuts[0]!.key.lastIndexOf("/"));
     expect(raw.puts.some((put) => put.key === `${prefix}/manifest.json`)).toBe(true);
+    const jsonl = structured.puts.filter((put) => put.key.endsWith(".jsonl"));
+    expect(jsonl).toHaveLength(5);
     for (const put of raw.puts) {
       expect(put.body).not.toContain("data_truncated");
     }
@@ -463,16 +501,6 @@ describe("ingestion-premium equities_master SCD2 universe evidence", () => {
           .map((line) => JSON.parse(line) as Record<string, unknown>),
       );
   }
-
-  it("passes fetch/receipt universe evidence into upsertRecords for equities_master only", () => {
-    const src = readFileSync(join(here, "index.ts"), "utf8");
-    expect(src).toContain("masterUniverseEvidence");
-    expect(src).toContain('spec.id !== "equities_master"');
-    expect(src).toContain("paginationExhausted");
-    expect(src).toContain("fullUniverse");
-    expect(src).toContain("masterUniverseEvidence(spec, outcome)");
-    expect(src).not.toMatch(/fullUniverse:\s*true/);
-  });
 
   it("DELISTED only when this run exhausted pagination for a single-day full universe", async () => {
     const { env, structured } = runEnv();

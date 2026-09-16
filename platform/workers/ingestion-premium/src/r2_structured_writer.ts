@@ -71,21 +71,44 @@ export async function writeJsonlToR2(
   const key =
     `structured/jsonl/${r2DatasetSegment(dataset)}/dt=${dateSeg}/${runId}.jsonl`;
 
+  const metadata = {
+    sha256,
+    count: String(records.length),
+    bytes: String(bytes.byteLength),
+    dataset,
+    run_id: runId,
+    date: dateSeg,
+    schema: "jquants_records/v1",
+    ...(options?.extraMetadata ?? {}),
+  };
   const putResult = await bucket.put(key, body, {
-    customMetadata: {
-      sha256,
-      count: String(records.length),
-      bytes: String(bytes.byteLength),
-      dataset,
-      run_id: runId,
-      date: dateSeg,
-      schema: "jquants_records/v1",
-      ...(options?.extraMetadata ?? {}),
-    },
+    onlyIf: { etagDoesNotMatch: "*" },
+    customMetadata: metadata,
     httpMetadata: {
       contentType: "application/x-ndjson; charset=utf-8",
     },
   });
+  if (putResult === null) {
+    const existing = await bucket.get(key);
+    if (existing === null) {
+      throw new Error("structured jsonl create lost a conflict");
+    }
+    const stored = new Uint8Array(await existing.arrayBuffer());
+    const storedSha = await sha256HexFromBytes(stored);
+    if (
+      stored.byteLength !== bytes.byteLength ||
+      storedSha !== sha256
+    ) {
+      throw new Error("structured jsonl replay differs from existing bytes");
+    }
+    return {
+      key,
+      sha256,
+      bytes: bytes.byteLength,
+      count: records.length,
+      etag: existing.etag,
+    };
+  }
 
   return {
     key,

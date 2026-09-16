@@ -47,7 +47,7 @@ import {
   upsertWatermark,
   type MasterScd2UniverseEvidence,
 } from "./persist_records";
-import { fetchDataset } from "./fetch_jq";
+import { fetchDataset, requestQueries } from "./fetch_jq";
 import {
   runValuationBackfillTick,
   valuationIdleForExactFive,
@@ -122,6 +122,8 @@ const MAX_CONCURRENCY = 8;
 const RATE_LIMIT_INTERVAL_MS = 120;
 
 // R2 raw: raw/{dataset}/{run_id}/page-NNNNNN.json + manifest.json
+const STRUCTURED_SLICE_PAGES = 4;
+const STRUCTURED_PROGRESS_NAME = "structured-progress.json";
 
 function rawRunPrefix(dataset: string, runId: number | null, when: Date): string {
   const fallback = `uncommitted-${when.toISOString().replace(/[-:.TZ]/g, "")}`;
@@ -150,7 +152,7 @@ function latestEventDate(rows: Record<string, unknown>[]): string | null {
 
 interface DatasetResult {
   dataset: string;
-  status: "pass" | "fail";
+  status: "pass" | "fail" | "partial";
   startedAt: string;
   finishedAt: string;
   rowsSeen: number;
@@ -289,17 +291,359 @@ function masterUniverseEvidence(
   };
 }
 
+type AcquiredRawPage = {
+  key: string;
+  page: number;
+  rows: number;
+  bytes: number;
+  digest: string;
+  http_status: number;
+};
+
+type AcquiredRaw = {
+  rawKey: string;
+  pageCount: number;
+  rowCount: number;
+  rawBytes: number;
+  dataDigest: string;
+  pages: AcquiredRawPage[];
+  fetchedAt: string;
+};
+
+type StructuredProgress = {
+  next_page: number;
+  logical_rows: number;
+};
+
+async function readAcquiredRaw(
+  env: Env,
+  dataset: string,
+  runId: number,
+): Promise<AcquiredRaw | null> {
+  const row = await env.DB.prepare(
+    `SELECT manifest_key, page_count, row_count, raw_bytes, data_digest, completeness
+            , created_at
+       FROM raw_retention_manifests
+      WHERE dataset = ? AND run_id = ?
+      LIMIT 1`,
+  ).bind(dataset, runId).first<{
+    manifest_key: string;
+    page_count: number;
+    row_count: number;
+    raw_bytes: number;
+    data_digest: string;
+    completeness: string;
+    created_at: string;
+  }>();
+  if (!row || row.completeness !== "ACQUIRED") return null;
+  if (
+    typeof row.manifest_key !== "string" ||
+    !Number.isSafeInteger(row.page_count) || row.page_count < 1 ||
+    !Number.isSafeInteger(row.row_count) || row.row_count < 0
+  ) {
+    return null;
+  }
+  const object = await env.RAW_BUCKET.get(row.manifest_key);
+  if (!object) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await object.text());
+  } catch {
+    return null;
+  }
+  if (
+    typeof parsed !== "object" || parsed === null || Array.isArray(parsed) ||
+    (parsed as { raw_acquisition?: unknown }).raw_acquisition !== "ACQUIRED" ||
+    (parsed as { complete?: unknown }).complete !== true
+  ) {
+    return null;
+  }
+  const pagesRaw = (parsed as { pages?: unknown }).pages;
+  if (!Array.isArray(pagesRaw) || pagesRaw.length !== row.page_count) return null;
+  const pages: AcquiredRawPage[] = [];
+  for (const page of pagesRaw) {
+    if (typeof page !== "object" || page === null) return null;
+    const rec = page as Record<string, unknown>;
+    if (
+      typeof rec.key !== "string" ||
+      !Number.isSafeInteger(rec.page) ||
+      typeof rec.digest !== "string"
+    ) {
+      return null;
+    }
+    pages.push({
+      key: rec.key,
+      page: rec.page as number,
+      rows: Number(rec.rows) || 0,
+      bytes: Number(rec.bytes) || 0,
+      digest: rec.digest,
+      http_status: Number(rec.http_status) || 200,
+    });
+  }
+  pages.sort((left, right) => left.page - right.page);
+  const fetchedAt = typeof (parsed as { fetched_at?: unknown }).fetched_at === "string"
+    ? (parsed as { fetched_at: string }).fetched_at
+    : row.created_at;
+  return {
+    rawKey: row.manifest_key,
+    pageCount: row.page_count,
+    rowCount: row.row_count,
+    rawBytes: Number.isSafeInteger(row.raw_bytes) ? row.raw_bytes : 0,
+    dataDigest: row.data_digest,
+    pages,
+    fetchedAt,
+  };
+}
+
+async function readStructuredProgress(
+  bucket: R2Bucket,
+  prefix: string,
+): Promise<StructuredProgress> {
+  const object = await bucket.get(`${prefix}/${STRUCTURED_PROGRESS_NAME}`);
+  if (!object) return { next_page: 1, logical_rows: 0 };
+  try {
+    const parsed = JSON.parse(await object.text()) as StructuredProgress;
+    if (
+      Number.isSafeInteger(parsed.next_page) && parsed.next_page >= 1 &&
+      Number.isSafeInteger(parsed.logical_rows) && parsed.logical_rows >= 0
+    ) {
+      return { next_page: parsed.next_page, logical_rows: parsed.logical_rows };
+    }
+  } catch {
+    /* restart the slice from page 1; structured object identity is stable */
+  }
+  return { next_page: 1, logical_rows: 0 };
+}
+
+async function writeStructuredProgress(
+  bucket: R2Bucket,
+  prefix: string,
+  progress: StructuredProgress,
+): Promise<void> {
+  await bucket.put(`${prefix}/${STRUCTURED_PROGRESS_NAME}`, JSON.stringify(progress), {
+    customMetadata: {
+      next_page: String(progress.next_page),
+      logical_rows: String(progress.logical_rows),
+    },
+  });
+}
+
+async function persistAcquiredStructured(
+  env: Env,
+  spec: DatasetSpec,
+  opts: { from?: string; to?: string; today?: string; operation?: string; resumeAcquired?: boolean },
+  runId: number,
+  acquired: AcquiredRaw,
+  startedAt: string,
+  when: Date,
+): Promise<DatasetResult> {
+  const rawPrefix = rawRunPrefix(spec.id, runId, when);
+  const progress = await readStructuredProgress(env.RAW_BUCKET, rawPrefix);
+  const capturedMs = Date.parse(acquired.fetchedAt);
+  const capturedWhen = Number.isFinite(capturedMs) ? new Date(capturedMs) : when;
+  let logicalRows = progress.logical_rows;
+  let lastEvent: string | null = null;
+  let processed = 0;
+  const queries = requestQueries(spec, opts);
+  const boundSlice = typeof opts.operation === "string" && opts.operation.length > 0;
+  if (spec.id === "equities_master") {
+    const allRows: Record<string, unknown>[] = [];
+    for (const page of acquired.pages) {
+      const object = await env.RAW_BUCKET.get(page.key);
+      if (!object) throw new Error(`acquired raw page missing: ${page.key}`);
+      const parsed = JSON.parse(await object.text()) as { data?: unknown };
+      if (!Array.isArray(parsed.data)) {
+        throw new Error(`acquired raw page missing data array: ${page.key}`);
+      }
+      allRows.push(...(parsed.data as Record<string, unknown>[]));
+    }
+    await upsertRecords(
+      env,
+      spec,
+      allRows,
+      capturedWhen,
+      masterUniverseEvidence(spec, {
+        error: "",
+        paginationErrors: 0,
+        queries,
+      }),
+      `run${runId}-master`,
+    );
+    logicalRows = allRows.length;
+    lastEvent = latestEventDate(allRows);
+  } else {
+  for (const page of acquired.pages) {
+    if (page.page < progress.next_page) continue;
+    if (boundSlice && processed >= STRUCTURED_SLICE_PAGES) {
+      await writeStructuredProgress(env.RAW_BUCKET, rawPrefix, {
+        next_page: page.page,
+        logical_rows: logicalRows,
+      });
+      const finishedAt = toJstIso(new Date());
+      return {
+        dataset: spec.id,
+        status: "partial",
+        startedAt,
+        finishedAt,
+        rowsSeen: acquired.rowCount,
+        rowsInserted: logicalRows,
+        rowsRevisions: 0,
+        availableAtMin: null,
+        availableAtMax: null,
+        detail: `raw=${acquired.rawKey}; structured_slice=${page.page}/${acquired.pageCount}`,
+        rawKey: acquired.rawKey,
+        rawBytes: acquired.rawBytes,
+      };
+    }
+    const object = await env.RAW_BUCKET.get(page.key);
+    if (!object) {
+      throw new Error(`acquired raw page missing: ${page.key}`);
+    }
+    const parsed = JSON.parse(await object.text()) as { data?: unknown };
+    if (!Array.isArray(parsed.data)) {
+      throw new Error(`acquired raw page missing data array: ${page.key}`);
+    }
+    const pageRows = parsed.data as Record<string, unknown>[];
+    await upsertRecords(
+      env,
+      spec,
+      pageRows,
+      capturedWhen,
+      undefined,
+      `run${runId}-p${page.page}`,
+    );
+    logicalRows += pageRows.length;
+    const ev = latestEventDate(pageRows);
+    if (ev && (lastEvent === null || ev > lastEvent)) lastEvent = ev;
+    processed += 1;
+    await writeStructuredProgress(env.RAW_BUCKET, rawPrefix, {
+      next_page: page.page + 1,
+      logical_rows: logicalRows,
+    });
+  }
+  }
+
+  const segment = collectionSegment(spec, queries);
+  if (segment.canonicalMonth) {
+    await writeRequiredCoverageSegment(env, spec, segment);
+  }
+  const paginationExhausted = true;
+  const structuredRowCount = logicalRows;
+  if (
+    env.RECEIPT_AUTHORITY_OPERATION_MODE === "ACTIVE" &&
+    paginationExhausted &&
+    structuredRowCount > 0 &&
+    segment.canonicalMonth
+  ) {
+    const nonce = opts.operation
+      ? await sha256HexFromString(opts.operation)
+      : undefined;
+    try {
+      await issueGovernedReceipt(
+        env,
+        receiptEnvironment(env),
+        spec.id,
+        segment.id,
+        undefined,
+        nonce,
+      );
+    } catch (error) {
+      if (nonce) {
+        const prepared = await env.DB.prepare(
+          `SELECT 1 AS present
+             FROM receipt_authority_requests
+            WHERE state = 'PREPARED' AND request_nonce = ?
+            LIMIT 1`,
+        ).bind(nonce).first();
+        if (prepared) {
+          const finishedAt = toJstIso(new Date());
+          return {
+            dataset: spec.id,
+            status: "partial",
+            startedAt,
+            finishedAt,
+            rowsSeen: acquired.rowCount,
+            rowsInserted: logicalRows,
+            rowsRevisions: 0,
+            availableAtMin: null,
+            availableAtMax: null,
+            detail: `raw=${acquired.rawKey}; prepared_receipt_pending=${(error as Error).message}`,
+            rawKey: acquired.rawKey,
+            rawBytes: acquired.rawBytes,
+          };
+        }
+      }
+      throw error;
+    }
+  } else {
+    await writeCollectionReceipt(env, spec, runId, segment, {
+      observedItems: spec.coverage.expected_frequency === "event_driven"
+        ? acquired.rowCount
+        : queries.length,
+      rawPageCount: acquired.pageCount,
+      rawRowCount: acquired.rowCount,
+      structuredRowCount,
+      paginationExhausted,
+      rawDigest: acquired.dataDigest,
+      manifestKey: acquired.rawKey,
+      status: "SUCCESS",
+      error: null,
+    });
+  }
+
+  const availableBounds = await selectAvailableBounds(env, spec.id);
+  const ingestedAt = toJstIso(capturedWhen);
+  let watermarkDetail = "";
+  try {
+    await upsertWatermark(env, spec.id, lastEvent, ingestedAt);
+  } catch (watermarkError) {
+    watermarkDetail = `; watermark upsert failed: ${(watermarkError as Error).message}`;
+  }
+  const finishedAt = toJstIso(new Date());
+  const res: DatasetResult = {
+    dataset: spec.id,
+    status: "pass",
+    startedAt,
+    finishedAt,
+    rowsSeen: acquired.rowCount,
+    rowsInserted: logicalRows,
+    rowsRevisions: 0,
+    availableAtMin: availableBounds.min,
+    availableAtMax: availableBounds.max,
+    detail: `raw=${acquired.rawKey}${watermarkDetail}; structured_from_acquired=1`,
+    rawKey: acquired.rawKey,
+    rawBytes: acquired.rawBytes,
+  };
+  await writeValidation(env, runId, res);
+  return res;
+}
+
 // Fetch/upsert stay together as the ingestion façade.
 async function ingestOne(
   env: Env,
   spec: DatasetSpec,
-  opts: { from?: string; to?: string; today?: string; operation?: string },
+  opts: {
+    from?: string;
+    to?: string;
+    today?: string;
+    operation?: string;
+    resumeAcquired?: boolean;
+  },
   fetchImpl: typeof fetch,
   runId: number | null,
   limiter: RateLimiter,
 ): Promise<DatasetResult> {
   const startedAt = toJstIso(new Date());
   const when = new Date();
+  const acquired = runId !== null
+    ? await readAcquiredRaw(env, spec.id, runId)
+    : null;
+  if (opts.resumeAcquired) {
+    if (!acquired || runId === null) {
+      throw new Error("acquired raw required for uncounted continuation");
+    }
+    return persistAcquiredStructured(env, spec, opts, runId, acquired, startedAt, when);
+  }
   const streamD1 = /options/i.test(spec.id);
   let insertedTotal = 0;
   let revisionsTotal = 0;
@@ -351,7 +695,7 @@ async function ingestOne(
   };
 
   const outcome = await fetchDataset(
-    env, spec, opts, fetchImpl, limiter, onPage, !streamD1, onPlan,
+    env, spec, opts, fetchImpl, limiter, onPage, false, onPlan,
   );
 
   const rawKey = `${rawPrefix}/manifest.json`;
@@ -435,17 +779,13 @@ async function ingestOne(
   }
 
   if (!streamD1) {
-    const inserted = await upsertRecords(
-      env,
-      spec,
-      outcome.rows,
-      when,
-      masterUniverseEvidence(spec, outcome),
+    const persisted = await readAcquiredRaw(env, spec.id, runId);
+    if (!persisted) {
+      throw new Error("acquired raw missing after successful fetch");
+    }
+    return persistAcquiredStructured(
+      env, spec, opts, runId, persisted, startedAt, when,
     );
-    insertedTotal = inserted.inserted;
-    revisionsTotal = inserted.revisions;
-    structuredRowCount = outcome.rows.length;
-    lastEvent = latestEventDate(outcome.rows);
   }
 
   if (segment === null) {
@@ -571,7 +911,14 @@ async function lastRunSummary(env: Env): Promise<RunSummary | null> {
 
 async function runIngestion(
   env: Env,
-  opts: { from?: string; to?: string; today?: string; dataset?: string; operation?: string },
+  opts: {
+    from?: string;
+    to?: string;
+    today?: string;
+    dataset?: string;
+    operation?: string;
+    resumeAcquired?: boolean;
+  },
   triggeredBy: "cron" | "manual",
   fetchImpl: typeof fetch,
 ): Promise<RunSummary> {
@@ -579,11 +926,28 @@ async function runIngestion(
 
   await requireNaturalKeysV2Ready(env.DB);
 
-  const ins = await env.DB.prepare(
-    `INSERT INTO ingestion_run_log (ran_at, source, runtime, status, detail)
-     VALUES (?, 'jquants', 'cloudflare', 'running', ?)`,
-  ).bind(startedAt, JSON.stringify({ triggeredBy, opts })).run();
-  const runId = (ins.meta?.last_row_id ?? null) as number | null;
+  let runId: number | null = null;
+  if (opts.resumeAcquired && opts.operation && opts.dataset && opts.from && opts.to) {
+    const existing = await env.DB.prepare(
+      `SELECT id FROM ingestion_run_log
+        WHERE source = 'jquants' AND runtime = 'cloudflare' AND status = 'running'
+          AND json_extract(detail, '$.opts.operation') = ?
+          AND json_extract(detail, '$.opts.dataset') = ?
+          AND json_extract(detail, '$.opts.from') = ?
+          AND json_extract(detail, '$.opts.to') = ?
+        LIMIT 1`,
+    ).bind(opts.operation, opts.dataset, opts.from, opts.to).first<{ id: number }>();
+    if (existing && Number.isSafeInteger(existing.id) && existing.id > 0) {
+      runId = existing.id;
+    }
+  }
+  if (runId === null) {
+    const ins = await env.DB.prepare(
+      `INSERT INTO ingestion_run_log (ran_at, source, runtime, status, detail)
+       VALUES (?, 'jquants', 'cloudflare', 'running', ?)`,
+    ).bind(startedAt, JSON.stringify({ triggeredBy, opts })).run();
+    runId = (ins.meta?.last_row_id ?? null) as number | null;
+  }
 
   const specs: DatasetSpec[] = opts.dataset
     ? (isPremiumCore(opts.dataset) ? [datasetById(opts.dataset)!] : [])
@@ -660,6 +1024,8 @@ async function runIngestion(
     if (!res) continue;
     if (res.status === "pass") {
       passed++;
+    } else if (res.status === "partial") {
+      /* same-operation slice; keep the running marker */
     } else {
       failed++;
       failures.push({ dataset: res.dataset, detail: res.detail });
@@ -669,8 +1035,14 @@ async function runIngestion(
   }
 
   const finishedAt = toJstIso(new Date());
-  const status: RunSummary["status"] =
-    specs.length === 0 || passed === 0 ? "fail" : failed === 0 ? "pass" : "partial";
+  const sliced = orderedResults.some((res) => res?.status === "partial");
+  const status: RunSummary["status"] = failed > 0
+    ? (passed > 0 || sliced ? "partial" : "fail")
+    : sliced
+      ? "partial"
+      : passed > 0
+        ? "pass"
+        : "fail";
   const summary: RunSummary = {
     startedAt, finishedAt, status,
     datasetCount: specs.length,
@@ -682,9 +1054,15 @@ async function runIngestion(
   };
 
   if (runId !== null) {
-    await env.DB.prepare(
-      `UPDATE ingestion_run_log SET status = ?, detail = ? WHERE id = ?`,
-    ).bind(status, JSON.stringify({ ...summary, opts }), runId).run();
+    if (status === "partial" && failed === 0) {
+      await env.DB.prepare(
+        `UPDATE ingestion_run_log SET detail = ? WHERE id = ? AND status = 'running'`,
+      ).bind(JSON.stringify({ ...summary, opts }), runId).run();
+    } else {
+      await env.DB.prepare(
+        `UPDATE ingestion_run_log SET status = ?, detail = ? WHERE id = ?`,
+      ).bind(status, JSON.stringify({ ...summary, opts }), runId).run();
+    }
   }
 
   return summary;
@@ -1050,7 +1428,13 @@ export default {
   ): Promise<void> {
     if (env.RECEIPT_AUTHORITY_ENVIRONMENT === "staging") {
       const ingest = (
-        opts: { dataset: string; from: string; to: string; operation?: string },
+        opts: {
+          dataset: string;
+          from: string;
+          to: string;
+          operation?: string;
+          resumeAcquired?: boolean;
+        },
         signal: AbortSignal,
       ) => runIngestion(
         env,

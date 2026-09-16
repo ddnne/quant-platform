@@ -7,14 +7,25 @@
  * compiled period end). Exact selector membership is the operator control,
  * produced by `ops.exact_five_acquisition_control` from
  * `compiled_candidate_selectors` / `declared_coverage_segments` /
-* `_missing_compiled_segments` extras. This tick does not compile warmup.
-*
+ * `_missing_compiled_segments` extras. This tick does not compile warmup.
+ *
  * Fetch abort cancels vendor HTTP only. The tick waits for the ingest
  * callback to settle and commits that outcome even after the claim lease
  * expires. The claim lease is longer than the fetch abort so overlapping
  * minute Cron ticks do not recapture an in-flight month. Elapsed lease is
-* not proof the prior owner stopped: reconcile a SUCCESS collection receipt
-* for the pending job before any replay.
+ * not proof the prior owner stopped: reconcile a SUCCESS collection receipt
+ * for the pending job before any replay.
+ * A Durable Object/DB `running` row is not proof an isolate still executes.
+ * Official Cron Trigger wall-clock duration is 15 minutes; a `running` row
+ * older than that wall, with no PREPARED request and no receipt, is an
+ * abandoned started marker. Uncounted continuation is raw-only: it requires a
+ * usable ACQUIRED manifest for that run and must not refetch vendor pages.
+ * Track the current invocation start on the lease (not the original ran_at)
+ * so a resumed isolate cannot overlap another same-owner callback inside the
+ * Cron wall. Paid Cron duration is 15 minutes; Bundled has no Cron duration
+ * limit but 50 ms CPU and is not this Worker's setting. Missing raw holds or
+ * takes a counted new attempt within existing caps. Do not overlap a live
+ * isolate, and do not hold later jobs forever on a stale row.
  * PENDING no-operation skip still treats unsigned SUCCESS as already collected
  * for that audit path. ACTIVE no-operation skip requires a trusted signed
  * full-segment collection receipt for the exact window. Operation-bound
@@ -57,6 +68,8 @@ const MAX_JOBS = 24;
 const MAX_ATTEMPTS = 3;
 const EXACT_FIVE_FETCH_TIMEOUT_MS = 180_000;
 const EXACT_FIVE_LEASE_MS = 240_000;
+/** Official Cron Trigger duration limit (developers.cloudflare.com/workers/platform/limits). */
+const CRON_TRIGGER_WALL_MS = 15 * 60 * 1000;
 const MONTH_ID = /^[0-9]{4}-[0-9]{2}$/;
 
 const CONTROL_KEYS = [
@@ -107,13 +120,20 @@ export type ExactFiveTickResult = {
 };
 
 export type ExactFiveIngest = (
-  opts: { dataset: string; from: string; to: string; operation?: string },
+  opts: {
+    dataset: string;
+    from: string;
+    to: string;
+    operation?: string;
+    resumeAcquired?: boolean;
+  },
   signal: AbortSignal,
 ) => Promise<{ status: "pass" | "fail" | "partial"; datasetCount: number; rowsInserted: number }>;
 
  export type ExactFiveObservation = {
    status: "pass" | "failed" | "started" | "absent";
    rowsInserted: number;
+   acquired?: boolean;
  };
 
 export type ExactFiveObserve = (
@@ -132,6 +152,7 @@ export type ExactFiveObserveOptions = {
   operationMode?: "PENDING" | "ACTIVE";
   environment?: "staging" | "production";
   registry?: ReceiptVerifyRegistry | null;
+  clock?: () => Date;
 };
 
 /** Durable job completion is a collection receipt for this window, not the ingest promise. */
@@ -143,7 +164,9 @@ export async function observeExactFiveReceipt(
   options: ExactFiveObserveOptions = {},
 ): Promise<ExactFiveObservation> {
    if (operation) {
-     const bound = await observeBoundExactFive(db, job, window, operation);
+     const bound = await observeBoundExactFive(
+       db, job, window, operation, options.clock ?? (() => new Date()),
+     );
      if (bound) return bound;
    }
   const operationMode = options.operationMode ?? "PENDING";
@@ -226,12 +249,13 @@ export async function observeExactFiveReceipt(
    return row !== null;
  }
 
- async function observeBoundExactFive(
-   db: D1Database,
-   job: ExactFiveJob,
-   window: { from: string; to: string },
-   operation: string,
- ): Promise<ExactFiveObservation | null> {
+async function observeBoundExactFive(
+  db: D1Database,
+  job: ExactFiveJob,
+  window: { from: string; to: string },
+  operation: string,
+  _clock: () => Date,
+): Promise<ExactFiveObservation | null> {
    const nonce = await sha256HexFromString(operation);
    const success = await db.prepare(
      `SELECT receipt.structured_row_count AS structured_row_count
@@ -309,7 +333,9 @@ export async function observeExactFiveReceipt(
        job.dataset, job.segment_id, window.from, window.to,
        operation, job.dataset, window.from, window.to,
      ).first();
-     if (failed) return { status: "failed", rowsInserted: 0 };
+     if (failed) {
+       return boundFailedObservation(db, operation, job, window);
+     }
    const validationFailed = await db.prepare(
      `SELECT 1 AS present
         FROM ingestion_run_log AS run
@@ -319,7 +345,9 @@ export async function observeExactFiveReceipt(
          AND validation.status = 'fail'
        LIMIT 1`,
    ).bind(operation, job.dataset, window.from, window.to, job.dataset).first();
-   if (validationFailed) return { status: "failed", rowsInserted: 0 };
+   if (validationFailed) {
+     return boundFailedObservation(db, operation, job, window);
+   }
    const failedRun = await db.prepare(
      `SELECT 1 AS present
        FROM ingestion_run_log
@@ -327,19 +355,94 @@ export async function observeExactFiveReceipt(
          AND status IN ('fail', 'failed')
        LIMIT 1`,
    ).bind(operation, job.dataset, window.from, window.to).first();
-   if (failedRun) return { status: "failed", rowsInserted: 0 };
-   const run = await db.prepare(
-     `SELECT 1 AS present
+  if (failedRun) {
+    return boundFailedObservation(db, operation, job, window);
+  }
+  const run = await db.prepare(
+     `SELECT ran_at, status
        FROM ingestion_run_log
        WHERE ${premiumOperationSql("ingestion_run_log")}
        LIMIT 1`,
-   ).bind(operation, job.dataset, window.from, window.to).first();
-   if (run) return { status: "started", rowsInserted: 0 };
-   return null;
+   ).bind(operation, job.dataset, window.from, window.to).first<{
+     ran_at: string;
+     status: string;
+   }>();
+   if (!run) return null;
+   const acquired = await acquiredRawForOperation(
+     db, operation, job.dataset, window.from, window.to,
+   );
+   return { status: "absent", rowsInserted: 0, acquired };
  }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function boundFailedObservation(
+  db: D1Database,
+  operation: string,
+  job: ExactFiveJob,
+  window: { from: string; to: string },
+): Promise<ExactFiveObservation> {
+  return {
+    status: "failed",
+    rowsInserted: 0,
+    acquired: await acquiredRawForOperation(
+      db, operation, job.dataset, window.from, window.to,
+    ),
+  };
+}
+
+async function acquiredRawForOperation(
+  db: D1Database,
+  operation: string,
+  dataset: string,
+  from: string,
+  to: string,
+): Promise<boolean> {
+  const row = await db.prepare(
+    `SELECT manifest.page_count AS page_count, manifest.manifest_key AS manifest_key
+       FROM raw_retention_manifests AS manifest
+       JOIN ingestion_run_log AS run ON run.id = manifest.run_id
+      WHERE ${premiumOperationSql("run")}
+        AND manifest.dataset = ?
+        AND manifest.completeness = 'ACQUIRED'
+        AND manifest.page_count >= 1
+      LIMIT 1`,
+  ).bind(operation, dataset, from, to, dataset).first<{
+    page_count: number;
+    manifest_key: string;
+  }>();
+  return row !== null &&
+    Number.isSafeInteger(row.page_count) && row.page_count >= 1 &&
+    typeof row.manifest_key === "string" && row.manifest_key.length > 0;
+}
+
+function invocationMayStillRun(lease: ControlLease, now: Date): boolean {
+  if (!lease) return false;
+  if (lease.until > now.toISOString()) return true;
+  const startedAt = invocationStartedMs(lease);
+  if (!Number.isFinite(startedAt)) return true;
+  return now.getTime() - startedAt < CRON_TRIGGER_WALL_MS;
+}
+
+function invocationStartedMs(lease: NonNullable<ControlLease>): number {
+  if (typeof lease.started === "string") {
+    const started = Date.parse(lease.started);
+    if (Number.isFinite(started)) return started;
+  }
+  const untilMs = Date.parse(lease.until);
+  if (!Number.isFinite(untilMs)) return Number.NaN;
+  return untilMs - EXACT_FIVE_LEASE_MS;
+}
+
+function leaseInvocationStarted(
+  lease: NonNullable<ControlLease>,
+  now: Date,
+): string {
+  const startedMs = invocationStartedMs(lease);
+  if (Number.isFinite(startedMs)) return new Date(startedMs).toISOString();
+  return now.toISOString();
 }
 
 function monthEnd(month: string): string {
@@ -627,12 +730,19 @@ async function ingestJob(
   window: { from: string; to: string },
   fetchTimeoutMs: number,
   operation: string,
+  resumeAcquired: boolean,
 ): Promise<{ status: "pass" | "fail" | "partial"; datasetCount: number; rowsInserted: number }> {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), fetchTimeoutMs);
   try {
     return await ingest(
-      { dataset: job.dataset, from: window.from, to: window.to, operation },
+      {
+        dataset: job.dataset,
+        from: window.from,
+        to: window.to,
+        operation,
+        resumeAcquired,
+      },
       ac.signal,
     );
   } catch (error) {
@@ -735,7 +845,7 @@ export async function runExactFiveAcquisitionTick(
   const jobIndex = control.cursor;
   const lastStatus = lastForJob(control.last, job, window) ? control.last!.status : null;
   const pendingOperation = lastStatus === "running" || lastStatus === "unresolved" ||
-      lastStatus === "timeout"
+      lastStatus === "timeout" || lastStatus === "ingestion_failed"
     ? control.lease?.owner
     : undefined;
   const observed = options.observe
@@ -748,7 +858,8 @@ export async function runExactFiveAcquisitionTick(
   }
   if (observed?.status === "failed") {
     return finishFail(
-      bucket, control, etag, job, window, jobIndex, 0, false, "ingestion_failed", false,
+      bucket, control, etag, job, window, jobIndex, 0, false, "ingestion_failed",
+      observed.acquired === true,
     );
   }
 
@@ -763,16 +874,24 @@ export async function runExactFiveAcquisitionTick(
     return { status: "idle", fetched: false, jobs: 0, reason: "leased" };
   }
 
-  const needsFence = lastStatus === "running" || lastStatus === "timeout" ||
-    (observed?.status === "started" && Boolean(control.lease?.owner));
-  if (needsFence && lastStatus !== "unresolved") {
+  if (observed?.status === "started") {
+    return holdInitiating(bucket, control, etag, job, window, jobIndex, false);
+  }
+
+  const liveInvocation = invocationMayStillRun(control.lease, now);
+  const needsFence = liveInvocation && (
+    lastStatus === "running" || lastStatus === "timeout" || lastStatus === "unresolved"
+  );
+  if (needsFence) {
     const owner = control.lease?.owner;
-    if (!owner) {
+    const currentLease = control.lease;
+    if (!owner || !currentLease) {
       return holdInitiating(bucket, control, etag, job, window, jobIndex, false);
     }
     control.lease = {
       owner,
       until: new Date(now.getTime() + EXACT_FIVE_LEASE_MS).toISOString(),
+      started: leaseInvocationStarted(currentLease, now),
     };
     control.last = jobLast(job, window, 0, "unresolved");
     const durable = await commitControl(bucket, control, etag);
@@ -783,18 +902,15 @@ export async function runExactFiveAcquisitionTick(
     return { status: "idle", fetched: false, jobs: 0, reason: "unresolved" };
   }
 
-  if (observed?.status === "started") {
-    return holdInitiating(bucket, control, etag, job, window, jobIndex, false);
-  }
-
-  if (control.attempts >= MAX_ATTEMPTS) {
+  const resumeRaw = Boolean(pendingOperation) && observed?.acquired === true;
+  if (!resumeRaw && control.attempts >= MAX_ATTEMPTS) {
     return { status: "stop", fetched: false, jobs: 0, reason: "exhausted" };
   }
 
-  const owner = crypto.randomUUID();
+  const owner = resumeRaw ? pendingOperation! : crypto.randomUUID();
   const until = new Date(now.getTime() + EXACT_FIVE_LEASE_MS).toISOString();
-  control.attempts += 1;
-  control.lease = { owner, until };
+  if (!resumeRaw) control.attempts += 1;
+  control.lease = { owner, until, started: now.toISOString() };
   control.last = jobLast(job, window, 0, "running");
   const claimed = await casPut(bucket, control, etag);
   if (claimed === null || !claimed.etag) {
@@ -807,11 +923,12 @@ export async function runExactFiveAcquisitionTick(
   etag = claimed.etag;
 
   let summary: { status: "pass" | "fail" | "partial"; datasetCount: number; rowsInserted: number };
+  let late: ExactFiveObservation | null = null;
   try {
-    summary = await ingestJob(ingest, job, window, fetchTimeoutMs, owner);
+    summary = await ingestJob(ingest, job, window, fetchTimeoutMs, owner, resumeRaw);
   } catch (error) {
     if (options.observe) {
-      const late = await options.observe(job, window, owner);
+      late = await options.observe(job, window, owner);
       if (late.status === "pass") {
         return finishPass(
           bucket, control, etag, job, window, jobIndex, late.rowsInserted, true,
@@ -833,7 +950,7 @@ export async function runExactFiveAcquisitionTick(
       0,
       true,
       timedOut ? "timeout" : "ingestion_failed",
-      timedOut,
+      timedOut || resumeRaw || late?.acquired === true,
     );
   }
 
@@ -841,9 +958,18 @@ export async function runExactFiveAcquisitionTick(
       summary.rowsInserted >= 0
     ? summary.rowsInserted
     : 0;
+  if (summary.status === "partial") {
+    const released = clock();
+    control.lease = {
+      owner,
+      until: released.toISOString(),
+      started: new Date(released.getTime() - CRON_TRIGGER_WALL_MS).toISOString(),
+    };
+    return holdInitiating(bucket, control, etag, job, window, jobIndex, true);
+  }
   if (!summaryAccepted(summary)) {
     if (options.observe) {
-      const late = await options.observe(job, window, owner);
+      late = await options.observe(job, window, owner);
       if (late.status === "pass") {
         return finishPass(
           bucket, control, etag, job, window, jobIndex, late.rowsInserted, true,
@@ -854,7 +980,8 @@ export async function runExactFiveAcquisitionTick(
       }
     }
     return finishFail(
-      bucket, control, etag, job, window, jobIndex, rowsInserted, true, "ingestion_failed", false,
+      bucket, control, etag, job, window, jobIndex, rowsInserted, true, "ingestion_failed",
+      resumeRaw || late?.acquired === true,
     );
   }
 
