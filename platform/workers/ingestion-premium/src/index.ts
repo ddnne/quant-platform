@@ -445,6 +445,7 @@ async function persistAcquiredStructured(
   let lastEvent: string | null = null;
   let processed = 0;
   const queries = requestQueries(spec, opts);
+  const boundSlice = typeof opts.operation === "string" && opts.operation.length > 0;
   if (spec.id === "equities_master") {
     const allRows: Record<string, unknown>[] = [];
     for (const page of acquired.pages) {
@@ -473,7 +474,7 @@ async function persistAcquiredStructured(
   } else {
   for (const page of acquired.pages) {
     if (page.page < progress.next_page) continue;
-    if (processed >= STRUCTURED_SLICE_PAGES) {
+    if (boundSlice && processed >= STRUCTURED_SLICE_PAGES) {
       await writeStructuredProgress(env.RAW_BUCKET, rawPrefix, {
         next_page: page.page,
         logical_rows: logicalRows,
@@ -515,10 +516,29 @@ async function persistAcquiredStructured(
     const ev = latestEventDate(pageRows);
     if (ev && (lastEvent === null || ev > lastEvent)) lastEvent = ev;
     processed += 1;
-    await writeStructuredProgress(env.RAW_BUCKET, rawPrefix, {
-      next_page: page.page + 1,
-      logical_rows: logicalRows,
-    });
+    try {
+      await writeStructuredProgress(env.RAW_BUCKET, rawPrefix, {
+        next_page: page.page + 1,
+        logical_rows: logicalRows,
+      });
+    } catch (error) {
+      if (!boundSlice || processed < 1) throw error;
+      const finishedAt = toJstIso(new Date());
+      return {
+        dataset: spec.id,
+        status: "partial",
+        startedAt,
+        finishedAt,
+        rowsSeen: acquired.rowCount,
+        rowsInserted: logicalRows,
+        rowsRevisions: 0,
+        availableAtMin: null,
+        availableAtMax: null,
+        detail: `raw=${acquired.rawKey}; checkpoint_interrupt=${page.page}/${acquired.pageCount}`,
+        rawKey: acquired.rawKey,
+        rawBytes: acquired.rawBytes,
+      };
+    }
   }
   }
 
@@ -994,24 +1014,21 @@ async function runIngestion(
       res = await ingestOne(env, spec, opts, fetchImpl, runId, limiter);
     } catch (e) {
       const detail = `ingest exception: ${(e as Error).message || String(e)}`;
-      const acquired = runId !== null && spec.id
-        ? await readAcquiredRaw(env, spec.id, runId)
-        : null;
       res = {
         dataset: spec.id,
-        status: acquired ? "partial" : "fail",
+        status: "fail",
         startedAt: datasetStartedAt,
         finishedAt: toJstIso(new Date()),
-        rowsSeen: acquired?.rowCount ?? 0,
+        rowsSeen: 0,
         rowsInserted: 0,
         rowsRevisions: 0,
         availableAtMin: null,
         availableAtMax: null,
         detail,
-        rawKey: acquired?.rawKey ?? null,
-        rawBytes: acquired?.rawBytes ?? 0,
+        rawKey: null,
+        rawBytes: 0,
       };
-      if (runId !== null && !acquired) {
+      if (runId !== null) {
         try {
           await writeValidation(env, runId, res);
         } catch (validationError) {
