@@ -333,7 +333,9 @@ async function observeBoundExactFive(
        job.dataset, job.segment_id, window.from, window.to,
        operation, job.dataset, window.from, window.to,
      ).first();
-     if (failed) return { status: "failed", rowsInserted: 0 };
+     if (failed) {
+       return boundFailedObservation(db, operation, job, window);
+     }
    const validationFailed = await db.prepare(
      `SELECT 1 AS present
         FROM ingestion_run_log AS run
@@ -343,7 +345,9 @@ async function observeBoundExactFive(
          AND validation.status = 'fail'
        LIMIT 1`,
    ).bind(operation, job.dataset, window.from, window.to, job.dataset).first();
-   if (validationFailed) return { status: "failed", rowsInserted: 0 };
+   if (validationFailed) {
+     return boundFailedObservation(db, operation, job, window);
+   }
    const failedRun = await db.prepare(
      `SELECT 1 AS present
        FROM ingestion_run_log
@@ -351,7 +355,9 @@ async function observeBoundExactFive(
          AND status IN ('fail', 'failed')
        LIMIT 1`,
    ).bind(operation, job.dataset, window.from, window.to).first();
-  if (failedRun) return { status: "failed", rowsInserted: 0 };
+  if (failedRun) {
+    return boundFailedObservation(db, operation, job, window);
+  }
   const run = await db.prepare(
      `SELECT ran_at, status
        FROM ingestion_run_log
@@ -370,6 +376,21 @@ async function observeBoundExactFive(
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function boundFailedObservation(
+  db: D1Database,
+  operation: string,
+  job: ExactFiveJob,
+  window: { from: string; to: string },
+): Promise<ExactFiveObservation> {
+  return {
+    status: "failed",
+    rowsInserted: 0,
+    acquired: await acquiredRawForOperation(
+      db, operation, job.dataset, window.from, window.to,
+    ),
+  };
 }
 
 async function acquiredRawForOperation(
@@ -837,7 +858,8 @@ export async function runExactFiveAcquisitionTick(
   }
   if (observed?.status === "failed") {
     return finishFail(
-      bucket, control, etag, job, window, jobIndex, 0, false, "ingestion_failed", false,
+      bucket, control, etag, job, window, jobIndex, 0, false, "ingestion_failed",
+      observed.acquired === true,
     );
   }
 
@@ -901,11 +923,12 @@ export async function runExactFiveAcquisitionTick(
   etag = claimed.etag;
 
   let summary: { status: "pass" | "fail" | "partial"; datasetCount: number; rowsInserted: number };
+  let late: ExactFiveObservation | null = null;
   try {
     summary = await ingestJob(ingest, job, window, fetchTimeoutMs, owner, resumeRaw);
   } catch (error) {
     if (options.observe) {
-      const late = await options.observe(job, window, owner);
+      late = await options.observe(job, window, owner);
       if (late.status === "pass") {
         return finishPass(
           bucket, control, etag, job, window, jobIndex, late.rowsInserted, true,
@@ -927,7 +950,7 @@ export async function runExactFiveAcquisitionTick(
       0,
       true,
       timedOut ? "timeout" : "ingestion_failed",
-      timedOut || resumeRaw,
+      timedOut || resumeRaw || late?.acquired === true,
     );
   }
 
@@ -946,7 +969,7 @@ export async function runExactFiveAcquisitionTick(
   }
   if (!summaryAccepted(summary)) {
     if (options.observe) {
-      const late = await options.observe(job, window, owner);
+      late = await options.observe(job, window, owner);
       if (late.status === "pass") {
         return finishPass(
           bucket, control, etag, job, window, jobIndex, late.rowsInserted, true,
@@ -957,7 +980,8 @@ export async function runExactFiveAcquisitionTick(
       }
     }
     return finishFail(
-      bucket, control, etag, job, window, jobIndex, rowsInserted, true, "ingestion_failed", resumeRaw,
+      bucket, control, etag, job, window, jobIndex, rowsInserted, true, "ingestion_failed",
+      resumeRaw || late?.acquired === true,
     );
   }
 

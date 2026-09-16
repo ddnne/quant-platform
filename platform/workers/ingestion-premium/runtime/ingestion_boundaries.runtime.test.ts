@@ -1489,39 +1489,29 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
     const spy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       throw new Error(`unexpected fetch ${fetchUrl(input).href}`);
     });
-    const innerRaw = env.RAW_BUCKET;
-    let crashed = false;
-    const testEnv = runtimeEnv({
-      RAW_BUCKET: {
-        get: (key: string) => innerRaw.get(key),
-        put: async (key: string, value: unknown, options?: unknown) => {
-          if (String(key).endsWith("structured-progress.json") && !crashed) {
-            crashed = true;
-            throw new Error("injected progress crash");
-          }
-          return innerRaw.put(key, value as string, options as { customMetadata?: Record<string, string> });
-        },
-      } as R2Bucket,
-    });
+    const testEnv = runtimeEnv();
     await worker.scheduled(scheduledAt("2026-09-16T18:40:00.000Z"), testEnv, createExecutionContext());
-    expect(crashed).toBe(true);
     expect(spy).not.toHaveBeenCalled();
-    const jsonlAfterCrash = (await env.STRUCTURED_BUCKET.list({
+    const jsonlAfterSlice = (await env.STRUCTURED_BUCKET.list({
       prefix: "structured/jsonl/markets_calendar/",
     })).objects.map((object) => object.key).sort();
-    expect(jsonlAfterCrash).toEqual([
+    expect(jsonlAfterSlice).toEqual([
       "structured/jsonl/markets_calendar/dt=2023-01-01/run55-p1.jsonl",
+      "structured/jsonl/markets_calendar/dt=2023-01-02/run55-p2.jsonl",
+      "structured/jsonl/markets_calendar/dt=2023-01-03/run55-p3.jsonl",
+      "structured/jsonl/markets_calendar/dt=2023-01-04/run55-p4.jsonl",
     ]);
-    const firstBody = await (await env.STRUCTURED_BUCKET.get(jsonlAfterCrash[0]!))!.text();
+    const firstBody = await (await env.STRUCTURED_BUCKET.get(jsonlAfterSlice[0]!))!.text();
+    await env.RAW_BUCKET.delete("raw/markets_calendar/55/structured-progress.json");
     for (let i = 0; i < 8; i++) {
       const stored = JSON.parse(
         await (await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY))!.text(),
       ) as { cursor: number; last: { status: string } };
       if (stored.cursor === 1 && stored.last.status === "pass") break;
-      await worker.scheduled(scheduledAt("2026-09-16T18:40:00.000Z"), testEnv, createExecutionContext());
+      await worker.scheduled(scheduledAt("2026-09-16T18:41:00.000Z"), testEnv, createExecutionContext());
     }
     expect(spy).not.toHaveBeenCalled();
-    const replayBody = await (await env.STRUCTURED_BUCKET.get(jsonlAfterCrash[0]!))!.text();
+    const replayBody = await (await env.STRUCTURED_BUCKET.get(jsonlAfterSlice[0]!))!.text();
     expect(replayBody).toBe(firstBody);
     const jsonlFinal = (await env.STRUCTURED_BUCKET.list({
       prefix: "structured/jsonl/markets_calendar/",
@@ -1548,7 +1538,7 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
     });
   });
 
-  it("holds a missing ACQUIRED page as terminal failure without recapture", async () => {
+  it("holds missing ACQUIRED persist failure across future ticks without recapture", async () => {
     expect((await rebuildNaturalKeysV2(env.DB)).state).toBe("READY");
     const owner = "missing-page-owner";
     await env.STRUCTURED_BUCKET.put(
@@ -1618,7 +1608,12 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
     expect(spy).not.toHaveBeenCalled();
     const failed = JSON.parse(
       await (await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY))!.text(),
-    ) as { cursor: number; attempts: number; last: { status: string }; lease: unknown };
+    ) as {
+      cursor: number;
+      attempts: number;
+      last: { status: string };
+      lease: { owner: string } | null;
+    };
     expect(failed.cursor).toBe(0);
     expect(failed.attempts).toBe(1);
     expect(failed.last.status).toBe("ingestion_failed");
@@ -1629,13 +1624,78 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
     expect(await env.DB.prepare(
       "SELECT status FROM ingestion_validation WHERE run_id = 56",
     ).first()).toMatchObject({ status: "fail" });
-    await worker.scheduled(scheduledAt("2026-09-16T18:41:00.000Z"), testEnv, createExecutionContext());
-    expect(spy).not.toHaveBeenCalled();
-    const held = JSON.parse(
+    expect(await env.DB.prepare(
+      `SELECT completeness FROM raw_retention_manifests
+        WHERE dataset = 'markets_calendar' AND run_id = 56`,
+    ).first()).toMatchObject({ completeness: "ACQUIRED" });
+    for (const at of [
+      "2026-09-16T18:41:00.000Z",
+      "2026-09-16T18:42:00.000Z",
+      "2026-09-16T18:56:00.000Z",
+    ]) {
+      await worker.scheduled(scheduledAt(at), testEnv, createExecutionContext());
+      expect(spy).not.toHaveBeenCalled();
+      const held = JSON.parse(
+        await (await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY))!.text(),
+      ) as {
+        attempts: number;
+        last: { status: string };
+        lease: { owner: string } | null;
+      };
+      expect(held.attempts).toBe(1);
+      expect(held.last.status).toBe("ingestion_failed");
+      expect(held.lease).toMatchObject({ owner });
+    }
+
+    await env.STRUCTURED_BUCKET.put(EXACT_FIVE_ACQUISITION_KEY, JSON.stringify(exactFiveDoc()));
+    const innerRaw = env.RAW_BUCKET;
+    const freshEnv = runtimeEnv({
+      RAW_BUCKET: {
+        get: (key: string) => {
+          if (/\/page-\d+\.json$/.test(String(key))) return Promise.resolve(null);
+          return innerRaw.get(key);
+        },
+        put: (key: string, value: unknown, options?: unknown) =>
+          innerRaw.put(
+            key,
+            value as string,
+            options as { customMetadata?: Record<string, string> },
+          ),
+      } as R2Bucket,
+    });
+    const vendor = stubVendor(
+      "/v2/markets/calendar",
+      { from: "2023-01-01", to: "2023-01-31" },
+      [{ Date: "2023-01-04" }],
+    );
+    await worker.scheduled(scheduledAt("2026-09-16T19:00:00.000Z"), freshEnv, createExecutionContext());
+    expect(vendor.mock.calls.length).toBe(1);
+    const freshFailed = JSON.parse(
       await (await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY))!.text(),
-    ) as { attempts: number; last: { status: string } };
-    expect(held.attempts).toBe(1);
-    expect(held.last.status).toBe("ingestion_failed");
+    ) as {
+      attempts: number;
+      last: { status: string };
+      lease: { owner: string } | null;
+    };
+    expect(freshFailed.attempts).toBe(1);
+    expect(freshFailed.last.status).toBe("ingestion_failed");
+    expect(freshFailed.lease?.owner).toEqual(expect.any(String));
+    const freshOwner = freshFailed.lease!.owner;
+    expect(freshOwner).not.toBe(owner);
+    for (const at of ["2026-09-16T19:01:00.000Z", "2026-09-16T19:16:00.000Z"]) {
+      await worker.scheduled(scheduledAt(at), freshEnv, createExecutionContext());
+      expect(vendor.mock.calls.length).toBe(1);
+      const held = JSON.parse(
+        await (await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY))!.text(),
+      ) as {
+        attempts: number;
+        last: { status: string };
+        lease: { owner: string } | null;
+      };
+      expect(held.attempts).toBe(1);
+      expect(held.last.status).toBe("ingestion_failed");
+      expect(held.lease).toMatchObject({ owner: freshOwner });
+    }
   });
 
   it("R2 CAS concurrent claim, thrown error, exhaustion, and resume", async () => {

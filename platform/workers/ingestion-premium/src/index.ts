@@ -516,29 +516,10 @@ async function persistAcquiredStructured(
     const ev = latestEventDate(pageRows);
     if (ev && (lastEvent === null || ev > lastEvent)) lastEvent = ev;
     processed += 1;
-    try {
-      await writeStructuredProgress(env.RAW_BUCKET, rawPrefix, {
-        next_page: page.page + 1,
-        logical_rows: logicalRows,
-      });
-    } catch (error) {
-      if (!boundSlice || processed < 1) throw error;
-      const finishedAt = toJstIso(new Date());
-      return {
-        dataset: spec.id,
-        status: "partial",
-        startedAt,
-        finishedAt,
-        rowsSeen: acquired.rowCount,
-        rowsInserted: logicalRows,
-        rowsRevisions: 0,
-        availableAtMin: null,
-        availableAtMax: null,
-        detail: `raw=${acquired.rawKey}; checkpoint_interrupt=${page.page}/${acquired.pageCount}`,
-        rawKey: acquired.rawKey,
-        rawBytes: acquired.rawBytes,
-      };
-    }
+    await writeStructuredProgress(env.RAW_BUCKET, rawPrefix, {
+      next_page: page.page + 1,
+      logical_rows: logicalRows,
+    });
   }
   }
 
