@@ -20,6 +20,7 @@ import {
 } from "./personal_research_contract";
 import { personalSnapshotManifestKey } from "./personal_snapshot_contract";
 import { personalReceiptCandidateManifestKey } from "./personal_receipt_candidate_contract";
+import { d1BackupEncryptManifestKey } from "./d1_backup_encrypt_contract";
 import {
   PERSONAL_OPTION_SIDECAR_KIND,
   PERSONAL_OPTION_SIDECAR_RUNNER_VERSION,
@@ -36,7 +37,8 @@ export type PersonalJobKind =
   | "svi"
   | "overlay"
   | "vol-panel"
-  | "option-sidecar";
+  | "option-sidecar"
+  | "d1-backup";
 
 export const PERSONAL_JOB_TTL_MS = 180 * 60 * 1000;
 const STATE_MAX_BYTES = 8 * 1024;
@@ -94,6 +96,9 @@ export function personalJobStateKey(kind: PersonalJobKind, jobId: string): strin
   if (kind === "receipt-candidate") {
     return `research/receipt-candidates/job=${jobId}/state.json`;
   }
+  if (kind === "d1-backup") {
+    return `research/d1-backups/job=${jobId}/state.json`;
+  }
   if (kind === "svi") {
     return `research/personal/svi-2023/job=${jobId}/state.json`;
   }
@@ -117,6 +122,9 @@ export function personalJobTerminalKey(
   if (kind === "snapshot") return personalSnapshotManifestKey(jobId);
   if (kind === "receipt-candidate") {
     return personalReceiptCandidateManifestKey(jobId);
+  }
+  if (kind === "d1-backup") {
+    return d1BackupEncryptManifestKey(jobId);
   }
   if (kind === "svi") {
     return `research/personal/svi-2023/job=${jobId}/manifest.json`;

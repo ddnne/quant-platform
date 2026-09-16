@@ -12,15 +12,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 COPY pyproject.toml uv.lock README.md qp_paths.py qp_ofd_continuity.py ./
 COPY scripts/qp-research ./scripts/qp-research
+COPY scripts/encrypt_d1_backup.py scripts/cloudflare_d1_migration_manifest.py ./scripts/
 COPY packages ./packages
 COPY specs ./specs
 COPY platform/workers/research-mass-eval/container ./platform/workers/research-mass-eval/container
 
 RUN uv sync --frozen --no-dev && \
+    apt-get update && apt-get install -y --no-install-recommends sqlite3 && \
+    rm -rf /var/lib/apt/lists/* && \
     chmod 0555 \
       /app/platform/workers/research-mass-eval/container/personal_research_service.py && \
-    PYTHONPATH=/app/platform/workers/research-mass-eval/container \
-      python -c "from pathlib import Path; import importlib.util; assert not Path('/app/packages/product/research/offline').exists(); assert not Path('/app/packages/product/research/unique_logic').exists(); assert importlib.util.find_spec('research.offline') is None; assert importlib.util.find_spec('research.unique_logic') is None; import personal_vol_am_pm_panel_job, personal_research_service, research, research.experiment_plans, research.phase7_pilot, research.scheduler, agents.mass_research, research.personal_service, execution.paper_service"
+    PYTHONPATH=/app:/app/platform/workers/research-mass-eval/container \
+      python -c "from pathlib import Path; import importlib.util; assert not Path('/app/packages/product/research/offline').exists(); assert not Path('/app/packages/product/research/unique_logic').exists(); assert importlib.util.find_spec('research.offline') is None; assert importlib.util.find_spec('research.unique_logic') is None; import personal_vol_am_pm_panel_job, personal_research_service, d1_backup_encrypt_job, research, research.experiment_plans, research.phase7_pilot, research.scheduler, agents.mass_research, research.personal_service, execution.paper_service"
 
 EXPOSE 8080
 CMD ["python", "platform/workers/research-mass-eval/container/personal_research_service.py"]

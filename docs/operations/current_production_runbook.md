@@ -94,6 +94,23 @@ remote apply results only in immutable release evidence.
   Service Binding RPC `GatewayService`. `GATEWAY_TOKEN` is HTTP defense in
   depth if a closed route is attached later; it is not a shared Mass
   credential.
+
+- **Encrypted D1 backup (source, not executed):** Mass
+  `POST /v1/d1-backup-encrypt` (MASS_EVAL_TOKEN, `go: false`) forwards to the
+  existing snapshot Container `POST /v1/encrypt-d1-backup`. Container internet
+  stays off. SQL is streamed by Worker host `d1.export` from Worker secret
+  `D1_BACKUP_EXPORT_SIGNED_URL` (Wrangler 4.125.0 remote export `signed_url`,
+  1h, `*.r2.cloudflarestorage.com` only; not a CF admin token; never logged).
+  `children-then-manifest` is JSON-only and cannot carry the dump. Ciphertext
+  is a streaming create-only `research.r2` PUT under
+  `research/d1-backups/`. Restore/schema/`integrity_check` stay
+  `encrypt_d1_backup.py` QPDBENC2 on Container scratch with sqlite3 CLI.
+  Bounds: SQL dump 4 GiB, restored sqlite 5 GiB, ciphertext dump+QPDBENC2
+  framing, peak scratch dump+restored sqlite. D1 `file_size` is not dump size;
+  do not claim staging 16.8MB / prod 744.9MB fit. Absent
+  `D1_BACKUP_EXPORT_SIGNED_URL` / `D1_BACKUP_KEY` is 409. Do not POST D1
+  export, generate keys, or deploy this image until one combined approval.
+  Whole-DB restore after shared writers resume remains prohibited.
 - **Mass product-lane deploy trigger:** deployment leg held. Trigger
   `b83cc2ee-8a40-4448-b517-80959796eb3e` had only its deploy command replaced
   via the Cloudflare API; build and test still run. Read-back verified

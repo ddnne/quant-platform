@@ -29,6 +29,12 @@ import {
   type ReceiptCandidateRequest,
 } from "./personal_receipt_candidate_contract";
 import {
+  D1_BACKUP_ENCRYPT_MAX_REQUEST_BYTES,
+  d1BackupEncryptJobIdFromPath,
+  parseD1BackupEncryptRequest,
+  type D1BackupEncryptRequest,
+} from "./d1_backup_encrypt_contract";
+import {
   PERSONAL_RESEARCH_BATCH_MAX_BYTES,
   parsePersonalResearchBatchRequest,
   personalResearchBatchJobIdsFromUrl,
@@ -109,6 +115,11 @@ export type MassEvalFetchHandlers = {
     request: ReceiptCandidateRequest,
   ) => Promise<Response>;
   personalReceiptCandidateStatus?: (env: Env, jobId: string) => Promise<Response>;
+  submitD1BackupEncrypt?: (
+    env: Env,
+    request: D1BackupEncryptRequest,
+  ) => Promise<Response>;
+  d1BackupEncryptStatus?: (env: Env, jobId: string) => Promise<Response>;
   submitPersonalVolAmPmPanelBuild?: (
     env: Env,
     request: PersonalVolAmPmPanelBuildRequest,
@@ -529,6 +540,45 @@ export async function dispatchMassEvalFetch(
       return json({ error: "receipt candidate status unavailable" }, 503);
     }
     return handlers.personalReceiptCandidateStatus(env, jobId);
+  }
+
+  if (url.pathname === "/v1/d1-backup-encrypt") {
+    if (request.method !== "POST") {
+      return json({ error: "POST required" }, 405);
+    }
+    if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    if (
+      !env.STRUCTURED_BUCKET ||
+      !env.PERSONAL_RESEARCH_CONTAINER ||
+      !handlers.submitD1BackupEncrypt
+    ) {
+      return json({ error: "d1 backup encrypt unavailable" }, 503);
+    }
+    const bounded = await readBoundedJson(
+      request,
+      D1_BACKUP_ENCRYPT_MAX_REQUEST_BYTES,
+    );
+    if (!bounded.ok) return json({ error: bounded.error }, bounded.status);
+    const parsed = parseD1BackupEncryptRequest(bounded.value);
+    if (!parsed.ok) return json({ error: parsed.error }, 400);
+    return handlers.submitD1BackupEncrypt(env, parsed.value);
+  }
+
+  if (url.pathname.startsWith("/v1/d1-backup-encrypt/")) {
+    if (request.method !== "GET") {
+      return json({ error: "GET required" }, 405);
+    }
+    if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    const jobId = d1BackupEncryptJobIdFromPath(url.pathname);
+    if (!jobId) return json({ error: "job_id is invalid" }, 400);
+    if (!env.STRUCTURED_BUCKET || !handlers.d1BackupEncryptStatus) {
+      return json({ error: "d1 backup encrypt status unavailable" }, 503);
+    }
+    return handlers.d1BackupEncryptStatus(env, jobId);
   }
 
   if (url.pathname === "/v1/personal-research-batch") {

@@ -68,6 +68,11 @@ from receipt_candidate_job import (
     ReceiptCandidateJobSpec,
     execute_receipt_candidate_job,
 )
+from d1_backup_encrypt_job import (
+    D1BackupEncryptJobInputError,
+    D1BackupEncryptJobSpec,
+    execute_d1_backup_encrypt_job,
+)
 from data_contracts.personal_history_compact import (
     PERSONAL_HISTORY_COMPACT_BARS_TABLE,
     compact_history_state,
@@ -1831,6 +1836,8 @@ def _job_kind(spec: Any) -> str:
         return "snapshot"
     if isinstance(spec, ReceiptCandidateJobSpec):
         return "receipt-candidate"
+    if isinstance(spec, D1BackupEncryptJobSpec):
+        return "d1-backup"
     if isinstance(spec, PersonalSvi2023JobSpec):
         return "svi"
     if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):
@@ -2719,6 +2726,7 @@ JobSpecLike = (
     | PersonalIndexVolOverlay2023JobSpec
     | PersonalVolAmPmPanelJobSpec
     | PersonalOptionSidecarJobSpec
+    | D1BackupEncryptJobSpec
     | ControlledPilotJobSpec
 )
 Runner = Callable[[JobSpecLike], dict[str, Any]]
@@ -2847,6 +2855,8 @@ class JobManager:
                 record["job_kind"] = "snapshot-build"
             elif isinstance(spec, ReceiptCandidateJobSpec):
                 record["job_kind"] = "receipt-candidate"
+            elif isinstance(spec, D1BackupEncryptJobSpec):
+                record["job_kind"] = "d1-backup"
             elif isinstance(spec, ControlledPilotJobSpec):
                 record["job_kind"] = "controlled-pilot"
                 record["identity"] = CONTROLLED_PILOT_IDENTITY
@@ -3326,6 +3336,12 @@ class JobManager:
             return candidate_failure_terminal(
                 spec, started_at=started, finished_at=finished, error=error
             )
+        if isinstance(spec, D1BackupEncryptJobSpec):
+            from d1_backup_encrypt_job import failure_terminal
+
+            return failure_terminal(
+                spec, started_at=started, finished_at=finished, error=error
+            )
         if isinstance(spec, JobSpec):
             return {
                 **_manifest_base(spec, started_at=started, finished_at=finished),
@@ -3801,6 +3817,12 @@ def default_runner(
                     uploader=_put_child_artifact,
                     deadline=deadline,
                 )
+            if isinstance(spec, D1BackupEncryptJobSpec):
+                return execute_d1_backup_encrypt_job(
+                    spec,
+                    work_root=work_root,
+                    uploader=_put,
+                )
             if isinstance(spec, PersonalIndexVolOverlay2023JobSpec):
                 return execute_overlay_job(spec, uploader=_put_child_json, deadline=deadline)
             if isinstance(spec, PersonalSvi2023JobSpec):
@@ -3903,6 +3925,7 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
             "/v1/produce-option-sidecar",
             "/v1/controlled-pilot",
             "/v1/materialize-receipt-candidate",
+            "/v1/encrypt-d1-backup",
         }:
             self._json({"error": "not_found"}, HTTPStatus.NOT_FOUND)
             return
@@ -3910,6 +3933,8 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
         maximum = (
             RECEIPT_CANDIDATE_MAX_REQUEST_BYTES
             if self.path == "/v1/materialize-receipt-candidate"
+            else 8 * 1024
+            if self.path == "/v1/encrypt-d1-backup"
             else MAX_REQUEST_BYTES
         )
         if not raw_length.isdigit() or not 0 < int(raw_length) <= maximum:
@@ -3945,6 +3970,8 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
                 spec = PersonalOptionSidecarJobSpec.from_document(document)
             elif self.path == "/v1/materialize-receipt-candidate":
                 spec = ReceiptCandidateJobSpec.from_document(document)
+            elif self.path == "/v1/encrypt-d1-backup":
+                spec = D1BackupEncryptJobSpec.from_document(document)
             else:
                 spec = JobSpec.from_document(document)
             record = self.manager.submit(spec)
@@ -3953,6 +3980,7 @@ class PersonalResearchHandler(BaseHTTPRequestHandler):
             JobInputError,
             ReceiptCandidateJobInputError,
             SviJobInputError,
+            D1BackupEncryptJobInputError,
             OverlayJobInputError,
             VolPanelJobInputError,
             OptionSidecarJobInputError,

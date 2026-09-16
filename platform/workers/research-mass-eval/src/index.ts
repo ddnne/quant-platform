@@ -18,6 +18,10 @@ import {
   personalReceiptCandidateStatus,
   submitPersonalReceiptCandidate,
 } from "./personal_receipt_candidate";
+import {
+  d1BackupEncryptStatus,
+  submitD1BackupEncrypt,
+} from "./d1_backup_encrypt";
 import { runPersonalVolResearch } from "./personal_vol_research";
 import { runPersonalVolAmPmResearch } from "./personal_vol_am_pm";
 import {
@@ -60,6 +64,8 @@ export default {
       personalSnapshotBuildStatus,
       submitPersonalReceiptCandidate,
       personalReceiptCandidateStatus,
+      submitD1BackupEncrypt,
+      d1BackupEncryptStatus,
       submitPersonalVolAmPmPanelBuild,
       personalVolAmPmPanelBuildStatus,
       submitPersonalOptionSidecarProduce,

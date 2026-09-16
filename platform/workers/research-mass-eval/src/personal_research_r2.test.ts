@@ -1065,3 +1065,36 @@ describe("controlled terminal lease CAS fence", () => {
     expect(JSON.parse(await storedTerminal.text()).status).toBe("COMPLETED");
   });
 });
+
+describe("d1 backup research.r2 stream put", () => {
+  it("create-only streams ciphertext under the backup prefix", async () => {
+    const body = new Uint8Array([1, 2, 3, 4]);
+    const digest = `sha256:${await sha256Hex(body)}`;
+    const hex = digest.slice("sha256:".length);
+    const key = `research/d1-backups/sha256=${hex}.sql.enc`;
+    const bucket = {
+      head: vi.fn(async () => null),
+      put: vi.fn(async (putKey: string, _value: unknown, options: { sha256?: ArrayBuffer }) => {
+        expect(putKey).toBe(key);
+        expect(options.sha256).toBeDefined();
+        return { key: putKey, size: body.byteLength };
+      }),
+    } as unknown as R2Bucket;
+    const created = await personalResearchR2Outbound(
+      new Request(`http://research.r2/${key}`, {
+        method: "PUT",
+        headers: {
+          "content-length": "4",
+          "x-personal-job-id": "d1b-one",
+          "x-personal-request-digest": `sha256:${"a".repeat(64)}`,
+          "x-personal-job-kind": "d1-backup",
+          "x-content-sha256": digest,
+        },
+        body,
+      }),
+      { STRUCTURED_BUCKET: bucket },
+    );
+    expect(created.status).toBe(201);
+    expect(bucket.put).toHaveBeenCalledOnce();
+  });
+});

@@ -115,6 +115,20 @@ describe("personal snapshot and batch HTTP routes", () => {
     );
     expect(gated.status).toBe(401);
     expect(candidate).not.toHaveBeenCalled();
+    const backup = vi.fn();
+    const backupGated = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/d1-backup-encrypt", {
+        method: "POST",
+        body: JSON.stringify({
+          job_id: "d1b-1",
+          environment: "staging",
+        }),
+      }),
+      env(),
+      { submitD1BackupEncrypt: backup },
+    );
+    expect(backupGated.status).toBe(401);
+    expect(backup).not.toHaveBeenCalled();
   });
 
   it("rejects snapshot POST bodies over 8 KiB and chunked input", async () => {

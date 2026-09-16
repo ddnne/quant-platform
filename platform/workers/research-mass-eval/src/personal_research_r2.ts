@@ -25,6 +25,14 @@ import {
   personalReceiptCandidateScopeKey,
 } from "./personal_receipt_candidate_contract";
 import {
+  D1_BACKUP_ENCRYPT_FORMAT,
+  D1_BACKUP_MAX_CIPHERTEXT_BYTES,
+  d1BackupEncryptCiphertextKey,
+  d1BackupEncryptManifestKey,
+  isD1BackupEncryptCiphertextKey,
+  isD1BackupEncryptManifestKey,
+} from "./d1_backup_encrypt_contract";
+import {
   isPersonalIndexOverlayFamilyCohort,
   personalIndexOverlayFamilyRunnerVersion,
   personalIndexOverlayFamilyTerminalManifestKey,
@@ -1142,6 +1150,158 @@ export async function personalResearchR2Outbound(
   request: Request,
   env: R2Env,
 ): Promise<Response> {
+  return personalResearchR2OutboundDispatch(request, env);
+}
+
+async function putD1BackupCiphertext(
+  request: Request,
+  env: R2Env,
+  key: string,
+): Promise<Response> {
+  if (request.headers.get("x-personal-job-kind") !== "d1-backup") {
+    return responseJson({ error: "invalid d1 backup identity" }, 400);
+  }
+  const identity = outputIdentity(request);
+  const hex = identity?.contentDigest.slice("sha256:".length) ?? "";
+  if (!identity || key !== d1BackupEncryptCiphertextKey(hex)) {
+    return responseJson({ error: "invalid d1 backup ciphertext identity" }, 400);
+  }
+  const length = contentLength(request, D1_BACKUP_MAX_CIPHERTEXT_BYTES);
+  if (length === null || request.body === null) {
+    return responseJson({ error: "invalid d1 backup ciphertext length" }, 400);
+  }
+  const existing = await env.STRUCTURED_BUCKET.head(key);
+  if (existing) {
+    return existing.customMetadata?.sha256 === identity.contentDigest &&
+      existing.size === length
+      ? responseJson({ ok: true, created: false, key })
+      : responseJson({ error: "immutable d1 backup ciphertext conflict" }, 409);
+  }
+  let put: R2Object | null;
+  try {
+    put = await env.STRUCTURED_BUCKET.put(key, request.body, {
+      httpMetadata: { contentType: "application/octet-stream" },
+      customMetadata: {
+        plane: "d1_backup",
+        job_id: identity.jobId,
+        request_digest: identity.requestDigest,
+        sha256: identity.contentDigest,
+        format: D1_BACKUP_ENCRYPT_FORMAT,
+        immutable: "true",
+      },
+      sha256: digestBytes(identity.contentDigest),
+      onlyIf: { etagDoesNotMatch: "*" },
+    });
+  } catch {
+    return responseJson({ error: "d1 backup ciphertext checksum rejected" }, 502);
+  }
+  if (put !== null) return responseJson({ ok: true, created: true, key }, 201);
+  const raced = await env.STRUCTURED_BUCKET.head(key);
+  return raced &&
+    raced.customMetadata?.sha256 === identity.contentDigest &&
+    raced.size === length
+    ? responseJson({ ok: true, created: false, key })
+    : responseJson({ error: "immutable d1 backup ciphertext conflict" }, 409);
+}
+
+async function putD1BackupManifest(
+  request: Request,
+  env: R2Env,
+  key: string,
+): Promise<Response> {
+  if (request.headers.get("x-personal-job-kind") !== "d1-backup") {
+    return responseJson({ error: "invalid d1 backup identity" }, 400);
+  }
+  const identity = outputIdentity(request);
+  if (!identity || key !== d1BackupEncryptManifestKey(identity.jobId)) {
+    return responseJson({ error: "invalid d1 backup manifest identity" }, 400);
+  }
+  const length = contentLength(request, MANIFEST_MAX_BYTES);
+  if (length === null) {
+    return responseJson({ error: "invalid d1 backup manifest length" }, 400);
+  }
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (bytes.byteLength !== length) {
+    return responseJson({ error: "d1 backup manifest length mismatch" }, 400);
+  }
+  const actual = `sha256:${await sha256Hex(bytes)}`;
+  if (actual !== identity.contentDigest) {
+    return responseJson({ error: "d1 backup manifest digest mismatch" }, 400);
+  }
+  let manifest: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error("not object");
+    }
+    manifest = parsed as Record<string, unknown>;
+  } catch {
+    return responseJson({ error: "d1 backup manifest must be JSON object" }, 400);
+  }
+  if (
+    manifest.job_id !== identity.jobId ||
+    manifest.request_digest !== identity.requestDigest ||
+    manifest.go !== false ||
+    (manifest.status !== "COMPLETED" && manifest.status !== "FAILED")
+  ) {
+    return responseJson({ error: "d1 backup manifest identity mismatch" }, 400);
+  }
+  if (manifest.status === "COMPLETED") {
+    const cipherKey = manifest.ciphertext_key;
+    const cipherDigest = manifest.ciphertext_sha256;
+    if (
+      typeof cipherKey !== "string" ||
+      typeof cipherDigest !== "string" ||
+      !isD1BackupEncryptCiphertextKey(cipherKey) ||
+      !DIGEST_RE.test(cipherDigest)
+    ) {
+      return responseJson({ error: "d1 backup ciphertext pointer invalid" }, 400);
+    }
+    const uploaded = await env.STRUCTURED_BUCKET.head(cipherKey);
+    if (
+      !uploaded ||
+      uploaded.customMetadata?.sha256 !== cipherDigest ||
+      uploaded.size < 1 ||
+      uploaded.size > D1_BACKUP_MAX_CIPHERTEXT_BYTES
+    ) {
+      return responseJson({ error: "d1 backup ciphertext missing" }, 409);
+    }
+  }
+  const existing = await env.STRUCTURED_BUCKET.head(key);
+  if (existing) {
+    return existing.customMetadata?.sha256 === identity.contentDigest
+      ? responseJson({ ok: true, created: false, key })
+      : responseJson({ error: "immutable d1 backup manifest conflict" }, 409);
+  }
+  let put: R2Object | null;
+  try {
+    put = await env.STRUCTURED_BUCKET.put(key, bytes, {
+      httpMetadata: { contentType: "application/json; charset=utf-8" },
+      customMetadata: {
+        plane: "d1_backup",
+        job_id: identity.jobId,
+        request_digest: identity.requestDigest,
+        sha256: identity.contentDigest,
+        status: String(manifest.status),
+        immutable: "true",
+      },
+      sha256: digestBytes(identity.contentDigest),
+      onlyIf: { etagDoesNotMatch: "*" },
+    });
+  } catch {
+    return responseJson({ error: "d1 backup manifest checksum rejected" }, 502);
+  }
+  if (put !== null) return responseJson({ ok: true, created: true, key }, 201);
+  const raced = await env.STRUCTURED_BUCKET.head(key);
+  return raced && raced.customMetadata?.sha256 === identity.contentDigest
+    ? responseJson({ ok: true, created: false, key })
+    : responseJson({ error: "immutable d1 backup manifest conflict" }, 409);
+}
+
+async function personalResearchR2OutboundDispatch(
+  request: Request,
+  env: R2Env,
+): Promise<Response> {
   const url = new URL(request.url);
   const key = url.pathname.startsWith("/") ? url.pathname.slice(1) : url.pathname;
   if (url.hostname !== "research.r2" || url.search || url.hash || key.includes("%")) {
@@ -1173,6 +1333,12 @@ export async function personalResearchR2Outbound(
   }
   if (isPersonalAcquisitionCacheOutboundRequest(request, key)) {
     return personalAcquisitionCacheR2Outbound(request, env, key);
+  }
+  if (request.method === "PUT" && isD1BackupEncryptCiphertextKey(key)) {
+    return putD1BackupCiphertext(request, env, key);
+  }
+  if (request.method === "PUT" && isD1BackupEncryptManifestKey(key)) {
+    return putD1BackupManifest(request, env, key);
   }
   if ((request.method === "GET" || request.method === "HEAD") &&
       isPersonalResearchSnapshotKey(key)) {
