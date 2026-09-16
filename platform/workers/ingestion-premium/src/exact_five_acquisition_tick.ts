@@ -14,9 +14,11 @@
  * clock. Elapsed lease is not proof the prior owner stopped: reconcile a
  * SUCCESS collection receipt for the pending job before any replay.
  * Coverage presence is not liveness. A fail validation or FAILED receipt
- * for this operation and exact window is terminal. Cursor is progress
- * inside this object; receipts also skip already-acquired months after a
- * control replace.
+ * for this operation and exact window is terminal only when no matching
+ * PREPARED request remains. A matching PREPARED keeps the initiating
+ * operation so recoverPreparedReceipts can finish before a new claim.
+ * Cursor is progress inside this object; receipts also skip already-acquired
+ * months after a control replace.
  */
 
 import { datasetById } from "./catalog";
@@ -143,6 +145,9 @@ export type ExactFiveTickOptions = {
        : 0;
      return { status: "pass", rowsInserted };
    }
+   if (!operation && await preparedExactFiveRequest(db, job)) {
+     return { status: "started", rowsInserted: 0 };
+   }
    return { status: "absent", rowsInserted: 0 };
  }
 
@@ -152,6 +157,31 @@ export type ExactFiveTickOptions = {
      AND json_extract(${alias}.detail, '$.opts.dataset') = ?
      AND json_extract(${alias}.detail, '$.opts.from') = ?
      AND json_extract(${alias}.detail, '$.opts.to') = ?`;
+ }
+
+ async function preparedExactFiveRequest(
+   db: D1Database,
+   job: ExactFiveJob,
+   nonce?: string,
+ ): Promise<boolean> {
+   if (nonce) {
+     const row = await db.prepare(
+       `SELECT 1 AS present
+          FROM receipt_authority_requests
+         WHERE state = 'PREPARED' AND source = 'jquants'
+           AND dataset = ? AND segment_id = ? AND request_nonce = ?
+         LIMIT 1`,
+     ).bind(job.dataset, job.segment_id, nonce).first();
+     return row !== null;
+   }
+   const row = await db.prepare(
+     `SELECT 1 AS present
+        FROM receipt_authority_requests
+       WHERE state = 'PREPARED' AND source = 'jquants'
+         AND dataset = ? AND segment_id = ?
+       LIMIT 1`,
+   ).bind(job.dataset, job.segment_id).first();
+   return row !== null;
  }
 
  async function observeBoundExactFive(
@@ -215,6 +245,9 @@ export type ExactFiveTickOptions = {
          ? success.structured_row_count
          : 0;
        return { status: "pass", rowsInserted };
+     }
+     if (await preparedExactFiveRequest(db, job, nonce)) {
+       return { status: "started", rowsInserted: 0 };
      }
      const failed = await db.prepare(
        `SELECT 1 AS present
@@ -515,8 +548,29 @@ async function finishFail(
     window,
     jobIndex,
     fetched,
-    { status: "fail", fetched, jobs, reason },
-  );
+   { status: "fail", fetched, jobs, reason },
+ );
+}
+
+async function holdInitiating(
+  bucket: R2Bucket,
+  control: AcquisitionControl,
+  etag: string,
+  job: ExactFiveJob,
+  window: { from: string; to: string },
+  jobIndex: number,
+  fetched: boolean,
+): Promise<ExactFiveTickResult> {
+  const owner = control.lease?.owner;
+  control.last = jobLast(job, window, 0, "unresolved");
+  if (!owner) control.lease = null;
+  const durable = await commitControl(bucket, control, etag);
+  const jobs = fetched ? 1 : 0;
+  if (!durable) return { status: "lost", fetched, jobs, reason: "cas" };
+  if (jobRecordedPass(durable, job, window, jobIndex)) {
+    return { status: "pass", fetched, jobs, reason: "ok" };
+  }
+  return { status: "idle", fetched, jobs, reason: "unresolved" };
 }
 
 /**
@@ -666,9 +720,12 @@ export async function runExactFiveAcquisitionTick(
   }
 
   const needsFence = lastStatus === "running" || lastStatus === "timeout" ||
-    observed?.status === "started";
+    (observed?.status === "started" && Boolean(control.lease?.owner));
   if (needsFence && lastStatus !== "unresolved") {
-    const owner = control.lease?.owner || crypto.randomUUID();
+    const owner = control.lease?.owner;
+    if (!owner) {
+      return holdInitiating(bucket, control, etag, job, window, jobIndex, false);
+    }
     control.lease = {
       owner,
       until: new Date(now.getTime() + CONTROL_LEASE_MS).toISOString(),
@@ -683,7 +740,7 @@ export async function runExactFiveAcquisitionTick(
   }
 
   if (observed?.status === "started") {
-    return { status: "idle", fetched: false, jobs: 0, reason: "unresolved" };
+    return holdInitiating(bucket, control, etag, job, window, jobIndex, false);
   }
 
   if (control.attempts >= MAX_ATTEMPTS) {
@@ -716,6 +773,9 @@ export async function runExactFiveAcquisitionTick(
           bucket, control, etag, job, window, jobIndex, late.rowsInserted, true,
         );
       }
+      if (late.status === "started") {
+        return holdInitiating(bucket, control, etag, job, window, jobIndex, true);
+      }
     }
     const timedOut = error instanceof Error &&
       error.message === "exact-five job fetch timeout";
@@ -744,6 +804,9 @@ export async function runExactFiveAcquisitionTick(
         return finishPass(
           bucket, control, etag, job, window, jobIndex, late.rowsInserted, true,
         );
+      }
+      if (late.status === "started") {
+        return holdInitiating(bucket, control, etag, job, window, jobIndex, true);
       }
     }
     return finishFail(

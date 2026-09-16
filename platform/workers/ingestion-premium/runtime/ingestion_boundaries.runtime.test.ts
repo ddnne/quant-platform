@@ -731,6 +731,46 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
       },
     })).run();
     await env.DB.prepare(
+      `INSERT INTO ingestion_validation (
+         run_id, dataset, started_at, finished_at, status, rows_seen, rows_inserted,
+         rows_revisions, available_at_min, available_at_max, detail
+       ) VALUES (
+         11, 'markets_calendar', '2023-01-31T00:00:00Z', '2023-01-31T00:00:01Z',
+         'fail', 0, 0, 0, NULL, NULL, 'issue rpc lost'
+       )`,
+    ).run();
+    await env.DB.prepare(
+      `INSERT INTO receipt_authority_requests(
+         operation_id,request_nonce,environment,source,contract_id,dataset,segment_id,state,
+         receipt_digest,created_at,updated_at
+       ) VALUES (
+         ?, ?, 'staging', 'jquants', 'jquants_premium_core', 'markets_calendar', '2023-01',
+         'PREPARED', NULL, '2023-01-31T00:00:00Z', '2023-01-31T00:00:00Z'
+       )`,
+    ).bind(operationId, nonce).run();
+    let invocations = 0;
+    const ingest: ExactFiveIngest = async () => {
+      invocations += 1;
+      return { status: "pass", datasetCount: 1, rowsInserted: 99 };
+    };
+    const held = await runExactFiveAcquisitionTick(env.STRUCTURED_BUCKET, ingest, {
+      clock: () => new Date("2026-09-12T00:00:00.000Z"),
+      observe: (job, window, operation) =>
+        observeExactFiveReceipt(env.DB, job, window, operation),
+    });
+    expect(held).toMatchObject({ status: "idle", fetched: false, reason: "unresolved" });
+    expect(invocations).toBe(0);
+    const heldControl = JSON.parse(
+      await (await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY))!.text(),
+    ) as { cursor: number; lease: { owner: string }; last: { status: string } };
+    expect(heldControl.cursor).toBe(0);
+    expect(heldControl.lease.owner).toBe(owner);
+    expect(heldControl.last.status).toBe("unresolved");
+    expect(await env.DB.prepare(
+      "SELECT request_nonce, state FROM receipt_authority_requests",
+    ).first()).toMatchObject({ request_nonce: nonce, state: "PREPARED" });
+
+    await env.DB.prepare(
       `INSERT INTO ingestion_run_log
          (id, ran_at, source, runtime, status, detail, authority_operation_id)
        VALUES (
@@ -774,21 +814,14 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
         WHERE operation_id=?`,
     ).bind(operationId).run();
     await env.DB.prepare(
-      `INSERT INTO receipt_authority_requests(
-         operation_id,request_nonce,environment,source,contract_id,dataset,segment_id,state,
-         receipt_digest,created_at,updated_at
-       ) VALUES (
-         ?, ?, 'staging', 'jquants', 'jquants_premium_core', 'markets_calendar', '2023-01',
-         'FINALIZED', 'sha256:${"33".repeat(32)}', '2023-01-31T00:00:00Z', '2023-01-31T00:00:00Z'
-       )`,
+      `UPDATE receipt_authority_requests
+          SET state='FINALIZED',
+              receipt_digest='sha256:${"33".repeat(32)}',
+              updated_at='2023-01-31T00:00:02Z'
+        WHERE operation_id=? AND request_nonce=? AND state='PREPARED'`,
     ).bind(operationId, nonce).run();
-    let invocations = 0;
-    const ingest: ExactFiveIngest = async () => {
-      invocations += 1;
-      return { status: "pass", datasetCount: 1, rowsInserted: 99 };
-    };
     const finished = await runExactFiveAcquisitionTick(env.STRUCTURED_BUCKET, ingest, {
-      clock: () => new Date("2026-09-12T00:00:00.000Z"),
+      clock: () => new Date("2026-09-12T00:02:00.000Z"),
       observe: (job, window, operation) =>
         observeExactFiveReceipt(env.DB, job, window, operation),
     });
