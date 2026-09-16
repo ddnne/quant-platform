@@ -12,6 +12,28 @@ live in [`../phase633_finding_ledger.md`](../phase633_finding_ledger.md).
 
 Do not print secret values. Check presence only.
 
+## USER_REQUESTED_PAUSE — RESUME CHECKPOINT
+
+**Status:** `USER_REQUESTED_PAUSE`. Resume only on an explicit user request.
+Background development is intentionally stopped; this is not global-task-complete.
+Do not merge, deploy, or auto-resume from this checkpoint.
+
+| Item | Value |
+|------|-------|
+| Repo | https://github.com/ddnne/quant-platform |
+| Conversation | `01a0abdb-4795-7500-a5b7-6e9c1684932e` |
+| Branch / PR | `fix/receipt-durable-capture-reconcile` / [PR229](https://github.com/ddnne/quant-platform/pull/229) |
+| Original source head | `64c8e4d7bd0ed0f4e688aa9b160a2590b1f6b888` (native SUCCESS `104994000343` is historical on this SHA only) |
+| WIP source commit | `8cc5aecc9c983ac2b2dc083f930c0cf11ee05d31` (unverified; not ready) |
+| Docs checkpoint | this commit on the same branch |
+| Accepted main | `26abffecd4463c5d052e9f28d862bc67a7c006a1` (PR228). Live SHA/status is `current_work_ledger.json`; do not copy stale PENDING `d37ef73` tables from older paragraphs below. |
+| Edited files (WIP, not reviewed/accepted) | `product_materialization.ts`, `receipt_evidence.ts`, `structured_reconciliation.ts` |
+| Validation this pause | `git diff --check` PASS; Receipt `tsc --noEmit` PASS; existing focused vitest `-t "resumes remaining structured pages from durable capture without a refetch"` PASS (1 passed, 64 skipped). Full CI/full test: notrun. |
+| Open monthly blockers | Durable next-page progress and D1 2MB/1000-query product materialization are WIP; existing tests that assert nonempty D1 `artifact_body` are not updated; missing realistic-size synthetic E2E and duplicate-key tests; Feb 6738 still COLLECTING/PREPARED (15-min `MAX_CONTEXT_AGE` vs 21600s continuation TTL is a source-confirmed issuance block, not a proven live OOM). |
+| Original source-unit scope | Source + local synthetic tests + read-only staging diagnosis + Git/PR/native CI only. No remote mutation/migration/deploy/merge. Existing Feb PREPARED/raw/same operation only. |
+| Next step (explicit resume only) | Complete bounded finalization, end-to-end synthetic proof, final reviews and native CI **before** any merge/deploy. |
+| Later / incomplete | Master P1 (`equities_master` `ingest_time_conservative` available_at vs 2023 PIT), global Ops, READY, Pilot. Original 2023 exact-four ideas, AM-PM, and budget stay. Source / staging / data / READY / Pilot remain separate. Preserve existing cloud raw/PREPARED/attempts; January bars 3/3 HOLD. No local market history, no new full D1 backup, no production/DLQ/Pilot/Mass/broker. Held worktree `exact-five-acquisition-recovery` and Draft PR137 unchanged. |
+
 ## Canonical machine-readable authorities
 
 | Authority | Path | Check command |
@@ -183,23 +205,19 @@ remote apply results only in immutable release evidence.
   is the final check, not a blocker for prerequisite Worker code rollout.
   This bounded repair does not run D1 migration, JSDA activation, or DLQ
   mutation.
-- **Current staging code rollout (not acceptance):** Secrets, Receipt, and
-  Premium staging are accepted/deployed baseline `d37ef73e5c226a7b2499f0523f4bcca4090b511b`
-  PENDING, canonical live acceptance ok:
-  [PR211 comment](https://github.com/ddnne/quant-platform/pull/211#issuecomment-5681285373)
-  (mutable; not A6/READY). Mass staging remains source `35611b0` at an
-  earlier checkpoint, not remeasured after that:
-  [Mass operational checkpoint](https://github.com/ddnne/quant-platform/pull/204#issuecomment-5674898739).
-  Authenticated 403 smoke is pending location of existing
-  `MASS_EVAL_TOKEN` (no rotation; ask only location or already-set process
-  env; never print values). That gap blocks only that smoke. Gateway, Mass,
-  JSDA, Ops, and the observer were not accepted or reverified at this SHA.
-  Worker/Container code
-  rollout is not auth-smoke, data, READY, or Pilot. Staging schema is
-  `SCHEMA_PREPARED` (canonical `0001`–`0023`), distinct from Worker code
-  and from JSDA `--activate`. Structured facts live in
-  `current_work_ledger.json`. `--activate` and production stay SHA-tag
-  strict.
+- **Current staging code rollout (not acceptance):** This paragraph is not
+  a live SHA table. Accepted Secrets/Receipt/Premium ACTIVE SHA, dated
+  PENDING `d37ef73` history, and Mass checkpoint live in
+  `current_work_ledger.json` `lanes.source_delivered` /
+  `lanes.staging_deployed` (accepted main
+  `26abffecd4463c5d052e9f28d862bc67a7c006a1`). Authenticated 403 smoke is
+  pending location of existing `MASS_EVAL_TOKEN` (no rotation; ask only
+  location or already-set process env; never print values). That gap
+  blocks only that smoke. Gateway, Mass, JSDA, Ops, and the observer were
+  not SHA-aligned in that unit. Worker/Container code rollout is not
+  auth-smoke, data, READY, or Pilot. Staging schema is `SCHEMA_PREPARED`
+  (canonical `0001`–`0023`), distinct from Worker code and from JSDA
+  `--activate`. `--activate` and production stay SHA-tag strict.
 - **JSDA cutover follow-ups (open):** whole shared-D1 Time Travel restore is
   removed from the operator. A Time Travel bookmark remains recovery-reference
   evidence only; Premium and Receipt writers are not fenced. `--rollback`

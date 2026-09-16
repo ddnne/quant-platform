@@ -1,6 +1,48 @@
 {
   "schema": "quant-platform-work-ledger/v1",
-  "updated_at": "2026-09-16T21:32:43Z",
+  "updated_at": "2026-09-16T22:24:00Z",
+  "user_pause": {
+    "status": "USER_REQUESTED_PAUSE",
+    "resume": "explicit_user_request_only",
+    "paused_at": "2026-09-16T22:24:00Z",
+    "conversation": "01a0abdb-4795-7500-a5b7-6e9c1684932e",
+    "repo": "https://github.com/ddnne/quant-platform",
+    "branch": "fix/receipt-durable-capture-reconcile",
+    "pr": "https://github.com/ddnne/quant-platform/pull/229",
+    "original_source_head": "64c8e4d7bd0ed0f4e688aa9b160a2590b1f6b888",
+    "accepted_main": "26abffecd4463c5d052e9f28d862bc67a7c006a1",
+    "wip_source_sha": "8cc5aecc9c983ac2b2dc083f930c0cf11ee05d31",
+    "checkpoint_docs": "this ledger/runbook commit on the same branch",
+    "edited_files": [
+      "platform/workers/receipt-evidence-authority/src/product_materialization.ts",
+      "platform/workers/receipt-evidence-authority/src/receipt_evidence.ts",
+      "platform/workers/receipt-evidence-authority/src/structured_reconciliation.ts"
+    ],
+    "validation": {
+      "git_diff_check": "PASS",
+      "receipt_tsc_noEmit": "PASS",
+      "focused_existing_test": "PASS vitest -t resumes remaining structured pages from durable capture without a refetch (1 passed, 64 skipped)",
+      "full_ci_full_test": "notrun",
+      "native_check_104994000343": "historical SUCCESS on 64c8e4d7 only; new SHA needs a new check"
+    },
+    "open_monthly_blockers": [
+      "WIP durable next-page structured progress and D1 2MB/1000-query product materialization not reviewed/accepted",
+      "existing tests asserting nonempty D1 artifact_body not updated",
+      "missing realistic-size synthetic E2E and duplicate-key tests",
+      "Feb 6738 COLLECTING/PREPARED; 15-min MAX_CONTEXT_AGE vs 21600s continuation TTL is a source-confirmed issuance block, not a proven live OOM"
+    ],
+    "original_scope": "source + local synthetic tests + read-only staging diagnosis + Git/PR/native CI only; no remote mutation/migration/deploy/merge; existing Feb PREPARED/raw/same operation only",
+    "next_step": "complete bounded finalization, end-to-end synthetic proof, final reviews/native CI before any merge/deploy",
+    "later_incomplete": [
+      "master_P1_equities_master_available_at",
+      "global_ops",
+      "READY",
+      "Pilot"
+    ],
+    "preserved": "cloud raw/PREPARED/attempts; January bars 3/3 HOLD; Draft PR137; held worktree exact-five-acquisition-recovery; original 2023 exact-four ideas/AM-PM/budget",
+    "background_development": "intentionally_stopped_not_global_complete",
+    "runbook_section": "docs/operations/current_production_runbook.md USER_REQUESTED_PAUSE — RESUME CHECKPOINT"
+  },
   "history": {
     "git_sha": "26abffecd4463c5d052e9f28d862bc67a7c006a1",
     "url": "https://github.com/ddnne/quant-platform/blob/26abffecd4463c5d052e9f28d862bc67a7c006a1/docs/operations/current_work_ledger.json",
@@ -219,7 +261,7 @@
   "next_prerequisite_chain": [
     "Do not serialize Access 9999 or Grok MCP auth failure as a global stop. Access GET organizations returned 9999 not_enabled (API not enabled). No UI was inspected. Conditional only for Worker Access JWT/hostname protection; not a precondition for schema recovery, read-only Ops checks, or ordinary source fixes. Codex mechanical fallback may apply authorized operations after a Grok permission denial; never bypass HOLDs; no paid API fallback. Staging schema recovery already ran once: SCHEMA_PREPARED.",
     "Inactive staging Secrets/Receipt/Premium/Gateway/Mass at 69c9772 is accepted. Source (this unit) adds idle-by-default staging Cron ticks for PENDING registration and exact-five acquisition; they are not live until a later SHA-align and are no-ops without R2 control objects. Do not put those control objects, activate keys, publish Ops, or mint READY from source merge. Staging Premium scheduled() still does not publish Ops. Publication remains HOLD. MASS_EVAL_TOKEN location gap blocks only authenticated 403 smoke. Ask once for the remaining production/data/keys/READY/Pilot outcome after this source is reviewed/merged; not per-Worker.",
-    "Explicit HOLDs unchanged; generic continue is not their release: production deploy, data activation, JSDA --activate, key activation, READY publication, Pilot/exact-four, Ops projection publication, Mass/FoF/broker. Exact-four and budget remain NO-GO. No new Worker/signer roles. A6 GLOBAL remains OPEN: encrypted D1 backup source path exists (Container restore-validate-encrypt + one export bundle stream) but is not executed; 32-byte key custody, metadata-only d1_export_poll_descriptor.py --initiate, secret put, and Mass image deploy remain the one combined approval. GitHub Release immutability and production collection are repo/API or later-auth work, not inherently human-only; existing content-addressed R2/JSDA AUDIT_ONLY paths are not A6 closure. Staging JSDA AUDIT_ONLY intake is source-partial."
+    "Explicit HOLDs unchanged; generic continue is not their release: production deploy, data activation, JSDA --activate, key activation, READY publication, Pilot/exact-four, Ops projection publication, Mass/FoF/broker. Exact-four and budget remain NO-GO. No new Worker/signer roles. A6 GLOBAL remains OPEN for independently accepted JSDA/publication collection, not as a backup-recipient gate. Operator declined additional full D1 backup (NO NEW FULL BACKUP): do not run a new full D1 export, 32-byte key custody, metadata-only d1_export_poll_descriptor.py --initiate, secret put, or treat those as pending human approval. GitHub Release immutability and production collection are repo/API or later-auth work, not inherently human-only; existing content-addressed R2/JSDA AUDIT_ONLY paths are not A6 closure. Staging JSDA AUDIT_ONLY intake is source-partial."
   ],
   "unknowns": [
     "Affected historic AM+gross-cap engine artifact inventory was not examined; no cloud listing was performed.",
@@ -238,7 +280,7 @@
   "items": {
     "1_fresh_clone_and_ledger": {
       "status": "pr211_main_accepted_before_this_docs_edit",
-      "notes": "Accepted main d37ef73 HEAD==origin/main, clean, unpushed 0. Completed feature branch removed. Nested historical transcripts live at history.git_sha."
+      "notes": "Historical PR211/d37ef73 clone record, not current. Current accepted main is history.git_sha / lanes.source_delivered 26abffec. Nested historical transcripts live at history.git_sha."
     },
     "2_am_order_quantity_causality": {
       "status": "source_merged_not_deployed",
@@ -319,7 +361,7 @@
     },
     "9_push_remote_and_fresh_clone_verify": {
       "status": "pr211_main_accepted",
-      "notes": "Latest accepted main PR211/d37ef73. Feature 5049fbb native check 104401424406/build e8e8c2e5 SUCCESS; merged-main check 104406618815/build 5f401591 SUCCESS 2026-09-15T13:43:24Z. Fresh clone clean, unpushed 0. Open PR only 137 HELD Draft. Historical Mass HOLD on dad020 is check 103821504107 (feea0136), intentional after successful tests."
+      "notes": "Historical PR211/d37ef73 acceptance only; not current. Current accepted main is lanes.source_delivered.latest_main_sha 26abffec (PR228). Feature 5049fbb native check 104401424406/build e8e8c2e5 SUCCESS; merged-main check 104406618815/build 5f401591 SUCCESS 2026-09-15T13:43:24Z. Open PR 137 remains HELD Draft; PR229 is USER_REQUESTED_PAUSE. Historical Mass HOLD on dad020 is check 103821504107 (feea0136), intentional after successful tests."
     }
   }
 }
