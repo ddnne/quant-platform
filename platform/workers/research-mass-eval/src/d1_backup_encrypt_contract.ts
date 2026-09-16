@@ -14,8 +14,6 @@ export const D1_BACKUP_MAX_SQL_BYTES = 4 * 1024 * 1024 * 1024;
 export const D1_BACKUP_MAX_RESTORED_SQLITE_BYTES = 5 * 1024 * 1024 * 1024;
 export const D1_BACKUP_MAX_CIPHERTEXT_BYTES =
   D1_BACKUP_MAX_SQL_BYTES + QPDBENC2_MAX_FRAMING_BYTES;
-/** standard-4 provisioned disk (image/files share it). Runtime structural bound. */
-export const STANDARD_4_PHYSICAL_DISK_BYTES = 20 * 1024 * 1024 * 1024;
 export const D1_BACKUP_ENVIRONMENTS = ["staging", "production"] as const;
 export type D1BackupEnvironment = (typeof D1_BACKUP_ENVIRONMENTS)[number];
 

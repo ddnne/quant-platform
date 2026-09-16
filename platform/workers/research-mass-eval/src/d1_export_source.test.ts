@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { d1ExportSourceOutbound } from "./d1_export_source";
 import {
-  D1_BACKUP_MAX_RESTORED_SQLITE_BYTES,
-  STANDARD_4_PHYSICAL_DISK_BYTES,
   d1ExportDownloadUrlDenied,
   d1ExportUrlSha256,
   parseD1BackupEncryptRequest,
@@ -26,14 +24,6 @@ const BUNDLE = {
 describe("d1 export Container outbound", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
-  });
-
-  it("separates accepted restored sqlite from standard-4 physical disk", () => {
-    expect(D1_BACKUP_MAX_RESTORED_SQLITE_BYTES).toBe(5 * 1024 * 1024 * 1024);
-    expect(STANDARD_4_PHYSICAL_DISK_BYTES).toBe(20 * 1024 * 1024 * 1024);
-    expect(D1_BACKUP_MAX_RESTORED_SQLITE_BYTES).toBeLessThan(
-      STANDARD_4_PHYSICAL_DISK_BYTES,
-    );
   });
 
   it("rejects extra backup request fields that would carry a URL", () => {

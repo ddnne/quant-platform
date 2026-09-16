@@ -40,8 +40,6 @@ MAX_HEADER_BYTES = 64 * 1024
 CHUNK_BYTES = 4 * 1024 * 1024
 # Accepted restored sqlite after restore completes. Not a runtime disk cap.
 MAX_RESTORED_SQLITE_BYTES = 5 * 1024 * 1024 * 1024
-# standard-4 provisioned disk (image/files share it). Runtime structural bound.
-STANDARD_4_PHYSICAL_DISK_BYTES = 20 * 1024 * 1024 * 1024
 BACKUP_FORMAT = "quant-platform-d1-backup/aes-256-gcm-v3"
 SCHEMA_PROFILES = {
     "production": "quant-ingest-production/v1",

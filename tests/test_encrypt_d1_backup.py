@@ -534,9 +534,3 @@ def test_restore_rejects_restored_sqlite_above_accepted_size(tmp_path: Path) -> 
             max_restored_sqlite_bytes=1,
             **identity_kwargs(),
         )
-
-
-def test_accepted_restored_sqlite_is_below_standard_4_physical_disk() -> None:
-    assert backup.MAX_RESTORED_SQLITE_BYTES == 5 * 1024 * 1024 * 1024
-    assert backup.STANDARD_4_PHYSICAL_DISK_BYTES == 20 * 1024 * 1024 * 1024
-    assert backup.MAX_RESTORED_SQLITE_BYTES < backup.STANDARD_4_PHYSICAL_DISK_BYTES
