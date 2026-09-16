@@ -77,6 +77,76 @@ def _load_active_workers(path: Path = INVENTORY) -> tuple[str, ...]:
 
 
 ACTIVE_WORKERS = _load_active_workers()
+STAGING_RECEIPT_REGISTRY_PATH = (
+    ROOT
+    / "packages"
+    / "data_plane"
+    / "data_contracts"
+    / "receipt_verify_public_keys.staging.json"
+)
+
+
+def _staging_active_receipt_key() -> tuple[str, str]:
+    """Return the canonical staging ACTIVE key_id and registry digest."""
+
+    try:
+        registry = json.loads(STAGING_RECEIPT_REGISTRY_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("staging receipt registry is unreadable") from exc
+    keys = registry.get("keys") if type(registry) is dict else None
+    active = [
+        row for row in keys
+        if type(row) is dict and row.get("status") == "active"
+    ] if type(keys) is list else []
+    if (
+        registry.get("authority_status") != "ACTIVE"
+        or registry.get("environment") != "staging"
+        or registry.get("generation") != 4
+        or len(active) != 1
+        or type(registry.get("registry_digest")) is not str
+        or not registry["registry_digest"].startswith("sha256:")
+        or type(active[0].get("key_id")) is not str
+        or not active[0]["key_id"]
+    ):
+        raise ValueError("staging receipt registry is not the exact ACTIVE source surface")
+    return active[0]["key_id"], registry["registry_digest"]
+
+
+def _receipt_authority_expected_vars(environment: str) -> dict[str, str]:
+    if environment == "staging":
+        key_id, digest = _staging_active_receipt_key()
+        return {
+            "ACTIVATED_KEY_ID": key_id,
+            "AUTHORITY_MODE": "ACTIVE",
+            "AUTHORITY_REGISTRY_DIGEST": digest,
+            "ENVIRONMENT": "staging",
+            "RECEIPT_KEY_GENERATION": "1",
+        }
+    return {
+        "AUTHORITY_MODE": "PENDING",
+        "ENVIRONMENT": "production",
+        "RECEIPT_KEY_GENERATION": "1",
+    }
+
+
+def _premium_receipt_expected_vars(environment: str) -> dict[str, str]:
+    staging = environment == "staging"
+    expected = {
+        "INGEST_CONCURRENCY": "2" if staging else "6",
+        "OPS_PROJECTION_ENVIRONMENT": "staging" if staging else "production",
+        "OPS_PROJECTION_SIGNING_KEY_ID": (
+            "ops-projection-cloud-staging-v1" if staging else "ops-projection-20260826-v2"
+        ),
+        "RECEIPT_AUTHORITY_ENVIRONMENT": "staging" if staging else "production",
+        "RECEIPT_AUTHORITY_OPERATION_MODE": "ACTIVE" if staging else "PENDING",
+        "READY_DECLARED": "false",
+    }
+    if staging:
+        key_id, digest = _staging_active_receipt_key()
+        expected["RECEIPT_AUTHORITY_ACTIVE_KEY_ID"] = key_id
+        expected["RECEIPT_AUTHORITY_REGISTRY_DIGEST"] = digest
+    return expected
+
 
 
 def _wrangler_config_paths(worker_root: Path = WORKER_ROOT) -> tuple[Path, ...]:
@@ -1653,13 +1723,9 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             raise ValueError(
                 f"receipt-evidence-authority/{environment}: public surface drift"
             )
-        if receipt["vars"] != {
-            "AUTHORITY_MODE": "PENDING",
-            "ENVIRONMENT": "staging" if environment == "staging" else "production",
-            "RECEIPT_KEY_GENERATION": "1",
-        }:
+        if receipt["vars"] != _receipt_authority_expected_vars(environment):
             raise ValueError(
-                f"receipt-evidence-authority/{environment}: PENDING key policy drift"
+                f"receipt-evidence-authority/{environment}: Receipt key policy drift"
             )
         if receipt["durable_objects"] != [{
             "class_name": "ReceiptEvidenceAuthority",
@@ -1713,22 +1779,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
                 f"ingestion-premium/{environment}: typed Receipt binding drift"
             )
         premium_vars = workers["ingestion-premium"][environment]["vars"]
-        if premium_vars != {
-            "INGEST_CONCURRENCY": "2" if environment == "staging" else "6",
-            "OPS_PROJECTION_ENVIRONMENT": (
-                "staging" if environment == "staging" else "production"
-            ),
-            "OPS_PROJECTION_SIGNING_KEY_ID": (
-                "ops-projection-cloud-staging-v1"
-                if environment == "staging"
-                else "ops-projection-20260826-v2"
-            ),
-            "RECEIPT_AUTHORITY_ENVIRONMENT": (
-                "staging" if environment == "staging" else "production"
-            ),
-            "RECEIPT_AUTHORITY_OPERATION_MODE": "PENDING",
-            "READY_DECLARED": "false",
-        }:
+        if premium_vars != _premium_receipt_expected_vars(environment):
             raise ValueError(
                 f"ingestion-premium/{environment}: Receipt environment policy drift"
             )

@@ -2,9 +2,11 @@
 
 This runbook activates the dedicated Receipt Evidence Authority without ever
 making its HTTP surface public or exporting private signing material. The
-checked-in production and staging configurations are intentionally
-`AUTHORITY_MODE = "PENDING"`, omit `ACTIVATED_KEY_ID`, and set both
-`workers_dev = false` and `preview_urls = false`.
+checked-in production and base configurations remain
+`AUTHORITY_MODE = "PENDING"` and omit `ACTIVATED_KEY_ID`. Staging source is
+configured `AUTHORITY_MODE = "ACTIVE"` with the reviewed registered key and
+registry digest. Every environment keeps `workers_dev = false` and
+`preview_urls = false`. Configured ACTIVE source is not live ACTIVE evidence.
 
 The implementation commit does not provision Cloudflare resources, install a
 secret, run a migration, deploy a Worker, register a key, or make an existing
@@ -87,7 +89,10 @@ Before either deployment:
    `ingestion-premium`. Live three-Worker rebuilds still use each Worker's
    pinned Wrangler 4.125.0.
 2. The active-binding manifest is clean for base, production, and staging.
-3. A D1 backup and checksum evidence exist for the target environment.
+3. Existing immutable cloud raw, evidence, experiments, control/attempt
+   accounting, and Durable Object key identity are retained. A new whole-D1
+   export/encrypt job is not a mandatory recovery step. D1 Time Travel is not
+   a tested R2/Durable Object restoration.
 4. Canonical ingestion migrations through
    `0019_receipt_authority_recovery_smoke.sql` have been reviewed and applied by
    the single ingestion migration owner.
@@ -246,8 +251,10 @@ source-only until that SHA is deployed; putting the control object is a later
 approved mutation. The observer still cannot register. Adding a public Premium
 route remains prohibited. Do not generate a key or claim registration or
 activation is live until that control is accepted and the PENDING authority
-returns the public registration. Access-protected observer acceptance remains
-required before ACTIVE, not before this PENDING one-shot.
+returns the public registration. Observer Worker/Access remains the separate
+JSDA release-observation HOLD; it is not a Receipt ACTIVE prerequisite.
+Receipt ACTIVE acceptance uses the three-Worker management-D1 signed-evidence
+collector, not observer HTTP or Access credentials.
 
 Exact-five Cron admission binds current profile/closure and catalog
 canonical-month windows, including pre-period months from
@@ -350,11 +357,15 @@ attestation/Receipt. Successful evidence is canonical, content-addressed,
 create-only local output marked `AUDIT_ONLY` and research-ineligible.
 
 This is only a source-level partial safety boundary, not permission to activate.
-The active registry,
-ACTIVE vars, migration, deployment, closed operator caller, and live recovery
-evidence do not exist. The ordinary all-P0 gate still rejects release. A generic
-`ignore P0` switch is not an acceptable substitute, and this runbook does not
-authorize ACTIVE deployment under the current gate.
+Staging source now carries configured ACTIVE eligibility: scoped registry
+generation 4 with exactly one active key `receipt-staging-98fa0160de908051`,
+and Receipt/Premium `wrangler.staging.toml` ACTIVE vars bound to that key and
+registry digest. That is not live ACTIVE evidence. Production and base remain
+PENDING. Live recovery/replay canary, module-byte acceptance, and the
+management-D1 ACTIVE gate remain a later operational unit. The ordinary all-P0
+gate still rejects release. A generic `ignore P0` switch is not an acceptable
+substitute, and this runbook does not authorize ACTIVE deployment by source
+merge alone.
 
 The staging gate treats the authority deployment ID and selected version,
 Premium caller deployment ID and selected version, active key ID, and exact
@@ -387,8 +398,10 @@ exception no longer applies. At minimum, require:
 
 1. The active public-key registry containing the exact key ID is merged and
    deployed to every verifier.
-2. The D1 backup, canonical migrations, Service Bindings, R2, and Durable
-   Object state all match the reviewed environment manifest.
+2. Canonical migrations, Service Bindings, R2, and Durable Object state match
+   the reviewed environment manifest. Minimum recovery retains existing
+   immutable cloud artifacts and key identity; it does not require a new full
+   D1 export/encrypt job or treat D1 Time Travel as a tested R2/DO restore.
 3. The current source SHA passes typecheck, workerd runtime tests, and
    base/production/staging dry-runs.
 4. No unresolved receipt-authority P0 remains.
@@ -399,21 +412,25 @@ exception no longer applies. At minimum, require:
 7. The selected Premium caller version was deployed after the selected
    authority version; the signed attestation names both exact versions and the
    registry-derived key. An older pair or mutable row is not accepted.
-8. The observer Worker exists in the Workers Beta inventory. Record its
-   immutable ID, protect exactly that worker destination with one Service Auth
-   policy and one service token, then replace every `PENDING` placeholder in
-   `specs/cloudflare/receipt_activation_observer_access.json` through a normal
-   reviewed commit. A domain-only, `allow`, `bypass`, any-valid-token, preview,
-   or broader application is prohibited.
-9. Redeploy the four exact reviewed versions after the manifest change. Supply
-   `RECEIPT_OBSERVER_ACCESS_CLIENT_ID` and
-   `RECEIPT_OBSERVER_ACCESS_CLIENT_SECRET` only as process environment secrets
-   when running the gate; never place either value in Git, argv, logs, or the
-   output document.
+8. The official Receipt ACTIVE path is the three-Worker chain
+   (`ingestion-secrets`, `receipt-evidence-authority`, `ingestion-premium`)
+   plus the management-D1 signed-evidence collector in
+   `scripts/receipt_authority_staging_active_gate.py`. It reads the Premium
+   staging `DB` attestation; it does not call observer HTTP or Access and does
+   not require Observer Worker credentials. Observer Worker/Access remains the
+   separate JSDA release-observation HOLD.
+9. Redeploy the three exact reviewed Receipt-chain versions after the manifest
+   change, then collect management-D1 evidence. Do not treat
+   `RECEIPT_OBSERVER_ACCESS_CLIENT_ID` /
+   `RECEIPT_OBSERVER_ACCESS_CLIENT_SECRET` or a four-Worker observer rollout as
+   Receipt ACTIVE acceptance.
 
-Both checked-in scoped registries remain `PENDING` with no active key. This
-runbook does not authorize changing either registry or Worker to `ACTIVE` while
-any receipt-authority P0 remains unresolved.
+The staging scoped registry is configured `ACTIVE` with exactly one active key
+`receipt-staging-98fa0160de908051`. Production and base scoped registries remain
+`PENDING` with no active key. Configured ACTIVE source is not live ACTIVE
+evidence. This runbook does not authorize live ACTIVE deployment or release
+while any receipt-authority P0 remains unresolved. A generic `ignore P0` switch
+is not an acceptable substitute.
 
 Deploy ACTIVE to staging first, retain its immutable evidence, then repeat the
 review for production. A smoke reconciliation may pass only `dataset` and
@@ -429,6 +446,12 @@ inherit eligibility from older or unsigned receipts. Do not publish profile
 READY or run the controlled pilot until all independent READY gates pass.
 
 ## Recovery and rollback
+
+Minimum recovery retains the existing immutable cloud raw, evidence,
+experiments, control/attempt accounting, and Durable Object key identity. It
+does not add a whole-D1 export/encrypt job, local authentic history, or local
+Docker/VM restore. D1 Time Travel is not a tested R2/Durable Object
+restoration.
 
 The Premium request ledger persists `PREPARED` before RPC and scheduled
 recovery resubmits only the opaque operation ID. Issuance, finalization, and
@@ -476,23 +499,27 @@ with a changed request, and post-sign structured-row mutation all fail closed.
 
 ## Current status
 
-The repository contains the inactive implementation and test evidence only.
-Staging and production remain PENDING and unprovisioned. The checked-in Access
-manifest intentionally retains `PENDING` placeholders, so the ACTIVE gate
-returns an operational hold until the account-specific Worker, application,
-AUD, policy, token, and ID-derived subdomain URL/hostname identities are
-independently recorded and
-reviewed. No service-token value is checked in. The source-only observer,
-ACTIVE validator, migration, and Cron recovery canary have not been deployed or
-measured, and no live observer-to-Premium Service Binding has been accepted.
-Production acceptance additionally remains C7 HOLD because
-the acquisition Worker's workers.dev hostname is enabled and no Cloudflare
-Access application/policy is provisioned or verified; the live collector
-intentionally refuses to report a production PASS in that state.
-The first deployment, secret installation, public registration capture,
-registry review, ACTIVE deployment, segment re-proof, and final operational
-sign-off remain account-authorized actions. The source Worker has only the
-three contract-pinned R2 buckets described above; their names are part of the
-environment/resource-bound authority digest. D2/D3 remain operationally open
-until the exact live chain and scoped registry are activated with fresh keys
-and eligible segments are re-proved through the deployed authority path.
+Staging source is configured ACTIVE: scoped registry generation 4 with exactly
+one active key `receipt-staging-98fa0160de908051`, and Receipt/Premium
+`wrangler.staging.toml` ACTIVE vars bound to that key and registry digest.
+Production and base remain PENDING with no active key. That source
+configuration is not live ACTIVE evidence. Live three-Worker SHA-align,
+recovery/replay canary, module-byte acceptance, and the management-D1 ACTIVE
+gate remain a later operational unit.
+
+The official Receipt ACTIVE acceptance path is the three-Worker chain plus
+`scripts/receipt_authority_staging_active_gate.py` reading the Premium staging
+management D1 attestation. Observer Worker/Access remains the separate JSDA
+release-observation HOLD. The checked-in Access manifest still retains
+`PENDING` placeholders for that JSDA path; no service-token value is checked
+in. Observer HTTP is not Receipt ACTIVE evidence transport.
+
+The ordinary all-P0 gate still rejects release. A generic `ignore P0` switch is
+not an acceptable substitute. Production acceptance additionally remains C7
+HOLD because the acquisition Worker's workers.dev hostname is enabled and no
+Cloudflare Access application/policy is provisioned or verified. READY remains
+undeclared (`READY_DECLARED=false`); Mass remains NO-GO. The source Worker has
+only the three contract-pinned R2 buckets described above; their names are
+part of the environment/resource-bound authority digest. D2/D3 remain
+operationally open until the exact live chain is activated and eligible
+segments are re-proved through the deployed authority path.

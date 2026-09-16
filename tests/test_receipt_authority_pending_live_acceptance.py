@@ -11,6 +11,7 @@ from urllib.request import Request
 import pytest
 
 from scripts import receipt_authority_pending_live_acceptance as live
+from scripts.receipt_authority_pending_gate import PendingReceiptAuthorityError
 
 
 SHA = "1" * 40
@@ -191,10 +192,8 @@ def _documents(environment: str) -> tuple[
     return deployments, versions, public, source_provenance
 
 
-@pytest.mark.parametrize("environment", ["staging", "production"])
-def test_exact_live_pending_chain_is_read_only_and_source_bound(
-    environment: str,
-) -> None:
+def test_exact_live_pending_chain_is_read_only_and_source_bound() -> None:
+    environment = "production"
     deployments, versions, public, source_provenance = _documents(environment)
     result = live.validate_live_pending_receipt_chain(
         environment=environment,
@@ -226,31 +225,47 @@ def test_exact_live_pending_chain_is_read_only_and_source_bound(
 
 
 def test_staging_chain_declares_only_minimum_non_proxy_secrets() -> None:
-    deployments, versions, public, source_provenance = _documents("staging")
-    result = live.validate_live_pending_receipt_chain(
-        environment="staging",
-        source_sha=SHA,
-        account_id=ACCOUNT,
-        deployments=deployments,
-        versions=versions,
-        public_surfaces=public,
-        source_provenance=source_provenance,
-    )
-    assert result["workers"]["acquisition"]["secret_binding_names"] == [
+    workers = live.build_manifest()["workers"]
+    assert workers["ingestion-secrets"]["staging"]["secret_names"] == [
         "JQUANTS_API_KEY",
         "JQUANTS_RPC_CURSOR_HMAC_KEY",
     ]
-    assert result["workers"]["caller"]["secret_binding_names"] == [
+    assert workers["ingestion-premium"]["staging"]["secret_names"] == [
         "INGESTION_RUN_TOKEN",
         "JQUANTS_API_KEY",
         "OPS_PROJECTION_SIGNING_PKCS8_B64",
         "READY_ED25519_PRIVATE_KEY",
         "TRADER_ED25519_PRIVATE_KEY",
     ]
-    assert result["workers"]["authority"]["secret_binding_names"] == [
+    assert workers["receipt-evidence-authority"]["staging"]["secret_names"] == [
         "RECEIPT_KEY_WRAP_KEY"
     ]
-    assert "JQUANTS_PROXY_TOKEN" not in json.dumps(result)
+    staging_secrets = json.dumps({
+        name: workers[name]["staging"]["secret_names"]
+        for name in (
+            "ingestion-secrets",
+            "ingestion-premium",
+            "receipt-evidence-authority",
+        )
+    })
+    assert "JQUANTS_PROXY_TOKEN" not in staging_secrets
+
+
+def test_staging_configured_active_source_cannot_use_pending_live_chain() -> None:
+    deployments, versions, public, source_provenance = _documents("staging")
+    with pytest.raises(
+        PendingReceiptAuthorityError,
+        match="identity|active",
+    ):
+        live.validate_live_pending_receipt_chain(
+            environment="staging",
+            source_sha=SHA,
+            account_id=ACCOUNT,
+            deployments=deployments,
+            versions=versions,
+            public_surfaces=public,
+            source_provenance=source_provenance,
+        )
 
 
 @pytest.mark.parametrize(
@@ -323,11 +338,11 @@ def test_live_chain_fails_closed_on_source_traffic_binding_and_route_drift(
     mutate,
     match: str,
 ) -> None:
-    deployments, versions, public, source_provenance = _documents("staging")
+    deployments, versions, public, source_provenance = _documents("production")
     mutate(deployments, versions, public)
     with pytest.raises(live.ReceiptPendingLiveAcceptanceError, match=match):
         live.validate_live_pending_receipt_chain(
-            environment="staging",
+            environment="production",
             source_sha=SHA,
             account_id=ACCOUNT,
             deployments=deployments,
@@ -338,14 +353,14 @@ def test_live_chain_fails_closed_on_source_traffic_binding_and_route_drift(
 
 
 def test_live_chain_rejects_extra_resource_capability_surface() -> None:
-    deployments, versions, public, source_provenance = _documents("staging")
+    deployments, versions, public, source_provenance = _documents("production")
     versions["authority"]["resources"]["unsafe_capability"] = {"enabled": True}
     with pytest.raises(
         live.ReceiptPendingLiveAcceptanceError,
         match="undeclared resource surface",
     ):
         live.validate_live_pending_receipt_chain(
-            environment="staging",
+            environment="production",
             source_sha=SHA,
             account_id=ACCOUNT,
             deployments=deployments,
@@ -400,11 +415,11 @@ def test_live_chain_rejects_nested_and_extra_version_capabilities(
     mutate,
     match: str,
 ) -> None:
-    deployments, versions, public, source_provenance = _documents("staging")
+    deployments, versions, public, source_provenance = _documents("production")
     mutate(versions, public)
     with pytest.raises(live.ReceiptPendingLiveAcceptanceError, match=match):
         live.validate_live_pending_receipt_chain(
-            environment="staging",
+            environment="production",
             source_sha=SHA,
             account_id=ACCOUNT,
             deployments=deployments,
@@ -451,12 +466,12 @@ def test_live_chain_requires_exact_named_handlers_and_migration_tag(
     mutate,
     match: str,
 ) -> None:
-    deployments, versions, public, source_provenance = _documents("staging")
+    deployments, versions, public, source_provenance = _documents("production")
     authority = versions["authority"]["resources"]
     mutate(authority["script"], authority["script_runtime"])
     with pytest.raises(live.ReceiptPendingLiveAcceptanceError, match=match):
         live.validate_live_pending_receipt_chain(
-            environment="staging",
+            environment="production",
             source_sha=SHA,
             account_id=ACCOUNT,
             deployments=deployments,
@@ -470,7 +485,7 @@ def test_live_chain_requires_exact_named_handlers_and_migration_tag(
 def test_live_chain_rejects_named_handlers_or_migration_tag_without_manifest_authority(
     role: str,
 ) -> None:
-    deployments, versions, public, source_provenance = _documents("staging")
+    deployments, versions, public, source_provenance = _documents("production")
     resources = versions[role]["resources"]
     resources["script"]["named_handlers"] = [
         {"name": "UnexpectedAuthority", "handlers": ["class"]}
@@ -478,7 +493,7 @@ def test_live_chain_rejects_named_handlers_or_migration_tag_without_manifest_aut
     resources["script_runtime"]["migration_tag"] = "v1"
     with pytest.raises(live.ReceiptPendingLiveAcceptanceError):
         live.validate_live_pending_receipt_chain(
-            environment="staging",
+            environment="production",
             source_sha=SHA,
             account_id=ACCOUNT,
             deployments=deployments,
@@ -489,14 +504,14 @@ def test_live_chain_rejects_named_handlers_or_migration_tag_without_manifest_aut
 
 
 def test_live_chain_requires_the_closed_premium_operator_entrypoint() -> None:
-    deployments, versions, public, source_provenance = _documents("staging")
+    deployments, versions, public, source_provenance = _documents("production")
     versions["caller"]["resources"]["script"]["named_handlers"] = []
     with pytest.raises(
         live.ReceiptPendingLiveAcceptanceError,
         match="script handler, source, or etag drifted",
     ):
         live.validate_live_pending_receipt_chain(
-            environment="staging",
+            environment="production",
             source_sha=SHA,
             account_id=ACCOUNT,
             deployments=deployments,
@@ -507,12 +522,12 @@ def test_live_chain_requires_the_closed_premium_operator_entrypoint() -> None:
 
 
 def test_version_has_preview_true_is_not_a_public_preview_route() -> None:
-    deployments, versions, public, source_provenance = _documents("staging")
+    deployments, versions, public, source_provenance = _documents("production")
     for role in versions:
         versions[role]["metadata"]["has_preview"] = True
         assert public[role]["subdomain"]["previews_enabled"] is False
     result = live.validate_live_pending_receipt_chain(
-        environment="staging",
+        environment="production",
         source_sha=SHA,
         account_id=ACCOUNT,
         deployments=deployments,
@@ -527,7 +542,7 @@ def test_version_has_preview_true_is_not_a_public_preview_route() -> None:
         match="workers.dev or preview surface drifted",
     ):
         live.validate_live_pending_receipt_chain(
-            environment="staging",
+            environment="production",
             source_sha=SHA,
             account_id=ACCOUNT,
             deployments=deployments,
@@ -538,7 +553,7 @@ def test_version_has_preview_true_is_not_a_public_preview_route() -> None:
 
 
 def test_named_handlers_match_frozen_rpc_and_specials_not_class_markers() -> None:
-    deployments, versions, public, source_provenance = _documents("staging")
+    deployments, versions, public, source_provenance = _documents("production")
     authority = versions["authority"]["resources"]["script"]["named_handlers"]
     service = next(
         row for row in authority if row["name"] == "ReceiptAuthorityService"
@@ -548,7 +563,7 @@ def test_named_handlers_match_frozen_rpc_and_specials_not_class_markers() -> Non
     observed = list(service["handlers"])
     service["handlers"] = list(reversed(observed))
     live.validate_live_pending_receipt_chain(
-        environment="staging",
+        environment="production",
         source_sha=SHA,
         account_id=ACCOUNT,
         deployments=deployments,
@@ -568,7 +583,7 @@ def test_named_handlers_match_frozen_rpc_and_specials_not_class_markers() -> Non
             match="script handler, source, or etag drifted",
         ):
             live.validate_live_pending_receipt_chain(
-                environment="staging",
+                environment="production",
                 source_sha=SHA,
                 account_id=ACCOUNT,
                 deployments=deployments,
@@ -579,14 +594,14 @@ def test_named_handlers_match_frozen_rpc_and_specials_not_class_markers() -> Non
 
 
 def test_live_chain_rejects_module_bytes_not_built_from_reviewed_source() -> None:
-    deployments, versions, public, source_provenance = _documents("staging")
+    deployments, versions, public, source_provenance = _documents("production")
     source_provenance["authority"]["modules"][0]["digest"] = "sha256:" + "f" * 63
     with pytest.raises(
         live.ReceiptPendingLiveAcceptanceError,
         match="malformed",
     ):
         live.validate_live_pending_receipt_chain(
-            environment="staging",
+            environment="production",
             source_sha=SHA,
             account_id=ACCOUNT,
             deployments=deployments,
@@ -1070,8 +1085,7 @@ def test_collection_rejects_change_after_an_earlier_worker_local_bracket(
         role = next(
             role
             for role, worker in live.CHAIN
-            if live.build_manifest()["workers"][worker]["staging"]["name"]
-            == worker_name
+            if live.build_manifest()["workers"][worker]["staging"]["name"] == worker_name
         )
         return copy.deepcopy(public[role])
 

@@ -1115,11 +1115,21 @@ describe("POST /v1/export/receipt-products workerd D1", () => {
     expect(oversized?.status).toBe(400);
     expect(await oversized!.json()).toEqual({ error: "body too large" });
 
-    const pending = await postReceiptProducts(env, inputRequest([
+    const missingTable = await postReceiptProducts(env, inputRequest([
       { dataset: "equities_bars_daily", segment_id: "2026-08" },
     ]));
-    expect(pending?.status).toBe(409);
-    expect(await pending!.json()).toMatchObject({
+    expect(missingTable?.status).toBe(409);
+    expect(await missingTable!.json()).toMatchObject({
+      status: "HOLD",
+      hold_reason: "MISSING_TABLE",
+    });
+
+    const pendingRegistry = await postReceiptProducts(
+      { ...env, OPS_PROJECTION_ENVIRONMENT: "production" },
+      inputRequest([{ dataset: "equities_bars_daily", segment_id: "2026-08" }]),
+    );
+    expect(pendingRegistry?.status).toBe(409);
+    expect(await pendingRegistry!.json()).toMatchObject({
       status: "HOLD",
       hold_reason: "PENDING_REGISTRY",
     });
