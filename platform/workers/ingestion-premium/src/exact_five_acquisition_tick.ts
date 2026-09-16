@@ -24,7 +24,6 @@
 import { datasetById } from "./catalog";
 import {
   casPutJson,
-  CONTROL_LEASE_MS,
   CONTROL_MAX_BYTES,
   parseControlLease,
   type ControlLease,
@@ -45,7 +44,8 @@ export const EXACT_FIVE_ACQUISITION_KEY =
 const SCHEMA = "exact-five-compiled-acquisition/v1";
 const MAX_JOBS = 24;
 const MAX_ATTEMPTS = 3;
-const FETCH_TIMEOUT_MS = 30_000;
+export const EXACT_FIVE_FETCH_TIMEOUT_MS = 180_000;
+export const EXACT_FIVE_LEASE_MS = 240_000;
 const MONTH_ID = /^[0-9]{4}-[0-9]{2}$/;
 
 const CONTROL_KEYS = [
@@ -574,8 +574,9 @@ async function holdInitiating(
 }
 
 /**
- * Abort cancels fetch only. Always wait for ingest() — D1/R2/Receipt may
- * still finish after the 30s signal.
+ * Abort cancels vendor HTTP only. Always wait for ingest() — D1/R2/Receipt
+ * may still finish after the fetch signal. Calendar-month equities bars
+ * paginate beyond 30s; the lease must outlast the fetch abort.
  */
 async function ingestJob(
   ingest: ExactFiveIngest,
@@ -669,7 +670,7 @@ export async function runExactFiveAcquisitionTick(
   options: ExactFiveTickOptions = {},
 ): Promise<ExactFiveTickResult> {
   const clock = options.clock ?? (() => new Date());
-  const fetchTimeoutMs = options.fetchTimeoutMs ?? FETCH_TIMEOUT_MS;
+  const fetchTimeoutMs = options.fetchTimeoutMs ?? EXACT_FIVE_FETCH_TIMEOUT_MS;
   const object = await bucket.get(EXACT_FIVE_ACQUISITION_KEY);
   if (!object) return { status: "idle", fetched: false, jobs: 0, reason: "absent" };
   if (object.size > CONTROL_MAX_BYTES) {
@@ -728,7 +729,7 @@ export async function runExactFiveAcquisitionTick(
     }
     control.lease = {
       owner,
-      until: new Date(now.getTime() + CONTROL_LEASE_MS).toISOString(),
+      until: new Date(now.getTime() + EXACT_FIVE_LEASE_MS).toISOString(),
     };
     control.last = jobLast(job, window, 0, "unresolved");
     const durable = await commitControl(bucket, control, etag);
@@ -748,7 +749,7 @@ export async function runExactFiveAcquisitionTick(
   }
 
   const owner = crypto.randomUUID();
-  const until = new Date(now.getTime() + CONTROL_LEASE_MS).toISOString();
+  const until = new Date(now.getTime() + EXACT_FIVE_LEASE_MS).toISOString();
   control.attempts += 1;
   control.lease = { owner, until };
   control.last = jobLast(job, window, 0, "running");

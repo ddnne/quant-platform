@@ -10,6 +10,8 @@ import {
 } from "../src/valuation_backfill";
 import {
   EXACT_FIVE_ACQUISITION_KEY,
+  EXACT_FIVE_FETCH_TIMEOUT_MS,
+  EXACT_FIVE_LEASE_MS,
   observeExactFiveReceipt,
   runExactFiveAcquisitionTick,
   type ExactFiveIngest,
@@ -205,6 +207,11 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     await reset();
+  });
+
+  it("keeps exact-five month fetch abort inside a longer lease", () => {
+    expect(EXACT_FIVE_FETCH_TIMEOUT_MS).toBeGreaterThan(30_000);
+    expect(EXACT_FIVE_LEASE_MS).toBeGreaterThan(EXACT_FIVE_FETCH_TIMEOUT_MS);
   });
 
   it.each([
@@ -622,7 +629,7 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
     ).toMatchObject({ status: "idle", fetched: false, reason: "leased" });
     expect(invocations).toBe(1);
 
-    nowMs += 120_000;
+    nowMs += 300_000;
     expect(
       await runExactFiveAcquisitionTick(env.STRUCTURED_BUCKET, hanging, { clock, fetchTimeoutMs: 60_000 }),
     ).toMatchObject({ status: "idle", fetched: false, reason: "unresolved" });
