@@ -18,7 +18,7 @@ export type Env = Omit<
   PILOT_READY_PUBLICATION?: PilotReadyPublicationRpc;
   MASS_EVAL_TOKEN?: string;
   PERSONAL_RESEARCH_CONTAINER?: DurableObjectNamespace<PersonalResearchContainer>;
-  D1_BACKUP_EXPORT_SIGNED_URL?: string;
+  D1_BACKUP_EXPORT_BUNDLE?: string;
   D1_BACKUP_KEY?: string;
 };
 

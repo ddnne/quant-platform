@@ -4478,3 +4478,52 @@ def test_terminal_lease_does_not_takeover_when_logical_terminal_missing() -> Non
             recovery.cancel()
         if heartbeat is not None:
             heartbeat.cancel()
+
+
+def test_d1_backup_ambiguous_put_retries_when_terminal_get_misses(
+    held_retry_scheduler: list[_HeldTimer],
+) -> None:
+    spec = service.D1BackupEncryptJobSpec(
+        job_id="d1b-retry",
+        request_digest="sha256:" + "a" * 64,
+        manifest_key="research/d1-backups/job=d1b-retry/manifest.json",
+        runner_version=service.RUNNER_VERSION,
+        environment="production",
+        database_name="quant-ingest",
+        database_id="be6fdcf8-40be-41fc-9535-7facd1fc2ffc",
+        at_bookmark="bm-1",
+        export_completed_at="2026-09-16T05:00:00Z",
+        download_host="acct.r2.cloudflarestorage.com",
+        signed_url_sha256="sha256:" + "b" * 64,
+        format="d1-backup-encrypt/v1",
+        max_sql_bytes=4 * 1024 * 1024 * 1024,
+        deployment_id="deploy-1",
+        release_source_sha="a" * 40,
+    )
+    puts = {"n": 0}
+    shutdowns: list[int] = []
+
+    def terminal_uploader(key, data, *, spec, content_digest, extra_headers=None):
+        del key, data, spec, content_digest, extra_headers
+        puts["n"] += 1
+        raise RuntimeError("R2 upload returned 502")
+
+    def terminal_reader(item):
+        del item
+        return None
+
+    manager = _job_manager(
+        lambda item: (_ for _ in ()).throw(AssertionError("no runner")),
+        on_terminal=lambda: shutdowns.append(1),
+        terminal_uploader=terminal_uploader,
+        terminal_reader=terminal_reader,
+        retry_schedule=(0.05,),
+        max_job_seconds=30,
+    )
+    manager._begin_terminal_publication(
+        spec, manager._failure_terminal(spec, "runner failed")
+    )
+    assert puts["n"] == 1
+    assert shutdowns == []
+    assert manager._shutdown_notified is False
+    assert held_retry_scheduler != []

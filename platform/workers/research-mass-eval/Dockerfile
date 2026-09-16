@@ -23,7 +23,7 @@ RUN uv sync --frozen --no-dev && \
     chmod 0555 \
       /app/platform/workers/research-mass-eval/container/personal_research_service.py && \
     PYTHONPATH=/app:/app/platform/workers/research-mass-eval/container \
-      python -c "from pathlib import Path; import importlib.util; assert not Path('/app/packages/product/research/offline').exists(); assert not Path('/app/packages/product/research/unique_logic').exists(); assert importlib.util.find_spec('research.offline') is None; assert importlib.util.find_spec('research.unique_logic') is None; import personal_vol_am_pm_panel_job, personal_research_service, d1_backup_encrypt_job, research, research.experiment_plans, research.phase7_pilot, research.scheduler, agents.mass_research, research.personal_service, execution.paper_service"
+      python -c "from pathlib import Path; import importlib.util; assert not Path('/app/packages/product/research/offline').exists(); assert not Path('/app/packages/product/research/unique_logic').exists(); assert importlib.util.find_spec('research.offline') is None; assert importlib.util.find_spec('research.unique_logic') is None; import personal_vol_am_pm_panel_job, personal_research_service, d1_backup_encrypt_job, research, research.experiment_plans, research.phase7_pilot, research.scheduler, agents.mass_research, research.personal_service, execution.paper_service; from scripts.encrypt_d1_backup import _governed_database as gdb; s=gdb('staging'); p=gdb('production'); assert s['id']=='d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb' and s['name']=='quant-ingest-staging'; assert p['id']=='be6fdcf8-40be-41fc-9535-7facd1fc2ffc' and p['name']=='quant-ingest'"
 
 EXPOSE 8080
 CMD ["python", "platform/workers/research-mass-eval/container/personal_research_service.py"]

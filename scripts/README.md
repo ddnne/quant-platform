@@ -124,10 +124,10 @@ Phase 6 hardening utilities:
   or digest never attests the executing source SHA and never grants migration
   or staging authority.
   Cloud execution is Mass Container `/v1/encrypt-d1-backup` via Worker
-  `d1.export` signed_url stream and `research.r2` ciphertext PUT; Mac must
-  not hold authentic SQL. Operator later supplies the signed_url and 32-byte
-  key as Worker secrets after one combined approval. Do not run `d1 export`
-  from this README.
+  `d1.export` stream from one `D1_BACKUP_EXPORT_BUNDLE` and `research.r2`
+  ciphertext PUT. Mac must not hold authentic SQL. Operator helper
+  `d1_export_poll_descriptor.py --initiate` writes a 0600 bundle (no SQL).
+  Do not run Wrangler `d1 export` from this README.
 - `d1_ingestion_migration_validation.py` — validate the canonical migration
   history, schema, triggers and populated v2-to-v3 preservation on an isolated
   ephemeral database. Recorded partial or malformed states fail.

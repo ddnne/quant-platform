@@ -52,9 +52,10 @@ new_sqlite_classes = ["PersonalResearchContainer"]
 [secrets]
 required = ["MASS_EVAL_TOKEN"]
 
-# Optional later, not required to bind: D1_BACKUP_EXPORT_SIGNED_URL (1h R2
-# signed_url from operator wrangler d1 export --remote) and D1_BACKUP_KEY
-# (32 raw bytes or standard base64). Absent secrets keep backup 409.
+# Optional later, not required to bind: D1_BACKUP_EXPORT_BUNDLE (one
+# metadata+signed_url JSON from scripts/d1_export_poll_descriptor.py --initiate)
+# and D1_BACKUP_KEY (32 raw bytes or standard base64). Absent bundle/key is 409
+# before Container boot. Do not wrangler-export SQL onto the Mac.
 
 # R2 — research mass-eval artifacts (and optional staged panels).
 [[r2_buckets]]

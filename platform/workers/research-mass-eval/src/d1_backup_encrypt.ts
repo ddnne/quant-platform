@@ -6,8 +6,11 @@ import {
 import {
   D1_BACKUP_ENCRYPT_FORMAT,
   D1_BACKUP_MAX_SQL_BYTES,
+  GOVERNED_INGEST_DATABASE,
   d1BackupEncryptManifestKey,
   d1BackupEncryptRequestDigest,
+  d1ExportUrlSha256,
+  parseD1ExportBundle,
   type D1BackupEncryptRequest,
 } from "./d1_backup_encrypt_contract";
 import {
@@ -28,11 +31,47 @@ function releaseSourceSha(env: Env): string | null {
   return SOURCE_SHA.test(tag) ? tag : null;
 }
 
+function backupKeyPresent(raw: string | undefined): boolean {
+  if (!raw) return false;
+  const utf8 = new TextEncoder().encode(raw);
+  if (utf8.byteLength === 32) return true;
+  try {
+    return atob(raw.trim()).length === 32;
+  } catch {
+    return false;
+  }
+}
+
 export async function submitD1BackupEncrypt(
   env: Env,
   request: D1BackupEncryptRequest,
 ): Promise<Response> {
-  const requestDigest = await d1BackupEncryptRequestDigest(request);
+  const parsed = await parseD1ExportBundle(env.D1_BACKUP_EXPORT_BUNDLE);
+  if (!parsed.ok) {
+    return json(
+      { ok: false, error: "export_not_authorized", job_id: request.job_id, go: false },
+      409,
+    );
+  }
+  const bundle = parsed.value;
+  if (
+    bundle.environment !== request.environment ||
+    bundle.database_id !== GOVERNED_INGEST_DATABASE[request.environment].id ||
+    bundle.database_name !== GOVERNED_INGEST_DATABASE[request.environment].name
+  ) {
+    return json(
+      { ok: false, error: "export_identity_mismatch", job_id: request.job_id, go: false },
+      409,
+    );
+  }
+  if (!backupKeyPresent(env.D1_BACKUP_KEY)) {
+    return json(
+      { ok: false, error: "backup_key_unavailable", job_id: request.job_id, go: false },
+      409,
+    );
+  }
+  const signedUrlSha256 = await d1ExportUrlSha256(bundle.signed_url);
+  const requestDigest = await d1BackupEncryptRequestDigest(request, bundle);
   const existing = await readSmallJson(
     env.STRUCTURED_BUCKET,
     d1BackupEncryptManifestKey(request.job_id),
@@ -83,7 +122,12 @@ export async function submitD1BackupEncrypt(
         headers: { "content-type": "application/json; charset=utf-8" },
         body: JSON.stringify({
           deployment_id: env.CF_VERSION_METADATA?.id ?? "unknown",
+          at_bookmark: bundle.at_bookmark,
+          database_id: bundle.database_id,
+          database_name: bundle.database_name,
+          download_host: bundle.download_host,
           environment: request.environment,
+          export_completed_at: bundle.export_completed_at,
           format: D1_BACKUP_ENCRYPT_FORMAT,
           job_id: request.job_id,
           manifest_key: d1BackupEncryptManifestKey(request.job_id),
@@ -91,6 +135,7 @@ export async function submitD1BackupEncrypt(
           release_source_sha: sourceSha,
           request_digest: requestDigest,
           runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
+          signed_url_sha256: signedUrlSha256,
         }),
       }),
     );

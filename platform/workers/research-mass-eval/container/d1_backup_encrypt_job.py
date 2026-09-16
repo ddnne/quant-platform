@@ -75,6 +75,12 @@ class D1BackupEncryptJobSpec:
     manifest_key: str
     runner_version: str
     environment: str
+    database_name: str
+    database_id: str
+    at_bookmark: str
+    export_completed_at: str
+    download_host: str
+    signed_url_sha256: str
     format: str
     max_sql_bytes: int
     deployment_id: str
@@ -85,8 +91,13 @@ class D1BackupEncryptJobSpec:
         if not isinstance(document, dict):
             raise D1BackupEncryptJobInputError("d1 backup job must be a JSON object")
         required = {
+            "at_bookmark",
+            "database_id",
+            "database_name",
             "deployment_id",
+            "download_host",
             "environment",
+            "export_completed_at",
             "format",
             "job_id",
             "manifest_key",
@@ -94,6 +105,7 @@ class D1BackupEncryptJobSpec:
             "release_source_sha",
             "request_digest",
             "runner_version",
+            "signed_url_sha256",
         }
         if set(document) != required:
             raise D1BackupEncryptJobInputError("d1 backup job fields are closed")
@@ -111,6 +123,12 @@ class D1BackupEncryptJobSpec:
             manifest_key=document["manifest_key"],
             runner_version=document["runner_version"],
             environment=document["environment"],
+            database_name=document["database_name"],
+            database_id=document["database_id"],
+            at_bookmark=document["at_bookmark"],
+            export_completed_at=document["export_completed_at"],
+            download_host=document["download_host"],
+            signed_url_sha256=document["signed_url_sha256"],
             format=document["format"],
             max_sql_bytes=max_bytes,
             deployment_id=document["deployment_id"],
@@ -136,6 +154,18 @@ class D1BackupEncryptJobSpec:
             raise D1BackupEncryptJobInputError("release_source_sha is invalid")
 
 
+        from scripts.encrypt_d1_backup import _governed_database, _require_utc_timestamp
+
+        governed = _governed_database(self.environment)
+        if self.database_name != governed["name"] or self.database_id != governed["id"]:
+            raise D1BackupEncryptJobInputError("export identity mismatch")
+        if not self.at_bookmark.strip() or not self.download_host.strip():
+            raise D1BackupEncryptJobInputError("export identity mismatch")
+        _require_utc_timestamp(self.export_completed_at, "export_completed_at")
+        if _DIGEST_RE.fullmatch(self.signed_url_sha256) is None:
+            raise D1BackupEncryptJobInputError("export identity mismatch")
+
+
 def spool_d1_export_sql(
     destination: Path,
     spec: D1BackupEncryptJobSpec,
@@ -150,6 +180,7 @@ def spool_d1_export_sql(
             "x-personal-job-id": spec.job_id,
             "x-personal-request-digest": spec.request_digest,
             "x-personal-job-kind": "d1-backup",
+            "x-d1-export-url-sha256": spec.signed_url_sha256,
         },
     )
     try:
@@ -182,6 +213,7 @@ def fetch_backup_key(destination: Path, spec: D1BackupEncryptJobSpec) -> None:
             "x-personal-job-id": spec.job_id,
             "x-personal-request-digest": spec.request_digest,
             "x-personal-job-kind": "d1-backup",
+            "x-d1-export-url-sha256": spec.signed_url_sha256,
         },
     )
     try:
@@ -247,19 +279,18 @@ def execute_d1_backup_encrypt_job(
                 fetch_backup_key(key_path, spec)
             sql_path = job_root / "export.sql"
             spooler(sql_path, spec)
-            from scripts.encrypt_d1_backup import _governed_database
 
-            governed = _governed_database(spec.environment)
             encrypted = job_root / "export.sql.enc"
             observed = encrypt_backup(
                 sql_path,
                 encrypted,
                 key_path,
                 environment=spec.environment,
-                database_name=governed["name"],
-                database_id=governed["id"],
-                exported_at=started_at,
+                database_name=spec.database_name,
+                database_id=spec.database_id,
+                exported_at=spec.export_completed_at,
                 release_source_sha=spec.release_source_sha,
+                max_restored_sqlite_bytes=D1_BACKUP_MAX_RESTORED_SQLITE_BYTES,
             )
             verified = verify_encrypted(encrypted, key_path)
             if verified["plaintext_digest"] != observed["plaintext_digest"]:
@@ -286,6 +317,9 @@ def execute_d1_backup_encrypt_job(
                 "deployment_id": spec.deployment_id,
                 "started_at": started_at,
                 "finished_at": _now(),
+                "at_bookmark": spec.at_bookmark,
+                "export_completed_at": spec.export_completed_at,
+                "signed_url_sha256": spec.signed_url_sha256,
                 "ciphertext_key": ciphertext_key,
                 "ciphertext_sha256": ciphertext_digest,
                 "plaintext_bytes": observed["plaintext_bytes"],

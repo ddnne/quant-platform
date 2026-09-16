@@ -1097,4 +1097,24 @@ describe("d1 backup research.r2 stream put", () => {
     expect(created.status).toBe(201);
     expect(bucket.put).toHaveBeenCalledOnce();
   });
+
+  it("GET of a d1-backup terminal is 404 when absent, not 403", async () => {
+    const jobId = "d1b-one";
+    const requestDigest = `sha256:${"a".repeat(64)}`;
+    const key = `research/d1-backups/job=${jobId}/manifest.json`;
+    const bucket = { get: vi.fn(async () => null), head: vi.fn(), put: vi.fn() } as unknown as R2Bucket;
+    const missing = await personalResearchR2Outbound(
+      new Request(`http://research.r2/${key}`, {
+        method: "GET",
+        headers: {
+          "x-personal-job-id": jobId,
+          "x-personal-request-digest": requestDigest,
+          "x-personal-runner-version": PERSONAL_RESEARCH_RUNNER_VERSION,
+          "x-personal-job-kind": "d1-backup",
+        },
+      }),
+      { STRUCTURED_BUCKET: bucket },
+    );
+    expect(missing.status).toBe(404);
+  });
 });

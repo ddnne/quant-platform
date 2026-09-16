@@ -28,7 +28,7 @@ import uuid
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-from scripts.cloudflare_d1_migration_manifest import MANIFEST, build_manifest
+from scripts.cloudflare_d1_migration_manifest import MANIFEST
 
 
 MAGIC = b"QPDBENC2"
@@ -38,6 +38,7 @@ KEY_BYTES = 32
 HEADER_LENGTH_BYTES = 4
 MAX_HEADER_BYTES = 64 * 1024
 CHUNK_BYTES = 4 * 1024 * 1024
+MAX_RESTORED_SQLITE_BYTES = 5 * 1024 * 1024 * 1024
 BACKUP_FORMAT = "quant-platform-d1-backup/aes-256-gcm-v3"
 SCHEMA_PROFILES = {
     "production": "quant-ingest-production/v1",
@@ -251,24 +252,24 @@ def _key_id(key: bytes) -> str:
 def _governed_database(environment: str) -> dict[str, str]:
     if environment not in SCHEMA_PROFILES:
         raise ValueError("D1 backup environment must be production or staging")
-    generated = build_manifest()
-    rendered = json.dumps(generated, indent=2, sort_keys=False) + "\n"
     try:
-        frozen = MANIFEST.read_text(encoding="utf-8")
-    except OSError as exc:
+        frozen = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
         raise ValueError("canonical D1 migration manifest is missing") from exc
-    if frozen != rendered:
-        raise ValueError("canonical D1 migration manifest is stale")
     try:
-        binding = generated["targets"]["quant-ingest"]["environments"][
+        binding = frozen["targets"]["quant-ingest"]["environments"][
             environment
         ]
+        name = str(binding["database_name"])
+        database_id = str(binding["database_id"])
     except (KeyError, TypeError) as exc:
         raise ValueError("canonical quant-ingest environment binding is missing") from exc
+    if not name or not database_id:
+        raise ValueError("canonical quant-ingest environment binding is missing")
     return {
         "environment": environment,
-        "name": str(binding["database_name"]),
-        "id": str(binding["database_id"]),
+        "name": name,
+        "id": database_id,
         "schema_profile": SCHEMA_PROFILES[environment],
     }
 
@@ -290,6 +291,41 @@ def _validate_database_identity(
     return governed
 
 
+def _scratch_bytes(directory: Path) -> int:
+    total = 0
+    try:
+        for root, _dirs, files in os.walk(directory, onerror=lambda _exc: None):
+            for name in files:
+                try:
+                    total += (Path(root) / name).stat().st_size
+                except OSError:
+                    continue
+    except OSError:
+        return total
+    return total
+
+
+def _kill_if_scratch_exceeds(process: subprocess.Popen[bytes], directory: Path, max_bytes: int) -> None:
+    if _scratch_bytes(directory) <= max_bytes:
+        return
+    process.kill()
+    process.wait()
+    raise ValueError("restored D1 database exceeds the sqlite byte bound")
+
+
+def _wait_sqlite_bounded(
+    process: subprocess.Popen[bytes],
+    directory: Path,
+    max_bytes: int,
+) -> int:
+    while True:
+        _kill_if_scratch_exceeds(process, directory, max_bytes)
+        try:
+            return int(process.wait(timeout=0.05))
+        except subprocess.TimeoutExpired:
+            continue
+
+
 def _restore_and_validate_export(
     source: Path,
     *,
@@ -299,6 +335,7 @@ def _restore_and_validate_export(
     exported_at: str,
     release_source_sha: str,
     sqlite3_binary: str | None = None,
+    max_restored_sqlite_bytes: int = MAX_RESTORED_SQLITE_BYTES,
 ) -> tuple[dict[str, Any], str, int]:
     _validate_database_identity(
         environment=environment,
@@ -316,8 +353,18 @@ def _restore_and_validate_export(
     if not executable:
         raise ValueError("sqlite3 CLI is required to validate the D1 SQL export")
 
-    with tempfile.TemporaryDirectory(prefix="quant-platform-d1-restore-") as directory:
-        restored = Path(directory) / "restored.sqlite3"
+    parent = os.environ.get("TMPDIR")
+    tmp_kwargs: dict[str, str] = {"prefix": "quant-platform-d1-restore-"}
+    if parent:
+        tmp_kwargs["dir"] = parent
+    with tempfile.TemporaryDirectory(**tmp_kwargs) as directory:
+        scratch = Path(directory)
+        child_env = os.environ.copy()
+        child_env["TMPDIR"] = directory
+        child_env["TEMP"] = directory
+        child_env["TMP"] = directory
+        child_env["SQLITE_TMPDIR"] = directory
+        restored = scratch / "restored.sqlite3"
         digest = hashlib.sha256()
         source_bytes = 0
         # No shell is involved, and stdout/stderr are discarded deliberately:
@@ -327,16 +374,20 @@ def _restore_and_validate_export(
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env=child_env,
         )
         assert process.stdin is not None
         try:
             with source.open("rb") as handle:
                 while chunk := handle.read(CHUNK_BYTES):
+                    _kill_if_scratch_exceeds(process, scratch, max_restored_sqlite_bytes)
                     digest.update(chunk)
                     source_bytes += len(chunk)
                     process.stdin.write(chunk)
             process.stdin.close()
-            return_code = process.wait()
+            return_code = _wait_sqlite_bounded(
+                process, scratch, max_restored_sqlite_bytes
+            )
         except BrokenPipeError as exc:
             process.stdin.close()
             process.wait()
@@ -347,7 +398,9 @@ def _restore_and_validate_export(
             raise
         if return_code != 0 or source_bytes <= 0 or not restored.is_file():
             raise ValueError("D1 SQL export could not be restored")
-
+        restored_bytes = restored.stat().st_size
+        if restored_bytes < 1 or restored_bytes > max_restored_sqlite_bytes:
+            raise ValueError("restored D1 database exceeds the sqlite byte bound")
         try:
             connection = sqlite3.connect(
                 f"file:{restored}?mode=ro&immutable=1", uri=True
@@ -628,6 +681,7 @@ def encrypt_backup(
     release_source_sha: str,
     delete_source: bool = True,
     sqlite3_binary: str | None = None,
+    max_restored_sqlite_bytes: int = MAX_RESTORED_SQLITE_BYTES,
 ) -> dict[str, object]:
     _resolved_distinct(source, target, key_path)
     if target.exists():
@@ -645,6 +699,7 @@ def encrypt_backup(
         exported_at=exported_at,
         release_source_sha=release_source_sha,
         sqlite3_binary=sqlite3_binary,
+        max_restored_sqlite_bytes=max_restored_sqlite_bytes,
     )
     nonce = os.urandom(NONCE_BYTES)
     header = _header_payload(

@@ -921,6 +921,7 @@ function parseTerminalManifestKey(
     ["overlay", /^research\/personal\/(?:index-vol-overlay-2023|index-smile-transport-2023)(?:-am-pm)?\/job=([a-z0-9][a-z0-9._-]{0,63})\/manifest\.json$/],
     ["vol-panel", /^research\/personal\/vol-ratio-am-pm-v1\/panel-builds\/job=([a-z0-9][a-z0-9._-]{0,63})\/manifest\.json$/],
     ["option-sidecar", /^research\/personal\/option-sidecar\/job=([a-z0-9][a-z0-9._-]{0,63})\/manifest\.json$/],
+    ["d1-backup", /^research\/d1-backups\/job=([a-z0-9][a-z0-9._-]{0,63})\/manifest\.json$/],
   ];
   for (const [kind, pattern] of patterns) {
     const match = pattern.exec(key);
@@ -940,6 +941,7 @@ function expectedTerminalManifestKey(
   if (kind === "receipt-candidate") {
     return personalReceiptCandidateManifestKey(jobId);
   }
+  if (kind === "d1-backup") return d1BackupEncryptManifestKey(jobId);
   if (kind === "svi") return personalSviTerminalManifestKey(jobId);
   if (kind === "vol-panel") return personalVolAmPmPanelBuildTerminalKey(jobId);
   if (kind === PERSONAL_OPTION_SIDECAR_KIND) {
@@ -964,7 +966,9 @@ function requiredTerminalHeaders(kind: PersonalContainerKind): string[] {
   if (kind === "research") {
     return [...common, "x-personal-cohort-id", "x-personal-universe-id"];
   }
-  if (kind === "snapshot" || kind === "receipt-candidate") return common;
+  if (kind === "snapshot" || kind === "receipt-candidate" || kind === "d1-backup") {
+    return common;
+  }
   return [...common, "x-personal-cohort-id"];
 }
 
@@ -975,7 +979,8 @@ function expectedRunnerVersion(
   if (
     kind === "research" ||
     kind === "snapshot" ||
-    kind === "receipt-candidate"
+    kind === "receipt-candidate" ||
+    kind === "d1-backup"
   ) {
     return PERSONAL_RESEARCH_RUNNER_VERSION;
   }

@@ -1,6 +1,11 @@
 import { json } from "./http";
 import { isPersonalResearchJobId } from "./personal_research_contract";
-import { D1_BACKUP_MAX_SQL_BYTES } from "./d1_backup_encrypt_contract";
+import {
+  D1_BACKUP_MAX_SQL_BYTES,
+  d1ExportDownloadUrlDenied,
+  d1ExportUrlSha256,
+  parseD1ExportBundle,
+} from "./d1_backup_encrypt_contract";
 
 export const D1_EXPORT_HOST = "d1.export";
 const DOWNLOAD_PATH = "/v1/download";
@@ -9,11 +14,9 @@ const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
 const MAX_REDIRECTS = 3;
 const DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000;
 const KEY_BYTES = 32;
-const EXPORT_HOST_RE =
-  /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.r2\.cloudflarestorage\.com$/;
 
 export type D1ExportEnv = {
-  D1_BACKUP_EXPORT_SIGNED_URL?: string;
+  D1_BACKUP_EXPORT_BUNDLE?: string;
   D1_BACKUP_KEY?: string;
 };
 
@@ -28,17 +31,6 @@ function backupJobIdentity(request: Request): boolean {
   );
 }
 
-export function d1ExportDownloadUrlDenied(raw: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    return true;
-  }
-  if (parsed.protocol !== "https:") return true;
-  if (parsed.username !== "" || parsed.password !== "") return true;
-  return !EXPORT_HOST_RE.test(parsed.hostname.toLowerCase());
-}
 
 function parseBackupKey(raw: string): Uint8Array | null {
   const utf8 = new TextEncoder().encode(raw);
@@ -57,6 +49,7 @@ function parseBackupKey(raw: string): Uint8Array | null {
 async function streamSignedExport(
   signedUrl: string,
   maxBytes: number,
+  allowedHost: string,
 ): Promise<Response> {
   let current: URL;
   try {
@@ -64,7 +57,7 @@ async function streamSignedExport(
   } catch {
     return json({ error: "d1 export url denied", go: false }, 403);
   }
-  if (d1ExportDownloadUrlDenied(current.toString())) {
+  if (d1ExportDownloadUrlDenied(current.toString(), allowedHost)) {
     return json({ error: "d1 export url denied", go: false }, 403);
   }
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
@@ -89,7 +82,7 @@ async function streamSignedExport(
       } catch {
         return json({ error: "d1 export redirect denied", go: false }, 502);
       }
-      if (d1ExportDownloadUrlDenied(next.toString())) {
+      if (d1ExportDownloadUrlDenied(next.toString(), allowedHost)) {
         return json({ error: "d1 export redirect denied", go: false }, 403);
       }
       current = next;
@@ -124,13 +117,13 @@ async function streamSignedExport(
 
 /**
  * Container-only SQL/key proxy. Container internet stays off.
- * Operator later places the Wrangler 4.125.0 export signed_url (1h R2
- * download, not a CF admin token) and 32-byte backup key as Worker secrets.
- * Absent secrets deny. Present allowed URL is fetched and streamed.
+ * Operator later places one export bundle (descriptor + signed_url) and the
+ * 32-byte backup key. Download requires the job's signed_url sha256 to match
+ * the current bundle so a swapped same-host URL cannot be labelled as this job.
  */
 export async function d1ExportSourceOutbound(
   request: Request,
-  env: D1ExportEnv = {},
+  env: D1ExportEnv,
 ): Promise<Response> {
   const url = new URL(request.url);
   if (
@@ -164,9 +157,18 @@ export async function d1ExportSourceOutbound(
       },
     });
   }
-  const signed = env.D1_BACKUP_EXPORT_SIGNED_URL;
-  if (!signed) {
+  const parsed = await parseD1ExportBundle(env.D1_BACKUP_EXPORT_BUNDLE);
+  if (!parsed.ok) {
     return json({ error: "export_not_authorized", go: false }, 409);
   }
-  return streamSignedExport(signed, D1_BACKUP_MAX_SQL_BYTES);
+  const expected = await d1ExportUrlSha256(parsed.value.signed_url);
+  const provided = request.headers.get("x-d1-export-url-sha256") ?? "";
+  if (provided !== expected) {
+    return json({ error: "export_identity_mismatch", go: false }, 409);
+  }
+  return streamSignedExport(
+    parsed.value.signed_url,
+    D1_BACKUP_MAX_SQL_BYTES,
+    parsed.value.download_host,
+  );
 }
