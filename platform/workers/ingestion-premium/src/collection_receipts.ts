@@ -1,6 +1,7 @@
 /**
  * Collection receipt and required-segment evidence writes.
- * Segment insert stays UNKNOWN; COMPLETE is not minted here.
+ * Segment insert stays UNKNOWN; governed Receipt commitReceipt may CAS
+ * COMPLETE onto a matching V3 planned row. This writer never mints COMPLETE.
  */
 
 import type { DatasetSpec } from "./catalog";

@@ -45,6 +45,50 @@ export function canonicalReceiptExpectedScope(spec: DatasetSpec, initial: {
   };
 }
 
+const COVERAGE_POLICY_VERSION = "collection-coverage/v3";
+const EXPECTED_EMPTY_WITH_EVIDENCE = "EXPECTED_EMPTY_WITH_EVIDENCE";
+
+function extraDigest(
+  digests: CollectionReceiptV3["digests"],
+  name: string,
+): string | undefined {
+  const extra = digests.extra_digests;
+  if (!extra || typeof extra !== "object") return undefined;
+  const value = extra[name];
+  return typeof value === "string" ? value : undefined;
+}
+
+/** COMPLETE only for a jquants V3 signed SUCCESS that already proved exhaustion
+ * and raw/structured reconciliation. Does not invent a planned coverage row. */
+export function receiptEligibleForCoverageComplete(
+  receipt: CollectionReceiptV3,
+): boolean {
+  if (receipt.source !== "jquants") return false;
+  if (receipt.status !== "SUCCESS" || receipt.error !== null) return false;
+  if (receipt.pagination_exhausted !== true) return false;
+  if (
+    receipt.digests.eligibility !== "TRUSTED_COLLECTION" ||
+    receipt.digests.issuer_class !== "SignedReceiptAuthority"
+  ) {
+    return false;
+  }
+  if (!Number.isInteger(receipt.raw_page_count) || receipt.raw_page_count < 1) {
+    return false;
+  }
+  if (receipt.raw_row_count !== receipt.structured_row_count) return false;
+  if (
+    receipt.expected_items !== null &&
+    receipt.observed_items !== receipt.expected_items
+  ) {
+    return false;
+  }
+  const emptyEvidence = extraDigest(receipt.digests, EXPECTED_EMPTY_WITH_EVIDENCE);
+  const emptyOk = typeof emptyEvidence === "string" &&
+    /^sha256:[0-9a-f]{64}$/.test(emptyEvidence);
+  if (receipt.raw_row_count < 1 && !emptyOk) return false;
+  return true;
+}
+
 export async function measuredClaims(input: {
   env: ReceiptAuthorityEnv;
   requestDigest: string;
@@ -250,6 +294,11 @@ export async function commitReceipt(
     product_artifact_key: product.artifact_key,
     raw_manifest_digest: operation.raw_manifest_digest,
   });
+  const coverageDetail = canonicalJson({
+    reason: "receipt reconciled",
+    event_zero: receipt.observed_items === 0,
+  });
+  const promoteCoverage = receiptEligibleForCoverageComplete(receipt);
   await env.DB.batch([
     env.DB.prepare(
     `INSERT OR IGNORE INTO collection_receipts
@@ -299,6 +348,42 @@ export async function commitReceipt(
       `UPDATE ingestion_run_log SET status='SUCCESS',detail=?
        WHERE id=? AND authority_operation_id=? AND status IN ('RUNNING','SUCCESS')`,
     ).bind(successDetail, receipt.run_id, operationId),
+    ...(promoteCoverage
+      ? [env.DB.prepare(
+        `UPDATE coverage_segments
+            SET status='COMPLETE',
+                receipt_run_id=?,
+                evaluated_at=?,
+                detail_json=?
+          WHERE source=?
+            AND dataset=?
+            AND segment_id=?
+            AND policy_version=?
+            AND segment_start=?
+            AND segment_end=?
+            AND expected_scope=?
+            AND (
+              (expected_items IS NULL AND ? IS NULL)
+              OR expected_items = ?
+            )
+            AND status IN ('UNKNOWN','PARTIAL','STALE','COMPLETE')
+            AND (receipt_run_id IS NULL OR receipt_run_id=?)`,
+      ).bind(
+        receipt.run_id,
+        receipt.checked_at,
+        coverageDetail,
+        receipt.source,
+        receipt.dataset,
+        receipt.segment_id,
+        COVERAGE_POLICY_VERSION,
+        receipt.segment_start,
+        receipt.segment_end,
+        JSON.stringify(receipt.expected_scope),
+        receipt.expected_items,
+        receipt.expected_items,
+        receipt.run_id,
+      )]
+      : []),
   ]);
   const row = await env.DB.prepare(
     `SELECT source,dataset,segment_id,segment_start,segment_end,expected_scope,

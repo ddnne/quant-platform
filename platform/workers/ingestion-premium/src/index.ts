@@ -17,7 +17,13 @@
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 
-import { PREMIUM_CORE_DATASETS, isPremiumCore, datasetById, type DatasetSpec } from "./catalog";
+import {
+  PREMIUM_CORE_DATASETS,
+  isPremiumCore,
+  datasetById,
+  governedReceiptIdentity,
+  type DatasetSpec,
+} from "./catalog";
 import {
   naturalKeyMigrationStatus,
   rebuildNaturalKeysV2,
@@ -77,6 +83,7 @@ import {
   type ReceiptOperatorAuditEvidenceV1,
 } from "./receipt_authority_audit_canary";
 import { publishOpsProjectionBestEffort } from "./ops_projection";
+import { canonicalReceiptExpectedScope } from "../../receipt-evidence-authority/src/receipt_evidence";
 import { readReceiptProductBytes } from "./receipt_product_bytes";
 import {
   describeReceiptProductInput,
@@ -208,6 +215,22 @@ function collectionSegment(
       && month <= currentDay.slice(0, 7)
       && start === requiredStart
       && end === requiredEnd;
+  const identity = governedReceiptIdentity(spec.id);
+  if (identity !== undefined && identity.source === "jquants") {
+    const planned = canonicalReceiptExpectedScope(spec, {
+      segment_start: start,
+      segment_end: end,
+      segment_grain: identity.segment_grain,
+    });
+    return {
+      id,
+      start,
+      end,
+      expectedScope: planned.scope as CollectionSegment["expectedScope"],
+      expectedItems: planned.expectedItems,
+      canonicalMonth,
+    };
+  }
   return {
     id,
     start,
