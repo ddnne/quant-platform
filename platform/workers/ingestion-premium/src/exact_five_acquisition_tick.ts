@@ -7,14 +7,20 @@
  * compiled period end). Exact selector membership is the operator control,
  * produced by `ops.exact_five_acquisition_control` from
  * `compiled_candidate_selectors` / `declared_coverage_segments` /
-* `_missing_compiled_segments` extras. This tick does not compile warmup.
-*
+ * `_missing_compiled_segments` extras. This tick does not compile warmup.
+ *
  * Fetch abort cancels vendor HTTP only. The tick waits for the ingest
  * callback to settle and commits that outcome even after the claim lease
  * expires. The claim lease is longer than the fetch abort so overlapping
  * minute Cron ticks do not recapture an in-flight month. Elapsed lease is
-* not proof the prior owner stopped: reconcile a SUCCESS collection receipt
-* for the pending job before any replay.
+ * not proof the prior owner stopped: reconcile a SUCCESS collection receipt
+ * for the pending job before any replay.
+ * A Durable Object/DB `running` row is not proof an isolate still executes.
+ * Official Cron Trigger wall-clock duration is 15 minutes; a `running` row
+ * older than that wall, with no PREPARED request and no receipt, is an
+ * abandoned started marker. Continue the same operation/attempt (same owner,
+ * no attempt increment) so late work can finish. Do not overlap a live or
+ * possibly-live isolate, and do not hold later jobs forever on a stale row.
  * PENDING no-operation skip still treats unsigned SUCCESS as already collected
  * for that audit path. ACTIVE no-operation skip requires a trusted signed
  * full-segment collection receipt for the exact window. Operation-bound
@@ -57,6 +63,8 @@ const MAX_JOBS = 24;
 const MAX_ATTEMPTS = 3;
 const EXACT_FIVE_FETCH_TIMEOUT_MS = 180_000;
 const EXACT_FIVE_LEASE_MS = 240_000;
+/** Official Cron Trigger duration limit (developers.cloudflare.com/workers/platform/limits). */
+const CRON_TRIGGER_WALL_MS = 15 * 60 * 1000;
 const MONTH_ID = /^[0-9]{4}-[0-9]{2}$/;
 
 const CONTROL_KEYS = [
@@ -132,6 +140,7 @@ export type ExactFiveObserveOptions = {
   operationMode?: "PENDING" | "ACTIVE";
   environment?: "staging" | "production";
   registry?: ReceiptVerifyRegistry | null;
+  clock?: () => Date;
 };
 
 /** Durable job completion is a collection receipt for this window, not the ingest promise. */
@@ -143,7 +152,9 @@ export async function observeExactFiveReceipt(
   options: ExactFiveObserveOptions = {},
 ): Promise<ExactFiveObservation> {
    if (operation) {
-     const bound = await observeBoundExactFive(db, job, window, operation);
+     const bound = await observeBoundExactFive(
+       db, job, window, operation, options.clock ?? (() => new Date()),
+     );
      if (bound) return bound;
    }
   const operationMode = options.operationMode ?? "PENDING";
@@ -226,12 +237,13 @@ export async function observeExactFiveReceipt(
    return row !== null;
  }
 
- async function observeBoundExactFive(
-   db: D1Database,
-   job: ExactFiveJob,
-   window: { from: string; to: string },
-   operation: string,
- ): Promise<ExactFiveObservation | null> {
+async function observeBoundExactFive(
+  db: D1Database,
+  job: ExactFiveJob,
+  window: { from: string; to: string },
+  operation: string,
+  clock: () => Date,
+): Promise<ExactFiveObservation | null> {
    const nonce = await sha256HexFromString(operation);
    const success = await db.prepare(
      `SELECT receipt.structured_row_count AS structured_row_count
@@ -327,19 +339,42 @@ export async function observeExactFiveReceipt(
          AND status IN ('fail', 'failed')
        LIMIT 1`,
    ).bind(operation, job.dataset, window.from, window.to).first();
-   if (failedRun) return { status: "failed", rowsInserted: 0 };
-   const run = await db.prepare(
-     `SELECT 1 AS present
+  if (failedRun) return { status: "failed", rowsInserted: 0 };
+  const run = await db.prepare(
+     `SELECT ran_at, status
        FROM ingestion_run_log
        WHERE ${premiumOperationSql("ingestion_run_log")}
        LIMIT 1`,
-   ).bind(operation, job.dataset, window.from, window.to).first();
-   if (run) return { status: "started", rowsInserted: 0 };
+   ).bind(operation, job.dataset, window.from, window.to).first<{
+     ran_at: string;
+     status: string;
+   }>();
+   if (
+     run &&
+     (run.status === "running" || run.status === "partial") &&
+     isolateMayStillRunFromStart(run.ran_at, clock)
+   ) {
+     return { status: "started", rowsInserted: 0 };
+   }
    return null;
  }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isolateMayStillRunFromStart(ranAt: string, clock: () => Date): boolean {
+  const startedAt = Date.parse(ranAt);
+  if (!Number.isFinite(startedAt)) return true;
+  return clock().getTime() - startedAt < CRON_TRIGGER_WALL_MS;
+}
+
+function isolateMayStillRunFromLease(lease: ControlLease, now: Date): boolean {
+  if (!lease) return false;
+  if (lease.until > now.toISOString()) return true;
+  const untilMs = Date.parse(lease.until);
+  if (!Number.isFinite(untilMs)) return true;
+  return now.getTime() - (untilMs - EXACT_FIVE_LEASE_MS) < CRON_TRIGGER_WALL_MS;
 }
 
 function monthEnd(month: string): string {
@@ -763,9 +798,14 @@ export async function runExactFiveAcquisitionTick(
     return { status: "idle", fetched: false, jobs: 0, reason: "leased" };
   }
 
-  const needsFence = lastStatus === "running" || lastStatus === "timeout" ||
-    (observed?.status === "started" && Boolean(control.lease?.owner));
-  if (needsFence && lastStatus !== "unresolved") {
+  if (observed?.status === "started") {
+    return holdInitiating(bucket, control, etag, job, window, jobIndex, false);
+  }
+
+  const maybeLiveLate = isolateMayStillRunFromLease(control.lease, now);
+  const needsFence = (lastStatus === "running" || lastStatus === "timeout") &&
+    maybeLiveLate;
+  if (needsFence) {
     const owner = control.lease?.owner;
     if (!owner) {
       return holdInitiating(bucket, control, etag, job, window, jobIndex, false);
@@ -783,17 +823,14 @@ export async function runExactFiveAcquisitionTick(
     return { status: "idle", fetched: false, jobs: 0, reason: "unresolved" };
   }
 
-  if (observed?.status === "started") {
-    return holdInitiating(bucket, control, etag, job, window, jobIndex, false);
-  }
-
-  if (control.attempts >= MAX_ATTEMPTS) {
+  const continueOwner = pendingOperation;
+  if (!continueOwner && control.attempts >= MAX_ATTEMPTS) {
     return { status: "stop", fetched: false, jobs: 0, reason: "exhausted" };
   }
 
-  const owner = crypto.randomUUID();
+  const owner = continueOwner ?? crypto.randomUUID();
   const until = new Date(now.getTime() + EXACT_FIVE_LEASE_MS).toISOString();
-  control.attempts += 1;
+  if (!continueOwner) control.attempts += 1;
   control.lease = { owner, until };
   control.last = jobLast(job, window, 0, "running");
   const claimed = await casPut(bucket, control, etag);
@@ -841,6 +878,10 @@ export async function runExactFiveAcquisitionTick(
       summary.rowsInserted >= 0
     ? summary.rowsInserted
     : 0;
+  if (summary.status === "partial") {
+    control.lease = { owner, until: clock().toISOString() };
+    return holdInitiating(bucket, control, etag, job, window, jobIndex, true);
+  }
   if (!summaryAccepted(summary)) {
     if (options.observe) {
       const late = await options.observe(job, window, owner);
