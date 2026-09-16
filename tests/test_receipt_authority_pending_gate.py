@@ -114,6 +114,41 @@ def test_exact_pending_surface_is_provisioning_only(environment: str) -> None:
     assert evidence["authorization_scope"] == "PENDING_PROVISIONING_ONLY"
 
 
+def test_staging_pending_registry_holds_the_captured_public_key_only() -> None:
+    from storage.receipt_crypto import (
+        _parse_scoped_registry_document,
+    )
+
+    path = pending.SCOPED_REGISTRY_PATHS["staging"]
+    raw = path.read_bytes()
+    document = json.loads(raw.decode("utf-8"))
+    parsed = _parse_scoped_registry_document(raw)
+    assert document["generation"] == 3
+    assert document["authority_status"] == "PENDING"
+    assert document["environment"] == "staging"
+    assert (
+        document["prior_registry_digest"]
+        == "sha256:9cb40c06bd2f869a2eedc81082f85db85cf5600a992288cdfa75ce5f1c79cdee"
+    )
+    assert document["keys"] == [
+        {
+            "key_id": "receipt-staging-98fa0160de908051",
+            "algorithm": "Ed25519",
+            "public_key_base64": "QefUnSikny/jxE1mWY0yHT8hXezlziIBTA9HZcLN48c=",
+            "status": "pending",
+        }
+    ]
+    assert parsed.active_keys == ()
+    assert parsed.entries[0].key_id == "receipt-staging-98fa0160de908051"
+    assert parsed.entries[0].status == "pending"
+    body = dict(document)
+    body.pop("registry_digest")
+    assert document["registry_digest"] == pending._canonical_digest(body)
+    evidence = pending.validate_pending_receipt_authority("staging")
+    assert evidence["active_key_count"] == 0
+    assert evidence["authority_mode"] == "PENDING"
+
+
 def test_active_or_cross_environment_registry_cannot_use_pending_gate(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
