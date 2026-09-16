@@ -8,6 +8,8 @@ import {
   VALUATION_BACKFILL_KEY,
   type ValuationIngest,
 } from "../src/valuation_backfill";
+import { EXACT_FIVE_ACQUISITION_KEY } from "../src/exact_five_acquisition_tick";
+import { PENDING_REGISTRATION_KEY } from "../src/pending_registration_tick";
 
 const migrations = inject<Array<{ name: string; queries: string[] }>>("premiumD1Migrations");
 
@@ -275,6 +277,64 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
     expect(spy).not.toHaveBeenCalled();
     expect((await env.DB.prepare("SELECT id FROM ingestion_run_log").all()).results).toEqual([]);
     expect((await env.RAW_BUCKET.list()).objects).toHaveLength(0);
+  });
+
+  it("invalid exact-five control and idle registration do not ingest or register", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      throw new Error(`unexpected fetch ${fetchUrl(input).href}`);
+    });
+    const publicKey = vi.fn();
+    const testEnv = runtimeEnv({
+      RECEIPT_EVIDENCE_AUTHORITY: {
+        public_key_registration: publicKey,
+        issue_for_segment: vi.fn(),
+        recover_issue: vi.fn(),
+        begin_audit_recovery_canary: vi.fn(),
+        recover_audit_recovery_canary: vi.fn(),
+      },
+    });
+    await env.STRUCTURED_BUCKET.put(
+      EXACT_FIVE_ACQUISITION_KEY,
+      JSON.stringify({
+        schema: "exact-five-compiled-acquisition/v1",
+        jobs: [{ dataset: "equities_valuation", from: "2023-01-04", to: "2023-01-04" }],
+        cursor: 0,
+        attempts: 0,
+        lease: null,
+        last: null,
+      }),
+    );
+    await worker.scheduled(scheduledAt(), testEnv, createExecutionContext());
+    expect(spy).not.toHaveBeenCalled();
+    expect(publicKey).not.toHaveBeenCalled();
+    expect((await env.DB.prepare("SELECT id FROM ingestion_run_log").all()).results).toEqual([]);
+  });
+
+  it("requested registration is skipped while READY is declared", async () => {
+    const publicKey = vi.fn();
+    const testEnv = runtimeEnv({
+      READY_DECLARED: "true" as unknown as "false",
+      RECEIPT_EVIDENCE_AUTHORITY: {
+        public_key_registration: publicKey,
+        issue_for_segment: vi.fn(),
+        recover_issue: vi.fn(),
+        begin_audit_recovery_canary: vi.fn(),
+        recover_audit_recovery_canary: vi.fn(),
+      },
+    });
+    await env.STRUCTURED_BUCKET.put(
+      PENDING_REGISTRATION_KEY,
+      JSON.stringify({
+        schema: "receipt-pending-registration/v1",
+        environment: "staging",
+        state: "requested",
+        attempts: 0,
+        lease: null,
+        last: null,
+      }),
+    );
+    await worker.scheduled(scheduledAt(), testEnv, createExecutionContext());
+    expect(publicKey).not.toHaveBeenCalled();
   });
 
   it("R2 CAS concurrent claim, thrown error, exhaustion, and resume", async () => {

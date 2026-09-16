@@ -214,9 +214,18 @@ remote apply results only in immutable release evidence.
   binding manifest; internal key/state/event helpers are JavaScript-private and
   unavailable to workerd RPC. All four named WorkerEntrypoints separately pin
   ordinary RPC methods and the reserved `fetch` special.
-  This is still operational HOLD: the operator caller principal, active key,
-  migration, deploy and live evidence are absent. Do not add a general bypass
-  or execute ACTIVE instructions yet. The all-P0 gate remains the final
+  Staging source now also has two idle-by-default R2 control ticks on the
+  existing Premium minute Cron (same lifecycle as
+  `control/equities_valuation/backfill.json`):
+  `control/receipt_pending_registration.json` invokes the existing
+  `pending_public_key_registration` path once, idempotently, PENDING-only,
+  public evidence only; `control/exact_five_compiled_acquisition.json` runs a
+  finite exact-five `runIngestion` queue (max 24 jobs, 1/tick, 31-day windows,
+  3 attempts). Absent objects are no-ops. They are not deployed until a later
+  SHA-align. Writing either control object is a later approved mutation, not
+  authorized by source merge. Do not add a public Premium route. Mass remains
+  verify-only. This is still operational HOLD for ACTIVE keys, READY, and
+  Pilot. Do not add a general bypass or execute ACTIVE instructions yet. The all-P0 gate remains the final
   release checklist. Runtime Worker paths separately enforce keys, READY,
   Trader authorization, and BudgetLedger occupancy; those checks are not the
   all-P0 gate.

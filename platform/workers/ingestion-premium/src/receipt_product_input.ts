@@ -49,6 +49,10 @@ const PROFILE_DATASETS = new Set(
     : [],
 );
 
+/** Compiled exact-five dataset ids; windows stay on the control object. */
+export const COMPILED_EXACT_FIVE_DATASET_IDS: ReadonlySet<string> =
+  PROFILE_DATASETS;
+
 if (
   typeof PROFILE_ID !== "string" ||
   PROFILE_ID.length === 0 ||

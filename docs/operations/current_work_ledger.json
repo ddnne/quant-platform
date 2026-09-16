@@ -1,6 +1,6 @@
 {
   "schema": "quant-platform-work-ledger/v1",
-  "updated_at": "2026-09-15T13:50:00Z",
+  "updated_at": "2026-09-16T04:00:00Z",
   "history": {
     "git_sha": "d37ef73e5c226a7b2499f0523f4bcca4090b511b",
     "url": "https://github.com/ddnne/quant-platform/blob/d37ef73e5c226a7b2499f0523f4bcca4090b511b/docs/operations/current_work_ledger.json",
@@ -176,7 +176,7 @@
   },
   "next_prerequisite_chain": [
     "Do not serialize Access 9999 or Grok MCP auth failure as a global stop. Access GET organizations returned 9999 not_enabled (API not enabled). No UI was inspected. Conditional only for Worker Access JWT/hostname protection; not a precondition for schema recovery, read-only Ops checks, or ordinary source fixes. Codex mechanical fallback may apply authorized operations after a Grok permission denial; never bypass HOLDs; no paid API fallback. Staging schema recovery already ran once: SCHEMA_PREPARED.",
-    "Secrets/Receipt/Premium staging PENDING at d37ef73 is complete. Next inactive staging code (Gateway, then Mass Worker/Container) needs its own individual approval: it was not in the last 3-Worker unit. Do not deploy Mass/container, activate keys, publish Ops, or mint READY from this continue. Current STALE/B0/READY/sync facts are live_observation (projection_status and 2026-09-15 sync_status). Staging Premium scheduled() returns after valuation_backfill_tick when RECEIPT_AUTHORITY_ENVIRONMENT is staging and does not reach publishOpsProjectionBestEffort; production cause of the same STALE generation is unproven. Publication remains HOLD. MASS_EVAL_TOKEN location gap blocks only authenticated 403 smoke.",
+    "Inactive staging Secrets/Receipt/Premium/Gateway/Mass at 69c9772 is accepted. Source (this unit) adds idle-by-default staging Cron ticks for PENDING registration and exact-five acquisition; they are not live until a later SHA-align and are no-ops without R2 control objects. Do not put those control objects, activate keys, publish Ops, or mint READY from source merge. Staging Premium scheduled() still does not publish Ops. Publication remains HOLD. MASS_EVAL_TOKEN location gap blocks only authenticated 403 smoke. Ask once for the remaining production/data/keys/READY/Pilot outcome after this source is reviewed/merged; not per-Worker.",
     "Explicit HOLDs unchanged; generic continue is not their release: production deploy, data activation, JSDA --activate, key activation, READY publication, Pilot/exact-four, Ops projection publication, Mass/FoF/broker. Exact-four and budget remain NO-GO. No new Worker/signer roles. A6 GLOBAL remains OPEN: missing backup recipient and 32-byte key custody is a real choice. GitHub Release immutability and production collection are repo/API or later-auth work, not inherently human-only; existing content-addressed R2/JSDA AUDIT_ONLY paths are not A6 closure. Staging JSDA AUDIT_ONLY intake is source-partial."
   ],
   "unknowns": [
@@ -213,7 +213,7 @@
     },
     "4_receipt_to_ready_trader": {
       "status": "source_chain_present_not_live",
-      "notes": "Caller chain on e07158a: Premium POST /v1/export/receipt-products; maybePublishAfterAdmittedTerminal → publishAdmittedReceiptCandidate; ready_publication.ts signReadyAttestation + pairPaperTraderAuthorization; Mass submitControlledPilot verifyExecutionReadyEnvelope / trader batch, go:false mass:false. Eval does not mint READY. Live READY snapshot null was remeasured 2026-09-15T08:24:35Z. Staging READY/Trader registries empty is historical metadata captured by 2026-09-14T00:52Z, not remeasured 2026-09-15. Not live certification.",
+      "notes": "Mass still binds PremiumReceiptProductInputService and PilotReadyPublicationService and verifies READY; it does not mint. Premium HTTP /v1/run and /v1/export remain unreachable (workers_dev=false, no routes). Source adds idle R2 controls on staging Cron for one PENDING public registration and a finite exact-five runIngestion queue. Absent control = no-op. Not deployed, not live certification. Local cf_premium_backfill HTTP is not the staging path.",
       "scope": "existence_and_binding_evidence_only"
     },
     "5_ci_deploy_entrypoints": {
@@ -273,7 +273,7 @@
     },
     "8_rollout_and_research_go": {
       "status": "pending",
-      "notes": "Source-delivered and staging Secrets/Receipt/Premium PENDING are distinct from remaining staging Gateway/Mass, production, data, READY, and Pilot. SCHEMA_PREPARED is not JSDA activate. A6 staging JSDA AUDIT_ONLY intake is source-partial; A6 GLOBAL remains OPEN. No production/data/READY/Trader/Pilot/Mass GO."
+      "notes": "Inactive 5-Worker staging at 69c9772 is accepted. This source unit adds idle Cron controls for PENDING registration and exact-five acquisition; undeployed until SHA-align; writing control objects remains unapproved. Production/data/READY/Trader/Pilot/Mass GO remain unapproved. SCHEMA_PREPARED is not JSDA activate. A6 GLOBAL remains OPEN."
     },
     "9_push_remote_and_fresh_clone_verify": {
       "status": "pr211_main_accepted",

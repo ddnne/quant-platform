@@ -228,9 +228,17 @@ typed Premium capability and exact named-handler acceptance are now checked in,
 and the source tree contains a no-secret staging observer bound only to the
 read-only evidence RPC. No live operator/observer principal or Service Binding
 has been deployed or accepted, and the observer cannot call registration.
-Until a separately reviewed no-public-Premium-surface registration caller and
-the Access-protected observer are configured and accepted, do not generate a
-key or claim that registration or activation is executable.
+The in-cloud registration caller is the existing Premium staging Cron plus
+absent-by-default R2 object `control/receipt_pending_registration.json`
+(`state=requested` once). It calls the same
+`PremiumReceiptOperatorService.pending_public_key_registration` implementation,
+persists only public fields, and will not recur after `completed`. It is
+source-only until that SHA is deployed; putting the control object is a later
+approved mutation. The observer still cannot register. Adding a public Premium
+route remains prohibited. Do not generate a key or claim registration or
+activation is live until that control is accepted and the PENDING authority
+returns the public registration. Access-protected observer acceptance remains
+required before ACTIVE, not before this PENDING one-shot.
 
 Preserve the non-secret response, source/deployment SHA, environment, Worker
 version, Durable Object generation, and response digest as immutable release
