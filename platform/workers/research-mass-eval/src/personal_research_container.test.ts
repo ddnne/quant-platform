@@ -87,6 +87,7 @@ import {
 } from "./personal_research_contract";
 import { personalHistorySourceOutbound } from "./personal_history_source";
 import { receiptProductSourceOutbound } from "./receipt_product_source";
+import { d1ExportSourceOutbound } from "./d1_export_source";
 import { withRequestDeadline } from "./bounded_container_request";
 import * as controlledPilot from "./controlled_pilot";
 import {
@@ -239,6 +240,9 @@ describe("personal research Container admission", () => {
     );
     expect(containerRegistry.outboundByHost?.["receipt.products"]).toBe(
       receiptProductSourceOutbound,
+    );
+    expect(containerRegistry.outboundByHost?.["d1.export"]).toBe(
+      d1ExportSourceOutbound,
     );
     expect(containerRegistry.outboundByHost?.["controlled.r2"]).toBeDefined();
     expect(containerRegistry.outboundHandlers?.controlledPilotSnapshot).toBeDefined();
