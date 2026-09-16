@@ -6,6 +6,7 @@
 
 import type { DatasetSpec } from "./catalog";
 import { toJstIso } from "./identity";
+import { canonicalJson } from "../../ingestion-secrets/src/jquants_acquisition_registry";
 
 export interface CollectionReceiptEnv {
   DB: D1Database;
@@ -42,7 +43,7 @@ export async function writeRequiredCoverageSegment(
        detail_json=excluded.detail_json`,
   ).bind(
     spec.id, segment.id, spec.coverage.policy_version,
-    segment.start, segment.end, JSON.stringify(segment.expectedScope),
+    segment.start, segment.end, canonicalJson(segment.expectedScope),
     segment.expectedItems, toJstIso(new Date()),
     JSON.stringify({
       reason: "request queries planned",

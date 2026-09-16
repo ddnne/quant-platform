@@ -378,7 +378,7 @@ export async function commitReceipt(
         COVERAGE_POLICY_VERSION,
         receipt.segment_start,
         receipt.segment_end,
-        JSON.stringify(receipt.expected_scope),
+        canonicalJson(receipt.expected_scope),
         receipt.expected_items,
         receipt.expected_items,
         receipt.run_id,

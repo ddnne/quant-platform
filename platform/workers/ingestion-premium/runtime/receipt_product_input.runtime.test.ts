@@ -26,7 +26,18 @@ import {
   closedReceiptVerifyRegistry,
   type ReceiptVerifyRegistry,
 } from "../src/ops_projection_policy";
-import { commitReceipt } from "../../receipt-evidence-authority/src/receipt_evidence";
+import {
+  canonicalReceiptExpectedScope,
+  commitReceipt,
+} from "../../receipt-evidence-authority/src/receipt_evidence";
+import {
+  datasetById,
+  governedReceiptIdentity,
+} from "../src/catalog";
+import {
+  writeRequiredCoverageSegment,
+  type CollectionSegment,
+} from "../src/collection_receipts";
 import type {
   CollectionReceiptV3,
   ReceiptAuthorityEnv,
@@ -698,7 +709,17 @@ async function seedUnknownStructuredForCommit(options?: {
   const raw = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
   const registry = await closedActiveStagingRegistry(raw);
   const objects = await seedGovernedObjects();
-  const expectedScope = barsScope();
+  const spec = datasetById("equities_bars_daily");
+  if (spec === undefined) throw new Error("catalog missing equities_bars_daily");
+  const identity = governedReceiptIdentity(spec.id);
+  if (identity === undefined || identity.source !== "jquants") {
+    throw new Error("equities_bars_daily is not a governed jquants receipt identity");
+  }
+  const planned = canonicalReceiptExpectedScope(spec, {
+    segment_start: "2026-08-01",
+    segment_end: "2026-08-31",
+    segment_grain: identity.segment_grain,
+  });
   const claims = await canonicalV3Claims(objects, {
     artifact_key: "bars-artifact.jsonl",
     manifest_key: "bars-manifest.json",
@@ -710,16 +731,20 @@ async function seedUnknownStructuredForCommit(options?: {
       operation_id: "op-bars",
       natural_keys: ["k1", "k2"],
     }),
+    expected_scope: planned.scope,
   });
   const envelope = await signV3Claims(pair, claims);
+  const recoveredClaims = JSON.parse(canonicalJson(claims)) as {
+    expected_scope: CollectionReceiptV3["expected_scope"];
+  };
   const receipt: CollectionReceiptV3 = {
     source: "jquants",
     dataset: "equities_bars_daily",
     segment_id: "2026-08",
     segment_start: "2026-08-01",
     segment_end: "2026-08-31",
-    expected_scope: expectedScope,
-    expected_items: 1,
+    expected_scope: recoveredClaims.expected_scope,
+    expected_items: planned.expectedItems,
     observed_items: 1,
     raw_page_count: 1,
     raw_row_count: 2,
@@ -738,7 +763,7 @@ async function seedUnknownStructuredForCommit(options?: {
     operationId: "op-bars",
     nonce: "ab".repeat(32),
     requestDigest: "sha256:" + "cc".repeat(32),
-    expectedScope,
+    expectedScope: planned.scope,
     artifactKey: "bars-artifact.jsonl",
     manifestKey: "bars-manifest.json",
     rawKey: "bars-raw.json",
@@ -746,6 +771,18 @@ async function seedUnknownStructuredForCommit(options?: {
     objects,
     phase: "structured",
   });
+  await writeRequiredCoverageSegment(
+    { DB: runtimeEnv.DB },
+    spec,
+    {
+      id: "2026-08",
+      start: "2026-08-01",
+      end: "2026-08-31",
+      expectedScope: planned.scope as CollectionSegment["expectedScope"],
+      expectedItems: planned.expectedItems,
+      canonicalMonth: true,
+    },
+  );
   if (options?.coverageEnd && options.coverageEnd !== "2026-08-31") {
     await runtimeEnv.DB.prepare(
       `UPDATE coverage_segments SET segment_end=?
