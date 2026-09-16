@@ -12,9 +12,11 @@
  * Fetch abort cancels vendor HTTP only. The tick waits for the ingest
  * callback to settle and commits that outcome even after the 90s lease
  * clock. Elapsed lease is not proof the prior owner stopped: reconcile a
- * SUCCESS collection receipt for the pending job before any replay. Cursor
- * is progress inside this object; receipts also skip already-acquired months
- * after a control replace.
+ * SUCCESS collection receipt for the pending job before any replay.
+ * Coverage presence is not liveness. A fail validation or FAILED receipt
+ * for this operation and exact window is terminal. Cursor is progress
+ * inside this object; receipts also skip already-acquired months after a
+ * control replace.
  */
 
 import { datasetById } from "./catalog";
@@ -25,14 +27,15 @@ import {
   parseControlLease,
   type ControlLease,
 } from "./control_cas";
-import { todayJst, validDate } from "./identity";
-import {
-  COMPILED_CLOSURE_DIGEST,
-  COMPILED_EXACT_FIVE_DATASET_IDS,
-  COMPILED_EXACT_FOUR_PERIOD,
-  COMPILED_PROFILE_DIGEST,
-  COMPILED_PROFILE_ID,
-} from "./receipt_product_input";
+ import { todayJst, validDate } from "./identity";
+ import {
+   COMPILED_CLOSURE_DIGEST,
+   COMPILED_EXACT_FIVE_DATASET_IDS,
+   COMPILED_EXACT_FOUR_PERIOD,
+   COMPILED_PROFILE_DIGEST,
+   COMPILED_PROFILE_ID,
+ } from "./receipt_product_input";
+ import { sha256HexFromString } from "./sha256";
 
 export const EXACT_FIVE_ACQUISITION_KEY =
   "control/exact_five_compiled_acquisition.json";
@@ -95,10 +98,10 @@ export type ExactFiveIngest = (
   signal: AbortSignal,
 ) => Promise<{ status: "pass" | "fail" | "partial"; datasetCount: number; rowsInserted: number }>;
 
-export type ExactFiveObservation = {
-  status: "pass" | "acquired" | "failed" | "started" | "absent";
-  rowsInserted: number;
-};
+ export type ExactFiveObservation = {
+   status: "pass" | "failed" | "started" | "absent";
+   rowsInserted: number;
+ };
 
 export type ExactFiveObserve = (
   job: ExactFiveJob,
@@ -112,94 +115,153 @@ export type ExactFiveTickOptions = {
   observe?: ExactFiveObserve;
 };
 
-/** Durable job completion is a SUCCESS collection receipt, not the ingest promise. */
-export async function observeExactFiveReceipt(
-  db: D1Database,
-  job: ExactFiveJob,
-  window: { from: string; to: string },
-  operation?: string,
-): Promise<ExactFiveObservation> {
-  if (operation) {
-    const success = await db.prepare(
-      `SELECT receipt.structured_row_count AS structured_row_count
-         FROM collection_receipts AS receipt
-         JOIN ingestion_run_log AS run ON run.id = receipt.run_id
-        WHERE run.source = 'jquants' AND run.runtime = 'cloudflare'
-          AND json_extract(run.detail, '$.opts.operation') = ?
-          AND receipt.source = 'jquants' AND receipt.dataset = ?
-          AND receipt.segment_id = ?
-          AND receipt.segment_start = ? AND receipt.segment_end = ?
-          AND receipt.status = 'SUCCESS'
-        ORDER BY receipt.checked_at DESC, receipt.run_id DESC
-        LIMIT 1`,
-    ).bind(operation, job.dataset, job.segment_id, window.from, window.to).first<{
-      structured_row_count: number;
-    }>();
-    if (success) {
-      const rowsInserted = Number.isSafeInteger(success.structured_row_count) &&
-          success.structured_row_count >= 0
-        ? success.structured_row_count
-        : 0;
-      return { status: "pass", rowsInserted };
-    }
-    const failed = await db.prepare(
-      `SELECT 1 AS present
-         FROM collection_receipts AS receipt
-         JOIN ingestion_run_log AS run ON run.id = receipt.run_id
-        WHERE run.source = 'jquants' AND run.runtime = 'cloudflare'
-          AND json_extract(run.detail, '$.opts.operation') = ?
-          AND receipt.source = 'jquants' AND receipt.dataset = ?
-          AND receipt.segment_id = ?
-          AND receipt.segment_start = ? AND receipt.segment_end = ?
-          AND receipt.status = 'FAILED'
-        LIMIT 1`,
-    ).bind(operation, job.dataset, job.segment_id, window.from, window.to).first();
-    if (failed) return { status: "failed", rowsInserted: 0 };
-    const run = await db.prepare(
-      `SELECT 1 AS present
-         FROM ingestion_run_log
-        WHERE source = 'jquants' AND runtime = 'cloudflare'
-          AND json_extract(detail, '$.opts.operation') = ?
-        LIMIT 1`,
-    ).bind(operation).first();
-    if (run) return { status: "started", rowsInserted: 0 };
-  }
-  const success = await db.prepare(
-    `SELECT structured_row_count
-       FROM collection_receipts
-      WHERE source = 'jquants' AND dataset = ? AND segment_id = ?
-        AND segment_start = ? AND segment_end = ? AND status = 'SUCCESS'
-      ORDER BY checked_at DESC, run_id DESC
-      LIMIT 1`,
-  ).bind(job.dataset, job.segment_id, window.from, window.to).first<{
-    structured_row_count: number;
-  }>();
-  if (success) {
-    const rowsInserted = Number.isSafeInteger(success.structured_row_count) &&
-        success.structured_row_count >= 0
-      ? success.structured_row_count
-      : 0;
-    return { status: operation ? "acquired" : "pass", rowsInserted };
-  }
-  const failed = await db.prepare(
-    `SELECT 1 AS present
-       FROM collection_receipts
-      WHERE source = 'jquants' AND dataset = ? AND segment_id = ?
-        AND segment_start = ? AND segment_end = ?
-        AND status = 'FAILED'
-      LIMIT 1`,
-  ).bind(job.dataset, job.segment_id, window.from, window.to).first();
-  if (failed) return { status: "failed", rowsInserted: 0 };
-  const coverage = await db.prepare(
-    `SELECT 1 AS present
-       FROM coverage_segments
-      WHERE source = 'jquants' AND dataset = ? AND segment_id = ?
-        AND segment_start = ? AND segment_end = ?
-      LIMIT 1`,
-  ).bind(job.dataset, job.segment_id, window.from, window.to).first();
-  if (coverage) return { status: "started", rowsInserted: 0 };
-  return { status: "absent", rowsInserted: 0 };
-}
+ /** Durable job completion is a SUCCESS collection receipt, not the ingest promise. */
+ export async function observeExactFiveReceipt(
+   db: D1Database,
+   job: ExactFiveJob,
+   window: { from: string; to: string },
+   operation?: string,
+ ): Promise<ExactFiveObservation> {
+   if (operation) {
+     const bound = await observeBoundExactFive(db, job, window, operation);
+     if (bound) return bound;
+   }
+   const success = await db.prepare(
+     `SELECT structured_row_count
+        FROM collection_receipts
+       WHERE source = 'jquants' AND dataset = ? AND segment_id = ?
+         AND segment_start = ? AND segment_end = ? AND status = 'SUCCESS'
+       ORDER BY checked_at DESC, run_id DESC
+       LIMIT 1`,
+   ).bind(job.dataset, job.segment_id, window.from, window.to).first<{
+     structured_row_count: number;
+   }>();
+   if (success && !operation) {
+     const rowsInserted = Number.isSafeInteger(success.structured_row_count) &&
+         success.structured_row_count >= 0
+       ? success.structured_row_count
+       : 0;
+     return { status: "pass", rowsInserted };
+   }
+   return { status: "absent", rowsInserted: 0 };
+ }
+
+ function premiumOperationSql(alias: string): string {
+   return `${alias}.source = 'jquants' AND ${alias}.runtime = 'cloudflare'
+     AND json_extract(${alias}.detail, '$.opts.operation') = ?
+     AND json_extract(${alias}.detail, '$.opts.dataset') = ?
+     AND json_extract(${alias}.detail, '$.opts.from') = ?
+     AND json_extract(${alias}.detail, '$.opts.to') = ?`;
+ }
+
+ async function observeBoundExactFive(
+   db: D1Database,
+   job: ExactFiveJob,
+   window: { from: string; to: string },
+   operation: string,
+ ): Promise<ExactFiveObservation | null> {
+   const nonce = await sha256HexFromString(operation);
+   const success = await db.prepare(
+     `SELECT receipt.structured_row_count AS structured_row_count
+        FROM collection_receipts AS receipt
+        JOIN ingestion_run_log AS run ON run.id = receipt.run_id
+       WHERE receipt.source = 'jquants' AND receipt.dataset = ?
+         AND receipt.segment_id = ?
+         AND receipt.segment_start = ? AND receipt.segment_end = ?
+         AND receipt.status = 'SUCCESS'
+         AND (
+           (
+             run.source = 'jquants' AND run.runtime = 'cloudflare'
+             AND json_extract(run.detail, '$.opts.operation') = ?
+             AND json_extract(run.detail, '$.opts.dataset') = ?
+             AND json_extract(run.detail, '$.opts.from') = ?
+             AND json_extract(run.detail, '$.opts.to') = ?
+           ) OR (
+             run.source = 'jquants' AND run.runtime = 'receipt-evidence-authority'
+             AND EXISTS (
+               SELECT 1
+                 FROM receipt_authority_requests AS request
+                 JOIN receipt_authority_operations AS authority
+                   ON authority.operation_id = request.operation_id
+                WHERE request.request_nonce = ?
+                  AND request.state = 'FINALIZED'
+                  AND authority.run_id = run.id
+                  AND authority.operation_id = run.authority_operation_id
+                  AND authority.state = 'RECEIPT_COMMITTED'
+                  AND authority.dataset = receipt.dataset
+                  AND authority.segment_id = receipt.segment_id
+                  AND authority.segment_start = receipt.segment_start
+                  AND authority.segment_end = receipt.segment_end
+                  AND EXISTS (
+                    SELECT 1 FROM ingestion_run_log AS premium
+                     WHERE ${premiumOperationSql("premium")}
+                  )
+             )
+           )
+         )
+       ORDER BY receipt.checked_at DESC, receipt.run_id DESC
+       LIMIT 1`,
+   ).bind(
+     job.dataset, job.segment_id, window.from, window.to,
+     operation, job.dataset, window.from, window.to,
+     nonce,
+     operation, job.dataset, window.from, window.to,
+   ).first<{
+     structured_row_count: number;
+   }>();
+     if (success) {
+       const rowsInserted = Number.isSafeInteger(success.structured_row_count) &&
+           success.structured_row_count >= 0
+         ? success.structured_row_count
+         : 0;
+       return { status: "pass", rowsInserted };
+     }
+     const failed = await db.prepare(
+       `SELECT 1 AS present
+          FROM collection_receipts AS receipt
+          JOIN ingestion_run_log AS run ON run.id = receipt.run_id
+         WHERE receipt.source = 'jquants' AND receipt.dataset = ?
+           AND receipt.segment_id = ?
+           AND receipt.segment_start = ? AND receipt.segment_end = ?
+           AND receipt.status = 'FAILED'
+           AND run.source = 'jquants' AND run.runtime = 'cloudflare'
+           AND json_extract(run.detail, '$.opts.operation') = ?
+           AND json_extract(run.detail, '$.opts.dataset') = ?
+           AND json_extract(run.detail, '$.opts.from') = ?
+           AND json_extract(run.detail, '$.opts.to') = ?
+         LIMIT 1`,
+     ).bind(
+       job.dataset, job.segment_id, window.from, window.to,
+       operation, job.dataset, window.from, window.to,
+     ).first();
+     if (failed) return { status: "failed", rowsInserted: 0 };
+   const validationFailed = await db.prepare(
+     `SELECT 1 AS present
+        FROM ingestion_run_log AS run
+       JOIN ingestion_validation AS validation ON validation.run_id = run.id
+       WHERE ${premiumOperationSql("run")}
+         AND validation.dataset = ?
+         AND validation.status = 'fail'
+       LIMIT 1`,
+   ).bind(operation, job.dataset, window.from, window.to, job.dataset).first();
+   if (validationFailed) return { status: "failed", rowsInserted: 0 };
+   const failedRun = await db.prepare(
+     `SELECT 1 AS present
+       FROM ingestion_run_log
+       WHERE ${premiumOperationSql("ingestion_run_log")}
+         AND status IN ('fail', 'failed')
+       LIMIT 1`,
+   ).bind(operation, job.dataset, window.from, window.to).first();
+   if (failedRun) return { status: "failed", rowsInserted: 0 };
+   const run = await db.prepare(
+     `SELECT 1 AS present
+       FROM ingestion_run_log
+       WHERE ${premiumOperationSql("ingestion_run_log")}
+       LIMIT 1`,
+   ).bind(operation, job.dataset, window.from, window.to).first();
+   if (run) return { status: "started", rowsInserted: 0 };
+   return null;
+ }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -403,6 +465,60 @@ function jobLast(
   };
 }
 
+async function finishPass(
+  bucket: R2Bucket,
+  control: AcquisitionControl,
+  etag: string,
+  job: ExactFiveJob,
+  window: { from: string; to: string },
+  jobIndex: number,
+  rowsInserted: number,
+  fetched: boolean,
+): Promise<ExactFiveTickResult> {
+  control.cursor = jobIndex + 1;
+  control.attempts = 0;
+  control.lease = null;
+  control.last = jobLast(job, window, rowsInserted, "pass");
+  const durable = await commitControl(bucket, control, etag);
+  const jobs = fetched ? 1 : 0;
+  if (!durable) return { status: "lost", fetched, jobs, reason: "cas" };
+  return tickFromDurable(
+    durable,
+    job,
+    window,
+    jobIndex,
+    fetched,
+    { status: "lost", fetched, jobs, reason: "cas" },
+  );
+}
+
+async function finishFail(
+  bucket: R2Bucket,
+  control: AcquisitionControl,
+  etag: string,
+  job: ExactFiveJob,
+  window: { from: string; to: string },
+  jobIndex: number,
+  rowsInserted: number,
+  fetched: boolean,
+  reason: "timeout" | "ingestion_failed",
+  keepLease: boolean,
+): Promise<ExactFiveTickResult> {
+  if (!keepLease) control.lease = null;
+  control.last = jobLast(job, window, rowsInserted, reason);
+  const durable = await commitControl(bucket, control, etag);
+  const jobs = fetched ? 1 : 0;
+  if (!durable) return { status: "lost", fetched, jobs, reason: "cas" };
+  return tickFromDurable(
+    durable,
+    job,
+    window,
+    jobIndex,
+    fetched,
+    { status: "fail", fetched, jobs, reason },
+  );
+}
+
 /**
  * Abort cancels fetch only. Always wait for ingest() — D1/R2/Receipt may
  * still finish after the 30s signal.
@@ -528,35 +644,19 @@ export async function runExactFiveAcquisitionTick(
     ? await options.observe(job, window, pendingOperation)
     : null;
   if (observed?.status === "pass") {
-    control.cursor = jobIndex + 1;
-    control.attempts = 0;
-    control.lease = null;
-    control.last = jobLast(job, window, observed.rowsInserted, "pass");
-    const durable = await commitControl(bucket, control, etag);
-    if (!durable) return { status: "lost", fetched: false, jobs: 0, reason: "cas" };
-    return tickFromDurable(
-      durable,
-      job,
-      window,
-      jobIndex,
-      false,
-      { status: "lost", fetched: false, jobs: 0, reason: "cas" },
+    return finishPass(
+      bucket, control, etag, job, window, jobIndex, observed.rowsInserted, false,
+    );
+  }
+  if (observed?.status === "failed") {
+    return finishFail(
+      bucket, control, etag, job, window, jobIndex, 0, false, "ingestion_failed", false,
     );
   }
 
   if (lastForJob(control.last, job, window) && control.last!.status === "pass") {
-    control.cursor = jobIndex + 1;
-    control.attempts = 0;
-    control.lease = null;
-    const durable = await commitControl(bucket, control, etag);
-    if (!durable) return { status: "lost", fetched: false, jobs: 0, reason: "cas" };
-    return tickFromDurable(
-      durable,
-      job,
-      window,
-      jobIndex,
-      false,
-      { status: "lost", fetched: false, jobs: 0, reason: "cas" },
+    return finishPass(
+      bucket, control, etag, job, window, jobIndex, control.last!.rowsInserted, false,
     );
   }
 
@@ -566,7 +666,7 @@ export async function runExactFiveAcquisitionTick(
   }
 
   const needsFence = lastStatus === "running" || lastStatus === "timeout" ||
-    observed?.status === "started" || observed?.status === "acquired";
+    observed?.status === "started";
   if (needsFence && lastStatus !== "unresolved") {
     const owner = control.lease?.owner || crypto.randomUUID();
     control.lease = {
@@ -584,23 +684,6 @@ export async function runExactFiveAcquisitionTick(
 
   if (observed?.status === "started") {
     return { status: "idle", fetched: false, jobs: 0, reason: "unresolved" };
-  }
-
-  if (observed?.status === "acquired" && lastStatus === "unresolved") {
-    control.cursor = jobIndex + 1;
-    control.attempts = 0;
-    control.lease = null;
-    control.last = jobLast(job, window, observed.rowsInserted, "pass");
-    const durable = await commitControl(bucket, control, etag);
-    if (!durable) return { status: "lost", fetched: false, jobs: 0, reason: "cas" };
-    return tickFromDurable(
-      durable,
-      job,
-      window,
-      jobIndex,
-      false,
-      { status: "lost", fetched: false, jobs: 0, reason: "cas" },
-    );
   }
 
   if (control.attempts >= MAX_ATTEMPTS) {
@@ -629,45 +712,24 @@ export async function runExactFiveAcquisitionTick(
     if (options.observe) {
       const late = await options.observe(job, window, owner);
       if (late.status === "pass") {
-        control.cursor = jobIndex + 1;
-        control.attempts = 0;
-        control.lease = null;
-        control.last = jobLast(job, window, late.rowsInserted, "pass");
-        const durable = await commitControl(bucket, control, etag);
-        if (!durable) return { status: "lost", fetched: true, jobs: 1, reason: "cas" };
-        return tickFromDurable(
-          durable,
-          job,
-          window,
-          jobIndex,
-          true,
-          { status: "lost", fetched: true, jobs: 1, reason: "cas" },
+        return finishPass(
+          bucket, control, etag, job, window, jobIndex, late.rowsInserted, true,
         );
       }
     }
     const timedOut = error instanceof Error &&
       error.message === "exact-five job fetch timeout";
-    if (!timedOut) control.lease = null;
-    control.last = jobLast(
-      job,
-      window,
-      0,
-      timedOut ? "timeout" : "ingestion_failed",
-    );
-    const durable = await commitControl(bucket, control, etag);
-    if (!durable) return { status: "lost", fetched: true, jobs: 1, reason: "cas" };
-    return tickFromDurable(
-      durable,
+    return finishFail(
+      bucket,
+      control,
+      etag,
       job,
       window,
       jobIndex,
+      0,
       true,
-      {
-        status: "fail",
-        fetched: true,
-        jobs: 1,
-        reason: timedOut ? "timeout" : "ingestion_failed",
-      },
+      timedOut ? "timeout" : "ingestion_failed",
+      timedOut,
     );
   }
 
@@ -679,48 +741,17 @@ export async function runExactFiveAcquisitionTick(
     if (options.observe) {
       const late = await options.observe(job, window, owner);
       if (late.status === "pass") {
-        control.cursor = jobIndex + 1;
-        control.attempts = 0;
-        control.lease = null;
-        control.last = jobLast(job, window, late.rowsInserted, "pass");
-        const durable = await commitControl(bucket, control, etag);
-        if (!durable) return { status: "lost", fetched: true, jobs: 1, reason: "cas" };
-        return tickFromDurable(
-          durable,
-          job,
-          window,
-          jobIndex,
-          true,
-          { status: "lost", fetched: true, jobs: 1, reason: "cas" },
+        return finishPass(
+          bucket, control, etag, job, window, jobIndex, late.rowsInserted, true,
         );
       }
     }
-    control.lease = null;
-    control.last = jobLast(job, window, rowsInserted, "ingestion_failed");
-    const durable = await commitControl(bucket, control, etag);
-    if (!durable) return { status: "lost", fetched: true, jobs: 1, reason: "cas" };
-    return tickFromDurable(
-      durable,
-      job,
-      window,
-      jobIndex,
-      true,
-      { status: "fail", fetched: true, jobs: 1, reason: "ingestion_failed" },
+    return finishFail(
+      bucket, control, etag, job, window, jobIndex, rowsInserted, true, "ingestion_failed", false,
     );
   }
 
-  control.cursor = jobIndex + 1;
-  control.attempts = 0;
-  control.lease = null;
-  control.last = jobLast(job, window, summary.rowsInserted, "pass");
-  const durable = await commitControl(bucket, control, etag);
-  if (!durable) return { status: "lost", fetched: true, jobs: 1, reason: "cas" };
-  return tickFromDurable(
-    durable,
-    job,
-    window,
-    jobIndex,
-    true,
-    { status: "lost", fetched: true, jobs: 1, reason: "cas" },
+  return finishPass(
+    bucket, control, etag, job, window, jobIndex, summary.rowsInserted, true,
   );
 }

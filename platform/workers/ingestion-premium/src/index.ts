@@ -270,7 +270,7 @@ function masterUniverseEvidence(
 async function ingestOne(
   env: Env,
   spec: DatasetSpec,
-  opts: { from?: string; to?: string; today?: string },
+  opts: { from?: string; to?: string; today?: string; operation?: string },
   fetchImpl: typeof fetch,
   runId: number | null,
   limiter: RateLimiter,
@@ -441,6 +441,8 @@ async function ingestOne(
       receiptEnvironment(env),
       spec.id,
       collected.id,
+      undefined,
+      opts.operation ? await sha256HexFromString(opts.operation) : undefined,
     );
   } else {
     await writeCollectionReceipt(env, spec, runId, collected, {
@@ -659,7 +661,7 @@ async function runIngestion(
   if (runId !== null) {
     await env.DB.prepare(
       `UPDATE ingestion_run_log SET status = ?, detail = ? WHERE id = ?`,
-    ).bind(status, JSON.stringify(summary).slice(0, 8000), runId).run();
+    ).bind(status, JSON.stringify({ ...summary, opts }), runId).run();
   }
 
   return summary;
@@ -1025,7 +1027,7 @@ export default {
   ): Promise<void> {
     if (env.RECEIPT_AUTHORITY_ENVIRONMENT === "staging") {
       const ingest = (
-        opts: { dataset: string; from: string; to: string },
+        opts: { dataset: string; from: string; to: string; operation?: string },
         signal: AbortSignal,
       ) => runIngestion(
         env,
