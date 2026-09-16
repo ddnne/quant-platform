@@ -420,6 +420,35 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
     expect((await env.DB.prepare("SELECT id FROM ingestion_run_log").all()).results).toEqual([]);
   });
 
+  it("staging ACTIVE scheduled invokes AUDIT_ONLY canary and not receipt issue", async () => {
+    const begin = vi.fn(async () => {
+      throw new Error("audit begin invoked");
+    });
+    const issue = vi.fn();
+    const recover = vi.fn();
+    const testEnv = runtimeEnv({
+      RECEIPT_AUTHORITY_OPERATION_MODE: "ACTIVE",
+      CF_VERSION_METADATA: {
+        id: "10000000-0000-4000-8000-000000000003",
+        tag: `ra-s-c-${CALLER_SHA}`,
+        timestamp: "2026-08-28T00:00:00.000Z",
+      },
+      RECEIPT_EVIDENCE_AUTHORITY: {
+        public_key_registration: vi.fn(),
+        issue_for_segment: issue,
+        recover_issue: recover,
+        begin_audit_recovery_canary: begin,
+        recover_audit_recovery_canary: vi.fn(),
+      },
+    });
+    await expect(
+      worker.scheduled(scheduledAt(), testEnv, createExecutionContext()),
+    ).rejects.toThrow("audit begin invoked");
+    expect(begin).toHaveBeenCalledOnce();
+    expect(issue).not.toHaveBeenCalled();
+    expect(recover).not.toHaveBeenCalled();
+  });
+
   it("scheduled requested registration persists the full public envelope once", async () => {
     const testEnv = registrationEnv();
     await env.STRUCTURED_BUCKET.put(

@@ -255,8 +255,10 @@ outputs; putting it remains a later approved mutation.
 Callable recovery/activation after this source unit: PENDING staging Cron
 does not issue governed receipts, so `recoverPreparedReceipts` is not on
 that path. ACTIVE staging Cron may run the existing PREPARED sweep.
-`runStagingReceiptAuditRecoveryCanary` remains existing ACTIVE-only logic
-and is still not invoked from Premium Cron (`ra-s-c` vs `rp-s-c`).
+`runStagingReceiptAuditRecoveryCanary` is the existing ACTIVE-only
+AUDIT_ONLY canary and is invoked from staging Cron after that sweep.
+Premium caller tags are `rp-s-c` in PENDING and `ra-s-c` in ACTIVE
+(`version_tag` in `scripts/receipt_authority_pending_live_acceptance.py`).
 Read-only observation remains `PremiumReceiptAuditEvidenceService`.
 Positive Receipt issue remains `issueGovernedReceipt` during ACTIVE
 canonical-month ingest, not this PENDING registration tick.
