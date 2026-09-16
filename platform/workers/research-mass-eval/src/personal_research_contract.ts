@@ -24,7 +24,8 @@ export type PersonalContainerKind =
   | "snapshot"
   | "receipt-candidate"
   | "vol-panel"
-  | "option-sidecar";
+  | "option-sidecar"
+  | "d1-backup";
 export const PERSONAL_RESEARCH_LEGACY_COHORT_IDS = [
   "price-relative-v1",
   "fundamental-relative-v1",
@@ -365,7 +366,7 @@ export function personalSnapshotContainerName(): string {
 }
 
 export async function personalJobContainerName(
-  kind: Exclude<PersonalContainerKind, "snapshot" | "receipt-candidate">,
+  kind: Exclude<PersonalContainerKind, "snapshot" | "receipt-candidate" | "d1-backup">,
   jobId: string,
 ): Promise<string> {
   if (!JOB_ID_RE.test(jobId)) {

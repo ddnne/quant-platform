@@ -123,6 +123,26 @@ Phase 6 hardening utilities:
   artifact is rollback material only. Its header, restore verification, key,
   or digest never attests the executing source SHA and never grants migration
   or staging authority.
+  Cloud execution is Mass Container `/v1/encrypt-d1-backup` via Worker
+  `d1.export` stream from one `D1_BACKUP_EXPORT_BUNDLE` and `research.r2`
+  ciphertext PUT. Mac must not hold authentic SQL. Operator helper
+  from the repo root (project environment; it imports
+  `scripts.encrypt_d1_backup`, so `python3 scripts/...` fails):
+  `uv run --frozen python -m scripts.d1_export_poll_descriptor --help`.
+  `--environment` and `--output` are required. Example only — do not run
+  `--initiate` until combined approval; live export interrupts D1:
+
+  ```bash
+  uv run --frozen python -m scripts.d1_export_poll_descriptor \
+    --environment staging \
+    --output "$HOME/.local/share/quant-platform/private/d1-export-bundle.json" \
+    --initiate
+  ```
+
+  That writes a 0600 bundle (no SQL).
+  Accepted restored sqlite is a postcondition (<= 5 GiB). Runtime disk is the
+  existing standard-4 20 GB physical volume (image/files share it). Do not
+  run Wrangler `d1 export` from this README.
 - `d1_ingestion_migration_validation.py` — validate the canonical migration
   history, schema, triggers and populated v2-to-v3 preservation on an isolated
   ephemeral database. Recorded partial or malformed states fail.

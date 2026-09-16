@@ -524,3 +524,13 @@ def test_encrypt_streams_in_bounded_chunks(
     )
     assert sizes
     assert max(sizes) <= backup.CHUNK_BYTES
+
+
+def test_restore_rejects_restored_sqlite_above_accepted_size(tmp_path: Path) -> None:
+    source = governed_d1_export(tmp_path)
+    with pytest.raises(ValueError, match="sqlite byte bound"):
+        backup._restore_and_validate_export(
+            source,
+            max_restored_sqlite_bytes=1,
+            **identity_kwargs(),
+        )

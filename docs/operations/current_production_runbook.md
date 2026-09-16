@@ -94,6 +94,43 @@ remote apply results only in immutable release evidence.
   Service Binding RPC `GatewayService`. `GATEWAY_TOKEN` is HTTP defense in
   depth if a closed route is attached later; it is not a shared Mass
   credential.
+
+- **Encrypted D1 backup (source, not executed):** Mass
+  `POST /v1/d1-backup-encrypt` (MASS_EVAL_TOKEN, `go: false`) forwards to the
+  existing snapshot Container `POST /v1/encrypt-d1-backup`. Container internet
+  stays off. Operator helper from the repo root (project environment; it
+  imports `scripts.encrypt_d1_backup`, so `python3 scripts/...` fails):
+  `uv run --frozen python -m scripts.d1_export_poll_descriptor --help`.
+  `--environment` and `--output` are required. Example only — do not run
+  `--initiate` until combined approval; live export interrupts D1:
+
+  ```bash
+  uv run --frozen python -m scripts.d1_export_poll_descriptor \
+    --environment staging \
+    --output "$HOME/.local/share/quant-platform/private/d1-export-bundle.json" \
+    --initiate
+  ```
+
+  The helper polls the D1 export API (metadata only; SQL never touches the Mac)
+  and writes one 0600 bundle (DB identity, `at_bookmark`, observed
+  `export_completed_at`, `signed_url`). Worker secret
+  `D1_BACKUP_EXPORT_BUNDLE` plus `D1_BACKUP_KEY`
+  are checked before SUBMITTED/Container boot. Job digest includes
+  `signed_url` sha256; `d1.export` download requires that fingerprint to match
+  the current bundle. `children-then-manifest` cannot carry the dump.
+  Ciphertext is a streaming create-only `research.r2` PUT under
+  `research/d1-backups/`. Restore/schema/`integrity_check` stay
+  `encrypt_d1_backup.py` QPDBENC2 on Container scratch with sqlite3 CLI.
+  Accepted restored sqlite is a postcondition (<= 5 GiB), not a hard runtime
+  disk cap. SQL dump stream is 4 GiB; ciphertext is dump plus QPDBENC2
+  framing. Runtime structural bound is the existing standard-4 Container
+  20 GB physical disk (image/files share it; not all usable scratch). The
+  180-minute process-group watchdog is a finite bound, not exact billing;
+  terminal publication, retry, shutdown, and cleanup can add time. Create-only
+  R2; COMPLETE is not issued before verification and upload succeed. D1
+  `file_size` is not dump size. Do not POST D1 export,
+  generate keys, or deploy this image until one combined approval. Whole-DB
+  restore after shared writers resume remains prohibited.
 - **Mass product-lane deploy trigger:** deployment leg held. Trigger
   `b83cc2ee-8a40-4448-b517-80959796eb3e` had only its deploy command replaced
   via the Cloudflare API; build and test still run. Read-back verified
