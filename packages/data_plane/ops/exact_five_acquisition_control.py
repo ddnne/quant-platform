@@ -12,16 +12,17 @@ cloud execution plan.
 from __future__ import annotations
 
 import calendar
+import json
 import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Mapping, Sequence
 
 from data_contracts.coverage import coverage_contract_for
-from research.ready_manifest import load_exact_four_pilot_ready_binding
 from storage.coverage_ledger import (
     compiled_period_collection_segments,
     declared_coverage_segments,
 )
+from qp_paths import repo_root
 
 EXACT_FIVE_ACQUISITION_KEY = "control/exact_five_compiled_acquisition.json"
 EXACT_FIVE_ACQUISITION_SCHEMA = "exact-five-compiled-acquisition/v1"
@@ -29,7 +30,9 @@ EXACT_FIVE_ACQUISITION_SCHEMA = "exact-five-compiled-acquisition/v1"
 # or 64-job cloud plan; putting the object remains a later mutation.
 MAX_JOBS = 24
 _MONTH_ID = re.compile(r"^[0-9]{4}-[0-9]{2}$")
+_SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 _JST = timezone(timedelta(hours=9))
+_GENERATED_BINDING = ("specs", "ready", "controlled_pilot_v1.generated.json")
 
 
 class ExactFiveAcquisitionControlError(ValueError):
@@ -37,26 +40,51 @@ class ExactFiveAcquisitionControlError(ValueError):
 
 
 def _pins() -> dict[str, Any]:
-    binding = load_exact_four_pilot_ready_binding()
+    """Ordinary generated binding the Worker already pins; not product compile."""
+
+    path = repo_root().joinpath(*_GENERATED_BINDING)
+    try:
+        binding = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ExactFiveAcquisitionControlError("compiled binding is missing") from exc
+    if not isinstance(binding, dict):
+        raise ExactFiveAcquisitionControlError("compiled binding is invalid")
+    profile_id = binding.get("profile_id")
+    profile_digest = binding.get("profile_digest")
+    closure_digest = binding.get("dependency_closure_digest")
+    dataset_ids = binding.get("dataset_ids")
+    plans = binding.get("plans")
+    if (
+        type(profile_id) is not str
+        or not profile_id
+        or type(profile_digest) is not str
+        or _SHA256.fullmatch(profile_digest) is None
+        or type(closure_digest) is not str
+        or _SHA256.fullmatch(closure_digest) is None
+        or type(dataset_ids) is not list
+        or not dataset_ids
+        or any(type(item) is not str or not item for item in dataset_ids)
+        or type(plans) is not list
+        or not plans
+    ):
+        raise ExactFiveAcquisitionControlError("compiled binding pins are invalid")
     periods = {
-        (str(profile.period_start), str(profile.period_end))
-        for profile in binding.profiles
-        if getattr(profile, "period_start", None)
-        and getattr(profile, "period_end", None)
+        (profile["period_start"], profile["period_end"])
+        for profile in plans
+        if isinstance(profile, dict)
+        and type(profile.get("period_start")) is str
+        and type(profile.get("period_end")) is str
     }
     if len(periods) != 1:
         raise ExactFiveAcquisitionControlError("profile period is missing")
     period_start, period_end = next(iter(periods))
-    datasets = tuple(str(item) for item in binding.required_datasets)
-    if not datasets:
-        raise ExactFiveAcquisitionControlError("profile datasets are missing")
     return {
-        "profile_id": binding.profile_id,
-        "profile_digest": binding.profile_digest,
-        "dependency_closure_digest": binding.closure_set_digest,
+        "profile_id": profile_id,
+        "profile_digest": profile_digest,
+        "dependency_closure_digest": closure_digest,
         "period_start": period_start,
         "period_end": period_end,
-        "datasets": frozenset(datasets),
+        "datasets": frozenset(str(item) for item in dataset_ids),
     }
 
 
