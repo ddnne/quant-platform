@@ -1159,6 +1159,152 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
     expect(stored.last.status).toBe("ingestion_failed");
   });
 
+  it("continues the same expired operation after Cron wall without a second attempt", async () => {
+    const owner = "c766f36f-6289-4793-837e-b951e35fa84b";
+    const clock = () => new Date("2026-09-16T18:40:00.000Z");
+    await env.STRUCTURED_BUCKET.put(
+      EXACT_FIVE_ACQUISITION_KEY,
+      JSON.stringify(exactFiveDoc({
+        attempts: 1,
+        lease: { owner, until: "2026-09-16T18:13:51.098Z" },
+        last: {
+          dataset: "markets_calendar",
+          segment_id: "2023-01",
+          from: "2023-01-01",
+          to: "2023-01-31",
+          rowsInserted: 0,
+          status: "unresolved",
+        },
+      })),
+    );
+    await env.DB.prepare(
+      `INSERT INTO ingestion_run_log (id, ran_at, source, runtime, status, detail)
+       VALUES (6737, '2026-09-16T18:05:51.000Z', 'jquants', 'cloudflare', 'running', ?)`,
+    ).bind(JSON.stringify({
+      triggeredBy: "cron",
+      opts: {
+        dataset: "markets_calendar",
+        from: "2023-01-01",
+        to: "2023-01-31",
+        operation: owner,
+      },
+    })).run();
+    const seen: string[] = [];
+    const ingest: ExactFiveIngest = async (opts) => {
+      seen.push(opts.operation ?? "");
+      return { status: "pass", datasetCount: 1, rowsInserted: 2 };
+    };
+    const result = await runExactFiveAcquisitionTick(env.STRUCTURED_BUCKET, ingest, {
+      clock,
+      observe: (job, window, operation) =>
+        observeExactFiveReceipt(env.DB, job, window, operation, { clock }),
+    });
+    expect(result).toMatchObject({ status: "pass", fetched: true, reason: "ok" });
+    expect(seen).toEqual([owner]);
+    const stored = JSON.parse(
+      await (await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY))!.text(),
+    ) as { cursor: number; attempts: number; last: { status: string } };
+    expect(stored.cursor).toBe(1);
+    expect(stored.attempts).toBe(0);
+    expect(stored.last.status).toBe("pass");
+  });
+
+  it("resumes ACQUIRED raw pages for the same run without a vendor refetch", async () => {
+    expect((await rebuildNaturalKeysV2(env.DB)).state).toBe("READY");
+    const owner = "acquired-resume-owner";
+    const clock = () => new Date("2026-09-16T18:40:00.000Z");
+    await env.STRUCTURED_BUCKET.put(
+      EXACT_FIVE_ACQUISITION_KEY,
+      JSON.stringify(exactFiveDoc({
+        attempts: 1,
+        lease: { owner, until: "2026-09-16T18:13:51.098Z" },
+        last: {
+          dataset: "markets_calendar",
+          segment_id: "2023-01",
+          from: "2023-01-01",
+          to: "2023-01-31",
+          rowsInserted: 0,
+          status: "unresolved",
+        },
+      })),
+    );
+    await env.DB.prepare(
+      `INSERT INTO ingestion_run_log (id, ran_at, source, runtime, status, detail)
+       VALUES (42, '2026-09-16T18:05:51.000Z', 'jquants', 'cloudflare', 'running', ?)`,
+    ).bind(JSON.stringify({
+      triggeredBy: "cron",
+      opts: {
+        dataset: "markets_calendar",
+        from: "2023-01-01",
+        to: "2023-01-31",
+        operation: owner,
+      },
+    })).run();
+    const pageBody = JSON.stringify({ data: [] });
+    await env.RAW_BUCKET.put("raw/markets_calendar/42/page-000001.json", pageBody);
+    await env.RAW_BUCKET.put("raw/markets_calendar/42/page-000002.json", pageBody);
+    const manifest = {
+      format: "jquants-raw-manifest/v1",
+      dataset: "markets_calendar",
+      run_id: 42,
+      raw_acquisition: "ACQUIRED",
+      complete: true,
+      page_count: 2,
+      row_count: 0,
+      data_digest: "sha256:test",
+      pages: [
+        {
+          key: "raw/markets_calendar/42/page-000001.json",
+          page: 1,
+          rows: 0,
+          bytes: pageBody.length,
+          digest: "sha256:p1",
+          http_status: 200,
+        },
+        {
+          key: "raw/markets_calendar/42/page-000002.json",
+          page: 2,
+          rows: 0,
+          bytes: pageBody.length,
+          digest: "sha256:p2",
+          http_status: 200,
+        },
+      ],
+    };
+    await env.RAW_BUCKET.put(
+      "raw/markets_calendar/42/manifest.json",
+      JSON.stringify(manifest),
+    );
+    await env.DB.prepare(
+      `INSERT INTO raw_retention_manifests
+         (dataset, run_id, manifest_key, page_count, row_count, raw_bytes,
+          data_digest, completeness, created_at)
+       VALUES (
+         'markets_calendar', 42, 'raw/markets_calendar/42/manifest.json',
+         2, 0, 0, 'sha256:test', 'ACQUIRED', '2026-09-16T18:05:51.000Z'
+       )`,
+    ).run();
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      throw new Error(`unexpected fetch ${fetchUrl(input).href}`);
+    });
+    const testEnv = runtimeEnv();
+    await worker.scheduled(scheduledAt("2026-09-16T18:40:00.000Z"), testEnv, createExecutionContext());
+    expect(spy).not.toHaveBeenCalled();
+    const stored = JSON.parse(
+      await (await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY))!.text(),
+    ) as { cursor: number; attempts: number; last: { status: string } };
+    expect(stored.cursor).toBe(1);
+    expect(stored.attempts).toBe(0);
+    expect(stored.last.status).toBe("pass");
+    expect(await env.DB.prepare(
+      "SELECT run_id, status FROM collection_receipts WHERE run_id = 42",
+    ).first()).toMatchObject({ run_id: 42, status: "SUCCESS" });
+    const run = await env.DB.prepare(
+      "SELECT status FROM ingestion_run_log WHERE id = 42",
+    ).first<{ status: string }>();
+    expect(run?.status).toBe("pass");
+  });
+
   it("R2 CAS concurrent claim, thrown error, exhaustion, and resume", async () => {
     expect((await rebuildNaturalKeysV2(env.DB)).state).toBe("READY");
     const testEnv = runtimeEnv();

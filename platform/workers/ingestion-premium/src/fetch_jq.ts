@@ -53,7 +53,7 @@ function inclusiveDates(from: string, to: string): string[] {
   return dates;
 }
 
-function requestQueries(
+export function requestQueries(
   spec: DatasetSpec,
   opts: { from?: string; to?: string; today?: string },
 ): Record<string, string>[] {
