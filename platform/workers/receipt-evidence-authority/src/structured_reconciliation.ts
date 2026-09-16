@@ -226,6 +226,43 @@ async function persistStructuredRows(
   }
 }
 
+const STRUCTURED_SLICE_PAGES = 4;
+export const STRUCTURED_SLICE_INCOMPLETE =
+  "structured reconciliation slice is incomplete";
+
+async function storedRowsForKeys(
+  env: ReceiptAuthorityEnv,
+  operationId: string,
+  keys: string[],
+): Promise<CanonicalStructuredRow[]> {
+  const rows: CanonicalStructuredRow[] = [];
+  for (let index = 0; index < keys.length; index += 40) {
+    const batch = keys.slice(index, index + 40);
+    const placeholders = batch.map(() => "?").join(",");
+    const page = await env.DB.prepare(
+      `SELECT natural_key,source,dataset,event_time,available_at,ingested_at,
+              payload,raw_payload,row_digest
+         FROM receipt_authority_structured_rows
+        WHERE operation_id=? AND natural_key IN (${placeholders})
+        ORDER BY natural_key`,
+    ).bind(operationId, ...batch).all<CanonicalStructuredRow>();
+    rows.push(...(page.results ?? []));
+  }
+  rows.sort((left, right) => compareUtf8Text(left.natural_key, right.natural_key));
+  return rows;
+}
+
+function pageMatchesStored(
+  stored: CanonicalStructuredRow[],
+  expected: CanonicalStructuredRow[],
+): boolean {
+  if (stored.length !== expected.length) return false;
+  const ordered = [...expected].sort((left, right) =>
+    compareUtf8Text(left.natural_key, right.natural_key)
+  );
+  return canonicalJson(stored) === canonicalJson(ordered);
+}
+
 async function readStructuredRows(
   env: ReceiptAuthorityEnv,
   operationId: string,
@@ -271,7 +308,7 @@ export async function reconcileStructured(
     throw new Error("structured reconciliation requires exhausted raw evidence");
   }
   let rawCount = 0;
-  const expectedRows: CanonicalStructuredRow[] = [];
+  let pagesThisInvocation = 0;
   const jsda = isJsdaPersistedRequest(input.capture.initialRequest)
     ? input.capture.initialRequest
     : null;
@@ -307,21 +344,33 @@ export async function reconcileStructured(
     }
     rawCount += rawRows.length;
     const normalized = await normalizeRows(rawRows, input.spec, input.checkedAt);
-    expectedRows.push(...normalized);
-    await persistStructuredRows(env, input.operationId, normalized);
+    const storedPage = await storedRowsForKeys(
+      env,
+      input.operationId,
+      normalized.map((row) => row.natural_key),
+    );
+    if (!pageMatchesStored(storedPage, normalized)) {
+      if (pagesThisInvocation >= STRUCTURED_SLICE_PAGES) {
+        throw new Error(STRUCTURED_SLICE_INCOMPLETE);
+      }
+      await persistStructuredRows(env, input.operationId, normalized);
+      const replayed = await storedRowsForKeys(
+        env,
+        input.operationId,
+        normalized.map((row) => row.natural_key),
+      );
+      if (!pageMatchesStored(replayed, normalized)) {
+        throw new Error(
+          "persisted structured fields differ from canonical raw normalization",
+        );
+      }
+      pagesThisInvocation += 1;
+    }
   }
   if (rawCount === 0) throw new Error("zero-row collection cannot mint SUCCESS");
   const stored = await readStructuredRows(env, input.operationId);
   if (stored.length !== rawCount) {
-    throw new Error("structured natural-key readback does not reconcile raw rows");
-  }
-  expectedRows.sort((left, right) =>
-    compareUtf8Text(left.natural_key, right.natural_key)
-  );
-  if (canonicalJson(stored) !== canonicalJson(expectedRows)) {
-    throw new Error(
-      "persisted structured fields differ from canonical raw normalization",
-    );
+    throw new Error(STRUCTURED_SLICE_INCOMPLETE);
   }
   for (const row of stored) {
     const measured = await canonicalDigest({

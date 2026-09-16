@@ -4,6 +4,7 @@ import type {
   SegmentGrain,
 } from "../../receipt-evidence-authority/src/types";
 import { canonicalDigest } from "../../receipt-evidence-authority/src/canonical";
+import { STRUCTURED_SLICE_INCOMPLETE } from "../../receipt-evidence-authority/src/structured_reconciliation";
 import { governedReceiptIdentity } from "./catalog";
 import {
   jsdaSegmentGrain,
@@ -564,6 +565,10 @@ export async function recoverPreparedReceipts(
       await recoverPreparedReceipt(env, row.operation_id);
       recovered += 1;
     } catch (error) {
+      if (error instanceof Error && error.message === STRUCTURED_SLICE_INCOMPLETE) {
+        recovered += 1;
+        continue;
+      }
       failed += 1;
       console.error(JSON.stringify({
         event: "receipt_authority_recovery",

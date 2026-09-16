@@ -6,7 +6,7 @@ import {
   runDurableObjectAlarm,
   runInDurableObject,
 } from "cloudflare:test";
-import { afterEach, beforeEach, describe, expect, inject, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, inject, it, vi } from "vitest";
 import receiptClaimsSchema from "../../../../packages/data_plane/storage/authorities/receipts/signed_receipt_claims.schema.json";
 import {
   fetchGovernedPage,
@@ -140,6 +140,31 @@ function installTopixContinuationUpstream(): void {
     expect(url.searchParams.get("pagination_key")).toBe("topix-page-2");
     return new Response(
       '{"data":[{"Date":"2024-02-02","Open":2,"Close":3}],"pagination_key":null}',
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+}
+
+function installFivePageContinuationUpstream(): void {
+  let calls = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    expect(new Headers(init?.headers).get("x-api-key")).toBe(
+      "jq-runtime-api-key-not-for-live",
+    );
+    const url = new URL(input instanceof Request ? input.url : input.toString());
+    calls += 1;
+    const date = `2024-02-0${calls}`;
+    const next = calls < 5 ? `page-${calls + 1}` : null;
+    if (calls === 1) {
+      expect(url.searchParams.get("pagination_key")).toBeNull();
+    } else {
+      expect(url.searchParams.get("pagination_key")).toBe(`page-${calls}`);
+    }
+    return new Response(
+      JSON.stringify({
+        data: [{ Date: date, Open: calls, Close: calls + 1 }],
+        pagination_key: next,
+      }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
   }) as typeof fetch;
@@ -608,6 +633,7 @@ beforeEach(async () => {
 afterEach(() => {
   globalThis.fetch = originalFetch;
   crypto.subtle.digest = originalSubtleDigest;
+  vi.useRealTimers();
 });
 
 describe("Receipt Evidence Authority in workerd", () => {
@@ -1570,6 +1596,68 @@ describe("Receipt Evidence Authority in workerd", () => {
          SELECT run_id FROM receipt_authority_operations WHERE operation_id=?
        )`,
     ).bind(operationId).first<{ count: number }>()).toEqual({ count: 1 });
+  });
+
+  it("recovers a durable capture after the original collection clock ages", async () => {
+    installAuthorityAcquisition();
+    const interruptedRequest = {
+      ...request,
+      request_nonce: "9".repeat(64),
+    };
+    const interrupted = await interruptAfterDurableCapture(interruptedRequest);
+    const operationId = await canonicalDigest(interruptedRequest);
+    globalThis.fetch = (async () => {
+      throw new Error("recovery must not reacquire after a committed capture");
+    }) as typeof fetch;
+    vi.useFakeTimers({ now: Date.now() + 20 * 60 * 1000 });
+    const recovered = await runInDurableObject(interrupted.stub, (instance) =>
+      instance.recover_issue({
+        ...interruptedRequest,
+        operation: "recover_issue",
+      }),
+    );
+    vi.useRealTimers();
+    expect(recovered).toMatchObject({
+      operation_id: operationId,
+      state: "FINALIZED",
+      replayed: true,
+    });
+  });
+
+  it("resumes remaining structured pages from durable capture without a refetch", async () => {
+    installFivePageContinuationUpstream();
+    installAuthorityAcquisition();
+    const { stub } = await activateRegisteredTestKey();
+    const slicedRequest = {
+      ...request,
+      request_nonce: "8".repeat(64),
+    };
+    const operationId = await canonicalDigest(slicedRequest);
+    await expect(runInDurableObject(stub, (instance) =>
+      instance.issue_for_segment(slicedRequest)
+    )).rejects.toThrow("structured reconciliation slice is incomplete");
+    expect(await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS count FROM receipt_authority_structured_rows
+        WHERE operation_id=?`,
+    ).bind(operationId).first<{ count: number }>()).toEqual({ count: 4 });
+    globalThis.fetch = (async () => {
+      throw new Error("recovery must not reacquire after a committed capture");
+    }) as typeof fetch;
+    const recovered = await runInDurableObject(stub, (instance) =>
+      instance.recover_issue({
+        ...slicedRequest,
+        operation: "recover_issue",
+      }),
+    );
+    expect(recovered).toMatchObject({
+      operation_id: operationId,
+      state: "FINALIZED",
+      replayed: true,
+    });
+    expect(await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS count FROM receipt_authority_structured_rows
+        WHERE operation_id=?`,
+    ).bind(operationId).first<{ count: number }>()).toEqual({ count: 5 });
   });
 
   it("recovery reuses the same immutable official calendar capture", async () => {

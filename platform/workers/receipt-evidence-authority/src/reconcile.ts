@@ -39,8 +39,6 @@ import {
   requireReceiptRequest,
 } from "./receipt_request_identity";
 
-const MAX_CONTEXT_AGE_MS = 15 * 60 * 1000;
-
 function requireRequest(value: unknown): ReceiptRequestV1 {
   return requireReceiptRequest(value);
 }
@@ -220,9 +218,6 @@ export async function executeReceiptRequest(
     ? await loadJsdaCaptureState(env, recoveryContext)
     : await loadCaptureState(env, recoveryContext);
   const observedAt = new Date().toISOString();
-  if (Date.parse(observedAt) >= Date.parse(capture.acquisitionExpiresAt)) {
-    throw new Error("acquisition collection expired before reconciliation");
-  }
   const spec = datasetById(request.dataset_id);
   if (
     spec === undefined ||
@@ -247,12 +242,6 @@ export async function executeReceiptRequest(
     spec,
     checkedAt,
   });
-  if (
-    Date.now() - Date.parse(checkedAt) > MAX_CONTEXT_AGE_MS ||
-    Date.now() >= Date.parse(capture.acquisitionExpiresAt)
-  ) {
-    throw new Error("receipt reconciliation context expired before issuance");
-  }
   const claims = await measuredClaims({
     env,
     requestDigest,
