@@ -1,10 +1,10 @@
 {
   "schema": "quant-platform-work-ledger/v1",
-  "updated_at": "2026-09-16T04:00:00Z",
+  "updated_at": "2026-09-16T21:32:43Z",
   "history": {
-    "git_sha": "d37ef73e5c226a7b2499f0523f4bcca4090b511b",
-    "url": "https://github.com/ddnne/quant-platform/blob/d37ef73e5c226a7b2499f0523f4bcca4090b511b/docs/operations/current_work_ledger.json",
-    "note": "Accepted main d37ef73 (PR211) BEFORE this docs edit. Older release acceptances live in Git history and PR comments. This object is not a self-SHA of the edit or a future merge."
+    "git_sha": "26abffecd4463c5d052e9f28d862bc67a7c006a1",
+    "url": "https://github.com/ddnne/quant-platform/blob/26abffecd4463c5d052e9f28d862bc67a7c006a1/docs/operations/current_work_ledger.json",
+    "note": "Accepted main 26abffec (PR228) BEFORE this docs-and-repair PR. Older release acceptances including PR211/d37ef73 live in Git history. This object is not a self-SHA of the edit or a future merge."
   },
   "open_findings": {
     "preserved_not_exhaustive": [
@@ -22,8 +22,8 @@
   "pr137": "intentional_held_draft",
   "lanes": {
     "source_delivered": {
-      "status": "pr211_merged_main_native_success",
-      "latest_main_sha": "d37ef73e5c226a7b2499f0523f4bcca4090b511b",
+      "status": "pr228_merged_main_native_success",
+      "latest_main_sha": "26abffecd4463c5d052e9f28d862bc67a7c006a1",
       "required_check_app_id": 85455,
       "required_check_name": "Workers Builds: quant-platform-ci-aggregate-staging",
       "strict": true,
@@ -37,7 +37,18 @@
           "main_check": "104406618815",
           "main_build": "5f401591-4b85-4ed3-8ec4-182c7911c3d2",
           "required_app85455_success_at": "2026-09-15T13:43:24Z",
-          "note": "Accepted main BEFORE this docs edit. deploy_command string true remains CI-only. Fresh clone HEAD==origin/main d37ef73, clean, unpushed 0. Completed feature branch removed. A6 GLOBAL remains OPEN. Not production/READY/Pilot."
+          "note": "Historical accepted main d37ef73. Not current. A6 GLOBAL remains OPEN. Not production/READY/Pilot."
+        },
+        "pr228": {
+          "url": "https://github.com/ddnne/quant-platform/pull/228",
+          "feature_sha": "7c9ee781364aa38831907eec9b2d7f88153adb59",
+          "merged_main_sha": "26abffecd4463c5d052e9f28d862bc67a7c006a1",
+          "feature_check": "104968464723",
+          "feature_build": "3c946490-0b70-4153-8ad7-e34f0f10d520",
+          "main_check": "104973858100",
+          "main_build": "18471585-8664-423f-9bfd-b42955babd6d",
+          "required_app85455_success_at": "2026-09-16T20:56:10Z",
+          "note": "Merge --merge --match-head-commit. Feature branch deleted. Production trigger HOLD. A6 GLOBAL remains OPEN. Not READY/Pilot. Operator declined additional full D1 backup; that does not close A6."
         }
       },
       "mass_worker_build_on_dad020": {
@@ -48,7 +59,7 @@
         "cause": "intentional DEPLOYMENT HOLD after successful tests",
         "note": "Historical HOLD evidence on dad020. Not a required-native failure. Not a code-acceptance failure. Not current-main Mass deploy. No retry, no bypass, no product deploy."
       },
-      "notes": "Latest accepted main is PR211/d37ef73. Staging Secrets/Receipt/Premium PENDING are accepted at that SHA. Mass/Gateway/JSDA/Ops/observer were not accepted or reverified at this SHA. PR137 remains an intentional HELD Draft. Older CI tables live in Git/PR comments."
+      "notes": "Latest accepted main is PR228/26abffec. Staging Secrets/Receipt/Premium ACTIVE SHA-aligned at that SHA. Mass/Gateway/JSDA/Ops/observer were not SHA-aligned in this unit. PR137 remains an intentional HELD Draft. A6 GLOBAL remains OPEN. Operator declined additional full D1 backup. Fresh historical equities_master ingest_time_conservative available_at is a later PRE-PILOT P1, not this Receipt repair."
     },
     "staging_schema_prepared": {
       "status": "schema_prepared_once",
@@ -66,8 +77,39 @@
       "notes": "Exactly one reviewed staging recovery. Original private receipt/intent identity d9de3fb stayed original; repair source e071 recorded separately. Successful normal release reset the live lease to vacant / remote_spawned 0 with source_sha empty and expires 1970; the vacant lease does not retain source. Pre-apply fingerprint is PRE-APPLY ONLY: independently checked before and after CAS before remote spawn, not a SQL CAS input/predicate, not the current post-migration fingerprint, and not retry authority. Mutable PR comment, not immutable final release. Refer to that one record for lease/Queue/Cron/cutover SELECT readback rather than duplicating every UUID/count here. Not JSDA deploy/activate, not shared-D1 restore, not production."
     },
     "staging_deployed": {
-      "status": "receipt_chain_d37ef73_pending_accepted_mass_not_current",
-      "receipt_chain_pending": {
+      "status": "receipt_chain_26abffec_active_audit_only_mass_not_current",
+      "receipt_chain_active": {
+        "source_sha": "26abffecd4463c5d052e9f28d862bc67a7c006a1",
+        "eligibility": "AUDIT_ONLY",
+        "evidence_digest": "sha256:6a0b052c4ad3a5683f99ae75dd7f48c55a9875fc05e9e4bd48ccaef4fa8432a1",
+        "workers": {
+          "ingestion-secrets": {
+            "version_id": "6b66c3d2-d776-4b82-9905-f0a01e5698ce",
+            "deployment_id": "7fc5c0d3-d717-4ab4-bccc-5c26d509d552",
+            "tag": "ra-s-a-26abffecd4463c5d052e9f28d862bc67a7c006a1"
+          },
+          "receipt-evidence-authority": {
+            "version_id": "8438ae73-3152-4815-b850-67cbb55bd89c",
+            "deployment_id": "1a5f88e2-1cf0-48c4-87d1-c56acea37eb5",
+            "tag": "ra-s-r-26abffecd4463c5d052e9f28d862bc67a7c006a1",
+            "durable_object_namespace_id": "e24d619fbd734073829e6ff8fc07ef1f",
+            "authority_mode": "ACTIVE"
+          },
+          "ingestion-premium": {
+            "version_id": "180a119d-c2ba-410e-9fbb-05d0c269711e",
+            "deployment_id": "3688a5d3-de2f-4602-80c5-c768c20e0e0a",
+            "tag": "ra-s-c-26abffecd4463c5d052e9f28d862bc67a7c006a1",
+            "ready_declared": "false",
+            "receipt_authority_operation_mode": "ACTIVE",
+            "cron": "* * * * *",
+            "module_digest": "sha256:93c6b23918a0051d9add740b1f25511ddbc1f99915d41782a13be75778fed644",
+            "module_bytes": 532431
+          }
+        },
+        "public": "workers.dev/previews/routes off",
+        "note": "AUDIT_ONLY management-D1 evidence. Not A6/READY/Pilot. Not a new production deploy."
+      },
+      "receipt_chain_pending_d37ef73": {
         "source_sha": "d37ef73e5c226a7b2499f0523f4bcca4090b511b",
         "canonical": "scripts/verify_cloudflare_deployment_acceptance.sh --pending-receipt-authority staging --expected-source-sha d37ef73e5c226a7b2499f0523f4bcca4090b511b",
         "outcome": "ok (staging)",
@@ -110,7 +152,7 @@
         "health": "GET /health 200 and unauthenticated 401 at that earlier checkpoint",
         "authenticated_403_smoke": "blocked only on location of existing MASS_EVAL_TOKEN or already-set process env; prior scoped project/env/Build-env searches failed; no rotation; never print values"
       },
-      "notes": "Secrets/Receipt/Premium staging PENDING are accepted at d37ef73. Mass/Gateway/JSDA/Ops/observer were not accepted or reverified at this SHA; Mass facts remain the earlier PR204 checkpoint. Worker code rollout is not auth-smoke, data, READY, or Pilot. MASS_EVAL_TOKEN location gap blocks only authenticated 403 smoke."
+      "notes": "Current staging Secrets/Receipt/Premium are ACTIVE at 26abffec. PENDING d37ef73 remains dated history only. Mass/Gateway/JSDA/Ops/observer were not SHA-aligned in this unit. Worker code rollout is not A6/READY/Pilot."
     },
     "production_deployed": {
       "status": "hold",
@@ -118,7 +160,7 @@
     },
     "data_activated": {
       "status": "pending",
-      "notes": "This scoped operation downloaded no local authentic market history and activated no data. That does not deny preexisting cloud acquisition. Staging SCHEMA_PREPARED is not data activation."
+      "notes": "No local authentic market history. Exact-five cursor 10/24: Feb 2023 bars Premium run 6737 resumeAcquired=1, 28/28 pages, 80695 structured rows, same operation c766f36f, attempts 1. Authority run 6738 remains COLLECTING/PREPARED as of 2026-09-16T21:32:43Z. January 2023 bars stay 3/3 HOLD. Not READY/Pilot."
     },
     "ready": {
       "status": "pending",
@@ -130,7 +172,7 @@
     }
   },
   "live_observation": {
-    "observed_by": "2026-09-15 Codex READONLY quant-mcp projection_status",
+    "observed_by": "2026-09-16T21:18:28Z root READONLY globalOps; prior 2026-09-15 Codex projection_status still STALE",
     "projection": "STALE",
     "generation": "projgen-ef18b4f86ee946048161d25e2a30a2a8",
     "generated_at": "2026-08-21T12:30:49.152421+00:00",
@@ -149,8 +191,8 @@
     "sync_status": {
       "observed_by": "2026-09-15 Codex READONLY quant-mcp sync_status",
       "applied_feed_cursor": null,
-      "latest_change_seq": 2901021,
-      "latest_source_change_seq": 2901021,
+      "latest_change_seq": 2901776,
+      "latest_source_change_seq": 2901776,
       "all_applied_and_ready_pins": null
     },
     "applied_feed_cursor": null,

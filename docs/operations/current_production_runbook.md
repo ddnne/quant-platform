@@ -85,24 +85,32 @@ remote apply results only in immutable release evidence.
 - **Release evidence:** authenticated **STAGING JSDA AUDIT_ONLY** intake exists
   in `scripts/build_release_evidence.py`. Caller JSON is untrusted. Local
   digest-named output is `STAGED_LOCAL_NOT_PUBLISHED` / `release_allowed=false`,
-  not a public release. A6 remains OPEN: missing backup recipient and key
-  custody is a real choice. GitHub Release immutability and production
-  collection are later repo/API or auth work, not inherently human-only;
-  existing content-addressed R2/JSDA AUDIT_ONLY paths are not A6 closure.
-  Staging JSDA intake cannot close global A6.
+  not a public release. A6 remains OPEN for independently accepted staging
+  AND production authenticated collection of actual endpoint bytes, then a
+  content-addressed non-secret published manifest. GitHub Release
+  immutability and production collection are later repo/API or auth work,
+  not inherently human-only; existing content-addressed R2/JSDA AUDIT_ONLY
+  paths are not A6 closure. Staging JSDA intake cannot close global A6.
+  On 2026-09-16 the operator chose no additional full D1 export / encrypted
+  backup job (no `--initiate`, no new keys/bundle, no local price history).
+  Missing backup recipient and key custody is not a blocker for the
+  already-approved staging SHA-align. That choice does not mark A6 FIXED and
+  does not authorize a replacement enterprise backup framework.
 - **Mass Research:** **NO-GO**. Mass talks to Gateway only through typed
   Service Binding RPC `GatewayService`. `GATEWAY_TOKEN` is HTTP defense in
   depth if a closed route is attached later; it is not a shared Mass
   credential.
 
-- **Encrypted D1 backup (source, not executed):** Mass
+- **Encrypted D1 backup (source present, operator declined additional job):** Mass
   `POST /v1/d1-backup-encrypt` (MASS_EVAL_TOKEN, `go: false`) forwards to the
   existing snapshot Container `POST /v1/encrypt-d1-backup`. Container internet
   stays off. Operator helper from the repo root (project environment; it
   imports `scripts.encrypt_d1_backup`, so `python3 scripts/...` fails):
   `uv run --frozen python -m scripts.d1_export_poll_descriptor --help`.
-  `--environment` and `--output` are required. Example only — do not run
-  `--initiate` until combined approval; live export interrupts D1:
+  `--environment` and `--output` are required. Example only. Do **not** run
+  `--initiate`: live export interrupts D1, and the operator declined an
+  additional full D1 backup. Preserve existing cloud raw / observations /
+  receipts / control / attempt history / key identity and existing backups.
 
   ```bash
   uv run --frozen python -m scripts.d1_export_poll_descriptor \
