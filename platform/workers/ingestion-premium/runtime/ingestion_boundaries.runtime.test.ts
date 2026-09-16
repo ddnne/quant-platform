@@ -376,7 +376,7 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
     expect((await env.RAW_BUCKET.list()).objects).toHaveLength(0);
   });
 
-  it("rejects one-day/out-of-period exact-five jobs and READY-declared registration", async () => {
+  it("rejects one-day, future, wrong-profile exact-five jobs and READY-declared registration", async () => {
     const spy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       throw new Error(`unexpected fetch ${fetchUrl(input).href}`);
     });
@@ -403,6 +403,16 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
       EXACT_FIVE_ACQUISITION_KEY,
       JSON.stringify(exactFiveDoc({
         jobs: [{ dataset: "markets_calendar", segment_id: "2024-06" }],
+      })),
+    );
+    await worker.scheduled(scheduledAt(), testEnv, createExecutionContext());
+    expect(spy).not.toHaveBeenCalled();
+
+    await env.STRUCTURED_BUCKET.put(
+      EXACT_FIVE_ACQUISITION_KEY,
+      JSON.stringify(exactFiveDoc({
+        profile_digest: `sha256:${"0".repeat(64)}`,
+        jobs: [{ dataset: "markets_calendar", segment_id: "2023-01" }],
       })),
     );
     await worker.scheduled(scheduledAt(), testEnv, createExecutionContext());
@@ -453,33 +463,46 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
       EXACT_FIVE_ACQUISITION_KEY,
       JSON.stringify(exactFiveDoc({
         jobs: [
+          { dataset: "equities_bars_daily", segment_id: "2022-12" },
           { dataset: "markets_calendar", segment_id: "2023-01" },
-          { dataset: "markets_calendar", segment_id: "2023-02" },
         ],
       })),
     );
-    const spy = stubVendor("/v2/markets/calendar", { from: "2023-01-01", to: "2023-01-31" }, []);
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = fetchUrl(input);
+      const day = url.searchParams.get("date");
+      if (
+        url.origin !== "https://api.jquants.com" ||
+        url.pathname !== "/v2/equities/bars/daily" ||
+        !day ||
+        day < "2022-12-01" ||
+        day > "2022-12-31"
+      ) {
+        throw new Error(`unexpected fetch ${url.href}`);
+      }
+      return Promise.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+    });
     await worker.scheduled(scheduledAt(), testEnv, createExecutionContext());
-    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls.length).toBeGreaterThan(0);
     const vendor = fetchUrl(spy.mock.calls[0]![0]);
-    expect(vendor.searchParams.get("from")).toBe("2023-01-01");
-    expect(vendor.searchParams.get("to")).toBe("2023-01-31");
+    expect(vendor.searchParams.get("date")).toBe("2022-12-01");
     const coverage = await env.DB.prepare(
       "SELECT dataset, segment_id, status FROM coverage_segments",
     ).all<{ dataset: string; segment_id: string; status: string }>();
     expect(coverage.results).toEqual([
-      { dataset: "markets_calendar", segment_id: "2023-01", status: "UNKNOWN" },
+      { dataset: "equities_bars_daily", segment_id: "2022-12", status: "UNKNOWN" },
     ]);
     const control = JSON.parse(
       await (await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY))!.text(),
     ) as { cursor: number; last: { from: string; to: string; status: string } };
     expect(control.cursor).toBe(1);
     expect(control.last).toMatchObject({
-      from: "2023-01-01",
-      to: "2023-01-31",
+      from: "2022-12-01",
+      to: "2022-12-31",
       status: "pass",
     });
 
+    const calls = spy.mock.calls.length;
     spy.mockImplementation((input) => {
       throw new Error(`unexpected fetch ${fetchUrl(input).href}`);
     });
@@ -487,7 +510,7 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
       lease: { owner: "cron-a", until: new Date(Date.now() + 60_000).toISOString() },
     })));
     await worker.scheduled(scheduledAt(), testEnv, createExecutionContext());
-    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls.length).toBe(calls);
     expect(JSON.parse(
       await (await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY))!.text(),
     ).cursor).toBe(1);

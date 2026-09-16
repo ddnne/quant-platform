@@ -223,11 +223,16 @@ remote apply results only in immutable release evidence.
   registration plus caller provenance; never wrapped/private key);
   `control/exact_five_compiled_acquisition.json` admits explicit
   `{dataset, segment_id}` jobs pinned to the generated exact-four
-  profile/closure/period and derives canonical calendar-month windows from
-  the catalog (1/tick, 3 attempts, max 64 jobs). Full compiled selector
-  compilation, including post-evaluate pre-period seeds, remains
+  profile/closure identity. Worker admission is catalog month bounds
+  (official history start, no future window, no month after the compiled
+  period end) plus those pins; it does not compile warmup. Selector
+  membership is `ops.exact_five_acquisition_control` from
   `compiled_candidate_selectors` /
-  `compiled_period_collection_segments`. Exact-five runs only when
+  `compiled_period_collection_segments` bootstrap and
+  `declared_coverage_segments` / `_missing_compiled_segments` fill,
+  including pre-period master/fins/bar/split months. Canonical full-month
+  windows come from the catalog (1/tick, 3 attempts, source parse max 24
+  jobs; that ceiling is not an authorized cloud execution plan). Exact-five runs only when
   valuation is absent or complete, not leased/CAS/error. Fetch abort is 30s
   on the ingest callback only; it does not cancel D1/R2/Receipt and the 90s
   lease is not proof the prior owner stopped. Absent objects are no-ops.

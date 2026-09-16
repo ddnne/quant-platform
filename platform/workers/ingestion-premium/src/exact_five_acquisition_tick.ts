@@ -2,12 +2,12 @@
  * Staging R2 control for a finite exact-five compiled acquisition queue.
  * Absent/idle is a no-op. Does not mint Coverage COMPLETE or READY.
  *
- * Compilation of the full selector set, including post-evaluate pre-period
- * seeds, belongs to `compiled_candidate_selectors()` /
- * `compiled_period_collection_segments` in the receipt-candidate producer.
- * This tick admits explicit `{dataset, segment_id}` jobs that pin the current
- * generated profile/closure and overlap the generated exact-four period, then
- * derives canonical calendar-month collection windows from the catalog.
+ * Admission checks compiled profile/closure identity and catalog month
+ * bounds (official history start, no window after today, no month after the
+ * compiled period end). Exact selector membership is the operator control,
+ * produced by `ops.exact_five_acquisition_control` from
+ * `compiled_candidate_selectors` / `declared_coverage_segments` /
+ * `_missing_compiled_segments` extras. This tick does not compile warmup.
  */
 
 import { datasetById } from "./catalog";
@@ -31,7 +31,7 @@ export const EXACT_FIVE_ACQUISITION_KEY =
   "control/exact_five_compiled_acquisition.json";
 
 const SCHEMA = "exact-five-compiled-acquisition/v1";
-const MAX_JOBS = 64;
+const MAX_JOBS = 24;
 const MAX_ATTEMPTS = 3;
 const FETCH_TIMEOUT_MS = 30_000;
 const MONTH_ID = /^[0-9]{4}-[0-9]{2}$/;
@@ -107,20 +107,21 @@ export function compiledCollectionWindow(
   }
   const spec = datasetById(dataset);
   if (!spec || spec.coverage.segment_granularity !== "calendar_month") return null;
-  const periodStart = COMPILED_EXACT_FOUR_PERIOD.start;
-  const periodEnd = COMPILED_EXACT_FOUR_PERIOD.end;
+  const historyStart = spec.coverage.history_target_start;
+  const periodEndMonth = COMPILED_EXACT_FOUR_PERIOD.end.slice(0, 7);
+  const currentDay = todayJst();
+  const currentMonth = currentDay.slice(0, 7);
   if (
-    segmentId < periodStart.slice(0, 7) ||
-    segmentId > periodEnd.slice(0, 7)
+    segmentId < historyStart.slice(0, 7) ||
+    segmentId > periodEndMonth ||
+    segmentId > currentMonth
   ) {
     return null;
   }
-  const historyStart = spec.coverage.history_target_start;
   const from = historyStart.slice(0, 7) === segmentId
     ? historyStart
     : `${segmentId}-01`;
-  const currentDay = todayJst();
-  const to = currentDay.slice(0, 7) === segmentId ? currentDay : monthEnd(segmentId);
+  const to = currentMonth === segmentId ? currentDay : monthEnd(segmentId);
   if (from > to) return null;
   return { from, to };
 }

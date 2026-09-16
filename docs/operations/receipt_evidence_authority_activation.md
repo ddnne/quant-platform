@@ -244,6 +244,14 @@ activation is live until that control is accepted and the PENDING authority
 returns the public registration. Access-protected observer acceptance remains
 required before ACTIVE, not before this PENDING one-shot.
 
+Exact-five Cron admission binds current profile/closure and catalog
+canonical-month windows, including pre-period months from
+`declared_coverage_segments` / candidate-loop extras. It does not compile
+warmup itself. The control document is built by
+`ops.exact_five_acquisition_control` /
+`exact_five_acquisition_control_from_selectors` from those compiler
+outputs; putting it remains a later approved mutation.
+
 Callable recovery/activation after this source unit: PENDING staging Cron
 does not issue governed receipts, so `recoverPreparedReceipts` is not on
 that path. ACTIVE staging Cron may run the existing PREPARED sweep.
