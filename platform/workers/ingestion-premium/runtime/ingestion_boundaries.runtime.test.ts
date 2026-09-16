@@ -376,7 +376,7 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
     expect((await env.RAW_BUCKET.list()).objects).toHaveLength(0);
   });
 
-  it("rejects one-day, future, wrong-profile exact-five jobs and READY-declared registration", async () => {
+  it("rejects one-day, invalid-month, wrong-profile exact-five jobs and READY-declared registration", async () => {
     const spy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       throw new Error(`unexpected fetch ${fetchUrl(input).href}`);
     });
@@ -402,7 +402,7 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
     await env.STRUCTURED_BUCKET.put(
       EXACT_FIVE_ACQUISITION_KEY,
       JSON.stringify(exactFiveDoc({
-        jobs: [{ dataset: "markets_calendar", segment_id: "2024-06" }],
+        jobs: [{ dataset: "markets_calendar", segment_id: "2022-13" }],
       })),
     );
     await worker.scheduled(scheduledAt(), testEnv, createExecutionContext());

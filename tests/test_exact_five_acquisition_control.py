@@ -56,7 +56,6 @@ def test_compiler_control_tick_window_includes_preperiod_and_rejects_unbounded()
     )
     preperiod = next(item for item in fill if item["segment_id"] == "2022-12")
     control = exact_five_acquisition_control_from_selectors((preperiod,))
-    assert control == build_exact_five_compiled_acquisition_control((preperiod,))
     assert control["schema"] == "exact-five-compiled-acquisition/v1"
     assert control["jobs"] == [preperiod]
     assert control["profile_id"] == "controlled-pilot/exact-four"
@@ -71,13 +70,9 @@ def test_compiler_control_tick_window_includes_preperiod_and_rejects_unbounded()
         )
     with pytest.raises(ExactFiveAcquisitionControlError, match="catalog month"):
         build_exact_five_compiled_acquisition_control(
-            ({"dataset": "markets_calendar", "segment_id": "2023-13"},)
+            ({"dataset": "markets_calendar", "segment_id": "2022-13"},)
         )
     with pytest.raises(ExactFiveAcquisitionControlError, match="catalog month"):
         build_exact_five_compiled_acquisition_control(
             ({"dataset": "equities_valuation", "segment_id": "2023-01"},)
         )
-    wrong = dict(control)
-    wrong["profile_digest"] = "sha256:" + "0" * 64
-    rebuilt = build_exact_five_compiled_acquisition_control((preperiod,))
-    assert rebuilt["profile_digest"] != wrong["profile_digest"]

@@ -18,7 +18,7 @@ import {
   parseControlLease,
   type ControlLease,
 } from "./control_cas";
-import { todayJst } from "./identity";
+import { todayJst, validDate } from "./identity";
 import {
   COMPILED_CLOSURE_DIGEST,
   COMPILED_EXACT_FIVE_DATASET_IDS,
@@ -105,6 +105,7 @@ export function compiledCollectionWindow(
   if (!COMPILED_EXACT_FIVE_DATASET_IDS.has(dataset) || !MONTH_ID.test(segmentId)) {
     return null;
   }
+  if (!validDate(`${segmentId}-01`)) return null;
   const spec = datasetById(dataset);
   if (!spec || spec.coverage.segment_granularity !== "calendar_month") return null;
   const historyStart = spec.coverage.history_target_start;

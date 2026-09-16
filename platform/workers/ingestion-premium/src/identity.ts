@@ -13,7 +13,7 @@ export function isYyyyMmDd(value: string): boolean {
   return DATE_RE.test(value);
 }
 
-function validDate(value: string): boolean {
+export function validDate(value: string): boolean {
   if (!isYyyyMmDd(value)) return false;
   const date = new Date(`${value}T00:00:00Z`);
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
