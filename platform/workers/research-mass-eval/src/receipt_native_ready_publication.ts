@@ -38,12 +38,10 @@ import {
 
 export const PINNED_RECEIPT_REGISTRY_SCOPE = {
   production: {
-    generation: 2,
     authority_instance_digest:
       "sha256:e6d7df1b9000481d15b8987f5ffda7f3a0b0c051a43cf0051d04a38e58e372a6",
   },
   staging: {
-    generation: 2,
     authority_instance_digest:
       "sha256:5104b2d3b85ddbbd44fb9e4ddc2689898232c2e6e175727c71c1ce2cb6ec9bff",
   },
