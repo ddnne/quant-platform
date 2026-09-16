@@ -214,9 +214,36 @@ remote apply results only in immutable release evidence.
   binding manifest; internal key/state/event helpers are JavaScript-private and
   unavailable to workerd RPC. All four named WorkerEntrypoints separately pin
   ordinary RPC methods and the reserved `fetch` special.
-  This is still operational HOLD: the operator caller principal, active key,
-  migration, deploy and live evidence are absent. Do not add a general bypass
-  or execute ACTIVE instructions yet. The all-P0 gate remains the final
+  Staging source now also has two idle-by-default R2 control ticks on the
+  existing Premium minute Cron (same lifecycle as
+  `control/equities_valuation/backfill.json`):
+  `control/receipt_pending_registration.json` invokes the existing
+  `pending_public_key_registration` path once, idempotently, PENDING-only,
+  and persists the validated public operator envelope (the 19-field
+  registration plus caller provenance; never wrapped/private key);
+  `control/exact_five_compiled_acquisition.json` admits explicit
+  `{dataset, segment_id}` jobs pinned to the generated exact-four
+  profile/closure identity. Worker admission is catalog month bounds
+  (official history start, no future window, no month after the compiled
+  period end) plus those pins; it does not compile warmup. Selector
+  membership is `ops.exact_five_acquisition_control` from
+  `compiled_candidate_selectors` /
+  `compiled_period_collection_segments` bootstrap and
+  `declared_coverage_segments` / `_missing_compiled_segments` fill,
+  including pre-period master/fins/bar/split months. Canonical full-month
+  windows come from the catalog (1/tick, 3 attempts, source parse max 24
+  jobs; that ceiling is not an authorized cloud execution plan). Exact-five runs only when
+  valuation is absent or complete, not leased/CAS/error. Fetch abort is 30s
+  on the ingest callback only; it does not cancel D1/R2/Receipt and the 90s
+  lease is not proof the prior owner stopped. Absent objects are no-ops.
+  PENDING staging Cron does not run `recoverPreparedReceipts` (no governed
+  issue). ACTIVE staging Cron may recover PREPARED identities; the ACTIVE
+  audit canary stays off this path because it requires `ra-s-c` provenance
+  while Premium deploys `rp-s-c`. They are not deployed until a later
+  SHA-align. Writing either control object is a later approved mutation, not
+  authorized by source merge. Do not add a public Premium route. Mass remains
+  verify-only. This is still operational HOLD for ACTIVE keys, READY, and
+  Pilot. Do not add a general bypass or execute ACTIVE instructions yet. The all-P0 gate remains the final
   release checklist. Runtime Worker paths separately enforce keys, READY,
   Trader authorization, and BudgetLedger occupancy; those checks are not the
   all-P0 gate.

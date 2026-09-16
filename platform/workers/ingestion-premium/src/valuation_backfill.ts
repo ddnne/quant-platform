@@ -61,12 +61,19 @@ export type ValuationIngest = (
   signal: AbortSignal,
 ) => Promise<ValuationRunSummary>;
 
-type ValuationTickResult = {
+export type ValuationTickResult = {
   status: "idle" | "stop" | "lost" | "pass" | "fail";
   fetched: boolean;
   days: number;
   reason: string;
 };
+
+/** Exact-five may run only when valuation is definitively idle, not busy/CAS/error. */
+export function valuationIdleForExactFive(tick: ValuationTickResult): boolean {
+  return tick.fetched === false &&
+    tick.status === "idle" &&
+    (tick.reason === "absent" || tick.reason === "complete");
+}
 
 function isCalendarDay(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;

@@ -228,9 +228,38 @@ typed Premium capability and exact named-handler acceptance are now checked in,
 and the source tree contains a no-secret staging observer bound only to the
 read-only evidence RPC. No live operator/observer principal or Service Binding
 has been deployed or accepted, and the observer cannot call registration.
-Until a separately reviewed no-public-Premium-surface registration caller and
-the Access-protected observer are configured and accepted, do not generate a
-key or claim that registration or activation is executable.
+The in-cloud registration caller is the existing Premium staging Cron plus
+absent-by-default R2 object `control/receipt_pending_registration.json`
+(`state=requested` once). It calls the same
+`PremiumReceiptOperatorService.pending_public_key_registration` implementation,
+persists that already-validated public operator envelope (`receipt-operator-registration/v1`
+wrapping the 19-field `receipt-public-key-registration/v1`, including
+`algorithm`, `environment`, `authority_instance_digest`, `key_generation`,
+and `registration_digest`), and will not recur after `completed`. It never
+persists wrapped or private key material. It is
+source-only until that SHA is deployed; putting the control object is a later
+approved mutation. The observer still cannot register. Adding a public Premium
+route remains prohibited. Do not generate a key or claim registration or
+activation is live until that control is accepted and the PENDING authority
+returns the public registration. Access-protected observer acceptance remains
+required before ACTIVE, not before this PENDING one-shot.
+
+Exact-five Cron admission binds current profile/closure and catalog
+canonical-month windows, including pre-period months from
+`declared_coverage_segments` / candidate-loop extras. It does not compile
+warmup itself. The control document is built by
+`ops.exact_five_acquisition_control` /
+`exact_five_acquisition_control_from_selectors` from those compiler
+outputs; putting it remains a later approved mutation.
+
+Callable recovery/activation after this source unit: PENDING staging Cron
+does not issue governed receipts, so `recoverPreparedReceipts` is not on
+that path. ACTIVE staging Cron may run the existing PREPARED sweep.
+`runStagingReceiptAuditRecoveryCanary` remains existing ACTIVE-only logic
+and is still not invoked from Premium Cron (`ra-s-c` vs `rp-s-c`).
+Read-only observation remains `PremiumReceiptAuditEvidenceService`.
+Positive Receipt issue remains `issueGovernedReceipt` during ACTIVE
+canonical-month ingest, not this PENDING registration tick.
 
 Preserve the non-secret response, source/deployment SHA, environment, Worker
 version, Durable Object generation, and response digest as immutable release

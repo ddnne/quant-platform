@@ -42,7 +42,12 @@ import {
   type MasterScd2UniverseEvidence,
 } from "./persist_records";
 import { fetchDataset } from "./fetch_jq";
-import { runValuationBackfillTick } from "./valuation_backfill";
+import {
+  runValuationBackfillTick,
+  valuationIdleForExactFive,
+} from "./valuation_backfill";
+import { runPendingRegistrationTick } from "./pending_registration_tick";
+import { runExactFiveAcquisitionTick } from "./exact_five_acquisition_tick";
 import { todayJst, toJstIso } from "./identity";
 import { sha256HexFromString } from "./sha256";
 import type {
@@ -919,25 +924,31 @@ function receiptOperatorVersion(
  * PENDING-only at the Receipt authority itself.
  */
 
+async function performPendingPublicKeyRegistration(
+  env: Env,
+): Promise<ReceiptOperatorRegistrationV1> {
+  const environment = receiptEnvironment(env);
+  const version = receiptOperatorVersion(env);
+  const registration = await requirePendingReceiptRegistration(
+    await env.RECEIPT_EVIDENCE_AUTHORITY.public_key_registration(),
+    { environment, sourceSha: version.sourceSha },
+  );
+  return {
+    schema_version: "receipt-operator-registration/v1",
+    authority: "receipt-evidence-authority",
+    action: "public_key_registration",
+    environment,
+    caller_worker_version_id: version.id,
+    caller_worker_version_tag: version.tag,
+    registration,
+  };
+}
+
 export class PremiumReceiptOperatorService
   extends WorkerEntrypoint<Env>
   implements PremiumReceiptOperatorRpc {
-  async pending_public_key_registration(): Promise<ReceiptOperatorRegistrationV1> {
-    const environment = receiptEnvironment(this.env);
-    const version = receiptOperatorVersion(this.env);
-    const registration = await requirePendingReceiptRegistration(
-      await this.env.RECEIPT_EVIDENCE_AUTHORITY.public_key_registration(),
-      { environment, sourceSha: version.sourceSha },
-    );
-    return {
-      schema_version: "receipt-operator-registration/v1",
-      authority: "receipt-evidence-authority",
-      action: "public_key_registration",
-      environment,
-      caller_worker_version_id: version.id,
-      caller_worker_version_tag: version.tag,
-      registration,
-    };
+  pending_public_key_registration(): Promise<ReceiptOperatorRegistrationV1> {
+    return performPendingPublicKeyRegistration(this.env);
   }
 }
 
@@ -1010,22 +1021,61 @@ export default {
     _controller: ScheduledController, env: Env, ctx: ExecutionContext,
   ): Promise<void> {
     if (env.RECEIPT_AUTHORITY_ENVIRONMENT === "staging") {
-      const result = await runValuationBackfillTick(
+      const ingest = (
+        opts: { dataset: string; from: string; to: string },
+        signal: AbortSignal,
+      ) => runIngestion(
+        env,
+        opts,
+        "cron",
+        (input, init) => fetch(input, { ...init, signal }),
+      );
+      const valuation = await runValuationBackfillTick(
         env.STRUCTURED_BUCKET,
-        (opts, signal) => runIngestion(
-          env,
-          opts,
-          "cron",
-          (input, init) => fetch(input, { ...init, signal }),
-        ),
+        ingest,
       );
       console.log(JSON.stringify({
         event: "valuation_backfill_tick",
-        status: result.status,
-        reason: result.reason,
-        fetched: result.fetched,
-        days: result.days,
+        status: valuation.status,
+        reason: valuation.reason,
+        fetched: valuation.fetched,
+        days: valuation.days,
       }));
+      const registration = await runPendingRegistrationTick(
+        env.STRUCTURED_BUCKET,
+        () => performPendingPublicKeyRegistration(env),
+        {
+          environment: env.RECEIPT_AUTHORITY_ENVIRONMENT,
+          operationMode: env.RECEIPT_AUTHORITY_OPERATION_MODE,
+          readyDeclared: env.READY_DECLARED,
+        },
+      );
+      console.log(JSON.stringify({
+        event: "pending_registration_tick",
+        status: registration.status,
+        reason: registration.reason,
+        called: registration.called,
+      }));
+      if (valuationIdleForExactFive(valuation)) {
+        const acquisition = await runExactFiveAcquisitionTick(
+          env.STRUCTURED_BUCKET,
+          ingest,
+        );
+        console.log(JSON.stringify({
+          event: "exact_five_acquisition_tick",
+          status: acquisition.status,
+          reason: acquisition.reason,
+          fetched: acquisition.fetched,
+          jobs: acquisition.jobs,
+        }));
+      }
+      // PENDING staging does not issue governed PREPARED receipts.
+      // ACTIVE staging may recover leftover PREPARED identities via the
+      // existing sweep. The ACTIVE audit canary is not invoked here: it
+      // requires ra-s-c provenance, while Premium deploys rp-s-c.
+      if (env.RECEIPT_AUTHORITY_OPERATION_MODE === "ACTIVE") {
+        await recoverPreparedReceipts(env);
+      }
       return;
     }
     ctx.waitUntil((async () => {

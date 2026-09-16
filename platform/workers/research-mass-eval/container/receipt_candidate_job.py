@@ -124,6 +124,22 @@ def compiled_candidate_selectors() -> tuple[dict[str, str], ...]:
     return tuple(selectors)
 
 
+def exact_five_acquisition_control_from_selectors(
+    selectors: Sequence[Mapping[str, str]],
+) -> dict[str, Any]:
+    """Idle Cron control from compiler/fill selectors. Does not PUT R2.
+
+    ``selectors`` are ``compiled_candidate_selectors`` and/or
+    ``_missing_compiled_segments`` extras / ``declared_coverage_segments``.
+    """
+
+    from ops.exact_five_acquisition_control import (
+        build_exact_five_compiled_acquisition_control,
+    )
+
+    return build_exact_five_compiled_acquisition_control(selectors)
+
+
 @dataclass(frozen=True, slots=True)
 class ReceiptCandidateJobSpec:
     job_id: str
