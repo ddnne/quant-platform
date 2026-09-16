@@ -47,7 +47,10 @@ import {
   valuationIdleForExactFive,
 } from "./valuation_backfill";
 import { runPendingRegistrationTick } from "./pending_registration_tick";
-import { runExactFiveAcquisitionTick } from "./exact_five_acquisition_tick";
+import {
+  observeExactFiveReceipt,
+  runExactFiveAcquisitionTick,
+} from "./exact_five_acquisition_tick";
 import { todayJst, toJstIso } from "./identity";
 import { sha256HexFromString } from "./sha256";
 import type {
@@ -543,7 +546,7 @@ async function lastRunSummary(env: Env): Promise<RunSummary | null> {
 
 async function runIngestion(
   env: Env,
-  opts: { from?: string; to?: string; today?: string; dataset?: string },
+  opts: { from?: string; to?: string; today?: string; dataset?: string; operation?: string },
   triggeredBy: "cron" | "manual",
   fetchImpl: typeof fetch,
 ): Promise<RunSummary> {
@@ -1060,6 +1063,10 @@ export default {
         const acquisition = await runExactFiveAcquisitionTick(
           env.STRUCTURED_BUCKET,
           ingest,
+          {
+            observe: (job, window, operation) =>
+              observeExactFiveReceipt(env.DB, job, window, operation),
+          },
         );
         console.log(JSON.stringify({
           event: "exact_five_acquisition_tick",
