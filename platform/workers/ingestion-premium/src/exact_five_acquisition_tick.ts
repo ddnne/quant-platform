@@ -18,9 +18,14 @@
  * A Durable Object/DB `running` row is not proof an isolate still executes.
  * Official Cron Trigger wall-clock duration is 15 minutes; a `running` row
  * older than that wall, with no PREPARED request and no receipt, is an
- * abandoned started marker. Continue the same operation/attempt (same owner,
- * no attempt increment) so late work can finish. Do not overlap a live or
- * possibly-live isolate, and do not hold later jobs forever on a stale row.
+ * abandoned started marker. Uncounted continuation is raw-only: it requires a
+ * usable ACQUIRED manifest for that run and must not refetch vendor pages.
+ * Track the current invocation start on the lease (not the original ran_at)
+ * so a resumed isolate cannot overlap another same-owner callback inside the
+ * Cron wall. Paid Cron duration is 15 minutes; Bundled has no Cron duration
+ * limit but 50 ms CPU and is not this Worker's setting. Missing raw holds or
+ * takes a counted new attempt within existing caps. Do not overlap a live
+ * isolate, and do not hold later jobs forever on a stale row.
  * PENDING no-operation skip still treats unsigned SUCCESS as already collected
  * for that audit path. ACTIVE no-operation skip requires a trusted signed
  * full-segment collection receipt for the exact window. Operation-bound
@@ -115,13 +120,20 @@ export type ExactFiveTickResult = {
 };
 
 export type ExactFiveIngest = (
-  opts: { dataset: string; from: string; to: string; operation?: string },
+  opts: {
+    dataset: string;
+    from: string;
+    to: string;
+    operation?: string;
+    resumeAcquired?: boolean;
+  },
   signal: AbortSignal,
 ) => Promise<{ status: "pass" | "fail" | "partial"; datasetCount: number; rowsInserted: number }>;
 
  export type ExactFiveObservation = {
    status: "pass" | "failed" | "started" | "absent";
    rowsInserted: number;
+   acquired?: boolean;
  };
 
 export type ExactFiveObserve = (
@@ -242,7 +254,7 @@ async function observeBoundExactFive(
   job: ExactFiveJob,
   window: { from: string; to: string },
   operation: string,
-  clock: () => Date,
+  _clock: () => Date,
 ): Promise<ExactFiveObservation | null> {
    const nonce = await sha256HexFromString(operation);
    const success = await db.prepare(
@@ -349,32 +361,49 @@ async function observeBoundExactFive(
      ran_at: string;
      status: string;
    }>();
-   if (
-     run &&
-     (run.status === "running" || run.status === "partial") &&
-     isolateMayStillRunFromStart(run.ran_at, clock)
-   ) {
-     return { status: "started", rowsInserted: 0 };
-   }
-   return null;
+   if (!run) return null;
+   const acquired = await acquiredRawForOperation(
+     db, operation, job.dataset, window.from, window.to,
+   );
+   return { status: "absent", rowsInserted: 0, acquired };
  }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isolateMayStillRunFromStart(ranAt: string, clock: () => Date): boolean {
-  const startedAt = Date.parse(ranAt);
-  if (!Number.isFinite(startedAt)) return true;
-  return clock().getTime() - startedAt < CRON_TRIGGER_WALL_MS;
+async function acquiredRawForOperation(
+  db: D1Database,
+  operation: string,
+  dataset: string,
+  from: string,
+  to: string,
+): Promise<boolean> {
+  const row = await db.prepare(
+    `SELECT manifest.page_count AS page_count, manifest.manifest_key AS manifest_key
+       FROM raw_retention_manifests AS manifest
+       JOIN ingestion_run_log AS run ON run.id = manifest.run_id
+      WHERE ${premiumOperationSql("run")}
+        AND manifest.dataset = ?
+        AND manifest.completeness = 'ACQUIRED'
+        AND manifest.page_count >= 1
+      LIMIT 1`,
+  ).bind(operation, dataset, from, to, dataset).first<{
+    page_count: number;
+    manifest_key: string;
+  }>();
+  return row !== null &&
+    Number.isSafeInteger(row.page_count) && row.page_count >= 1 &&
+    typeof row.manifest_key === "string" && row.manifest_key.length > 0;
 }
 
-function isolateMayStillRunFromLease(lease: ControlLease, now: Date): boolean {
+function invocationMayStillRun(lease: ControlLease, now: Date): boolean {
   if (!lease) return false;
   if (lease.until > now.toISOString()) return true;
-  const untilMs = Date.parse(lease.until);
-  if (!Number.isFinite(untilMs)) return true;
-  return now.getTime() - (untilMs - EXACT_FIVE_LEASE_MS) < CRON_TRIGGER_WALL_MS;
+  if (typeof lease.started !== "string") return false;
+  const startedAt = Date.parse(lease.started);
+  if (!Number.isFinite(startedAt)) return true;
+  return now.getTime() - startedAt < CRON_TRIGGER_WALL_MS;
 }
 
 function monthEnd(month: string): string {
@@ -662,12 +691,19 @@ async function ingestJob(
   window: { from: string; to: string },
   fetchTimeoutMs: number,
   operation: string,
+  resumeAcquired: boolean,
 ): Promise<{ status: "pass" | "fail" | "partial"; datasetCount: number; rowsInserted: number }> {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), fetchTimeoutMs);
   try {
     return await ingest(
-      { dataset: job.dataset, from: window.from, to: window.to, operation },
+      {
+        dataset: job.dataset,
+        from: window.from,
+        to: window.to,
+        operation,
+        resumeAcquired,
+      },
       ac.signal,
     );
   } catch (error) {
@@ -802,9 +838,10 @@ export async function runExactFiveAcquisitionTick(
     return holdInitiating(bucket, control, etag, job, window, jobIndex, false);
   }
 
-  const maybeLiveLate = isolateMayStillRunFromLease(control.lease, now);
-  const needsFence = (lastStatus === "running" || lastStatus === "timeout") &&
-    maybeLiveLate;
+  const liveInvocation = invocationMayStillRun(control.lease, now);
+  const needsFence = liveInvocation && (
+    lastStatus === "running" || lastStatus === "timeout" || lastStatus === "unresolved"
+  );
   if (needsFence) {
     const owner = control.lease?.owner;
     if (!owner) {
@@ -813,6 +850,9 @@ export async function runExactFiveAcquisitionTick(
     control.lease = {
       owner,
       until: new Date(now.getTime() + EXACT_FIVE_LEASE_MS).toISOString(),
+      ...(typeof control.lease?.started === "string"
+        ? { started: control.lease.started }
+        : {}),
     };
     control.last = jobLast(job, window, 0, "unresolved");
     const durable = await commitControl(bucket, control, etag);
@@ -823,15 +863,15 @@ export async function runExactFiveAcquisitionTick(
     return { status: "idle", fetched: false, jobs: 0, reason: "unresolved" };
   }
 
-  const continueOwner = pendingOperation;
-  if (!continueOwner && control.attempts >= MAX_ATTEMPTS) {
+  const resumeRaw = Boolean(pendingOperation) && observed?.acquired === true;
+  if (!resumeRaw && control.attempts >= MAX_ATTEMPTS) {
     return { status: "stop", fetched: false, jobs: 0, reason: "exhausted" };
   }
 
-  const owner = continueOwner ?? crypto.randomUUID();
+  const owner = resumeRaw ? pendingOperation! : crypto.randomUUID();
   const until = new Date(now.getTime() + EXACT_FIVE_LEASE_MS).toISOString();
-  if (!continueOwner) control.attempts += 1;
-  control.lease = { owner, until };
+  if (!resumeRaw) control.attempts += 1;
+  control.lease = { owner, until, started: now.toISOString() };
   control.last = jobLast(job, window, 0, "running");
   const claimed = await casPut(bucket, control, etag);
   if (claimed === null || !claimed.etag) {
@@ -845,7 +885,7 @@ export async function runExactFiveAcquisitionTick(
 
   let summary: { status: "pass" | "fail" | "partial"; datasetCount: number; rowsInserted: number };
   try {
-    summary = await ingestJob(ingest, job, window, fetchTimeoutMs, owner);
+    summary = await ingestJob(ingest, job, window, fetchTimeoutMs, owner, resumeRaw);
   } catch (error) {
     if (options.observe) {
       const late = await options.observe(job, window, owner);
