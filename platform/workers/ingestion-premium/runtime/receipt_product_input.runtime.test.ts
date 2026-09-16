@@ -26,6 +26,22 @@ import {
   closedReceiptVerifyRegistry,
   type ReceiptVerifyRegistry,
 } from "../src/ops_projection_policy";
+import {
+  canonicalReceiptExpectedScope,
+  commitReceipt,
+} from "../../receipt-evidence-authority/src/receipt_evidence";
+import {
+  datasetById,
+  governedReceiptIdentity,
+} from "../src/catalog";
+import {
+  writeRequiredCoverageSegment,
+  type CollectionSegment,
+} from "../src/collection_receipts";
+import type {
+  CollectionReceiptV3,
+  ReceiptAuthorityEnv,
+} from "../../receipt-evidence-authority/src/types";
 
 const registries = vi.hoisted(() => ({
   production: {} as Record<string, unknown>,
@@ -398,6 +414,7 @@ type SeedSpec = {
   artifactDigest?: string;
   rawPageCount?: number;
   rawBytes?: number;
+  phase?: "complete" | "structured";
 };
 
 async function seedComplete(db: D1Database, spec: SeedSpec): Promise<void> {
@@ -424,19 +441,31 @@ async function seedComplete(db: D1Database, spec: SeedSpec): Promise<void> {
     checked_at: "2026-08-01T00:00:00Z",
   });
   const artifactDigest = spec.artifactDigest ?? spec.objects.structured;
+  const structuredOnly = spec.phase === "structured";
   await db.prepare(
     `INSERT INTO ingestion_run_log(id,ran_at,source,runtime,status,detail)
-     VALUES (?,'2026-08-01T00:00:00Z','jquants','cloud','ok',NULL)`,
-  ).bind(spec.runId).run();
+     VALUES (?,'2026-08-01T00:00:00Z','jquants','cloud',?,NULL)`,
+  ).bind(spec.runId, structuredOnly ? "RUNNING" : "ok").run();
+  if (structuredOnly) {
+    await db.prepare(
+      `UPDATE ingestion_run_log SET authority_operation_id=? WHERE id=?`,
+    ).bind(spec.operationId, spec.runId).run();
+  }
   await db.prepare(
     `INSERT INTO coverage_segments(
        source,dataset,segment_id,policy_version,segment_start,segment_end,expected_scope,
        expected_items,status,receipt_run_id,evaluated_at,detail_json
      ) VALUES (
-       'jquants',?,?,'collection-coverage/v3','2026-08-01','2026-08-31',?,1,'COMPLETE',?,
+       'jquants',?,?,'collection-coverage/v3','2026-08-01','2026-08-31',?,1,?,?,
        '2026-08-01T00:00:00Z','{}'
      )`,
-  ).bind(spec.dataset, spec.segmentId, expectedScopeJson, spec.runId).run();
+  ).bind(
+    spec.dataset,
+    spec.segmentId,
+    expectedScopeJson,
+    structuredOnly ? "UNKNOWN" : "COMPLETE",
+    structuredOnly ? null : spec.runId,
+  ).run();
   await db.prepare(
     `INSERT INTO receipt_authority_operations(
        operation_id,request_digest,run_id,environment,source,contract_id,dataset,segment_id,
@@ -478,8 +507,8 @@ async function seedComplete(db: D1Database, spec: SeedSpec): Promise<void> {
        row_count,byte_count,manifest_key,manifest_digest,raw_manifest_key,raw_manifest_digest,
        raw_page_count,raw_row_count,raw_bytes,committed_at
      ) VALUES (
-       ?,?,'jquants',?,?,?,?,'',
-       2,?, ?,?,?,?,
+        ?,?,'jquants',?,?,?,?,'{}',
+        2,?, ?,?,?,?,
        ?,2,?,'2026-08-01T00:00:00Z'
      )`,
   ).bind(
@@ -504,6 +533,7 @@ async function seedComplete(db: D1Database, spec: SeedSpec): Promise<void> {
             structured_digest=?
       WHERE operation_id=?`,
   ).bind(spec.manifestKey, spec.objects.structured, spec.operationId).run();
+  if (structuredOnly) return;
   await db.prepare(
     `INSERT INTO collection_receipts(
        source,dataset,segment_id,segment_start,segment_end,expected_scope,expected_items,
@@ -666,6 +696,102 @@ async function seedPair(options?: {
   return { registry, objects };
 }
 
+async function seedUnknownStructuredForCommit(options?: {
+  coverageEnd?: string;
+}): Promise<{
+  registry: ReceiptVerifyRegistry;
+  envelope: Record<string, unknown>;
+  receipt: CollectionReceiptV3;
+}> {
+  await applyD1Migrations(runtimeEnv.DB, migrations);
+  await seedBase(runtimeEnv.DB);
+  const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  const raw = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
+  const registry = await closedActiveStagingRegistry(raw);
+  const objects = await seedGovernedObjects();
+  const spec = datasetById("equities_bars_daily");
+  if (spec === undefined) throw new Error("catalog missing equities_bars_daily");
+  const identity = governedReceiptIdentity(spec.id);
+  if (identity === undefined || identity.source !== "jquants") {
+    throw new Error("equities_bars_daily is not a governed jquants receipt identity");
+  }
+  const planned = canonicalReceiptExpectedScope(spec, {
+    segment_start: "2026-08-01",
+    segment_end: "2026-08-31",
+    segment_grain: identity.segment_grain,
+  });
+  const claims = await canonicalV3Claims(objects, {
+    artifact_key: "bars-artifact.jsonl",
+    manifest_key: "bars-manifest.json",
+    raw_manifest_key: "bars-raw.json",
+    receipt_issue_digest: "sha256:" + "cc".repeat(32),
+    run_id: 1,
+    structured_generation: 1,
+    natural_key_digest: await canonicalDigest({
+      operation_id: "op-bars",
+      natural_keys: ["k1", "k2"],
+    }),
+    expected_scope: planned.scope,
+  });
+  const envelope = await signV3Claims(pair, claims);
+  const recoveredClaims = JSON.parse(canonicalJson(claims)) as {
+    expected_scope: CollectionReceiptV3["expected_scope"];
+  };
+  const receipt: CollectionReceiptV3 = {
+    source: "jquants",
+    dataset: "equities_bars_daily",
+    segment_id: "2026-08",
+    segment_start: "2026-08-01",
+    segment_end: "2026-08-31",
+    expected_scope: recoveredClaims.expected_scope,
+    expected_items: planned.expectedItems,
+    observed_items: 1,
+    raw_page_count: 1,
+    raw_row_count: 2,
+    structured_row_count: 2,
+    pagination_exhausted: true,
+    digests: envelope as CollectionReceiptV3["digests"],
+    run_id: 1,
+    status: "SUCCESS",
+    error: null,
+    checked_at: "2026-08-01T00:00:00Z",
+  };
+  await seedComplete(runtimeEnv.DB, {
+    dataset: "equities_bars_daily",
+    segmentId: "2026-08",
+    runId: 1,
+    operationId: "op-bars",
+    nonce: "ab".repeat(32),
+    requestDigest: "sha256:" + "cc".repeat(32),
+    expectedScope: planned.scope,
+    artifactKey: "bars-artifact.jsonl",
+    manifestKey: "bars-manifest.json",
+    rawKey: "bars-raw.json",
+    envelope,
+    objects,
+    phase: "structured",
+  });
+  await writeRequiredCoverageSegment(
+    { DB: runtimeEnv.DB },
+    spec,
+    {
+      id: "2026-08",
+      start: "2026-08-01",
+      end: "2026-08-31",
+      expectedScope: planned.scope as CollectionSegment["expectedScope"],
+      expectedItems: planned.expectedItems,
+      canonicalMonth: true,
+    },
+  );
+  if (options?.coverageEnd && options.coverageEnd !== "2026-08-31") {
+    await runtimeEnv.DB.prepare(
+      `UPDATE coverage_segments SET segment_end=?
+        WHERE dataset='equities_bars_daily' AND segment_id='2026-08'`,
+    ).bind(options.coverageEnd).run();
+  }
+  return { registry, envelope, receipt };
+}
+
 afterEach(async () => {
   restoreRegistries();
   await reset();
@@ -720,6 +846,61 @@ describe("POST /v1/export/receipt-products workerd D1", () => {
     delete identity.input_set_digest;
     delete identity.read_observation;
     expect(left.input_set_digest).toBe(await canonicalDigest(identity));
+  });
+
+  it("promotes matching UNKNOWN coverage on governed commit then describes", async () => {
+    const { registry, receipt } = await seedUnknownStructuredForCommit();
+    const digest = await commitReceipt(
+      { DB: runtimeEnv.DB } as ReceiptAuthorityEnv,
+      "op-bars",
+      receipt,
+    );
+    const coverage = await runtimeEnv.DB.prepare(
+      `SELECT status, receipt_run_id FROM coverage_segments
+        WHERE dataset='equities_bars_daily' AND segment_id='2026-08'`,
+    ).first<{ status: string; receipt_run_id: number }>();
+    expect(coverage).toEqual({ status: "COMPLETE", receipt_run_id: 1 });
+    await runtimeEnv.DB.prepare(
+      `INSERT INTO receipt_authority_requests(
+         operation_id,request_nonce,environment,source,contract_id,dataset,segment_id,state,
+         receipt_digest,created_at,updated_at
+       ) VALUES (
+         'op-bars',?,'staging','jquants','jquants_premium_core','equities_bars_daily','2026-08',
+         'FINALIZED',?,'2026-08-01T00:00:00Z','2026-08-01T00:00:00Z'
+       )`,
+    ).bind("ab".repeat(32), digest).run();
+    installRegistry("staging", registry);
+    const res = await postReceiptProducts(exportEnv(), inputRequest([
+      { dataset: "equities_bars_daily", segment_id: "2026-08" },
+    ]));
+    expect(res?.status).toBe(200);
+    expect(await res!.json()).toMatchObject({ status: "DESCRIBED" });
+  });
+
+  it("leaves mismatched planned coverage UNKNOWN so describe HOLDs incomplete", async () => {
+    const { registry, receipt } = await seedUnknownStructuredForCommit({
+      coverageEnd: "2026-08-30",
+    });
+    await commitReceipt(
+      { DB: runtimeEnv.DB } as ReceiptAuthorityEnv,
+      "op-bars",
+      receipt,
+    );
+    const coverage = await runtimeEnv.DB.prepare(
+      `SELECT status, receipt_run_id FROM coverage_segments
+        WHERE dataset='equities_bars_daily' AND segment_id='2026-08'`,
+    ).first<{ status: string; receipt_run_id: number | null }>();
+    expect(coverage).toEqual({ status: "UNKNOWN", receipt_run_id: null });
+    installRegistry("staging", registry);
+    const res = await postReceiptProducts(exportEnv(), inputRequest([
+      { dataset: "equities_bars_daily", segment_id: "2026-08" },
+    ]));
+    expect(res?.status).toBe(409);
+    expect(await res!.json()).toMatchObject({
+      status: "HOLD",
+      hold_reason: "COVERAGE_INCOMPLETE",
+      hold_selector: { dataset: "equities_bars_daily", segment_id: "2026-08" },
+    });
   });
 
   it("holds on current incomplete coverage and never falls back to an older successful receipt", async () => {
