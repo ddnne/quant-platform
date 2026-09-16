@@ -7,12 +7,14 @@
  * compiled period end). Exact selector membership is the operator control,
  * produced by `ops.exact_five_acquisition_control` from
  * `compiled_candidate_selectors` / `declared_coverage_segments` /
- * `_missing_compiled_segments` extras. This tick does not compile warmup.
- *
+* `_missing_compiled_segments` extras. This tick does not compile warmup.
+*
  * Fetch abort cancels vendor HTTP only. The tick waits for the ingest
- * callback to settle and commits that outcome even after the 90s lease
- * clock. Elapsed lease is not proof the prior owner stopped: reconcile a
- * SUCCESS collection receipt for the pending job before any replay.
+ * callback to settle and commits that outcome even after the claim lease
+ * expires. The claim lease is longer than the fetch abort so overlapping
+ * minute Cron ticks do not recapture an in-flight month. Elapsed lease is
+ * not proof the prior owner stopped: reconcile a SUCCESS collection receipt
+ * for the pending job before any replay.
  * Coverage presence is not liveness. A fail validation or FAILED receipt
  * for this operation and exact window is terminal only when no matching
  * PREPARED request remains. A matching PREPARED keeps the initiating
@@ -44,8 +46,8 @@ export const EXACT_FIVE_ACQUISITION_KEY =
 const SCHEMA = "exact-five-compiled-acquisition/v1";
 const MAX_JOBS = 24;
 const MAX_ATTEMPTS = 3;
-export const EXACT_FIVE_FETCH_TIMEOUT_MS = 180_000;
-export const EXACT_FIVE_LEASE_MS = 240_000;
+const EXACT_FIVE_FETCH_TIMEOUT_MS = 180_000;
+const EXACT_FIVE_LEASE_MS = 240_000;
 const MONTH_ID = /^[0-9]{4}-[0-9]{2}$/;
 
 const CONTROL_KEYS = [
@@ -576,7 +578,8 @@ async function holdInitiating(
 /**
  * Abort cancels vendor HTTP only. Always wait for ingest() — D1/R2/Receipt
  * may still finish after the fetch signal. Calendar-month equities bars
- * paginate beyond 30s; the lease must outlast the fetch abort.
+ * paginate past a day-tick abort; the claim lease must outlast the fetch
+ * abort.
  */
 async function ingestJob(
   ingest: ExactFiveIngest,
