@@ -251,8 +251,10 @@ source-only until that SHA is deployed; putting the control object is a later
 approved mutation. The observer still cannot register. Adding a public Premium
 route remains prohibited. Do not generate a key or claim registration or
 activation is live until that control is accepted and the PENDING authority
-returns the public registration. Access-protected observer acceptance remains
-required before ACTIVE, not before this PENDING one-shot.
+returns the public registration. Observer Worker/Access remains the separate
+JSDA release-observation HOLD; it is not a Receipt ACTIVE prerequisite.
+Receipt ACTIVE acceptance uses the three-Worker management-D1 signed-evidence
+collector, not observer HTTP or Access credentials.
 
 Exact-five Cron admission binds current profile/closure and catalog
 canonical-month windows, including pre-period months from
