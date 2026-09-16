@@ -116,9 +116,14 @@ async function streamSignedExport(
  * 32-byte backup key. Download requires the job's signed_url sha256 to match
  * the current bundle so a swapped same-host URL cannot be labelled as this job.
  */
+type D1ExportOutboundEnv = Cloudflare.Env & {
+  D1_BACKUP_EXPORT_BUNDLE?: string;
+  D1_BACKUP_KEY?: string;
+};
+
 export async function d1ExportSourceOutbound(
   request: Request,
-  env: Cloudflare.Env,
+  env: D1ExportOutboundEnv,
 ): Promise<Response> {
   const url = new URL(request.url);
   if (
