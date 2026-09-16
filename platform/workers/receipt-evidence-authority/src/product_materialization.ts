@@ -1,4 +1,4 @@
-import { canonicalJson, sha256Digest } from "./canonical";
+import { canonicalDigest, canonicalJson, sha256Digest } from "./canonical";
 import {
   capturedOfficialCalendarDescriptor,
   putCreateOnly,
@@ -108,10 +108,11 @@ function governedBusinessFields(row: GovernedProductRow): Omit<
   };
 }
 
-async function persistGovernedProduct(
+export async function persistGovernedProductSlice(
   env: ReceiptAuthorityEnv,
   rows: CanonicalStructuredRow[],
-): Promise<CanonicalStructuredRow[]> {
+): Promise<void> {
+  if (rows.length === 0) return;
   const primary = rows.map((row) => env.DB.prepare(
     `INSERT OR IGNORE INTO jquants_records
      (source,dataset,natural_key,event_time,available_at,ingested_at,payload,raw_payload)
@@ -129,63 +130,7 @@ async function persistGovernedProduct(
   for (let index = 0; index < primary.length; index += 50) {
     await env.DB.batch(primary.slice(index, index + 50));
   }
-
-  const stored: GovernedProductRow[] = [];
-  for (let index = 0; index < rows.length; index += 50) {
-    const expected = rows.slice(index, index + 50);
-    const placeholders = expected.map(() => "?").join(",");
-    const result = await env.DB.prepare(
-      `SELECT source,dataset,natural_key,event_time,available_at,ingested_at,
-              payload,raw_payload
-         FROM jquants_records
-        WHERE source=? AND dataset=?
-          AND natural_key IN (${placeholders})
-        ORDER BY natural_key`,
-    ).bind(
-      expected[0]!.source,
-      expected[0]!.dataset,
-      ...expected.map((row) => row.natural_key),
-    ).all<GovernedProductRow>();
-    stored.push(...(result.results ?? []));
-  }
-
-  const byNaturalKey = new Map<string, GovernedProductRow>();
-  for (const row of stored) {
-    if (byNaturalKey.has(row.natural_key)) {
-      throw new Error("governed jquants_records contains duplicate natural keys");
-    }
-    byNaturalKey.set(row.natural_key, row);
-  }
-
-  const productRows: CanonicalStructuredRow[] = [];
-  for (const expected of rows) {
-    const actual = byNaturalKey.get(expected.natural_key);
-    const expectedFields = governedProductFields(expected);
-    if (
-      actual === undefined || actual.source !== expected.source ||
-      canonicalJson(governedBusinessFields(actual)) !==
-        canonicalJson(governedBusinessFields(expectedFields)) ||
-      !Number.isFinite(Date.parse(actual.ingested_at)) ||
-      !Number.isFinite(Date.parse(actual.available_at)) ||
-      Date.parse(actual.ingested_at) < Date.parse(actual.available_at) ||
-      Date.parse(actual.ingested_at) > Date.parse(expected.ingested_at)
-    ) {
-      throw new Error(
-        "governed jquants_records fields differ from canonical raw normalization",
-      );
-    }
-    productRows.push({
-      ...actual,
-      row_digest: await sha256Digest(canonicalJson(actual)),
-    });
-  }
-  if (productRows.length !== stored.length) {
-    throw new Error(
-      "governed jquants_records fields differ from canonical raw normalization",
-    );
-  }
-
-  const changes = productRows.map((row) => env.DB.prepare(
+  const changes = rows.map((row) => env.DB.prepare(
     `INSERT OR IGNORE INTO ingestion_change_log
      (table_name,source,dataset,natural_key,event_time,available_at,ingested_at,
       payload,raw_payload,changed_at)
@@ -204,39 +149,6 @@ async function persistGovernedProduct(
   for (let index = 0; index < changes.length; index += 50) {
     await env.DB.batch(changes.slice(index, index + 50));
   }
-  for (const row of productRows) {
-    const change = await env.DB.prepare(
-      `SELECT change_seq,table_name,source,dataset,natural_key,event_time,
-              available_at,ingested_at,payload,raw_payload,changed_at
-         FROM ingestion_change_log
-        WHERE table_name='jquants_records' AND source=? AND dataset=?
-          AND natural_key=? AND available_at=? AND ingested_at=? AND payload=?`,
-    ).bind(
-      row.source,
-      row.dataset,
-      row.natural_key,
-      row.available_at,
-      row.ingested_at,
-      row.payload,
-    ).first<Record<string, unknown>>();
-    if (
-      change === null || typeof change.change_seq !== "number" ||
-      !Number.isSafeInteger(change.change_seq) || change.change_seq <= 0 ||
-      canonicalJson({
-        source: change.source,
-        dataset: change.dataset,
-        natural_key: change.natural_key,
-        event_time: change.event_time,
-        available_at: change.available_at,
-        ingested_at: change.ingested_at,
-        payload: change.payload,
-        raw_payload: change.raw_payload,
-      }) !== canonicalJson(governedProductFields(row)) ||
-      change.table_name !== "jquants_records" ||
-      change.changed_at !== row.ingested_at
-    ) throw new Error("governed product change feed differs from signed rows");
-  }
-  return productRows;
 }
 
 async function requireExactObject(
@@ -260,13 +172,40 @@ async function requireExactObject(
  * immutable product prefix; it is not a digest of the reconciliation shadow
  * table.
  */
+async function assembleCanonicalProductBody(
+  env: ReceiptAuthorityEnv,
+  operationId: string,
+): Promise<{ body: string; count: number; naturalKeys: string[] }> {
+  const lines: string[] = [];
+  const naturalKeys: string[] = [];
+  let after = "";
+  while (true) {
+    const page = await env.DB.prepare(
+      `SELECT natural_key,source,dataset,event_time,available_at,ingested_at,
+              payload,raw_payload
+         FROM receipt_authority_structured_rows
+        WHERE operation_id=? AND natural_key>?
+        ORDER BY natural_key LIMIT 200`,
+    ).bind(operationId, after).all<CanonicalStructuredRow>();
+    const batch = page.results ?? [];
+    if (batch.length === 0) break;
+    for (const row of batch) {
+      naturalKeys.push(row.natural_key);
+      lines.push(productLine(row));
+    }
+    if (batch.length < 200) break;
+    after = batch.at(-1)!.natural_key;
+  }
+  return { body: lines.length === 0 ? "" : `${lines.join("\n")}\n`, count: lines.length, naturalKeys };
+}
+
 export async function materializeProduct(
   env: ReceiptAuthorityEnv,
   input: {
     operationId: string;
     runId: number;
     capture: Capture;
-    rows: CanonicalStructuredRow[];
+    expectedCount: number;
     checkedAt: string;
   },
 ): Promise<{
@@ -277,12 +216,16 @@ export async function materializeProduct(
   manifestKey: string;
   manifestByteCount: number;
   manifestDigest: string;
+  naturalKeyDigest: string;
 }> {
-  if (input.rows.length === 0) {
+  if (!Number.isSafeInteger(input.expectedCount) || input.expectedCount < 1) {
     throw new Error("empty product materialization cannot be signed");
   }
-  const productRows = await persistGovernedProduct(env, input.rows);
-  const body = canonicalProductBody(productRows);
+  const assembled = await assembleCanonicalProductBody(env, input.operationId);
+  if (assembled.count !== input.expectedCount) {
+    throw new Error("product materialization row count differs from raw evidence");
+  }
+  const body = assembled.body;
   const bytes = new TextEncoder().encode(body);
   const artifactDigest = await sha256Digest(bytes);
   const dataset = input.capture.initialRequest.dataset_id;
@@ -332,7 +275,7 @@ export async function materializeProduct(
     artifact_digest: artifactDigest,
     artifact_body: body,
     structured_digest: artifactDigest,
-    row_count: productRows.length,
+    row_count: assembled.count,
     byte_count: bytes.byteLength,
     raw_manifest_key: input.capture.rawManifestKey,
     raw_manifest_digest: input.capture.rawManifestDigest,
@@ -374,8 +317,8 @@ export async function materializeProduct(
     segment_id: segmentId,
     artifact_key: artifactKey,
     artifact_digest: artifactDigest,
-    artifact_body: body,
-    row_count: productRows.length,
+    artifact_body: "",
+    row_count: assembled.count,
     byte_count: bytes.byteLength,
     manifest_key: manifestKey,
     manifest_digest: manifestDigest,
@@ -405,12 +348,16 @@ export async function materializeProduct(
     throw new Error("product materialization index differs from verified artifact");
   }
   return {
-    count: productRows.length,
+    count: assembled.count,
     digest: artifactDigest,
     artifactKey,
     artifactByteCount: bytes.byteLength,
     manifestKey,
     manifestByteCount: manifestBytes.byteLength,
     manifestDigest,
+    naturalKeyDigest: await canonicalDigest({
+      operation_id: input.operationId,
+      natural_keys: assembled.naturalKeys,
+    }),
   };
 }
