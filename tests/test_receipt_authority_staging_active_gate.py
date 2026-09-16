@@ -228,18 +228,13 @@ def _chain_documents(
         surface = surfaces[role]
         deployment_id = f"00000000-0000-4000-8000-{ordinal:012d}"
         version_id = f"10000000-0000-4000-8000-{ordinal:012d}"
-        message = (
-            active._observer_message(SHA)
-            if role == "observer"
-            else live.deployment_message(role, "staging", SHA, "ACTIVE")
-        )
+        message = live.deployment_message(role, "staging", SHA, "ACTIVE")
         deployments[role] = {
             "id": deployment_id,
             "created_on": {
                 "acquisition": "2026-08-28T08:00:05.000Z",
                 "authority": "2026-08-28T08:00:10.000Z",
                 "caller": "2026-08-28T08:00:20.000Z",
-                "observer": "2026-08-28T08:00:25.000Z",
             }[role],
             "source": "wrangler",
             "strategy": "percentage",
@@ -278,11 +273,7 @@ def _chain_documents(
             "id": version_id,
             "annotations": {
                 "workers/message": message,
-                "workers/tag": (
-                    active._observer_tag(SHA)
-                    if role == "observer"
-                    else live.version_tag(role, "staging", SHA, "ACTIVE")
-                ),
+                "workers/tag": live.version_tag(role, "staging", SHA, "ACTIVE"),
                 "workers/triggered_by": "version_upload",
             },
             "metadata": {
@@ -290,7 +281,6 @@ def _chain_documents(
                     "acquisition": "2026-08-28T08:00:01.000Z",
                     "authority": "2026-08-28T08:00:02.000Z",
                     "caller": "2026-08-28T08:00:11.000Z",
-                    "observer": "2026-08-28T08:00:21.000Z",
                 }[role],
                 "source": "wrangler",
                 "has_preview": False,
@@ -521,65 +511,18 @@ def _attestation(
     return envelope
 
 
-def _observer_documents(
+def _d1_snapshot(
     attestation: dict[str, Any],
     versions: dict[str, Any],
-    *,
-    challenge: str = "f" * 64,
-) -> tuple[bytes, dict[str, Any]]:
+) -> dict[str, Any]:
     exact_text = active._canonical_bytes(attestation).decode("utf-8")
     caller_version_id = versions["caller"]["id"]
-    reservation_id = active._canonical_digest({
-        "schema_version": "staging-receipt-audit-reservation/v1",
-        "purpose": "receipt_authority_recovery_canary",
-        "eligibility": "AUDIT_ONLY",
-        "source_sha": SHA,
-        "caller_worker_version_id": caller_version_id,
-    })
+    reservation_id = active._expected_reservation_id(
+        source_sha=SHA,
+        caller_version_id=caller_version_id,
+    )
     claims = json.loads(base64.b64decode(attestation["signed_claims_base64"]))
-    premium_body = {
-        "schema_version": "receipt-operator-audit-evidence/v1",
-        "purpose": "receipt_authority_recovery_canary",
-        "eligibility": "AUDIT_ONLY",
-        "environment": "staging",
-        "caller_source_sha": SHA,
-        "caller_worker_version_id": caller_version_id,
-        "caller_worker_version_tag": live.version_tag(
-            "caller", "staging", SHA, "ACTIVE"
-        ),
-        "d1_schema_digest": active.RECOVERY_AUDIT_SCHEMA_DIGEST,
-        "reservation_id": reservation_id,
-        "authority_operation_id": claims["operation_id"],
-        "request_nonce": claims["request_nonce"],
-        "signed_attestation_digest": active._canonical_digest(attestation),
-        "signed_attestation_json_utf8_base64": base64.b64encode(
-            exact_text.encode("utf-8")
-        ).decode("ascii"),
-        "signed_attestation_json_utf8_length": len(exact_text.encode("utf-8")),
-    }
-    premium = {
-        **premium_body,
-        "evidence_digest": active._canonical_digest(premium_body),
-    }
-    response_body = {
-        "schema_version": "receipt-activation-observer-response/v1",
-        "purpose": "receipt_authority_recovery_canary",
-        "eligibility": "AUDIT_ONLY",
-        "environment": "staging",
-        "challenge": challenge,
-        "observer_source_sha": SHA,
-        "observer_worker_version_id": versions["observer"]["id"],
-        "observer_worker_version_tag": active._observer_tag(SHA),
-        "access_authenticated": True,
-        "access_aud": ACCESS_AUD,
-        "premium_evidence": premium,
-        "premium_evidence_digest": premium["evidence_digest"],
-    }
-    response = {
-        **response_body,
-        "response_digest": active._canonical_digest(response_body),
-    }
-    d1 = {
+    return {
         "schema_rows": copy.deepcopy(SCHEMA_ROWS),
         "attestation_rows": [{
             "reservation_id": reservation_id,
@@ -592,17 +535,13 @@ def _observer_documents(
             "signed_attestation_json": exact_text,
         }],
     }
-    return active._canonical_bytes(response), d1
 
 
-def _refresh_observer(evidence: dict[str, Any]) -> None:
-    response, d1 = _observer_documents(
+def _refresh_d1(evidence: dict[str, Any]) -> None:
+    evidence["d1_snapshot"] = _d1_snapshot(
         evidence["attestation"],
         evidence["versions"],
-        challenge=evidence["challenge"],
     )
-    evidence["observer_response"] = response
-    evidence["d1_snapshot"] = d1
 
 
 def _evidence(tmp_path: Path):
@@ -628,11 +567,8 @@ def _evidence(tmp_path: Path):
         "public": public,
         "provenance": provenance,
         "attestation": attestation,
-        "challenge": "f" * 64,
-        "access_manifest_path": _access_manifest(tmp_path / "access.json"),
-        "access_snapshot": _access_snapshot(),
     }
-    _refresh_observer(evidence)
+    _refresh_d1(evidence)
     return evidence
 
 
@@ -646,11 +582,7 @@ def _validate(evidence: dict[str, Any], **overrides: Any) -> dict[str, Any]:
         "source_provenance": evidence["provenance"],
         "deployment_bracket_after": copy.deepcopy(evidence["deployments"]),
         "public_bracket_after": copy.deepcopy(evidence["public"]),
-        "observer_response_bytes": evidence["observer_response"],
-        "observer_challenge": evidence["challenge"],
-        "access_snapshot": evidence["access_snapshot"],
         "d1_snapshot": evidence["d1_snapshot"],
-        "access_manifest_path": evidence["access_manifest_path"],
         "registry_path": evidence["registry_path"],
     }
     arguments.update(overrides)
@@ -662,7 +594,10 @@ def test_exact_audit_only_transition_uses_real_signature_and_separate_digests(
 ) -> None:
     evidence = _evidence(tmp_path)
     result = _validate(evidence)
-    assert result["format"] == "receipt-authority-staging-active-transition/v4"
+    assert result["format"] == "receipt-authority-staging-active-transition/v5"
+    assert result["evidence_kind"] == (
+        "management-collected signed runtime recovery evidence"
+    )
     assert result["authority_mode"] == "ACTIVE"
     assert result["eligibility"] == "AUDIT_ONLY"
     assert result["research_eligible"] is False
@@ -674,11 +609,14 @@ def test_exact_audit_only_transition_uses_real_signature_and_separate_digests(
         "signed_claims_digest"
     ]
     assert result["signed_attestation_digest"] != result["signed_claims_digest"]
-    assert set(result["workers"]) == {
-        "acquisition", "authority", "caller", "observer"
-    }
-    assert result["access_aud"] == ACCESS_AUD
-    assert result["observer_challenge"] == evidence["challenge"]
+    assert set(result["workers"]) == {"acquisition", "authority", "caller"}
+    assert "observer_challenge" not in result
+    assert "access_aud" not in result
+    assert result["reservation_id"] == active._expected_reservation_id(
+        source_sha=SHA,
+        caller_version_id=evidence["versions"]["caller"]["id"],
+    )
+    assert result["d1_request_nonce"] == "a" * 64
     assert result["d1_schema_digest"] == active.RECOVERY_AUDIT_SCHEMA_DIGEST
     assert result["deployment_pair_digest"] == active._canonical_digest(
         {
@@ -729,7 +667,7 @@ def test_authority_change_requires_a_newer_coordinated_caller_version(
     evidence["attestation"] = _attestation(
         evidence["private_key"], evidence["key_id"], evidence["versions"]
     )
-    _refresh_observer(evidence)
+    _refresh_d1(evidence)
     with pytest.raises(
         active.ReceiptStagingActiveGateError,
         match="Premium caller version was not uploaded after authority deployment",
@@ -753,7 +691,7 @@ def test_authority_change_requires_a_newer_coordinated_caller_version(
     evidence["attestation"] = _attestation(
         evidence["private_key"], evidence["key_id"], evidence["versions"]
     )
-    _refresh_observer(evidence)
+    _refresh_d1(evidence)
     result = _validate(evidence)
     assert result["workers"]["authority"]["deployment_version_id"] == (
         new_authority_version
@@ -823,7 +761,6 @@ def test_public_validator_collects_live_and_owns_fixed_paths(
         "source_provenance": evidence["provenance"],
         "deployment_bracket_after": copy.deepcopy(evidence["deployments"]),
         "public_bracket_after": copy.deepcopy(evidence["public"]),
-        "access_snapshot": evidence["access_snapshot"],
         "d1_snapshot": evidence["d1_snapshot"],
     }
     source_checks: list[str] = []
@@ -852,18 +789,6 @@ def test_public_validator_collects_live_and_owns_fixed_paths(
     monkeypatch.setattr(active, "_collect_staging_active_documents", collect)
     monkeypatch.setattr(
         active,
-        "_load_access_manifest",
-        lambda *_args, **_kwargs: json.loads(
-            evidence["access_manifest_path"].read_text(encoding="utf-8")
-        ),
-    )
-    monkeypatch.setattr(
-        active,
-        "_fetch_observer_response",
-        lambda **_arguments: evidence["observer_response"],
-    )
-    monkeypatch.setattr(
-        active,
         "_write_content_addressed_result",
         lambda result: dict(result),
     )
@@ -873,7 +798,6 @@ def test_public_validator_collects_live_and_owns_fixed_paths(
         lambda **_arguments: (
             copy.deepcopy(documents["deployment_bracket_after"]),
             copy.deepcopy(documents["public_bracket_after"]),
-            copy.deepcopy(documents["access_snapshot"]),
             copy.deepcopy(documents["d1_snapshot"]),
         ),
     )
@@ -893,10 +817,11 @@ def test_public_validator_collects_live_and_owns_fixed_paths(
         f"origin:{SHA}",
     ]
     assert validated[0]["registry_path"] == active.SCOPED_REGISTRY_PATHS["staging"]
-    assert validated[0]["access_manifest_path"] == active.ACCESS_MANIFEST_PATH
-    assert validated[0]["observer_response_bytes"] == evidence["observer_response"]
-    assert validated[0]["observer_challenge"].isalnum()
-    assert len(validated[0]["observer_challenge"]) == 64
+    assert "observer_response_bytes" not in validated[0]
+    assert "access_manifest_path" not in validated[0]
+    assert set(validated[0]["deployments"]) == {
+        "acquisition", "authority", "caller"
+    }
 
     drifted = copy.deepcopy(documents["deployment_bracket_after"])
     drifted["authority"]["id"] = "changed-after-attestation"
@@ -906,35 +831,12 @@ def test_public_validator_collects_live_and_owns_fixed_paths(
         lambda **_arguments: (
             drifted,
             copy.deepcopy(documents["public_bracket_after"]),
-            copy.deepcopy(documents["access_snapshot"]),
             copy.deepcopy(documents["d1_snapshot"]),
         ),
     )
     with pytest.raises(
         active.ReceiptStagingActiveGateError,
         match="changed after attestation verification",
-    ):
-        active.validate_staging_active_transition(
-            source_sha=SHA,
-            account_id=ACCOUNT,
-            api_token="opaque-test-token",
-        )
-
-    drifted_access = copy.deepcopy(documents["access_snapshot"])
-    drifted_access["application"]["aud"] = "0" * 64
-    monkeypatch.setattr(
-        active,
-        "_remeasure_staging_active_tail",
-        lambda **_arguments: (
-            copy.deepcopy(documents["deployment_bracket_after"]),
-            copy.deepcopy(documents["public_bracket_after"]),
-            drifted_access,
-            copy.deepcopy(documents["d1_snapshot"]),
-        ),
-    )
-    with pytest.raises(
-        active.ReceiptStagingActiveGateError,
-        match="Access app/policy/token changed",
     ):
         active.validate_staging_active_transition(
             source_sha=SHA,
@@ -950,7 +852,6 @@ def test_public_validator_collects_live_and_owns_fixed_paths(
         lambda **_arguments: (
             copy.deepcopy(documents["deployment_bracket_after"]),
             copy.deepcopy(documents["public_bracket_after"]),
-            copy.deepcopy(documents["access_snapshot"]),
             drifted_d1,
         ),
     )
@@ -1009,7 +910,7 @@ def test_gate_rejects_races_positive_eligibility_and_digest_confusion(
     after_deployments = copy.deepcopy(evidence["deployments"])
     after_public = copy.deepcopy(evidence["public"])
     mutation(evidence)
-    _refresh_observer(evidence)
+    _refresh_d1(evidence)
     with pytest.raises(active.ReceiptStagingActiveGateError, match=match):
         _validate(
             evidence,
@@ -1029,7 +930,7 @@ def test_gate_rejects_self_signed_source_and_version_substitution(
         mutate_claims=lambda claims: claims.update(authority_source_sha="2" * 40),
     )
     evidence["attestation"] = substituted
-    _refresh_observer(evidence)
+    _refresh_d1(evidence)
     with pytest.raises(
         active.ReceiptStagingActiveGateError,
         match="immutable caller/authority version/key pair drifted",
@@ -1037,46 +938,19 @@ def test_gate_rejects_self_signed_source_and_version_substitution(
         _validate(evidence)
 
 
-def test_gate_rejects_noncanonical_or_challenge_substituted_observer_bytes(
+def test_d1_row_operation_id_and_nonce_must_match_signed_claims(
     tmp_path: Path,
 ) -> None:
     evidence = _evidence(tmp_path)
     _validate(evidence)
-    pretty = json.dumps(json.loads(evidence["observer_response"]), indent=2).encode()
-    with pytest.raises(active.ReceiptStagingActiveGateError, match="not canonical"):
-        _validate(evidence, observer_response_bytes=pretty)
-    with pytest.raises(active.ReceiptStagingActiveGateError, match="scope drifted"):
-        _validate(evidence, observer_challenge="0" * 64)
-
-
-def test_gate_rejects_access_aud_and_current_worker_version_substitution(
-    tmp_path: Path,
-) -> None:
-    evidence = _evidence(tmp_path)
-    for mutation in (
-        lambda response: response.update(access_aud="0" * 64),
-        lambda response: response.update(
-            observer_worker_version_id="20000000-0000-4000-8000-000000000004"
-        ),
-        lambda response: response["premium_evidence"].update(
-            caller_worker_version_id="20000000-0000-4000-8000-000000000003"
-        ),
+    row = evidence["d1_snapshot"]["attestation_rows"][0]
+    row["request_nonce"] = "b" * 64
+    row["authority_operation_id"] = active._canonical_digest({"other": True})
+    with pytest.raises(
+        active.ReceiptStagingActiveGateError,
+        match="operation_id/nonce drifted from signed claims",
     ):
-        response = json.loads(evidence["observer_response"])
-        mutation(response)
-        if response["premium_evidence"] != json.loads(
-            evidence["observer_response"]
-        )["premium_evidence"]:
-            premium = response["premium_evidence"]
-            premium_body = dict(premium)
-            premium_body.pop("evidence_digest")
-            premium["evidence_digest"] = active._canonical_digest(premium_body)
-            response["premium_evidence_digest"] = premium["evidence_digest"]
-        response_body = dict(response)
-        response_body.pop("response_digest")
-        response["response_digest"] = active._canonical_digest(response_body)
-        with pytest.raises(active.ReceiptStagingActiveGateError, match="scope drifted"):
-            _validate(evidence, observer_response_bytes=active._canonical_bytes(response))
+        _validate(evidence)
 
 
 @pytest.mark.parametrize("field", ["schema_rows", "attestation_rows"])
@@ -1347,78 +1221,6 @@ def test_cloudflare_zero_trust_9999_is_an_operational_hold(
     )
     with pytest.raises(active.ReceiptStagingActiveGateError, match="9999"):
         active._cloudflare_api("/accounts/x/access/apps", api_token="opaque")
-
-
-def test_observer_fetch_requires_environment_credentials_before_network(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    manifest_path = _access_manifest(tmp_path / "access.json")
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    monkeypatch.delenv(active.ACCESS_CLIENT_ID_ENV, raising=False)
-    monkeypatch.delenv(active.ACCESS_CLIENT_SECRET_ENV, raising=False)
-    with pytest.raises(active.ReceiptStagingActiveGateError, match="process environment"):
-        active._fetch_observer_response(challenge="f" * 64, access_manifest=manifest)
-
-
-def test_observer_fetch_probes_unauthenticated_then_exact_access_request(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    manifest_path = _access_manifest(tmp_path / "access.json")
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    exact = b'{"closed":true}'
-    observed: list[dict[str, str]] = []
-
-    class Response:
-        headers = {
-            "content-type": "application/json; charset=utf-8",
-            "cache-control": "no-store",
-            "pragma": "no-cache",
-            "x-content-type-options": "nosniff",
-        }
-
-        def __enter__(self) -> "Response":
-            return self
-
-        def __exit__(self, *_args: Any) -> None:
-            return None
-
-        def read(self, _limit: int) -> bytes:
-            return exact
-
-        def getcode(self) -> int:
-            return 200
-
-        def geturl(self) -> str:
-            return (
-                f"https://{ACCESS_DOMAIN}/v1/receipt-authority/audit-evidence?"
-                f"challenge={'f' * 64}"
-            )
-
-    def open_request(request: Any, *, timeout: int) -> Any:
-        assert timeout == 30
-        headers = {key.lower(): value for key, value in request.header_items()}
-        observed.append(headers)
-        if "cf-access-client-id" not in headers:
-            raise HTTPError(request.full_url, 403, "forbidden", {}, io.BytesIO(b""))
-        return Response()
-
-    monkeypatch.setenv(active.ACCESS_CLIENT_ID_ENV, "client-id")
-    monkeypatch.setenv(active.ACCESS_CLIENT_SECRET_ENV, "client-secret")
-    monkeypatch.setattr(
-        active,
-        "_pinned_https_opener",
-        lambda: SimpleNamespace(open=open_request),
-    )
-    assert active._fetch_observer_response(
-        challenge="f" * 64,
-        access_manifest=manifest,
-    ) == exact
-    assert len(observed) == 2
-    assert "cf-access-client-id" not in observed[0]
-    assert observed[1]["cf-access-client-id"] == "client-id"
-    assert observed[1]["cf-access-client-secret"] == "client-secret"
 
 
 def test_content_addressed_output_is_create_only_and_idempotent(

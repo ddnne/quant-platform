@@ -63,6 +63,11 @@ shape is an exact random-challenge GET protected by the official Workers
 Access context. The observer binds the exact Access application AUD into its
 canonical response and cannot initiate registration or the audit canary.
 
+The Receipt ACTIVE Python gate does not consume that observer HTTP response.
+It reads the same authority-signed D1 attestation through the official
+management SELECT collector. Observer Access remains the JSDA
+release-observation HOLD, not Receipt ACTIVE evidence transport.
+
 `RECEIPT_KEY_WRAP_KEY` is a 32-byte, independently generated wrapping key
 encoded as exactly 64 lowercase hexadecimal characters. Put
 it into each environment with Wrangler's secret input; never place its value in
@@ -321,31 +326,28 @@ ACTIVE audit entrypoint can only read that attestation; the separate operator
 entrypoint has only the argument-free PENDING registration proposal. Neither
 entrypoint can initiate a positive Receipt operation.
 
-The public gate owns the pinned Access manifest and staging key registry; only
-its private test core accepts mappings or alternate paths. It generates a
-fresh 256-bit challenge, proves an unauthenticated request is rejected, and
-then performs the authenticated HTTPS GET using service-token credentials read
-only from the process environment. Redirects, inherited proxies, HTML,
-oversize responses, extra query/body data, and credential values in argv or
-artifacts are excluded. The response must carry the exact Access application
-AUD observed from the Cloudflare API.
+The public gate owns the pinned staging key registry; only its private test
+core accepts mappings or alternate paths. Receipt ACTIVE collection does not
+call observer HTTP or Access. The official Cloudflare management D1 collector
+reads the exact Premium staging `DB` row. The gate derives `reservation_id`
+from the reviewed source SHA and current caller version, requires exactly one
+`ATTESTED` row, retains the exact canonical UTF-8 attestation bytes and digest,
+and compares D1 `authority_operation_id` and `request_nonce` to the verified
+signed claims. It does not fabricate a Premium/observer wrapper. Evidence
+format `receipt-authority-staging-active-transition/v5` is
+management-collected signed runtime recovery evidence, not RPC/Access-observed
+evidence.
 
-The gate remeasures the exact four-Worker deployment bracket, immutable module
+The gate remeasures the exact three-Worker Receipt chain, immutable module
 bytes, bindings, Durable Object migration tag, secret-name/public surfaces,
-Workers Beta immutable observer ID plus its enabled non-preview subdomain URL,
-Access app/policy/token inventory, and the
-Premium D1 migration-0019 schema plus exact stored attestation TEXT before and
-after the observer request. Worker-level Access must have exactly
-`destinations=[{type:"worker",worker_id:<immutable-id>}]`. The HTTPS endpoint
-is derived from the same ID-addressed Worker API response and must equal the
-pinned manifest URL and hostname; any covering worker,
-preview-worker, all-workers, public, wildcard, or legacy hostname application
-fails closed. It verifies the complete initial/first-recovery/replay-
-confirmation chain with the real Ed25519 key from the pinned staging registry.
-Its public API accepts neither live evidence mappings, paths, a
-registry/verifier override, nor an in-memory attestation/Receipt. Successful
-evidence is canonical, content-addressed, create-only local output marked
-`AUDIT_ONLY` and research-ineligible.
+and the Premium D1 migration-0019 schema plus exact stored attestation TEXT
+before and after verification. It verifies the complete
+initial/first-recovery/replay-confirmation chain with the real Ed25519 key
+from the pinned staging registry. Observer Worker/Access helpers remain for
+the separate JSDA release-observation HOLD. Its public API accepts neither
+live evidence mappings, paths, a registry/verifier override, nor an in-memory
+attestation/Receipt. Successful evidence is canonical, content-addressed,
+create-only local output marked `AUDIT_ONLY` and research-ineligible.
 
 This is only a source-level partial safety boundary, not permission to activate.
 The active registry,

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Narrow fail-closed validator for a Receipt staging ACTIVE transition.
 
-The public validator owns fixed Access-manifest and staging-registry paths and
-remeasures deployments, Access, D1, and the authenticated observer response.
-It cannot invoke a positive RPC, accept caller-supplied evidence documents,
-accept a Receipt/Coverage claim, inject a verifier, or select another trust
-root.
+The public validator owns the pinned staging registry path and remeasures
+deployments, public surfaces, and the official management D1 collector. Evidence
+is management-collected signed runtime recovery evidence, not observer
+RPC/Access-observed evidence. It cannot invoke a positive RPC, accept
+caller-supplied evidence documents, accept a Receipt/Coverage claim, inject a
+verifier, or select another trust root. Observer Access helpers remain for the
+separate JSDA release-observation HOLD.
 """
 
 from __future__ import annotations
@@ -16,7 +18,6 @@ import hashlib
 import json
 import os
 import re
-import secrets
 import ssl
 import subprocess
 from collections.abc import Mapping
@@ -57,8 +58,7 @@ ACCESS_MANIFEST_PATH = (
 OUTPUT_DIR = ROOT / "data" / "ops" / "receipt_authority" / "staging_active"
 ACCESS_CLIENT_ID_ENV = "RECEIPT_OBSERVER_ACCESS_CLIENT_ID"
 ACCESS_CLIENT_SECRET_ENV = "RECEIPT_OBSERVER_ACCESS_CLIENT_SECRET"
-OBSERVER_ROLE = ("observer", "receipt-activation-observer")
-ACTIVE_CHAIN = (*live.CHAIN, OBSERVER_ROLE)
+ACTIVE_CHAIN = live.CHAIN
 MAX_OBSERVER_RESPONSE_BYTES = 64 * 1024
 RECOVERY_AUDIT_SCHEMA_DIGEST = (
     "sha256:fba0bdada764ff2dc67caa5c11b3a31b2c3c28d673a25712a853e0b0566b5259"
@@ -122,38 +122,6 @@ _CLAIM_FIELDS = {
     "final_state",
     "issuer_key_id",
     "issued_at",
-}
-_PREMIUM_EVIDENCE_FIELDS = {
-    "schema_version",
-    "purpose",
-    "eligibility",
-    "environment",
-    "caller_source_sha",
-    "caller_worker_version_id",
-    "caller_worker_version_tag",
-    "d1_schema_digest",
-    "reservation_id",
-    "authority_operation_id",
-    "request_nonce",
-    "signed_attestation_digest",
-    "signed_attestation_json_utf8_base64",
-    "signed_attestation_json_utf8_length",
-    "evidence_digest",
-}
-_OBSERVER_RESPONSE_FIELDS = {
-    "schema_version",
-    "purpose",
-    "eligibility",
-    "environment",
-    "challenge",
-    "observer_source_sha",
-    "observer_worker_version_id",
-    "observer_worker_version_tag",
-    "access_authenticated",
-    "access_aud",
-    "premium_evidence",
-    "premium_evidence_digest",
-    "response_digest",
 }
 _SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _SOURCE_SHA = re.compile(r"[0-9a-f]{40}\Z")
@@ -349,9 +317,6 @@ def _active_surfaces(
         "RECEIPT_AUTHORITY_ACTIVE_KEY_ID": active_key_id,
         "RECEIPT_AUTHORITY_REGISTRY_DIGEST": active_registry_digest,
     }
-    surfaces["observer"] = copy.deepcopy(
-        manifest["workers"]["receipt-activation-observer"]["staging"]
-    )
     return surfaces
 
 
@@ -610,112 +575,24 @@ def _validate_access_snapshot(
     return copy.deepcopy(value)
 
 
-def _validate_observer_response(
-    raw: bytes,
-    *,
-    challenge: str,
-    reviewed_sha: str,
-    accepted: Mapping[str, Mapping[str, Any]],
-    access_manifest: Mapping[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any], str]:
-    if type(raw) is not bytes or not raw or len(raw) > MAX_OBSERVER_RESPONSE_BYTES:
-        raise ReceiptStagingActiveGateError("Receipt observer response is oversized")
-    if _NONCE.fullmatch(challenge) is None:
-        raise ReceiptStagingActiveGateError("Receipt observer challenge is invalid")
-    try:
-        response = json.loads(
-            raw,
-            object_pairs_hook=_reject_duplicates,
-            parse_constant=_reject_constant,
-        )
-    except ReceiptStagingActiveGateError:
-        raise
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ReceiptStagingActiveGateError("Receipt observer response is unreadable") from exc
-    if type(response) is not dict or set(response) != _OBSERVER_RESPONSE_FIELDS:
-        raise ReceiptStagingActiveGateError("Receipt observer response is not closed")
-    if raw != _canonical_bytes(response):
-        raise ReceiptStagingActiveGateError("Receipt observer response is not canonical")
-    premium = response.get("premium_evidence")
-    observer = accepted["observer"]
-    caller = accepted["caller"]
-    if (
-        response.get("schema_version") != "receipt-activation-observer-response/v1"
-        or response.get("purpose") != "receipt_authority_recovery_canary"
-        or response.get("eligibility") != "AUDIT_ONLY"
-        or response.get("environment") != "staging"
-        or response.get("challenge") != challenge
-        or response.get("observer_source_sha") != reviewed_sha
-        or response.get("observer_worker_version_id")
-        != observer["deployment_version_id"]
-        or response.get("observer_worker_version_tag") != _observer_tag(reviewed_sha)
-        or response.get("access_authenticated") is not True
-        or response.get("access_aud") != access_manifest["application"]["aud"]
-        or type(premium) is not dict
-        or set(premium) != _PREMIUM_EVIDENCE_FIELDS
-        or response.get("premium_evidence_digest") != premium.get("evidence_digest")
-    ):
-        raise ReceiptStagingActiveGateError("Receipt observer scope drifted")
-    response_body = dict(response)
-    response_digest = response_body.pop("response_digest")
-    if response_digest != _canonical_digest(response_body):
-        raise ReceiptStagingActiveGateError("Receipt observer response digest drifted")
-    if (
-        premium.get("schema_version") != "receipt-operator-audit-evidence/v1"
-        or premium.get("purpose") != "receipt_authority_recovery_canary"
-        or premium.get("eligibility") != "AUDIT_ONLY"
-        or premium.get("environment") != "staging"
-        or premium.get("caller_source_sha") != reviewed_sha
-        or premium.get("caller_worker_version_id") != caller["deployment_version_id"]
-        or premium.get("caller_worker_version_tag")
-        != live.version_tag("caller", "staging", reviewed_sha, "ACTIVE")
-        or premium.get("d1_schema_digest") != RECOVERY_AUDIT_SCHEMA_DIGEST
-        or _SHA256.fullmatch(str(premium.get("reservation_id"))) is None
-        or _SHA256.fullmatch(str(premium.get("authority_operation_id"))) is None
-        or _NONCE.fullmatch(str(premium.get("request_nonce"))) is None
-        or _SHA256.fullmatch(str(premium.get("signed_attestation_digest"))) is None
-        or type(premium.get("signed_attestation_json_utf8_length")) is not int
-        or premium["signed_attestation_json_utf8_length"] <= 0
-        or premium["signed_attestation_json_utf8_length"] > 48 * 1024
-    ):
-        raise ReceiptStagingActiveGateError("Premium audit evidence scope drifted")
-    premium_body = dict(premium)
-    premium_digest = premium_body.pop("evidence_digest", None)
-    if premium_digest != _canonical_digest(premium_body):
-        raise ReceiptStagingActiveGateError("Premium audit evidence digest drifted")
-    attestation_bytes = _canonical_base64(
-        premium.get("signed_attestation_json_utf8_base64")
-    )
-    if (
-        attestation_bytes is None
-        or len(attestation_bytes) != premium["signed_attestation_json_utf8_length"]
-    ):
-        raise ReceiptStagingActiveGateError("Premium exact D1 bytes drifted")
-    try:
-        attestation = json.loads(
-            attestation_bytes,
-            object_pairs_hook=_reject_duplicates,
-            parse_constant=_reject_constant,
-        )
-    except ReceiptStagingActiveGateError:
-        raise
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ReceiptStagingActiveGateError("Premium exact D1 bytes are unreadable") from exc
-    if (
-        type(attestation) is not dict
-        or attestation_bytes != _canonical_bytes(attestation)
-        or _canonical_digest(attestation) != premium["signed_attestation_digest"]
-    ):
-        raise ReceiptStagingActiveGateError("Premium exact D1 bytes drifted")
-    return attestation, premium, response_digest
+def _expected_reservation_id(*, source_sha: str, caller_version_id: str) -> str:
+    return _canonical_digest({
+        "schema_version": "staging-receipt-audit-reservation/v1",
+        "purpose": "receipt_authority_recovery_canary",
+        "eligibility": "AUDIT_ONLY",
+        "source_sha": source_sha,
+        "caller_worker_version_id": caller_version_id,
+    })
 
 
 def _validate_d1_snapshot(
     value: Any,
     *,
-    premium: Mapping[str, Any],
-    attestation: Mapping[str, Any],
-) -> str:
+    reviewed_sha: str,
+    caller_version_id: str,
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    """Parse the exact management D1 attestation row. Do not wrap it."""
+
     if type(value) is not dict or set(value) != {"schema_rows", "attestation_rows"}:
         raise ReceiptStagingActiveGateError("Receipt audit D1 snapshot is not closed")
     schema_rows = value["schema_rows"]
@@ -745,23 +622,63 @@ def _validate_d1_snapshot(
         "authority_operation_id", "request_nonce", "state",
         "signed_attestation_digest", "signed_attestation_json",
     }
-    exact_text = _canonical_bytes(attestation).decode("utf-8")
+    expected_reservation_id = _expected_reservation_id(
+        source_sha=reviewed_sha,
+        caller_version_id=caller_version_id,
+    )
     if (
         type(row) is not dict
         or set(row) != row_fields
-        or row.get("reservation_id") != premium["reservation_id"]
-        or row.get("source_sha") != premium["caller_source_sha"]
-        or row.get("caller_worker_version_id") != premium["caller_worker_version_id"]
-        or row.get("authority_operation_id") != premium["authority_operation_id"]
-        or row.get("request_nonce") != premium["request_nonce"]
+        or row.get("reservation_id") != expected_reservation_id
+        or row.get("source_sha") != reviewed_sha
+        or row.get("caller_worker_version_id") != caller_version_id
         or row.get("state") != "ATTESTED"
-        or row.get("signed_attestation_digest") != premium["signed_attestation_digest"]
-        or row.get("signed_attestation_json") != exact_text
-        or base64.b64encode(exact_text.encode("utf-8")).decode("ascii")
-        != premium["signed_attestation_json_utf8_base64"]
+        or _SHA256.fullmatch(str(row.get("authority_operation_id"))) is None
+        or _NONCE.fullmatch(str(row.get("request_nonce"))) is None
+        or _SHA256.fullmatch(str(row.get("signed_attestation_digest"))) is None
+        or type(row.get("signed_attestation_json")) is not str
+        or not row["signed_attestation_json"]
     ):
         raise ReceiptStagingActiveGateError("Receipt audit D1 exact bytes/row drifted")
-    return schema_digest
+    exact_text = row["signed_attestation_json"]
+    try:
+        exact_bytes = exact_text.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ReceiptStagingActiveGateError(
+            "Receipt audit D1 exact bytes are unreadable"
+        ) from exc
+    try:
+        attestation = json.loads(
+            exact_bytes,
+            object_pairs_hook=_reject_duplicates,
+            parse_constant=_reject_constant,
+        )
+    except ReceiptStagingActiveGateError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ReceiptStagingActiveGateError(
+            "Receipt audit D1 exact bytes are unreadable"
+        ) from exc
+    if (
+        type(attestation) is not dict
+        or exact_bytes != _canonical_bytes(attestation)
+        or _canonical_digest(attestation) != row["signed_attestation_digest"]
+    ):
+        raise ReceiptStagingActiveGateError("Receipt audit D1 exact bytes/row drifted")
+    return schema_digest, copy.deepcopy(row), attestation
+
+
+def _require_d1_row_matches_signed_claims(
+    row: Mapping[str, Any],
+    claims: Mapping[str, Any],
+) -> None:
+    if (
+        row.get("authority_operation_id") != claims.get("operation_id")
+        or row.get("request_nonce") != claims.get("request_nonce")
+    ):
+        raise ReceiptStagingActiveGateError(
+            "Receipt audit D1 operation_id/nonce drifted from signed claims"
+        )
 
 
 def _authority_instance_digest() -> str:
@@ -1095,11 +1012,7 @@ def _validate_staging_active_transition_core(
     source_provenance: Mapping[str, Any],
     deployment_bracket_after: Mapping[str, Any],
     public_bracket_after: Mapping[str, Any],
-    observer_response_bytes: bytes,
-    observer_challenge: str,
-    access_snapshot: Mapping[str, Any],
     d1_snapshot: Mapping[str, Any],
-    access_manifest_path: Path,
     registry_path: Path,
 ) -> dict[str, Any]:
     reviewed_sha = live._source_sha(source_sha)
@@ -1110,14 +1023,6 @@ def _validate_staging_active_transition_core(
     if registry.get("authority_instance_digest") != instance_digest:
         raise ReceiptStagingActiveGateError("ACTIVE registry authority scope drifted")
     surfaces = _active_surfaces(active_key_id, registry["registry_digest"])
-    access_manifest = _load_access_manifest(
-        access_manifest_path,
-        account_id=account_id,
-    )
-    accepted_access = _validate_access_snapshot(
-        access_snapshot,
-        manifest=access_manifest,
-    )
     roles = {role for role, _worker in ACTIVE_CHAIN}
     if any(
         set(document) != roles
@@ -1146,36 +1051,22 @@ def _validate_staging_active_transition_core(
             raise ReceiptStagingActiveGateError(
                 f"{role} public surface changed during ACTIVE transition"
             )
-        if role == "observer":
-            deployment_id, version_id, message, deployment_created_on = (
-                _validate_observer_deployment(
-                    deployments[role],
-                    source_sha=reviewed_sha,
-                )
-            )
-            row = _validate_observer_version(
-                versions[role],
-                source_sha=reviewed_sha,
-                version_id=version_id,
-                surface=surfaces[role],
-            )
-        else:
-            deployment_id, version_id, message, deployment_created_on = live._validate_deployment(
-                deployments[role],
-                role=role,
-                environment="staging",
-                source_sha=reviewed_sha,
-                authority_mode="ACTIVE",
-            )
-            row = live._validate_version(
-                versions[role],
-                role=role,
-                environment="staging",
-                source_sha=reviewed_sha,
-                version_id=version_id,
-                surface=surfaces[role],
-                authority_mode="ACTIVE",
-            )
+        deployment_id, version_id, message, deployment_created_on = live._validate_deployment(
+            deployments[role],
+            role=role,
+            environment="staging",
+            source_sha=reviewed_sha,
+            authority_mode="ACTIVE",
+        )
+        row = live._validate_version(
+            versions[role],
+            role=role,
+            environment="staging",
+            source_sha=reviewed_sha,
+            version_id=version_id,
+            surface=surfaces[role],
+            authority_mode="ACTIVE",
+        )
         row["deployment_id"] = deployment_id
         row["deployment_created_on"] = deployment_created_on
         row["deployment_message"] = message
@@ -1187,19 +1078,10 @@ def _validate_staging_active_transition_core(
         )
         accepted[role] = row
 
-    attestation, premium_evidence, observer_response_digest = (
-        _validate_observer_response(
-            observer_response_bytes,
-            challenge=observer_challenge,
-            reviewed_sha=reviewed_sha,
-            accepted=accepted,
-            access_manifest=access_manifest,
-        )
-    )
-    d1_schema_digest = _validate_d1_snapshot(
+    d1_schema_digest, d1_row, attestation = _validate_d1_snapshot(
         d1_snapshot,
-        premium=premium_evidence,
-        attestation=attestation,
+        reviewed_sha=reviewed_sha,
+        caller_version_id=accepted["caller"]["deployment_version_id"],
     )
     claims, attestation_digest = _verify_audit_attestation(
         attestation,
@@ -1208,6 +1090,7 @@ def _validate_staging_active_transition_core(
         instance_digest=instance_digest,
         accepted=accepted,
     )
+    _require_d1_row_matches_signed_claims(d1_row, claims)
     ledger = load_pinned_finding_ledger()
     deployment_pair_digest = _canonical_digest({
         "schema_version": "receipt-audit-deployment-pair/v2",
@@ -1222,7 +1105,8 @@ def _validate_staging_active_transition_core(
         "registry_digest": registry["registry_digest"],
     })
     return {
-        "format": "receipt-authority-staging-active-transition/v4",
+        "format": "receipt-authority-staging-active-transition/v5",
+        "evidence_kind": "management-collected signed runtime recovery evidence",
         "environment": "staging",
         "source_sha": reviewed_sha,
         "account_id": account_id,
@@ -1233,13 +1117,11 @@ def _validate_staging_active_transition_core(
         "registry_digest": registry["registry_digest"],
         "deployment_pair_digest": deployment_pair_digest,
         "workers": accepted,
+        "reservation_id": d1_row["reservation_id"],
         "audit_recovery_operation_id": claims["operation_id"],
+        "d1_request_nonce": d1_row["request_nonce"],
         "signed_attestation_digest": attestation_digest,
         "signed_claims_digest": attestation["signed_claims_digest"],
-        "observer_challenge": observer_challenge,
-        "observer_response_digest": observer_response_digest,
-        "access_aud": access_manifest["application"]["aud"],
-        "access_snapshot_digest": _canonical_digest(accepted_access),
         "d1_schema_digest": d1_schema_digest,
         "finding_ledger_digest": ledger.digest,
         "open_p0_ids": list(ledger.open_p0_ids),
@@ -1629,81 +1511,6 @@ def _collect_d1_snapshot(
     return {"schema_rows": schema_rows, "attestation_rows": attestation_rows}
 
 
-def _fetch_observer_response(
-    *,
-    challenge: str,
-    access_manifest: Mapping[str, Any],
-) -> bytes:
-    client_id = os.environ.get(ACCESS_CLIENT_ID_ENV)
-    client_secret = os.environ.get(ACCESS_CLIENT_SECRET_ENV)
-    if not client_id or not client_secret:
-        raise ReceiptStagingActiveGateError(
-            "Receipt observer Access credentials are required in process environment"
-        )
-    endpoint = access_manifest["endpoint"]["url"]
-    url = (
-        f"{endpoint}/v1/receipt-authority/audit-evidence?"
-        + urlencode({"challenge": challenge})
-    )
-    opener = _pinned_https_opener()
-    unauthenticated = Request(url, method="GET", headers={"accept": "application/json"})
-    try:
-        with opener.open(unauthenticated, timeout=30) as response:
-            response.read(MAX_OBSERVER_RESPONSE_BYTES + 1)
-            raise ReceiptStagingActiveGateError(
-                "Receipt observer accepted an unauthenticated request"
-            )
-    except HTTPError as exc:
-        exc.read(MAX_OBSERVER_RESPONSE_BYTES + 1)
-        if exc.code not in {401, 403} or exc.headers.get("location") is not None:
-            raise ReceiptStagingActiveGateError(
-                "Receipt observer unauthenticated rejection drifted"
-            ) from exc
-    except ReceiptStagingActiveGateError:
-        raise
-    except (URLError, TimeoutError, OSError) as exc:
-        raise ReceiptStagingActiveGateError(
-            "Receipt observer unauthenticated probe failed"
-        ) from exc
-
-    authenticated = Request(
-        url,
-        method="GET",
-        headers={
-            "accept": "application/json",
-            "CF-Access-Client-Id": client_id,
-            "CF-Access-Client-Secret": client_secret,
-        },
-    )
-    try:
-        with opener.open(authenticated, timeout=30) as response:
-            raw = response.read(MAX_OBSERVER_RESPONSE_BYTES + 1)
-            headers = response.headers
-            if (
-                response.getcode() != 200
-                or response.geturl() != url
-                or headers.get("location") is not None
-                or not str(headers.get("content-type") or "").lower().startswith(
-                    "application/json"
-                )
-                or headers.get("cache-control") != "no-store"
-                or headers.get("pragma") != "no-cache"
-                or headers.get("x-content-type-options") != "nosniff"
-            ):
-                raise ReceiptStagingActiveGateError(
-                    "Receipt observer authenticated response metadata drifted"
-                )
-    except ReceiptStagingActiveGateError:
-        raise
-    except (HTTPError, URLError, TimeoutError, OSError) as exc:
-        raise ReceiptStagingActiveGateError(
-            "Receipt observer authenticated request failed"
-        ) from exc
-    if len(raw) > MAX_OBSERVER_RESPONSE_BYTES:
-        raise ReceiptStagingActiveGateError("Receipt observer response is oversized")
-    return raw
-
-
 def _collect_staging_active_documents(
     *,
     source_sha: str,
@@ -1718,15 +1525,6 @@ def _collect_staging_active_documents(
             "exact Cloudflare account id and API token are required"
         )
     manifest = build_manifest()
-    access_manifest = _load_access_manifest(
-        ACCESS_MANIFEST_PATH,
-        account_id=account_id,
-    )
-    access_snapshot = _collect_access_snapshot(
-        account_id=account_id,
-        api_token=api_token,
-        access_manifest=access_manifest,
-    )
     deployments: dict[str, Any] = {}
     versions: dict[str, Any] = {}
     public: dict[str, Any] = {}
@@ -1843,7 +1641,6 @@ def _collect_staging_active_documents(
         "source_provenance": provenance,
         "deployment_bracket_after": deployment_after,
         "public_bracket_after": public_after,
-        "access_snapshot": access_snapshot,
         "d1_snapshot": d1_snapshot,
     }
 
@@ -1853,7 +1650,7 @@ def _remeasure_staging_active_tail(
     source_sha: str,
     account_id: str,
     api_token: str,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Close the live bracket after the fixed attestation has been verified."""
 
     manifest = build_manifest()
@@ -1884,22 +1681,13 @@ def _remeasure_staging_active_tail(
     if len(traffic) != 1 or type(traffic[0]) is not dict:
         raise ReceiptStagingActiveGateError("caller ACTIVE deployment drifted")
     caller_version_id = str(traffic[0].get("version_id"))
-    access_manifest = _load_access_manifest(
-        ACCESS_MANIFEST_PATH,
-        account_id=account_id,
-    )
-    access = _collect_access_snapshot(
-        account_id=account_id,
-        api_token=api_token,
-        access_manifest=access_manifest,
-    )
     d1 = _collect_d1_snapshot(
         account_id=account_id,
         api_token=api_token,
         source_sha=live._source_sha(source_sha),
         caller_version_id=caller_version_id,
     )
-    return deployments, public, access, d1
+    return deployments, public, d1
 
 
 def _write_content_addressed_result(result: Mapping[str, Any]) -> dict[str, Any]:
@@ -1973,30 +1761,18 @@ def validate_staging_active_transition(
     try:
         live._require_exact_clean_source(source_sha)
         live._require_official_origin_main(source_sha)
-        access_manifest = _load_access_manifest(
-            ACCESS_MANIFEST_PATH,
-            account_id=account_id,
-        )
         documents = _collect_staging_active_documents(
             source_sha=source_sha,
             account_id=account_id,
             api_token=api_token,
         )
-        challenge = secrets.token_hex(32)
-        observer_response = _fetch_observer_response(
-            challenge=challenge,
-            access_manifest=access_manifest,
-        )
         result = _validate_staging_active_transition_core(
             source_sha=source_sha,
             account_id=account_id,
             **documents,
-            observer_response_bytes=observer_response,
-            observer_challenge=challenge,
-            access_manifest_path=ACCESS_MANIFEST_PATH,
             registry_path=SCOPED_REGISTRY_PATHS["staging"],
         )
-        tail_deployments, tail_public, tail_access, tail_d1 = (
+        tail_deployments, tail_public, tail_d1 = (
             _remeasure_staging_active_tail(
             source_sha=source_sha,
             account_id=account_id,
@@ -2016,15 +1792,9 @@ def validate_staging_active_transition(
                 raise ReceiptStagingActiveGateError(
                     f"{role} public surface changed after attestation verification"
                 )
-        if _canonical_digest(documents["access_snapshot"]) != _canonical_digest(
-            tail_access
-        ):
-            raise ReceiptStagingActiveGateError(
-                "Access app/policy/token changed during observer request"
-            )
         if _canonical_digest(documents["d1_snapshot"]) != _canonical_digest(tail_d1):
             raise ReceiptStagingActiveGateError(
-                "Receipt audit D1 evidence changed during observer request"
+                "Receipt audit D1 evidence changed during verification"
             )
         live._require_exact_clean_source(source_sha)
         live._require_official_origin_main(source_sha)
