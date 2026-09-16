@@ -400,10 +400,28 @@ async function acquiredRawForOperation(
 function invocationMayStillRun(lease: ControlLease, now: Date): boolean {
   if (!lease) return false;
   if (lease.until > now.toISOString()) return true;
-  if (typeof lease.started !== "string") return false;
-  const startedAt = Date.parse(lease.started);
+  const startedAt = invocationStartedMs(lease);
   if (!Number.isFinite(startedAt)) return true;
   return now.getTime() - startedAt < CRON_TRIGGER_WALL_MS;
+}
+
+function invocationStartedMs(lease: NonNullable<ControlLease>): number {
+  if (typeof lease.started === "string") {
+    const started = Date.parse(lease.started);
+    if (Number.isFinite(started)) return started;
+  }
+  const untilMs = Date.parse(lease.until);
+  if (!Number.isFinite(untilMs)) return Number.NaN;
+  return untilMs - EXACT_FIVE_LEASE_MS;
+}
+
+function leaseInvocationStarted(
+  lease: NonNullable<ControlLease>,
+  now: Date,
+): string {
+  const startedMs = invocationStartedMs(lease);
+  if (Number.isFinite(startedMs)) return new Date(startedMs).toISOString();
+  return now.toISOString();
 }
 
 function monthEnd(month: string): string {
@@ -806,7 +824,7 @@ export async function runExactFiveAcquisitionTick(
   const jobIndex = control.cursor;
   const lastStatus = lastForJob(control.last, job, window) ? control.last!.status : null;
   const pendingOperation = lastStatus === "running" || lastStatus === "unresolved" ||
-      lastStatus === "timeout"
+      lastStatus === "timeout" || lastStatus === "ingestion_failed"
     ? control.lease?.owner
     : undefined;
   const observed = options.observe
@@ -844,15 +862,14 @@ export async function runExactFiveAcquisitionTick(
   );
   if (needsFence) {
     const owner = control.lease?.owner;
-    if (!owner) {
+    const currentLease = control.lease;
+    if (!owner || !currentLease) {
       return holdInitiating(bucket, control, etag, job, window, jobIndex, false);
     }
     control.lease = {
       owner,
       until: new Date(now.getTime() + EXACT_FIVE_LEASE_MS).toISOString(),
-      ...(typeof control.lease?.started === "string"
-        ? { started: control.lease.started }
-        : {}),
+      started: leaseInvocationStarted(currentLease, now),
     };
     control.last = jobLast(job, window, 0, "unresolved");
     const durable = await commitControl(bucket, control, etag);
@@ -910,7 +927,7 @@ export async function runExactFiveAcquisitionTick(
       0,
       true,
       timedOut ? "timeout" : "ingestion_failed",
-      timedOut,
+      timedOut || resumeRaw,
     );
   }
 
@@ -919,7 +936,12 @@ export async function runExactFiveAcquisitionTick(
     ? summary.rowsInserted
     : 0;
   if (summary.status === "partial") {
-    control.lease = { owner, until: clock().toISOString() };
+    const released = clock();
+    control.lease = {
+      owner,
+      until: released.toISOString(),
+      started: new Date(released.getTime() - CRON_TRIGGER_WALL_MS).toISOString(),
+    };
     return holdInitiating(bucket, control, etag, job, window, jobIndex, true);
   }
   if (!summaryAccepted(summary)) {
@@ -935,7 +957,7 @@ export async function runExactFiveAcquisitionTick(
       }
     }
     return finishFail(
-      bucket, control, etag, job, window, jobIndex, rowsInserted, true, "ingestion_failed", false,
+      bucket, control, etag, job, window, jobIndex, rowsInserted, true, "ingestion_failed", resumeRaw,
     );
   }
 
