@@ -94,8 +94,8 @@ def test_native_required_check_rejects_unfinished_or_wrong_sha(
         )
 
 
-@pytest.mark.parametrize("environment", ["staging", "production"])
-def test_exact_pending_surface_is_provisioning_only(environment: str) -> None:
+def test_exact_pending_surface_is_provisioning_only() -> None:
+    environment = "production"
     evidence = pending.validate_pending_receipt_authority(environment)
     assert evidence["environment"] == environment
     assert evidence["authority_mode"] == "PENDING"
@@ -122,12 +122,26 @@ def test_exact_pending_surface_is_provisioning_only(environment: str) -> None:
     )
 
 
+def test_staging_configured_active_source_is_not_pending_gate() -> None:
+    with pytest.raises(
+        pending.PendingReceiptAuthorityError,
+        match="identity|active",
+    ):
+        pending.validate_pending_receipt_authority("staging")
+    _instance, digest = pending._authority_instance("staging")
+    keys = load_scoped_verify_keys(
+        expected_environment="staging",
+        expected_authority_instance_digest=digest,
+    )
+    assert set(keys) == {"receipt-staging-98fa0160de908051"}
+
+
 def test_active_or_cross_environment_registry_cannot_use_pending_gate(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     original = json.loads(
-        pending.SCOPED_REGISTRY_PATHS["staging"].read_text(encoding="utf-8")
+        pending.SCOPED_REGISTRY_PATHS["production"].read_text(encoding="utf-8")
     )
     active = copy.deepcopy(original)
     active["authority_status"] = "ACTIVE"
@@ -137,14 +151,14 @@ def test_active_or_cross_environment_registry_cannot_use_pending_gate(
     active["registry_digest"] = pending._canonical_digest(body)
     path = tmp_path / "active.json"
     _write_json(path, active)
-    monkeypatch.setitem(pending.SCOPED_REGISTRY_PATHS, "staging", path)
+    monkeypatch.setitem(pending.SCOPED_REGISTRY_PATHS, "production", path)
     with pytest.raises(
         pending.PendingReceiptAuthorityError, match="registry is active"
     ):
-        pending.validate_pending_receipt_authority("staging")
+        pending.validate_pending_receipt_authority("production")
 
     crossed = copy.deepcopy(original)
-    crossed["environment"] = "production"
+    crossed["environment"] = "staging"
     body = dict(crossed)
     body.pop("registry_digest")
     crossed["registry_digest"] = pending._canonical_digest(body)
@@ -152,7 +166,7 @@ def test_active_or_cross_environment_registry_cannot_use_pending_gate(
     with pytest.raises(
         pending.PendingReceiptAuthorityError, match="unscoped"
     ):
-        pending.validate_pending_receipt_authority("staging")
+        pending.validate_pending_receipt_authority("production")
 
 
 @pytest.mark.parametrize(

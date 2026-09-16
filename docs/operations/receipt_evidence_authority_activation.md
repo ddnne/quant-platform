@@ -350,11 +350,15 @@ attestation/Receipt. Successful evidence is canonical, content-addressed,
 create-only local output marked `AUDIT_ONLY` and research-ineligible.
 
 This is only a source-level partial safety boundary, not permission to activate.
-The active registry,
-ACTIVE vars, migration, deployment, closed operator caller, and live recovery
-evidence do not exist. The ordinary all-P0 gate still rejects release. A generic
-`ignore P0` switch is not an acceptable substitute, and this runbook does not
-authorize ACTIVE deployment under the current gate.
+Staging source now carries configured ACTIVE eligibility: scoped registry
+generation 4 with exactly one active key `receipt-staging-98fa0160de908051`,
+and Receipt/Premium `wrangler.staging.toml` ACTIVE vars bound to that key and
+registry digest. That is not live ACTIVE evidence. Production and base remain
+PENDING. Live recovery/replay canary, module-byte acceptance, and the
+management-D1 ACTIVE gate remain a later operational unit. The ordinary all-P0
+gate still rejects release. A generic `ignore P0` switch is not an acceptable
+substitute, and this runbook does not authorize ACTIVE deployment by source
+merge alone.
 
 The staging gate treats the authority deployment ID and selected version,
 Premium caller deployment ID and selected version, active key ID, and exact

@@ -915,28 +915,46 @@ describe("ops projection cloud publisher", () => {
     ).toThrow(/immutable/);
   });
 
-  it("accepts the checked-in production and staging registries as PENDING", async () => {
-    for (const [environment, document] of [
-      ["production", pinnedProductionReceiptRegistry],
-      ["staging", pinnedStagingReceiptRegistry],
-    ] as const) {
-      const pin = PINNED_RECEIPT_REGISTRY_SCOPE[environment];
-      const registry = await closedReceiptVerifyRegistry(document, environment);
-      expect(registry).toMatchObject({
-        schema_version: 3,
-        purpose: "receipt_verification",
-        environment,
-        authority_status: "PENDING",
-        generation: document.generation,
-        authority_instance_digest: pin.authority_instance_digest,
-        registry_digest: document.registry_digest,
-      });
-      expect(registry!.keys.every((row) => row.status !== "active")).toBe(true);
-      expect(
-        registry!.keys.filter((row) => row.status === "pending").length,
-      ).toBeLessThanOrEqual(1);
-      expect(await pinnedReceiptRegistryForEnvironment(environment)).toEqual(registry);
-    }
+  it("accepts the checked-in production PENDING and staging ACTIVE registries", async () => {
+    const production = await closedReceiptVerifyRegistry(
+      pinnedProductionReceiptRegistry,
+      "production",
+    );
+    expect(production).toMatchObject({
+      schema_version: 3,
+      purpose: "receipt_verification",
+      environment: "production",
+      authority_status: "PENDING",
+      generation: pinnedProductionReceiptRegistry.generation,
+      authority_instance_digest:
+        PINNED_RECEIPT_REGISTRY_SCOPE.production.authority_instance_digest,
+      registry_digest: pinnedProductionReceiptRegistry.registry_digest,
+    });
+    expect(production!.keys.every((row) => row.status !== "active")).toBe(true);
+    expect(
+      production!.keys.filter((row) => row.status === "pending").length,
+    ).toBeLessThanOrEqual(1);
+    expect(await pinnedReceiptRegistryForEnvironment("production")).toEqual(production);
+
+    const staging = await closedReceiptVerifyRegistry(
+      pinnedStagingReceiptRegistry,
+      "staging",
+    );
+    expect(staging).toMatchObject({
+      schema_version: 3,
+      purpose: "receipt_verification",
+      environment: "staging",
+      authority_status: "ACTIVE",
+      generation: 4,
+      authority_instance_digest:
+        PINNED_RECEIPT_REGISTRY_SCOPE.staging.authority_instance_digest,
+      registry_digest: pinnedStagingReceiptRegistry.registry_digest,
+    });
+    expect(staging!.keys.filter((row) => row.status === "active").map((row) => row.key_id)).toEqual([
+      "receipt-staging-98fa0160de908051",
+    ]);
+    expect(staging!.keys.filter((row) => row.status === "pending")).toEqual([]);
+    expect(await pinnedReceiptRegistryForEnvironment("staging")).toEqual(staging);
     expect(
       (await pinnedReceiptRegistryForEnvironment("production"))?.authority_instance_digest,
     ).not.toBe(
