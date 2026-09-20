@@ -299,12 +299,18 @@ def _seed_complete_master(
     extra_unrelated: dict[str, str] | None = None,
     poison_unrelated: bool = False,
     period_end: str = PERIOD_END,
+    master_observed_at: str | None = None,
 ) -> dict[tuple[str, str], bytes]:
     calendar_raw = _official_calendar_bytes()
     extras = _calendar_extras(
         calendar_raw, start=SEGMENT_START, end=SEGMENT_END
     )
     store = _prepare_store(path)
+    if master_observed_at:
+        store._conn.execute(
+            "UPDATE snapshot_observation_clock SET observed_through=?",
+            (master_observed_at,),
+        )
     codes = tuple(
         sorted(
             {
@@ -325,7 +331,7 @@ def _seed_complete_master(
                 _catalog_rows(
                     [payload],
                     dataset="equities_master",
-                    stamp=_stamp(snapshot),
+                    stamp=master_observed_at or _stamp(snapshot),
                 )
             )
         store.upsert("jquants_records", rows)
@@ -464,7 +470,10 @@ def test_seed_older_than_warmup_agrees_with_draft(
     ]
 
 
-def test_entrant_and_delisting(tmp_path: Path, receipt_ed25519_keys) -> None:
+@pytest.mark.parametrize("master_observed_at", [None, "2026-09-20T08:00:00+09:00"])
+def test_entrant_and_delisting(
+    tmp_path: Path, receipt_ed25519_keys, master_observed_at: str | None
+) -> None:
     path = tmp_path / "churn.sqlite"
     snapshots = {
         "2022-12-30": [
@@ -482,11 +491,36 @@ def test_entrant_and_delisting(tmp_path: Path, receipt_ed25519_keys) -> None:
         "2023-01-06": [_master_payload("1003", "2023-01-06")],
     }
     calendars = _seed_complete_master(
-        path, receipt_ed25519_keys, snapshots=snapshots
+        path, receipt_ed25519_keys, snapshots=snapshots,
+        master_observed_at=master_observed_at,
     )
     conn = _open(path)
     try:
-        owned = _strict(conn, calendars)
+        if master_observed_at:
+            with pytest.raises(PitError, match="no PIT-visible snapshot"):
+                _strict(conn, calendars)
+            before = tuple(conn.execute(
+                "SELECT natural_key,available_at,ingested_at FROM jquants_records "
+                "WHERE dataset='equities_master' ORDER BY natural_key"
+            ))
+            owned = _owned_complete_master_selection_from_connection(
+                conn,
+                period_start=PERIOD_START,
+                period_end=PERIOD_END,
+                as_of_for_day=_as_of_for_day(),
+                official_calendar_raw=calendars,
+                historical_master=True,
+            )
+            assert owned.proof.membership_evidence_mode == "historical_effective_membership"
+            assert owned.proof.contemporaneous_observation_unproven
+            after = tuple(conn.execute(
+                "SELECT natural_key,available_at,ingested_at FROM jquants_records "
+                "WHERE dataset='equities_master' ORDER BY natural_key"
+            ))
+            assert before == after
+            assert all(row[1] == row[2] == master_observed_at for row in after)
+        else:
+            owned = _strict(conn, calendars)
     finally:
         conn.close()
     assert _member_codes(owned.slices) == {

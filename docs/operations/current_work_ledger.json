@@ -1,5 +1,16 @@
 {
   "schema": "quant-platform-work-ledger/v1",
+  "historical_master_repair": {
+    "status": "PRIVATE_OWNER_VERIFIED_PROFILE_INTEGRATION_PENDING",
+    "branch": "fix/historical-master-reference",
+    "base": "15639ffe649e709d89c96a26f0ae1fe51ad10b5c (PR229; native CI still running when this unit was checked)",
+    "source_basis": "https://jpx-jquants.com/ja/spec/eq-master: Date is effective date; historical queries include then-listed companies; holiday queries roll forward; subsequent source corrections remain a limitation",
+    "change": "private complete-master owner can reconstruct effective-date membership from verified complete products; original available_at/ingested_at and product digests are unchanged; observation cutoff still applies; ordinary PIT remains strict",
+    "provenance": "historical_effective_membership; contemporaneous_observation_unproven=true; this is not evidence of actual observation in 2023",
+    "validation": "33 tests passed across complete-master, universe contract and personal universe; one existing entrant/delisting test extended with late acquisition, strict rejection and timestamp preservation",
+    "review": "independent read-only review_historical_master_owner: no actionable correctness findings; did not independently rerun tests",
+    "remaining": "bind explicit versioned profile/read-scope semantics into compiler, candidate publisher, compiled dependency selection, pinned runtime and output provenance; regenerate digest chain; end-to-end late-acquisition regression; native CI; no production activation in this commit"
+  },
   "updated_at": "2026-09-20T22:53:08Z",
   "receipt_monthly_repair": {
     "status": "SOURCE_REPAIR_LOCALLY_VERIFIED_NATIVE_PENDING",

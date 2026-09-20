@@ -1,7 +1,8 @@
 """Shared PIT universe-day selector for Controlled and personal DRAFT.
 
-Activation is ``max(event_time, available_at)`` with ``available_at``,
-``event_time``, and ``ingested_at`` all ``<= as_of``.
+Ordinary activation is ``max(event_time, available_at)``; ingestion is bounded
+by the snapshot observation clock. Private complete-master reconstruction can
+select effective membership dates without claiming contemporaneous observation.
 The latest PIT-visible snapshot-date wins, so a delisted code disappears from
 a later visible snapshot. This DRAFT/replay selector does not prove that a
 snapshot is complete. Product policy (scale vs Prime, fins intersection) stays
@@ -16,6 +17,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Protocol, Sequence
+from zoneinfo import ZoneInfo
 
 from data_contracts.identity import natural_key as contract_natural_key
 from data_contracts.personal_history_compact import (
@@ -204,6 +206,7 @@ def _event_from_row(
     *,
     insertion: int,
     dataset: str,
+    historical_master: bool = False,
 ) -> _Event:
     payload = _decode_mapping(raw.get("payload"), dataset_id=dataset)
     expected = contract_natural_key(payload, dataset)
@@ -244,8 +247,23 @@ def _event_from_row(
     event_time_text = raw.get("event_time")
     available_at_text = raw.get("available_at")
     ingested_at_text = raw.get("ingested_at")
+    activation = max(event_time, available)
+    if historical_master:
+        # Date is the source's effective membership date, not a claim about
+        # contemporaneous observation. Keep every original product field intact.
+        if (
+            dataset != "equities_master"
+            or len(snapshot_date) != 10
+            or _pick(payload, "Date") != snapshot_date
+            or snapshot_date
+            != event_time.astimezone(ZoneInfo("Asia/Tokyo")).date().isoformat()
+        ):
+            raise PitError(
+                "historical master requires matching source Date and event_time"
+            )
+        activation = event_time
     return _Event(
-        activation=max(event_time, available),
+        activation=activation,
         dataset=dataset,
         identity=(str(raw.get("source") or "jquants"), dataset, natural_key),
         available=available,
@@ -308,6 +326,7 @@ def _anchor_snapshot_date(
     compact: bool,
     first_as_of: str,
     observed_through: str,
+    historical_master: bool = False,
 ) -> str | None:
     dates: list[str] = []
     ingested_gate = " AND ingested_at IS NOT NULL AND ingested_at <= ?"
@@ -332,7 +351,11 @@ def _anchor_snapshot_date(
                 "AND available_at IS NOT NULL AND event_time IS NOT NULL "
                 "AND available_at <= ? AND event_time <= ?"
                 + ingested_gate,
-                (first_as_of, first_as_of, *ingested_params),
+                (
+                    observed_through if historical_master else first_as_of,
+                    first_as_of,
+                    *ingested_params,
+                ),
             ).fetchone()
             if row and row[0]:
                 dates.append(str(row[0])[:10])
@@ -394,6 +417,7 @@ def _iter_master_events(
     last_as_of: str,
     observed_through: str,
     product_fields: bool = False,
+    historical_master: bool = False,
 ):
     insertion = 0
     window_sql, window_params = _master_window(
@@ -402,15 +426,17 @@ def _iter_master_events(
             compact=compact,
             first_as_of=first_as_of,
             observed_through=observed_through,
+            historical_master=historical_master,
         ),
         first_as_of=first_as_of,
         compact=compact,
     )
-    ranking = f"{_ACTIVATION_SQL},available_at,ingested_at,natural_key"
+    activation_sql = "event_time" if historical_master else _ACTIVATION_SQL
+    ranking = f"{activation_sql},available_at,ingested_at,natural_key"
     ingested_sql = " AND ingested_at IS NOT NULL AND ingested_at <= ?"
     ingested_params: tuple[str, ...] = (observed_through,)
     if compact:
-        if product_fields:
+        if product_fields or historical_master:
             raise PitError(
                 "complete master does not read compact personal history"
             )
@@ -448,14 +474,27 @@ def _iter_master_events(
                 + " AND ({window})"
             ).format(table=table, extra=extra, window=window_sql)
         )
-        params.extend(("equities_master", last_as_of, last_as_of, *ingested_params, *window_params))
+        params.extend(
+            (
+                "equities_master",
+                observed_through if historical_master else last_as_of,
+                last_as_of,
+                *ingested_params,
+                *window_params,
+            )
+        )
     if not selects:
         return
     for raw in conn.execute(
         "SELECT * FROM (" + " UNION ALL ".join(selects) + f") ORDER BY {ranking}",
         params,
     ):
-        yield _event_from_row(dict(raw), insertion=insertion, dataset="equities_master")
+        yield _event_from_row(
+            dict(raw),
+            insertion=insertion,
+            dataset="equities_master",
+            historical_master=historical_master,
+        )
         insertion += 1
 
 
@@ -530,6 +569,7 @@ def _universe_day_slices_from_connection(
     as_of_for_day: Mapping[str, str],
     complete_membership: _CompleteMembershipResolver | None = None,
     product_fields: bool = False,
+    historical_master: bool = False,
 ) -> tuple[UniverseDaySlice, ...]:
     """Resolve universe slices on an already-open verifier or READY connection.
 
@@ -539,6 +579,8 @@ def _universe_day_slices_from_connection(
     complete-membership resolver is not a caller-selectable READY bypass.
     """
 
+    if historical_master and (complete_membership is None or not product_fields):
+        raise PitError("historical master requires verified complete product membership")
     requested = _calendar_dates(period_start, period_end)
     as_ofs = {
         day: _parse_dt(as_of_for_day[day], label="decision_as_of")
@@ -602,6 +644,7 @@ def _universe_day_slices_from_connection(
                 last_as_of=last_as_of,
                 observed_through=observed_through,
                 product_fields=product_fields,
+                historical_master=historical_master,
             )
         )
         calendar_by_day: dict[str, dict[_VersionIdentity, _Event]] = {}

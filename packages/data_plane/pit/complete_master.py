@@ -181,6 +181,7 @@ def _segment_intersects(start: str, end: str, *, seed: str, period_end: str) -> 
 class _CompactVersion:
     identity: _VersionIdentity
     activation: datetime
+    available: datetime
     ingested: datetime
     version_digest: str
 
@@ -204,7 +205,11 @@ class _VerifiedGeneration:
 def _version_visible(
     version: _CompactVersion, *, as_of: datetime, observed_through: datetime
 ) -> bool:
-    return version.activation <= as_of and version.ingested <= observed_through
+    return (
+        version.activation <= as_of
+        and version.available <= observed_through
+        and version.ingested <= observed_through
+    )
 
 
 def _snapshot_visibility(
@@ -237,6 +242,7 @@ class _CompleteMembershipGate:
         period_end: str,
         observed_through: datetime,
         observed_through_text: str,
+        historical_master: bool = False,
         expected_environment: str = PRODUCTION_RECEIPT_ENVIRONMENT,
         expected_authority_instance_digest: str = (
             PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
@@ -247,6 +253,7 @@ class _CompleteMembershipGate:
         self._period_end = period_end
         self._observed_through = observed_through
         self._observed_through_text = observed_through_text
+        self._historical_master = historical_master
         self._expected_environment = expected_environment
         self._expected_authority_instance_digest = (
             expected_authority_instance_digest
@@ -400,6 +407,7 @@ class _CompleteMembershipGate:
                 self._conn,
                 official_calendars=self._official_calendars,
                 observed_through=self._observed_through_text,
+                historical_master=self._historical_master,
                 seed=current_snapshot,
                 period_end=self._period_end,
                 expected_environment=self._expected_environment,
@@ -439,6 +447,8 @@ class CompleteMasterProof:
     seed_snapshot_date: str
     receipt_digests: tuple[str, ...]
     official_business_dates_digests: tuple[str, ...]
+    membership_evidence_mode: str = "decision_visible"
+    contemporaneous_observation_unproven: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -507,6 +517,7 @@ def _compact_snapshots_from_artifact(
     tables: tuple[str, ...],
     retain_start: str,
     retain_end: str,
+    historical_master: bool = False,
 ) -> tuple[int, str, int, dict[str, _GenerationSnapshot]]:
     grouped: dict[str, dict[_VersionIdentity, _CompactVersion]] = {}
 
@@ -527,7 +538,10 @@ def _compact_snapshots_from_artifact(
                     "on the owner connection"
                 )
             digest = product_row_digest(raw)
-            event = _event_from_row(raw, insertion=0, dataset=_MASTER_DATASET)
+            event = _event_from_row(
+                raw, insertion=0, dataset=_MASTER_DATASET,
+                historical_master=historical_master,
+            )
             identity = _version_identity_from_product(raw)
             if identity != event.identity or not event.snapshot_date:
                 raise PitError("equities_master artifact row is inconsistent")
@@ -541,6 +555,7 @@ def _compact_snapshots_from_artifact(
                 bucket[identity] = _CompactVersion(
                     identity=identity,
                     activation=event.activation,
+                    available=event.available,
                     ingested=event.ingested,
                     version_digest=digest,
                 )
@@ -620,6 +635,7 @@ def _verify_one_generation(
     observed_through: str,
     seed: str,
     period_end: str,
+    historical_master: bool = False,
 ) -> _VerifiedGeneration | None:
     extras = closure.extra_digests
     raw_digest = extras.get("official_calendar_raw_body_digest")
@@ -699,6 +715,7 @@ def _verify_one_generation(
                     tables=tables,
                     retain_start=seed,
                     retain_end=period_end,
+                    historical_master=historical_master,
                 )
             )
         with open_stored_product_artifact(conn, operation_id) as artifact:
@@ -733,6 +750,7 @@ def _load_required_master_generations(
     observed_through: str,
     seed: str,
     period_end: str,
+    historical_master: bool = False,
     expected_environment: str = PRODUCTION_RECEIPT_ENVIRONMENT,
     expected_authority_instance_digest: str = (
         PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
@@ -780,6 +798,7 @@ def _load_required_master_generations(
             observed_through=observed_through,
             seed=seed,
             period_end=period_end,
+            historical_master=historical_master,
         )
         if generation is not None:
             generations.append(generation)
@@ -797,6 +816,7 @@ def _owned_complete_master_selection_from_connection(
     period_end: str,
     as_of_for_day: Mapping[str, str],
     official_calendar_raw: Sequence[bytes] | None = None,
+    historical_master: bool = False,
     expected_environment: str = PRODUCTION_RECEIPT_ENVIRONMENT,
     expected_authority_instance_digest: str = (
         PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
@@ -809,6 +829,11 @@ def _owned_complete_master_selection_from_connection(
     stored rows. When omitted, each required verified master closure loads its
     signed digest from official_calendar_raw on this connection. Callers cannot
     supply dates or calendar objects as the source domain.
+
+    ``historical_master`` is a private reconstruction policy, not READY or
+    contemporaneous PIT evidence. Its use must be declared by the compiled
+    profile before wiring the production publisher/runtime. It changes only
+    effective membership selection, never the signed acquisition timestamps.
     """
 
     calendars = (
@@ -832,6 +857,7 @@ def _owned_complete_master_selection_from_connection(
         period_end=period_end,
         observed_through=observed_through,
         observed_through_text=clock.observed_through,
+        historical_master=historical_master,
         expected_environment=expected_environment,
         expected_authority_instance_digest=expected_authority_instance_digest,
     )
@@ -842,6 +868,7 @@ def _owned_complete_master_selection_from_connection(
         as_of_for_day=as_of_for_day,
         complete_membership=gate,
         product_fields=True,
+        historical_master=historical_master,
     )
     proof = CompleteMasterProof(
         format=COMPLETE_MASTER_SELECTION_EVIDENCE,
@@ -852,6 +879,10 @@ def _owned_complete_master_selection_from_connection(
         official_business_dates_digests=tuple(
             generation.business_dates_digest for generation in gate.generations
         ),
+        membership_evidence_mode=(
+            "historical_effective_membership" if historical_master else "decision_visible"
+        ),
+        contemporaneous_observation_unproven=historical_master,
     )
     return _OwnedCompleteMasterSelection(slices=slices, proof=proof)
 
