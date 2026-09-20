@@ -19,8 +19,9 @@ Remote main was rechecked at `26abffec`; PR229 remains Draft. Native CI on
 the pause checkpoint `157ee2f2` failed. Local Receipt runtime tests reproduced
 four failures, including signing despite canonical DB disagreement and losing
 original ingestion time. Those regressions and crash/cursor replay are the
-first repair unit. Monthly whole-body finalization and realistic-size proof
-remain open; local tests do not make this PR merge/deploy-ready.
+first repair unit. The next source repair replaces whole-body finalization
+with streamed product bytes and bounded row resumes; local tests do not make
+this PR merge/deploy-ready.
 
 Repair checks: Receipt typecheck PASS and 66 workerd tests PASS, including
 an interrupted page write with D1 ahead of the R2 progress cursor. Existing
@@ -28,6 +29,22 @@ an interrupted page write with D1 ahead of the R2 progress cursor. Existing
 checks are batched and product bytes use canonical DB ingestion timestamps;
 the change-feed match is part of the product query. Full native CI on the
 pushed repair remains pending. No remote data/deployment changes were made.
+
+Monthly repair: D1 writes/readback are batched in 50-row groups, each call
+handles at most 6,000 rows and four raw pages, and large finalization starts
+in a fresh invocation. Product measurement and upload read 1,000 rows at a
+time; R2 readback hashes a stream. New v2 manifests contain metadata, not a
+second copy of the product. Existing v1 indexed products retain their original
+manifest after independent measurement/readback on recovery.
+The synthetic 29-page / 80,707-row acquisition-to-signed-Receipt test passed
+with a product larger than 100 MB, no vendor refetch and a manifest under
+10 KB. This is workerd/D1/R2 local runtime evidence, not deployed CPU-limit
+or live data acceptance. Independent source review found the v1 recovery
+issue; the repair was rechecked with no additional blocker reported.
+Final local checks: Receipt typecheck and all 67 workerd tests PASS; Premium
+typecheck and 13 receipt-client tests PASS. Exact-SHA native CI and staging
+acceptance are tracked separately in the ledger. Production, READY and Pilot
+remain unchanged.
 
 The table below preserves the **historical pause checkpoint**, not current
 test or live acceptance. Existing production/data/READY/Pilot HOLDs remain.

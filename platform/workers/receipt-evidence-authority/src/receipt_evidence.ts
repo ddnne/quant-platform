@@ -2,7 +2,7 @@ import {
   canonicalDigest,
   canonicalJson,
 } from "../../ingestion-secrets/src/jquants_acquisition_registry";
-import { sha256Digest } from "./canonical";
+import { requireProductObject } from "./product_materialization";
 
 import type { DatasetSpec } from "../../ingestion-premium/src/catalog";
 import {
@@ -288,17 +288,8 @@ export async function commitReceipt(
     typeof product.byte_count !== "number" || product.byte_count <= 0
   ) throw new Error("signed digest is not bound to the product materialization");
   if (product.artifact_body.length === 0) {
-    const artifact = await env.STRUCTURED_BUCKET.get(String(product.artifact_key));
-    if (artifact === null) {
-      throw new Error("signed digest is not bound to the product materialization");
-    }
-    const bytes = new Uint8Array(await artifact.arrayBuffer());
-    if (
-      bytes.byteLength !== product.byte_count ||
-      await sha256Digest(bytes) !== product.artifact_digest
-    ) {
-      throw new Error("signed digest is not bound to the product materialization");
-    }
+    await requireProductObject(env.STRUCTURED_BUCKET, product.artifact_key,
+      product.byte_count, String(product.artifact_digest));
   }
   const successDetail = canonicalJson({
     schema_version: "receipt-authority-ingestion-result/v1",

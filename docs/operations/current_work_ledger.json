@@ -1,6 +1,21 @@
 {
   "schema": "quant-platform-work-ledger/v1",
-  "updated_at": "2026-09-20T22:40:00Z",
+  "updated_at": "2026-09-20T22:53:08Z",
+  "receipt_monthly_repair": {
+    "status": "SOURCE_REPAIR_LOCALLY_VERIFIED_NATIVE_PENDING",
+    "branch": "fix/receipt-durable-capture-reconcile",
+    "pr": 229,
+    "bounds": "50-row D1 write/readback groups; at most 6000 rows and 4 raw pages per call; 1000-row product pages; large finalization in a fresh invocation",
+    "storage": "streamed canonical JSONL and R2 digest readback; small v2 metadata manifest; legacy v1 indexed products preserved on retry",
+    "synthetic_monthly": "PASS: 29 pages, 80707 rows, product >100 MB, manifest <10 KB, no upstream refetch; first successful focused run 98.82 seconds",
+    "compatibility": "PASS focused existing calendar-recovery test extended to pre-upgrade v1 index; append-only trigger restored before recovery",
+    "premium_checks": "typecheck PASS; receipt_authority_client 13 tests PASS",
+    "full_receipt_suite": "PASS: typecheck and 67 workerd tests; final full run 79.71 seconds (includes monthly and legacy recovery)",
+    "independent_review": "review_receipt_streaming: v1 index recovery finding fixed and rechecked; no additional concrete blocker reported; reviewer made no edits",
+    "native_ci": "PENDING on this repair commit; preceding a3b51276 build 8cf8aa40-5624-4b59-8f60-579db27b8f40 IN_PROGRESS at 2026-09-20T22:53:08Z; historical checks do not accept this repair",
+    "live_scope": "no remote mutation/deploy/data activation; existing live holds preserved",
+    "remaining": "final exact-SHA native CI; deployment-scope approval/acceptance; real same-operation February recovery; master P1; global Ops; READY; Pilot"
+  },
   "user_pause": {
     "status": "RESUMED_BY_USER",
     "resume": "2026-09-21 JST explicit user request; Grok subscription ended; Codex implements",

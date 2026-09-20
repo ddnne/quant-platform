@@ -204,26 +204,18 @@ async function persistStructuredRows(
   operationId: string,
   rows: CanonicalStructuredRow[],
 ): Promise<void> {
-  const statements = rows.map((row) => env.DB.prepare(
-    `INSERT OR IGNORE INTO receipt_authority_structured_rows
-     (operation_id,natural_key,source,dataset,event_time,available_at,
-      ingested_at,payload,raw_payload,row_digest)
-     VALUES (?,?,?,?,?,?,?,?,?,?)`,
-  ).bind(
-    operationId,
-    row.natural_key,
-    row.source,
-    row.dataset,
-    row.event_time,
-    row.available_at,
-    row.ingested_at,
-    row.payload,
-    row.raw_payload,
-    row.row_digest,
-  ));
-  for (let index = 0; index < statements.length; index += 50) {
-    await env.DB.batch(statements.slice(index, index + 50));
+  for (let index = 0; index < rows.length; index += 50) {
     const expected = rows.slice(index, index + 50);
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO receipt_authority_structured_rows
+       (operation_id,natural_key,source,dataset,event_time,available_at,
+        ingested_at,payload,raw_payload,row_digest)
+       SELECT ?,json_extract(value,'$.natural_key'),json_extract(value,'$.source'),
+              json_extract(value,'$.dataset'),json_extract(value,'$.event_time'),
+              json_extract(value,'$.available_at'),json_extract(value,'$.ingested_at'),
+              json_extract(value,'$.payload'),json_extract(value,'$.raw_payload'),
+              json_extract(value,'$.row_digest') FROM json_each(?)`,
+    ).bind(operationId, JSON.stringify(expected)).run();
     const result = await env.DB.prepare(
       `SELECT natural_key,source,dataset,event_time,available_at,ingested_at,
               payload,raw_payload,row_digest
@@ -241,6 +233,8 @@ async function persistStructuredRows(
 }
 
 const STRUCTURED_SLICE_PAGES = 4;
+// Five D1 statements per 50 rows plus bounded metadata/readback work.
+const STRUCTURED_SLICE_ROWS = 6000;
 export const STRUCTURED_SLICE_INCOMPLETE =
   "structured reconciliation slice is incomplete";
 export const STRUCTURED_CARDINALITY_MISMATCH =
@@ -250,6 +244,7 @@ type StructuredProgress = {
   schema_version: "receipt-authority-structured-progress/v1";
   operation_id: string;
   next_page: number;
+  next_row?: number;
   raw_rows_committed: number;
 };
 
@@ -280,6 +275,7 @@ async function loadStructuredProgress(
     value.schema_version !== "receipt-authority-structured-progress/v1" ||
     value.operation_id !== operationId ||
     !Number.isSafeInteger(value.next_page) || value.next_page < 0 ||
+    (value.next_row !== undefined && (!Number.isSafeInteger(value.next_row) || value.next_row < 0)) ||
     !Number.isSafeInteger(value.raw_rows_committed) || value.raw_rows_committed < 0
   ) {
     throw new Error("structured progress identity is invalid");
@@ -341,11 +337,19 @@ export async function reconcileStructured(
   if (progress.next_page > input.capture.pages.length) {
     throw new Error(STRUCTURED_CARDINALITY_MISMATCH);
   }
+  const nextRow = progress.next_row ?? 0;
+  const expectedProgress = input.capture.pages.slice(0, progress.next_page)
+    .reduce((total, page) => total + page.rowCount, 0) + nextRow;
+  if (progress.raw_rows_committed !== expectedProgress ||
+      nextRow > (input.capture.pages[progress.next_page]?.rowCount ?? 0)) {
+    throw new Error(STRUCTURED_CARDINALITY_MISMATCH);
+  }
   const storedBefore = await countStructuredRows(env, input.operationId);
   if (storedBefore < progress.raw_rows_committed) {
     throw new Error(STRUCTURED_CARDINALITY_MISMATCH);
   }
   let pagesThisInvocation = 0;
+  let rowsThisInvocation = 0;
   const jsda = isJsdaPersistedRequest(input.capture.initialRequest)
     ? input.capture.initialRequest
     : null;
@@ -357,7 +361,7 @@ export async function reconcileStructured(
     )
     : null;
   for (let pageIndex = progress.next_page; pageIndex < input.capture.pages.length; pageIndex += 1) {
-    if (pagesThisInvocation >= STRUCTURED_SLICE_PAGES) {
+    if (pagesThisInvocation >= STRUCTURED_SLICE_PAGES || rowsThisInvocation >= STRUCTURED_SLICE_ROWS) {
       await saveStructuredProgress(env, input.capture.rawManifestKey, progress);
       throw new Error(STRUCTURED_SLICE_INCOMPLETE);
     }
@@ -384,24 +388,31 @@ export async function reconcileStructured(
     if (rawRows.length !== page.rowCount) {
       throw new Error("persisted raw row count differs from live capture");
     }
-    const normalized = await normalizeRows(rawRows, input.spec, input.checkedAt);
+    const offset = progress.next_row ?? 0;
+    const slice = rawRows.slice(offset, offset + STRUCTURED_SLICE_ROWS - rowsThisInvocation);
+    const normalized = await normalizeRows(slice, input.spec, input.checkedAt);
     await persistStructuredRows(env, input.operationId, normalized);
     await persistGovernedProductSlice(env, normalized);
     progress = {
       ...progress,
-      next_page: pageIndex + 1,
-      raw_rows_committed: progress.raw_rows_committed + page.rowCount,
+      next_page: offset + slice.length === rawRows.length ? pageIndex + 1 : pageIndex,
+      next_row: offset + slice.length === rawRows.length ? 0 : offset + slice.length,
+      raw_rows_committed: progress.raw_rows_committed + slice.length,
     };
     pagesThisInvocation += 1;
+    rowsThisInvocation += slice.length;
     // D1 writes can survive a crash before the R2 checkpoint. Replay them
     // idempotently; only the exhausted collection has an exact total count.
     await saveStructuredProgress(env, input.capture.rawManifestKey, progress);
+    if (progress.next_row !== 0) throw new Error(STRUCTURED_SLICE_INCOMPLETE);
   }
   await saveStructuredProgress(env, input.capture.rawManifestKey, progress);
   const storedCount = await countStructuredRows(env, input.operationId);
   if (progress.next_page !== input.capture.pages.length || storedCount !== rawCount) {
     throw new Error(STRUCTURED_CARDINALITY_MISMATCH);
   }
+  // Finalization gets a fresh invocation after a large write slice.
+  if (rowsThisInvocation >= 1000) throw new Error(STRUCTURED_SLICE_INCOMPLETE);
   const product = await materializeProduct(env, {
     operationId: input.operationId,
     runId: input.runId,
