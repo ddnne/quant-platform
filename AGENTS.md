@@ -1,5 +1,6 @@
 # Development responsibilities
 
+- Current user direction (2026-09-21): Grok's subscription has ended. Codex owns investigation, implementation, checks and Git until the user changes this direction. Do not start Grok or a paid replacement. The Grok-first rules below describe the normal arrangement when Grok is available.
 - Do not re-run Grok's source/caller investigation or bounce tiny questions back to Grok inside a coherent work unit. Use Grok's diagnosis, implementation, failure analysis, self-review, Git, and exact-source native CI at work-unit granularity. Do not split command confirmation or log watching into a separate Codex lane.
 - Grok owns a bounded unit end to end: investigate source and callers, choose the simplest justified design and implementation, edit, run minimal targeted local checks, diagnose failures, self-review, Git, exact-source native CI, and approved rollout. Prefer that useful investigation, design, implementation, failure analysis, and self-review over patch-only edits.
 - When Grok hits an actual permission denial or missing authentication, Codex may mechanically apply only the needed operation from Grok's patch and selected checks, then return the results for Grok to diagnose. That fallback is mechanical execution only. Codex may implement only when Grok cannot; report the fallback.

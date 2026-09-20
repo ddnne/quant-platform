@@ -1,9 +1,17 @@
 {
   "schema": "quant-platform-work-ledger/v1",
-  "updated_at": "2026-09-16T22:24:00Z",
+  "updated_at": "2026-09-20T22:40:00Z",
   "user_pause": {
-    "status": "USER_REQUESTED_PAUSE",
-    "resume": "explicit_user_request_only",
+    "status": "RESUMED_BY_USER",
+    "resume": "2026-09-21 JST explicit user request; Grok subscription ended; Codex implements",
+    "resume_baseline": {
+      "branch_head": "157ee2f29319910a5224a7f44eed80b0a15d1b22",
+      "main_reverified": "26abffecd4463c5d052e9f28d862bc67a7c006a1",
+      "native_ci": "FAILED on checkpoint head; PR229 stays Draft",
+      "local_receipt_before_fix": "61 passed / 4 failed; canonical DB disagreement and original ingestion time regressions",
+      "repair_validation": "Receipt typecheck PASS; workerd 66 passed, including interrupted D1-before-R2 checkpoint replay; existing ensureKey negative-RPC diagnostic still printed; full native CI pending on pushed repair",
+      "remaining": "monthly whole-body finalization, realistic-size runtime proof, full native CI and review; no deployment or research authorization"
+    },
     "paused_at": "2026-09-16T22:24:00Z",
     "conversation": "01a0abdb-4795-7500-a5b7-6e9c1684932e",
     "repo": "https://github.com/ddnne/quant-platform",
@@ -40,8 +48,8 @@
       "Pilot"
     ],
     "preserved": "cloud raw/PREPARED/attempts; January bars 3/3 HOLD; Draft PR137; held worktree exact-five-acquisition-recovery; original 2023 exact-four ideas/AM-PM/budget",
-    "background_development": "intentionally_stopped_not_global_complete",
-    "runbook_section": "docs/operations/current_production_runbook.md USER_REQUESTED_PAUSE — RESUME CHECKPOINT"
+    "background_development": "resumed_by_user_not_global_complete",
+    "runbook_section": "docs/operations/current_production_runbook.md Resumed 2026-09-21 — PR229 repair"
   },
   "history": {
     "git_sha": "26abffecd4463c5d052e9f28d862bc67a7c006a1",

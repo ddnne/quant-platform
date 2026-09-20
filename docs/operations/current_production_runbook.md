@@ -12,11 +12,25 @@ live in [`../phase633_finding_ledger.md`](../phase633_finding_ledger.md).
 
 Do not print secret values. Check presence only.
 
-## USER_REQUESTED_PAUSE — RESUME CHECKPOINT
+## Resumed 2026-09-21 — PR229 repair
 
-**Status:** `USER_REQUESTED_PAUSE`. Resume only on an explicit user request.
-Background development is intentionally stopped; this is not global-task-complete.
-Do not merge, deploy, or auto-resume from this checkpoint.
+**Status:** `RESUMED_BY_USER`. Grok's subscription ended; Codex now implements.
+Remote main was rechecked at `26abffec`; PR229 remains Draft. Native CI on
+the pause checkpoint `157ee2f2` failed. Local Receipt runtime tests reproduced
+four failures, including signing despite canonical DB disagreement and losing
+original ingestion time. Those regressions and crash/cursor replay are the
+first repair unit. Monthly whole-body finalization and realistic-size proof
+remain open; local tests do not make this PR merge/deploy-ready.
+
+Repair checks: Receipt typecheck PASS and 66 workerd tests PASS, including
+an interrupted page write with D1 ahead of the R2 progress cursor. Existing
+`ensureKey` negative-RPC diagnostic is still printed by the suite. Readback
+checks are batched and product bytes use canonical DB ingestion timestamps;
+the change-feed match is part of the product query. Full native CI on the
+pushed repair remains pending. No remote data/deployment changes were made.
+
+The table below preserves the **historical pause checkpoint**, not current
+test or live acceptance. Existing production/data/READY/Pilot HOLDs remain.
 
 | Item | Value |
 |------|-------|
