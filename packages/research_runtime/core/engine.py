@@ -2227,6 +2227,8 @@ def _run_backtest_impl(
         metadata["price_evidence_mode"] = "historical_daily_reconstruction"
         metadata["contemporaneous_observation_unproven"] = True
         metadata["historical_reconstruction"] = True
+        if governed_am_view is not None:
+            metadata["master_evidence_mode"] = governed_am_view.master_evidence_mode
         if governed_am_pm:
             metadata["am_session_evidence_reason"] = (
                 controlled_hold_reason

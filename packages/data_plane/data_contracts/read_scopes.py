@@ -48,6 +48,7 @@ READ_CLOCKS = frozenset(
         "period_end_session_close",
         "same_trading_date_pm_close",
         "unconsumed_policy_membership",
+        "snapshot_observed_effective_membership",
     }
 )
 _REQUIREMENT_KEYS = frozenset({"consumer_kind", "consumer_id", "clock", "scope"})
@@ -56,12 +57,46 @@ _REQUIREMENT_KEYS = frozenset({"consumer_kind", "consumer_id", "clock", "scope"}
 class DatasetRequirementError(ValueError):
     """Malformed dataset read requirement or dataset dependency scope."""
 
+
+def combined_master_evidence_mode(profiles: Sequence[Any]) -> str:
+    """Derive one membership policy from digest-bound profile declarations."""
+    modes: set[str] = set()
+    for profile in profiles:
+        found = False
+        for scope in profile.dataset_scopes:
+            if scope["dataset_id"] != "equities_master":
+                continue
+            for raw in scope.get("requirements") or ():
+                requirement = DatasetReadRequirement.from_mapping(raw)
+                if requirement.consumer_kind != "universe":
+                    continue
+                pair = (requirement.clock, requirement.scope.initial_visible_state)
+                if pair == (
+                    "snapshot_observed_effective_membership",
+                    "latest_complete_effective_snapshot",
+                ):
+                    modes.add("historical_effective_membership")
+                elif pair == (
+                    "bound_decision_visible_view",
+                    "latest_complete_snapshot_plus_updates",
+                ):
+                    modes.add("decision_visible")
+                else:
+                    raise DatasetRequirementError("unsupported master membership requirement")
+                found = True
+        if not found:
+            raise DatasetRequirementError("profile is missing complete master membership requirements")
+    if len(modes) != 1:
+        raise DatasetRequirementError("profiles must share one master membership policy")
+    return next(iter(modes))
+
 _COUNT_KINDS = frozenset({"literal", "named_integer_input_plus"})
 _INITIAL_STATES = frozenset(
     {
         "all_visible_existence_and_count",
         "latest_qualifying_bps_preferred_else_eps",
         "latest_complete_snapshot_plus_updates",
+        "latest_complete_effective_snapshot",
     }
 )
 _REQUIRED_FIELDS = frozenset(
@@ -356,6 +391,17 @@ class DatasetReadRequirement:
             raise DatasetRequirementError(f"unsupported read clock {self.clock!r}")
         if not isinstance(self.scope, DatasetReadScope):
             raise DatasetRequirementError("requirement scope must be DatasetReadScope")
+        historical_master = self.clock == "snapshot_observed_effective_membership"
+        if historical_master or self.scope.initial_visible_state == "latest_complete_effective_snapshot":
+            if not (
+                historical_master
+                and self.consumer_kind == "universe"
+                and self.scope.dataset_id == "equities_master"
+                and self.scope.initial_visible_state == "latest_complete_effective_snapshot"
+            ):
+                raise DatasetRequirementError(
+                    "historical membership is only a complete equities_master universe read"
+                )
         if self.clock == "period_end_session_close" and self.scope.dataset_id != (
             "markets_calendar"
         ):
@@ -386,6 +432,7 @@ class DatasetReadRequirement:
         if (
             self.consumer_kind in {"universe", "calendar_prerequisite"}
             and self.clock != "bound_decision_visible_view"
+            and not historical_master
         ):
             raise DatasetRequirementError(
                 "universe and calendar prerequisites use the bound "

@@ -26,6 +26,7 @@ from .compiled_dependency_scope import (
     CompiledControlledSelection,
     _select_compiled_dependency_scope,
     combined_dataset_lookback_trading_days,
+    combined_master_evidence_mode,
 )
 from .complete_master import _complete_master_day_slices_from_connection
 from .errors import PitError
@@ -246,6 +247,7 @@ class CompiledScopeProofSession:
         period_start: str,
         period_end: str,
         as_of_for_day: Mapping[str, str],
+        historical_master: bool = False,
         expected_environment: str,
         expected_authority_instance_digest: str,
     ) -> Any:
@@ -255,6 +257,7 @@ class CompiledScopeProofSession:
             period_start=period_start,
             period_end=period_end,
             as_of_for_day=as_of_for_day,
+            historical_master=historical_master,
             expected_environment=expected_environment,
             expected_authority_instance_digest=expected_authority_instance_digest,
         )
@@ -344,6 +347,7 @@ __all__ = [
     "CompiledControlledSelection",
     "CompiledScopeProofSession",
     "combined_dataset_lookback_trading_days",
+    "combined_master_evidence_mode",
     "compiled_scope_proof_session_from_pinned_connection",
     "compiled_scope_proof_session_from_store",
 ]

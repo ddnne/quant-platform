@@ -14,7 +14,7 @@ from types import MappingProxyType
 from typing import Any, Iterator, Mapping, Sequence
 
 from data_contracts.identity import natural_key as contract_natural_key
-from data_contracts.read_scopes import DatasetReadRequirement
+from data_contracts.read_scopes import DatasetReadRequirement, combined_master_evidence_mode
 from ops.receipt_product import PRODUCT_ARTIFACT_FIELDS, product_row_digest
 from storage.schema import CATALOG_CODE_SQL
 
@@ -55,11 +55,20 @@ class CompiledControlledSelection:
     dataset_lookback_trading_days: Mapping[str, int] = field(
         default_factory=dict
     )
+    master_evidence_mode: str = "decision_visible"
+
+    @property
+    def historical_master(self) -> bool:
+        return self.master_evidence_mode == "historical_effective_membership"
 
     def lookback_for(self, dataset_id: str) -> int:
         return int(self.dataset_lookback_trading_days.get(dataset_id, 0))
 
     def __post_init__(self) -> None:
+        if self.master_evidence_mode not in {
+            "decision_visible", "historical_effective_membership"
+        }:
+            raise PitError("compiled master evidence mode is invalid")
         if type(self.period_start) is not str or type(self.period_end) is not str:
             raise PitError("compiled universe period is missing")
         if (
@@ -423,6 +432,7 @@ def _select_compiled_dependency_scope(
     for row in _facts(
         "equities_master",
         codes=member_codes,
+        available_at_cutoff=observed_through if compiled.historical_master else None,
         event_start=(
             min(authorized_master_dates) if authorized_master_dates else period_end
         ),
@@ -482,7 +492,10 @@ def _select_compiled_dependency_scope(
             code: row
             for code, row in master_by_date[latest_snapshot].items()
             if row["event_at"] <= decision_clock
-            and row["available_at"] <= decision_clock
+            and row["available_at"] <= (
+                _require_aware(observed_through, "observed_through")
+                if compiled.historical_master else decision_clock
+            )
         }
         missing_master = sorted(set(members) - set(master_by_code))
         if missing_master:

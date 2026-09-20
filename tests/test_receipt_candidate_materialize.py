@@ -598,7 +598,7 @@ def _normalize_builder_rows(dataset: str, raw_rows: list[dict]) -> list[dict]:
             )
     elif dataset == "equities_master":
         for row in raw_rows:
-            stamp = f"{row['Date']}T08:00:00+09:00"
+            stamp = "2026-08-24T08:00:00+09:00"
             structured.extend(
                 normalize_generic(
                     [row],

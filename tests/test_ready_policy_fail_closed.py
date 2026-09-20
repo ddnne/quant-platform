@@ -1031,7 +1031,7 @@ def _daily_equity_bar(
 
 def _mini_exact_scope_binding() -> SimpleNamespace:
     from research.dependency_closure import (
-        PLAN_DEPENDENCY_CLOSURE_VERSION_V2,
+        PLAN_DEPENDENCY_CLOSURE_VERSION_V3,
         build_plan_dependency_closure,
     )
     from research.experiment_plans import load_experiment_plans
@@ -1049,7 +1049,7 @@ def _mini_exact_scope_binding() -> SimpleNamespace:
             plan, period_start="2023-01-04", period_end="2023-01-06"
         )
         closure = build_plan_dependency_closure(
-            shortened, closure_version=PLAN_DEPENDENCY_CLOSURE_VERSION_V2
+            shortened, closure_version=PLAN_DEPENDENCY_CLOSURE_VERSION_V3
         )
         profile = profile_from_dependency_closure(closure)
         if profile.profile_version != PROFILE_VERSION_V3:
@@ -1424,7 +1424,7 @@ def _seed_exact_pit_scope(
                     )
             elif dataset_id == "equities_master":
                 for row in rows:
-                    stamp = f"{row['Date']}T08:00:00+09:00"
+                    stamp = "2026-08-24T08:00:00+09:00"
                     store.upsert(
                         "jquants_records",
                         normalize_generic(
@@ -1679,6 +1679,7 @@ def _open_controlled_from_ready_proof(path: Path, proof, binding):
                 for scope in profile.dataset_scopes
             ),
             profile_digest=binding.profile_digest,
+            master_evidence_mode="historical_effective_membership",
             feature_consumers=tuple(
                 profile.feature_consumers() for profile in binding.profiles
             ),

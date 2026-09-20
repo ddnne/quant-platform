@@ -5,7 +5,7 @@
   "publication_scope": "PILOT",
   "profile_id": "controlled-pilot/exact-four",
   "profile_version": "research-data-profile-set/v1",
-  "profile_digest": "sha256:a79465d7ab88c59bdc14c78d560200c00c87567c56e796b89e13ac11bef98dd1",
+  "profile_digest": "sha256:42de1a66bd6a846d4e498a84e10bb90a33836bf9990d63ea5790226567876ca2",
   "plan_ids": [
     "exp-mdh-hold10-momentum",
     "exp-xs-hold10-mom5",
@@ -13,7 +13,7 @@
     "exp-fund-hold10-value-mom"
   ],
   "plan_set_digest": "sha256:b44265e98bc882dbfdde5d36afc34f41d768e271c430552cd236938845a2ad02",
-  "dependency_closure_digest": "sha256:3bd9d15c4869515fb7b51ccac1a39e4a0f5b1a719ffee4ae4a5942b74337869b",
+  "dependency_closure_digest": "sha256:9e7829fd87b7da34d119d8b464de4fdf33c1405d3d9b1065a5c4ce7e6bc55ff9",
   "universe_rule_digest": "sha256:710bd711b107dfebec64da6376a13933a8233d3c55e97562432f27f38c34d351",
   "resolved_universe_digest": "MISSING",
   "dataset_ids": [
@@ -50,5 +50,5 @@
     "compiled_scope_proof_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
     "receipt_runset_digest": "sha256:abababababababababababababababababababababababababababababababab"
   },
-  "manifest_digest": "sha256:d4e2e64a72240e8465b75f596375ad280522aeb7b75f339225f1a8a706c2327d"
+  "manifest_digest": "sha256:ca6f546e09d4f7bced0f2c91a859d194d4d56e71dbfe3ff8c95f60b695c269c3"
 }

@@ -1124,6 +1124,7 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
         from pit.compiled_dependency_scope import (
             CompiledControlledSelection,
             combined_dataset_lookback_trading_days,
+            combined_master_evidence_mode,
         )
         from research.dependency_closure import resolve_strategy_spec
         from research.experiment_plans import PILOT_COST_SCENARIO
@@ -1167,6 +1168,7 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
             period_end=period_end,
             lookback_trading_days=max(dataset_lookbacks.values(), default=0),
             profile_digest=ready_binding.profile_digest,
+            master_evidence_mode=combined_master_evidence_mode(ready_binding.profiles),
             feature_consumers=tuple(
                 profile.feature_consumers() for profile in ready_binding.profiles
             ),
@@ -1267,6 +1269,8 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
                 raise JobInputError(
                     "controlled paper must declare contemporaneous observation unproven"
                 )
+            if engine_meta.get("master_evidence_mode") != compiled_selection.master_evidence_mode:
+                raise JobInputError("controlled paper master evidence policy mismatch")
             binding = CONTROLLED_PLAN_BINDINGS.get(plan.plan_id)
             if binding is None:
                 raise JobInputError("plan is not in the canonical four")
@@ -1306,6 +1310,7 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
                 "execution_mode": CONTROLLED_FILL_EXECUTION_MODE,
                 "price_basis": PERSONAL_RETROSPECTIVE_ADJUSTED,
                 "price_evidence_mode": "historical_daily_reconstruction",
+                "master_evidence_mode": compiled_selection.master_evidence_mode,
                 "authentic_am_session_evidence": False,
                 "contemporaneous_observation_unproven": True,
                 "strategy_spec_id": plan.strategy_spec_id,

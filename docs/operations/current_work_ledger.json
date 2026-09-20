@@ -1,19 +1,20 @@
 {
   "schema": "quant-platform-work-ledger/v1",
   "historical_master_repair": {
-    "status": "PRIVATE_OWNER_VERIFIED_PROFILE_INTEGRATION_PENDING",
+    "status": "SOURCE_INTEGRATION_LOCALLY_VERIFIED_NATIVE_PENDING",
     "branch": "fix/historical-master-reference",
-    "base": "15639ffe649e709d89c96a26f0ae1fe51ad10b5c (PR229; native CI still running when this unit was checked)",
+    "base": "15639ffe649e709d89c96a26f0ae1fe51ad10b5c (PR229; exact-SHA native CI SUCCESS)",
     "source_basis": "https://jpx-jquants.com/ja/spec/eq-master: Date is effective date; historical queries include then-listed companies; holiday queries roll forward; subsequent source corrections remain a limitation",
     "change": "private complete-master owner can reconstruct effective-date membership from verified complete products; original available_at/ingested_at and product digests are unchanged; observation cutoff still applies; ordinary PIT remains strict",
     "provenance": "historical_effective_membership; contemporaneous_observation_unproven=true; this is not evidence of actual observation in 2023",
-    "validation": "33 tests passed across complete-master, universe contract and personal universe; one existing entrant/delisting test extended with late acquisition, strict rejection and timestamp preservation",
-    "review": "independent read-only review_historical_master_owner: no actionable correctness findings; did not independently rerun tests",
-    "remaining": "bind explicit versioned profile/read-scope semantics into compiler, candidate publisher, compiled dependency selection, pinned runtime and output provenance; regenerate digest chain; end-to-end late-acquisition regression; native CI; no production activation in this commit"
+    "validation": "Foundation 33 passed; integrated Python 413 passed; Mass Worker typecheck PASS, 454 Node and 55 workerd tests passed; generated contract drift check PASS. Existing publisher fixtures now use 2026 acquisition for 2023 master history; no authentic local market data.",
+    "review": "independent read-only review_historical_master_owner found Worker closed-schema mismatch; fixed required master_evidence_mode in acceptance and persisted validation, regenerated actual Python fixture; reviewer rechecked with no further actionable findings; did not independently rerun tests",
+    "integration": "Versioned closure V3 binds explicit effective membership through profile, candidate, publisher, pinned runtime and Python/Worker Paper provenance. Old V1/V2 compiler semantics stay strict. Generated digest chain updated atomically; old READY is not silently reused.",
+    "remaining": "exact final-SHA native CI; merge/deployment scope approval; authentic cloud reproof and operational closure; no production activation or Pilot authorization"
   },
   "updated_at": "2026-09-20T22:53:08Z",
   "receipt_monthly_repair": {
-    "status": "SOURCE_REPAIR_LOCALLY_VERIFIED_NATIVE_PENDING",
+    "status": "SOURCE_REPAIR_NATIVE_SUCCESS_ROLLOUT_HELD",
     "branch": "fix/receipt-durable-capture-reconcile",
     "pr": 229,
     "bounds": "50-row D1 write/readback groups; at most 6000 rows and 4 raw pages per call; 1000-row product pages; large finalization in a fresh invocation",
@@ -23,9 +24,9 @@
     "premium_checks": "typecheck PASS; receipt_authority_client 13 tests PASS",
     "full_receipt_suite": "PASS: typecheck and 67 workerd tests; final full run 79.71 seconds (includes monthly and legacy recovery)",
     "independent_review": "review_receipt_streaming: v1 index recovery finding fixed and rechecked; no additional concrete blocker reported; reviewer made no edits",
-    "native_ci": "PENDING on this repair commit; preceding a3b51276 build 8cf8aa40-5624-4b59-8f60-579db27b8f40 IN_PROGRESS at 2026-09-20T22:53:08Z; historical checks do not accept this repair",
+    "native_ci": "SUCCESS on 15639ffe649e709d89c96a26f0ae1fe51ad10b5c; Workers Builds: quant-platform-ci-aggregate-staging check 106166775570 completed 2026-09-20T23:14:53Z; build 3799cbcc-a9b1-404f-87dd-bcb1ae2960bc; verify_ci ok; branch deploy command true (no production deploy)",
     "live_scope": "no remote mutation/deploy/data activation; existing live holds preserved",
-    "remaining": "final exact-SHA native CI; deployment-scope approval/acceptance; real same-operation February recovery; master P1; global Ops; READY; Pilot"
+    "remaining": "merge/deployment-scope approval and acceptance; real same-operation February recovery; master P1 live reproof; global Ops; READY; Pilot"
   },
   "user_pause": {
     "status": "RESUMED_BY_USER",

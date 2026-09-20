@@ -429,6 +429,7 @@ def render_fixtures(contract: dict[str, Any] | None = None) -> dict[str, bytes]:
             "execution_mode": contract["fill_contract"]["execution_mode"],
             "price_basis": "PERSONAL_RETROSPECTIVE_ADJUSTED",
             "price_evidence_mode": contract["fill_contract"]["price_evidence_mode"],
+            "master_evidence_mode": contract["master_evidence_mode"],
             "authentic_am_session_evidence": False,
             "contemporaneous_observation_unproven": True,
             "lifecycle": "Paper",
@@ -927,6 +928,31 @@ def _fail_generated_check(errors: list[str]) -> int:
     return 1
 
 
+def render_receipt_native_example() -> bytes:
+    from research.ready_manifest import (
+        build_receipt_native_ready_manifest,
+        load_exact_four_pilot_ready_binding,
+    )
+    from storage.receipt_crypto import PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS
+
+    manifest = build_receipt_native_ready_manifest(
+        {
+            "kind": "governed-receipt-candidate",
+            "environment": "production",
+            "authority_instance_digest": PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS["production"],
+            "physical_digest": "sha256:" + "1" * 64,
+            "observation_policy": "max_verified_claims_checked_at",
+            "observed_through": "2026-08-25T00:00:00+00:00",
+            "compiled_scope_proof_digest": "sha256:" + "2" * 64,
+            "receipt_runset_digest": "sha256:" + "ab" * 32,
+        },
+        binding=load_exact_four_pilot_ready_binding(),
+        created_at="MISSING",
+        published_at="MISSING",
+    )
+    return (json.dumps(manifest.to_dict(), indent=2) + "\n").encode("utf-8")
+
+
 def write_artifacts(*, check: bool) -> int:
     plan_artifacts = {
         str(PLAN_SCHEMA_REL): render_plan_schema(),
@@ -944,6 +970,7 @@ def write_artifacts(*, check: bool) -> int:
     contract = controlled_pilot_v1_contract()
     authority_schema = render_authority_protocol_schema(contract)
     remaining = {
+        "specs/ready/ready_manifest_v2.example.json": render_receipt_native_example(),
         str(AUTHORITY_SCHEMA_REL): authority_schema,
         str(PROTOCOL_PY_REL): render_protocol_schema_pins(
             authority_schema=authority_schema,

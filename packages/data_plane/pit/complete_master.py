@@ -929,6 +929,7 @@ def _complete_master_day_slices_from_connection(
     period_start: str,
     period_end: str,
     as_of_for_day: Mapping[str, str],
+    historical_master: bool = False,
     expected_environment: str = PRODUCTION_RECEIPT_ENVIRONMENT,
     expected_authority_instance_digest: str = (
         PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
@@ -941,6 +942,7 @@ def _complete_master_day_slices_from_connection(
         period_start=period_start,
         period_end=period_end,
         as_of_for_day=as_of_for_day,
+        historical_master=historical_master,
         expected_environment=expected_environment,
         expected_authority_instance_digest=expected_authority_instance_digest,
     )
