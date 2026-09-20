@@ -1624,7 +1624,7 @@ describe("Receipt Evidence Authority in workerd", () => {
     });
   });
 
-  it("resumes remaining structured pages from durable capture without a refetch", async () => {
+  it.each([false, true])("resumes durable pages without refetch after interruption=%s", async (interrupted) => {
     installFivePageContinuationUpstream();
     installAuthorityAcquisition();
     const { stub } = await activateRegisteredTestKey();
@@ -1633,13 +1633,33 @@ describe("Receipt Evidence Authority in workerd", () => {
       request_nonce: "8".repeat(64),
     };
     const operationId = await canonicalDigest(slicedRequest);
+    if (interrupted) {
+      await runtimeEnv.DB.prepare(
+        `CREATE TRIGGER interrupt_third_page BEFORE INSERT ON receipt_authority_structured_rows
+         WHEN NEW.payload LIKE '%2024-02-03%'
+         BEGIN SELECT RAISE(ABORT, 'injected page interruption'); END`,
+      ).run();
+    }
     await expect(runInDurableObject(stub, (instance) =>
       instance.issue_for_segment(slicedRequest)
-    )).rejects.toThrow("structured reconciliation slice is incomplete");
+    )).rejects.toThrow(interrupted ? "injected page interruption" : "structured reconciliation slice is incomplete");
     expect(await runtimeEnv.DB.prepare(
       `SELECT COUNT(*) AS count FROM receipt_authority_structured_rows
         WHERE operation_id=?`,
-    ).bind(operationId).first<{ count: number }>()).toEqual({ count: 4 });
+    ).bind(operationId).first<{ count: number }>()).toEqual({ count: interrupted ? 2 : 4 });
+    if (interrupted) {
+      await runtimeEnv.DB.prepare("DROP TRIGGER interrupt_third_page").run();
+      // Simulate the crash window where D1 committed but the R2 cursor did not.
+      const objects = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.list({
+        prefix: `raw/receipt-authority/production/${request.dataset_id}/${request.segment_id}/${operationId.slice(7)}/`,
+      });
+      const key = objects.objects.find((object) => object.key.endsWith("/structured-progress.json"))!.key;
+      const saved = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.get(key);
+      const progress = JSON.parse(await saved!.text());
+      await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.put(key, JSON.stringify({
+        ...progress, next_page: 1, raw_rows_committed: 1,
+      }));
+    }
     globalThis.fetch = (async () => {
       throw new Error("recovery must not reacquire after a committed capture");
     }) as typeof fetch;
@@ -2058,15 +2078,17 @@ describe("Receipt Evidence Authority in workerd", () => {
     });
     expect(reproved.state).toBe("FINALIZED");
     const product = await runtimeEnv.DB.prepare(
-      `SELECT artifact_body,artifact_digest,row_count
+      `SELECT artifact_key,artifact_digest,row_count
          FROM receipt_product_materializations WHERE operation_id=?`,
     ).bind(reproved.operation_id).first<{
-      artifact_body: string;
+      artifact_key: string;
       artifact_digest: string;
       row_count: number;
     }>();
     expect(product).not.toBeNull();
-    expect(product!.artifact_body).toContain(
+    const artifact = await runtimeEnv.STRUCTURED_BUCKET.get(product!.artifact_key);
+    expect(artifact).not.toBeNull();
+    expect(await artifact!.text()).toContain(
       `"ingested_at":"${priorIngestedAt}"`,
     );
     expect(product!.artifact_digest).toBe(

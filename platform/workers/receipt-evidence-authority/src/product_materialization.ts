@@ -80,19 +80,6 @@ export function canonicalProductBody(rows: CanonicalStructuredRow[]): string {
   return `${ordered.map(productLine).join("\n")}\n`;
 }
 
-function governedProductFields(row: CanonicalStructuredRow): GovernedProductRow {
-  return {
-    source: row.source,
-    dataset: row.dataset,
-    natural_key: row.natural_key,
-    event_time: row.event_time,
-    available_at: row.available_at,
-    ingested_at: row.ingested_at,
-    payload: row.payload,
-    raw_payload: row.raw_payload,
-  };
-}
-
 function governedBusinessFields(row: GovernedProductRow): Omit<
   GovernedProductRow,
   "ingested_at"
@@ -130,7 +117,30 @@ export async function persistGovernedProductSlice(
   for (let index = 0; index < primary.length; index += 50) {
     await env.DB.batch(primary.slice(index, index + 50));
   }
-  const changes = rows.map((row) => env.DB.prepare(
+  const productRows: GovernedProductRow[] = [];
+  for (let index = 0; index < rows.length; index += 50) {
+    const expected = rows.slice(index, index + 50);
+    const result = await env.DB.prepare(
+      `SELECT source,dataset,natural_key,event_time,available_at,ingested_at,payload,raw_payload
+         FROM jquants_records WHERE source=? AND dataset=?
+          AND natural_key IN (${expected.map(() => "?").join(",")})`,
+    ).bind(expected[0]!.source, expected[0]!.dataset,
+      ...expected.map((row) => row.natural_key)).all<GovernedProductRow>();
+    const stored = new Map(result.results.map((row) => [row.natural_key, row]));
+    for (const row of expected) {
+      const actual = stored.get(row.natural_key);
+      if (!actual || canonicalJson(governedBusinessFields(actual)) !==
+          canonicalJson(governedBusinessFields(row)) ||
+          !Number.isFinite(Date.parse(actual.ingested_at)) ||
+          !Number.isFinite(Date.parse(actual.available_at)) ||
+          Date.parse(actual.ingested_at) < Date.parse(actual.available_at) ||
+          Date.parse(actual.ingested_at) > Date.parse(row.ingested_at)) {
+        throw new Error("governed jquants_records fields differ from canonical raw normalization");
+      }
+      productRows.push(actual);
+    }
+  }
+  const changes = productRows.map((row) => env.DB.prepare(
     `INSERT OR IGNORE INTO ingestion_change_log
      (table_name,source,dataset,natural_key,event_time,available_at,ingested_at,
       payload,raw_payload,changed_at)
@@ -181,11 +191,24 @@ async function assembleCanonicalProductBody(
   let after = "";
   while (true) {
     const page = await env.DB.prepare(
-      `SELECT natural_key,source,dataset,event_time,available_at,ingested_at,
-              payload,raw_payload
-         FROM receipt_authority_structured_rows
-        WHERE operation_id=? AND natural_key>?
-        ORDER BY natural_key LIMIT 200`,
+      `SELECT r.natural_key,r.source,r.dataset,r.event_time,r.available_at,
+              r.ingested_at,r.payload,r.raw_payload
+         FROM receipt_authority_structured_rows s
+         JOIN jquants_records r ON r.source=s.source AND r.dataset=s.dataset
+          AND r.natural_key=s.natural_key AND r.event_time=s.event_time
+          AND r.available_at=s.available_at AND r.payload=s.payload
+          AND r.raw_payload=s.raw_payload
+        WHERE s.operation_id=? AND s.natural_key>?
+          AND EXISTS (
+            SELECT 1 FROM ingestion_change_log c
+             WHERE c.table_name='jquants_records' AND c.source=r.source
+              AND c.dataset=r.dataset AND c.natural_key=r.natural_key
+              AND c.event_time=r.event_time AND c.available_at=r.available_at
+              AND c.ingested_at=r.ingested_at AND c.payload=r.payload
+              AND c.raw_payload=r.raw_payload AND c.changed_at=r.ingested_at
+              AND c.change_seq>0
+          )
+        ORDER BY s.natural_key LIMIT 200`,
     ).bind(operationId, after).all<CanonicalStructuredRow>();
     const batch = page.results ?? [];
     if (batch.length === 0) break;

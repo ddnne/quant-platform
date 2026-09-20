@@ -223,6 +223,20 @@ async function persistStructuredRows(
   ));
   for (let index = 0; index < statements.length; index += 50) {
     await env.DB.batch(statements.slice(index, index + 50));
+    const expected = rows.slice(index, index + 50);
+    const result = await env.DB.prepare(
+      `SELECT natural_key,source,dataset,event_time,available_at,ingested_at,
+              payload,raw_payload,row_digest
+         FROM receipt_authority_structured_rows WHERE operation_id=?
+          AND natural_key IN (${expected.map(() => "?").join(",")})`,
+    ).bind(operationId, ...expected.map((row) => row.natural_key))
+      .all<CanonicalStructuredRow>();
+    const stored = new Map(result.results.map((row) => [row.natural_key, row]));
+    for (const row of expected) {
+      if (canonicalJson(stored.get(row.natural_key) ?? null) !== canonicalJson(row)) {
+        throw new Error("persisted structured fields differ from canonical raw normalization");
+      }
+    }
   }
 }
 
@@ -379,10 +393,9 @@ export async function reconcileStructured(
       raw_rows_committed: progress.raw_rows_committed + page.rowCount,
     };
     pagesThisInvocation += 1;
-    const storedNow = await countStructuredRows(env, input.operationId);
-    if (storedNow !== progress.raw_rows_committed) {
-      throw new Error(STRUCTURED_CARDINALITY_MISMATCH);
-    }
+    // D1 writes can survive a crash before the R2 checkpoint. Replay them
+    // idempotently; only the exhausted collection has an exact total count.
+    await saveStructuredProgress(env, input.capture.rawManifestKey, progress);
   }
   await saveStructuredProgress(env, input.capture.rawManifestKey, progress);
   const storedCount = await countStructuredRows(env, input.operationId);
