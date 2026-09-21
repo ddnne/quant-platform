@@ -37,7 +37,7 @@
     "progress": "Approved staging outcome completed at 20a81d04: PR229–232 merged, main CI passed, ordered receipt-chain rollout accepted, February recovered. Further data acquisition and activation are not authorized by this record."
   },
   "historical_master_repair": {
-    "status": "SOURCE_INTEGRATION_LOCALLY_VERIFIED_NATIVE_PENDING",
+    "status": "HISTORICAL_SOURCE_CHECKPOINT_SUPERSEDED",
     "branch": "fix/historical-master-reference",
     "base": "15639ffe649e709d89c96a26f0ae1fe51ad10b5c (PR229; exact-SHA native CI SUCCESS)",
     "source_basis": "https://jpx-jquants.com/ja/spec/eq-master: Date is effective date; historical queries include then-listed companies; holiday queries roll forward; subsequent source corrections remain a limitation",
@@ -46,11 +46,11 @@
     "validation": "Foundation 33 passed; integrated Python 413 passed; Mass Worker typecheck PASS, 454 Node and 55 workerd tests passed; generated contract drift check PASS. Existing publisher fixtures now use 2026 acquisition for 2023 master history; no authentic local market data.",
     "review": "independent read-only review_historical_master_owner found Worker closed-schema mismatch; fixed required master_evidence_mode in acceptance and persisted validation, regenerated actual Python fixture; reviewer rechecked with no further actionable findings; did not independently rerun tests",
     "integration": "Versioned closure V3 binds explicit effective membership through profile, candidate, publisher, pinned runtime and Python/Worker Paper provenance. Old V1/V2 compiler semantics stay strict. Generated digest chain updated atomically; old READY is not silently reused.",
-    "remaining": "exact final-SHA native CI; merge/deployment scope approval; authentic cloud reproof and operational closure; no production activation or Pilot authorization"
+    "remaining": "Source review/CI/merge complete; see staging_acceptance_20260921 for receipt-chain rollout. Authentic master reproof, production and Pilot remain incomplete."
   },
   "updated_at": "2026-09-20T22:53:08Z",
   "receipt_monthly_repair": {
-    "status": "SOURCE_REPAIR_NATIVE_SUCCESS_ROLLOUT_HELD",
+    "status": "HISTORICAL_SOURCE_CHECKPOINT_SUPERSEDED",
     "branch": "fix/receipt-durable-capture-reconcile",
     "pr": 229,
     "bounds": "50-row D1 write/readback groups; at most 6000 rows and 4 raw pages per call; 1000-row product pages; large finalization in a fresh invocation",
@@ -62,7 +62,7 @@
     "independent_review": "review_receipt_streaming: v1 index recovery finding fixed and rechecked; no additional concrete blocker reported; reviewer made no edits",
     "native_ci": "SUCCESS on 15639ffe649e709d89c96a26f0ae1fe51ad10b5c; Workers Builds: quant-platform-ci-aggregate-staging check 106166775570 completed 2026-09-20T23:14:53Z; build 3799cbcc-a9b1-404f-87dd-bcb1ae2960bc; verify_ci ok; branch deploy command true (no production deploy)",
     "live_scope": "no remote mutation/deploy/data activation; existing live holds preserved",
-    "remaining": "merge/deployment-scope approval and acceptance; real same-operation February recovery; master P1 live reproof; global Ops; READY; Pilot"
+    "remaining": "Monthly recovery and receipt-chain rollout completed; see staging_acceptance_20260921. Master reproof, global Ops, READY and Pilot remain incomplete."
   },
   "user_pause": {
     "status": "RESUMED_BY_USER",
@@ -135,8 +135,8 @@
   "pr137": "intentional_held_draft",
   "lanes": {
     "source_delivered": {
-      "status": "pr228_merged_main_native_success",
-      "latest_main_sha": "26abffecd4463c5d052e9f28d862bc67a7c006a1",
+      "status": "pr229_to_pr232_merged_main_native_success",
+      "latest_main_sha": "20a81d04f0f01beff48c909156e3d97f8477dfe7",
       "required_check_app_id": 85455,
       "required_check_name": "Workers Builds: quant-platform-ci-aggregate-staging",
       "strict": true,
@@ -172,7 +172,7 @@
         "cause": "intentional DEPLOYMENT HOLD after successful tests",
         "note": "Historical HOLD evidence on dad020. Not a required-native failure. Not a code-acceptance failure. Not current-main Mass deploy. No retry, no bypass, no product deploy."
       },
-      "notes": "Latest accepted main is PR228/26abffec. Staging Secrets/Receipt/Premium ACTIVE SHA-aligned at that SHA. Mass/Gateway/JSDA/Ops/observer were not SHA-aligned in this unit. PR137 remains an intentional HELD Draft. A6 GLOBAL remains OPEN. Operator declined additional full D1 backup. Fresh historical equities_master ingest_time_conservative available_at is a later PRE-PILOT P1, not this Receipt repair."
+      "notes": "Accepted runtime source and CI are recorded in staging_acceptance_20260921; not global rollout. PR137 remains HELD Draft. No new full backup. Older baseline objects are historical audit records only."
     },
     "staging_schema_prepared": {
       "status": "schema_prepared_once",
@@ -190,37 +190,10 @@
       "notes": "Exactly one reviewed staging recovery. Original private receipt/intent identity d9de3fb stayed original; repair source e071 recorded separately. Successful normal release reset the live lease to vacant / remote_spawned 0 with source_sha empty and expires 1970; the vacant lease does not retain source. Pre-apply fingerprint is PRE-APPLY ONLY: independently checked before and after CAS before remote spawn, not a SQL CAS input/predicate, not the current post-migration fingerprint, and not retry authority. Mutable PR comment, not immutable final release. Refer to that one record for lease/Queue/Cron/cutover SELECT readback rather than duplicating every UUID/count here. Not JSDA deploy/activate, not shared-D1 restore, not production."
     },
     "staging_deployed": {
-      "status": "receipt_chain_26abffec_active_audit_only_mass_not_current",
+      "status": "receipt_chain_active_accepted_other_workers_not_current",
       "receipt_chain_active": {
-        "source_sha": "26abffecd4463c5d052e9f28d862bc67a7c006a1",
-        "eligibility": "AUDIT_ONLY",
-        "evidence_digest": "sha256:6a0b052c4ad3a5683f99ae75dd7f48c55a9875fc05e9e4bd48ccaef4fa8432a1",
-        "workers": {
-          "ingestion-secrets": {
-            "version_id": "6b66c3d2-d776-4b82-9905-f0a01e5698ce",
-            "deployment_id": "7fc5c0d3-d717-4ab4-bccc-5c26d509d552",
-            "tag": "ra-s-a-26abffecd4463c5d052e9f28d862bc67a7c006a1"
-          },
-          "receipt-evidence-authority": {
-            "version_id": "8438ae73-3152-4815-b850-67cbb55bd89c",
-            "deployment_id": "1a5f88e2-1cf0-48c4-87d1-c56acea37eb5",
-            "tag": "ra-s-r-26abffecd4463c5d052e9f28d862bc67a7c006a1",
-            "durable_object_namespace_id": "e24d619fbd734073829e6ff8fc07ef1f",
-            "authority_mode": "ACTIVE"
-          },
-          "ingestion-premium": {
-            "version_id": "180a119d-c2ba-410e-9fbb-05d0c269711e",
-            "deployment_id": "3688a5d3-de2f-4602-80c5-c768c20e0e0a",
-            "tag": "ra-s-c-26abffecd4463c5d052e9f28d862bc67a7c006a1",
-            "ready_declared": "false",
-            "receipt_authority_operation_mode": "ACTIVE",
-            "cron": "* * * * *",
-            "module_digest": "sha256:93c6b23918a0051d9add740b1f25511ddbc1f99915d41782a13be75778fed644",
-            "module_bytes": 532431
-          }
-        },
-        "public": "workers.dev/previews/routes off",
-        "note": "AUDIT_ONLY management-D1 evidence. Not A6/READY/Pilot. Not a new production deploy."
+        "evidence_ref": "staging_acceptance_20260921",
+        "eligibility": "AUDIT_ONLY"
       },
       "receipt_chain_pending_d37ef73": {
         "source_sha": "d37ef73e5c226a7b2499f0523f4bcca4090b511b",
@@ -265,7 +238,7 @@
         "health": "GET /health 200 and unauthenticated 401 at that earlier checkpoint",
         "authenticated_403_smoke": "blocked only on location of existing MASS_EVAL_TOKEN or already-set process env; prior scoped project/env/Build-env searches failed; no rotation; never print values"
       },
-      "notes": "Current staging Secrets/Receipt/Premium are ACTIVE at 26abffec. PENDING d37ef73 remains dated history only. Mass/Gateway/JSDA/Ops/observer were not SHA-aligned in this unit. Worker code rollout is not A6/READY/Pilot."
+      "notes": "Current receipt-chain acceptance is staging_acceptance_20260921. Other Worker records are historical; Mass/Gateway/JSDA/Ops/observer were not SHA-aligned in this outcome. Not global data/READY/Pilot acceptance."
     },
     "production_deployed": {
       "status": "hold",
@@ -273,7 +246,7 @@
     },
     "data_activated": {
       "status": "pending",
-      "notes": "No local authentic market history. Exact-five cursor 10/24: Feb 2023 bars Premium run 6737 resumeAcquired=1, 28/28 pages, 80695 structured rows, same operation c766f36f, attempts 1. Authority run 6738 remains COLLECTING/PREPARED as of 2026-09-16T21:32:43Z. January 2023 bars stay 3/3 HOLD. Not READY/Pilot."
+      "notes": "Only existing February operation recovered: see staging_acceptance_20260921. Period bootstrap inventory has 11 committed operations (10 calendar months plus February bars), not proof of all required scopes. January bars retain 3/3 HOLD. Do not restart obsolete control. No local market history; further acquisition, READY and Pilot not authorized."
     },
     "ready": {
       "status": "pending",
