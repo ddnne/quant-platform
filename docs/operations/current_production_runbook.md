@@ -26,11 +26,13 @@ supersedes the merge/staging/recovery HOLD below only for this bounded outcome.
 The three receipt-chain staging Workers now run `8d2e609e`; ordered deployment
 and the signed AUDIT_ONLY ACTIVE acceptance passed. Exact versions and evidence
 are in `current_work_ledger.json:staging_acceptance_20260921`. February's original
-PREPARED operation is advancing from preserved raw; do not reset it, mint a new
+PREPARED operation finalized from preserved raw; do not reset it, mint a new
 identity, or restart the old compiled acquisition control. Intermediate Service
 RPC hung diagnostics remain unexplained; DO progress and passing local bridge
-tests are not proof that this diagnostic is resolved. Wait for RECEIPT_COMMITTED
-and caller FINALIZED with matching digest before declaring recovery complete.
+tests are not proof that this diagnostic is resolved. RECEIPT_COMMITTED and caller
+FINALIZED now match digest `225ac334…d3f1f18` (full value in the ledger). One
+overlapping caller attempted an older completion timestamp and hit the monotonic
+trigger; preserve the successful finalization and repair idempotent caller writes.
 Production, READY and Pilot have not been activated by this acceptance.
 
 ### Historical source checkpoints (superseded by the acceptance above)
