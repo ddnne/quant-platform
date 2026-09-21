@@ -1,7 +1,7 @@
 {
   "schema": "quant-platform-work-ledger/v1",
   "staging_acquisition_approval_20260921": {
-    "status": "APPROVED_FIRST_THREE_STARTED",
+    "status": "STOPPED_MASTER_THREE_ATTEMPTS_FAILED_SOURCE_REPAIR_PENDING",
     "scope": "38 in-period segments: equities_bars_daily 2023-03 through 2023-10; equities_master, fins_summary and indices_bars_daily_topix each 2023-01 through 2023-10. Existing evidence reused where valid.",
     "sequence": "First master/fins_summary/TOPIX 2023-01 only; verify receipts and attributable usage before the remaining 24+11 jobs. No expansion if cost cannot be tracked.",
     "limits": "One acquisition at a time; at most three fresh attempts per segment; stop on anomalies. USD20 operational stopping target, NOT an automatic invoice hard cap.",
@@ -10,6 +10,9 @@
     "control_key": "quant-structured-staging/control/exact_five_compiled_acquisition.json",
     "preserved_previous_control": "control/archive/exact_five_compiled_acquisition/51fbf3f5126d9ca3405830aab0db0575b1ebf566f947cb3198c61652c4fe2211.json",
     "first_three_submitted_sha256": "c15eb4f7f8041270e8eef8ac76e5e44b1aed7a3aa102067e8ce2941d03665a9a",
+    "stopped_control_archive": "control/archive/exact_five_compiled_acquisition/dd325b7ba6f115e7f3b4bb6d64133c9a20ddb03cb150215f7b547b34c7646661.json",
+    "stop_evidence": "2026-09-21: runs 6826, 6827, 6828 all terminated fail (transport aborted at 180 seconds); raw manifests FAILED with 5, 2, 2 pages respectively. Active control removed after cloud archive/readback; third run subsequently confirmed fail. Fins/TOPIX and remaining 35 jobs were not started. Existing partial raw retained, not COMPLETE evidence. No automatic attempt reset.",
+    "source_repair": "ACTIVE operation-bound canonical months must enter the existing trusted Receipt acquisition directly, not first duplicate a whole-month legacy fetch. Existing ACQUIRED raw-only continuations remain unchanged. Source repair does not reset exhausted attempts or prove live convergence/cost visibility.",
     "evidence": "https://github.com/ddnne/quant-platform/pull/233#issuecomment-5760660572",
     "recovery": "Preserve new operation/raw identities. On failure stop further jobs; inspect active invocation/PREPARED state before changing control. Never restore whole D1 or restart the obsolete control as rollback. No authentic market history stored locally."
   },

@@ -635,6 +635,51 @@ async function ingestOne(
 ): Promise<DatasetResult> {
   const startedAt = toJstIso(new Date());
   const when = new Date();
+  // A governed Cron operation already owns acquisition, normalization and
+  // persistence behind the Receipt binding. Do not fetch the month a second
+  // time through the legacy path before invoking that authority. Existing
+  // ACQUIRED continuations retain their original raw-only recovery path.
+  if (env.RECEIPT_AUTHORITY_OPERATION_MODE === "ACTIVE" &&
+      opts.operation && !opts.resumeAcquired) {
+    const segment = collectionSegment(spec, requestQueries(spec, opts));
+    if (segment.canonicalMonth) {
+      await writeRequiredCoverageSegment(env, spec, segment, true);
+      const nonce = await sha256HexFromString(opts.operation);
+      let receipt;
+      try {
+        receipt = (await issueGovernedReceipt(
+          env, receiptEnvironment(env), spec.id, segment.id, undefined, nonce,
+        )).result.receipt;
+      } catch (error) {
+        // Once prepared, only the existing same-identity recovery may proceed.
+        // Never fall back to an ungoverned vendor fetch after an RPC failure.
+        const prepared = await env.DB.prepare(
+          `SELECT 1 AS present FROM receipt_authority_requests
+            WHERE state = 'PREPARED' AND request_nonce = ? LIMIT 1`,
+        ).bind(nonce).first();
+        if (!prepared) throw error;
+        return {
+          dataset: spec.id, status: "partial", startedAt,
+          finishedAt: toJstIso(new Date()), rowsSeen: 0, rowsInserted: 0,
+          rowsRevisions: 0, availableAtMin: null, availableAtMax: null,
+          detail: `prepared_receipt_pending=${(error as Error).message}`,
+          rawKey: null, rawBytes: 0,
+        };
+      }
+      // Raw byte/storage accounting belongs to the authority run, not a
+      // duplicate caller manifest. These fields count caller-side acquisition.
+      const res: DatasetResult = {
+        dataset: spec.id, status: "pass", startedAt,
+        finishedAt: toJstIso(new Date()), rowsSeen: receipt.raw_row_count,
+        rowsInserted: receipt.structured_row_count, rowsRevisions: 0,
+        availableAtMin: null, availableAtMax: null,
+        detail: `governed_receipt_run=${receipt.run_id}`,
+        rawKey: null, rawBytes: 0,
+      };
+      if (runId !== null) await writeValidation(env, runId, res);
+      return res;
+    }
+  }
   const acquired = runId !== null
     ? await readAcquiredRaw(env, spec.id, runId)
     : null;
