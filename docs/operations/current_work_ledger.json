@@ -300,11 +300,11 @@
       "all_worker_deployment",
       "DLQ"
     ],
-    "note": "Current evidence, not GO. Staging Premium scheduled() returns after valuation_backfill_tick when RECEIPT_AUTHORITY_ENVIRONMENT is staging, before runIngestion/recover/publishOpsProjectionBestEffort (those run only in the non-staging branch). Production projection-stale cause is unproven. Unmeasured fields are not replaced with 0. Not global GO."
+    "note": "Dated observations above are not current global GO. Current staging ACTIVE scheduled() recovers PREPARED requests and runs the audit canary, but does not publish Ops. Production projection-stale cause remains unproven. Unmeasured fields are not zero."
   },
   "next_prerequisite_chain": [
     "Do not serialize Access 9999 or Grok MCP auth failure as a global stop. Access GET organizations returned 9999 not_enabled (API not enabled). No UI was inspected. Conditional only for Worker Access JWT/hostname protection; not a precondition for schema recovery, read-only Ops checks, or ordinary source fixes. Codex mechanical fallback may apply authorized operations after a Grok permission denial; never bypass HOLDs; no paid API fallback. Staging schema recovery already ran once: SCHEMA_PREPARED.",
-    "Inactive staging Secrets/Receipt/Premium/Gateway/Mass at 69c9772 is accepted. Source (this unit) adds idle-by-default staging Cron ticks for PENDING registration and exact-five acquisition; they are not live until a later SHA-align and are no-ops without R2 control objects. Do not put those control objects, activate keys, publish Ops, or mint READY from source merge. Staging Premium scheduled() still does not publish Ops. Publication remains HOLD. MASS_EVAL_TOKEN location gap blocks only authenticated 403 smoke. Ask once for the remaining production/data/keys/READY/Pilot outcome after this source is reviewed/merged; not per-Worker.",
+    "Receipt-chain staging ACTIVE acceptance is recorded in staging_acceptance_20260921. Existing February recovery completed; replacing acquisition controls or changing keys needs its approved outcome. Staging still does not publish Ops. Production, Ops publication, READY and Pilot remain HOLD. Consolidate remaining approval requests by outcome, not Worker.",
     "Explicit HOLDs unchanged; generic continue is not their release: production deploy, data activation, JSDA --activate, key activation, READY publication, Pilot/exact-four, Ops projection publication, Mass/FoF/broker. Exact-four and budget remain NO-GO. No new Worker/signer roles. A6 GLOBAL remains OPEN for independently accepted JSDA/publication collection, not as a backup-recipient gate. Operator declined additional full D1 backup (NO NEW FULL BACKUP): do not run a new full D1 export, 32-byte key custody, metadata-only d1_export_poll_descriptor.py --initiate, secret put, or treat those as pending human approval. GitHub Release immutability and production collection are repo/API or later-auth work, not inherently human-only; existing content-addressed R2/JSDA AUDIT_ONLY paths are not A6 closure. Staging JSDA AUDIT_ONLY intake is source-partial."
   ],
   "unknowns": [
@@ -324,7 +324,7 @@
   "items": {
     "1_fresh_clone_and_ledger": {
       "status": "pr211_main_accepted_before_this_docs_edit",
-      "notes": "Historical PR211/d37ef73 clone record, not current. Current accepted main is history.git_sha / lanes.source_delivered 26abffec. Nested historical transcripts live at history.git_sha."
+      "notes": "Historical PR211 clone record superseded. Latest accepted runtime source and evidence are staging_acceptance_20260921; final verification is described in item9."
     },
     "2_am_order_quantity_causality": {
       "status": "source_merged_not_deployed",
@@ -401,11 +401,11 @@
     },
     "8_rollout_and_research_go": {
       "status": "pending",
-      "notes": "Inactive 5-Worker staging at 69c9772 is accepted. This source unit adds idle Cron controls for PENDING registration and exact-five acquisition; undeployed until SHA-align; writing control objects remains unapproved. Production/data/READY/Trader/Pilot/Mass GO remain unapproved. SCHEMA_PREPARED is not JSDA activate. A6 GLOBAL remains OPEN."
+      "notes": "Receipt-chain staging accepted; see staging_acceptance_20260921. Remaining Workers and production/data/READY/Trader/Pilot are not accepted or newly authorized. Existing February recovery does not release further acquisition. SCHEMA_PREPARED is not JSDA activation; A6 GLOBAL remains OPEN."
     },
     "9_push_remote_and_fresh_clone_verify": {
-      "status": "pr211_main_accepted",
-      "notes": "Historical PR211/d37ef73 acceptance only; not current. Current accepted main is lanes.source_delivered.latest_main_sha 26abffec (PR228). Feature 5049fbb native check 104401424406/build e8e8c2e5 SUCCESS; merged-main check 104406618815/build 5f401591 SUCCESS 2026-09-15T13:43:24Z. Open PR 137 remains HELD Draft; PR229 is USER_REQUESTED_PAUSE. Historical Mass HOLD on dad020 is check 103821504107 (feea0136), intentional after successful tests."
+      "status": "runtime_source_verified_docs_followup_pending",
+      "notes": "Runtime source 20a81d04 fresh-cloned at merge-verification-20260921-final.8eQAkE: clean HEAD==origin/main, unpushed0, generated controlled-pilot contract check PASS. PR229–232 merged; PR137 held. This docs follow-up requires its own final-SHA CI/merge; it does not change accepted deployed source."
     }
   }
 }
