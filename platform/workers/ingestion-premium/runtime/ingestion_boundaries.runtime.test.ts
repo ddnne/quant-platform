@@ -503,34 +503,22 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
       EXACT_FIVE_ACQUISITION_KEY,
       JSON.stringify(exactFiveDoc({
         jobs: [
-          { dataset: "equities_bars_daily", segment_id: "2022-12" },
+          { dataset: "markets_calendar", segment_id: "2022-12" },
           { dataset: "markets_calendar", segment_id: "2023-01" },
         ],
       })),
     );
-    const spy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
-      const url = fetchUrl(input);
-      const day = url.searchParams.get("date");
-      if (
-        url.origin !== "https://api.jquants.com" ||
-        url.pathname !== "/v2/equities/bars/daily" ||
-        !day ||
-        day < "2022-12-01" ||
-        day > "2022-12-31"
-      ) {
-        throw new Error(`unexpected fetch ${url.href}`);
-      }
-      return Promise.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
-    });
+    // Scheduling/lease behavior does not require 31 rate-limited daily fetches.
+    const spy = stubVendor("/v2/markets/calendar", { from: "2022-12-01", to: "2022-12-31" }, []);
     await worker.scheduled(scheduledAt(), testEnv, createExecutionContext());
     expect(spy.mock.calls.length).toBeGreaterThan(0);
     const vendor = fetchUrl(spy.mock.calls[0]![0]);
-    expect(vendor.searchParams.get("date")).toBe("2022-12-01");
+    expect(vendor.searchParams.get("from")).toBe("2022-12-01");
     const coverage = await env.DB.prepare(
       "SELECT dataset, segment_id, status FROM coverage_segments",
     ).all<{ dataset: string; segment_id: string; status: string }>();
     expect(coverage.results).toEqual([
-      { dataset: "equities_bars_daily", segment_id: "2022-12", status: "UNKNOWN" },
+      { dataset: "markets_calendar", segment_id: "2022-12", status: "UNKNOWN" },
     ]);
     const vendorCalls = spy.mock.calls.length;
     let control = JSON.parse(
