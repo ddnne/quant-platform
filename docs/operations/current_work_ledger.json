@@ -1,5 +1,18 @@
 {
   "schema": "quant-platform-work-ledger/v1",
+  "staging_acquisition_approval_20260921": {
+    "status": "APPROVED_FIRST_THREE_STARTED",
+    "scope": "38 in-period segments: equities_bars_daily 2023-03 through 2023-10; equities_master, fins_summary and indices_bars_daily_topix each 2023-01 through 2023-10. Existing evidence reused where valid.",
+    "sequence": "First master/fins_summary/TOPIX 2023-01 only; verify receipts and attributable usage before the remaining 24+11 jobs. No expansion if cost cannot be tracked.",
+    "limits": "One acquisition at a time; at most three fresh attempts per segment; stop on anomalies. USD20 operational stopping target, NOT an automatic invoice hard cap.",
+    "included": "Same-scope implementation fixes, verification, Git and required CI; no per-command approval.",
+    "excluded": "January bars 3/3 HOLD reset, periods outside approved months, production, keys, READY, Pilot, Mass, FoF, broker, orders and full D1 backup.",
+    "control_key": "quant-structured-staging/control/exact_five_compiled_acquisition.json",
+    "preserved_previous_control": "control/archive/exact_five_compiled_acquisition/51fbf3f5126d9ca3405830aab0db0575b1ebf566f947cb3198c61652c4fe2211.json",
+    "first_three_submitted_sha256": "c15eb4f7f8041270e8eef8ac76e5e44b1aed7a3aa102067e8ce2941d03665a9a",
+    "evidence": "https://github.com/ddnne/quant-platform/pull/233#issuecomment-5760660572",
+    "recovery": "Preserve new operation/raw identities. On failure stop further jobs; inspect active invocation/PREPARED state before changing control. Never restore whole D1 or restart the obsolete control as rollback. No authentic market history stored locally."
+  },
   "caller_finalization_repair_20260921": {
     "status": "STAGING_DEPLOYED_ACCEPTED_PRODUCTION_UNCHANGED",
     "failure": "An overlapping recovery caller rewrote FINALIZED updated_at using an older local timestamp; real D1 rejected the non-monotonic update after another caller had successfully finalized.",
@@ -246,7 +259,7 @@
     },
     "data_activated": {
       "status": "pending",
-      "notes": "Only existing February operation recovered: see staging_acceptance_20260921. Period bootstrap inventory has 11 committed operations (10 calendar months plus February bars), not proof of all required scopes. January bars retain 3/3 HOLD. Do not restart obsolete control. No local market history; further acquisition, READY and Pilot not authorized."
+      "notes": "Before the new acquisition approval, inventory was 11 committed operations (10 calendar months plus February bars), not proof of all scopes. Approved additional acquisition and its first-three status are in staging_acquisition_approval_20260921. January bars retain 3/3 HOLD. No local market history; READY and Pilot remain unauthorized."
     },
     "ready": {
       "status": "pending",

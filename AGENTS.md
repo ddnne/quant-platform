@@ -34,3 +34,10 @@ native CI, and PREPARED-identity recovery are included in that ask. Re-ask
 only when the outcome's scope, cost, or destructive surface materially
 changes. Never bypass explicit HOLDs (production auto-deploy, Mass research
 GO, READY/Pilot, public Premium HTTP, local authentic market SQL).
+
+Approval requests must be understandable without reading earlier updates.
+State why the outcome is needed, exact environment/resources/data periods,
+the concrete operations and their order, expected cost and enforced limits
+versus estimates (never call a monitoring target a billing hard cap), success
+evidence, stop conditions, rollback or forward-recovery actions, and exclusions.
+Group related operations into one outcome; do not repeatedly ask per command.
