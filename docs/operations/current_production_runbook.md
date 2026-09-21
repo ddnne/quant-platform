@@ -12,94 +12,33 @@ live in [`../phase633_finding_ledger.md`](../phase633_finding_ledger.md).
 
 Do not print secret values. Check presence only.
 
-## Resumed 2026-09-21 — PR229 repair
+## Accepted staging outcome — 2026-09-21
 
-User subsequently approved one outcome: PR229/230 main integration after
-review/native CI, limited staging rollout, and existing February same-operation
-recovery using preserved raw/PREPARED evidence. Ordinary same-scope fixes and
-verification are included without per-command reapproval. Production, READY,
-Pilot, Mass/broker, fresh full acquisition and new full D1 backup remain excluded.
-PR229 merged as `163170ad`; PR230 merged as `8d2e609e`. Both feature SHAs and
-merged main passed the authoritative native check. The approval
-supersedes the merge/staging/recovery HOLD below only for this bounded outcome.
+Codex implements while Grok is unavailable. The user approved PR229/230
+integration, limited receipt-chain staging rollout and the existing February
+same-operation recovery, including ordinary follow-up fixes and verification.
+PR229–232 are merged. Source `20a81d04` passed the required native check and
+is deployed to the three receipt-chain staging Workers. Exact versions, CI,
+signed AUDIT_ONLY acceptance and remote evidence are recorded once in
+`current_work_ledger.json:staging_acceptance_20260921`.
 
-The three receipt-chain staging Workers now run `8d2e609e`; ordered deployment
-and the signed AUDIT_ONLY ACTIVE acceptance passed. Exact versions and evidence
-are in `current_work_ledger.json:staging_acceptance_20260921`. February's original
-PREPARED operation finalized from preserved raw; do not reset it, mint a new
-identity, or restart the old compiled acquisition control. Intermediate Service
-RPC hung diagnostics remain unexplained; DO progress and passing local bridge
-tests are not proof that this diagnostic is resolved. RECEIPT_COMMITTED and caller
-FINALIZED now match digest `225ac334…d3f1f18` (full value in the ledger). One
-overlapping caller attempted an older completion timestamp and hit the monotonic
-trigger; preserve the successful finalization and repair idempotent caller writes.
-Production, READY and Pilot have not been activated by this acceptance.
+February's original operation is RECEIPT_COMMITTED / caller FINALIZED, with
+80,695 rows from 28 preserved raw pages. Post-deploy readback found 11 FINALIZED
+requests and no PREPARED requests. Do not reset this operation, reacquire its
+raw, or restart the obsolete compiled acquisition control. The overlapping
+caller timestamp bug is repaired and deployed; intermediate Service RPC hung
+diagnostics remain unexplained and are not claimed fixed.
+January bars remain on the existing 3/3-attempt HOLD; February's completion
+does not authorize resetting January's attempts or replacing its identity.
 
-### Historical source checkpoints (superseded by the acceptance above)
-
-PR229 exact source `15639ffe` passed native check
-`106166775570` (build `3799cbcc-a9b1-404f-87dd-bcb1ae2960bc`). No deployment
-occurred. Stacked Draft PR230 now integrates historical complete-master
-membership using explicit closure V3, preserving original acquisition clocks
-and labeling contemporaneous observation unproven. Python 413, Worker 454
-and workerd 55 tests passed; typecheck and generated-contract checks passed.
-The independent review's Python/Worker provenance mismatch was fixed.
-Existing fixtures cover late acquisition; no new test-count target or
-authority layer was introduced. Final PR230 SHA still needs native CI.
-Those check/approval steps are now complete for the bounded staging outcome.
-Reprove cloud data before READY;
-do not reuse old profile digests or claim actual 2023 observation.
-
-**Status:** `RESUMED_BY_USER`. Grok's subscription ended; Codex now implements.
-Remote main was rechecked at `26abffec`; PR229 remains Draft. Native CI on
-the pause checkpoint `157ee2f2` failed. Local Receipt runtime tests reproduced
-four failures, including signing despite canonical DB disagreement and losing
-original ingestion time. Those regressions and crash/cursor replay are the
-first repair unit. The next source repair replaces whole-body finalization
-with streamed product bytes and bounded row resumes; local tests do not make
-this PR merge/deploy-ready.
-
-Repair checks: Receipt typecheck PASS and 66 workerd tests PASS, including
-an interrupted page write with D1 ahead of the R2 progress cursor. Existing
-`ensureKey` negative-RPC diagnostic is still printed by the suite. Readback
-checks are batched and product bytes use canonical DB ingestion timestamps;
-the change-feed match is part of the product query. Full native CI on the
-pushed repair remains pending. No remote data/deployment changes were made.
-
-Monthly repair: D1 writes/readback are batched in 50-row groups, each call
-handles at most 6,000 rows and four raw pages, and large finalization starts
-in a fresh invocation. Product measurement and upload read 1,000 rows at a
-time; R2 readback hashes a stream. New v2 manifests contain metadata, not a
-second copy of the product. Existing v1 indexed products retain their original
-manifest after independent measurement/readback on recovery.
-The synthetic 29-page / 80,707-row acquisition-to-signed-Receipt test passed
-with a product larger than 100 MB, no vendor refetch and a manifest under
-10 KB. This is workerd/D1/R2 local runtime evidence, not deployed CPU-limit
-or live data acceptance. Independent source review found the v1 recovery
-issue; the repair was rechecked with no additional blocker reported.
-Final local checks: Receipt typecheck and all 67 workerd tests PASS; Premium
-typecheck and 13 receipt-client tests PASS. Exact-SHA native CI and staging
-acceptance are tracked separately in the ledger. Production, READY and Pilot
-remain unchanged.
-
-The table below preserves the **historical pause checkpoint**, not current
-test or live acceptance. Existing production/data/READY/Pilot HOLDs remain.
-
-| Item | Value |
-|------|-------|
-| Repo | https://github.com/ddnne/quant-platform |
-| Conversation | `01a0abdb-4795-7500-a5b7-6e9c1684932e` |
-| Branch / PR | `fix/receipt-durable-capture-reconcile` / [PR229](https://github.com/ddnne/quant-platform/pull/229) |
-| Original source head | `64c8e4d7bd0ed0f4e688aa9b160a2590b1f6b888` (native SUCCESS `104994000343` is historical on this SHA only) |
-| WIP source commit | `8cc5aecc9c983ac2b2dc083f930c0cf11ee05d31` (unverified; not ready) |
-| Docs checkpoint | this commit on the same branch |
-| Accepted main | `26abffecd4463c5d052e9f28d862bc67a7c006a1` (PR228). Live SHA/status is `current_work_ledger.json`; do not copy stale PENDING `d37ef73` tables from older paragraphs below. |
-| Edited files (WIP, not reviewed/accepted) | `product_materialization.ts`, `receipt_evidence.ts`, `structured_reconciliation.ts` |
-| Validation this pause | `git diff --check` PASS; Receipt `tsc --noEmit` PASS; existing focused vitest `-t "resumes remaining structured pages from durable capture without a refetch"` PASS (1 passed, 64 skipped). Full CI/full test: notrun. |
-| Open monthly blockers | Durable next-page progress and D1 2MB/1000-query product materialization are WIP; existing tests that assert nonempty D1 `artifact_body` are not updated; missing realistic-size synthetic E2E and duplicate-key tests; Feb 6738 still COLLECTING/PREPARED (15-min `MAX_CONTEXT_AGE` vs 21600s continuation TTL is a source-confirmed issuance block, not a proven live OOM). |
-| Original source-unit scope | Source + local synthetic tests + read-only staging diagnosis + Git/PR/native CI only. No remote mutation/migration/deploy/merge. Existing Feb PREPARED/raw/same operation only. |
-| Next step (explicit resume only) | Complete bounded finalization, end-to-end synthetic proof, final reviews and native CI **before** any merge/deploy. |
-| Later / incomplete | Master P1 (`equities_master` `ingest_time_conservative` available_at vs 2023 PIT), global Ops, READY, Pilot. Original 2023 exact-four ideas, AM-PM, and budget stay. Source / staging / data / READY / Pilot remain separate. Preserve existing cloud raw/PREPARED/attempts; January bars 3/3 HOLD. No local market history, no new full D1 backup, no production/DLQ/Pilot/Mass/broker. Held worktree `exact-five-acquisition-recovery` and Draft PR137 unchanged. |
+This is staging receipt acceptance, not production, READY or Pilot acceptance.
+Historical master reconstruction preserves original acquisition clocks and
+labels contemporaneous observation unproven; it still needs authentic cloud
+reproof for the required scope. Current profile/closure pins must be used.
+Production mutation, READY, Pilot, Mass/broker, new full acquisition and new full
+D1 backup remain outside this approved outcome. Draft PR137 and its held
+worktree remain untouched. Prior pause transcripts and superseded local test
+counts are available in Git history, not executable instructions here.
 
 ## Canonical machine-readable authorities
 
@@ -363,18 +302,18 @@ remote apply results only in immutable release evidence.
   including pre-period master/fins/bar/split months. Canonical full-month
   windows come from the catalog (1/tick, 3 attempts, source parse max 24
   jobs; that ceiling is not an authorized cloud execution plan). Exact-five runs only when
-  valuation is absent or complete, not leased/CAS/error. Fetch abort is 30s
-  on the ingest callback only; it does not cancel D1/R2/Receipt and the 90s
+  valuation is absent or complete, not leased/CAS/error. Fetch abort is 180s
+  on the ingest callback only; it does not cancel D1/R2/Receipt and the 240s
   lease is not proof the prior owner stopped. Absent objects are no-ops.
   PENDING staging Cron does not run `recoverPreparedReceipts` (no governed
   issue). ACTIVE staging Cron recovers PREPARED identities then runs the
   existing AUDIT_ONLY canary. Tag alphabet is `rp-` PENDING / `ra-` ACTIVE
   (`ra-s-c` is the ACTIVE Premium caller, not a different Worker). PENDING
-  Cron does not invoke the canary. They are not deployed until a later
-  SHA-align. Writing either control object is a later approved mutation, not
-  authorized by source merge. Do not add a public Premium route. Mass remains
-  verify-only. This is still operational HOLD for ACTIVE keys, READY, and
-  Pilot. Do not add a general bypass or execute ACTIVE instructions yet. The all-P0 gate remains the final
+  Cron does not invoke the canary. The deployed staging ACTIVE receipt chain
+  is accepted as recorded above; production is not. Replacing an acquisition
+  control or changing keys requires its approved outcome, not merely a source
+  merge. Do not restart the obsolete control or add a public Premium route.
+  Mass remains verify-only; READY and Pilot remain on HOLD. The all-P0 gate remains the final
   release checklist. Runtime Worker paths separately enforce keys, READY,
   Trader authorization, and BudgetLedger occupancy; those checks are not the
   all-P0 gate.
