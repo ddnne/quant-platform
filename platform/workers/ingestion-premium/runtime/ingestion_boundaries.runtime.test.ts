@@ -243,6 +243,75 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
       .rejects.toThrow("Receipt request ledger finalization failed");
   });
 
+  it("ACTIVE Cron goes straight to governed acquisition and holds its identity after RPC loss", async () => {
+    expect((await rebuildNaturalKeysV2(env.DB)).state).toBe("READY");
+    const testEnv = registrationEnv({
+      RECEIPT_AUTHORITY_OPERATION_MODE: "ACTIVE",
+      CF_VERSION_METADATA: {
+        id: "10000000-0000-4000-8000-000000000003",
+        tag: `ra-s-c-${CALLER_SHA}`,
+        timestamp: "2026-08-27T08:00:00.000Z",
+      },
+    });
+    const rpc = testEnv.RECEIPT_EVIDENCE_AUTHORITY;
+    vi.mocked(rpc.issue_for_segment).mockRejectedValue(new Error("lost response"));
+    vi.mocked(rpc.recover_issue).mockRejectedValue(new Error("still pending"));
+    // The independent AUDIT_ONLY smoke runs after acquisition; this test
+    // exercises the acquisition entry path, not the audit signature protocol.
+    vi.mocked(rpc.begin_audit_recovery_canary).mockRejectedValue(new Error("audit fixture unavailable"));
+    const vendor = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("legacy fetch forbidden"));
+    await env.STRUCTURED_BUCKET.put(EXACT_FIVE_ACQUISITION_KEY, JSON.stringify(exactFiveDoc({
+      jobs: [{ dataset: "equities_master", segment_id: "2023-01" }],
+    })));
+
+    await expect(worker.scheduled(scheduledAt(), testEnv, createExecutionContext()))
+      .rejects.toThrow("audit fixture unavailable");
+    const prepared = await env.DB.prepare(
+      "SELECT operation_id,request_nonce,state,dataset,segment_id FROM receipt_authority_requests",
+    ).first();
+    expect(prepared).toMatchObject({ state: "PREPARED", dataset: "equities_master", segment_id: "2023-01" });
+    expect(rpc.issue_for_segment).toHaveBeenCalledOnce();
+    expect(vendor).not.toHaveBeenCalled();
+    expect((await env.RAW_BUCKET.list()).objects).toHaveLength(0);
+
+    await expect(worker.scheduled(scheduledAt(), testEnv, createExecutionContext()))
+      .rejects.toThrow("audit fixture unavailable");
+    expect(rpc.issue_for_segment).toHaveBeenCalledOnce();
+    expect(vendor).not.toHaveBeenCalled();
+    expect(await env.DB.prepare(
+      "SELECT operation_id,request_nonce,state,dataset,segment_id FROM receipt_authority_requests",
+    ).first()).toEqual(prepared);
+    const control = JSON.parse(await (await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY))!.text());
+    expect(control).toMatchObject({ cursor: 0, attempts: 1 });
+
+    // A successful trusted RPC maps its measured row count into caller
+    // progress. This partial fixture does not test authority persistence or
+    // signatures; authority runtime tests and the recovery test below do.
+    vi.mocked(rpc.issue_for_segment).mockImplementation(async () => {
+      const row = await env.DB.prepare(
+        "SELECT operation_id FROM receipt_authority_requests WHERE dataset='indices_bars_daily_topix'",
+      ).first<{ operation_id: string }>();
+      return {
+        operation_id: row!.operation_id, receipt_digest: `sha256:${"b".repeat(64)}`,
+        receipt: { raw_row_count: 19, structured_row_count: 19, run_id: 999 },
+      };
+    });
+    await env.STRUCTURED_BUCKET.put(EXACT_FIVE_ACQUISITION_KEY, JSON.stringify(exactFiveDoc({
+      jobs: [{ dataset: "indices_bars_daily_topix", segment_id: "2023-01" }],
+    })));
+    await expect(worker.scheduled(scheduledAt(), testEnv, createExecutionContext()))
+      .rejects.toThrow("audit fixture unavailable");
+    expect(vendor).not.toHaveBeenCalled();
+    expect(await env.DB.prepare(
+      "SELECT status,rows_seen,rows_inserted,detail FROM ingestion_validation WHERE dataset='indices_bars_daily_topix'",
+    ).first()).toEqual({ status: "pass", rows_seen: 19, rows_inserted: 19, detail: "governed_receipt_run=999" });
+    expect(await env.DB.prepare(
+      "SELECT status FROM coverage_segments WHERE dataset='indices_bars_daily_topix'",
+    ).first()).toEqual({ status: "UNKNOWN" });
+    const completed = JSON.parse(await (await env.STRUCTURED_BUCKET.get(EXACT_FIVE_ACQUISITION_KEY))!.text());
+    expect(completed).toMatchObject({ cursor: 1, attempts: 0, last: { status: "pass", rowsInserted: 19 } });
+  });
+
   it.each([
     { title: "PENDING control row", missing: false, message: "migration is PENDING" },
     { title: "missing control row", missing: true, message: "schema is not installed" },

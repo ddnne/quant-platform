@@ -25,6 +25,7 @@ export async function writeRequiredCoverageSegment(
   env: CollectionReceiptEnv,
   spec: DatasetSpec,
   segment: CollectionSegment,
+  preserveExisting = false,
 ): Promise<void> {
   await env.DB.prepare(
     `INSERT INTO coverage_segments
@@ -32,7 +33,7 @@ export async function writeRequiredCoverageSegment(
         segment_end, expected_scope, expected_items, status, receipt_run_id,
         evaluated_at, detail_json)
      VALUES ('jquants', ?, ?, ?, ?, ?, ?, ?, 'UNKNOWN', NULL, ?, ?)
-     ON CONFLICT(source, dataset, segment_id, policy_version) DO UPDATE SET
+     ON CONFLICT(source, dataset, segment_id, policy_version) ${preserveExisting ? "DO NOTHING" : `DO UPDATE SET
        segment_start=excluded.segment_start,
        segment_end=excluded.segment_end,
        expected_scope=excluded.expected_scope,
@@ -40,7 +41,7 @@ export async function writeRequiredCoverageSegment(
        status='UNKNOWN',
        receipt_run_id=NULL,
        evaluated_at=excluded.evaluated_at,
-       detail_json=excluded.detail_json`,
+       detail_json=excluded.detail_json`}`,
   ).bind(
     spec.id, segment.id, spec.coverage.policy_version,
     segment.start, segment.end, canonicalJson(segment.expectedScope),

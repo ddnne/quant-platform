@@ -1714,6 +1714,12 @@ describe("Receipt Evidence Authority in workerd", () => {
     expect(calls).toBe(pageCount);
     expect(result!.receipt.raw_row_count).toBe(pageCount * rowsPerPage);
     expect(result!.receipt.structured_row_count).toBe(pageCount * rowsPerPage);
+    expect(await runtimeEnv.DB.prepare(
+      "SELECT last_event_date,last_ingested_at FROM ingestion_watermarks WHERE dataset='equities_bars_daily'",
+    ).first()).toEqual({
+      last_event_date: "2024-02-29",
+      last_ingested_at: result!.receipt.checked_at,
+    });
     const product = await runtimeEnv.DB.prepare(
       "SELECT artifact_key,artifact_digest,artifact_body,byte_count,manifest_key FROM receipt_product_materializations WHERE operation_id=?",
     ).bind(result!.operation_id).first<{

@@ -305,6 +305,27 @@ export async function commitReceipt(
   });
   const promoteCoverage = receiptEligibleForCoverageComplete(receipt);
   await env.DB.batch([
+    // Acquisition no longer depends on a duplicate Premium write. Publish
+    // operation-measured watermarks atomically with the receipt, including
+    // recovery; older backfills/replays must not move them backwards.
+    env.DB.prepare(
+      `INSERT INTO ingestion_watermarks
+         (dataset,last_event_date,last_ingested_at,last_export_cursor)
+       SELECT ?,substr(MAX(event_time),1,10),?,
+              (SELECT MAX(change_seq) FROM ingestion_change_log WHERE dataset=?)
+         FROM receipt_authority_structured_rows WHERE operation_id=?
+       HAVING COUNT(*) > 0
+       ON CONFLICT(dataset) DO UPDATE SET
+         last_event_date=CASE
+           WHEN ingestion_watermarks.last_event_date IS NULL
+             OR excluded.last_event_date > ingestion_watermarks.last_event_date
+           THEN excluded.last_event_date ELSE ingestion_watermarks.last_event_date END,
+         last_ingested_at=CASE
+           WHEN ingestion_watermarks.last_ingested_at IS NULL
+             OR julianday(excluded.last_ingested_at) > julianday(ingestion_watermarks.last_ingested_at)
+           THEN excluded.last_ingested_at ELSE ingestion_watermarks.last_ingested_at END,
+         last_export_cursor=COALESCE(excluded.last_export_cursor,ingestion_watermarks.last_export_cursor)`,
+    ).bind(receipt.dataset, receipt.checked_at, receipt.dataset, operationId),
     env.DB.prepare(
     `INSERT OR IGNORE INTO collection_receipts
      (source,dataset,segment_id,segment_start,segment_end,expected_scope,
