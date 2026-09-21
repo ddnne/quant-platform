@@ -1,5 +1,13 @@
 {
   "schema": "quant-platform-work-ledger/v1",
+  "approval_20260921": {
+    "status": "APPROVED_BY_USER",
+    "scope": "PR229/230 main integration after native CI/review; limited staging rollout; existing February same-operation recovery using preserved raw/PREPARED evidence",
+    "included": "ordinary same-scope fixes, verification, Git and required fresh-SHA CI; no repeated per-command approval",
+    "excluded": "production mutation, READY publication, Pilot, Mass, FoF, broker, live orders, new full backfill or full D1 backup",
+    "stop_rule": "on uncertain mutation inspect actual state before retry; ask one consolidated question only for materially changed scope, cost or destructive surface",
+    "progress": "PR229 merged as 163170adeedd48843f4f9780bb17401c31ad6560; PR230 base changed to main and required main merge brought in with identical source tree; new final SHA native CI required"
+  },
   "historical_master_repair": {
     "status": "SOURCE_INTEGRATION_LOCALLY_VERIFIED_NATIVE_PENDING",
     "branch": "fix/historical-master-reference",

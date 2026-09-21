@@ -14,6 +14,15 @@ Do not print secret values. Check presence only.
 
 ## Resumed 2026-09-21 — PR229 repair
 
+User subsequently approved one outcome: PR229/230 main integration after
+review/native CI, limited staging rollout, and existing February same-operation
+recovery using preserved raw/PREPARED evidence. Ordinary same-scope fixes and
+verification are included without per-command reapproval. Production, READY,
+Pilot, Mass/broker, fresh full acquisition and new full D1 backup remain excluded.
+PR229 merged as `163170ad`. PR230 incorporates that main merge (no source-tree
+change) and must pass native CI on its new final SHA before merging. The approval
+supersedes the merge/staging/recovery HOLD below only for this bounded outcome.
+
 Latest checkpoint: PR229 exact source `15639ffe` passed native check
 `106166775570` (build `3799cbcc-a9b1-404f-87dd-bcb1ae2960bc`). No deployment
 occurred. Stacked Draft PR230 now integrates historical complete-master
