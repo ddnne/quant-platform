@@ -1699,12 +1699,13 @@ describe("Receipt Evidence Authority in workerd", () => {
     installAuthorityAcquisition();
     const { stub } = await activateRegisteredTestKey();
     const monthly = { ...request, dataset_id: "equities_bars_daily", request_nonce: "9".repeat(64) };
+    const rpc = workerExports.default;
     let result: Awaited<ReturnType<typeof stub.issue_for_segment>> | undefined;
     for (let attempt = 0; attempt < 20 && result === undefined; attempt += 1) {
       try {
         result = attempt === 0
-          ? await stub.issue_for_segment(monthly)
-          : await stub.recover_issue({ ...monthly, operation: "recover_issue" });
+          ? await rpc.issue_for_segment(monthly)
+          : await rpc.recover_issue({ ...monthly, operation: "recover_issue" });
       } catch (error) {
         expect(String(error)).toContain("structured reconciliation slice is incomplete");
       }
@@ -3047,13 +3048,14 @@ describe("Receipt Evidence Authority in workerd", () => {
   it("accepts concurrent same-request issue without closing issuance", async () => {
     installAuthorityAcquisition();
     const { stub } = await activateRegisteredTestKey();
+    const rpc = workerExports.default;
     const concurrentRequest = {
       ...request,
       request_nonce: "9".repeat(64),
     };
     const [first, second] = await Promise.all([
-      stub.issue_for_segment(concurrentRequest),
-      stub.issue_for_segment(concurrentRequest),
+      rpc.issue_for_segment(concurrentRequest),
+      rpc.issue_for_segment(concurrentRequest),
     ]);
     expect(first.operation_id).toBe(second.operation_id);
     expect(first.receipt_digest).toBe(second.receipt_digest);

@@ -19,11 +19,23 @@ review/native CI, limited staging rollout, and existing February same-operation
 recovery using preserved raw/PREPARED evidence. Ordinary same-scope fixes and
 verification are included without per-command reapproval. Production, READY,
 Pilot, Mass/broker, fresh full acquisition and new full D1 backup remain excluded.
-PR229 merged as `163170ad`. PR230 incorporates that main merge (no source-tree
-change) and must pass native CI on its new final SHA before merging. The approval
+PR229 merged as `163170ad`; PR230 merged as `8d2e609e`. Both feature SHAs and
+merged main passed the authoritative native check. The approval
 supersedes the merge/staging/recovery HOLD below only for this bounded outcome.
 
-Latest checkpoint: PR229 exact source `15639ffe` passed native check
+The three receipt-chain staging Workers now run `8d2e609e`; ordered deployment
+and the signed AUDIT_ONLY ACTIVE acceptance passed. Exact versions and evidence
+are in `current_work_ledger.json:staging_acceptance_20260921`. February's original
+PREPARED operation is advancing from preserved raw; do not reset it, mint a new
+identity, or restart the old compiled acquisition control. Intermediate Service
+RPC hung diagnostics remain unexplained; DO progress and passing local bridge
+tests are not proof that this diagnostic is resolved. Wait for RECEIPT_COMMITTED
+and caller FINALIZED with matching digest before declaring recovery complete.
+Production, READY and Pilot have not been activated by this acceptance.
+
+### Historical source checkpoints (superseded by the acceptance above)
+
+PR229 exact source `15639ffe` passed native check
 `106166775570` (build `3799cbcc-a9b1-404f-87dd-bcb1ae2960bc`). No deployment
 occurred. Stacked Draft PR230 now integrates historical complete-master
 membership using explicit closure V3, preserving original acquisition clocks
@@ -32,8 +44,8 @@ and workerd 55 tests passed; typecheck and generated-contract checks passed.
 The independent review's Python/Worker provenance mismatch was fixed.
 Existing fixtures cover late acquisition; no new test-count target or
 authority layer was introduced. Final PR230 SHA still needs native CI.
-Resume with that check, then obtain the single scoped merge/rollout outcome
-approval before crossing the existing HOLD. Reprove cloud data before READY;
+Those check/approval steps are now complete for the bounded staging outcome.
+Reprove cloud data before READY;
 do not reuse old profile digests or claim actual 2023 observation.
 
 **Status:** `RESUMED_BY_USER`. Grok's subscription ended; Codex now implements.

@@ -1,5 +1,23 @@
 {
   "schema": "quant-platform-work-ledger/v1",
+  "staging_acceptance_20260921": {
+    "status": "ACTIVE_ACCEPTANCE_PASS_RECOVERY_IN_PROGRESS",
+    "accepted_source_sha": "8d2e609e10bbf2abf7a223494c2bd2a53ef0d93e",
+    "merged_prs": [229, 230],
+    "main_native_build": "e41c89b0-a7dd-48ad-ae75-197b82ea2902",
+    "main_native_result": "SUCCESS",
+    "versions": {
+      "ingestion-secrets-staging": "096c8f5e-5ecf-4559-bfd3-cc0d8192a358",
+      "receipt-evidence-authority-staging": "f00401f8-c77f-4f28-94fd-165bd5e7bbe4",
+      "ingestion-premium-staging": "cfc1e904-deee-408f-90c7-34d2bf4f4200"
+    },
+    "active_transition_evidence_digest": "sha256:d614f902963193a02b92a9f743a64d133a5c246d374ef81fd47ddac85fef25d0",
+    "evidence": "https://github.com/ddnne/quant-platform/pull/230#issuecomment-5759390254",
+    "recovery_operation_id": "sha256:cf46358cc553d44dda7a97f0bc7d34c434dada57370b52d0739679dd560ae14e",
+    "recovery": "Existing February PREPARED identity and preserved raw only; durable checkpoint advanced to 46725/80695 rows. Not a receipt or COMPLETE proof. Intermediate Service RPC hung diagnostics remain unexplained while DO progress continues. Do not reset the operation or reacquire raw.",
+    "diagnostic_test": "Existing concurrent-issue and monthly-sized recovery tests pass through the WorkerEntrypoint bridge. This does not reproduce or dismiss the live hung diagnostic; no speculative production fix.",
+    "scope": "AUDIT_ONLY staging acceptance, research_eligible=false; production, READY and Pilot unchanged. Older ledger sections below retain historical state and are superseded by this dated acceptance for these three staging Workers only."
+  },
   "approval_20260921": {
     "status": "APPROVED_BY_USER",
     "scope": "PR229/230 main integration after native CI/review; limited staging rollout; existing February same-operation recovery using preserved raw/PREPARED evidence",
