@@ -1,28 +1,28 @@
 {
   "schema": "quant-platform-work-ledger/v1",
   "caller_finalization_repair_20260921": {
-    "status": "SOURCE_FIXED_NOT_DEPLOYED",
+    "status": "STAGING_DEPLOYED_ACCEPTED_PRODUCTION_UNCHANGED",
     "failure": "An overlapping recovery caller rewrote FINALIZED updated_at using an older local timestamp; real D1 rejected the non-monotonic update after another caller had successfully finalized.",
     "repair": "UPDATE only PREPARED; retain post-read exact receipt digest and nonce checks. Do not weaken database triggers, reset the operation, or rewrite the winning timestamp.",
     "test_replacement": "Replace one Map-backed lost-response test with one workerd/D1 regression: real monotonic constraint reproduces the failure before repair, matching replay preserves the winning timestamp after repair, and substituted digest still fails. No net test-count increase.",
     "review": "Independent read-only review found no actionable issues. Partial RPC fixture tests caller ledger behavior, not receipt schema or cryptographic verification.",
-    "release": "Needs exact-SHA native CI, merge and approved staging rollout. Successful February finalization is preserved regardless of this follow-up."
+    "release": "PR232 merged into 20a81d04; exact-SHA main native CI and approved staging rollout passed. See staging_acceptance_20260921. February finalization is preserved; production unchanged."
   },
   "staging_acceptance_20260921": {
     "status": "ACTIVE_ACCEPTANCE_PASS_FEBRUARY_RECEIPT_FINALIZED",
-    "accepted_source_sha": "8d2e609e10bbf2abf7a223494c2bd2a53ef0d93e",
-    "merged_prs": [229, 230],
-    "main_native_build": "e41c89b0-a7dd-48ad-ae75-197b82ea2902",
+    "accepted_source_sha": "20a81d04f0f01beff48c909156e3d97f8477dfe7",
+    "merged_prs": [229, 230, 231, 232],
+    "main_native_build": "a263abf0-788b-4d57-ad2c-1969751b156c",
     "main_native_result": "SUCCESS",
     "versions": {
-      "ingestion-secrets-staging": "096c8f5e-5ecf-4559-bfd3-cc0d8192a358",
-      "receipt-evidence-authority-staging": "f00401f8-c77f-4f28-94fd-165bd5e7bbe4",
-      "ingestion-premium-staging": "cfc1e904-deee-408f-90c7-34d2bf4f4200"
+      "ingestion-secrets-staging": "06878b14-fe68-4ba8-b06c-9434ad7237c4",
+      "receipt-evidence-authority-staging": "5c54a495-5816-48e5-a226-86d5c3569a7f",
+      "ingestion-premium-staging": "4cd33f9f-b911-45c7-bf28-d794fb1361bb"
     },
-    "active_transition_evidence_digest": "sha256:d614f902963193a02b92a9f743a64d133a5c246d374ef81fd47ddac85fef25d0",
-    "evidence": "https://github.com/ddnne/quant-platform/pull/230#issuecomment-5759390254",
+    "active_transition_evidence_digest": "sha256:8612999d8a9ea9411e51b5c755cf0201ccf0568e5e0588c0b64ed25fa1197fdb",
+    "evidence": "https://github.com/ddnne/quant-platform/pull/232#issuecomment-5760213942",
     "recovery_operation_id": "sha256:cf46358cc553d44dda7a97f0bc7d34c434dada57370b52d0739679dd560ae14e",
-    "recovery": "Existing February operation reached RECEIPT_COMMITTED and caller FINALIZED with matching receipt digest after all 80695 rows and 28 pages. Original operation/raw identity preserved. Intermediate Service RPC hung diagnostics remain unexplained. One overlapping caller hit the monotonic timestamp trigger after another finalized; idempotent caller finalization remains a follow-up repair. Do not reset or reacquire.",
+    "recovery": "Existing February operation reached RECEIPT_COMMITTED and caller FINALIZED with matching receipt digest after all 80695 rows and 28 pages. Original operation/raw identity preserved. Post-deploy readback: 11 FINALIZED, 0 PREPARED, February digest unchanged. Intermediate Service RPC hung diagnostics remain unexplained. Idempotent caller timestamp repair is deployed. Do not reset or reacquire.",
     "receipt_digest": "sha256:225ac334eb6e9e3e8985eed4a28b9aa4f1a0796e3bef644b4f53a2f78d3f1f18",
     "structured_digest": "sha256:68511eed841c6cc288127467e7ad6e99a09808f33415aeb4dec9ef134a1061d1",
     "diagnostic_test": "Existing concurrent-issue and monthly-sized recovery tests pass through the WorkerEntrypoint bridge. This does not reproduce or dismiss the live hung diagnostic; no speculative production fix.",
@@ -34,10 +34,10 @@
     "included": "ordinary same-scope fixes, verification, Git and required fresh-SHA CI; no repeated per-command approval",
     "excluded": "production mutation, READY publication, Pilot, Mass, FoF, broker, live orders, new full backfill or full D1 backup",
     "stop_rule": "on uncertain mutation inspect actual state before retry; ask one consolidated question only for materially changed scope, cost or destructive surface",
-    "progress": "PR229 merged as 163170adeedd48843f4f9780bb17401c31ad6560; PR230 base changed to main and required main merge brought in with identical source tree; new final SHA native CI required"
+    "progress": "Approved staging outcome completed at 20a81d04: PR229–232 merged, main CI passed, ordered receipt-chain rollout accepted, February recovered. Further data acquisition and activation are not authorized by this record."
   },
   "historical_master_repair": {
-    "status": "SOURCE_INTEGRATION_LOCALLY_VERIFIED_NATIVE_PENDING",
+    "status": "HISTORICAL_SOURCE_CHECKPOINT_SUPERSEDED",
     "branch": "fix/historical-master-reference",
     "base": "15639ffe649e709d89c96a26f0ae1fe51ad10b5c (PR229; exact-SHA native CI SUCCESS)",
     "source_basis": "https://jpx-jquants.com/ja/spec/eq-master: Date is effective date; historical queries include then-listed companies; holiday queries roll forward; subsequent source corrections remain a limitation",
@@ -46,11 +46,11 @@
     "validation": "Foundation 33 passed; integrated Python 413 passed; Mass Worker typecheck PASS, 454 Node and 55 workerd tests passed; generated contract drift check PASS. Existing publisher fixtures now use 2026 acquisition for 2023 master history; no authentic local market data.",
     "review": "independent read-only review_historical_master_owner found Worker closed-schema mismatch; fixed required master_evidence_mode in acceptance and persisted validation, regenerated actual Python fixture; reviewer rechecked with no further actionable findings; did not independently rerun tests",
     "integration": "Versioned closure V3 binds explicit effective membership through profile, candidate, publisher, pinned runtime and Python/Worker Paper provenance. Old V1/V2 compiler semantics stay strict. Generated digest chain updated atomically; old READY is not silently reused.",
-    "remaining": "exact final-SHA native CI; merge/deployment scope approval; authentic cloud reproof and operational closure; no production activation or Pilot authorization"
+    "remaining": "Source review/CI/merge complete; see staging_acceptance_20260921 for receipt-chain rollout. Authentic master reproof, production and Pilot remain incomplete."
   },
   "updated_at": "2026-09-20T22:53:08Z",
   "receipt_monthly_repair": {
-    "status": "SOURCE_REPAIR_NATIVE_SUCCESS_ROLLOUT_HELD",
+    "status": "HISTORICAL_SOURCE_CHECKPOINT_SUPERSEDED",
     "branch": "fix/receipt-durable-capture-reconcile",
     "pr": 229,
     "bounds": "50-row D1 write/readback groups; at most 6000 rows and 4 raw pages per call; 1000-row product pages; large finalization in a fresh invocation",
@@ -62,7 +62,7 @@
     "independent_review": "review_receipt_streaming: v1 index recovery finding fixed and rechecked; no additional concrete blocker reported; reviewer made no edits",
     "native_ci": "SUCCESS on 15639ffe649e709d89c96a26f0ae1fe51ad10b5c; Workers Builds: quant-platform-ci-aggregate-staging check 106166775570 completed 2026-09-20T23:14:53Z; build 3799cbcc-a9b1-404f-87dd-bcb1ae2960bc; verify_ci ok; branch deploy command true (no production deploy)",
     "live_scope": "no remote mutation/deploy/data activation; existing live holds preserved",
-    "remaining": "merge/deployment-scope approval and acceptance; real same-operation February recovery; master P1 live reproof; global Ops; READY; Pilot"
+    "remaining": "Monthly recovery and receipt-chain rollout completed; see staging_acceptance_20260921. Master reproof, global Ops, READY and Pilot remain incomplete."
   },
   "user_pause": {
     "status": "RESUMED_BY_USER",
@@ -135,8 +135,8 @@
   "pr137": "intentional_held_draft",
   "lanes": {
     "source_delivered": {
-      "status": "pr228_merged_main_native_success",
-      "latest_main_sha": "26abffecd4463c5d052e9f28d862bc67a7c006a1",
+      "status": "pr229_to_pr232_merged_main_native_success",
+      "latest_main_sha": "20a81d04f0f01beff48c909156e3d97f8477dfe7",
       "required_check_app_id": 85455,
       "required_check_name": "Workers Builds: quant-platform-ci-aggregate-staging",
       "strict": true,
@@ -172,7 +172,7 @@
         "cause": "intentional DEPLOYMENT HOLD after successful tests",
         "note": "Historical HOLD evidence on dad020. Not a required-native failure. Not a code-acceptance failure. Not current-main Mass deploy. No retry, no bypass, no product deploy."
       },
-      "notes": "Latest accepted main is PR228/26abffec. Staging Secrets/Receipt/Premium ACTIVE SHA-aligned at that SHA. Mass/Gateway/JSDA/Ops/observer were not SHA-aligned in this unit. PR137 remains an intentional HELD Draft. A6 GLOBAL remains OPEN. Operator declined additional full D1 backup. Fresh historical equities_master ingest_time_conservative available_at is a later PRE-PILOT P1, not this Receipt repair."
+      "notes": "Accepted runtime source and CI are recorded in staging_acceptance_20260921; not global rollout. PR137 remains HELD Draft. No new full backup. Older baseline objects are historical audit records only."
     },
     "staging_schema_prepared": {
       "status": "schema_prepared_once",
@@ -190,37 +190,10 @@
       "notes": "Exactly one reviewed staging recovery. Original private receipt/intent identity d9de3fb stayed original; repair source e071 recorded separately. Successful normal release reset the live lease to vacant / remote_spawned 0 with source_sha empty and expires 1970; the vacant lease does not retain source. Pre-apply fingerprint is PRE-APPLY ONLY: independently checked before and after CAS before remote spawn, not a SQL CAS input/predicate, not the current post-migration fingerprint, and not retry authority. Mutable PR comment, not immutable final release. Refer to that one record for lease/Queue/Cron/cutover SELECT readback rather than duplicating every UUID/count here. Not JSDA deploy/activate, not shared-D1 restore, not production."
     },
     "staging_deployed": {
-      "status": "receipt_chain_26abffec_active_audit_only_mass_not_current",
+      "status": "receipt_chain_active_accepted_other_workers_not_current",
       "receipt_chain_active": {
-        "source_sha": "26abffecd4463c5d052e9f28d862bc67a7c006a1",
-        "eligibility": "AUDIT_ONLY",
-        "evidence_digest": "sha256:6a0b052c4ad3a5683f99ae75dd7f48c55a9875fc05e9e4bd48ccaef4fa8432a1",
-        "workers": {
-          "ingestion-secrets": {
-            "version_id": "6b66c3d2-d776-4b82-9905-f0a01e5698ce",
-            "deployment_id": "7fc5c0d3-d717-4ab4-bccc-5c26d509d552",
-            "tag": "ra-s-a-26abffecd4463c5d052e9f28d862bc67a7c006a1"
-          },
-          "receipt-evidence-authority": {
-            "version_id": "8438ae73-3152-4815-b850-67cbb55bd89c",
-            "deployment_id": "1a5f88e2-1cf0-48c4-87d1-c56acea37eb5",
-            "tag": "ra-s-r-26abffecd4463c5d052e9f28d862bc67a7c006a1",
-            "durable_object_namespace_id": "e24d619fbd734073829e6ff8fc07ef1f",
-            "authority_mode": "ACTIVE"
-          },
-          "ingestion-premium": {
-            "version_id": "180a119d-c2ba-410e-9fbb-05d0c269711e",
-            "deployment_id": "3688a5d3-de2f-4602-80c5-c768c20e0e0a",
-            "tag": "ra-s-c-26abffecd4463c5d052e9f28d862bc67a7c006a1",
-            "ready_declared": "false",
-            "receipt_authority_operation_mode": "ACTIVE",
-            "cron": "* * * * *",
-            "module_digest": "sha256:93c6b23918a0051d9add740b1f25511ddbc1f99915d41782a13be75778fed644",
-            "module_bytes": 532431
-          }
-        },
-        "public": "workers.dev/previews/routes off",
-        "note": "AUDIT_ONLY management-D1 evidence. Not A6/READY/Pilot. Not a new production deploy."
+        "evidence_ref": "staging_acceptance_20260921",
+        "eligibility": "AUDIT_ONLY"
       },
       "receipt_chain_pending_d37ef73": {
         "source_sha": "d37ef73e5c226a7b2499f0523f4bcca4090b511b",
@@ -265,7 +238,7 @@
         "health": "GET /health 200 and unauthenticated 401 at that earlier checkpoint",
         "authenticated_403_smoke": "blocked only on location of existing MASS_EVAL_TOKEN or already-set process env; prior scoped project/env/Build-env searches failed; no rotation; never print values"
       },
-      "notes": "Current staging Secrets/Receipt/Premium are ACTIVE at 26abffec. PENDING d37ef73 remains dated history only. Mass/Gateway/JSDA/Ops/observer were not SHA-aligned in this unit. Worker code rollout is not A6/READY/Pilot."
+      "notes": "Current receipt-chain acceptance is staging_acceptance_20260921. Other Worker records are historical; Mass/Gateway/JSDA/Ops/observer were not SHA-aligned in this outcome. Not global data/READY/Pilot acceptance."
     },
     "production_deployed": {
       "status": "hold",
@@ -273,7 +246,7 @@
     },
     "data_activated": {
       "status": "pending",
-      "notes": "No local authentic market history. Exact-five cursor 10/24: Feb 2023 bars Premium run 6737 resumeAcquired=1, 28/28 pages, 80695 structured rows, same operation c766f36f, attempts 1. Authority run 6738 remains COLLECTING/PREPARED as of 2026-09-16T21:32:43Z. January 2023 bars stay 3/3 HOLD. Not READY/Pilot."
+      "notes": "Only existing February operation recovered: see staging_acceptance_20260921. Period bootstrap inventory has 11 committed operations (10 calendar months plus February bars), not proof of all required scopes. January bars retain 3/3 HOLD. Do not restart obsolete control. No local market history; further acquisition, READY and Pilot not authorized."
     },
     "ready": {
       "status": "pending",
@@ -327,11 +300,11 @@
       "all_worker_deployment",
       "DLQ"
     ],
-    "note": "Current evidence, not GO. Staging Premium scheduled() returns after valuation_backfill_tick when RECEIPT_AUTHORITY_ENVIRONMENT is staging, before runIngestion/recover/publishOpsProjectionBestEffort (those run only in the non-staging branch). Production projection-stale cause is unproven. Unmeasured fields are not replaced with 0. Not global GO."
+    "note": "Dated observations above are not current global GO. Current staging ACTIVE scheduled() recovers PREPARED requests and runs the audit canary, but does not publish Ops. Production projection-stale cause remains unproven. Unmeasured fields are not zero."
   },
   "next_prerequisite_chain": [
     "Do not serialize Access 9999 or Grok MCP auth failure as a global stop. Access GET organizations returned 9999 not_enabled (API not enabled). No UI was inspected. Conditional only for Worker Access JWT/hostname protection; not a precondition for schema recovery, read-only Ops checks, or ordinary source fixes. Codex mechanical fallback may apply authorized operations after a Grok permission denial; never bypass HOLDs; no paid API fallback. Staging schema recovery already ran once: SCHEMA_PREPARED.",
-    "Inactive staging Secrets/Receipt/Premium/Gateway/Mass at 69c9772 is accepted. Source (this unit) adds idle-by-default staging Cron ticks for PENDING registration and exact-five acquisition; they are not live until a later SHA-align and are no-ops without R2 control objects. Do not put those control objects, activate keys, publish Ops, or mint READY from source merge. Staging Premium scheduled() still does not publish Ops. Publication remains HOLD. MASS_EVAL_TOKEN location gap blocks only authenticated 403 smoke. Ask once for the remaining production/data/keys/READY/Pilot outcome after this source is reviewed/merged; not per-Worker.",
+    "Receipt-chain staging ACTIVE acceptance is recorded in staging_acceptance_20260921. Existing February recovery completed; replacing acquisition controls or changing keys needs its approved outcome. Staging still does not publish Ops. Production, Ops publication, READY and Pilot remain HOLD. Consolidate remaining approval requests by outcome, not Worker.",
     "Explicit HOLDs unchanged; generic continue is not their release: production deploy, data activation, JSDA --activate, key activation, READY publication, Pilot/exact-four, Ops projection publication, Mass/FoF/broker. Exact-four and budget remain NO-GO. No new Worker/signer roles. A6 GLOBAL remains OPEN for independently accepted JSDA/publication collection, not as a backup-recipient gate. Operator declined additional full D1 backup (NO NEW FULL BACKUP): do not run a new full D1 export, 32-byte key custody, metadata-only d1_export_poll_descriptor.py --initiate, secret put, or treat those as pending human approval. GitHub Release immutability and production collection are repo/API or later-auth work, not inherently human-only; existing content-addressed R2/JSDA AUDIT_ONLY paths are not A6 closure. Staging JSDA AUDIT_ONLY intake is source-partial."
   ],
   "unknowns": [
@@ -351,7 +324,7 @@
   "items": {
     "1_fresh_clone_and_ledger": {
       "status": "pr211_main_accepted_before_this_docs_edit",
-      "notes": "Historical PR211/d37ef73 clone record, not current. Current accepted main is history.git_sha / lanes.source_delivered 26abffec. Nested historical transcripts live at history.git_sha."
+      "notes": "Historical PR211 clone record superseded. Latest accepted runtime source and evidence are staging_acceptance_20260921; final verification is described in item9."
     },
     "2_am_order_quantity_causality": {
       "status": "source_merged_not_deployed",
@@ -428,11 +401,11 @@
     },
     "8_rollout_and_research_go": {
       "status": "pending",
-      "notes": "Inactive 5-Worker staging at 69c9772 is accepted. This source unit adds idle Cron controls for PENDING registration and exact-five acquisition; undeployed until SHA-align; writing control objects remains unapproved. Production/data/READY/Trader/Pilot/Mass GO remain unapproved. SCHEMA_PREPARED is not JSDA activate. A6 GLOBAL remains OPEN."
+      "notes": "Receipt-chain staging accepted; see staging_acceptance_20260921. Remaining Workers and production/data/READY/Trader/Pilot are not accepted or newly authorized. Existing February recovery does not release further acquisition. SCHEMA_PREPARED is not JSDA activation; A6 GLOBAL remains OPEN."
     },
     "9_push_remote_and_fresh_clone_verify": {
-      "status": "pr211_main_accepted",
-      "notes": "Historical PR211/d37ef73 acceptance only; not current. Current accepted main is lanes.source_delivered.latest_main_sha 26abffec (PR228). Feature 5049fbb native check 104401424406/build e8e8c2e5 SUCCESS; merged-main check 104406618815/build 5f401591 SUCCESS 2026-09-15T13:43:24Z. Open PR 137 remains HELD Draft; PR229 is USER_REQUESTED_PAUSE. Historical Mass HOLD on dad020 is check 103821504107 (feea0136), intentional after successful tests."
+      "status": "runtime_source_verified_docs_followup_pending",
+      "notes": "Runtime source 20a81d04 fresh-cloned at merge-verification-20260921-final.8eQAkE: clean HEAD==origin/main, unpushed0, generated controlled-pilot contract check PASS. PR229–232 merged; PR137 held. This docs follow-up requires its own final-SHA CI/merge; it does not change accepted deployed source."
     }
   }
 }
