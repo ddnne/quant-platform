@@ -21,6 +21,7 @@ from pit.compiled_scope_proof import (
     CompiledControlledSelection,
     CompiledScopeProofSession,
     combined_dataset_lookback_trading_days,
+    combined_master_evidence_mode,
     compiled_scope_proof_session_from_store,
 )
 
@@ -191,6 +192,7 @@ def _resolve_controlled_universe(
     observed_through: str,
     expected_environment: str,
     expected_authority_instance_digest: str,
+    master_evidence_mode: str = "decision_visible",
 ):
     proof_clock = PitReadClock(
         decision_at=close_as_of(period_end),
@@ -207,6 +209,7 @@ def _resolve_controlled_universe(
             period_start=period_start,
             period_end=period_end,
             as_of_for_day=as_of_for_day,
+            historical_master=master_evidence_mode == "historical_effective_membership",
             expected_environment=expected_environment,
             expected_authority_instance_digest=(
                 expected_authority_instance_digest
@@ -474,6 +477,7 @@ def _prove_exact_four_compiled_scope(
             period_start=period_start,
             period_end=period_end,
             observed_through=observed_through,
+            master_evidence_mode=combined_master_evidence_mode(binding.profiles),
             expected_environment=expected_environment,
             expected_authority_instance_digest=(
                 expected_authority_instance_digest
@@ -498,6 +502,7 @@ def _prove_exact_four_compiled_scope(
             period_start=period_start,
             period_end=period_end,
             observed_through=observed_through,
+            master_evidence_mode=combined_master_evidence_mode(binding.profiles),
             expected_environment=expected_environment,
             expected_authority_instance_digest=(
                 expected_authority_instance_digest
@@ -510,6 +515,7 @@ def _prove_exact_four_compiled_scope(
             period_end=period_end,
             lookback_trading_days=max_lookback,
             profile_digest=binding.profile_digest,
+            master_evidence_mode=combined_master_evidence_mode(binding.profiles),
             feature_consumers=tuple(
                 profile.feature_consumers() for profile in binding.profiles
             ),

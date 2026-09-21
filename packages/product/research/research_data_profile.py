@@ -587,6 +587,7 @@ def profile_from_dependency_closure(closure: Any) -> ResearchDataProfile:
     from research.dependency_closure import (
         PLAN_DEPENDENCY_CLOSURE_VERSION_V1,
         PLAN_DEPENDENCY_CLOSURE_VERSION_V2,
+        PLAN_DEPENDENCY_CLOSURE_VERSION_V3,
         PlanDependencyClosure,
     )
 
@@ -594,7 +595,9 @@ def profile_from_dependency_closure(closure: Any) -> ResearchDataProfile:
         raise ResearchDataProfileError("PlanDependencyClosure required")
     if closure.version == PLAN_DEPENDENCY_CLOSURE_VERSION_V1:
         profile_version = PROFILE_VERSION_V2
-    elif closure.version == PLAN_DEPENDENCY_CLOSURE_VERSION_V2:
+    elif closure.version in {
+        PLAN_DEPENDENCY_CLOSURE_VERSION_V2, PLAN_DEPENDENCY_CLOSURE_VERSION_V3
+    }:
         profile_version = PROFILE_VERSION_V3
     else:
         raise ResearchDataProfileError(

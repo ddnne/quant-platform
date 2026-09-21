@@ -1006,6 +1006,7 @@ describe("controlled cloud execution", () => {
       expect(paper.price_evidence_mode).toBe(
         CONTROLLED_PILOT_CONTRACT.fill_contract.price_evidence_mode,
       );
+      expect(paper.master_evidence_mode).toBe(CONTROLLED_PILOT_CONTRACT.master_evidence_mode);
       expect(paper.authentic_am_session_evidence).toBe(false);
       expect(paper.contemporaneous_observation_unproven).toBe(true);
       expect(paper.execution_mode).toBe(CONTROLLED_FILL_EXECUTION_MODE);
@@ -1616,7 +1617,7 @@ describe("controlled cloud execution", () => {
   it("rejects persisted Paper fill-policy fields even when semantic and byte digests are rebound", async () => {
     for (const [field, value] of [
       ["price_basis", "PIT_ADJUSTED"],
-      ["price_basis", "RAW"],
+      ["master_evidence_mode", "decision_visible"],
       ["execution_mode", "arbitrary_close"],
       ["price_evidence_mode", "tip_am_session"],
       ["authentic_am_session_evidence", true],

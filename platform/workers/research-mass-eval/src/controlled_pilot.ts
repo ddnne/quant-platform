@@ -939,6 +939,7 @@ const PAPER_SEMANTIC_FIELDS = new Set([
   "n_equity_points", "n_trades", "resolved_universe_digest", "max_gross_weight_ppm",
   "requested_gross_weight", "realized_gross_weight", "reproducibility", "price_basis",
   "price_evidence_mode", "authentic_am_session_evidence",
+  "master_evidence_mode",
   "contemporaneous_observation_unproven",
 ]);
 const RISK_SEMANTIC_FIELDS = new Set([
@@ -1115,6 +1116,7 @@ async function validateContainerArtifacts(
       paper.execution_mode !== CONTROLLED_FILL_EXECUTION_MODE ||
       paper.price_basis !== CONTROLLED_PAPER_PRICE_BASIS ||
       paper.price_evidence_mode !== CONTROLLED_FILL_PRICE_EVIDENCE_MODE ||
+      paper.master_evidence_mode !== CONTROLLED_PILOT_CONTRACT.master_evidence_mode ||
       paper.authentic_am_session_evidence !== false ||
       paper.contemporaneous_observation_unproven !== true ||
       paper.automatic_promotion !== false || paper.live_orders_enabled !== false || paper.mass !== false
@@ -1682,6 +1684,7 @@ async function callContainer(
         row.execution_mode !== CONTROLLED_FILL_EXECUTION_MODE ||
         row.price_basis !== CONTROLLED_PAPER_PRICE_BASIS ||
         row.price_evidence_mode !== CONTROLLED_FILL_PRICE_EVIDENCE_MODE ||
+        row.master_evidence_mode !== CONTROLLED_PILOT_CONTRACT.master_evidence_mode ||
         row.authentic_am_session_evidence !== false ||
         row.contemporaneous_observation_unproven !== true,
     )

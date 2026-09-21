@@ -771,6 +771,7 @@ class VerifiedControlledSnapshotHandle:
         scoped_owner: Any,
         session_profile_digest: str,
         verified_session_scope: _VerifiedControlledSessionScope,
+        master_evidence_mode: str = "decision_visible",
     ) -> None:
         if token is not _HANDLE_TOKEN:
             raise TypeError(
@@ -799,11 +800,16 @@ class VerifiedControlledSnapshotHandle:
             raise SnapshotObservationClockError("session profile digest is invalid")
         self._session_profile_digest = session_profile_digest
         self._verified_session_scope = verified_session_scope
+        self._master_evidence_mode = master_evidence_mode
         self._bound_plan_feature_binding: _BoundPlanFeatureBinding | None = None
 
     @property
     def offline_fixture(self) -> bool:
         return False
+
+    @property
+    def master_evidence_mode(self) -> str:
+        return self._master_evidence_mode
 
     @property
     def observed_through(self) -> str:
@@ -1041,6 +1047,7 @@ class VerifiedControlledSnapshotHandle:
                 period_start=period_start,
                 period_end=period_end,
                 as_of_for_day=as_of_for_day,
+                historical_master=self._master_evidence_mode == "historical_effective_membership",
             )
 
     def am_session_data_view(self) -> "GovernedAmSessionDataView":
@@ -1473,6 +1480,10 @@ class GovernedAmSessionDataView:
     def physical_digest(self) -> str:
         return self._handle.physical_digest
 
+    @property
+    def master_evidence_mode(self) -> str:
+        return self._handle.master_evidence_mode
+
     def logical_snapshot_id(self) -> str:
         return self._handle.logical_snapshot_id()
 
@@ -1723,6 +1734,7 @@ def _open_verified_controlled_snapshot(
                 period_start=compiled_selection.period_start,
                 period_end=compiled_selection.period_end,
                 as_of_for_day=as_of_for_day,
+                historical_master=compiled_selection.historical_master,
             )
         try:
             resolved_universe = resolve_membership(
@@ -1779,6 +1791,7 @@ def _open_verified_controlled_snapshot(
             scoped_owner=scoped_owner,
             session_profile_digest=verified_session_scope.profile_digest,
             verified_session_scope=verified_session_scope,
+            master_evidence_mode=compiled_selection.master_evidence_mode,
         )
     except Exception:
         conn.close()

@@ -53,9 +53,13 @@ from research.paper_candidate_specs import (
 
 PLAN_DEPENDENCY_CLOSURE_VERSION_V1 = "plan-dependency-closure/v1"
 PLAN_DEPENDENCY_CLOSURE_VERSION_V2 = "plan-dependency-closure/v2"
+PLAN_DEPENDENCY_CLOSURE_VERSION_V3 = "plan-dependency-closure/v3"
+SCOPED_CLOSURE_VERSIONS = frozenset(
+    {PLAN_DEPENDENCY_CLOSURE_VERSION_V2, PLAN_DEPENDENCY_CLOSURE_VERSION_V3}
+)
 PLAN_DEPENDENCY_CLOSURE_VERSION = PLAN_DEPENDENCY_CLOSURE_VERSION_V1
 SUPPORTED_CLOSURE_VERSIONS = frozenset(
-    {PLAN_DEPENDENCY_CLOSURE_VERSION_V1, PLAN_DEPENDENCY_CLOSURE_VERSION_V2}
+    {PLAN_DEPENDENCY_CLOSURE_VERSION_V1, *SCOPED_CLOSURE_VERSIONS}
 )
 _SHA256_PREFIX = "sha256:"
 PlanDependencyClosureError = DatasetRequirementError
@@ -392,7 +396,7 @@ class PlanDependencyClosure:
             default=0,
         ) != self.required_lookback_trading_days:
             raise PlanDependencyClosureError("closure lookback summary mismatch")
-        scoped = self.version == PLAN_DEPENDENCY_CLOSURE_VERSION_V2
+        scoped = self.version in SCOPED_CLOSURE_VERSIONS
         if scoped:
             if any(not scope.requirements for scope in self.dataset_scopes):
                 raise PlanDependencyClosureError(
@@ -422,7 +426,7 @@ class PlanDependencyClosure:
             "strategy_spec_version": self.strategy_spec_version,
             "strategy_spec_hash": self.strategy_spec_hash,
             "feature_dependencies": [
-                dependency.to_dict(scoped=self.version == PLAN_DEPENDENCY_CLOSURE_VERSION_V2)
+                dependency.to_dict(scoped=self.version in SCOPED_CLOSURE_VERSIONS)
                 for dependency in self.feature_dependencies
             ],
             "universe_dependencies": [
@@ -563,6 +567,7 @@ def validate_scoped_feature_binding(
 
 def _universe_requirements(
     universe: Sequence[ContractDependency],
+    *, historical_master: bool = False,
 ) -> tuple[DatasetReadRequirement, ...]:
     requirements: list[DatasetReadRequirement] = []
     for dependency in universe:
@@ -572,10 +577,16 @@ def _universe_requirements(
                 DatasetReadRequirement(
                     consumer_kind="universe",
                     consumer_id=consumer_id,
-                    clock="bound_decision_visible_view",
+                    clock=(
+                        "snapshot_observed_effective_membership"
+                        if historical_master else "bound_decision_visible_view"
+                    ),
                     scope=DatasetReadScope(
                         dataset_id="equities_master",
-                        initial_visible_state="latest_complete_snapshot_plus_updates",
+                        initial_visible_state=(
+                            "latest_complete_effective_snapshot" if historical_master
+                            else "latest_complete_snapshot_plus_updates"
+                        ),
                         fields=("code", "market_code", "scale_category", "snapshot_date"),
                     ),
                 )
@@ -820,7 +831,7 @@ def build_strategy_dependency_closure(
         raise PlanDependencyClosureError(
             f"unsupported closure version {closure_version!r}"
         )
-    scoped = closure_version == PLAN_DEPENDENCY_CLOSURE_VERSION_V2
+    scoped = closure_version in SCOPED_CLOSURE_VERSIONS
     if not scoped and extra_requirements:
         raise PlanDependencyClosureError(
             "plan-dependency-closure/v1 cannot carry extra_requirements"
@@ -935,7 +946,10 @@ def build_strategy_dependency_closure(
         try:
             requirements = (
                 *_feature_requirements(feature_dependencies),
-                *_universe_requirements(universe),
+                *_universe_requirements(
+                    universe,
+                    historical_master=closure_version == PLAN_DEPENDENCY_CLOSURE_VERSION_V3,
+                ),
                 *_evaluation_requirements(evaluation),
                 *tuple(extra_requirements),
                 *_unconsumed_membership_requirements(
@@ -1035,7 +1049,7 @@ def build_plan_dependency_closure(
     signal_dataset = fill.get("signal_price_dataset")
     if type(signal_dataset) is str and signal_dataset.strip():
         fill_datasets = (signal_dataset.strip(),)
-    if closure_version == PLAN_DEPENDENCY_CLOSURE_VERSION_V2:
+    if closure_version in SCOPED_CLOSURE_VERSIONS:
         extra_requirements = _controlled_fill_requirements()
         fill_ids = {item.scope.dataset_id for item in extra_requirements}
         if fill_datasets and set(fill_datasets) - fill_ids:
@@ -1078,6 +1092,7 @@ __all__ = [
     "PLAN_DEPENDENCY_CLOSURE_VERSION",
     "PLAN_DEPENDENCY_CLOSURE_VERSION_V1",
     "PLAN_DEPENDENCY_CLOSURE_VERSION_V2",
+    "PLAN_DEPENDENCY_CLOSURE_VERSION_V3",
     "PlanDependencyClosure",
     "PlanDependencyClosureError",
     "ResolvedFeatureDependency",

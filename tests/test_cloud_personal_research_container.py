@@ -3292,6 +3292,7 @@ def _proven_ok_engine_meta(**overrides: object) -> dict[str, object]:
         "realized_gross_weight": 0.5,
         "authentic_am_session_evidence": False,
         "price_evidence_mode": "historical_daily_reconstruction",
+        "master_evidence_mode": "historical_effective_membership",
         "contemporaneous_observation_unproven": True,
         "gross_limit_events": [
             {

@@ -14,6 +14,28 @@ Do not print secret values. Check presence only.
 
 ## Resumed 2026-09-21 — PR229 repair
 
+User subsequently approved one outcome: PR229/230 main integration after
+review/native CI, limited staging rollout, and existing February same-operation
+recovery using preserved raw/PREPARED evidence. Ordinary same-scope fixes and
+verification are included without per-command reapproval. Production, READY,
+Pilot, Mass/broker, fresh full acquisition and new full D1 backup remain excluded.
+PR229 merged as `163170ad`. PR230 incorporates that main merge (no source-tree
+change) and must pass native CI on its new final SHA before merging. The approval
+supersedes the merge/staging/recovery HOLD below only for this bounded outcome.
+
+Latest checkpoint: PR229 exact source `15639ffe` passed native check
+`106166775570` (build `3799cbcc-a9b1-404f-87dd-bcb1ae2960bc`). No deployment
+occurred. Stacked Draft PR230 now integrates historical complete-master
+membership using explicit closure V3, preserving original acquisition clocks
+and labeling contemporaneous observation unproven. Python 413, Worker 454
+and workerd 55 tests passed; typecheck and generated-contract checks passed.
+The independent review's Python/Worker provenance mismatch was fixed.
+Existing fixtures cover late acquisition; no new test-count target or
+authority layer was introduced. Final PR230 SHA still needs native CI.
+Resume with that check, then obtain the single scoped merge/rollout outcome
+approval before crossing the existing HOLD. Reprove cloud data before READY;
+do not reuse old profile digests or claim actual 2023 observation.
+
 **Status:** `RESUMED_BY_USER`. Grok's subscription ended; Codex now implements.
 Remote main was rechecked at `26abffec`; PR229 remains Draft. Native CI on
 the pause checkpoint `157ee2f2` failed. Local Receipt runtime tests reproduced

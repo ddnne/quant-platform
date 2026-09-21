@@ -708,7 +708,7 @@ class ExactFourPilotReadyBinding:
     def __post_init__(self) -> None:
         from research.artifacts import ExperimentPlan
         from research.dependency_closure import (
-            PLAN_DEPENDENCY_CLOSURE_VERSION_V2,
+            PLAN_DEPENDENCY_CLOSURE_VERSION_V3,
             PlanDependencyClosure,
             verify_plan_dependency_closure,
         )
@@ -798,7 +798,7 @@ class ExactFourPilotReadyBinding:
                 or list(profile.to_dict()["dataset_scopes"])
                 != [scope.to_dict() for scope in closure.dataset_scopes]
                 or profile.profile_version != PROFILE_VERSION_V3
-                or closure.version != PLAN_DEPENDENCY_CLOSURE_VERSION_V2
+                or closure.version != PLAN_DEPENDENCY_CLOSURE_VERSION_V3
             ):
                 raise MassResearchDisabledError(
                     f"controlled pilot profile binding mismatch for {plan.plan_id}"
@@ -809,10 +809,10 @@ class ExactFourPilotReadyBinding:
         # the checked-in exact-four compiler output.
         canonical_plans = load_experiment_plans()
         canonical_closures = load_experiment_plan_closures(
-            closure_version=PLAN_DEPENDENCY_CLOSURE_VERSION_V2
+            closure_version=PLAN_DEPENDENCY_CLOSURE_VERSION_V3
         )
         canonical_profiles = load_experiment_plan_profiles(
-            closure_version=PLAN_DEPENDENCY_CLOSURE_VERSION_V2
+            closure_version=PLAN_DEPENDENCY_CLOSURE_VERSION_V3
         )
         if tuple(plan.to_dict() for plan in self.plans) != tuple(
             plan.to_dict() for plan in canonical_plans
@@ -1057,7 +1057,7 @@ def load_exact_four_pilot_ready_binding(
     *, root: Path | None = None
 ) -> ExactFourPilotReadyBinding:
     """Compile the only supported pilot READY plan/profile/closure binding."""
-    from research.dependency_closure import PLAN_DEPENDENCY_CLOSURE_VERSION_V2
+    from research.dependency_closure import PLAN_DEPENDENCY_CLOSURE_VERSION_V3
     from research.experiment_plans import (
         load_experiment_plan_closures,
         load_experiment_plan_profiles,
@@ -1067,10 +1067,10 @@ def load_exact_four_pilot_ready_binding(
     return ExactFourPilotReadyBinding(
         plans=load_experiment_plans(root=root),
         closures=load_experiment_plan_closures(
-            root=root, closure_version=PLAN_DEPENDENCY_CLOSURE_VERSION_V2
+            root=root, closure_version=PLAN_DEPENDENCY_CLOSURE_VERSION_V3
         ),
         profiles=load_experiment_plan_profiles(
-            root=root, closure_version=PLAN_DEPENDENCY_CLOSURE_VERSION_V2
+            root=root, closure_version=PLAN_DEPENDENCY_CLOSURE_VERSION_V3
         ),
     )
 
