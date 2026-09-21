@@ -21,8 +21,8 @@ import {
   parseJsdaStructuredRows,
 } from "./jsda_capture";
 import {
-  compareUtf8Text,
   materializeProduct,
+  persistGovernedProductSlice,
   type CanonicalStructuredRow,
 } from "./product_materialization";
 import type {
@@ -204,48 +204,107 @@ async function persistStructuredRows(
   operationId: string,
   rows: CanonicalStructuredRow[],
 ): Promise<void> {
-  const statements = rows.map((row) => env.DB.prepare(
-    `INSERT OR IGNORE INTO receipt_authority_structured_rows
-     (operation_id,natural_key,source,dataset,event_time,available_at,
-      ingested_at,payload,raw_payload,row_digest)
-     VALUES (?,?,?,?,?,?,?,?,?,?)`,
-  ).bind(
-    operationId,
-    row.natural_key,
-    row.source,
-    row.dataset,
-    row.event_time,
-    row.available_at,
-    row.ingested_at,
-    row.payload,
-    row.raw_payload,
-    row.row_digest,
-  ));
-  for (let index = 0; index < statements.length; index += 50) {
-    await env.DB.batch(statements.slice(index, index + 50));
+  for (let index = 0; index < rows.length; index += 50) {
+    const expected = rows.slice(index, index + 50);
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO receipt_authority_structured_rows
+       (operation_id,natural_key,source,dataset,event_time,available_at,
+        ingested_at,payload,raw_payload,row_digest)
+       SELECT ?,json_extract(value,'$.natural_key'),json_extract(value,'$.source'),
+              json_extract(value,'$.dataset'),json_extract(value,'$.event_time'),
+              json_extract(value,'$.available_at'),json_extract(value,'$.ingested_at'),
+              json_extract(value,'$.payload'),json_extract(value,'$.raw_payload'),
+              json_extract(value,'$.row_digest') FROM json_each(?)`,
+    ).bind(operationId, JSON.stringify(expected)).run();
+    const result = await env.DB.prepare(
+      `SELECT natural_key,source,dataset,event_time,available_at,ingested_at,
+              payload,raw_payload,row_digest
+         FROM receipt_authority_structured_rows WHERE operation_id=?
+          AND natural_key IN (${expected.map(() => "?").join(",")})`,
+    ).bind(operationId, ...expected.map((row) => row.natural_key))
+      .all<CanonicalStructuredRow>();
+    const stored = new Map(result.results.map((row) => [row.natural_key, row]));
+    for (const row of expected) {
+      if (canonicalJson(stored.get(row.natural_key) ?? null) !== canonicalJson(row)) {
+        throw new Error("persisted structured fields differ from canonical raw normalization");
+      }
+    }
   }
 }
 
-async function readStructuredRows(
+const STRUCTURED_SLICE_PAGES = 4;
+// Five D1 statements per 50 rows plus bounded metadata/readback work.
+const STRUCTURED_SLICE_ROWS = 6000;
+export const STRUCTURED_SLICE_INCOMPLETE =
+  "structured reconciliation slice is incomplete";
+export const STRUCTURED_CARDINALITY_MISMATCH =
+  "structured natural-key cardinality differs from raw pages";
+
+type StructuredProgress = {
+  schema_version: "receipt-authority-structured-progress/v1";
+  operation_id: string;
+  next_page: number;
+  next_row?: number;
+  raw_rows_committed: number;
+};
+
+function structuredProgressKey(rawManifestKey: string): string {
+  if (!rawManifestKey.endsWith("/manifest.json")) {
+    throw new Error("capture manifest key is not a governed prefix");
+  }
+  return `${rawManifestKey.slice(0, -"manifest.json".length)}structured-progress.json`;
+}
+
+async function loadStructuredProgress(
   env: ReceiptAuthorityEnv,
   operationId: string,
-): Promise<CanonicalStructuredRow[]> {
-  const rows: CanonicalStructuredRow[] = [];
-  let after = "";
-  while (true) {
-    const page = await env.DB.prepare(
-      `SELECT natural_key,source,dataset,event_time,available_at,ingested_at,
-              payload,raw_payload,row_digest
-       FROM receipt_authority_structured_rows
-       WHERE operation_id=? AND natural_key>?
-       ORDER BY natural_key LIMIT 200`,
-    ).bind(operationId, after).all<CanonicalStructuredRow>();
-    const batch = page.results ?? [];
-    rows.push(...batch);
-    if (batch.length < 200) break;
-    after = batch.at(-1)!.natural_key;
+  rawManifestKey: string,
+): Promise<StructuredProgress> {
+  const vacant: StructuredProgress = {
+    schema_version: "receipt-authority-structured-progress/v1",
+    operation_id: operationId,
+    next_page: 0,
+    raw_rows_committed: 0,
+  };
+  const object = await env.AUTHORITY_EVIDENCE_BUCKET.get(
+    structuredProgressKey(rawManifestKey),
+  );
+  if (object === null) return vacant;
+  const value = JSON.parse(await object.text()) as StructuredProgress;
+  if (
+    value.schema_version !== "receipt-authority-structured-progress/v1" ||
+    value.operation_id !== operationId ||
+    !Number.isSafeInteger(value.next_page) || value.next_page < 0 ||
+    (value.next_row !== undefined && (!Number.isSafeInteger(value.next_row) || value.next_row < 0)) ||
+    !Number.isSafeInteger(value.raw_rows_committed) || value.raw_rows_committed < 0
+  ) {
+    throw new Error("structured progress identity is invalid");
   }
-  return rows;
+  return value;
+}
+
+async function saveStructuredProgress(
+  env: ReceiptAuthorityEnv,
+  rawManifestKey: string,
+  progress: StructuredProgress,
+): Promise<void> {
+  await env.AUTHORITY_EVIDENCE_BUCKET.put(
+    structuredProgressKey(rawManifestKey),
+    canonicalJson(progress),
+  );
+}
+
+async function countStructuredRows(
+  env: ReceiptAuthorityEnv,
+  operationId: string,
+): Promise<number> {
+  const row = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM receipt_authority_structured_rows WHERE operation_id=?`,
+  ).bind(operationId).first<{ n: number }>();
+  if (row === null || !Number.isSafeInteger(row.n) || row.n < 0) {
+    throw new Error("structured row count is unreadable");
+  }
+  return row.n;
 }
 
 export async function reconcileStructured(
@@ -270,8 +329,27 @@ export async function reconcileStructured(
   if (!input.capture.paginationExhausted || !input.capture.discoveryExhausted) {
     throw new Error("structured reconciliation requires exhausted raw evidence");
   }
-  let rawCount = 0;
-  const expectedRows: CanonicalStructuredRow[] = [];
+  const rawCount = input.capture.pages.reduce((total, page) => total + page.rowCount, 0);
+  if (rawCount === 0) throw new Error("zero-row collection cannot mint SUCCESS");
+  let progress = await loadStructuredProgress(
+    env, input.operationId, input.capture.rawManifestKey,
+  );
+  if (progress.next_page > input.capture.pages.length) {
+    throw new Error(STRUCTURED_CARDINALITY_MISMATCH);
+  }
+  const nextRow = progress.next_row ?? 0;
+  const expectedProgress = input.capture.pages.slice(0, progress.next_page)
+    .reduce((total, page) => total + page.rowCount, 0) + nextRow;
+  if (progress.raw_rows_committed !== expectedProgress ||
+      nextRow > (input.capture.pages[progress.next_page]?.rowCount ?? 0)) {
+    throw new Error(STRUCTURED_CARDINALITY_MISMATCH);
+  }
+  const storedBefore = await countStructuredRows(env, input.operationId);
+  if (storedBefore < progress.raw_rows_committed) {
+    throw new Error(STRUCTURED_CARDINALITY_MISMATCH);
+  }
+  let pagesThisInvocation = 0;
+  let rowsThisInvocation = 0;
   const jsda = isJsdaPersistedRequest(input.capture.initialRequest)
     ? input.capture.initialRequest
     : null;
@@ -282,7 +360,12 @@ export async function reconcileStructured(
       new Date(input.checkedAt),
     )
     : null;
-  for (const page of input.capture.pages) {
+  for (let pageIndex = progress.next_page; pageIndex < input.capture.pages.length; pageIndex += 1) {
+    if (pagesThisInvocation >= STRUCTURED_SLICE_PAGES || rowsThisInvocation >= STRUCTURED_SLICE_ROWS) {
+      await saveStructuredProgress(env, input.capture.rawManifestKey, progress);
+      throw new Error(STRUCTURED_SLICE_INCOMPLETE);
+    }
+    const page = input.capture.pages[pageIndex]!;
     const bytes = await loadRawPage(env.RAW_BUCKET, page);
     let rawRows: Record<string, unknown>[];
     if (jsda !== null) {
@@ -305,45 +388,36 @@ export async function reconcileStructured(
     if (rawRows.length !== page.rowCount) {
       throw new Error("persisted raw row count differs from live capture");
     }
-    rawCount += rawRows.length;
-    const normalized = await normalizeRows(rawRows, input.spec, input.checkedAt);
-    expectedRows.push(...normalized);
+    const offset = progress.next_row ?? 0;
+    const slice = rawRows.slice(offset, offset + STRUCTURED_SLICE_ROWS - rowsThisInvocation);
+    const normalized = await normalizeRows(slice, input.spec, input.checkedAt);
     await persistStructuredRows(env, input.operationId, normalized);
+    await persistGovernedProductSlice(env, normalized);
+    progress = {
+      ...progress,
+      next_page: offset + slice.length === rawRows.length ? pageIndex + 1 : pageIndex,
+      next_row: offset + slice.length === rawRows.length ? 0 : offset + slice.length,
+      raw_rows_committed: progress.raw_rows_committed + slice.length,
+    };
+    pagesThisInvocation += 1;
+    rowsThisInvocation += slice.length;
+    // D1 writes can survive a crash before the R2 checkpoint. Replay them
+    // idempotently; only the exhausted collection has an exact total count.
+    await saveStructuredProgress(env, input.capture.rawManifestKey, progress);
+    if (progress.next_row !== 0) throw new Error(STRUCTURED_SLICE_INCOMPLETE);
   }
-  if (rawCount === 0) throw new Error("zero-row collection cannot mint SUCCESS");
-  const stored = await readStructuredRows(env, input.operationId);
-  if (stored.length !== rawCount) {
-    throw new Error("structured natural-key readback does not reconcile raw rows");
+  await saveStructuredProgress(env, input.capture.rawManifestKey, progress);
+  const storedCount = await countStructuredRows(env, input.operationId);
+  if (progress.next_page !== input.capture.pages.length || storedCount !== rawCount) {
+    throw new Error(STRUCTURED_CARDINALITY_MISMATCH);
   }
-  expectedRows.sort((left, right) =>
-    compareUtf8Text(left.natural_key, right.natural_key)
-  );
-  if (canonicalJson(stored) !== canonicalJson(expectedRows)) {
-    throw new Error(
-      "persisted structured fields differ from canonical raw normalization",
-    );
-  }
-  for (const row of stored) {
-    const measured = await canonicalDigest({
-      natural_key: row.natural_key,
-      source: row.source,
-      dataset: row.dataset,
-      event_time: row.event_time,
-      available_at: row.available_at,
-      ingested_at: row.ingested_at,
-      payload: row.payload,
-      raw_payload: row.raw_payload,
-    });
-    if (
-      (row.source !== "jquants" && row.source !== "jsda") || row.dataset !== input.spec.id ||
-      measured !== row.row_digest
-    ) throw new Error("structured D1 row changed after canonical normalization");
-  }
+  // Finalization gets a fresh invocation after a large write slice.
+  if (rowsThisInvocation >= 1000) throw new Error(STRUCTURED_SLICE_INCOMPLETE);
   const product = await materializeProduct(env, {
     operationId: input.operationId,
     runId: input.runId,
     capture: input.capture,
-    rows: stored,
+    expectedCount: rawCount,
     checkedAt: input.checkedAt,
   });
   await env.DB.prepare(
@@ -365,10 +439,6 @@ export async function reconcileStructured(
     operation.structured_manifest_key !== product.manifestKey ||
     operation.structured_digest !== product.digest
   ) throw new Error("structured D1 commit state failed");
-  const naturalKeyDigest = await canonicalDigest({
-    operation_id: input.operationId,
-    natural_keys: stored.map((row) => row.natural_key),
-  });
   return {
     count: product.count,
     digest: product.digest,
@@ -377,6 +447,6 @@ export async function reconcileStructured(
     manifestKey: product.manifestKey,
     manifestByteCount: product.manifestByteCount,
     manifestDigest: product.manifestDigest,
-    naturalKeyDigest,
+    naturalKeyDigest: product.naturalKeyDigest,
   };
 }

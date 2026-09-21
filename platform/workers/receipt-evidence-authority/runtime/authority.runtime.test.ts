@@ -6,7 +6,7 @@ import {
   runDurableObjectAlarm,
   runInDurableObject,
 } from "cloudflare:test";
-import { afterEach, beforeEach, describe, expect, inject, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, inject, it, vi } from "vitest";
 import receiptClaimsSchema from "../../../../packages/data_plane/storage/authorities/receipts/signed_receipt_claims.schema.json";
 import {
   fetchGovernedPage,
@@ -140,6 +140,31 @@ function installTopixContinuationUpstream(): void {
     expect(url.searchParams.get("pagination_key")).toBe("topix-page-2");
     return new Response(
       '{"data":[{"Date":"2024-02-02","Open":2,"Close":3}],"pagination_key":null}',
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+}
+
+function installFivePageContinuationUpstream(): void {
+  let calls = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    expect(new Headers(init?.headers).get("x-api-key")).toBe(
+      "jq-runtime-api-key-not-for-live",
+    );
+    const url = new URL(input instanceof Request ? input.url : input.toString());
+    calls += 1;
+    const date = `2024-02-0${calls}`;
+    const next = calls < 5 ? `page-${calls + 1}` : null;
+    if (calls === 1) {
+      expect(url.searchParams.get("pagination_key")).toBeNull();
+    } else {
+      expect(url.searchParams.get("pagination_key")).toBe(`page-${calls}`);
+    }
+    return new Response(
+      JSON.stringify({
+        data: [{ Date: date, Open: calls, Close: calls + 1 }],
+        pagination_key: next,
+      }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
   }) as typeof fetch;
@@ -608,6 +633,7 @@ beforeEach(async () => {
 afterEach(() => {
   globalThis.fetch = originalFetch;
   crypto.subtle.digest = originalSubtleDigest;
+  vi.useRealTimers();
 });
 
 describe("Receipt Evidence Authority in workerd", () => {
@@ -1572,7 +1598,143 @@ describe("Receipt Evidence Authority in workerd", () => {
     ).bind(operationId).first<{ count: number }>()).toEqual({ count: 1 });
   });
 
-  it("recovery reuses the same immutable official calendar capture", async () => {
+  it("recovers a durable capture after the original collection clock ages", async () => {
+    installAuthorityAcquisition();
+    const interruptedRequest = {
+      ...request,
+      request_nonce: "9".repeat(64),
+    };
+    const interrupted = await interruptAfterDurableCapture(interruptedRequest);
+    const operationId = await canonicalDigest(interruptedRequest);
+    globalThis.fetch = (async () => {
+      throw new Error("recovery must not reacquire after a committed capture");
+    }) as typeof fetch;
+    vi.useFakeTimers({ now: Date.now() + 20 * 60 * 1000 });
+    const recovered = await runInDurableObject(interrupted.stub, (instance) =>
+      instance.recover_issue({
+        ...interruptedRequest,
+        operation: "recover_issue",
+      }),
+    );
+    vi.useRealTimers();
+    expect(recovered).toMatchObject({
+      operation_id: operationId,
+      state: "FINALIZED",
+      replayed: true,
+    });
+  });
+
+  it.each([false, true])("resumes durable pages without refetch after interruption=%s", async (interrupted) => {
+    installFivePageContinuationUpstream();
+    installAuthorityAcquisition();
+    const { stub } = await activateRegisteredTestKey();
+    const slicedRequest = {
+      ...request,
+      request_nonce: "8".repeat(64),
+    };
+    const operationId = await canonicalDigest(slicedRequest);
+    if (interrupted) {
+      await runtimeEnv.DB.prepare(
+        `CREATE TRIGGER interrupt_third_page BEFORE INSERT ON receipt_authority_structured_rows
+         WHEN NEW.payload LIKE '%2024-02-03%'
+         BEGIN SELECT RAISE(ABORT, 'injected page interruption'); END`,
+      ).run();
+    }
+    await expect(runInDurableObject(stub, (instance) =>
+      instance.issue_for_segment(slicedRequest)
+    )).rejects.toThrow(interrupted ? "injected page interruption" : "structured reconciliation slice is incomplete");
+    expect(await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS count FROM receipt_authority_structured_rows
+        WHERE operation_id=?`,
+    ).bind(operationId).first<{ count: number }>()).toEqual({ count: interrupted ? 2 : 4 });
+    if (interrupted) {
+      await runtimeEnv.DB.prepare("DROP TRIGGER interrupt_third_page").run();
+      // Simulate the crash window where D1 committed but the R2 cursor did not.
+      const objects = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.list({
+        prefix: `raw/receipt-authority/production/${request.dataset_id}/${request.segment_id}/${operationId.slice(7)}/`,
+      });
+      const key = objects.objects.find((object) => object.key.endsWith("/structured-progress.json"))!.key;
+      const saved = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.get(key);
+      const progress = JSON.parse(await saved!.text());
+      await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.put(key, JSON.stringify({
+        ...progress, next_page: 1, raw_rows_committed: 1,
+      }));
+    }
+    globalThis.fetch = (async () => {
+      throw new Error("recovery must not reacquire after a committed capture");
+    }) as typeof fetch;
+    const recovered = await runInDurableObject(stub, (instance) =>
+      instance.recover_issue({
+        ...slicedRequest,
+        operation: "recover_issue",
+      }),
+    );
+    expect(recovered).toMatchObject({
+      operation_id: operationId,
+      state: "FINALIZED",
+      replayed: true,
+    });
+    expect(await runtimeEnv.DB.prepare(
+      `SELECT COUNT(*) AS count FROM receipt_authority_structured_rows
+        WHERE operation_id=?`,
+    ).bind(operationId).first<{ count: number }>()).toEqual({ count: 5 });
+  });
+
+  it("finishes a monthly-sized capture through bounded resumes and streamed product bytes", async () => {
+    const pageCount = 29;
+    const rowsPerPage = 2783;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      const page = calls++;
+      if (page >= pageCount) throw new Error("monthly capture must not refetch");
+      return Response.json({
+        data: Array.from({ length: rowsPerPage }, (_, index) => ({
+          Date: `2024-02-${String(page + 1).padStart(2, "0")}`,
+          Code: String(10000 + index), O: 100, C: 101, MC: 100.5,
+          SyntheticPadding: "x".repeat(560),
+        })),
+        pagination_key: null,
+      });
+    }) as typeof fetch;
+    installAuthorityAcquisition();
+    const { stub } = await activateRegisteredTestKey();
+    const monthly = { ...request, dataset_id: "equities_bars_daily", request_nonce: "9".repeat(64) };
+    let result: Awaited<ReturnType<typeof stub.issue_for_segment>> | undefined;
+    for (let attempt = 0; attempt < 20 && result === undefined; attempt += 1) {
+      try {
+        result = attempt === 0
+          ? await stub.issue_for_segment(monthly)
+          : await stub.recover_issue({ ...monthly, operation: "recover_issue" });
+      } catch (error) {
+        expect(String(error)).toContain("structured reconciliation slice is incomplete");
+      }
+    }
+    expect(result?.state).toBe("FINALIZED");
+    expect(calls).toBe(pageCount);
+    expect(result!.receipt.raw_row_count).toBe(pageCount * rowsPerPage);
+    expect(result!.receipt.structured_row_count).toBe(pageCount * rowsPerPage);
+    const product = await runtimeEnv.DB.prepare(
+      "SELECT artifact_key,artifact_digest,artifact_body,byte_count,manifest_key FROM receipt_product_materializations WHERE operation_id=?",
+    ).bind(result!.operation_id).first<{
+      artifact_key: string; artifact_digest: string; artifact_body: string;
+      byte_count: number; manifest_key: string;
+    }>();
+    expect(product!.artifact_body).toBe("");
+    expect(product!.byte_count).toBeGreaterThan(100_000_000);
+    const artifact = await runtimeEnv.STRUCTURED_BUCKET.get(product!.artifact_key);
+    const digest = new crypto.DigestStream("SHA-256");
+    await artifact!.body.pipeTo(digest);
+    const hex = [...new Uint8Array(await digest.digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    expect(`sha256:${hex}`).toBe(result!.receipt.digests.structured_digest);
+    const manifest = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.get(product!.manifest_key);
+    expect(manifest!.size).toBeLessThan(10_000);
+    expect(await manifest!.json()).toMatchObject({
+      schema_version: "receipt-product-materialization/v2",
+      artifact_digest: product!.artifact_digest, row_count: pageCount * rowsPerPage,
+    });
+  }, 180_000);
+
+  it("recovery preserves the official calendar and a pre-upgrade v1 product commit", async () => {
     const acquisitionCalls = installMasterCalendarUpstream();
     installAuthorityAcquisition();
     const { stub } = await activateRegisteredTestKey();
@@ -1623,6 +1785,29 @@ describe("Receipt Evidence Authority in workerd", () => {
       calendarDescriptor!,
     );
 
+    // Simulate the old writer's commit before the operation-state crash.
+    const priorProduct = await runtimeEnv.DB.prepare(
+      "SELECT artifact_key,manifest_key FROM receipt_product_materializations WHERE operation_id=?",
+    ).bind(operationId).first<{ artifact_key: string; manifest_key: string }>();
+    const priorArtifact = await runtimeEnv.STRUCTURED_BUCKET.get(priorProduct!.artifact_key);
+    const priorBody = await priorArtifact!.text();
+    const currentManifest = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.get(priorProduct!.manifest_key);
+    const legacyKey = priorProduct!.manifest_key.replace(".manifest.v2.json", ".manifest.json");
+    const legacyBody = canonicalJson({
+      ...await currentManifest!.json<Record<string, unknown>>(),
+      schema_version: "receipt-product-materialization/v1", artifact_body: priorBody,
+    });
+    const legacyDigest = await sha256Digest(legacyBody);
+    await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.put(legacyKey, legacyBody);
+    const immutability = await runtimeEnv.DB.prepare(
+      "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='receipt_product_materializations_no_update'",
+    ).first<{ sql: string }>();
+    await runtimeEnv.DB.prepare("DROP TRIGGER receipt_product_materializations_no_update").run();
+    await runtimeEnv.DB.prepare(
+      "UPDATE receipt_product_materializations SET artifact_body=?,manifest_key=?,manifest_digest=? WHERE operation_id=?",
+    ).bind(priorBody, legacyKey, legacyDigest, operationId).run();
+    await runtimeEnv.DB.prepare(immutability!.sql).run();
+
     await runtimeEnv.DB.prepare(
       "DROP TRIGGER inject_master_pre_sign_failure",
     ).run();
@@ -1642,6 +1827,7 @@ describe("Receipt Evidence Authority in workerd", () => {
     expect(
       recovered.receipt.digests.extra_digests.official_calendar_evidence_digest,
     ).toBe(expectedCalendarEvidenceDigest);
+    expect(recovered.receipt.digests.extra_digests.product_manifest_digest).toBe(legacyDigest);
     const afterRaw = await runtimeEnv.RAW_BUCKET.list({ prefix });
     const afterAuthority = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.list({
       prefix,
@@ -1970,15 +2156,17 @@ describe("Receipt Evidence Authority in workerd", () => {
     });
     expect(reproved.state).toBe("FINALIZED");
     const product = await runtimeEnv.DB.prepare(
-      `SELECT artifact_body,artifact_digest,row_count
+      `SELECT artifact_key,artifact_digest,row_count
          FROM receipt_product_materializations WHERE operation_id=?`,
     ).bind(reproved.operation_id).first<{
-      artifact_body: string;
+      artifact_key: string;
       artifact_digest: string;
       row_count: number;
     }>();
     expect(product).not.toBeNull();
-    expect(product!.artifact_body).toContain(
+    const artifact = await runtimeEnv.STRUCTURED_BUCKET.get(product!.artifact_key);
+    expect(artifact).not.toBeNull();
+    expect(await artifact!.text()).toContain(
       `"ingested_at":"${priorIngestedAt}"`,
     );
     expect(product!.artifact_digest).toBe(

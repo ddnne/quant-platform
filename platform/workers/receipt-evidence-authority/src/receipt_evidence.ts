@@ -2,6 +2,7 @@ import {
   canonicalDigest,
   canonicalJson,
 } from "../../ingestion-secrets/src/jquants_acquisition_registry";
+import { requireProductObject } from "./product_materialization";
 
 import type { DatasetSpec } from "../../ingestion-premium/src/catalog";
 import {
@@ -273,7 +274,7 @@ export async function commitReceipt(
     product.run_id !== receipt.run_id || product.source !== receipt.source ||
     product.dataset !== receipt.dataset || product.segment_id !== receipt.segment_id ||
     product.artifact_digest !== receipt.digests.structured_digest ||
-    typeof product.artifact_body !== "string" || !product.artifact_body ||
+    typeof product.artifact_body !== "string" ||
     product.row_count !== receipt.structured_row_count ||
     product.manifest_key !== operation.structured_manifest_key ||
     product.raw_manifest_key !== operation.raw_manifest_key ||
@@ -286,6 +287,10 @@ export async function commitReceipt(
     typeof product.manifest_digest !== "string" || !product.manifest_digest ||
     typeof product.byte_count !== "number" || product.byte_count <= 0
   ) throw new Error("signed digest is not bound to the product materialization");
+  if (product.artifact_body.length === 0) {
+    await requireProductObject(env.STRUCTURED_BUCKET, product.artifact_key,
+      product.byte_count, String(product.artifact_digest));
+  }
   const successDetail = canonicalJson({
     schema_version: "receipt-authority-ingestion-result/v1",
     operation_id: operationId,

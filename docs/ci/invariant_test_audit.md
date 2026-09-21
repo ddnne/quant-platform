@@ -66,6 +66,12 @@ charter for extra hostile-Python tests.
 
 ## Consolidation decisions
 
+- Receipt monthly recovery keeps one realistic synthetic runtime regression
+  (80,707 rows, >100 MB product) because the former five-row happy path could
+  not catch monthly memory/D1 limits. It verifies acquisition through signing,
+  bounded continuation and no upstream refetch. The existing calendar-recovery
+  case also covers pre-upgrade v1 product reuse instead of adding a version
+  matrix. These are local runtime checks, not deployed capacity evidence.
 - Removed unused `scripts/verify_all.sh`. It duplicated local pytest plus optional worker `npm test` with skip flags; native CI remains `scripts/verify_ci.sh` on Workers Builds, and local developer verification remains pytest.
 - Removed tests and scripts that fixed a historical `22 COMPLETE / 4 PARTIAL`
   snapshot as policy.
