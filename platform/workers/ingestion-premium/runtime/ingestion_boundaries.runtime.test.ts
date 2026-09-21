@@ -27,6 +27,7 @@ import {
   sha256Digest,
 } from "../../receipt-evidence-authority/src/canonical";
 import { sha256HexFromString } from "../src/sha256";
+import { issueGovernedReceipt, recoverPreparedReceipt } from "../src/receipt_authority_client";
 import {
   closedReceiptVerifyRegistry,
   PINNED_RECEIPT_REGISTRY_SCOPE,
@@ -210,6 +211,36 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     await reset();
+  });
+
+  it("recovers a lost receipt response without rewriting a competing finalization", async () => {
+    const digest = `sha256:${"b".repeat(64)}`;
+    const completedAt = new Date(Date.now() + 1000).toISOString();
+    const testEnv = registrationEnv();
+    const rpc = testEnv.RECEIPT_EVIDENCE_AUTHORITY;
+    vi.mocked(rpc.issue_for_segment).mockRejectedValueOnce(new Error("lost response"));
+    await expect(issueGovernedReceipt(testEnv, "staging", "markets_calendar", "2024-02"))
+      .rejects.toThrow("lost response");
+    const prepared = await env.DB.prepare("SELECT operation_id,state FROM receipt_authority_requests")
+      .first<{ operation_id: string; state: string }>();
+    expect(prepared!.state).toBe("PREPARED");
+    // Another caller completes before this RPC returns; its clock is slightly ahead.
+    vi.mocked(rpc.recover_issue).mockImplementation(async () => {
+      await env.DB.prepare("UPDATE receipt_authority_requests SET state='FINALIZED',receipt_digest=?,updated_at=? WHERE operation_id=? AND state='PREPARED'")
+        .bind(digest, completedAt, prepared!.operation_id).run();
+      return { operation_id: prepared!.operation_id, receipt_digest: digest, replayed: true };
+    });
+    await expect(recoverPreparedReceipt(testEnv, prepared!.operation_id))
+      .resolves.toMatchObject({ receipt_digest: digest, replayed: true });
+    expect(await env.DB.prepare("SELECT state,receipt_digest,updated_at FROM receipt_authority_requests WHERE operation_id=?")
+      .bind(prepared!.operation_id).first()).toEqual({
+      state: "FINALIZED", receipt_digest: digest, updated_at: completedAt,
+    });
+    vi.mocked(rpc.recover_issue).mockResolvedValue({
+      operation_id: prepared!.operation_id, receipt_digest: `sha256:${"c".repeat(64)}`,
+    });
+    await expect(recoverPreparedReceipt(testEnv, prepared!.operation_id))
+      .rejects.toThrow("Receipt request ledger finalization failed");
   });
 
   it.each([

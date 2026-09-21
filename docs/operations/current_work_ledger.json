@@ -1,5 +1,13 @@
 {
   "schema": "quant-platform-work-ledger/v1",
+  "caller_finalization_repair_20260921": {
+    "status": "SOURCE_FIXED_NOT_DEPLOYED",
+    "failure": "An overlapping recovery caller rewrote FINALIZED updated_at using an older local timestamp; real D1 rejected the non-monotonic update after another caller had successfully finalized.",
+    "repair": "UPDATE only PREPARED; retain post-read exact receipt digest and nonce checks. Do not weaken database triggers, reset the operation, or rewrite the winning timestamp.",
+    "test_replacement": "Replace one Map-backed lost-response test with one workerd/D1 regression: real monotonic constraint reproduces the failure before repair, matching replay preserves the winning timestamp after repair, and substituted digest still fails. No net test-count increase.",
+    "review": "Independent read-only review found no actionable issues. Partial RPC fixture tests caller ledger behavior, not receipt schema or cryptographic verification.",
+    "release": "Needs exact-SHA native CI, merge and approved staging rollout. Successful February finalization is preserved regardless of this follow-up."
+  },
   "staging_acceptance_20260921": {
     "status": "ACTIVE_ACCEPTANCE_PASS_FEBRUARY_RECEIPT_FINALIZED",
     "accepted_source_sha": "8d2e609e10bbf2abf7a223494c2bd2a53ef0d93e",

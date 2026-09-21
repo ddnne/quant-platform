@@ -539,26 +539,6 @@ describe("Receipt Evidence Authority client", () => {
     }));
   });
 
-  it("persists the exact request before RPC and recovers a lost response", async () => {
-    const { env, issue, recover, rows } = fakeEnv();
-    issue.mockRejectedValueOnce(new Error("simulated lost RPC response"));
-    await expect(issueGovernedReceipt(
-      env,
-      "production",
-      "markets_calendar",
-      "2024-02",
-    )).rejects.toThrow("simulated lost RPC response");
-    const [operationId, prepared] = [...rows.entries()][0]!;
-    expect(prepared).toMatchObject({ state: "PREPARED", receipt_digest: null });
-    const recovered = await recoverPreparedReceipt(env, operationId);
-    expect(recovered.replayed).toBe(true);
-    expect(recover).toHaveBeenCalledOnce();
-    expect(rows.get(operationId)).toMatchObject({
-      state: "FINALIZED",
-      receipt_digest: recovered.receipt_digest,
-    });
-  });
-
   it("cron recovery consumes only durable PREPARED operation identities", async () => {
     const { env, issue, recover, rows } = fakeEnv();
     issue.mockRejectedValueOnce(new Error("lost response"));

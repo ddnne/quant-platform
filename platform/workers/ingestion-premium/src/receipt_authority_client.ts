@@ -268,12 +268,11 @@ async function finalizeRequest(
     `UPDATE receipt_authority_requests
         SET state='FINALIZED',receipt_digest=?,updated_at=?
       WHERE operation_id=?
-        AND (state='PREPARED' OR (state='FINALIZED' AND receipt_digest=?))`,
+        AND state='PREPARED'`,
   ).bind(
     result.receipt_digest,
     new Date().toISOString(),
     request.operation_id,
-    result.receipt_digest,
   ).run();
   const stored = await env.DB.prepare(
     `SELECT operation_id,request_nonce,environment,dataset,segment_id,state,
