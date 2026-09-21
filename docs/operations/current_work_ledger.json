@@ -1,5 +1,33 @@
 {
   "schema": "quant-platform-work-ledger/v1",
+  "caller_finalization_repair_20260921": {
+    "status": "SOURCE_FIXED_NOT_DEPLOYED",
+    "failure": "An overlapping recovery caller rewrote FINALIZED updated_at using an older local timestamp; real D1 rejected the non-monotonic update after another caller had successfully finalized.",
+    "repair": "UPDATE only PREPARED; retain post-read exact receipt digest and nonce checks. Do not weaken database triggers, reset the operation, or rewrite the winning timestamp.",
+    "test_replacement": "Replace one Map-backed lost-response test with one workerd/D1 regression: real monotonic constraint reproduces the failure before repair, matching replay preserves the winning timestamp after repair, and substituted digest still fails. No net test-count increase.",
+    "review": "Independent read-only review found no actionable issues. Partial RPC fixture tests caller ledger behavior, not receipt schema or cryptographic verification.",
+    "release": "Needs exact-SHA native CI, merge and approved staging rollout. Successful February finalization is preserved regardless of this follow-up."
+  },
+  "staging_acceptance_20260921": {
+    "status": "ACTIVE_ACCEPTANCE_PASS_FEBRUARY_RECEIPT_FINALIZED",
+    "accepted_source_sha": "8d2e609e10bbf2abf7a223494c2bd2a53ef0d93e",
+    "merged_prs": [229, 230],
+    "main_native_build": "e41c89b0-a7dd-48ad-ae75-197b82ea2902",
+    "main_native_result": "SUCCESS",
+    "versions": {
+      "ingestion-secrets-staging": "096c8f5e-5ecf-4559-bfd3-cc0d8192a358",
+      "receipt-evidence-authority-staging": "f00401f8-c77f-4f28-94fd-165bd5e7bbe4",
+      "ingestion-premium-staging": "cfc1e904-deee-408f-90c7-34d2bf4f4200"
+    },
+    "active_transition_evidence_digest": "sha256:d614f902963193a02b92a9f743a64d133a5c246d374ef81fd47ddac85fef25d0",
+    "evidence": "https://github.com/ddnne/quant-platform/pull/230#issuecomment-5759390254",
+    "recovery_operation_id": "sha256:cf46358cc553d44dda7a97f0bc7d34c434dada57370b52d0739679dd560ae14e",
+    "recovery": "Existing February operation reached RECEIPT_COMMITTED and caller FINALIZED with matching receipt digest after all 80695 rows and 28 pages. Original operation/raw identity preserved. Intermediate Service RPC hung diagnostics remain unexplained. One overlapping caller hit the monotonic timestamp trigger after another finalized; idempotent caller finalization remains a follow-up repair. Do not reset or reacquire.",
+    "receipt_digest": "sha256:225ac334eb6e9e3e8985eed4a28b9aa4f1a0796e3bef644b4f53a2f78d3f1f18",
+    "structured_digest": "sha256:68511eed841c6cc288127467e7ad6e99a09808f33415aeb4dec9ef134a1061d1",
+    "diagnostic_test": "Existing concurrent-issue and monthly-sized recovery tests pass through the WorkerEntrypoint bridge. This does not reproduce or dismiss the live hung diagnostic; no speculative production fix.",
+    "scope": "AUDIT_ONLY staging acceptance, research_eligible=false; production, READY and Pilot unchanged. Older ledger sections below retain historical state and are superseded by this dated acceptance for these three staging Workers only."
+  },
   "approval_20260921": {
     "status": "APPROVED_BY_USER",
     "scope": "PR229/230 main integration after native CI/review; limited staging rollout; existing February same-operation recovery using preserved raw/PREPARED evidence",

@@ -27,6 +27,7 @@ import {
   sha256Digest,
 } from "../../receipt-evidence-authority/src/canonical";
 import { sha256HexFromString } from "../src/sha256";
+import { issueGovernedReceipt, recoverPreparedReceipt } from "../src/receipt_authority_client";
 import {
   closedReceiptVerifyRegistry,
   PINNED_RECEIPT_REGISTRY_SCOPE,
@@ -210,6 +211,36 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     await reset();
+  });
+
+  it("recovers a lost receipt response without rewriting a competing finalization", async () => {
+    const digest = `sha256:${"b".repeat(64)}`;
+    const completedAt = new Date(Date.now() + 1000).toISOString();
+    const testEnv = registrationEnv();
+    const rpc = testEnv.RECEIPT_EVIDENCE_AUTHORITY;
+    vi.mocked(rpc.issue_for_segment).mockRejectedValueOnce(new Error("lost response"));
+    await expect(issueGovernedReceipt(testEnv, "staging", "markets_calendar", "2024-02"))
+      .rejects.toThrow("lost response");
+    const prepared = await env.DB.prepare("SELECT operation_id,state FROM receipt_authority_requests")
+      .first<{ operation_id: string; state: string }>();
+    expect(prepared!.state).toBe("PREPARED");
+    // Another caller completes before this RPC returns; its clock is slightly ahead.
+    vi.mocked(rpc.recover_issue).mockImplementation(async () => {
+      await env.DB.prepare("UPDATE receipt_authority_requests SET state='FINALIZED',receipt_digest=?,updated_at=? WHERE operation_id=? AND state='PREPARED'")
+        .bind(digest, completedAt, prepared!.operation_id).run();
+      return { operation_id: prepared!.operation_id, receipt_digest: digest, replayed: true };
+    });
+    await expect(recoverPreparedReceipt(testEnv, prepared!.operation_id))
+      .resolves.toMatchObject({ receipt_digest: digest, replayed: true });
+    expect(await env.DB.prepare("SELECT state,receipt_digest,updated_at FROM receipt_authority_requests WHERE operation_id=?")
+      .bind(prepared!.operation_id).first()).toEqual({
+      state: "FINALIZED", receipt_digest: digest, updated_at: completedAt,
+    });
+    vi.mocked(rpc.recover_issue).mockResolvedValue({
+      operation_id: prepared!.operation_id, receipt_digest: `sha256:${"c".repeat(64)}`,
+    });
+    await expect(recoverPreparedReceipt(testEnv, prepared!.operation_id))
+      .rejects.toThrow("Receipt request ledger finalization failed");
   });
 
   it.each([
@@ -503,34 +534,22 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
       EXACT_FIVE_ACQUISITION_KEY,
       JSON.stringify(exactFiveDoc({
         jobs: [
-          { dataset: "equities_bars_daily", segment_id: "2022-12" },
+          { dataset: "markets_calendar", segment_id: "2022-12" },
           { dataset: "markets_calendar", segment_id: "2023-01" },
         ],
       })),
     );
-    const spy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
-      const url = fetchUrl(input);
-      const day = url.searchParams.get("date");
-      if (
-        url.origin !== "https://api.jquants.com" ||
-        url.pathname !== "/v2/equities/bars/daily" ||
-        !day ||
-        day < "2022-12-01" ||
-        day > "2022-12-31"
-      ) {
-        throw new Error(`unexpected fetch ${url.href}`);
-      }
-      return Promise.resolve(new Response(JSON.stringify({ data: [] }), { status: 200 }));
-    });
+    // Scheduling/lease behavior does not require 31 rate-limited daily fetches.
+    const spy = stubVendor("/v2/markets/calendar", { from: "2022-12-01", to: "2022-12-31" }, []);
     await worker.scheduled(scheduledAt(), testEnv, createExecutionContext());
     expect(spy.mock.calls.length).toBeGreaterThan(0);
     const vendor = fetchUrl(spy.mock.calls[0]![0]);
-    expect(vendor.searchParams.get("date")).toBe("2022-12-01");
+    expect(vendor.searchParams.get("from")).toBe("2022-12-01");
     const coverage = await env.DB.prepare(
       "SELECT dataset, segment_id, status FROM coverage_segments",
     ).all<{ dataset: string; segment_id: string; status: string }>();
     expect(coverage.results).toEqual([
-      { dataset: "equities_bars_daily", segment_id: "2022-12", status: "UNKNOWN" },
+      { dataset: "markets_calendar", segment_id: "2022-12", status: "UNKNOWN" },
     ]);
     const vendorCalls = spy.mock.calls.length;
     let control = JSON.parse(
