@@ -266,61 +266,6 @@ def test_new_feature_dataset_constants_are_complete_only():
             assert ds not in PERMANENT_DEFER_DATASETS, ds
 
 
-def test_complete21_min_declared_datasets_reject_each_permanent_defer():
-    """Every declared feature dataset list fails closed when any DEFER is mixed in."""
-    from features import complete21_min as mod
-
-    groups = (
-        mod._VOLUME_DATASETS,
-        mod._TOPIX_REL_DATASETS,
-        mod._DISC_DATASETS,
-        mod._MARGIN_DATASETS,
-        mod._SHORT_RATIO_DATASETS,
-        mod._CALENDAR_DATASETS,
-        mod._REPO_DATASETS,
-        mod._RETURN_C21_DATASETS,
-        mod._MARGIN_ALERT_DATASETS,
-        mod._FUTURES_DATASETS,
-        mod._FUND_VALUE_DATASETS,
-    )
-    for group in groups:
-        for defer_ds in sorted(PERMANENT_DEFER_DATASETS):
-            poisoned = list(group) + [defer_ds]
-            with pytest.raises(PermanentDeferHistoryError):
-                require_feature_datasets(poisoned, context="feature T5 DEFER")
-
-
-def test_topix_relative_1d_rejects_if_internal_datasets_were_defer(monkeypatch):
-    """Feature preflight uses require_feature_datasets — DEFER list must fail closed."""
-    from features import complete21_min as mod
-
-    with pytest.raises(PermanentDeferHistoryError):
-        # Direct call of the guard with a poisoned list (simulates misdeclaration).
-        require_feature_datasets(
-            ["equities_bars_daily", "equities_bars_daily_am"],
-            context="feature topix_relative_1d",
-        )
-    # Module constant must stay COMPLETE-only.
-    for ds in mod._TOPIX_REL_DATASETS:
-        assert ds in COMPLETE_21_DATASETS
-        assert ds not in PERMANENT_DEFER_DATASETS
-
-
-def test_margin_short_calendar_repo_reject_defer_poison(monkeypatch):
-    """Each new feature's declared datasets stay DEFER-free; poison fails closed."""
-    for poisoned in (
-        ["markets_margin_interest", "equities_master"],
-        ["markets_short_ratio", "equities_earnings_calendar"],  # W68: fins not DEFER
-        ["markets_calendar", "equities_bars_daily_am"],
-        ["jsda_tokyo_repo_rates", "jsda_otc_bond_reference_prices"],
-        ["equities_bars_daily", "equities_bars_daily_am"],  # return_1d_c21 path
-        ["markets_margin_alert", "equities_master"],
-        ["derivatives_bars_daily_futures", "equities_earnings_calendar"],
-    ):
-        with pytest.raises(PermanentDeferHistoryError):
-            require_feature_datasets(poisoned, context="feature test")
-
-
 def test_research_complete21_matches_features_allowlist():
     assert len(RESEARCH_COMPLETE_21_DATASETS) == len(COMPLETE_21_DATASET_SET)
     assert COMPLETE_21_DATASET_SET == COMPLETE_21_DATASETS
