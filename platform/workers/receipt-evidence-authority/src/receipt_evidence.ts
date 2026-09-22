@@ -287,10 +287,11 @@ export async function commitReceipt(
     typeof product.manifest_digest !== "string" || !product.manifest_digest ||
     typeof product.byte_count !== "number" || product.byte_count <= 0
   ) throw new Error("signed digest is not bound to the product materialization");
-  if (product.artifact_body.length === 0) {
-    await requireProductObject(env.STRUCTURED_BUCKET, product.artifact_key,
-      product.byte_count, String(product.artifact_digest));
-  }
+  // Legacy inline D1 bodies are not proof that the R2 product consumed by
+  // research still exists. Recovery must verify that same artifact for both
+  // manifest versions before publishing receipt/coverage success.
+  await requireProductObject(env.STRUCTURED_BUCKET, product.artifact_key,
+    product.byte_count, String(product.artifact_digest));
   const successDetail = canonicalJson({
     schema_version: "receipt-authority-ingestion-result/v1",
     operation_id: operationId,

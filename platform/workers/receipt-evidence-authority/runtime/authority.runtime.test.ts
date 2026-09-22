@@ -1827,6 +1827,25 @@ describe("Receipt Evidence Authority in workerd", () => {
     globalThis.fetch = (async () => {
       throw new Error("recovery must not reacquire official calendar evidence");
     }) as typeof fetch;
+    // Interrupt after signing, before receipt commit, with the legacy inline
+    // copy intact. That copy must not substitute for the R2 research product.
+    await runtimeEnv.DB.prepare(
+      `CREATE TRIGGER inject_legacy_receipt_commit_failure
+       BEFORE INSERT ON collection_receipts
+       BEGIN SELECT RAISE(ABORT, 'injected legacy receipt commit failure'); END`,
+    ).run();
+    await expect(runInDurableObject(stub, (instance) =>
+      instance.recover_issue({ ...interruptedRequest, operation: "recover_issue" })
+    ))
+      .rejects.toThrow("injected legacy receipt commit failure");
+    await runtimeEnv.DB.prepare("DROP TRIGGER inject_legacy_receipt_commit_failure").run();
+    await runtimeEnv.STRUCTURED_BUCKET.delete(priorProduct!.artifact_key);
+    await evictDurableObject(stub);
+    await expect(runInDurableObject(stub, (instance) =>
+      instance.recover_issue({ ...interruptedRequest, operation: "recover_issue" })
+    ))
+      .rejects.toThrow("product materialization disappeared");
+    await runtimeEnv.STRUCTURED_BUCKET.put(priorProduct!.artifact_key, priorBody);
     const recovered = await stub.recover_issue({
       ...interruptedRequest,
       operation: "recover_issue",
