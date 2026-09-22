@@ -4,6 +4,71 @@
 **Mass research:** NO-GO  
 **Local DB:** not a SoT for analysis / features / strategy production
 
+## Current correction: Receipt acquisition must also be R2-first
+
+The adopted storage decision applies to the Receipt path, not just the older
+Premium writer. At source `6d501d39`, `structured_reconciliation.ts` and
+`product_materialization.ts` persist complete row bodies in
+`receipt_authority_structured_rows`, `jquants_records`, and
+`ingestion_change_log` before producing R2 products. That path violates the
+historical-body rule below. The dated deployment claims at the end describe
+the old writer only; they do not establish current compliance.
+
+The 2026-09-23 staging read measured 8,309,817,344 D1 bytes. Fifty product
+metadata rows reference 2,245,405,492 R2 bytes; this is not a per-table D1
+size breakdown. Metadata/signature acceptance is not independent verification
+of all product bytes. Evidence and independent dependency review:
+[capacity review](https://github.com/ddnne/quant-platform/pull/248#issuecomment-5785172724).
+
+### Required end state (not yet implemented)
+
+- R2 owns immutable raw, normalized history and research products. Reuse
+  existing buckets, services, parsers and full-segment verifiers; do not add
+  a new Worker, signer or storage framework to enforce this decision.
+- D1 holds operation/segment metadata, manifest references, independently
+  measured counts/digests and cursors. A permanent natural-key-per-row shadow
+  still grows with history: compacting only its payload is an intermediate
+  optimization, not the final architecture.
+- Row-level SQL, duplicate-key checking, ordering and feature computation use
+  bounded scratch in existing cloud compute. Stream partitions; do not load
+  full history into Worker memory or use the developer machine for market SQL.
+- The trusted pipeline must independently compare canonical parsed raw with
+  persisted structured R2 bytes, including keys/counts/exhaustion, before
+  issuing its receipt. Caller-supplied summaries or HEAD/ETag alone do not
+  replace byte verification. Failed/restarted publication cannot produce an
+  eligible receipt from a partial object.
+- Existing signed receipts and product serialization remain unchanged.
+  Normalized-input `row_digest` includes the operation ingestion timestamp;
+  governed rows may retain an earlier ingestion timestamp on identical replay.
+  These are different identities, not interchangeable hashes.
+
+### Implementation and migration boundary
+
+First change the new-operation producer and its consumers as one reviewed
+contract: reconciliation/materialization, receipt finalization/watermarks,
+Premium descriptors, Ops projection and cloud candidate. Descriptors and Ops
+currently count shadow rows; recovery remeasures joins. Missing rows must never
+silently become PASS by trusting a manifest count. Introduce a versioned
+R2-evidence path while keeping existing immutable evidence readable; retire
+obsolete full-history writes when that path is accepted.
+
+Prove the path with a small synthetic runtime scenario covering restart and
+partial/corrupt output plus unchanged legacy receipt/product verification.
+Measure a bounded staging acquisition to show D1 metadata growth is not
+proportional to market rows. Reuse existing tests instead of adding policy-text
+tests or an exhaustive version matrix.
+
+Existing D1 rows are not disposable merely because an R2 object exists.
+Before any separately authorized reclamation, verify complete R2 bytes and
+receipt binding, update all readers/recovery, resolve shared-writer/cursor
+dependencies, and preserve terminal operation metadata. Append-only triggers
+currently prohibit shadow mutation; do not drop them broadly or rewrite
+historical hashes. No whole-DB restore after other writers resume.
+
+The approved bounded 2022 acquisition is not permission to use the obsolete
+D1-history path, delete data, rotate keys, or release production/Pilot HOLDs.
+Source work and non-destructive verification can proceed while login is pending.
+
 ## Layers
 
 | Layer | Role | Location | Contents | Write policy |
@@ -37,7 +102,12 @@ No surplus quant D1 exists to retire today.
 - `equities_bars_daily` CF ingest: `D1_ERROR: Exceeded maximum DB size`  
 - `cf_premium_backfill` must remain **stopped** while D1 is full and write path still targets D1 full history.
 
-## P0 order
+## Historical P0 order (2026-08-11; superseded)
+
+This old sequence is retained as historical context, not executable guidance.
+The current correction above requires producer/consumer/recovery acceptance
+before bounded reclamation. Group related approval operations into one outcome;
+do not request approval separately for every SQL batch.
 
 1. Stop D1-full-history writers (backfill + premium route guard).  
 2. Archive cold structured rows to R2 (verify hash).  
