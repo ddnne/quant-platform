@@ -206,7 +206,7 @@ async function persistStructuredRows(
 ): Promise<void> {
   for (let index = 0; index < rows.length; index += 50) {
     const expected = rows.slice(index, index + 50);
-    await env.DB.prepare(
+    const insert = env.DB.prepare(
       `INSERT OR IGNORE INTO receipt_authority_structured_rows
        (operation_id,natural_key,source,dataset,event_time,available_at,
         ingested_at,payload,raw_payload,row_digest)
@@ -215,14 +215,16 @@ async function persistStructuredRows(
               json_extract(value,'$.available_at'),json_extract(value,'$.ingested_at'),
               json_extract(value,'$.payload'),json_extract(value,'$.raw_payload'),
               json_extract(value,'$.row_digest') FROM json_each(?)`,
-    ).bind(operationId, JSON.stringify(expected)).run();
-    const result = await env.DB.prepare(
+    ).bind(operationId, JSON.stringify(expected));
+    const select = env.DB.prepare(
       `SELECT natural_key,source,dataset,event_time,available_at,ingested_at,
               payload,raw_payload,row_digest
          FROM receipt_authority_structured_rows WHERE operation_id=?
           AND natural_key IN (${expected.map(() => "?").join(",")})`,
-    ).bind(operationId, ...expected.map((row) => row.natural_key))
-      .all<CanonicalStructuredRow>();
+    ).bind(operationId, ...expected.map((row) => row.natural_key));
+    // Keep write/readback ordered in one bounded D1 round trip.
+    const [, result] = await env.DB.batch<CanonicalStructuredRow>([insert, select]);
+    if (!result) throw new Error("structured readback result is absent");
     const stored = new Map(result.results.map((row) => [row.natural_key, row]));
     for (const row of expected) {
       if (canonicalJson(stored.get(row.natural_key) ?? null) !== canonicalJson(row)) {

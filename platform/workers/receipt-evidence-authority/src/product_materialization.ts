@@ -103,7 +103,7 @@ export async function persistGovernedProductSlice(
   const productRows: GovernedProductRow[] = [];
   for (let index = 0; index < rows.length; index += 50) {
     const expected = rows.slice(index, index + 50);
-    await env.DB.prepare(
+    const insert = env.DB.prepare(
       `INSERT OR IGNORE INTO jquants_records
        (source,dataset,natural_key,event_time,available_at,ingested_at,payload,raw_payload)
        SELECT json_extract(value,'$.source'),json_extract(value,'$.dataset'),
@@ -111,13 +111,15 @@ export async function persistGovernedProductSlice(
               json_extract(value,'$.available_at'),json_extract(value,'$.ingested_at'),
               json_extract(value,'$.payload'),json_extract(value,'$.raw_payload')
          FROM json_each(?)`,
-    ).bind(JSON.stringify(expected)).run();
-    const result = await env.DB.prepare(
+    ).bind(JSON.stringify(expected));
+    const select = env.DB.prepare(
       `SELECT source,dataset,natural_key,event_time,available_at,ingested_at,payload,raw_payload
          FROM jquants_records WHERE source=? AND dataset=?
           AND natural_key IN (${expected.map(() => "?").join(",")})`,
     ).bind(expected[0]!.source, expected[0]!.dataset,
-      ...expected.map((row) => row.natural_key)).all<GovernedProductRow>();
+      ...expected.map((row) => row.natural_key));
+    const [, result] = await env.DB.batch<GovernedProductRow>([insert, select]);
+    if (!result) throw new Error("governed product readback result is absent");
     const stored = new Map(result.results.map((row) => [row.natural_key, row]));
     for (const row of expected) {
       const actual = stored.get(row.natural_key);
