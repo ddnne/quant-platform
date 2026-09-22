@@ -1892,9 +1892,14 @@ describe("Receipt Evidence Authority in workerd", () => {
           WHERE operation_id=?`,
       ).bind(operationId).all<CanonicalStructuredRow>();
       scratch.append(operationId, rows.results);
+      // Force the producer loop, rather than only verifying an existing R2
+      // object. This deletion affects the synthetic runtime bucket only.
+      await runtimeEnv.STRUCTURED_BUCKET.delete(priorProduct!.artifact_key);
       const product = await materializeProduct(runtimeEnv, input, scratch);
       expect(product.digest).toBe(recovered.receipt.digests.structured_digest);
       expect(product.manifestDigest).toBe(legacyDigest);
+      const rebuilt = await runtimeEnv.STRUCTURED_BUCKET.get(product.artifactKey);
+      expect(await rebuilt!.text()).toBe(priorBody);
       scratch.release(operationId);
     });
     const afterRaw = await runtimeEnv.RAW_BUCKET.list({ prefix });
