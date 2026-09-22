@@ -61,15 +61,21 @@ remain required before activation. R2-mode
 watermarks deliberately report a NULL legacy export cursor: an unrelated D1
 row-change sequence must not make the new path look current or READY.
 
-Entrypoint validation: the existing 80,707-row monthly synthetic scenario
+Entrypoint validation: the existing monthly synthetic scenario now uses
+94,163 rows and over 150MB of product bytes, exceeding the observed staging
+maxima of 94,153 rows and 142,850,253 product bytes (metadata-only read).
+The scenario
 completes with zero D1 fact/shadow/change rows, one compact measurement and
 empty scratch after finalization. Pre-sign scratch-loss/eviction recovery and
 both page-interruption scenarios pass without reacquisition. Legacy v1 recovery,
 replay/re-proof and D1 append-only scenarios now seed persisted pre-upgrade
 operations before resuming through the current entrypoint. Those cases preserve
 the old assertions without a production legacy-mode switch or mocked writer.
-The complete authority runtime suite, including the monthly scenario, passes
-on source 5989485f. This is not deployment acceptance: capacity under the admitted
+The complete authority runtime suite passed on source 5989485f; the enlarged
+monthly case also passes independently. This is sequential single-operation
+evidence, not a bound for concurrent or accumulated abandoned work. Sampled DO
+size is measured between continuations, not at every within-invocation peak.
+This is not deployment acceptance: capacity under the admitted
 live workload, cursor integration and final exact-SHA native CI remain open.
 
 `receipt_product_publications/v1` is the new metadata-only source cursor:

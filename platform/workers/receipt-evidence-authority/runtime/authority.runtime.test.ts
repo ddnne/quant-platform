@@ -1772,7 +1772,9 @@ describe("Receipt Evidence Authority in workerd", () => {
 
   it("finishes a monthly-sized capture through bounded resumes and streamed product bytes", async () => {
     const pageCount = 29;
-    const rowsPerPage = 2783;
+    // Exceeds the observed staging monthly envelope (94,153 rows / 143MB)
+    // using synthetic content only, without another expensive test scenario.
+    const rowsPerPage = 3247;
     let calls = 0;
     globalThis.fetch = (async () => {
       const page = calls++;
@@ -1781,7 +1783,7 @@ describe("Receipt Evidence Authority in workerd", () => {
         data: Array.from({ length: rowsPerPage }, (_, index) => ({
           Date: `2024-02-${String(page + 1).padStart(2, "0")}`,
           Code: String(10000 + index), O: 100, C: 101, MC: 100.5,
-          SyntheticPadding: "x".repeat(560),
+          SyntheticPadding: "x".repeat(800),
         })),
         pagination_key: null,
       });
@@ -1791,10 +1793,15 @@ describe("Receipt Evidence Authority in workerd", () => {
     const monthly = { ...request, dataset_id: "equities_bars_daily", request_nonce: "9".repeat(64) };
     const rpc = workerExports.default;
     let result: ReceiptIssueResultV1 | undefined;
+    let peakObservedScratchDatabaseBytes = 0;
     for (let attempt = 0; attempt < 20 && result === undefined; attempt += 1) {
       const outcome = attempt === 0
         ? await rpc.issue_for_segment(monthly)
         : await rpc.recover_issue({ ...monthly, operation: "recover_issue" });
+      peakObservedScratchDatabaseBytes = Math.max(
+        peakObservedScratchDatabaseBytes,
+        await runInDurableObject(stub, (_instance, state) => state.storage.sql.databaseSize),
+      );
       if (outcome.state === "CONTINUATION_REQUIRED") {
         expect(outcome).toEqual({
           schema_version: "receipt-evidence-continuation/v1",
@@ -1832,7 +1839,13 @@ describe("Receipt Evidence Authority in workerd", () => {
       byte_count: number; manifest_key: string;
     }>();
     expect(product!.artifact_body).toBe("");
-    expect(product!.byte_count).toBeGreaterThan(100_000_000);
+    expect(product!.byte_count).toBeGreaterThan(150_000_000);
+    console.info("synthetic monthly reconciliation capacity", {
+      rows: pageCount * rowsPerPage,
+      artifactBytes: product!.byte_count,
+      peakObservedScratchDatabaseBytes,
+      admissionLimitBytes: 512 * 1024 * 1024,
+    });
     const artifact = await runtimeEnv.STRUCTURED_BUCKET.get(product!.artifact_key);
     const digest = new crypto.DigestStream("SHA-256");
     await artifact!.body.pipeTo(digest);
