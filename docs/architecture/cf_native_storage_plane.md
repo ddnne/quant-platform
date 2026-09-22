@@ -68,9 +68,9 @@ both page-interruption scenarios pass without reacquisition. Legacy v1 recovery,
 replay/re-proof and D1 append-only scenarios now seed persisted pre-upgrade
 operations before resuming through the current entrypoint. Those cases preserve
 the old assertions without a production legacy-mode switch or mocked writer.
-The 61 non-monthly authority cases pass after entrypoint activation; the monthly
-case passes separately. This is not deployment acceptance: retention, cursor
-integration and final exact-SHA native CI remain open.
+The complete authority runtime suite, including the monthly scenario, passes
+on source 5989485f. This is not deployment acceptance: capacity under the admitted
+live workload, cursor integration and final exact-SHA native CI remain open.
 
 `receipt_product_publications/v1` is the new metadata-only source cursor:
 one monotonically allocated sequence per atomic R2 receipt commit, independent
@@ -85,16 +85,30 @@ cursor with its independently verified receipt digest in
 `receipt_candidate_source_cursors` only after full raw/product verification.
 This scope-specific set is preserved in the candidate SQLite artifact and the
 materialization digest; it is not a claim that every earlier global sequence
-was applied. Legacy descriptors retain a null cursor, and generic Ops/READY
-exported/applied cursor integration remains outstanding.
+was applied. Legacy descriptors retain a null cursor.
+
+Ops includes its separately namespaced publication observation in generation
+identity and storage-plane metadata. Mid-read changes and cross-generation
+rollback/disappearance reject publication. Its research-applied cursor remains
+null: observing a publication is not proof of applying a research snapshot.
+
+Receipt-native READY v2 deliberately forbids legacy D1 cursor fields. Its
+existing source binds the physical snapshot digest, verified receipt run-set,
+dependency-scope proof and original observation time. The candidate cursor
+table is inside those physical snapshot bytes; it is not an additional signer
+or a replacement for full-segment verification. Do not invent a global applied
+MAX or widen the closed READY schema merely to copy the old D1 model. Remaining
+acceptance must demonstrate the admitted descriptor -> verified candidate ->
+immutable R2 snapshot -> READY/Trader chain on the same selected operations.
+That end-to-end live evidence is still missing; source binding alone is not GO.
 
 First change the new-operation producer and its consumers as one reviewed
 contract: reconciliation/materialization, receipt finalization/watermarks,
-Premium descriptors, Ops projection and cloud candidate. Descriptors and Ops
-currently count shadow rows; recovery remeasures joins. Missing rows must never
-silently become PASS by trusting a manifest count. Introduce a versioned
-R2-evidence path while keeping existing immutable evidence readable; retire
-obsolete full-history writes when that path is accepted.
+Premium descriptors, Ops projection and cloud candidate. Legacy readers retain
+shadow-row reconciliation; new R2 readers use independently measured compact
+evidence and verified objects. Missing evidence must never silently become PASS
+by trusting a manifest count. Keep existing immutable evidence readable; retire
+obsolete full-history writes only when the new path is accepted.
 
 Prove the path with a small synthetic runtime scenario covering restart and
 partial/corrupt output plus unchanged legacy receipt/product verification.
