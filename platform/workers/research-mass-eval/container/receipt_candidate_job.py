@@ -396,15 +396,13 @@ def _missing_compiled_segments(
         _require_controlled_exact_four_binding,
         _resolve_controlled_universe,
     )
-    from pit.compiled_dependency_scope import (
+    from pit.compiled_scope_proof import (
         CompiledControlledSelection,
-        collect_compiled_coverage_events,
         combined_dataset_lookback_trading_days,
         combined_master_evidence_mode,
+        compiled_scope_proof_session_from_store,
     )
-    from pit.compiled_scope_proof import compiled_scope_proof_session_from_store
     from pit.errors import PitError
-    from pit.scoped_selection import _owned_scoped_research_owner_from_verified_witness
     from selection.budget_ledger import MassResearchDisabledError
     from storage.coverage_ledger import declared_coverage_segments
     from storage.receipt_crypto import PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS
@@ -421,8 +419,6 @@ def _missing_compiled_segments(
     )
     extra: list[dict[str, str]] = []
     need_older: set[str] = set()
-    conn = store._conn  # noqa: SLF001
-    previous_factory = conn.row_factory
     try:
         with compiled_scope_proof_session_from_store(store) as session:
             (
@@ -462,12 +458,7 @@ def _missing_compiled_segments(
                     PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS[spec.environment]
                 ),
             )
-            owner = _owned_scoped_research_owner_from_verified_witness(
-                conn,
-                witness=frozenset(witness),
-            )
-            hits, missing = collect_compiled_coverage_events(
-                conn,
+            hits, missing = session.collect_compiled_coverage_events(
                 compiled=CompiledControlledSelection(
                     period_start=period_start,
                     period_end=period_end,
@@ -484,7 +475,7 @@ def _missing_compiled_segments(
                 observed_through=proof_clock.observed_through,
                 slices=slices,
                 resolved_universe=resolved_universe,
-                scoped_owner=owner,
+                witness=frozenset(witness),
             )
             events = {
                 dataset_id: frozenset(hits.selected_event_dates.get(dataset_id) or ())
@@ -493,8 +484,6 @@ def _missing_compiled_segments(
             need_older.update(missing)
     except (PitError, MassResearchDisabledError, sqlite3.Error):
         return extra, set(_SEED_DATASETS)
-    finally:
-        conn.row_factory = previous_factory
 
     plannable: list[str] = []
     for dataset_id in required_datasets:
