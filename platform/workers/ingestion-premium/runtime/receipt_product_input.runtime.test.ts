@@ -711,6 +711,7 @@ async function seedPair(options?: {
 
 async function seedUnknownStructuredForCommit(options?: {
   coverageEnd?: string;
+  r2?: "verified" | "missing";
 }): Promise<{
   registry: ReceiptVerifyRegistry;
   envelope: Record<string, unknown>;
@@ -722,6 +723,7 @@ async function seedUnknownStructuredForCommit(options?: {
   const raw = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
   const registry = await closedActiveStagingRegistry(raw);
   const objects = await seedGovernedObjects();
+  await runtimeEnv.STRUCTURED_BUCKET.put("bars-artifact.jsonl", objects.artifact);
   const spec = datasetById("equities_bars_daily");
   if (spec === undefined) throw new Error("catalog missing equities_bars_daily");
   const identity = governedReceiptIdentity(spec.id);
@@ -783,6 +785,7 @@ async function seedUnknownStructuredForCommit(options?: {
     envelope,
     objects,
     phase: "structured",
+    r2: options?.r2,
   });
   await writeRequiredCoverageSegment(
     { DB: runtimeEnv.DB },
@@ -862,9 +865,22 @@ describe("POST /v1/export/receipt-products workerd D1", () => {
   });
 
   it("promotes matching UNKNOWN coverage on governed commit then describes", async () => {
-    const { registry, receipt } = await seedUnknownStructuredForCommit();
+    const { registry, receipt } = await seedUnknownStructuredForCommit({ r2: "missing" });
+    const authorityEnv = { DB: runtimeEnv.DB, STRUCTURED_BUCKET: runtimeEnv.STRUCTURED_BUCKET } as ReceiptAuthorityEnv;
+    await expect(commitReceipt(authorityEnv, "op-bars", receipt))
+      .rejects.toThrow("matching R2 reconciliation evidence");
+    expect(await runtimeEnv.DB.prepare(
+      "SELECT status FROM coverage_segments WHERE dataset='equities_bars_daily'",
+    ).first()).toEqual({ status: "UNKNOWN" });
+    await runtimeEnv.DB.prepare(
+      `INSERT INTO receipt_r2_reconciliations
+       (operation_id,artifact_digest,row_count,natural_key_digest,last_event_time,measured_at)
+       VALUES ('op-bars',?,2,?,'2026-08-02','2026-08-01T00:00:00Z')`,
+    ).bind(receipt.digests.structured_digest, await canonicalDigest({
+      operation_id: "op-bars", natural_keys: ["k1", "k2"],
+    })).run();
     const digest = await commitReceipt(
-      { DB: runtimeEnv.DB } as ReceiptAuthorityEnv,
+      authorityEnv,
       "op-bars",
       receipt,
     );
@@ -873,6 +889,12 @@ describe("POST /v1/export/receipt-products workerd D1", () => {
         WHERE dataset='equities_bars_daily' AND segment_id='2026-08'`,
     ).first<{ status: string; receipt_run_id: number }>();
     expect(coverage).toEqual({ status: "COMPLETE", receipt_run_id: 1 });
+    expect(await runtimeEnv.DB.prepare(
+      "SELECT COUNT(*) AS n FROM receipt_authority_structured_rows WHERE operation_id='op-bars'",
+    ).first()).toEqual({ n: 0 });
+    expect(await runtimeEnv.DB.prepare(
+      "SELECT last_event_date,last_export_cursor FROM ingestion_watermarks WHERE dataset='equities_bars_daily'",
+    ).first()).toEqual({ last_event_date: "2026-08-02", last_export_cursor: null });
     await runtimeEnv.DB.prepare(
       `INSERT INTO receipt_authority_requests(
          operation_id,request_nonce,environment,source,contract_id,dataset,segment_id,state,
