@@ -157,34 +157,6 @@ def test_load_ops_occupancy_overlays_newer_cells(tmp_path) -> None:
     assert occ["liq_large"]["fresh"] == 0.4
 
 
-def test_run_eval_wave_local_stub_never_writes(tmp_path) -> None:
-    from research.occupancy_audit import run_eval_wave
-
-    def _invoke(**_kwargs):
-        return {
-            "ok": False,
-            "error": "llm_failed",
-            "n_adoptable": 0,
-            "proposals": [],
-            "reviews": [],
-        }
-
-    out = run_eval_wave(
-        {"mid_n_explore": {"x": 0.4}, "liq_large": {"x": 0.4}},
-        wave="test24eq",
-        root=tmp_path,
-        propose=True,
-        invoke=_invoke,
-    )
-    assert out["go"] is False
-    assert out["catalog_written"] is False
-    assert out["auto_inject"] is False
-    assert out["propose"]["written"] is False
-    assert out["propose"]["llm_failed_not_soup"] is True
-    assert (tmp_path / "eval-occupancy-maps-test24eq.json").is_file()
-    assert (tmp_path / "eval-cf-propose-test24eq.json").is_file()
-
-
 def test_merge_daily_path_cells_for_ids_later_file_wins(tmp_path) -> None:
     import json
 

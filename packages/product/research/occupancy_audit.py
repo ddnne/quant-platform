@@ -470,12 +470,6 @@ def write_eval_wave_pack(
     }
 
 
-from research.occupancy_audit_run import (  # noqa: E402
-    run_eval_wave,
-    run_occupancy_track,
-)
-
-
 __all__ = [
     "classify_occupancy_maps",
     "classify_occupancy_pair",
@@ -484,8 +478,6 @@ __all__ = [
     "merge_occupancy_cell_dumps",
     "occupancy_from_cells_file",
     "occupancy_recorded_drift",
-    "run_eval_wave",
-    "run_occupancy_track",
     "usable_eval_snapshot",
     "write_usable_eval_snapshot",
     "write_eval_wave_pack",
