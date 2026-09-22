@@ -180,6 +180,15 @@ export type ReceiptIssueResultV1 = {
   receipt: CollectionReceiptV3;
 };
 
+/** A durable slice is saved, but no receipt or completion is being asserted. */
+export type ReceiptContinuationV1 = {
+  schema_version: "receipt-evidence-continuation/v1";
+  operation_id: string;
+  state: "CONTINUATION_REQUIRED";
+};
+
+export type ReceiptServiceResultV1 = ReceiptIssueResultV1 | ReceiptContinuationV1;
+
 type ReceiptAuditRecoveryCanaryRequestBaseV1 = {
   schema_version: "receipt-audit-recovery-canary-request/v1";
   purpose: "receipt_authority_recovery_canary";
@@ -377,6 +386,13 @@ export interface ReceiptEvidenceAuthorityRpc {
     request: ReceiptAuditRecoveryCanaryRecoverRequestV1,
   ): Promise<ReceiptAuditRecoveryCanaryResultV1>;
   public_key_registration(): Promise<ReceiptPublicKeyRegistrationV1>;
+}
+
+export interface ReceiptAuthorityServiceRpc extends Omit<
+  ReceiptEvidenceAuthorityRpc, "issue_for_segment" | "recover_issue"
+> {
+  issue_for_segment(request: ReceiptIssueRequestV1): Promise<ReceiptServiceResultV1>;
+  recover_issue(request: ReceiptRecoveryRequestV1): Promise<ReceiptServiceResultV1>;
 }
 
 export type ReceiptAuthorityEnv = Omit<

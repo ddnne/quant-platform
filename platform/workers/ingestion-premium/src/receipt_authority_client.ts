@@ -1,5 +1,5 @@
 import type {
-  ReceiptEvidenceAuthorityRpc,
+  ReceiptAuthorityServiceRpc,
   ReceiptIssueResultV1,
   SegmentGrain,
 } from "../../receipt-evidence-authority/src/types";
@@ -14,7 +14,7 @@ import {
 export type ReceiptAuthorityClientEnv = {
   DB: D1Database;
   RECEIPT_EVIDENCE_AUTHORITY: Pick<
-    ReceiptEvidenceAuthorityRpc,
+    ReceiptAuthorityServiceRpc,
     "issue_for_segment" | "recover_issue"
   >;
 };
@@ -324,6 +324,15 @@ async function callPrepared(
       ...locator,
       operation: "recover_issue",
     } as never);
+  if (result.state === "CONTINUATION_REQUIRED") {
+    if (
+      result.schema_version !== "receipt-evidence-continuation/v1" ||
+      result.operation_id !== request.operation_id
+    ) throw new Error("Receipt continuation identity mismatch");
+    // Keep the caller PREPARED. Existing local recovery/tick control handles
+    // this condition; it must never enter the signed finalization path.
+    throw new Error(STRUCTURED_SLICE_INCOMPLETE);
+  }
   await finalizeRequest(env, request, result);
   return result;
 }

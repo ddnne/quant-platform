@@ -1,6 +1,10 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { canonicalDigest } from "./canonical";
+import { issueIdentity, requireReceiptRequest } from "./receipt_request_identity";
+import { STRUCTURED_SLICE_INCOMPLETE } from "./structured_reconciliation";
 import type {
   ReceiptAuthorityEnv,
+  ReceiptAuthorityServiceRpc,
   ReceiptAuditRecoveryBeginResultV1,
   ReceiptAuditRecoveryCanaryBeginRequestV1,
   ReceiptAuditRecoveryCanaryResultV1,
@@ -10,6 +14,8 @@ import type {
   ReceiptIssueResultV1,
   ReceiptPublicKeyRegistrationV1,
   ReceiptRecoveryRequestV1,
+  ReceiptRequestV1,
+  ReceiptServiceResultV1,
 } from "./types";
 
 export { ReceiptEvidenceAuthority } from "./authority_do";
@@ -22,9 +28,29 @@ function receiptAuthorityStub(
   return namespace.getByName(`receipt:${env.ENVIRONMENT}`);
 }
 
+async function serviceResult(
+  result: Promise<ReceiptIssueResultV1>,
+  request: ReceiptRequestV1,
+): Promise<ReceiptServiceResultV1> {
+  try {
+    return await result;
+  } catch (error) {
+    // A saved bounded slice is normal progress, not a failed service RPC.
+    // Preserve every other exception, including runtime cancellation.
+    if (!(error instanceof Error) || error.message !== STRUCTURED_SLICE_INCOMPLETE) {
+      throw error;
+    }
+    return {
+      schema_version: "receipt-evidence-continuation/v1",
+      operation_id: await canonicalDigest(issueIdentity(requireReceiptRequest(request))),
+      state: "CONTINUATION_REQUIRED",
+    };
+  }
+}
+
 export class ReceiptAuthorityService
   extends WorkerEntrypoint<ReceiptAuthorityEnv>
-  implements ReceiptEvidenceAuthorityRpc {
+  implements ReceiptAuthorityServiceRpc {
   override fetch(request: Request): Promise<Response> {
     void request;
     return Promise.resolve(new Response(null, {
@@ -38,26 +64,26 @@ export class ReceiptAuthorityService
 
   issue_for_segment(
     request: ReceiptIssueRequestV1,
-  ): Promise<ReceiptIssueResultV1> {
+  ): Promise<ReceiptServiceResultV1> {
     if (this.env.AUTHORITY_MODE !== "ACTIVE") {
       return Promise.reject(
         new Error("receipt evidence authority is PENDING activation"),
       );
     }
     const authority = receiptAuthorityStub(this.env);
-    return authority.issue_for_segment(request);
+    return serviceResult(authority.issue_for_segment(request), request);
   }
 
   recover_issue(
     request: ReceiptRecoveryRequestV1,
-  ): Promise<ReceiptIssueResultV1> {
+  ): Promise<ReceiptServiceResultV1> {
     if (this.env.AUTHORITY_MODE !== "ACTIVE") {
       return Promise.reject(
         new Error("receipt evidence authority is PENDING activation"),
       );
     }
     const authority = receiptAuthorityStub(this.env);
-    return authority.recover_issue(request);
+    return serviceResult(authority.recover_issue(request), request);
   }
 
   begin_audit_recovery_canary(

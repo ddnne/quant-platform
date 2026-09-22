@@ -60,7 +60,7 @@ import {
 import { todayJst, toJstIso } from "./identity";
 import { sha256HexFromString } from "./sha256";
 import type {
-  ReceiptEvidenceAuthorityRpc,
+  ReceiptAuthorityServiceRpc,
   ReceiptPublicKeyRegistrationV1,
 } from "../../receipt-evidence-authority/src/types";
 import {
@@ -100,7 +100,7 @@ export type Env = Omit<
   | "RECEIPT_AUTHORITY_OPERATION_MODE"
   | "OPS_PROJECTION_ENVIRONMENT"
 > & {
-  RECEIPT_EVIDENCE_AUTHORITY: ReceiptEvidenceAuthorityRpc;
+  RECEIPT_EVIDENCE_AUTHORITY: ReceiptAuthorityServiceRpc;
   RECEIPT_AUTHORITY_ENVIRONMENT: ReceiptAuthorityEnvironment;
   RECEIPT_AUTHORITY_OPERATION_MODE: "PENDING" | "ACTIVE";
   JQUANTS_API_KEY: string;
