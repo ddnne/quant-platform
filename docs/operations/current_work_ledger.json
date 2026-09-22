@@ -1,7 +1,7 @@
 {
   "schema": "quant-platform-work-ledger/v1",
   "staging_acquisition_checkpoint_20260922": {
-    "status": "STAGING_ROLLED_OUT_REMAINING_ACQUISITION_RUNNING_AUTHENTICATED_SMOKE_PENDING",
+    "status": "STAGING_ROLLED_OUT_FRESH_ACQUISITION_STOPPED_RPC_ERRORS_UNDER_INVESTIGATION",
     "supersedes": "The dated 20260921 source-repair-pending, exhausted-January approval and receipt-chain deployment descriptions below are historical. This record governs the 20260922 approved staging outcome; other HOLDs remain unchanged.",
     "approval": "User approved up to three additional fresh attempts EACH for equities_master 2023-01 and equities_bars_daily 2023-01. Preserve the original three failed attempts for each segment. Same-scope fixes, verification, Git, native CI and staging repair are included; no per-command reapproval.",
     "approval_evidence": "https://github.com/ddnne/quant-platform/pull/235#issuecomment-5769337572",
@@ -20,7 +20,7 @@
     "progress_and_usage_evidence": "https://github.com/ddnne/quant-platform/pull/235#issuecomment-5771064312",
     "recovery": "January master and financial/TOPIX receipts independently verified. Historical RPC hung diagnostics preserved; D1 batching is not claimed to fix their root cause. Financial window04:48-06:04UTC D1read479266/write131621, DO166.030939264GB*s; CPU/memory/fatal errors0. Windowed analytics are not a complete invoice; absent series UNKNOWN.",
     "snapshot_approval": "User approved bundled staging Receipt-to-cloud-snapshot outcome: https://github.com/ddnne/quant-platform/pull/238#issuecomment-5771761372. This supersedes the acquisition-only READY exclusion solely for staging candidate and conditional staging READY/Paper-only Trader publication after every proof gate passes. Existing Worker rollout, removal of evaluator READY private-key binding (done), no key generation/rotation. Candidate concurrency1, max3 fresh runs, existing180-minute watchdog, verified shutdown; additionalUSD10 monitored stop target, NOT invoice cap. Stop on missing data, signature mismatch, untrackable cost, unknown shutdown or unexpected permissions. Same-scope fixes/tests/Git included. Production, out-of-period acquisition, actualPilot/backtests, Mass, paid inference, orders, fullDBbackup, local market history and cancelledMCP/C09 remain excluded.",
-    "next_action": "Monitor existing18-job control/cost. Existing MASS_EVAL_TOKEN location remains unknown; user asked for location without secret value, no rotation. This blocks authenticated smoke/candidate, not acquisition or source work. Do not treat approval, rollout or32/50 as READY/PilotGO.",
+    "next_action": "06:10-06:18UTC Receipt Worker telemetry reports7 scriptThrewException requests. New acquisition stopped under anomaly policy:18-job control archived/read back at digest912f634dc3edfd6d25b33323cb9d194e21bd24d37026998288f17a3fafccfdd1 then removed at cursor0. Preserve February master PREPARED identity52e191ae5536bc897bdb293c3417caa03723a85a3a7333ff3a12894dae880d42 and recovery. Diagnose before restoring later jobs; CPU/memory error0 is not all-errors0. Existing MASS_EVAL_TOKEN location remains unknown; user asked for location only, no rotation. Authenticated smoke/candidate pending. No READY/PilotGO.",
     "rollout_evidence": "https://github.com/ddnne/quant-platform/pull/238#issuecomment-5772021734"
   },
   "staging_acquisition_approval_20260921": {
