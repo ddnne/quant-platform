@@ -1612,6 +1612,15 @@ describe("Receipt Evidence Authority in workerd", () => {
     await runtimeEnv.DB.prepare(
       "DROP TRIGGER inject_receipt_pre_sign_failure",
     ).run();
+    await runInDurableObject(stub, (_instance, state) => {
+      const scratch = new ReconciliationScratch(state.storage, 512 * 1024 * 1024);
+      expect(scratch.count(operationId)).toBeGreaterThan(0);
+      scratch.release(operationId);
+    });
+    await evictDurableObject(stub);
+    globalThis.fetch = (async () => {
+      throw new Error("scratch recovery must use retained raw without refetch");
+    }) as typeof fetch;
     const recovered = await stub.recover_issue({
       ...interruptedRequest,
       operation: "recover_issue",
@@ -1668,22 +1677,26 @@ describe("Receipt Evidence Authority in workerd", () => {
     };
     const operationId = await canonicalDigest(slicedRequest);
     if (interrupted) {
-      await runtimeEnv.DB.prepare(
-        `CREATE TRIGGER interrupt_third_page BEFORE INSERT ON receipt_authority_structured_rows
-         WHEN NEW.payload LIKE '%2024-02-03%'
-         BEGIN SELECT RAISE(ABORT, 'injected page interruption'); END`,
-      ).run();
+      await runInDurableObject(stub, (_instance, state) => {
+        new ReconciliationScratch(state.storage, 512 * 1024 * 1024);
+        state.storage.sql.exec(
+          `CREATE TRIGGER interrupt_third_page BEFORE INSERT ON reconciliation_scratch
+           WHEN NEW.row_json LIKE '%2024-02-03%'
+           BEGIN SELECT RAISE(ABORT, 'injected page interruption'); END`,
+        );
+      });
     }
     await expect(runInDurableObject(stub, (instance) =>
       instance.issue_for_segment(slicedRequest)
     )).rejects.toThrow(interrupted ? "injected page interruption" : "structured reconciliation slice is incomplete");
-    expect(await runtimeEnv.DB.prepare(
-      `SELECT COUNT(*) AS count FROM receipt_authority_structured_rows
-        WHERE operation_id=?`,
-    ).bind(operationId).first<{ count: number }>()).toEqual({ count: interrupted ? 2 : 4 });
+    expect(await runInDurableObject(stub, (_instance, state) =>
+      new ReconciliationScratch(state.storage, 512 * 1024 * 1024).count(operationId)
+    )).toBe(interrupted ? 2 : 4);
     if (interrupted) {
-      await runtimeEnv.DB.prepare("DROP TRIGGER interrupt_third_page").run();
-      // Simulate the crash window where D1 committed but the R2 cursor did not.
+      await runInDurableObject(stub, (_instance, state) => {
+        state.storage.sql.exec("DROP TRIGGER interrupt_third_page");
+      });
+      // Simulate the crash window where scratch committed but its R2 cursor did not.
       const objects = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.list({
         prefix: `raw/receipt-authority/production/${request.dataset_id}/${request.segment_id}/${operationId.slice(7)}/`,
       });
@@ -1708,10 +1721,10 @@ describe("Receipt Evidence Authority in workerd", () => {
       state: "FINALIZED",
       replayed: true,
     });
-    expect(await runtimeEnv.DB.prepare(
-      `SELECT COUNT(*) AS count FROM receipt_authority_structured_rows
-        WHERE operation_id=?`,
-    ).bind(operationId).first<{ count: number }>()).toEqual({ count: 5 });
+    expect(recovered.receipt.structured_row_count).toBe(5);
+    expect(await runInDurableObject(stub, (_instance, state) =>
+      new ReconciliationScratch(state.storage, 512 * 1024 * 1024).count(operationId)
+    )).toBe(0);
   });
 
   it("finishes a monthly-sized capture through bounded resumes and streamed product bytes", async () => {
@@ -1753,6 +1766,16 @@ describe("Receipt Evidence Authority in workerd", () => {
     expect(calls).toBe(pageCount);
     expect(result!.receipt.raw_row_count).toBe(pageCount * rowsPerPage);
     expect(result!.receipt.structured_row_count).toBe(pageCount * rowsPerPage);
+    expect(await runtimeEnv.DB.prepare(
+      `SELECT (SELECT COUNT(*) FROM receipt_authority_structured_rows) AS shadow,
+              (SELECT COUNT(*) FROM jquants_records) AS facts,
+              (SELECT COUNT(*) FROM ingestion_change_log) AS changes,
+              (SELECT COUNT(*) FROM receipt_r2_reconciliations) AS measurements`,
+    ).first()).toEqual({ shadow: 0, facts: 0, changes: 0, measurements: 1 });
+    await runInDurableObject(stub, (_instance, state) => {
+      const scratch = new ReconciliationScratch(state.storage, 512 * 1024 * 1024);
+      expect(scratch.count(result!.operation_id)).toBe(0);
+    });
     expect(await runtimeEnv.DB.prepare(
       "SELECT last_event_date,last_ingested_at FROM ingestion_watermarks WHERE dataset='equities_bars_daily'",
     ).first()).toEqual({

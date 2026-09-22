@@ -49,11 +49,23 @@ internal scratch producer, compact reconciliation metadata, Receipt commit
 gate and mixed legacy/R2 readers are implemented. Migration 0024 is source
 only. Scratch is released after durable finalization (and on finalized replay);
 an empty workspace can restart from retained raw using the original timestamp.
-The production DO entrypoint does not yet supply scratch. Its bounded capacity
-and abandoned-work retention policy, end-to-end restart tests, and R2 source/
-export/applied generation wiring remain required before activation. R2-mode
+The DO entrypoint now supplies scratch for new operations, with a 512 MiB
+whole-database admission cap reserving the remaining platform capacity for
+authority metadata; existing operations retain their recorded storage mode.
+This source change is not deployed. Abandoned-work retention policy, complete
+legacy/R2 runtime validation, and R2 source/export/applied generation wiring
+remain required before activation. R2-mode
 watermarks deliberately report a NULL legacy export cursor: an unrelated D1
 row-change sequence must not make the new path look current or READY.
+
+Entrypoint validation: the existing 80,707-row monthly synthetic scenario
+completes with zero D1 fact/shadow/change rows, one compact measurement and
+empty scratch after finalization. Pre-sign scratch-loss/eviction recovery and
+both page-interruption scenarios pass without reacquisition. The broad runtime
+run still exposed six legacy-writer-dependent cases to adapt or seed explicitly
+as pre-upgrade operations (v1 recovery, replay/re-proof and D1 append-only tests).
+The WIP branch is therefore not merge-ready; the earlier all-green test result
+predated entrypoint activation and must not be used as its acceptance evidence.
 
 First change the new-operation producer and its consumers as one reviewed
 contract: reconciliation/materialization, receipt finalization/watermarks,

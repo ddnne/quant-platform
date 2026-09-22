@@ -22,6 +22,7 @@ import {
   type WrappedPrivateKey,
 } from "./key_crypto";
 import { executeReceiptRequest } from "./reconcile";
+import { ReconciliationScratch } from "./reconciliation_scratch";
 import {
   hashAuthorityEvent,
   initializeEventCheckpoint,
@@ -1467,6 +1468,10 @@ export class ReceiptEvidenceAuthority extends DurableObject<ReceiptAuthorityEnv>
 
   #internalAuthority() {
     return {
+      // Bound temporary row reconciliation well below the authority database
+      // limit; keep remaining capacity for issuance/recovery/audit metadata.
+      // Existing operations retain their persisted legacy storage mode.
+      scratch: new ReconciliationScratch(this.ctx.storage, 512 * 1024 * 1024),
       begin: (
         operationId: string,
         requestDigest: string,
