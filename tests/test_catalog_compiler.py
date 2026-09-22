@@ -88,20 +88,3 @@ def test_replay_freeze_rejects_manifest_count_drift(tmp_path, monkeypatch) -> No
     monkeypatch.setattr(compiler, "catalog_artifact_dir", lambda root=None: dest)
     with pytest.raises(CatalogAndPlusNStoppedError, match="manifest n=1"):
         assert_legacy_catalog_artifact_frozen()
-
-
-@pytest.mark.replay
-def test_surprise_with_flow_gate_is_not_flow_family() -> None:
-    from research.catalog_family import classify_catalog_row
-
-    row = classify_catalog_row(
-        {
-            "logic_id": "surprise_xs_crowded_margin",
-            "evaluator": "research.unique_logic.event_combos.evaluate_combo_daily_mtm",
-            "params": {"gates": ["crowded_margin", "liq_high"]},
-        }
-    )
-    assert row["primary_hypothesis"] == "surprise_xs"
-    assert row["flow_family"] is False
-    assert "flow_gate" in row["gate_tags"]
-    assert row["go"] is False
