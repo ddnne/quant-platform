@@ -705,6 +705,10 @@ describe("Receipt Evidence Authority in workerd", () => {
     await runInDurableObject(stub, (_instance, state) => {
       const scratch = new ReconciliationScratch(state.storage, 16 * 1024 * 1024);
       expect(scratch.page("first", "")).toEqual([row]);
+      scratch.append("abandoned", [row]);
+      scratch.expire(Date.now() + 1, ["first", "second"]);
+      expect(scratch.count("abandoned")).toBe(0);
+      expect(scratch.count("first")).toBe(1);
       scratch.release("first");
       expect(scratch.count("first")).toBe(0);
       expect(scratch.page("second", "")).toEqual([row]);

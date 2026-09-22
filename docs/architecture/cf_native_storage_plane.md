@@ -52,8 +52,11 @@ an empty workspace can restart from retained raw using the original timestamp.
 The DO entrypoint now supplies scratch for new operations, with a 512 MiB
 whole-database admission cap reserving the remaining platform capacity for
 authority metadata; existing operations retain their recorded storage mode.
-This source change is not deployed. Abandoned-work retention policy, complete
-legacy/R2 runtime validation, and R2 source/export/applied generation wiring
+This source change is not deployed. On the next authority invocation, scratch
+untouched for 24 hours is reclaimed except for in-flight operations. Activity
+is committed atomically with row appends; no audit alarm is replaced. Evicted
+or expired work reconstructs from retained raw, not from D1 history. Complete
+legacy/R2 runtime validation and R2 source/export/applied generation wiring
 remain required before activation. R2-mode
 watermarks deliberately report a NULL legacy export cursor: an unrelated D1
 row-change sequence must not make the new path look current or READY.

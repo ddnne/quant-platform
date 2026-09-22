@@ -18,6 +18,10 @@ export class ReconciliationScratch {
       row_json TEXT NOT NULL,
       PRIMARY KEY(operation_id,natural_key)
     )`);
+    storage.sql.exec(`CREATE TABLE IF NOT EXISTS reconciliation_scratch_activity (
+      operation_id TEXT PRIMARY KEY,
+      touched_at INTEGER NOT NULL
+    )`);
   }
 
   append(operationId: string, rows: CanonicalStructuredRow[]): void {
@@ -25,6 +29,11 @@ export class ReconciliationScratch {
     // transaction rolls back both conflicting replay and capacity overflow.
     this.storage.transactionSync(() => {
       this.requireCapacity();
+      this.storage.sql.exec(
+        `INSERT INTO reconciliation_scratch_activity VALUES (?,?)
+         ON CONFLICT(operation_id) DO UPDATE SET touched_at=excluded.touched_at`,
+        operationId, Date.now(),
+      );
       for (const row of rows) {
         const body = canonicalJson(row);
         this.storage.sql.exec(
@@ -83,9 +92,25 @@ export class ReconciliationScratch {
   }
 
   release(operationId: string): void {
-    this.storage.sql.exec(
-      "DELETE FROM reconciliation_scratch WHERE operation_id=?", operationId,
-    );
+    this.storage.transactionSync(() => {
+      this.storage.sql.exec(
+        "DELETE FROM reconciliation_scratch WHERE operation_id=?", operationId,
+      );
+      this.storage.sql.exec(
+        "DELETE FROM reconciliation_scratch_activity WHERE operation_id=?", operationId,
+      );
+    });
+  }
+
+  expire(before: number, activeOperationIds: string[]): void {
+    // The authority supplies its in-flight operations, never a remote caller.
+    // Raw capture and signed products are outside this disposable workspace.
+    const expired = this.storage.sql.exec<{ operation_id: string }>(
+      `SELECT operation_id FROM reconciliation_scratch_activity
+       WHERE touched_at<? AND operation_id NOT IN (SELECT value FROM json_each(?))`,
+      before, JSON.stringify(activeOperationIds),
+    ).toArray();
+    for (const row of expired) this.release(row.operation_id);
   }
 
   private requireCapacity(): void {
