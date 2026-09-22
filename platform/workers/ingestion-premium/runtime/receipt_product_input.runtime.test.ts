@@ -415,6 +415,7 @@ type SeedSpec = {
   rawPageCount?: number;
   rawBytes?: number;
   phase?: "complete" | "structured";
+  r2?: "verified" | "missing";
 };
 
 async function seedComplete(db: D1Database, spec: SeedSpec): Promise<void> {
@@ -470,11 +471,11 @@ async function seedComplete(db: D1Database, spec: SeedSpec): Promise<void> {
     `INSERT INTO receipt_authority_operations(
        operation_id,request_digest,run_id,environment,source,contract_id,dataset,segment_id,
        segment_start,segment_end,state,checked_at,updated_at,raw_manifest_key,
-       raw_manifest_digest,raw_page_count,raw_row_count,raw_bytes
+       raw_manifest_digest,raw_page_count,raw_row_count,raw_bytes,structured_storage
      ) VALUES (
        ?,?,?,'staging','jquants','jquants_premium_core',?,?,
        '2026-08-01','2026-08-31','COLLECTING','2026-08-01T00:00:00Z','2026-08-01T00:00:00Z',
-       ?,?,?,2,?
+       ?,?,?,2,?,?
      )`,
   ).bind(
     spec.operationId,
@@ -486,8 +487,9 @@ async function seedComplete(db: D1Database, spec: SeedSpec): Promise<void> {
     spec.objects.rawDigest,
     rawPageCount,
     rawBytes,
+    spec.r2 === undefined ? "legacy_d1" : "r2_scratch_v1",
   ).run();
-  await db.prepare(
+  if (spec.r2 === undefined) await db.prepare(
     `INSERT INTO receipt_authority_structured_rows(
        operation_id,natural_key,source,dataset,event_time,available_at,ingested_at,payload,raw_payload,row_digest
      ) VALUES
@@ -526,6 +528,15 @@ async function seedComplete(db: D1Database, spec: SeedSpec): Promise<void> {
     rawPageCount,
     rawBytes,
   ).run();
+  if (spec.r2 === "verified") {
+    await db.prepare(
+      `INSERT INTO receipt_r2_reconciliations
+       (operation_id,artifact_digest,row_count,natural_key_digest,last_event_time,measured_at)
+       VALUES (?,?,2,?,'2026-08-02','2026-08-01T00:00:00Z')`,
+    ).bind(spec.operationId, artifactDigest, await canonicalDigest({
+      operation_id: spec.operationId, natural_keys: ["k1", "k2"],
+    })).run();
+  }
   await db.prepare(
     `UPDATE receipt_authority_operations
         SET state='STRUCTURED_COMMITTED',
@@ -630,6 +641,7 @@ function postReceiptProducts(
 async function seedPair(options?: {
   calRequest?: "FINALIZED" | "PREPARED";
   barsArtifactDigest?: string;
+  barsR2?: "verified" | "missing";
 }) {
   await applyD1Migrations(runtimeEnv.DB, migrations);
   await seedBase(runtimeEnv.DB);
@@ -677,6 +689,7 @@ async function seedPair(options?: {
     envelope: await signV3Claims(pair, barsClaims),
     objects,
     artifactDigest: options?.barsArtifactDigest,
+    r2: options?.barsR2,
   });
   await seedComplete(runtimeEnv.DB, {
     dataset: "markets_calendar",
@@ -799,7 +812,7 @@ afterEach(async () => {
 
 describe("POST /v1/export/receipt-products workerd D1", () => {
   it("describes multi-segment evidence in sorted order with stable digest and plane metadata", async () => {
-    const { registry } = await seedPair();
+    const { registry } = await seedPair({ barsR2: "verified" });
     installRegistry("staging", registry);
     const env = exportEnv();
     const reverse = await postReceiptProducts(env, inputRequest([
@@ -966,6 +979,16 @@ describe("POST /v1/export/receipt-products workerd D1", () => {
       status: "HOLD",
       hold_reason: "UNFINALIZED_REQUEST",
       hold_selector: { dataset: "markets_calendar", segment_id: "2026-08" },
+    });
+    await reset();
+    const missing = await seedPair({ barsR2: "missing" });
+    installRegistry("staging", missing.registry);
+    const absentMeasurement = await postReceiptProducts(exportEnv(), inputRequest([
+      { dataset: "equities_bars_daily", segment_id: "2026-08" },
+    ]));
+    expect(absentMeasurement?.status).toBe(409);
+    expect(await absentMeasurement!.json()).toMatchObject({
+      status: "HOLD", hold_reason: "UNTRUSTED_CHAIN",
     });
   });
 

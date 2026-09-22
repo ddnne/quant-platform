@@ -1,6 +1,7 @@
 /** Metadata-only Ops Projection publisher. Never reads market/fact tables. */
 
 import { catalogProjectionRows, datasetById } from "./catalog";
+import { reconciliationRead } from "./receipt_reconciliation_read";
 import {
   COVERAGE_POLICY_VERSION,
   aggregateDatasetStatus,
@@ -51,6 +52,7 @@ const SOURCE_WHITELIST = [
   "receipt_authority_operations",
   "receipt_authority_requests",
   "receipt_authority_structured_rows",
+  "receipt_r2_reconciliations",
   "jsda_v3_cutover_control",
   "jsda_acquisition_jobs",
   "jsda_acquisition_jobs_v2",
@@ -906,11 +908,12 @@ export async function publishOpsProjection(
       !/UNKNOWN/i.test(String(row.raw_manifest_digest || "")),
   );
 
+  const reconciliation = reconciliationRead(present.has("receipt_r2_reconciliations"));
   const operations = present.has("receipt_authority_operations") &&
       present.has("coverage_segments")
     ? await sourceAllPaged<Record<string, unknown>>(
         source,
-        `SELECT operation.operation_id, operation.run_id, operation.environment,
+        `SELECT ${reconciliation.columns} operation.operation_id, operation.run_id, operation.environment,
                 operation.source, operation.contract_id, operation.dataset,
                 operation.segment_id, operation.segment_start, operation.segment_end,
                 operation.state, operation.receipt_digest, operation.request_digest,
@@ -918,6 +921,7 @@ export async function publishOpsProjection(
                 operation.raw_manifest_key, operation.raw_manifest_digest,
                 operation.raw_page_count, operation.raw_row_count, operation.raw_bytes
            FROM receipt_authority_operations AS operation
+           ${reconciliation.join}
            JOIN coverage_segments AS segment
              ON segment.source=operation.source
             AND segment.dataset=operation.dataset

@@ -3,6 +3,7 @@
  * publishes, never reads R2, never selects artifact_body / fact rows.
  */
 import controlledPilot from "../../../../specs/ready/controlled_pilot_v1.generated.json";
+import { reconciliationRead } from "./receipt_reconciliation_read";
 import {
   canonicalDigest,
   canonicalJson,
@@ -587,7 +588,7 @@ async function describeFromDb(
       budget,
       `SELECT name FROM sqlite_master
         WHERE type='table' AND name IN (SELECT value FROM json_each(?))`,
-      [JSON.stringify([...REQUIRED_TABLES, "ingestion_change_log"])],
+      [JSON.stringify([...REQUIRED_TABLES, "ingestion_change_log", "receipt_r2_reconciliations"])],
     )).map((row) => row.name),
   );
   for (const name of REQUIRED_TABLES) {
@@ -710,10 +711,11 @@ async function describeFromDb(
     throw new HoldError("MISSING_ROW", missingSelector(frozen, products));
   }
 
+  const reconciliation = reconciliationRead(present.has("receipt_r2_reconciliations"));
   const operations = await sourceAll<Record<string, unknown>>(
     db,
     budget,
-    `SELECT operation.operation_id, operation.run_id, operation.environment,
+    `SELECT ${reconciliation.columns} operation.operation_id, operation.run_id, operation.environment,
             operation.source, operation.contract_id, operation.dataset,
             operation.segment_id, operation.segment_start, operation.segment_end,
             operation.state, operation.receipt_digest, operation.request_digest,
@@ -721,6 +723,7 @@ async function describeFromDb(
             operation.raw_manifest_key, operation.raw_manifest_digest,
             operation.raw_page_count, operation.raw_row_count, operation.raw_bytes
        FROM receipt_authority_operations AS operation
+       ${reconciliation.join}
        JOIN json_each(?) AS wanted
          ON operation.source = json_extract(wanted.value, '$.source')
         AND operation.dataset = json_extract(wanted.value, '$.dataset')
@@ -762,6 +765,7 @@ async function describeFromDb(
     );
   }
 
+  const legacyOperations = operations.filter((row) => row.structured_storage === "legacy_d1");
   const naturalRows = await sourceAll<{ operation_id: string; n: number }>(
     db,
     budget,
@@ -770,11 +774,11 @@ async function describeFromDb(
        JOIN json_each(?) AS wanted
          ON structured.operation_id = wanted.value
       GROUP BY structured.operation_id`,
-    [JSON.stringify(operations.map((row) => String(row.operation_id)))],
+    [JSON.stringify(legacyOperations.map((row) => String(row.operation_id)))],
   );
-  if (naturalRows.length !== frozen.length) {
+  if (naturalRows.length !== legacyOperations.length) {
     const have = new Set(naturalRows.map((row) => String(row.operation_id)));
-    const missing = operations.find((row) => !have.has(String(row.operation_id)));
+    const missing = legacyOperations.find((row) => !have.has(String(row.operation_id)));
     throw new HoldError(
       "MISSING_ROW",
       selectorOf(missing?.dataset, missing?.segment_id),
