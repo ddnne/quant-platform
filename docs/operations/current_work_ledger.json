@@ -1,5 +1,26 @@
 {
   "schema": "quant-platform-work-ledger/v1",
+  "staging_acquisition_checkpoint_20260922": {
+    "status": "FRESH_JOBS_STOPPED_SAME_MASTER_OPERATION_RECOVERING",
+    "supersedes": "The dated 20260921 source-repair-pending, exhausted-January approval and receipt-chain deployment descriptions below are historical. This record governs the 20260922 approved staging outcome; other HOLDs remain unchanged.",
+    "approval": "User approved up to three additional fresh attempts EACH for equities_master 2023-01 and equities_bars_daily 2023-01. Preserve the original three failed attempts for each segment. Same-scope fixes, verification, Git, native CI and staging repair are included; no per-command reapproval.",
+    "approval_evidence": "https://github.com/ddnne/quant-platform/pull/235#issuecomment-5769337572",
+    "limits": "One acquisition at a time. USD20 operational stopping target, NOT a billing hard cap. No out-of-period warmup, production, key changes, READY, Pilot, Mass, FoF, broker, orders or full D1 backup. Remaining previously approved in-period jobs remain conditional on successful first receipts and attributable usage; no expansion on missing cost evidence.",
+    "accepted_source_sha": "96dc29ff20d673331d24783b4452b2480af29607",
+    "source_delivery": "PR234 and PR235 merged; exact merged-main native check succeeded (build 0a0dd4a9-b7e1-4e37-8144-7456589e03ad). Independent fresh source clone clean and matched origin/main; source delivery does not establish data readiness.",
+    "staging_acceptance_digest": "sha256:7e92ae5f27e8e97018931c3a504a105b9dd512976a019b41c4c373f5bcb0a03d",
+    "staging_acceptance_evidence": "https://github.com/ddnne/quant-platform/pull/235#issuecomment-5761506167",
+    "staging_scope": "Only acquisition Secrets, ReceiptAuthority and Premium caller aligned to accepted source; AUDIT_ONLY and research_eligible=false. Other Workers and production are not accepted by this receipt-chain evidence.",
+    "current_operation_id": "sha256:77aa7d8925f37c62bd2eb8feb0ec047c7fb80ec8ffff9b0cbdd92f4619b0b642",
+    "current_run_id": 6830,
+    "attempts_at_checkpoint": "Additional master 1/3 used; additional January bars 0/3 used. Fins_summary, TOPIX and later months not started. Re-query live state before dispatch; these are observations, not a resettable counter.",
+    "control_state": "Active exact_five_compiled_acquisition control removed after archive/readback due to Service RPC hung diagnostics. This stops new jobs, not existing PREPARED recovery. Do not restore automatically or allocate a new operation because observation times out.",
+    "control_archive": "quant-structured-staging/control/archive/exact_five_compiled_acquisition/10506d86b37eaf3529b2187dca9166db5bf1142aac5874b94dcf91fc201bf9cc.json",
+    "stop_evidence": "https://github.com/ddnne/quant-platform/pull/235#issuecomment-5770982263",
+    "progress_and_usage_evidence": "https://github.com/ddnne/quant-platform/pull/235#issuecomment-5771064312",
+    "recovery": "Immutable capture has 19 pages and 80683 rows. Same-identity structured checkpoints advance, but receipt_digest remains null at this checkpoint. Require independent final receipt/product verification and inspect the unresolved RPC diagnostics before releasing later jobs. Windowed analytics are not a complete invoice; absent metric series mean UNKNOWN, not zero.",
+    "next_approval": "Consolidate any remaining Worker rollout, cloud snapshot/projection/READY/Trader integration decision into a defined outcome with scope, cost basis, stop/rollback and exclusions. Do not implicitly resume cancelled work, out-of-period acquisition, production or Pilot. No new approval is required merely to diagnose or recover this approved operation."
+  },
   "staging_acquisition_approval_20260921": {
     "status": "STOPPED_MASTER_THREE_ATTEMPTS_FAILED_SOURCE_REPAIR_PENDING",
     "scope": "38 in-period segments: equities_bars_daily 2023-03 through 2023-10; equities_master, fins_summary and indices_bars_daily_topix each 2023-01 through 2023-10. Existing evidence reused where valid.",
