@@ -1,55 +1,45 @@
-# research
+# Research control plane
 
-Research control plane (Phase 7 stays OFF): readiness attestation, experiment plans.
+Personal DRAFT, Controlled Pilot and disabled Mass are separate paths.
+Source availability is not operational authorization or evidence of live READY.
 
-**Mass is NO-GO.** A track result is not a pass / not GO. READY and Phase 7 stay closed.
+## Runtime entrypoints
 
-**Recording:** results go to R2 `research/eval/job={id}/` (plus `research/mass_eval`) and a small D1 job index. Git holds catalogs and evaluators. Do **not** add `scripts/run_wNN_*.py` or wave proof scorecards. See [`docs/architecture/adr_research_recording.md`](../../../docs/architecture/adr_research_recording.md).
+- Personal DRAFT uses `personal_service.PersonalResearchService` through the
+  [cloud research Worker](../../../platform/workers/research-mass-eval/README.md).
+  Results cannot publish Controlled READY or authorize promotion.
+- Controlled Paper uses `execution.paper_service.ControlledPilotExecutionService`
+  and the Worker's `POST /v1/controlled-pilot` route. Exact plan/profile/closure,
+  immutable snapshot, readiness and Trader checks remain required.
+- `POST /v1/receipt-candidate` constructs a cloud candidate from receipt evidence;
+  successful construction alone is not READY or permission to execute.
+- `POST /v1/daily-path`, `POST /v1/mass-eval` and `POST /v1/propose-thesis`
+  reject authenticated requests with 403. They are not alternative entrypoints.
 
-## Canonical SoT
+The package barrel exports the fail-closed control plane lazily; use explicit
+Personal/Controlled service entrypoints. `VerifiedPilotReadiness` and
+`VerifiedMassReadiness` are distinct. Mass remains disabled.
 
-- **Candidate eval:** `research.cf_daily_path_job` `POST /v1/daily-path` → R2 `research/eval/job={id}/`. Helpers: `research.daily_path_eval`.
-- **Tracks:** `research.eval_tracks` `mid_n_explore` / `liq_large` (ADV-ranked; **not** head-N).
-- **Live flags:** `research.eval_flags` (AND +N stopped, reconstitution apply, wave id).
-- **Batch guards:** `research.occupancy_guards` (AND freeze, known-thin, cheap_pb cap, occupancy band).
-- **Execution capabilities:** `research.research_capabilities` deny-by-default. Worker eval/propose require the same gates.
-- **Candidate grade:** `research.candidate_policy.job_candidate_grade` (partial → false).
-- **Legacy inventory:** `research.unique_logic.worker_bodies.countable_thesis_ids()` is intentionally empty. Catalog size is not a success metric or a runtime input.
-- **Legacy replay artifact:** `artifacts/replay/legacy_strategy_catalog/{manifest.json,migration.jsonl}`. Normal Pilot/Mass imports must not read it; `specs/research_logics/` remains empty.
-- **Propose:** `POST /v1/propose-thesis` (`research.cf_propose_thesis`; **AI Gateway only**, never `env.AI.run`; 403 `generation` without verified readiness; LLM failure is `ok:false`/`llm_failed`, not stub-as-success; review_proposal_row; no auto-inject).
-- **Legacy replay compiler:** `research.catalog_compiler` verifies the immutable closed-DSL artifact and semantic hashes. It emits no Worker source and is not a Pilot/Mass authority.
-- **Evaluation IR:** `research.evaluation_ir` calls `job_candidate_grade`; unknown fields rejected. Daily-path job artifacts carry `evaluation-ir/v1`; `candidate_grade` is the IR candidate (not a second grade).
-- **Phase 7 pilot:** `research.phase7_pilot.MassResearchScheduler` cannot construct without readiness+budget+plan+eval service+immutable store. Not enabled.
-- **Historical catalog replay:** `research.occupancy_audit` remains available for explicit audit/replay only. It cannot populate the Pilot or Mass runtime inventory.
-- **`cost_models.py` / `options_225_vol_series.py`:** live math. Do not fake-split.
+## Replay and storage
 
-CF period-net (`research.cf_mass_eval_job`) remains disabled; `n_survivors` is not a pass. Offline `research.offline.bar_eval` / `multiyear` are local helpers, not candidate SoT.
+The legacy catalog lives only in
+`artifacts/replay/legacy_strategy_catalog/{manifest.json,migration.jsonl}`.
+`catalog_compiler` validates its closed DSL and hashes; `occupancy_audit` is
+explicit audit/replay only. Neither populates runtime strategy inventory.
+Offline helpers and the local CLI are developer/recovery compatibility, not the
+normal market-data or research path.
 
-## Public entry (control plane)
+Market acquisition belongs to the ingestion plane. Research orchestration must
+not fetch market HTTP or open fact SQLite directly. Cloud job SQLite is ephemeral;
+do not persist authentic market history on a laptop. Keep PIT, AM-to-PM causality,
+immutable evidence and bounded cost; no live orders or automatic promotion.
 
-```python
-from research import (
-    ResearchReadinessService,
-    VerifiedResearchReadiness,
-    require_mass_research_start,
-    MassResearchDisabledError,
-    ExperimentPlan,
-    ExperimentScheduler,
-)
-```
+## Canonical references
 
-Mass start is **fail-closed** without `VerifiedResearchReadiness`; operator override is rejected.
-
-## Allowed imports
-
-- `selection`, `paper_runtime`
-- `data_contracts.permanent_defer` (COMPLETE-21 / DEFER guard)
-
-## Forbidden
-
-- Market HTTP (`ingestion`)
-- Claiming Mass ON without residual + proof
-- Direct fact SQLite from research orchestration
-- Arming Phase7 / Mass / READY from this package
-
-See [docs/architecture/phase7_fail_closed.md](../../../docs/architecture/phase7_fail_closed.md).
+- [Architecture](../../../docs/architecture.md): data and execution boundaries.
+- [Research recording](../../../docs/architecture/adr_research_recording.md):
+  durable artifact placement rather than wave scripts or scorecards.
+- [Runbook](../../../docs/operations/current_production_runbook.md): operational
+  procedures and staged authorization.
+- [Work ledger](../../../docs/operations/current_work_ledger.json): accepted scope
+  and cancel/HOLD records, not a substitute for live observations.
