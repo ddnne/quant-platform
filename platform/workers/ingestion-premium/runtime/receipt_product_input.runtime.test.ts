@@ -853,6 +853,10 @@ describe("POST /v1/export/receipt-products workerd D1", () => {
       raw_bytes: 2,
     });
     expect(segments[0]!.product).not.toHaveProperty("artifact_body");
+    expect(segments[0]!.source_cursor).toEqual({
+      namespace: "receipt_product_publications/v1", sequence: 1,
+    });
+    expect(segments[1]!.source_cursor).toBeNull();
     expect(left.input_set_digest).toBe(right.input_set_digest);
     expect(left.segments).toEqual(right.segments);
     const observation = left.read_observation as Record<string, unknown>;

@@ -316,6 +316,17 @@ def materialize_receipt_segment(
         raise ReceiptCandidateMaterializeError("environment is not pinned")
     if type(descriptor) is not dict:
         raise ReceiptCandidateMaterializeError("segment descriptor must be an object")
+    source_cursor = descriptor.get("source_cursor")
+    if source_cursor is not None:
+        if (
+            type(source_cursor) is not dict
+            or set(source_cursor) != {"namespace", "sequence"}
+            or source_cursor["namespace"] != "receipt_product_publications/v1"
+            or type(source_cursor["sequence"]) is not int
+            or source_cursor["sequence"] < 1
+        ):
+            raise ReceiptCandidateMaterializeError("receipt source cursor is invalid")
+        source_cursor = dict(source_cursor)
     conn = store._conn  # noqa: SLF001 — data-plane transaction owner
     try:
         receipt = collection_receipt_from_signed_envelope(
@@ -506,12 +517,36 @@ def materialize_receipt_segment(
                 observed_bytes=observed_bytes,
                 artifact=artifact,
             )
+        if source_cursor is not None:
+            # Persist the selected publication, not MAX(global cursor): other
+            # publications may not belong to this candidate's dependency scope.
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS receipt_candidate_source_cursors ("
+                "operation_id TEXT PRIMARY KEY, namespace TEXT NOT NULL, "
+                "sequence INTEGER NOT NULL, receipt_digest TEXT NOT NULL)"
+            )
+            cursor_row = (
+                operation_id, source_cursor["namespace"], source_cursor["sequence"],
+                closure.receipt_digest,
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO receipt_candidate_source_cursors VALUES (?,?,?,?)",
+                cursor_row,
+            )
+            stored_cursor = conn.execute(
+                "SELECT operation_id,namespace,sequence,receipt_digest "
+                "FROM receipt_candidate_source_cursors WHERE operation_id=?",
+                (operation_id,),
+            ).fetchone()
+            if tuple(stored_cursor) != cursor_row:
+                raise ReceiptCandidateMaterializeError("receipt source cursor changed")
         _guard_database_bytes(store, max_database_bytes=max_database_bytes)
         return {
             "dataset": closure.dataset,
             "segment_id": closure.segment_id,
             "run_id": closure.run_id,
             "receipt_digest": closure.receipt_digest,
+            "source_cursor": source_cursor,
             "row_count": observed_count,
             "byte_count": observed_bytes,
         }

@@ -847,6 +847,17 @@ async function describeFromDb(
     }
     const envelope = parseJsonObject(receipt[0]!.digests_json);
     if (!isPlainObject(envelope)) throw new HoldError("UNTRUSTED_CHAIN", selector);
+    const publication = operation[0]!;
+    const sourceCursor = publication.structured_storage === "r2_scratch_v1"
+      ? {
+        namespace: "receipt_product_publications/v1",
+        sequence: requireInt(publication.r2_publication_seq),
+      } : null;
+    if (sourceCursor !== null && (
+      sourceCursor.sequence === null || sourceCursor.sequence < 1 ||
+      publication.r2_publication_receipt_digest !== publication.receipt_digest ||
+      publication.r2_publication_artifact_digest !== product[0]!.artifact_digest
+    )) throw new HoldError("UNTRUSTED_CHAIN", selector);
     segments.push({
       source: ref.source,
       dataset: ref.dataset,
@@ -858,6 +869,7 @@ async function describeFromDb(
       receipt_run_id: ref.receipt_run_id,
       operation_id: String(operation[0]!.operation_id),
       receipt_digest: String(operation[0]!.receipt_digest),
+      source_cursor: sourceCursor,
       signed_receipt: envelope,
       product: {
         schema: "jquants_records/v1",

@@ -316,6 +316,9 @@ def test_genuine_descriptor_persists_text_artifact_and_catalog_detects_corruptio
     rows, product_path, raw_path, descriptor, _receipt = _signed_bundle(
         tmp_path, receipt_ed25519_keys
     )
+    descriptor["source_cursor"] = {
+        "namespace": "receipt_product_publications/v1", "sequence": 7,
+    }
     store = SqliteStore(tmp_path / "ok.sqlite")
     configure_receipt_candidate_limits(store, max_database_bytes=5 * 1024 * 1024)
     result = materialize_receipt_segment(
@@ -329,6 +332,12 @@ def test_genuine_descriptor_persists_text_artifact_and_catalog_detects_corruptio
     )
     store._conn.commit()  # noqa: SLF001
     assert result["dataset"] == "equities_bars_daily"
+    assert result["source_cursor"] == descriptor["source_cursor"]
+    assert tuple(store._conn.execute(  # noqa: SLF001
+        "SELECT namespace,sequence,receipt_digest FROM receipt_candidate_source_cursors"
+    ).fetchone()) == (
+        "receipt_product_publications/v1", 7, result["receipt_digest"],
+    )
     stored = store.fetch_all("jquants_records")
     assert len(stored) == 1
     assert stored[0]["available_at"] == rows[0]["available_at"]

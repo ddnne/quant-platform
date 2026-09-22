@@ -79,6 +79,14 @@ expose before/after observations under that explicit namespace. This is not
 an applied cursor, a finalized-authority acknowledgement or READY evidence;
 consumer/export integration must verify the full receipt chain before advancing
 its applied position. Do not substitute this number into legacy D1 feed fields.
+Premium now binds each R2 segment descriptor to its exact publication sequence,
+receipt digest and artifact digest. The cloud candidate records that selected
+cursor with its independently verified receipt digest in
+`receipt_candidate_source_cursors` only after full raw/product verification.
+This scope-specific set is preserved in the candidate SQLite artifact and the
+materialization digest; it is not a claim that every earlier global sequence
+was applied. Legacy descriptors retain a null cursor, and generic Ops/READY
+exported/applied cursor integration remains outstanding.
 
 First change the new-operation producer and its consumers as one reviewed
 contract: reconciliation/materialization, receipt finalization/watermarks,
