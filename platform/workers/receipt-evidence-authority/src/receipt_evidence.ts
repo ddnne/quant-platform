@@ -313,10 +313,11 @@ export async function commitReceipt(
   } else if (operation.structured_storage !== "legacy_d1") {
     throw new Error("unknown receipt structured storage mode");
   }
-  if (product.artifact_body.length === 0 || operation.structured_storage === "r2_scratch_v1") {
-    await requireProductObject(env.STRUCTURED_BUCKET, product.artifact_key,
-      product.byte_count, String(product.artifact_digest));
-  }
+  // Legacy inline D1 bodies are not proof that the R2 product consumed by
+  // research still exists. Recovery must verify that same artifact for both
+  // manifest versions before publishing receipt/coverage success.
+  await requireProductObject(env.STRUCTURED_BUCKET, product.artifact_key,
+    product.byte_count, String(product.artifact_digest));
   const successDetail = canonicalJson({
     schema_version: "receipt-authority-ingestion-result/v1",
     operation_id: operationId,

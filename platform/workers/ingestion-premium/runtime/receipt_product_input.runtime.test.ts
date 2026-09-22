@@ -934,7 +934,7 @@ describe("POST /v1/export/receipt-products workerd D1", () => {
       coverageEnd: "2026-08-30",
     });
     await commitReceipt(
-      { DB: runtimeEnv.DB } as ReceiptAuthorityEnv,
+      { DB: runtimeEnv.DB, STRUCTURED_BUCKET: runtimeEnv.STRUCTURED_BUCKET } as ReceiptAuthorityEnv,
       "op-bars",
       receipt,
     );
