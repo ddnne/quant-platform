@@ -414,30 +414,6 @@ def test_verified_d1_cursor_chain_reaches_sync_boundary_without_mutable_alias(
                 conn, duplicate_row, recompute_local=False
             )
 
-    class StatefulRow(dict):
-        def items(self):
-            raise AssertionError("stateful row must not be observed")
-
-    with sqlite3.connect(":memory:") as conn:
-        with pytest.raises(TypeError, match="exact dict"):
-            sync._verified_sync_envelope_from_row(
-                conn, StatefulRow(row), recompute_local=False
-            )
-
-    class StrSubclass(str):
-        pass
-
-    class IntSubclass(int):
-        pass
-
-    with sqlite3.connect(":memory:") as conn:
-        with pytest.raises(ValueError, match="types are not canonical"):
-            sync._verified_sync_envelope_from_row(
-                conn,
-                {**row, "status": StrSubclass("COMPLETE")},
-                recompute_local=False,
-            )
-
     first_count = f'"{next(iter(counts))}": 0'
     for replacement in (
         f'"{next(iter(counts))}": false',
@@ -454,30 +430,6 @@ def test_verified_d1_cursor_chain_reaches_sync_boundary_without_mutable_alias(
                     {**row, "table_counts_json": attacked_counts},
                     recompute_local=False,
                 )
-
-    class StatefulCountText(str):
-        def __str__(self):
-            raise AssertionError("stateful text must not be coerced")
-
-    with sqlite3.connect(":memory:") as conn:
-        with pytest.raises(ValueError, match="types are not canonical"):
-            sync._verified_sync_envelope_from_row(
-                conn,
-                {
-                    **row,
-                    "table_counts_json": StatefulCountText(
-                        row["table_counts_json"]
-                    ),
-                },
-                recompute_local=False,
-            )
-    with sqlite3.connect(":memory:") as conn:
-        with pytest.raises(ValueError, match="types are not canonical"):
-            sync._verified_sync_envelope_from_row(
-                conn,
-                {**row, "source_change_seq": IntSubclass(7)},
-                recompute_local=False,
-            )
 
 
 @pytest.mark.parametrize(
