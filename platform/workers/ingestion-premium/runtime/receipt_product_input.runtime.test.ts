@@ -889,6 +889,14 @@ describe("POST /v1/export/receipt-products workerd D1", () => {
         WHERE dataset='equities_bars_daily' AND segment_id='2026-08'`,
     ).first<{ status: string; receipt_run_id: number }>();
     expect(coverage).toEqual({ status: "COMPLETE", receipt_run_id: 1 });
+    const published = await runtimeEnv.DB.prepare(
+      "SELECT publication_seq,receipt_digest FROM receipt_product_publications WHERE operation_id='op-bars'",
+    ).first();
+    expect(published).toEqual({ publication_seq: 1, receipt_digest: digest });
+    await commitReceipt(authorityEnv, "op-bars", receipt);
+    expect(await runtimeEnv.DB.prepare(
+      "SELECT COUNT(*) AS n FROM receipt_product_publications",
+    ).first()).toEqual({ n: 1 });
     expect(await runtimeEnv.DB.prepare(
       "SELECT COUNT(*) AS n FROM receipt_authority_structured_rows WHERE operation_id='op-bars'",
     ).first()).toEqual({ n: 0 });
@@ -909,7 +917,12 @@ describe("POST /v1/export/receipt-products workerd D1", () => {
       { dataset: "equities_bars_daily", segment_id: "2026-08" },
     ]));
     expect(res?.status).toBe(200);
-    expect(await res!.json()).toMatchObject({ status: "DESCRIBED" });
+    expect(await res!.json()).toMatchObject({
+      status: "DESCRIBED",
+      read_observation: { receipt_publication_cursor: {
+        namespace: "receipt_product_publications/v1", before: 1, after: 1,
+      } },
+    });
   });
 
   it("leaves mismatched planned coverage UNKNOWN so describe HOLDs incomplete", async () => {

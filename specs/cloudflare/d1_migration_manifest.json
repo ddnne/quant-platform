@@ -233,7 +233,7 @@
         {
           "migration_id": "quant-ingest:0024_receipt_r2_reconciliation",
           "path": "platform/workers/ingestion-premium/migrations/0024_receipt_r2_reconciliation.sql",
-          "checksum": "sha256:d0d0f5257e71c7fbc12b029a005e4c2df8dd1cd057c88b1bf636aee5bd440eff",
+          "checksum": "sha256:03bb322e967d67e79a6419a35dff0c4cd09b997961aafcd55d5fdd4f9172853a",
           "order": 24,
           "depends_on": "quant-ingest:0023_mutation_lease"
         }

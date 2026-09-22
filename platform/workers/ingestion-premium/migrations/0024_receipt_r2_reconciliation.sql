@@ -35,6 +35,32 @@ CREATE TRIGGER IF NOT EXISTS receipt_r2_reconciliation_no_update
 BEFORE UPDATE ON receipt_r2_reconciliations
 BEGIN SELECT RAISE(ABORT, 'R2 reconciliation is immutable'); END;
 
+-- Publication order, not allocation/run order: a slow earlier run may finish
+-- after a newer one. One metadata entry per committed R2 receipt, no row bodies.
+CREATE TABLE IF NOT EXISTS receipt_product_publications (
+    publication_seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    operation_id TEXT NOT NULL UNIQUE REFERENCES receipt_authority_operations(operation_id),
+    receipt_digest TEXT NOT NULL,
+    artifact_digest TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS receipt_r2_publication
+AFTER UPDATE OF state ON receipt_authority_operations
+WHEN NEW.state='RECEIPT_COMMITTED' AND OLD.state='STRUCTURED_COMMITTED'
+ AND NEW.structured_storage='r2_scratch_v1'
+BEGIN
+    INSERT INTO receipt_product_publications(operation_id,receipt_digest,artifact_digest)
+    VALUES (NEW.operation_id,NEW.receipt_digest,NEW.structured_digest);
+END;
+
+CREATE TRIGGER IF NOT EXISTS receipt_publication_no_update
+BEFORE UPDATE ON receipt_product_publications
+BEGIN SELECT RAISE(ABORT, 'receipt publication is immutable'); END;
+
+CREATE TRIGGER IF NOT EXISTS receipt_publication_no_delete
+BEFORE DELETE ON receipt_product_publications
+BEGIN SELECT RAISE(ABORT, 'receipt publication is immutable'); END;
+
 CREATE TRIGGER IF NOT EXISTS receipt_r2_reconciliation_no_delete
 BEFORE DELETE ON receipt_r2_reconciliations
 BEGIN SELECT RAISE(ABORT, 'R2 reconciliation is immutable'); END;

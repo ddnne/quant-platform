@@ -588,12 +588,20 @@ async function describeFromDb(
       budget,
       `SELECT name FROM sqlite_master
         WHERE type='table' AND name IN (SELECT value FROM json_each(?))`,
-      [JSON.stringify([...REQUIRED_TABLES, "ingestion_change_log", "receipt_r2_reconciliations"])],
+      [JSON.stringify([...REQUIRED_TABLES, "ingestion_change_log", "receipt_r2_reconciliations", "receipt_product_publications"])],
     )).map((row) => row.name),
   );
   for (const name of REQUIRED_TABLES) {
     if (!present.has(name)) throw new HoldError("MISSING_TABLE");
   }
+  const receiptCursor = async (): Promise<number | null> => {
+    if (!present.has("receipt_product_publications")) return null;
+    return requireInt((await sourceFirst<{ seq: number }>(
+      db, budget,
+      "SELECT COALESCE(MAX(publication_seq),0) AS seq FROM receipt_product_publications",
+    ))?.seq);
+  };
+  const receiptBefore = await receiptCursor();
 
   const changeBefore = present.has("ingestion_change_log")
     ? requireInt(
@@ -911,6 +919,7 @@ async function describeFromDb(
     segments,
   };
   const digest = await canonicalDigest(identity);
+  const receiptAfter = await receiptCursor();
   const body = {
     ...identity,
     input_set_digest: digest,
@@ -918,6 +927,11 @@ async function describeFromDb(
       checked_at: nowUtc(),
       source_change_seq_before: changeBefore,
       source_change_seq_after: changeAfter,
+      receipt_publication_cursor: {
+        namespace: "receipt_product_publications/v1",
+        before: receiptBefore,
+        after: receiptAfter,
+      },
       session_bookmark: sessionBookmark(db),
     },
   };

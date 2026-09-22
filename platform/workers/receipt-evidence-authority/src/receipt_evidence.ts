@@ -235,7 +235,7 @@ export async function commitReceipt(
   const operation = await env.DB.prepare(
     `SELECT run_id,dataset,segment_id,state,raw_manifest_key,
             raw_manifest_digest,raw_page_count,raw_row_count,raw_bytes,
-            structured_manifest_key,structured_digest,structured_storage
+            structured_manifest_key,structured_digest,structured_storage,receipt_digest
        FROM receipt_authority_operations WHERE operation_id=?`,
   ).bind(operationId).first<{
     run_id: number;
@@ -250,11 +250,13 @@ export async function commitReceipt(
     structured_manifest_key: string;
     structured_digest: string;
     structured_storage: "legacy_d1" | "r2_scratch_v1";
+    receipt_digest: string | null;
   }>();
   if (
     operation === null ||
     (operation.state !== "STRUCTURED_COMMITTED" &&
       operation.state !== "RECEIPT_COMMITTED") ||
+    (operation.state === "RECEIPT_COMMITTED" && operation.receipt_digest !== receiptDigest) ||
     operation.run_id !== receipt.run_id || operation.dataset !== receipt.dataset ||
     operation.segment_id !== receipt.segment_id ||
     operation.raw_page_count !== receipt.raw_page_count ||
@@ -328,7 +330,10 @@ export async function commitReceipt(
     event_zero: receipt.observed_items === 0,
   });
   const promoteCoverage = receiptEligibleForCoverageComplete(receipt);
-  await env.DB.batch([
+  // The prior transaction may have committed before durable finalization.
+  // Do not reinsert through the pre-commit-only DB trigger on recovery;
+  // reverify the immutable stored receipt below instead.
+  if (operation.state !== "RECEIPT_COMMITTED") await env.DB.batch([
     // Acquisition no longer depends on a duplicate Premium write. Publish
     // operation-measured watermarks atomically with the receipt, including
     // recovery; older backfills/replays must not move them backwards.

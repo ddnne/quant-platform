@@ -69,6 +69,14 @@ The 61 non-monthly authority cases pass after entrypoint activation; the monthly
 case passes separately. This is not deployment acceptance: retention, cursor
 integration and final exact-SHA native CI remain open.
 
+`receipt_product_publications/v1` is the new metadata-only source cursor:
+one monotonically allocated sequence per atomic R2 receipt commit, independent
+of run allocation order and of `ingestion_change_log`. Premium descriptors
+expose before/after observations under that explicit namespace. This is not
+an applied cursor, a finalized-authority acknowledgement or READY evidence;
+consumer/export integration must verify the full receipt chain before advancing
+its applied position. Do not substitute this number into legacy D1 feed fields.
+
 First change the new-operation producer and its consumers as one reviewed
 contract: reconciliation/materialization, receipt finalization/watermarks,
 Premium descriptors, Ops projection and cloud candidate. Descriptors and Ops
