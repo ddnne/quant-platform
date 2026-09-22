@@ -27,6 +27,7 @@ from .compiled_dependency_scope import (
     _select_compiled_dependency_scope,
     combined_dataset_lookback_trading_days,
     combined_master_evidence_mode,
+    collect_compiled_coverage_events,
 )
 from .complete_master import _complete_master_day_slices_from_connection
 from .errors import PitError
@@ -287,6 +288,30 @@ class CompiledScopeProofSession:
         except ValueError as exc:
             raise PitError(str(exc)) from exc
 
+    def collect_compiled_coverage_events(
+        self,
+        *,
+        compiled: CompiledControlledSelection,
+        observed_through: str,
+        slices: Sequence[Any],
+        resolved_universe: Any,
+        witness: frozenset[str],
+    ) -> tuple[Any, frozenset[str]]:
+        """Partial builder inventory on this snapshot, not a READY proof."""
+
+        _require_active_sqlite_transaction(self._conn)
+        owner = _owned_scoped_research_owner_from_verified_witness(
+            self._conn, witness=witness
+        )
+        return collect_compiled_coverage_events(
+            self._conn,
+            compiled=compiled,
+            observed_through=observed_through,
+            slices=slices,
+            resolved_universe=resolved_universe,
+            scoped_owner=owner,
+        )
+
     def measure_receipt_snapshot_quality(
         self,
         *,
@@ -326,12 +351,15 @@ def compiled_scope_proof_session_from_store(
         )
     conn = store._conn  # noqa: SLF001 — data-plane store lifetime
     started = conn.in_transaction
-    session = _session_on_connection(conn)
+    previous_factory = conn.row_factory
     try:
-        yield session
+        yield _session_on_connection(conn)
     finally:
-        if conn.in_transaction and not started:
-            conn.rollback()
+        try:
+            if conn.in_transaction and not started:
+                conn.rollback()
+        finally:
+            conn.row_factory = previous_factory
 
 
 @contextmanager

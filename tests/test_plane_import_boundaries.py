@@ -11,7 +11,8 @@ Dynamic importlib strings and paths outside setuptools where=/py-modules are
 not verified. The same index then applies closed market-read owner-edges:
 ready_publication, ready_policy, personal_draft_bind, snapshot,
 snapshot_publish_policy, snapshot_persist, snapshot_read, coherence,
-core.engine, core.repo_rates, features.runtime, and data_access.adapter must not
+core.engine, core.repo_rates, features.runtime, data_access.adapter, and the
+receipt candidate Container builder must not
 import connection-private PIT SQL modules; ready_policy also must not import
 storage.coverage_proof. Equivalent aliases resolve to the same owner path.
 This does not ban sqlite3, DataView, or trusted experiment-index/cache/budget
@@ -146,6 +147,11 @@ def _prefix_hits(
 def test_data_plane_source_does_not_import_other_first_party_planes() -> None:
     root = Path(__file__).resolve().parents[1]
     where_dirs, index, owners, clashes = _first_party_index(root)
+    candidate = (
+        root / "platform/workers/research-mass-eval/container/receipt_candidate_job.py"
+    ).resolve()
+    index["receipt_candidate_job"] = candidate
+    owners[candidate] = "container"
     assert not clashes, "first-party module ownership is ambiguous:\n" + "\n".join(
         clashes
     )
@@ -219,6 +225,7 @@ def test_data_plane_source_does_not_import_other_first_party_planes() -> None:
         ("core.repo_rates", private_sql),
         ("features.runtime", private_sql),
         ("data_access.adapter", private_sql),
+        ("receipt_candidate_job", private_sql),
     )
     runtime_violations: list[str] = []
     for module_name, forbidden in closed_edges:
