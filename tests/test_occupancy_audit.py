@@ -1,6 +1,8 @@
 """Occupancy maps / wave pack. Does not GO. Does not apply reconstitution."""
 from __future__ import annotations
 
+import pytest
+
 
 def test_usable_eval_snapshot_is_not_a_pass() -> None:
     from research.occupancy_audit import usable_eval_snapshot
@@ -210,6 +212,7 @@ def test_merge_daily_path_cells_for_ids_later_file_wins(tmp_path) -> None:
     assert out["mid_n_explore"][0]["occupancy"] == 0.4
     assert len(out["liq_large"]) == 1
 
+@pytest.mark.replay
 def test_unique22_lift_park_partition() -> None:
     """Unique-22 leftover occupancy HOLD pin (entryIdx vs combo pre_mom). Not a daily_path.ts grep."""
     from research.unique_logic.worker_bodies import (
