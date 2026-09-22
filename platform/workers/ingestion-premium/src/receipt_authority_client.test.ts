@@ -10,6 +10,7 @@ import type {
   ReceiptAuditRecoveryResultV1,
   ReceiptAuditFirstRecoveryResultV1,
   ReceiptIssueResultV1,
+  ReceiptServiceResultV1,
 } from "../../receipt-evidence-authority/src/types";
 import {
   base64ToBytes,
@@ -211,7 +212,7 @@ function fakeEnv() {
     issuedOperations.add(operationId);
     return rpcResult(request, replayed);
   });
-  const recover = vi.fn(async (request: Record<string, unknown>) =>
+  const recover = vi.fn(async (request: Record<string, unknown>): Promise<ReceiptServiceResultV1> =>
     rpcResult(request, true)
   );
 
@@ -548,12 +549,29 @@ describe("Receipt Evidence Authority client", () => {
       "markets_calendar",
       "2024-02",
     )).rejects.toThrow("lost response");
+    const operationId = [...rows.keys()][0]!;
+    recover.mockResolvedValueOnce({
+      schema_version: "receipt-evidence-continuation/v1",
+      operation_id: operationId,
+      state: "CONTINUATION_REQUIRED",
+    });
+    expect(await recoverPreparedReceipts(env)).toEqual({
+      attempted: 1, recovered: 1, failed: 0,
+    });
+    expect(rows.get(operationId)).toMatchObject({ state: "PREPARED", receipt_digest: null });
+    recover.mockResolvedValueOnce({
+      schema_version: "receipt-evidence-continuation/v1",
+      operation_id: `sha256:${"0".repeat(64)}`,
+      state: "CONTINUATION_REQUIRED",
+    });
+    await expect(recoverPreparedReceipt(env, operationId)).rejects.toThrow("continuation identity mismatch");
+    expect(rows.get(operationId)).toMatchObject({ state: "PREPARED", receipt_digest: null });
     expect(await recoverPreparedReceipts(env)).toEqual({
       attempted: 1,
       recovered: 1,
       failed: 0,
     });
-    expect(recover).toHaveBeenCalledOnce();
+    expect(recover).toHaveBeenCalledTimes(3);
     expect([...rows.values()][0]).toMatchObject({ state: "FINALIZED" });
   });
 

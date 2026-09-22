@@ -1,6 +1,6 @@
 import type { JsdaQueueJob } from "./queue_contract";
 import type {
-  ReceiptEvidenceAuthorityRpc,
+  ReceiptAuthorityServiceRpc,
 } from "../../receipt-evidence-authority/src/types";
 
 /** Generated bindings are the base; only secret and Queue body typing are refined. */
@@ -15,7 +15,7 @@ export type JsdaWorkerEnv = Omit<
   JSDA_DLQ_QUEUE: string;
   INGESTION_RUN_TOKEN?: string;
   RECEIPT_EVIDENCE_AUTHORITY?: Pick<
-    ReceiptEvidenceAuthorityRpc,
+    ReceiptAuthorityServiceRpc,
     "issue_for_segment" | "recover_issue"
   >;
   RECEIPT_AUTHORITY_ENVIRONMENT?: "staging" | "production";

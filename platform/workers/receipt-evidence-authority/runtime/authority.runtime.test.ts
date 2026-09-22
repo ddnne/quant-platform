@@ -1700,14 +1700,19 @@ describe("Receipt Evidence Authority in workerd", () => {
     const { stub } = await activateRegisteredTestKey();
     const monthly = { ...request, dataset_id: "equities_bars_daily", request_nonce: "9".repeat(64) };
     const rpc = workerExports.default;
-    let result: Awaited<ReturnType<typeof stub.issue_for_segment>> | undefined;
+    let result: ReceiptIssueResultV1 | undefined;
     for (let attempt = 0; attempt < 20 && result === undefined; attempt += 1) {
-      try {
-        result = attempt === 0
-          ? await rpc.issue_for_segment(monthly)
-          : await rpc.recover_issue({ ...monthly, operation: "recover_issue" });
-      } catch (error) {
-        expect(String(error)).toContain("structured reconciliation slice is incomplete");
+      const outcome = attempt === 0
+        ? await rpc.issue_for_segment(monthly)
+        : await rpc.recover_issue({ ...monthly, operation: "recover_issue" });
+      if (outcome.state === "CONTINUATION_REQUIRED") {
+        expect(outcome).toEqual({
+          schema_version: "receipt-evidence-continuation/v1",
+          operation_id: await canonicalDigest(monthly),
+          state: "CONTINUATION_REQUIRED",
+        });
+      } else {
+        result = outcome;
       }
     }
     expect(result?.state).toBe("FINALIZED");
