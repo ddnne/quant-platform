@@ -709,6 +709,7 @@ async function seedUnknownStructuredForCommit(options?: {
   const raw = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
   const registry = await closedActiveStagingRegistry(raw);
   const objects = await seedGovernedObjects();
+  await runtimeEnv.STRUCTURED_BUCKET.put("bars-artifact.jsonl", objects.artifact);
   const spec = datasetById("equities_bars_daily");
   if (spec === undefined) throw new Error("catalog missing equities_bars_daily");
   const identity = governedReceiptIdentity(spec.id);
@@ -851,7 +852,7 @@ describe("POST /v1/export/receipt-products workerd D1", () => {
   it("promotes matching UNKNOWN coverage on governed commit then describes", async () => {
     const { registry, receipt } = await seedUnknownStructuredForCommit();
     const digest = await commitReceipt(
-      { DB: runtimeEnv.DB } as ReceiptAuthorityEnv,
+      { DB: runtimeEnv.DB, STRUCTURED_BUCKET: runtimeEnv.STRUCTURED_BUCKET } as ReceiptAuthorityEnv,
       "op-bars",
       receipt,
     );
@@ -882,7 +883,7 @@ describe("POST /v1/export/receipt-products workerd D1", () => {
       coverageEnd: "2026-08-30",
     });
     await commitReceipt(
-      { DB: runtimeEnv.DB } as ReceiptAuthorityEnv,
+      { DB: runtimeEnv.DB, STRUCTURED_BUCKET: runtimeEnv.STRUCTURED_BUCKET } as ReceiptAuthorityEnv,
       "op-bars",
       receipt,
     );
