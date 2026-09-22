@@ -61,11 +61,13 @@ row-change sequence must not make the new path look current or READY.
 Entrypoint validation: the existing 80,707-row monthly synthetic scenario
 completes with zero D1 fact/shadow/change rows, one compact measurement and
 empty scratch after finalization. Pre-sign scratch-loss/eviction recovery and
-both page-interruption scenarios pass without reacquisition. The broad runtime
-run still exposed six legacy-writer-dependent cases to adapt or seed explicitly
-as pre-upgrade operations (v1 recovery, replay/re-proof and D1 append-only tests).
-The WIP branch is therefore not merge-ready; the earlier all-green test result
-predated entrypoint activation and must not be used as its acceptance evidence.
+both page-interruption scenarios pass without reacquisition. Legacy v1 recovery,
+replay/re-proof and D1 append-only scenarios now seed persisted pre-upgrade
+operations before resuming through the current entrypoint. Those cases preserve
+the old assertions without a production legacy-mode switch or mocked writer.
+The 61 non-monthly authority cases pass after entrypoint activation; the monthly
+case passes separately. This is not deployment acceptance: retention, cursor
+integration and final exact-SHA native CI remain open.
 
 First change the new-operation producer and its consumers as one reviewed
 contract: reconciliation/materialization, receipt finalization/watermarks,

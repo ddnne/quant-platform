@@ -28,6 +28,7 @@ import {
 import { authorityInstanceDigest } from "../src/authority_instance";
 import { requirePersistedDerivedClaims } from "../src/claims_validation";
 import { ReconciliationScratch } from "../src/reconciliation_scratch";
+import { initializeD1Operation } from "../src/structured_reconciliation";
 import { canonicalReceiptExpectedScope } from "../src/receipt_evidence";
 import { datasetById } from "../../ingestion-premium/src/catalog";
 import {
@@ -586,6 +587,44 @@ async function interruptAfterDurableCapture(
     },
     state,
   };
+}
+
+// Seed an operation as it existed before the R2 writer upgrade. Exercise real
+// capture and legacy initialization, not a runtime flag or mocked producer.
+async function prepareLegacyOperation(
+  stub: InterruptedCapture["stub"],
+  issueRequest: ReceiptIssueRequestV1,
+): Promise<void> {
+  await runtimeEnv.DB.prepare(
+    `CREATE TRIGGER pause_before_operation BEFORE INSERT ON receipt_authority_operations
+     BEGIN SELECT RAISE(ABORT, 'test pre-upgrade initialization'); END`,
+  ).run();
+  try {
+    await expect(runInDurableObject(stub, (instance) =>
+      instance.issue_for_segment(issueRequest)
+    )).rejects.toThrow("test pre-upgrade initialization");
+  } finally {
+    await runtimeEnv.DB.prepare("DROP TRIGGER pause_before_operation").run();
+  }
+  const operationId = await canonicalDigest(issueRequest);
+  const captureKey = await runInDurableObject(stub, (_instance, state) =>
+    state.storage.sql.exec<{ capture_key: string }>(
+      "SELECT capture_key FROM authority_capture_attempts WHERE operation_id=? AND state='CAPTURED'",
+      operationId,
+    ).one().capture_key
+  );
+  const object = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.get(captureKey);
+  if (object === null) throw new Error("legacy fixture capture missing");
+  const { capture } = await object.json<TestCaptureStateV2>();
+  const run = await runtimeEnv.DB.prepare(
+    "SELECT ran_at FROM ingestion_run_log WHERE authority_operation_id=?",
+  ).bind(operationId).first<{ ran_at: string }>();
+  if (run === null) throw new Error("legacy fixture run missing");
+  await initializeD1Operation(runtimeEnv, {
+    operationId, requestDigest: operationId, request: issueRequest,
+    initial: capture.initialRequest, capture, checkedAt: run.ran_at,
+    storageMode: "legacy_d1",
+  });
 }
 
 async function replaceCaptureState(
@@ -1813,6 +1852,7 @@ describe("Receipt Evidence Authority in workerd", () => {
       request_nonce: "a".repeat(63) + "1",
     };
     const operationId = await canonicalDigest(interruptedRequest);
+    await prepareLegacyOperation(stub, interruptedRequest);
     await runtimeEnv.DB.prepare(
       `CREATE TRIGGER inject_master_pre_sign_failure
        BEFORE UPDATE OF state ON receipt_authority_operations
@@ -2233,6 +2273,7 @@ describe("Receipt Evidence Authority in workerd", () => {
   it("re-proves matching existing product rows with their original ingestion time", async () => {
     installAuthorityAcquisition();
     const { stub } = await activateRegisteredTestKey();
+    await prepareLegacyOperation(stub, { ...request, request_nonce: "2".repeat(64) });
     const first = await stub.issue_for_segment({
       ...request,
       request_nonce: "2".repeat(64),
@@ -2247,6 +2288,7 @@ describe("Receipt Evidence Authority in workerd", () => {
         WHERE table_name='jquants_records' AND source='jquants' AND dataset=?`,
     ).bind(priorIngestedAt, priorIngestedAt, request.dataset_id).run();
 
+    await prepareLegacyOperation(stub, { ...request, request_nonce: "3".repeat(64) });
     const reproved = await stub.issue_for_segment({
       ...request,
       request_nonce: "3".repeat(64),
@@ -2283,6 +2325,7 @@ describe("Receipt Evidence Authority in workerd", () => {
   it("rejects re-proof when an existing product payload differs", async () => {
     installAuthorityAcquisition();
     const { stub } = await activateRegisteredTestKey();
+    await prepareLegacyOperation(stub, { ...request, request_nonce: "4".repeat(64) });
     await stub.issue_for_segment({
       ...request,
       request_nonce: "4".repeat(64),
@@ -2291,6 +2334,7 @@ describe("Receipt Evidence Authority in workerd", () => {
       `UPDATE jquants_records SET payload='{}'
         WHERE source='jquants' AND dataset=?`,
     ).bind(request.dataset_id).run();
+    await prepareLegacyOperation(stub, { ...request, request_nonce: "5".repeat(64) });
     await expect(runInDurableObject(stub, (instance) =>
       instance.issue_for_segment({
         ...request,
@@ -2582,6 +2626,7 @@ describe("Receipt Evidence Authority in workerd", () => {
          );
        END`,
     ).run();
+    await prepareLegacyOperation(stub, { ...request, request_nonce: "7".repeat(64) });
     await expect(runInDurableObject(stub, (instance) =>
       instance.issue_for_segment({
         ...request,
@@ -2609,6 +2654,7 @@ describe("Receipt Evidence Authority in workerd", () => {
                  '{}','{"Date":"2024-02-01","Open":1,"Close":2}');
        END`,
     ).run();
+    await prepareLegacyOperation(stub, { ...request, request_nonce: "8".repeat(64) });
     await expect(runInDurableObject(stub, (instance) =>
       instance.issue_for_segment({
         ...request,
@@ -2629,6 +2675,7 @@ describe("Receipt Evidence Authority in workerd", () => {
       `INSERT INTO ingestion_run_log(ran_at,source,runtime,status,detail)
        VALUES ('2024-01-01T00:00:00Z','jquants','prior-test','SUCCESS','{}')`,
     ).run();
+    await prepareLegacyOperation(stub, { ...request, request_nonce: "9".repeat(64) });
     const result = await stub.issue_for_segment({
       ...request,
       request_nonce: "9".repeat(64),
