@@ -5,6 +5,7 @@ import {
   type Capture,
 } from "./raw_capture";
 import type { ReceiptAuthorityEnv } from "./types";
+import type { ReconciliationScratch } from "./reconciliation_scratch";
 
 export type CanonicalStructuredRow = {
   natural_key: string;
@@ -224,7 +225,9 @@ function pageBytes(rows: CanonicalStructuredRow[]): Uint8Array {
   return new TextEncoder().encode(`${rows.map(productLine).join("\n")}\n`);
 }
 
-async function measureProduct(env: ReceiptAuthorityEnv, operationId: string) {
+type ProductPages = () => AsyncIterable<CanonicalStructuredRow[]> | Iterable<CanonicalStructuredRow[]>;
+
+async function measureProduct(pages: ProductPages, operationId: string) {
   const hash = new crypto.DigestStream("SHA-256");
   const keys = new crypto.DigestStream("SHA-256");
   const bodyWriter = hash.getWriter();
@@ -233,7 +236,7 @@ async function measureProduct(env: ReceiptAuthorityEnv, operationId: string) {
   await keyWriter.write(encoder.encode('{"natural_keys":['));
   let count = 0;
   let byteCount = 0;
-  for await (const page of productPages(env, operationId)) {
+  for await (const page of pages()) {
     const bytes = pageBytes(page);
     await bodyWriter.write(bytes);
     byteCount += bytes.byteLength;
@@ -247,7 +250,7 @@ async function measureProduct(env: ReceiptAuthorityEnv, operationId: string) {
 }
 
 async function writeProduct(
-  env: ReceiptAuthorityEnv, operationId: string, key: string,
+  env: ReceiptAuthorityEnv, pages: ProductPages, key: string,
   measured: Awaited<ReturnType<typeof measureProduct>>,
   metadata: Record<string, string>,
 ): Promise<void> {
@@ -257,7 +260,7 @@ async function writeProduct(
     const writer = stream.writable.getWriter();
     const producing = (async () => {
       try {
-        for await (const page of productPages(env, operationId)) {
+        for await (const page of pages()) {
           await writer.write(pageBytes(page));
         }
         await writer.close();
@@ -295,6 +298,7 @@ export async function materializeProduct(
     expectedCount: number;
     checkedAt: string;
   },
+  scratch?: ReconciliationScratch,
 ): Promise<{
   count: number;
   digest: string;
@@ -308,7 +312,10 @@ export async function materializeProduct(
   if (!Number.isSafeInteger(input.expectedCount) || input.expectedCount < 1) {
     throw new Error("empty product materialization cannot be signed");
   }
-  const assembled = await measureProduct(env, input.operationId);
+  const pages: ProductPages = scratch === undefined
+    ? () => productPages(env, input.operationId)
+    : () => scratch.pages(input.operationId);
+  const assembled = await measureProduct(pages, input.operationId);
   if (assembled.count !== input.expectedCount) {
     throw new Error("product materialization row count differs from raw evidence");
   }
@@ -320,7 +327,7 @@ export async function materializeProduct(
   const artifactKey = `${prefix}-${input.operationId.slice(7, 23)}.jsonl`;
   await writeProduct(
     env,
-    input.operationId,
+    pages,
     artifactKey,
     assembled,
     {

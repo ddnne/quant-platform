@@ -63,6 +63,16 @@ export class ReconciliationScratch {
     return rows.map((row) => JSON.parse(row.row_json) as CanonicalStructuredRow);
   }
 
+  *pages(operationId: string): Generator<CanonicalStructuredRow[]> {
+    let after = "";
+    while (true) {
+      const rows = this.page(operationId, after);
+      if (rows.length === 0) return;
+      yield rows;
+      after = rows[rows.length - 1]!.natural_key;
+    }
+  }
+
   release(operationId: string): void {
     this.storage.sql.exec(
       "DELETE FROM reconciliation_scratch WHERE operation_id=?", operationId,

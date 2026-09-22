@@ -39,6 +39,8 @@ import {
 import {
   canonicalProductBody,
   compareUtf8Text,
+  materializeProduct,
+  type CanonicalStructuredRow,
 } from "../src/product_materialization";
 import {
   unwrapEd25519PrivateKey,
@@ -1872,6 +1874,29 @@ describe("Receipt Evidence Authority in workerd", () => {
       recovered.receipt.digests.extra_digests.official_calendar_evidence_digest,
     ).toBe(expectedCalendarEvidenceDigest);
     expect(recovered.receipt.digests.extra_digests.product_manifest_digest).toBe(legacyDigest);
+    // The same persisted rows produce identical historical bytes through the
+    // scratch path. Empty scratch must not fall back to existing D1 history.
+    await runInDurableObject(stub, async (_instance, state) => {
+      const scratch = new ReconciliationScratch(state.storage, 16 * 1024 * 1024);
+      const input = {
+        operationId, runId: recovered.receipt.run_id,
+        capture: captureState.capture,
+        expectedCount: recovered.receipt.structured_row_count,
+        checkedAt: recovered.receipt.checked_at,
+      };
+      await expect(materializeProduct(runtimeEnv, input, scratch))
+        .rejects.toThrow("product materialization row count differs");
+      const rows = await runtimeEnv.DB.prepare(
+        `SELECT natural_key,source,dataset,event_time,available_at,ingested_at,
+                payload,raw_payload,row_digest FROM receipt_authority_structured_rows
+          WHERE operation_id=?`,
+      ).bind(operationId).all<CanonicalStructuredRow>();
+      scratch.append(operationId, rows.results);
+      const product = await materializeProduct(runtimeEnv, input, scratch);
+      expect(product.digest).toBe(recovered.receipt.digests.structured_digest);
+      expect(product.manifestDigest).toBe(legacyDigest);
+      scratch.release(operationId);
+    });
     const afterRaw = await runtimeEnv.RAW_BUCKET.list({ prefix });
     const afterAuthority = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.list({
       prefix,
