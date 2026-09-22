@@ -102,7 +102,12 @@ No surplus quant D1 exists to retire today.
 - `equities_bars_daily` CF ingest: `D1_ERROR: Exceeded maximum DB size`  
 - `cf_premium_backfill` must remain **stopped** while D1 is full and write path still targets D1 full history.
 
-## P0 order
+## Historical P0 order (2026-08-11; superseded)
+
+This old sequence is retained as historical context, not executable guidance.
+The current correction above requires producer/consumer/recovery acceptance
+before bounded reclamation. Group related approval operations into one outcome;
+do not request approval separately for every SQL batch.
 
 1. Stop D1-full-history writers (backfill + premium route guard).  
 2. Archive cold structured rows to R2 (verify hash).  
