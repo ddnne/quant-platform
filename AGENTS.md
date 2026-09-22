@@ -11,6 +11,7 @@
 - Separate source delivery, staging rollout, production rollout, data activation, READY and Pilot execution. Source publication approval does not authorize production deployment or research execution. Preserve deployment HOLDs and use the applicable approval flow.
 - Follow the current operational attachment and work ledger. Keep at most three work units in progress; do not concurrently change shared contracts.
 - Do not persist authentic market history on this local machine or run local Docker/VM backtests. Small synthetic test fixtures are permitted.
+- Historical market bodies belong in R2, not permanent D1 fact/shadow/change-log copies. Follow `docs/architecture/cf_native_storage_plane.md`; receipt reconciliation is not an exception. Reducing one duplicate, adding capacity alarms, or sharding D1 is not completion of R2-first storage. Keep D1 metadata bounded by operations/segments, and use bounded cloud scratch for row-level reconciliation. Preserve existing signed bytes and live data until a separately authorized migration verifies their R2 replacement.
 - Preserve PIT and AM-to-PM causality, historical-data provenance, immutable evidence and budget limits. Keep Mass, FoF, broker, live orders and automatic promotion disabled; do not add new authorities or enterprise-only security complexity.
 - Never read, acknowledge or purge production DLQ message bodies as part of ordinary development.
 
