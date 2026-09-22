@@ -17,7 +17,6 @@ Research control plane (Phase 7 stays OFF): readiness attestation, experiment pl
 - **Legacy inventory:** `research.unique_logic.worker_bodies.countable_thesis_ids()` is intentionally empty. Catalog size is not a success metric or a runtime input.
 - **Legacy replay artifact:** `artifacts/replay/legacy_strategy_catalog/{manifest.json,migration.jsonl}`. Normal Pilot/Mass imports must not read it; `specs/research_logics/` remains empty.
 - **Propose:** `POST /v1/propose-thesis` (`research.cf_propose_thesis`; **AI Gateway only**, never `env.AI.run`; 403 `generation` without verified readiness; LLM failure is `ok:false`/`llm_failed`, not stub-as-success; review_proposal_row; no auto-inject).
-- **Family reclass:** `research.catalog_family` — flow **gate** ≠ flow **family**.
 - **Legacy replay compiler:** `research.catalog_compiler` verifies the immutable closed-DSL artifact and semantic hashes. It emits no Worker source and is not a Pilot/Mass authority.
 - **Evaluation IR:** `research.evaluation_ir` calls `job_candidate_grade`; unknown fields rejected. Daily-path job artifacts carry `evaluation-ir/v1`; `candidate_grade` is the IR candidate (not a second grade).
 - **Phase 7 pilot:** `research.phase7_pilot.MassResearchScheduler` cannot construct without readiness+budget+plan+eval service+immutable store. Not enabled.
