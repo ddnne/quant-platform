@@ -193,16 +193,15 @@ disabled as of 2026-09-14 JST. A6 remains OPEN.
 ## Deprecated: `scripts/run_w*.py`
 
 Wave eval runners (`run_w*.py`) are **gone**. Do **not** add new
-`run_wNN_*.py`. Evaluators live in `research.unique_logic`. See
+`run_wNN_*.py`. Legacy catalog code is replay-only. See
 [`docs/architecture/wave_assets_deprecated.md`](../docs/architecture/wave_assets_deprecated.md).
 
-New research:
-
-- legacy catalog: `artifacts/replay/legacy_strategy_catalog/` (immutable replay only; `specs/research_logics/` YAML is empty)
-- bounded daily path: exact-four only; legacy catalog IDs fail closed
-- local unique CLI (`python -m research.unique_logic`): retired fail-closed stub, not candidate SoT
-- CF screen (auxiliary): `research.cf_mass_eval_run.run_cf_mass_eval_job`
-- record: `research.occupancy_audit.run_eval_wave` (R2 `research/eval/job={id}/`; no `run_wNN`)
+Current research entrypoints are documented in the [root README](../README.md).
+The legacy catalog under `artifacts/replay/legacy_strategy_catalog/` is immutable
+replay only. The local unique CLI is a retired fail-closed stub. Occupancy audit
+helpers read and summarize existing evidence; the unused wave/proposal and
+daily-path fan-out orchestration has been removed. Do not use disabled Mass
+drivers as an alternative research path.
 
 See [`docs/architecture/adr_research_recording.md`](../docs/architecture/adr_research_recording.md)
 and [`docs/architecture/wave_assets_deprecated.md`](../docs/architecture/wave_assets_deprecated.md).
