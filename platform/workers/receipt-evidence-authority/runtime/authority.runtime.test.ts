@@ -27,6 +27,7 @@ import {
 } from "../src/event_checkpoint";
 import { authorityInstanceDigest } from "../src/authority_instance";
 import { requirePersistedDerivedClaims } from "../src/claims_validation";
+import { ReconciliationScratch } from "../src/reconciliation_scratch";
 import { canonicalReceiptExpectedScope } from "../src/receipt_evidence";
 import { datasetById } from "../../ingestion-premium/src/catalog";
 import {
@@ -637,6 +638,37 @@ afterEach(() => {
 });
 
 describe("Receipt Evidence Authority in workerd", () => {
+  it("bounds reconciliation scratch and retains exact replay across eviction", async () => {
+    const { stub } = await activateRegisteredTestKey();
+    const row = {
+      natural_key: "synthetic-key", source: "jquants" as const,
+      dataset: "indices_bars_daily_topix", event_time: "2024-02-01",
+      available_at: "2024-02-01T09:00:00Z", ingested_at: "2024-02-02T00:00:00Z",
+      payload: "{}", raw_payload: "{}", row_digest: "sha256:" + "1".repeat(64),
+    };
+    await runInDurableObject(stub, (_instance, state) => {
+      const scratch = new ReconciliationScratch(state.storage, 16 * 1024 * 1024);
+      scratch.append("first", [row]);
+      scratch.append("first", [row]);
+      scratch.append("second", [row]);
+      expect(scratch.count("first")).toBe(1);
+      expect(() => scratch.append("first", [{ ...row, payload: "changed" }]))
+        .toThrow("scratch replay differs");
+      const bounded = new ReconciliationScratch(state.storage, state.storage.sql.databaseSize);
+      expect(() => bounded.append("first", [{
+        ...row, natural_key: "large", payload: "x".repeat(32 * 1024),
+      }])).toThrow("scratch capacity exceeded");
+      expect(scratch.count("first")).toBe(1);
+    });
+    await evictDurableObject(stub);
+    await runInDurableObject(stub, (_instance, state) => {
+      const scratch = new ReconciliationScratch(state.storage, 16 * 1024 * 1024);
+      expect(scratch.page("first", "")).toEqual([row]);
+      scratch.release("first");
+      expect(scratch.count("first")).toBe(0);
+      expect(scratch.page("second", "")).toEqual([row]);
+    });
+  });
   it("exposes only five public Durable Object RPC methods", async () => {
     const methods = Reflect.ownKeys(ReceiptEvidenceAuthority.prototype)
       .map(String)
