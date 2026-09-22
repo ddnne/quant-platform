@@ -229,6 +229,13 @@
           "checksum": "sha256:2fbe181870625d81bf679fe014b5562e5b419a87d90ae3005a8bd9b4c371f1fd",
           "order": 23,
           "depends_on": "quant-ingest:0022_receipt_authority_jsda_locator"
+        },
+        {
+          "migration_id": "quant-ingest:0024_receipt_r2_reconciliation",
+          "path": "platform/workers/ingestion-premium/migrations/0024_receipt_r2_reconciliation.sql",
+          "checksum": "sha256:d0d0f5257e71c7fbc12b029a005e4c2df8dd1cd057c88b1bf636aee5bd440eff",
+          "order": 24,
+          "depends_on": "quant-ingest:0023_mutation_lease"
         }
       ]
     },

@@ -52,6 +52,15 @@ export class ReconciliationScratch {
     ).one().n;
   }
 
+  lastEventTime(operationId: string): string {
+    const row = this.storage.sql.exec<{ latest: string | null }>(
+      `SELECT MAX(json_extract(row_json,'$.event_time')) AS latest
+       FROM reconciliation_scratch WHERE operation_id=?`, operationId,
+    ).one();
+    if (row.latest === null) throw new Error("empty reconciliation scratch");
+    return row.latest;
+  }
+
   page(operationId: string, after: string): CanonicalStructuredRow[] {
     const rows = this.storage.sql.exec<{ row_json: string }>(
       `SELECT row_json FROM reconciliation_scratch
