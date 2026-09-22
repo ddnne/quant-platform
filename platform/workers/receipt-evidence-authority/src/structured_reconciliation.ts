@@ -358,6 +358,19 @@ export async function reconcileStructured(
     ? countStructuredRows(env, input.operationId)
     : Promise.resolve(scratch.count(input.operationId));
   const storedBefore = await countRows();
+  // Scratch is disposable; its R2 checkpoint is not proof that temporary rows
+  // still exist. Rebuild an empty workspace from the retained immutable raw
+  // capture, using the original checkedAt. Partial mismatches still fail closed.
+  if (scratch !== undefined && storedBefore === 0 && progress.raw_rows_committed > 0) {
+    progress = {
+      schema_version: "receipt-authority-structured-progress/v1",
+      operation_id: input.operationId,
+      next_page: 0,
+      next_row: 0,
+      raw_rows_committed: 0,
+    };
+    await saveStructuredProgress(env, input.capture.rawManifestKey, progress);
+  }
   if (storedBefore < progress.raw_rows_committed) {
     throw new Error(STRUCTURED_CARDINALITY_MISMATCH);
   }

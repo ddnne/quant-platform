@@ -44,6 +44,17 @@ of all product bytes. Evidence and independent dependency review:
 
 ### Implementation and migration boundary
 
+Work in progress on `feat/receipt-r2-reconciliation` (not deployed): the
+internal scratch producer, compact reconciliation metadata, Receipt commit
+gate and mixed legacy/R2 readers are implemented. Migration 0024 is source
+only. Scratch is released after durable finalization (and on finalized replay);
+an empty workspace can restart from retained raw using the original timestamp.
+The production DO entrypoint does not yet supply scratch. Its bounded capacity
+and abandoned-work retention policy, end-to-end restart tests, and R2 source/
+export/applied generation wiring remain required before activation. R2-mode
+watermarks deliberately report a NULL legacy export cursor: an unrelated D1
+row-change sequence must not make the new path look current or READY.
+
 First change the new-operation producer and its consumers as one reviewed
 contract: reconciliation/materialization, receipt finalization/watermarks,
 Premium descriptors, Ops projection and cloud candidate. Descriptors and Ops

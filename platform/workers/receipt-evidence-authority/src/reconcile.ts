@@ -103,6 +103,9 @@ async function finalizeIssued(
     receiptDigest,
     result,
   );
+  // Never discard scratch before both D1 publication and durable finalization.
+  // If cleanup fails, the finalized replay below retries it without reissuing.
+  authority.scratch?.release(operationId);
   return replayed ? { ...finalized, replayed: true } : finalized;
 }
 
@@ -149,6 +152,7 @@ export async function executeReceiptRequest(
     : await authority.recover(operationId, requestDigest);
   if (snapshot.state === "FINALIZED") {
     if (snapshot.result === null) throw new Error("finalized operation lost its result");
+    authority.scratch?.release(operationId);
     return { ...snapshot.result, replayed: true };
   }
   const recoveredIssued = issuedFromSnapshot(snapshot);
