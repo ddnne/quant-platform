@@ -69,6 +69,7 @@ def _install_valid_generation(
     monkeypatch: pytest.MonkeyPatch,
     *,
     producer: str = SHA,
+    projection_status: str = "FRESH",
     generated_at: str = "2026-09-02T00:00:00Z",
     not_before: str = "2026-09-01T00:00:00Z",
     not_after: str = "2026-09-03T00:00:00Z",
@@ -131,16 +132,16 @@ def _install_valid_generation(
         "environment": "production",
         "producer_commit_sha": producer,
         "generated_at": generated_at,
-        "projection_status": "FRESH",
+        "projection_status": projection_status,
         "source_cursor": 12,
         "export_cursor": 12,
         "applied_cursor": 12,
-        "coverage_policy_version": "collection-coverage/v3",
-        "b0_status": "PASS",
-        "b4_status": "PASS",
+        "coverage_policy_version": "collection-coverage/mixed",
+        "b0_status": "UNKNOWN",
+        "b4_status": "FAIL",
         "dataset_coverage": {
             "equities_bars_daily": {
-                "status": "COMPLETE",
+                "status": "UNKNOWN",
                 "policy_version": "collection-coverage/v3",
             }
         },
@@ -164,7 +165,7 @@ def _install_valid_generation(
         "registry_digest": "sha256:" + "5" * 64,
         "issuer_key_id": "ops-projection-test-v1",
         "signed_envelope_json": json.dumps(body),
-        "coverage_policy_version": "collection-coverage/v3",
+        "coverage_policy_version": envelope["coverage_policy_version"],
         "producer_commit_sha": producer,
     }
     pointer_index = {"value": 0}
@@ -182,6 +183,17 @@ def _install_valid_generation(
         raise AssertionError(command)
 
     monkeypatch.setattr(gate, "_d1_json", d1)
+
+
+def test_fresh_verified_monitoring_does_not_require_research_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_valid_generation(monkeypatch)
+    result = gate.require_sealed_active_generation("production", now=NOW)
+    assert result["generation_id"] == "gen-valid"
+    assert result["status"] == "SEALED"
+    # Deployment admission returns transport evidence, never READY or a permit.
+    assert set(result) == {"generation_id", "status", "content_digest"}
 
 
 def test_committed_pending_registry_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -205,96 +217,14 @@ def test_committed_pending_registry_fails_closed(monkeypatch: pytest.MonkeyPatch
 
 
 def test_content_digest_mismatch_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    _local_release(monkeypatch)
-    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "test-token")
-    private = Ed25519PrivateKey.generate()
-    public = private.public_key()
-    der = public.public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
-    raw = der[12:]
-    monkeypatch.setattr(
-        gate,
-        "_load_spki",
-        lambda environment: (
-            "ops-projection-test-v1"
-            if environment == "production"
-            else "ops-projection-cloud-staging-v1",
-            der,
-        ),
-    )
+    _install_valid_generation(monkeypatch)
+    original_d1 = gate._d1_json
 
-    def fake_registry(environment: str, key_id: str, spki: bytes) -> dict[str, Any]:
-        assert environment == "production"
-        assert key_id == "ops-projection-test-v1"
-        assert spki == der
-        return {
-            "authority_status": "ACTIVE",
-            "not_before": "2026-09-01T00:00:00Z",
-            "not_after": "2026-09-03T00:00:00Z",
-        }
-
-    monkeypatch.setattr(gate, "_require_pinned_registry", fake_registry)
-    generation = "gen-1"
-    empty_digest = "sha256:" + hashlib.sha256(
-        gate._canonical_json({"rows": []}).encode("utf-8")
-    ).hexdigest()
-    manifest = {
-        table: {"row_count": 0, "content_digest": empty_digest}
-        for table in gate.PROJECTED_CONTENT_TABLES
-    }
-    contract_digest = "sha256:" + hashlib.sha256(
-        gate._canonical_json({"tables": list(gate.PROJECTED_CONTENT_TABLES)}).encode("utf-8")
-    ).hexdigest()
-    envelope = {
-        "generation_id": generation,
-        "content_digest": "sha256:" + "1" * 64,
-        "source_db_digest": "sha256:" + "2" * 64,
-        "contract_digest": contract_digest,
-        "environment": "production",
-        "producer_commit_sha": SHA,
-        "generated_at": "2026-09-02T00:00:00Z",
-        "projection_status": "FRESH",
-        "source_cursor": 12,
-        "export_cursor": 12,
-        "applied_cursor": 12,
-        "coverage_policy_version": "collection-coverage/v3",
-        "b0_status": "PASS",
-        "b4_status": "PASS",
-        "dataset_coverage": {
-            "equities_bars_daily": {
-                "status": "PARTIAL",
-                "policy_version": "collection-coverage/v3",
-            }
-        },
-        "row_counts": {table: 0 for table in gate.PROJECTED_CONTENT_TABLES},
-        "content_manifest": manifest,
-    }
-    body = {
-        "schema_version": "ops-projection-signed-envelope/v1",
-        "algorithm": "Ed25519",
-        "issuer_key_id": "ops-projection-test-v1",
-        "envelope": envelope,
-    }
-    signature = private.sign(gate._canonical_json(body).encode("utf-8"))
-    row = {
-        "generation_id": generation,
-        "status": "SEALED",
-        "signature": "ed25519:" + base64.b64encode(signature).decode(),
-        "content_digest": envelope["content_digest"],
-        "source_db_digest": envelope["source_db_digest"],
-        "contract_digest": envelope["contract_digest"],
-        "registry_digest": "sha256:" + "5" * 64,
-        "issuer_key_id": "ops-projection-test-v1",
-        "signed_envelope_json": json.dumps(body),
-        "coverage_policy_version": "collection-coverage/v3",
-        "producer_commit_sha": SHA,
-    }
-
-    def d1(_environment: str, command: str) -> list[dict[str, Any]]:
-        if "ops_projection_active a JOIN" in command or "JOIN ops_projection_generation" in command:
-            return [row]
-        if "FROM ops_projection_active" in command:
-            return [{"generation_id": generation}]
-        return []
+    def d1(environment: str, command: str) -> list[dict[str, Any]]:
+        rows = original_d1(environment, command)
+        if "FROM endpoint_inventory " in command:
+            return [{**rows[0], "table": "tampered"}]
+        return rows
 
     monkeypatch.setattr(gate, "_d1_json", d1)
     with pytest.raises(gate.PredeployGateError, match="content digest"):
@@ -302,69 +232,7 @@ def test_content_digest_mismatch_fails_closed(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_unknown_projection_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    _local_release(monkeypatch)
-    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "test-token")
-    private = Ed25519PrivateKey.generate()
-    der = private.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
-    monkeypatch.setattr(
-        gate,
-        "_load_spki",
-        lambda environment: (
-            "ops-projection-test-v1"
-            if environment == "production"
-            else "ops-projection-cloud-staging-v1",
-            der,
-        ),
-    )
-    monkeypatch.setattr(
-        gate,
-        "_require_pinned_registry",
-        lambda *_args, **_kwargs: {
-            "authority_status": "ACTIVE",
-            "not_before": "2026-09-01T00:00:00Z",
-            "not_after": "2026-09-03T00:00:00Z",
-        },
-    )
-    envelope = {
-        "generation_id": "gen-1",
-        "content_digest": "sha256:" + "1" * 64,
-        "source_db_digest": "sha256:" + "2" * 64,
-        "contract_digest": "sha256:" + hashlib.sha256(
-            gate._canonical_json({"tables": list(gate.PROJECTED_CONTENT_TABLES)}).encode()
-        ).hexdigest(),
-        "environment": "production",
-        "producer_commit_sha": SHA,
-        "generated_at": "2026-09-02T00:00:00Z",
-        "projection_status": "UNKNOWN",
-        "source_cursor": None,
-        "export_cursor": None,
-        "applied_cursor": None,
-        "coverage_policy_version": "collection-coverage/v3",
-        "dataset_coverage": {"equities_bars_daily": {"status": "UNKNOWN"}},
-        "row_counts": {table: 0 for table in gate.PROJECTED_CONTENT_TABLES},
-        "content_manifest": {},
-    }
-    body = {
-        "schema_version": "ops-projection-signed-envelope/v1",
-        "algorithm": "Ed25519",
-        "issuer_key_id": "ops-projection-test-v1",
-        "envelope": envelope,
-    }
-    signature = private.sign(gate._canonical_json(body).encode("utf-8"))
-    row = {
-        "generation_id": "gen-1",
-        "status": "SEALED",
-        "signature": "ed25519:" + base64.b64encode(signature).decode(),
-        "content_digest": envelope["content_digest"],
-        "source_db_digest": envelope["source_db_digest"],
-        "contract_digest": envelope["contract_digest"],
-        "registry_digest": "sha256:" + "5" * 64,
-        "issuer_key_id": "ops-projection-test-v1",
-        "signed_envelope_json": json.dumps(body),
-        "coverage_policy_version": "collection-coverage/v3",
-        "producer_commit_sha": SHA,
-    }
-    monkeypatch.setattr(gate, "_d1_json", lambda *_args: [row])
+    _install_valid_generation(monkeypatch, projection_status="UNKNOWN")
     with pytest.raises(gate.PredeployGateError, match="UNKNOWN"):
         gate.require_sealed_active_generation("production", now=NOW)
 

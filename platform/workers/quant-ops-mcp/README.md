@@ -81,7 +81,12 @@ has no active key or the Worker signing/SPKI bindings are unprovisioned. Public
 consumers use the chained, verify-only registries under
 `specs/ops_projection/`; Python and Worker code pin their complete document
 identity. Deploy Premium first, wait for a fresh `SEALED` generation, then let
-`predeploy_ops_projection_gate.py` authorize the MCP deployment.
+`predeploy_ops_projection_gate.py` verify monitoring transport before MCP
+deployment. The gate retains signatures, exact producer SHA, freshness, aligned
+transport cursors and table hashes. Mixed Coverage and UNKNOWN/FAIL B0/B4 are
+diagnostic results to expose, not reasons to block the monitor. This does not
+authorize READY, Trader, Pilot, or a deployment outside the approved scope;
+research admission still requires its independent same-snapshot proofs.
 
 ## Verify and deploy
 

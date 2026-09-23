@@ -6,7 +6,9 @@ credentials or an unprovisioned public SPKI fail closed for deploy.
 Never print signed bodies, provider output, or secrets.
 
 Premium is deployed first. MCP keeps its current binding until a SEALED
-generation exists; this gate is that sequencing check, not a chicken-and-egg.
+generation exists. This verifies monitoring transport, not research readiness:
+the monitor must expose authentic UNKNOWN/FAIL quality and mixed Coverage.
+READY and Trader admission retain their independent same-snapshot gates.
 """
 
 from __future__ import annotations
@@ -381,20 +383,9 @@ def require_sealed_active_generation(
         or export_cursor != applied_cursor
     ):
         raise PredeployGateError("source/export/applied cursors must be non-null and equal")
-    if envelope.get("coverage_policy_version") != "collection-coverage/v3":
-        raise PredeployGateError("predeploy requires canonical Coverage V3")
-    if envelope.get("b0_status") != "PASS" or envelope.get("b4_status") != "PASS":
-        raise PredeployGateError("predeploy requires B0/B4 PASS")
     dataset_coverage = envelope.get("dataset_coverage")
     if not isinstance(dataset_coverage, dict) or not dataset_coverage:
         raise PredeployGateError("signed dataset coverage is empty")
-    statuses = [
-        row.get("status")
-        for row in dataset_coverage.values()
-        if isinstance(row, dict)
-    ]
-    if not statuses or set(statuses) <= {"UNKNOWN"}:
-        raise PredeployGateError("signed empty/UNKNOWN projection must not switch MCP")
     row_counts = envelope.get("row_counts")
     manifest = envelope.get("content_manifest")
     if not isinstance(row_counts, dict) or not isinstance(manifest, dict):
