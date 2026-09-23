@@ -1,536 +1,130 @@
 {
   "schema": "quant-platform-work-ledger/v1",
-  "staging_key_recovery_checkpoint_20260923": {
-    "status": "STAGING_KEYS_PROVISIONED_RECEIPT_ACTIVE_ACCEPTED_OPS_CONTRACT_REPAIR_PENDING",
-    "supersedes": "The user approved bounded staging MASS token and Ops/READY/Trader credential recovery; this supersedes earlier no-new-key/pending-approval notes for those staging credentials only. Receipt keys and production remain excluded.",
-    "approval": "https://github.com/ddnne/quant-platform/pull/253#issuecomment-5787989986",
-    "schema_evidence": "https://github.com/ddnne/quant-platform/pull/253#issuecomment-5787996734",
-    "credential_preparation": "https://github.com/ddnne/quant-platform/pull/253#issuecomment-5788022138",
-    "live_checkpoint": "https://github.com/ddnne/quant-platform/pull/254#issuecomment-5788469862",
-    "live_source": "cf6499771a4eb97d22ffa405ab69abcfa27c8974; native merged-main CI acaf1d78-21d8-409c-8e3e-cd3e3f2d7828 SUCCESS. Staging Secrets/Receipt/Premium versions 8b47b4af-e588-41de-8a8f-de786783b5d8 / 50f6ccdf-ca74-4585-98b8-b41c8059e0b0 / 3400c34c-c834-4950-9be1-ee8f734d3c42. Official ACTIVE acceptance sha256:5f74ebb87939101b9b3234b88afb89148a1795b5556c0d1158d65a88475b6f29, AUDIT_ONLY/research_eligible=false. Receipt key unchanged. Ops/READY/Trader private bindings and MASS token provisioned; unauthenticated GET401/authenticated GET405, no execution POST.",
-    "custody": "Prepared private values are in macOS Keychain under account quant-platform-staging and service prefix quant-platform/staging/recovery-20260923/. Suffixes: MASS_EVAL_TOKEN, OPS_PROJECTION_SIGNING_PKCS8_B64, READY_ED25519_PRIVATE_KEY, TRADER_ED25519_PRIVATE_KEY. Reuse these values, do not regenerate or print them. Independent synthetic challenge verified each prepared private/public pair; no real attestation was minted.",
-    "source_scope": "Activate staging public-key registries and corresponding Python/TS/config pins only. Preserve the old pending Ops public key and chain its prior registry digest. Publisher identity now derives from generated Ops registry bytes/pins, not duplicated literals or Receipt authority state. The obsolete local READY parser delegates to the canonical verifier instead of maintaining a second schema and stale pins.",
-    "checks": "Generated contract and binding manifest checks PASS; 135 focused Python tests PASS; Premium typecheck and 170 Node + 46 workerd tests PASS; Mass typecheck and 454 Node + 55 workerd tests PASS. Minimal existing tests strengthened; duplicate local-parser test removed. Independent read-only review found no actionable source blockers.",
-    "next": "PR255 repairs two observed consumer contract mismatches: signed Coverage rows omitted four required fields; receipt reader rejected the authority's millisecond UTC timestamps. Existing tests strengthened, no new testcase. A metadata-only replay of actual run7270 verifies signature and full R2 receipt chain as COMPLETE with the correction; no market bodies downloaded. Require exact-source CI/merge before corrective staging rollout and independent full projection verification. Reuse provisioned keys. Gateway/Mass module rollout remains pending; MCP predeploy gate remains enforced. Revalidate in-flight state before mutation. Existing bounded candidate limits and cost monitoring apply.",
-    "not_claimed": "Stored Ops generation90e03df7a80235e4ecd267926d2e4639635b35f68b12ec956ae4d2101a00bc40 has source/export/applied1771943 but Python verification rejects the old four-field envelope. B4 FAIL: 27 legacy options V2 segments coexist with five-dataset V3 evidence; do not delete/relabel old evidence or fake global PASS. Quality producer reports B0 subcheck PASS but aggregate FAIL is currently used as envelope B0 status, requiring separate review. Authenticated candidate, current research cursor, accepted FRESH projection, B0/B4, READY/Trader pairing and Pilot remain unproven. Production unchanged."
-  },
-  "ops_cron_source_checkpoint_20260923": {
-    "status": "SOURCE_FIX_NOT_DEPLOYED_OR_ACTIVATED",
-    "scope": "Staging ACTIVE Cron now reaches the existing metadata-only Ops publisher after recovery/audit, only when OPS_PROJECTION_VERIFY_SPKI_B64 is configured. Publisher accepts the exact staging ACTIVE caller tag ra-s-c-<40SHA>, retaining the real Worker version UUID and bare source SHA. Removed unreachable staging canary branch from the non-staging path. Production tag behavior unchanged.",
-    "verification": "Premium typecheck and full npm test passed: 170 Node and 46 workerd tests. One added synthetic workerd regression exercises Cron through real crypto, R2 export and D1 SEALED activation; absent verifier/PENDING remain dormant, production rejects staging role tags, PENDING tags cannot publish, and Ops publication does not become research READY. Read-only independent review found no blocking diff-level issues. No authentic market data used locally.",
-    "live_gap": "Existing staging signer binding is present but matching verifier is not provisioned and the Ops registry remains PENDING. Registry document digest 093fb04a and body digest c97a025e have different inputs; both match the checked-in document and are not a mismatch. Establish matching existing public key and approved registry activation before publication. Source change alone does not publish Ops or activate keys. Production quant-mcp still reports STALE generation projgen-ef18b4f86ee946048161d25e2a30a2a8 after successful reconnection; production stale cause is not established by this staging fix.",
-    "next": "Independent review, exact-final-SHA native CI and merge before any approved rollout. Existing key identity/activation conditions, deployment HOLDs, candidate credentials, READY and Pilot gates remain unchanged. No new or rotated keys."
-  },
-  "r2_reconciliation_checkpoint_20260923": {
-    "status": "STAGING_ACCEPTED_FIRST_R2_SEGMENT_VERIFIED_RESEARCH_HELD",
-    "supersedes": "For current staging receipt acquisition, this section supersedes the older source-only, June recovery-only, preperiod-unapproved and OAuth-blocked checkpoints below. Those dated sections are historical, not current dispatch instructions. Re-read live operation/control state before acting.",
-    "accepted_source_head": "d5cbb3d542aeb8ba58b1210f072515d76a669daf",
-    "pr": "https://github.com/ddnne/quant-platform/pull/251",
-    "accepted_main": "fcfdb82e73cb74d75e0c0c1ee283191d10006958",
-    "source_scope": "New receipt reconciliation stores historical row bodies in R2 and bounded cloud DO scratch, not permanent D1 fact/shadow/change-log copies. Persisted legacy operations retain their original route and signed serialization. D1 retains operation/segment evidence and immutable receipt publication metadata. Migration0024 is applied to staging only; canonical0001-0024 all applied, pending none. No historical data removed.",
-    "verified_checks": {
-      "premium": "Full npm test: 170 Node tests and 45 Cloudflare runtime tests passed on source5989485f.",
-      "independent_review": "Final source reviews and migration safety review completed before merge/rollout. Acceptance remains scoped to observed staging operation, not global research readiness.",
-      "native_ci": "Final PR source d5cbb3d5: build5e8cba37-9112-4abd-bdb2-c170ae994d13 SUCCESS. Merged main fcfdb82e: build884e84f5-16d5-42ce-9a62-8c2829caf062 SUCCESS, verify_ci: ok. Required Workers Builds: quant-platform-ci-aggregate-staging/app85455. Fresh source-only clone matched clean main. Separate Mass product deployment HOLD remains intentional."
+  "updated_at": "2026-09-23T05:21:51Z",
+  "purpose": "Current checkpoint, not live authorization. Remeasure before acting. Source, staging, production, data, READY and execution are separate outcomes; superseded details live in Git history.",
+  "user_pause": {"status": "RESUMED_BY_USER", "responsibility": "Codex implements while Grok is unavailable; no paid replacement. Main owns work, subagents only independent read-only review. Maximum three work units."},
+  "approvals": {
+    "candidate": {
+      "evidence": "https://github.com/ddnne/quant-platform/pull/238#issuecomment-5771761372",
+      "scope": "Staging Receipt-to-cloud candidate, ordinary source/Git/rollout repairs, conditional READY and Paper-only Trader after every same-snapshot proof gate.",
+      "limits": "Concurrency1, max3 fresh attempts, 180-minute watchdog and verified shutdown. AdditionalUSD10 monitored stopping target, NOT a hard invoice cap.",
+      "stop_rule": "Stop on missing data, signature mismatch, untrackable cost, unknown shutdown or unexpected permissions. Inspect authoritative state before any recovery; never infer terminal state from timeout or reset attempt limits.",
+      "excludes": "Pilot/backtests, production, Mass Research, paid inference, FoF/broker/orders, automatic promotion, local market history, full DB backup and cancelled MCP/C09 activation."
     },
-    "rollout": {
-      "migration_evidence": "https://github.com/ddnne/quant-platform/pull/251#issuecomment-5787007897",
-      "active_acceptance_evidence": "https://github.com/ddnne/quant-platform/pull/251#issuecomment-5787042265",
-      "evidence_digest": "sha256:04f6450b9c29fcc38214b3f77831b6c8f7bd5d5e93b24388db8ae4361d940f46",
-      "ingestion_secrets_version": "fda16c5c-9cb0-45e9-8fb7-e21b241ecd2d",
-      "receipt_authority_version": "036e922e-1d67-44a0-8c2b-d0ae11efe6f3",
-      "ingestion_premium_version": "30536d7c-1da4-4336-ac87-832c03ad2ba3",
-      "scope": "Ordered Secrets/Receipt/Premium staging rollout accepted: exact module bytes, selected-version rereads, bindings, closed HTTP/preview/routes, unchanged existing receipt key/namespace and ordinary Cron recovery/replay attestation. AUDIT_ONLY, research_eligible=false. JSDA unchanged in bridge mode; Gateway/Mass still at1cb283142cae3aa47c21a18ed4a24357c3852b2a."
-    },
-    "first_r2_segment": {
-      "evidence": "https://github.com/ddnne/quant-platform/pull/251#issuecomment-5787293878",
-      "dataset": "equities_bars_daily",
-      "segment_id": "2022-12",
-      "run_id": 7270,
-      "operation_id": "sha256:965c1a93a92b5cb3ef850def6bd466501be1a19dffeadb70efb308a1a3f457cf",
-      "state": "RECEIPT_COMMITTED / caller FINALIZED",
-      "row_count": 93164,
-      "product_bytes": 140850092,
-      "verification": "Existing staging public-key signature, signed/outer identity and counts, reconstructed whole-receipt digest, unique publication sequence1 and compact R2 measurement agree. Actual small manifest bytes from quant-receipt-evidence-staging match recorded digest. D1 artifact_body length0 and operation shadow rows0. Completed control cursor1/1, lease null. No market body downloaded locally. Full product reconciliation was executed by trusted cloud pipeline; cloud candidate must independently stream/verify products before scope/READY acceptance. Scratch physical cleanup not independently measured.",
-      "usage": "2026-09-23[00:50,01:14)UTC: staging D1 read21338/write65; Receipt DO SQL read1457145/write279575, duration35.914624512, cpuTime53078204; exceededCPU/exceededMemory/fatal errors0. Window includes background/checks and is not isolated job cost, invoice or hard cap. R2 operation analytics also observable; missing series remain UNKNOWN."
-    },
-    "preperiod_approval": {
-      "status": "APPROVED_BOUNDED_STAGING_ONLY",
+    "preperiod": {
       "evidence": "https://github.com/ddnne/quant-platform/pull/251#issuecomment-5787064159",
-      "limits": "2022 bars/master/fins only, at most12 monthly segments newest first, concurrency1, max3 fresh attempts each, additionalUSD10 monitored stopping target not billing hard cap. No2021earlier, production, Pilot, new keys or local market history.",
-      "dispatch_checkpoint": "Two of maximum12 segments dispatched: bars2022-12 verified; master2022-12 submitted next after no PREPARED requests, vacant mutation lease and no existing master operation. Master completion unproven at submission. No other preperiod job queued. Re-read actual control/operation before retry or replacing control.",
-      "previous_completed_control_archive": "quant-structured-staging/control/archive/exact_five_compiled_acquisition/a388cb31ad289bae4315b23a7a004a1422dfe69afdcba3008913babdc33f9582.json",
-      "master_submitted_control_digest": "sha256:21a388ab4e1c7034c192c61548fc8b845854cf90ffb66f713f90f3e3ccac728d"
+      "scope": "Staging2022 bars/master/fins only; max12 monthly segments newest first, concurrency1, max3 fresh attempts per segment, additionalUSD10 monitored target not hard billing cap. No2021earlier.",
+      "checkpoint": "Three segments completed: 2022-12 bars/master/fins. Compiler determines further scope; presence does not prove sufficient warmup. Current acquisition control cursor1/1, lease null, finished. Do not restart it."
     },
-    "quant_mcp_reconnection": {
-      "authentication": "SUCCESS: authenticated projection_status call after user reconnection",
-      "projection_status": "STALE",
-      "generated_at": "2026-08-21T12:30:49.152421+00:00",
-      "generation": "projgen-ef18b4f86ee946048161d25e2a30a2a8",
-      "refresh_attempt": false,
-      "refresh_success": false,
-      "meaning": "Supersedes the older OAuth reconnect blocker only. Authentication recovery does not prove fresh data, B0, READY or Pilot eligibility."
-    },
-    "remaining_rollout_conditions": [
-      "Ops source implementation separately observes receipt_product_publications/v1, includes that observation in generation identity, and rejects mid-read drift or cross-generation rollback. This is not live Ops acceptance; live projection remains STALE. The old jquants_records feed remains legacy-only. Research application/global READY integration remains incomplete; publication MAX is not a contiguous applied cursor.",
-      "Connect verified selected-operation candidate cursors to scope-bound snapshot/READY evidence while retaining authenticated descriptor provenance. Publication sequence is not itself a signed receipt claim or authority FINALIZED acknowledgement.",
-      "One monthly bars canary passed the bounded512MiB scratch route; this is not proof for every dataset/month or simultaneous workloads. Inactive scratch expiry is opportunistic after24h, not a scheduled deletion guarantee; oversized segments cannot be fixed by blind retries.",
-      "Update Mass candidate source through the approved cloud-only staging rollout, then authenticated smoke/full product verification and scope checks. Existing MASS_EVAL_TOKEN location and matching READY/Trader public-key identities remain unresolved; no generation/rotation. No production activation from source merge."
-    ],
-    "preserved_holds": "Only approved staging migration/receipt-chain rollout/acquisition performed. No data removal, production rollout, READY or Pilot execution. Mass research, FoF, broker, real orders and automatic promotion remain disabled. No authentic market history persisted locally."
+    "credentials": {
+      "evidence": "https://github.com/ddnne/quant-platform/pull/253#issuecomment-5787989986",
+      "status": "PROVISIONED",
+      "scope": "Approved missing staging MASS token and Ops/READY/Trader keys, matching public registries and empty dedicated Ops D1 initialization completed. Receipt key and production excluded.",
+      "custody": "Existing macOS Keychain account quant-platform-staging, service prefix quant-platform/staging/recovery-20260923/. Suffixes MASS_EVAL_TOKEN, OPS_PROJECTION_SIGNING_PKCS8_B64, READY_ED25519_PRIVATE_KEY, TRADER_ED25519_PRIVATE_KEY. Reuse, never print or regenerate."
+    }
   },
-  "staging_acquisition_checkpoint_20260922": {
-    "status": "FRESH_DISPATCH_HELD_RPC_CANCELLATION_UNRESOLVED_JUNE_RECOVERY_ONLY",
-    "supersedes": "The dated 20260921 source-repair-pending, exhausted-January approval and receipt-chain deployment descriptions below are historical. This record governs the 20260922 approved staging outcome; other HOLDs remain unchanged.",
-    "approval": "User approved up to three additional fresh attempts EACH for equities_master 2023-01 and equities_bars_daily 2023-01. Preserve the original three failed attempts for each segment. Same-scope fixes, verification, Git, native CI and staging repair are included; no per-command reapproval.",
-    "approval_evidence": "https://github.com/ddnne/quant-platform/pull/235#issuecomment-5769337572",
-    "limits": "One acquisition at a time. USD20 operational stopping target, NOT a billing hard cap. No out-of-period warmup, production, key changes, READY, Pilot, Mass, FoF, broker, orders or full D1 backup. Remaining previously approved in-period jobs remain conditional on successful first receipts and attributable usage; no expansion on missing cost evidence.",
-    "accepted_source_sha": "c4a785f75f6e1143723ff03e3e4a3e147d73360c",
-    "source_delivery": "PR240 merged after independent review and exact-final-head native CI success (de612a29-0163-4ac4-83c7-8729b1f75fa4). Merged-main native CI79e7c547-dc12-4a54-a418-027164223c1c succeeded. Separate existing verification checkout matched merged main and was clean; this is not the final fresh-clone completion audit. Not data readiness.",
-    "staging_acceptance_digest": "sha256:13d06b26a53c7d455a3f2ea2d240de07d121a1892a7f20d55f86a08fbe2b8df9",
-    "staging_acceptance_evidence": "https://github.com/ddnne/quant-platform/pull/240#issuecomment-5772738297",
-    "receipt_chain_versions": {
-      "ingestion-secrets": "9150ee54-eb1e-495f-9bde-39dff747ba75",
-      "receipt-evidence-authority": "648554d9-471f-4c8e-98b3-d5197974696c",
-      "ingestion-premium": "07d99167-cb82-4dce-b4d6-6cc1ac97ea88"
-    },
-    "staging_scope": "Secrets/Receipt/Premium source c4a785f75f6e1143723ff03e3e4a3e147d73360c ACTIVE gate PASS, AUDIT_ONLY/research_eligible=false. Gateway and Mass remain on source 1cb283142cae3aa47c21a18ed4a24357c3852b2a; they were not redeployed by PR240. Their earlier canonical deploy verified exact Worker module bytes. Mass cloud build 9eed5911-fc9d-4935-a350-aa279f9d8608 succeeded; selected version 4c96b7e9-04d4-4d50-a971-f3bf0acb909c. Container app a03b71dd-28e5-4781-9cd9-d6682596eb72 version9 at100%, image sha256:fab074b72664e18d0172ddd48c490d6a888c3912f02acba8592439cfa12e3054; namespace matches Worker. Health and unauthenticated401 PASS; no Container instances observed. Authenticated smoke and candidate not executed.",
-    "verified_january_master_operation_id": "sha256:77aa7d8925f37c62bd2eb8feb0ec047c7fb80ec8ffff9b0cbdd92f4619b0b642",
-    "verified_january_master_run_id": 6830,
-    "attempts_at_checkpoint": "January master finalized on additional1/3; January bars additional0/3, not restarted. Financial/calendar/TOPIX Jan-Oct, masterJan-May and February bars verified:36/50 in-period segments, not full scope/seed/READY proof. April run6990 has85236rows; May run7007 has85374rows. Each pinned signature, outer counts/identity, whole-receipt digest and actual product manifest bytes verified. June first attempt remains PREPARED/COLLECTING at09:50UTC; not COMPLETE. Re-query before acting; never reset attempts.",
-    "control_state": "After two service RPC canceled outcomes at09:32:23UTC, archived/read back exact seven-job masterApr-Oct control bytes and removed only the active dispatch key. Subsequent actual Cron reports idle/absent. Archive preserves cursor2, attempts1, lease owner3602a0bb-e539-4240-892f-c36915dac90b. June operation sha256:5f908166f288cb6ccc2a034574e8d445ba1d4f1d6c0e53011fa495010df58533 continues through existing PREPARED recovery without a new capture. Raw/products/receipts retained. MasterJul-Oct and barsJan+Mar-Oct not dispatched. Do not blindly restore the archived cursor/lease after June finishes; reconcile current evidence first.",
-    "control_archive": "quant-structured-staging/control/archive/exact_five_compiled_acquisition/359905f26b3b04130573424850821b53220ef72fdb98fe090ace2c6b49396aa4.json",
-    "stop_evidence": "https://github.com/ddnne/quant-platform/pull/241#issuecomment-5774380637",
-    "progress_and_usage_evidence": "https://github.com/ddnne/quant-platform/pull/241#issuecomment-5774423287",
-    "cancellation_diagnosis": "Independent read-only review found no concrete missing-await or RPC-lifetime defect. Both canceled service traces have inner DO and parent Cron outcome ok, but parent ok alone is insufficient because recovery catches failures. Full caller event window09:31-09:33:30 has no recovery FAILED record; May caller finalized09:32:23.482Z. Cross-service timestamps do not establish exact causal ordering. Cause remains unresolved; verified May receipt is retained, no speculative waitUntil/redeploy and no fresh-job expansion pending diagnosis/recovery review. Usage window08:56-09:45:34 has D1read3375155/write1026681, ReceiptDO289.55632384GB*s, CPU/memory/fatal errors0. Worker aggregate errors0 does not erase canceled events or prove billing cost.",
-    "publication_key_preflight": "Read-only settings confirm staging Premium READY_ED25519_PRIVATE_KEY and TRADER_ED25519_PRIVATE_KEY secret bindings exist; Mass has MASS_EVAL_TOKEN and no READY private-key binding. Values were not read or validated. Both specs/ready/readiness_verify_public_keys.staging.json and specs/trader_authorization/public_keys.staging.json have keys=[] on current main and accepted deployed source revisions c4a785f7/1cb28314. Publisher requires exactly one active verification key, so secret-name presence is not publication readiness. Recover the existing matching public-key identities or prepare a separately authorized provisioning outcome before publication; do not silently create/rotate/activate keys. This is the existing runbook activation gap, not a newly introduced authority.",
-    "recovery": "PR240 converts only structured-slice-incomplete at the service boundary into a typed operation-bound continuation; caller retains PREPARED until signed completion. February recovery preserved its existing identity and finalized. March fresh canary under repaired runtime finalized and independently verified. Window07:32-08:21UTC D1read2504688/write842093, ReceiptDO290.650402304GB*s CPU/memory/fatal errors0; authority44requests/errors0, Premium55/errors0. Windowed analytics are not a complete invoice; absent series UNKNOWN.",
-    "snapshot_approval": "User approved bundled staging Receipt-to-cloud-snapshot outcome: https://github.com/ddnne/quant-platform/pull/238#issuecomment-5771761372. This supersedes the acquisition-only READY exclusion solely for staging candidate and conditional staging READY/Paper-only Trader publication after every proof gate passes. Existing Worker rollout, removal of evaluator READY private-key binding (done), no key generation/rotation. Candidate concurrency1, max3 fresh runs, existing180-minute watchdog, verified shutdown; additionalUSD10 monitored stop target, NOT invoice cap. Stop on missing data, signature mismatch, untrackable cost, unknown shutdown or unexpected permissions. Same-scope fixes/tests/Git included. Production, out-of-period acquisition, actualPilot/backtests, Mass, paid inference, orders, fullDBbackup, local market history and cancelledMCP/C09 remain excluded.",
-    "next_action": "Track the existing June operation and independently verify its final receipt; investigate cancellation before fresh-job expansion. Grouped human questions remain unanswered: quant-mcp reconnect (oauth_token_invalid_grant prevents current projection/B0/sync measurement); storage location only of existing staging MASS_EVAL_TOKEN (no rotation); bounded2022 preperiod acquisition proposal. That proposal is NOT approved: staging bars/master/fins only, max12 monthly segments, newest first, concurrency1, max3 fresh attempts each, additionalUSD10 monitored stop target not invoice cap; no2021earlier/prod/Pilot/local history. Canonical scope needs11bar observations plus financial/master initial state and split-anchor bars; no committed pre2023 products were found and50/50 in-period is insufficient. Authenticated smoke/candidate remain pending. No READY/PilotGO.",
-    "rollout_evidence": "https://github.com/ddnne/quant-platform/pull/240#issuecomment-5772738297"
-  },
-  "staging_acquisition_approval_20260921": {
-    "status": "STOPPED_MASTER_THREE_ATTEMPTS_FAILED_SOURCE_REPAIR_PENDING",
-    "scope": "38 in-period segments: equities_bars_daily 2023-03 through 2023-10; equities_master, fins_summary and indices_bars_daily_topix each 2023-01 through 2023-10. Existing evidence reused where valid.",
-    "sequence": "First master/fins_summary/TOPIX 2023-01 only; verify receipts and attributable usage before the remaining 24+11 jobs. No expansion if cost cannot be tracked.",
-    "limits": "One acquisition at a time; at most three fresh attempts per segment; stop on anomalies. USD20 operational stopping target, NOT an automatic invoice hard cap.",
-    "included": "Same-scope implementation fixes, verification, Git and required CI; no per-command approval.",
-    "excluded": "January bars 3/3 HOLD reset, periods outside approved months, production, keys, READY, Pilot, Mass, FoF, broker, orders and full D1 backup.",
-    "control_key": "quant-structured-staging/control/exact_five_compiled_acquisition.json",
-    "preserved_previous_control": "control/archive/exact_five_compiled_acquisition/51fbf3f5126d9ca3405830aab0db0575b1ebf566f947cb3198c61652c4fe2211.json",
-    "first_three_submitted_sha256": "c15eb4f7f8041270e8eef8ac76e5e44b1aed7a3aa102067e8ce2941d03665a9a",
-    "stopped_control_archive": "control/archive/exact_five_compiled_acquisition/dd325b7ba6f115e7f3b4bb6d64133c9a20ddb03cb150215f7b547b34c7646661.json",
-    "stop_evidence": "2026-09-21: runs 6826, 6827, 6828 all terminated fail (transport aborted at 180 seconds); raw manifests FAILED with 5, 2, 2 pages respectively. Active control removed after cloud archive/readback; third run subsequently confirmed fail. Fins/TOPIX and remaining 35 jobs were not started. Existing partial raw retained, not COMPLETE evidence. No automatic attempt reset.",
-    "source_repair": "ACTIVE operation-bound canonical months must enter the existing trusted Receipt acquisition directly, not first duplicate a whole-month legacy fetch. Existing ACQUIRED raw-only continuations remain unchanged. Source repair does not reset exhausted attempts or prove live convergence/cost visibility.",
-    "evidence": "https://github.com/ddnne/quant-platform/pull/233#issuecomment-5760660572",
-    "recovery": "Preserve new operation/raw identities. On failure stop further jobs; inspect active invocation/PREPARED state before changing control. Never restore whole D1 or restart the obsolete control as rollback. No authentic market history stored locally."
-  },
-  "caller_finalization_repair_20260921": {
-    "status": "STAGING_DEPLOYED_ACCEPTED_PRODUCTION_UNCHANGED",
-    "failure": "An overlapping recovery caller rewrote FINALIZED updated_at using an older local timestamp; real D1 rejected the non-monotonic update after another caller had successfully finalized.",
-    "repair": "UPDATE only PREPARED; retain post-read exact receipt digest and nonce checks. Do not weaken database triggers, reset the operation, or rewrite the winning timestamp.",
-    "test_replacement": "Replace one Map-backed lost-response test with one workerd/D1 regression: real monotonic constraint reproduces the failure before repair, matching replay preserves the winning timestamp after repair, and substituted digest still fails. No net test-count increase.",
-    "review": "Independent read-only review found no actionable issues. Partial RPC fixture tests caller ledger behavior, not receipt schema or cryptographic verification.",
-    "release": "PR232 merged into 20a81d04; exact-SHA main native CI and approved staging rollout passed. See staging_acceptance_20260921. February finalization is preserved; production unchanged."
-  },
-  "staging_acceptance_20260921": {
-    "status": "ACTIVE_ACCEPTANCE_PASS_FEBRUARY_RECEIPT_FINALIZED",
-    "accepted_source_sha": "20a81d04f0f01beff48c909156e3d97f8477dfe7",
-    "merged_prs": [229, 230, 231, 232],
-    "main_native_build": "a263abf0-788b-4d57-ad2c-1969751b156c",
-    "main_native_result": "SUCCESS",
-    "versions": {
-      "ingestion-secrets-staging": "06878b14-fe68-4ba8-b06c-9434ad7237c4",
-      "receipt-evidence-authority-staging": "5c54a495-5816-48e5-a226-86d5c3569a7f",
-      "ingestion-premium-staging": "4cd33f9f-b911-45c7-bf28-d794fb1361bb"
-    },
-    "active_transition_evidence_digest": "sha256:8612999d8a9ea9411e51b5c755cf0201ccf0568e5e0588c0b64ed25fa1197fdb",
-    "evidence": "https://github.com/ddnne/quant-platform/pull/232#issuecomment-5760213942",
-    "recovery_operation_id": "sha256:cf46358cc553d44dda7a97f0bc7d34c434dada57370b52d0739679dd560ae14e",
-    "recovery": "Existing February operation reached RECEIPT_COMMITTED and caller FINALIZED with matching receipt digest after all 80695 rows and 28 pages. Original operation/raw identity preserved. Post-deploy readback: 11 FINALIZED, 0 PREPARED, February digest unchanged. Intermediate Service RPC hung diagnostics remain unexplained. Idempotent caller timestamp repair is deployed. Do not reset or reacquire.",
-    "receipt_digest": "sha256:225ac334eb6e9e3e8985eed4a28b9aa4f1a0796e3bef644b4f53a2f78d3f1f18",
-    "structured_digest": "sha256:68511eed841c6cc288127467e7ad6e99a09808f33415aeb4dec9ef134a1061d1",
-    "diagnostic_test": "Existing concurrent-issue and monthly-sized recovery tests pass through the WorkerEntrypoint bridge. This does not reproduce or dismiss the live hung diagnostic; no speculative production fix.",
-    "scope": "AUDIT_ONLY staging acceptance, research_eligible=false; production, READY and Pilot unchanged. Older ledger sections below retain historical state and are superseded by this dated acceptance for these three staging Workers only."
-  },
-  "approval_20260921": {
-    "status": "APPROVED_BY_USER",
-    "scope": "PR229/230 main integration after native CI/review; limited staging rollout; existing February same-operation recovery using preserved raw/PREPARED evidence",
-    "included": "ordinary same-scope fixes, verification, Git and required fresh-SHA CI; no repeated per-command approval",
-    "excluded": "production mutation, READY publication, Pilot, Mass, FoF, broker, live orders, new full backfill or full D1 backup",
-    "stop_rule": "on uncertain mutation inspect actual state before retry; ask one consolidated question only for materially changed scope, cost or destructive surface",
-    "progress": "Approved staging outcome completed at 20a81d04: PR229–232 merged, main CI passed, ordered receipt-chain rollout accepted, February recovered. Further data acquisition and activation are not authorized by this record."
-  },
-  "historical_master_repair": {
-    "status": "HISTORICAL_SOURCE_CHECKPOINT_SUPERSEDED",
-    "branch": "fix/historical-master-reference",
-    "base": "15639ffe649e709d89c96a26f0ae1fe51ad10b5c (PR229; exact-SHA native CI SUCCESS)",
-    "source_basis": "https://jpx-jquants.com/ja/spec/eq-master: Date is effective date; historical queries include then-listed companies; holiday queries roll forward; subsequent source corrections remain a limitation",
-    "change": "private complete-master owner can reconstruct effective-date membership from verified complete products; original available_at/ingested_at and product digests are unchanged; observation cutoff still applies; ordinary PIT remains strict",
-    "provenance": "historical_effective_membership; contemporaneous_observation_unproven=true; this is not evidence of actual observation in 2023",
-    "validation": "Foundation 33 passed; integrated Python 413 passed; Mass Worker typecheck PASS, 454 Node and 55 workerd tests passed; generated contract drift check PASS. Existing publisher fixtures now use 2026 acquisition for 2023 master history; no authentic local market data.",
-    "review": "independent read-only review_historical_master_owner found Worker closed-schema mismatch; fixed required master_evidence_mode in acceptance and persisted validation, regenerated actual Python fixture; reviewer rechecked with no further actionable findings; did not independently rerun tests",
-    "integration": "Versioned closure V3 binds explicit effective membership through profile, candidate, publisher, pinned runtime and Python/Worker Paper provenance. Old V1/V2 compiler semantics stay strict. Generated digest chain updated atomically; old READY is not silently reused.",
-    "remaining": "Source review/CI/merge complete; see staging_acceptance_20260921 for receipt-chain rollout. Authentic master reproof, production and Pilot remain incomplete."
-  },
-  "updated_at": "2026-09-23T01:23:00Z",
-  "receipt_monthly_repair": {
-    "status": "HISTORICAL_SOURCE_CHECKPOINT_SUPERSEDED",
-    "branch": "fix/receipt-durable-capture-reconcile",
-    "pr": 229,
-    "bounds": "50-row D1 write/readback groups; at most 6000 rows and 4 raw pages per call; 1000-row product pages; large finalization in a fresh invocation",
-    "storage": "streamed canonical JSONL and R2 digest readback; small v2 metadata manifest; legacy v1 indexed products preserved on retry",
-    "synthetic_monthly": "PASS: 29 pages, 80707 rows, product >100 MB, manifest <10 KB, no upstream refetch; first successful focused run 98.82 seconds",
-    "compatibility": "PASS focused existing calendar-recovery test extended to pre-upgrade v1 index; append-only trigger restored before recovery",
-    "premium_checks": "typecheck PASS; receipt_authority_client 13 tests PASS",
-    "full_receipt_suite": "PASS: typecheck and 67 workerd tests; final full run 79.71 seconds (includes monthly and legacy recovery)",
-    "independent_review": "review_receipt_streaming: v1 index recovery finding fixed and rechecked; no additional concrete blocker reported; reviewer made no edits",
-    "native_ci": "SUCCESS on 15639ffe649e709d89c96a26f0ae1fe51ad10b5c; Workers Builds: quant-platform-ci-aggregate-staging check 106166775570 completed 2026-09-20T23:14:53Z; build 3799cbcc-a9b1-404f-87dd-bcb1ae2960bc; verify_ci ok; branch deploy command true (no production deploy)",
-    "live_scope": "no remote mutation/deploy/data activation; existing live holds preserved",
-    "remaining": "Monthly recovery and receipt-chain rollout completed; see staging_acceptance_20260921. Master reproof, global Ops, READY and Pilot remain incomplete."
-  },
-  "user_pause": {
-    "status": "RESUMED_BY_USER",
-    "resume": "2026-09-21 JST explicit user request; Grok subscription ended; Codex implements",
-    "resume_baseline": {
-      "branch_head": "157ee2f29319910a5224a7f44eed80b0a15d1b22",
-      "main_reverified": "26abffecd4463c5d052e9f28d862bc67a7c006a1",
-      "native_ci": "FAILED on checkpoint head; PR229 stays Draft",
-      "local_receipt_before_fix": "61 passed / 4 failed; canonical DB disagreement and original ingestion time regressions",
-      "repair_validation": "Receipt typecheck PASS; workerd 66 passed, including interrupted D1-before-R2 checkpoint replay; existing ensureKey negative-RPC diagnostic still printed; full native CI pending on pushed repair",
-      "remaining": "monthly whole-body finalization, realistic-size runtime proof, full native CI and review; no deployment or research authorization"
-    },
-    "paused_at": "2026-09-16T22:24:00Z",
-    "conversation": "01a0abdb-4795-7500-a5b7-6e9c1684932e",
-    "repo": "https://github.com/ddnne/quant-platform",
-    "branch": "fix/receipt-durable-capture-reconcile",
-    "pr": "https://github.com/ddnne/quant-platform/pull/229",
-    "original_source_head": "64c8e4d7bd0ed0f4e688aa9b160a2590b1f6b888",
-    "accepted_main": "26abffecd4463c5d052e9f28d862bc67a7c006a1",
-    "wip_source_sha": "8cc5aecc9c983ac2b2dc083f930c0cf11ee05d31",
-    "checkpoint_docs": "this ledger/runbook commit on the same branch",
-    "edited_files": [
-      "platform/workers/receipt-evidence-authority/src/product_materialization.ts",
-      "platform/workers/receipt-evidence-authority/src/receipt_evidence.ts",
-      "platform/workers/receipt-evidence-authority/src/structured_reconciliation.ts"
-    ],
-    "validation": {
-      "git_diff_check": "PASS",
-      "receipt_tsc_noEmit": "PASS",
-      "focused_existing_test": "PASS vitest -t resumes remaining structured pages from durable capture without a refetch (1 passed, 64 skipped)",
-      "full_ci_full_test": "notrun",
-      "native_check_104994000343": "historical SUCCESS on 64c8e4d7 only; new SHA needs a new check"
-    },
-    "open_monthly_blockers": [
-      "WIP durable next-page structured progress and D1 2MB/1000-query product materialization not reviewed/accepted",
-      "existing tests asserting nonempty D1 artifact_body not updated",
-      "missing realistic-size synthetic E2E and duplicate-key tests",
-      "Feb 6738 COLLECTING/PREPARED; 15-min MAX_CONTEXT_AGE vs 21600s continuation TTL is a source-confirmed issuance block, not a proven live OOM"
-    ],
-    "original_scope": "source + local synthetic tests + read-only staging diagnosis + Git/PR/native CI only; no remote mutation/migration/deploy/merge; existing Feb PREPARED/raw/same operation only",
-    "next_step": "complete bounded finalization, end-to-end synthetic proof, final reviews/native CI before any merge/deploy",
-    "later_incomplete": [
-      "master_P1_equities_master_available_at",
-      "global_ops",
-      "READY",
-      "Pilot"
-    ],
-    "preserved": "cloud raw/PREPARED/attempts; January bars 3/3 HOLD; Draft PR137; held worktree exact-five-acquisition-recovery; original 2023 exact-four ideas/AM-PM/budget",
-    "background_development": "resumed_by_user_not_global_complete",
-    "runbook_section": "docs/operations/current_production_runbook.md Resumed 2026-09-21 — PR229 repair"
-  },
-  "history": {
-    "git_sha": "26abffecd4463c5d052e9f28d862bc67a7c006a1",
-    "url": "https://github.com/ddnne/quant-platform/blob/26abffecd4463c5d052e9f28d862bc67a7c006a1/docs/operations/current_work_ledger.json",
-    "note": "Accepted main 26abffec (PR228) BEFORE this docs-and-repair PR. Older release acceptances including PR211/d37ef73 live in Git history. This object is not a self-SHA of the edit or a future merge."
-  },
-  "open_findings": {
-    "preserved_not_exhaustive": [
-      "A2",
-      "C10",
-      "C4",
-      "D2",
-      "D3",
-      "R10",
-      "R11",
-      "R5"
-    ],
-    "note": "Copied from the prior ledger as still OPEN. Not a freshly audited complete P0 inventory."
-  },
-  "pr137": "intentional_held_draft",
   "lanes": {
     "source_delivered": {
-      "status": "pr229_to_pr232_merged_main_native_success",
-      "latest_main_sha": "20a81d04f0f01beff48c909156e3d97f8477dfe7",
-      "required_check_app_id": 85455,
+      "status": "PR257_MERGED_NATIVE_MAIN_CI_SUCCESS",
+      "accepted_source_sha": "805a47f8177b8eec0e6b77f53a8af949002a89ec",
+      "latest_main_sha": "6546217c6b89c839d70237702303ce239e2bb8b4",
+      "latest_main_status": "PR258_MERGED_MAIN_CI_PENDING_STAGING_UNCHANGED",
       "required_check_name": "Workers Builds: quant-platform-ci-aggregate-staging",
+      "required_check_app_id": 85455,
       "strict": true,
-      "accepted_baseline": {
-        "pr211": {
-          "url": "https://github.com/ddnne/quant-platform/pull/211",
-          "feature_sha": "5049fbba408d0cfcd0fb22068df05519d1d38cac",
-          "merged_main_sha": "d37ef73e5c226a7b2499f0523f4bcca4090b511b",
-          "feature_check": "104401424406",
-          "feature_build": "e8e8c2e5-df58-40f3-9fcf-18753e30bf5e",
-          "main_check": "104406618815",
-          "main_build": "5f401591-4b85-4ed3-8ec4-182c7911c3d2",
-          "required_app85455_success_at": "2026-09-15T13:43:24Z",
-          "note": "Historical accepted main d37ef73. Not current. A6 GLOBAL remains OPEN. Not production/READY/Pilot."
-        },
-        "pr228": {
-          "url": "https://github.com/ddnne/quant-platform/pull/228",
-          "feature_sha": "7c9ee781364aa38831907eec9b2d7f88153adb59",
-          "merged_main_sha": "26abffecd4463c5d052e9f28d862bc67a7c006a1",
-          "feature_check": "104968464723",
-          "feature_build": "3c946490-0b70-4153-8ad7-e34f0f10d520",
-          "main_check": "104973858100",
-          "main_build": "18471585-8664-423f-9bfd-b42955babd6d",
-          "required_app85455_success_at": "2026-09-16T20:56:10Z",
-          "note": "Merge --merge --match-head-commit. Feature branch deleted. Production trigger HOLD. A6 GLOBAL remains OPEN. Not READY/Pilot. Operator declined additional full D1 backup; that does not close A6."
-        }
-      },
-      "mass_worker_build_on_dad020": {
-        "id": "feea0136-88a5-48ef-83d7-ebbf323416fc",
-        "check": "103821504107",
-        "head": "dad0201946b331ddb9163aae19b3ced7bd3709ef",
-        "conclusion": "failure",
-        "cause": "intentional DEPLOYMENT HOLD after successful tests",
-        "note": "Historical HOLD evidence on dad020. Not a required-native failure. Not a code-acceptance failure. Not current-main Mass deploy. No retry, no bypass, no product deploy."
-      },
-      "notes": "Accepted runtime source and CI are recorded in staging_acceptance_20260921; not global rollout. PR137 remains HELD Draft. No new full backup. Older baseline objects are historical audit records only."
+      "main_build": "1171a7f3-7ae9-4623-9a53-7ddcf2686b9b",
+      "evidence": "https://github.com/ddnne/quant-platform/pull/257#issuecomment-5789387198",
+      "notes": "Accepted runtime source before this docs change, not a self-SHA. PR255 fixed UTC/envelope compatibility, PR256 removed invented B0 cursors, PR257 aligned full-transport receipt digests. PR258 merged after final-source CI/review; its main CI remains pending and no deployment changed."
     },
     "staging_schema_prepared": {
-      "status": "schema_prepared_once",
-      "outcome": "SCHEMA_PREPARED",
-      "started_at": "2026-09-15T08:19:17.949023Z",
-      "ended_at": "2026-09-15T08:20:21.922075Z",
-      "exit": 0,
+      "status": "CANONICAL_0001_TO_0024_APPLIED",
       "database_id": "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb",
-      "canonical_migrations": "0001-0023",
-      "original_intent_source": "d9de3fb",
-      "repair_source": "e07158a26c59b59a3b16e19545ddc04d075b9b31",
-      "evidence": "https://github.com/ddnne/quant-platform/pull/207#issuecomment-5676026212",
-      "evidence_updated_at": "2026-09-15T08:22:32Z",
-      "pre_apply_78_object_fingerprint": "sha256:0ac9dc808255c3afe9a7a03c4123a7e3381ee142ad71e2d8474c5b9db4f46ea9",
-      "notes": "Exactly one reviewed staging recovery. Original private receipt/intent identity d9de3fb stayed original; repair source e071 recorded separately. Successful normal release reset the live lease to vacant / remote_spawned 0 with source_sha empty and expires 1970; the vacant lease does not retain source. Pre-apply fingerprint is PRE-APPLY ONLY: independently checked before and after CAS before remote spawn, not a SQL CAS input/predicate, not the current post-migration fingerprint, and not retry authority. Mutable PR comment, not immutable final release. Refer to that one record for lease/Queue/Cron/cutover SELECT readback rather than duplicating every UUID/count here. Not JSDA deploy/activate, not shared-D1 restore, not production."
+      "ops_database_id": "68ee96d5-766c-4832-836b-54c079bd6265",
+      "ops_migrations": "0001-0003 applied",
+      "evidence": "https://github.com/ddnne/quant-platform/pull/251#issuecomment-5787007897",
+      "notes": "Staging only; no historical body deletion, shared-DB restore or JSDA activation. PREPARED0 and mutation lease vacant rechecked before rollout."
     },
     "staging_deployed": {
-      "status": "receipt_chain_active_accepted_other_workers_not_current",
-      "receipt_chain_active": {
-        "evidence_ref": "staging_acceptance_20260921",
-        "eligibility": "AUDIT_ONLY"
+      "status": "FIVE_WORKERS_ACCEPTED_CANDIDATE_PENDING",
+      "source_sha": "805a47f8177b8eec0e6b77f53a8af949002a89ec",
+      "versions": {
+        "ingestion-secrets": "547668e2-c63e-4ea6-9a9c-b08991f1c177",
+        "receipt-evidence-authority": "82d55524-0b04-4ad6-862b-bf613ec8d327",
+        "ingestion-premium": "3bfefe2f-bfc5-485d-8a5a-03db85a5433c",
+        "research-ai-gateway": "400fdee9-456d-461b-80d0-72c2a4c064bc",
+        "research-mass-eval": "777c9dea-a532-4b4e-ba89-b9a915bff446"
       },
-      "receipt_chain_pending_d37ef73": {
-        "source_sha": "d37ef73e5c226a7b2499f0523f4bcca4090b511b",
-        "canonical": "scripts/verify_cloudflare_deployment_acceptance.sh --pending-receipt-authority staging --expected-source-sha d37ef73e5c226a7b2499f0523f4bcca4090b511b",
-        "outcome": "ok (staging)",
-        "evidence": "https://github.com/ddnne/quant-platform/pull/211#issuecomment-5681285373",
-        "workers": {
-          "ingestion-secrets": {
-            "version_id": "64b7047c-b6bb-4018-9d50-7d795a9649e1",
-            "deployment_id": "304d12fd-7d87-425c-8ac0-822d9d87a3ef",
-            "tag": "rp-s-a-d37ef73e5c226a7b2499f0523f4bcca4090b511b"
-          },
-          "receipt-evidence-authority": {
-            "version_id": "a111e85c-0c9f-41f3-a79a-1b10e90ad76f",
-            "deployment_id": "0b9cb474-9b72-4db5-b64d-6faac3d630f4",
-            "tag": "rp-s-r-d37ef73e5c226a7b2499f0523f4bcca4090b511b",
-            "durable_object_namespace_id": "e24d619fbd734073829e6ff8fc07ef1f",
-            "migration_tag": "v1",
-            "authority_mode": "PENDING"
-          },
-          "ingestion-premium": {
-            "version_id": "fb5ad302-d9e6-4144-9bee-25e03e0a4ac8",
-            "deployment_id": "d8a11015-232c-4d30-8e1c-025bbdb484c6",
-            "tag": "rp-s-c-d37ef73e5c226a7b2499f0523f4bcca4090b511b",
-            "ready_declared": "false",
-            "receipt_authority_operation_mode": "PENDING",
-            "cron": "* * * * *"
-          }
-        },
-        "public": "workers.dev/previews/routes off",
-        "control_hash": "4bc393ae15f2bd8520b28b700643c28f6b0b97979bfabf88cb9b7b645e8ac61c",
-        "note": "Inactive PENDING code only. Mutable PR comment, not A6/READY/Pilot."
-      },
-      "mass_staging": {
-        "observation": "earlier checkpoint, not remeasured 2026-09-15T13:50Z",
-        "evidence": "https://github.com/ddnne/quant-platform/pull/204#issuecomment-5674898739",
-        "source_sha": "35611b0",
-        "version_id": "3cf6156f-e05c-4b49-949b-867cb1d2385e",
-        "deployment_id": "f6c45f59-45f5-4e52-a078-683a6a559941",
-        "container_v5": "100%",
-        "instances": 0,
-        "health": "GET /health 200 and unauthenticated 401 at that earlier checkpoint",
-        "authenticated_403_smoke": "blocked only on location of existing MASS_EVAL_TOKEN or already-set process env; prior scoped project/env/Build-env searches failed; no rotation; never print values"
-      },
-      "notes": "Current receipt-chain acceptance is staging_acceptance_20260921. Other Worker records are historical; Mass/Gateway/JSDA/Ops/observer were not SHA-aligned in this outcome. Not global data/READY/Pilot acceptance."
+      "receipt_acceptance_digest": "sha256:1d33d11e7ee41737e6716b073fab127d62753b43c3f8d004759eb36ef2c1438c",
+      "receipt_acceptance": "AUDIT_ONLY/research_eligible=false. Exact modules, selected versions, unchanged Receipt key/namespace, closed public surfaces and signed runtime audit accepted. READY_DECLARED=false.",
+      "gateway_mass_acceptance": "VERIFIED_EXACT_MODULE_BYTES; detailed module/deployment identities in evidence links.",
+      "mass_build": "c311f632-7eb8-4866-9f5a-b948fad6521b",
+      "container_application": "a03b71dd-28e5-4781-9cd9-d6682596eb72",
+      "container_version": 12,
+      "container_image_digest": "sha256:dfe63f5dee98738ed1b5a96180ba48ce7ba1d111d039b4b7c515151256460cee",
+      "container_rollout": "4e9101ff-0edc-4c1e-8814-7b3e0f908ed2 completed; instance inactive before attempt2",
+      "evidence": ["https://github.com/ddnne/quant-platform/pull/257#issuecomment-5789393993", "https://github.com/ddnne/quant-platform/pull/257#issuecomment-5789431672"],
+      "not_claimed": "JSDA/Ops MCP/observer not included. Not production, global Ops, scope, READY or Pilot acceptance."
     },
-    "production_deployed": {
-      "status": "hold",
-      "notes": "Production auto-deploy remains HOLD. Historical Mass HOLD evidence includes lanes.source_delivered.mass_worker_build_on_dad020 (feea0136 / check 103821504107). Not a product deploy. No retry or bypass. Generic continue is not production release."
-    },
-    "data_activated": {
-      "status": "pending",
-      "notes": "Before the new acquisition approval, inventory was 11 committed operations (10 calendar months plus February bars), not proof of all scopes. Approved additional acquisition and its first-three status are in staging_acquisition_approval_20260921. January bars retain 3/3 HOLD. No local market history; READY and Pilot remain unauthorized."
-    },
-    "ready": {
-      "status": "pending",
-      "notes": "latest_ready_snapshot null. JQ Cron PASS is not READY. Ops STALE/B0 UNKNOWN/applied-null are technical gaps, not a completed-READY gate on inactive code rollout."
-    },
-    "pilot_executed": {
-      "status": "pending",
-      "notes": "Exact-four Pilot is not authorized. Generic continue is not Pilot release."
+    "production_deployed": {"status": "HOLD", "notes": "No production rollout authorized. Mass main-trigger deploy intentionally exits HOLD after tests; distinct from required native CI. No retry/bypass."},
+    "data_activated": {"status": "CANDIDATE_ATTEMPT2_PENDING", "notes": "R2 products and receipt metadata are not readiness. Candidate independently verifies bytes/hash/count/natural keys/full segments and all compiled seed/lookback/anchor/field scopes on cloud scratch."},
+    "ready": {"status": "NOT_PROVEN", "notes": "Provisioned keys/code do not mint READY. Same physical snapshot, scope and measured B0/B4/C8 must pass before conditional staging publication."},
+    "pilot_executed": {"status": "NOT_EXECUTED_NO_GO", "notes": "Current candidate approval excludes Pilot/backtests. No next generation, Mass/FoF/broker/orders or autopromotion."}
+  },
+  "candidate": {
+    "attempts_submitted": 2,
+    "maximum_fresh_attempts": 3,
+    "previous": {"job_id": "receipt-candidate-20260923-a1", "status": "FAILED", "reason": "Transport digest compared with signed-claims body digest; repaired by PR257 without weakening verification.", "finished_at": "2026-09-23T04:14:29.733145Z", "shutdown_verified_at": "2026-09-23T04:14:41Z", "notes": "Preserve evidence. Cold-start resume used same identity, not another fresh attempt."},
+    "current": {
+      "job_id": "receipt-candidate-20260923-a2",
+      "request_digest": "sha256:8c39b501a7114229720b2e267ed8ac5317b678ea764f3b1c6a60cd116a348956",
+      "accepted_at": "2026-09-23T05:09:14.316410Z",
+      "durable_expires_at": "2026-09-23T08:09:10.314Z",
+      "last_durable_status": "PENDING",
+      "container_instance": "6330a23ee3dbdc49ba682f1d462f2b8f5575a9e8149c2e3034d530eed41af2dc",
+      "last_container_status": "running",
+      "status_path": "/v1/receipt-candidate/receipt-candidate-20260923-a2",
+      "next": "Poll same job plus authoritative Container state. PENDING alone is not liveness. Observation timeout is not terminal or retry authority. Verify actual scope/quality, terminal and shutdown before another attempt."
     }
   },
   "live_observation": {
-    "observed_by": "2026-09-16T21:18:28Z root READONLY globalOps; prior 2026-09-15 Codex projection_status still STALE",
-    "projection": "STALE",
-    "generation": "projgen-ef18b4f86ee946048161d25e2a30a2a8",
-    "generated_at": "2026-08-21T12:30:49.152421+00:00",
-    "refresh_attempt": false,
-    "refresh_success": false,
-    "b0": "UNKNOWN",
-    "b0_reason": "snapshot quality/B0 projection is unavailable",
-    "latest_ready_snapshot": null,
-    "connector_tools": {
-      "registered_count": 16,
-      "omits": [
-        "storage_plane_status"
-      ],
-      "note": "Connector inventory, not a remeasured raw tools/list or schema-digest deployment parity."
-    },
-    "sync_status": {
-      "observed_by": "2026-09-15 Codex READONLY quant-mcp sync_status",
-      "applied_feed_cursor": null,
-      "latest_change_seq": 2901776,
-      "latest_source_change_seq": 2901776,
-      "all_applied_and_ready_pins": null
-    },
-    "applied_feed_cursor": null,
-    "wrangler_oauth": "works for real staging reads/migration",
-    "grok_mcp_auth": "errors remain; not a global source-work stop; Codex mechanical fallback allowed for authorized operations; never HOLD bypass; no paid API fallback",
-    "access_api": {
-      "observed_at": "2026-09-14T00:56:19Z",
-      "get_organizations": "error 9999 access.api.error.not_enabled",
-      "recheck": "2026-09-15 GET again returned 9999 not_enabled; no UI inspected; no exact call timestamp supplied",
-      "note": "API reports Access/Zero Trust organizations not enabled. No UI was inspected, so this is not a claim that a ToS or team-domain prompt is currently required. Conditional only for Worker Access JWT/hostname protection; not a precondition for schema recovery, read-only Ops checks, or ordinary source fixes."
-    },
-    "not_remeasured": [
-      "B4",
-      "raw_tools_list",
-      "schema_parity",
-      "CoverageV3_acceptance",
-      "global_JSDA",
-      "latestJQ",
-      "all_worker_deployment",
-      "DLQ"
-    ],
-    "note": "Dated observations above are not current global GO. Current staging ACTIVE scheduled() recovers PREPARED requests and runs the audit canary, but does not publish Ops. Production projection-stale cause remains unproven. Unmeasured fields are not zero."
+    "staging": {"signature": "PINNED_VERIFIER_PASS", "generation": "4c80e9d8ab36db564f42f98a94dbbbd0d32c2e41149693dfa031ef303bfb69a6", "generated_at": "2026-09-23T05:05:26Z", "source_sha": "805a47f8177b8eec0e6b77f53a8af949002a89ec", "projection": "FRESH_AT_OBSERVATION_ONLY", "coverage_policy": "collection-coverage/mixed", "b0": "UNKNOWN", "b4": "UNKNOWN", "legacy_ops_source_export_applied_cursor": 1771943, "notes": "Legacy Ops cursor is NOT current Receipt research cursor. Legacy V2/unknown evidence retained, not relabeled/deleted. Candidate quality measured separately on its snapshot."},
+    "production": {"status": "NOT_REMEASURED_BY_THIS_ROLLOUT", "last_known_generation": "projgen-ef18b4f86ee946048161d25e2a30a2a8", "last_known_generated_at": "2026-08-21T12:30:49.152421+00:00", "last_known_projection": "STALE", "last_known_ready": null, "notes": "Prior connector observation, not current acceptance. Reconnection and staging do not refresh production. Tools/schema parity, cursors, B0/B4 and global JSDA remain unproven."}
   },
-  "next_prerequisite_chain": [
-    "Do not serialize Access 9999 or Grok MCP auth failure as a global stop. Access GET organizations returned 9999 not_enabled (API not enabled). No UI was inspected. Conditional only for Worker Access JWT/hostname protection; not a precondition for schema recovery, read-only Ops checks, or ordinary source fixes. Codex mechanical fallback may apply authorized operations after a Grok permission denial; never bypass HOLDs; no paid API fallback. Staging schema recovery already ran once: SCHEMA_PREPARED.",
-    "Receipt-chain staging ACTIVE acceptance is recorded in staging_acceptance_20260921. Existing February recovery completed; replacing acquisition controls or changing keys needs its approved outcome. Staging still does not publish Ops. Production, Ops publication, READY and Pilot remain HOLD. Consolidate remaining approval requests by outcome, not Worker.",
-    "Explicit HOLDs unchanged; generic continue is not their release: production deploy, data activation, JSDA --activate, key activation, READY publication, Pilot/exact-four, Ops projection publication, Mass/FoF/broker. Exact-four and budget remain NO-GO. No new Worker/signer roles. A6 GLOBAL remains OPEN for independently accepted JSDA/publication collection, not as a backup-recipient gate. Operator declined additional full D1 backup (NO NEW FULL BACKUP): do not run a new full D1 export, 32-byte key custody, metadata-only d1_export_poll_descriptor.py --initiate, secret put, or treat those as pending human approval. GitHub Release immutability and production collection are repo/API or later-auth work, not inherently human-only; existing content-addressed R2/JSDA AUDIT_ONLY paths are not A6 closure. Staging JSDA AUDIT_ONLY intake is source-partial."
-  ],
-  "unknowns": [
-    "Affected historic AM+gross-cap engine artifact inventory was not examined; no cloud listing was performed.",
-    "Exact 2026-09-15 Access GET timestamp was not supplied (recheck still 9999 not_enabled).",
-    "Post-migration sqlite_master fingerprint is not recorded here; the pre-apply 78-object digest is PRE-APPLY ONLY, was independently checked before and after CAS before remote spawn, is not a SQL CAS input/predicate, is not current, and does not authorize retry.",
-    "Existing MASS_EVAL_TOKEN location (project/env/Build env) remains unknown after scoped searches; no rotation authorized."
-  ],
-  "pending_operations": [
-    {
-      "id": "enumerate_legacy_am_gross_cap_engine_artifacts",
-      "status": "pending",
-      "requires": "cloud evidence",
-      "notes": "Structurally reject AM+gross-cap artifacts that cannot prove am_frozen_order_batch/v1. Do not overwrite or delete historic files. Inventory completion is not established. PR137 remains HELD."
-    }
-  ],
   "items": {
-    "1_fresh_clone_and_ledger": {
-      "status": "pr211_main_accepted_before_this_docs_edit",
-      "notes": "Historical PR211 clone record superseded. Latest accepted runtime source and evidence are staging_acceptance_20260921; final verification is described in item9."
-    },
-    "2_am_order_quantity_causality": {
-      "status": "source_merged_not_deployed",
-      "notes": "AM quantity freeze am_frozen_order_batch/v1 and historic daily MC/MAdjC/AAdjC reconstruction exist as source. Pending cloud inventory of legacy AM+gross-cap artifacts remains. Not deployed. See pending_operations and history.git_sha."
-    },
-    "3_dependency_scope": {
-      "status": "source_chain_present_not_live",
-      "notes": "Caller chain on e07158a: packages/product/research/dependency_closure.py DatasetDependencyScope; receipt_candidate_job.py pit-dependency-scope sidecar; receipt_native_ready_publication.ts proof_digest bind; personal_research_service.py CompiledControlledSelection; pit/compiled_dependency_scope.py select. Source-chain-present, not live B0/READY certification. PR137 remains HELD.",
-      "scope": "existence_and_binding_evidence_only",
-      "personal_paper_path_session": {
-        "status": "source_applied_review_pending",
-        "notes": "Product Personal Paper path/session remains as previously applied (PR190). Receipt-scope SELECT/PRAGMA stays in pit.receipt_scope (PR191). Catalog observations remain one data_plane readonly connection. Req3 compiled-scope proof session: pit.compiled_scope_proof owns store unwrap, BEGIN/rollback, receipt-scope load, product stream/measure, complete-master slices, compiled catalog selection, and receipt-candidate B0/B4/C8 measure on one snapshot. This unit (source, not live): pit.ready_evidence.ReadyLedgerSession owns staging open/commit/rollback/close, remaining READY market SQL (coherence facts, publication persist/copy/embed, raw-manifest/watermark/run reads), and pinned-fd artifact manifest reads. Runtime snapshot candidate uses ready_publication_session; evaluate_ready_publication / ReadyPublicationPolicy / check_ready_coherence / collect_typed_evidence take ReadyLedgerSession, not sqlite3.Connection. Runtime keeps PASS/FAIL policy, fixture vs production gates, SnapshotRejected exported_at messages, and artifact file state machine. begin_snapshot_sync/fail_snapshot_sync take SqliteStore. pit.read_clock owns canonical as_of, DEFAULT_DB_PATH, and resolve_db_path; pit.query keeps SQL/connection and imports those primitives. engine/features/repo_rates/data_access import pit.read_clock, not pit.query. run_backtest still resolves db_path=None to DEFAULT_DB_PATH and passes that Path into GovernedAmSessionDataView.assert_pinned_artifact; a different pinned file is HOLD/no-trading (swapped). The trading-day loop then has days=[] so calendar and per-day load_master do not run. resolve_injected_universe still runs after that HOLD: membership_at returns EquityMasterMap (dict with pit_as_of/membership_proof, no .membership attr) and that shape only sorts keys without membership_at; a mapping with proof plus codes/membership can still revalidate against the resolved default. Focused mismatch regression uses universe=None. bind_verified_controlled still Path-wraps and compares pin.resolve(). Metadata keeps str(resolved path). experiment_index/personal_prepared_frame remain trusted non-market stores. Import gate extends the existing owner-graph edge to core.engine, core.repo_rates, features.runtime, and data_access.adapter. Not merge, native CI, or rollout. Prior HOLDs unchanged."
-      }
-    },
-    "4_receipt_to_ready_trader": {
-      "status": "source_chain_present_not_live",
-      "notes": "Mass still binds PremiumReceiptProductInputService and PilotReadyPublicationService and verifies READY; it does not mint. Premium HTTP /v1/run and /v1/export remain unreachable (workers_dev=false, no routes). Source adds idle R2 controls on staging Cron for one PENDING public registration (full public operator envelope) and a finite exact-five queue of compiled dataset/segment jobs. Absent control = no-op. Not deployed, not live certification. Local cf_premium_backfill HTTP is not the staging path.",
-      "scope": "existence_and_binding_evidence_only"
-    },
+    "1_fresh_clone_and_ledger": {"status": "FINAL_AUDIT_PENDING", "notes": "Clean matching runtime805a47f8 verified. Earlier fresh clone is not final completion verification."},
+    "2_am_order_quantity_causality": {"status": "SOURCE_STAGING_PRESENT", "notes": "AM frozen quantities and adjusted historical MC/MAdjC/AAdjC retained; representative PM-mutation/holding tests passed. Historic artifact inventory remains held; original observation clocks/provenance stay unchanged."},
+    "3_dependency_scope": {"status": "CLOUD_PROOF_PENDING", "notes": "Shared dataset scopes, immutable day slices and owner import gate present. Actual seed/anchor/lookback/field completeness awaits candidate. No arbitrary fixed warmup expansion."},
+    "4_receipt_to_ready_trader": {"status": "DEPLOYED_NOT_READY", "notes": "Container materializes, Premium signs, evaluator verifies only. Dedicated staging keys provisioned. Conditional READY/Trader still needs same-snapshot proof; no new Worker/authority."},
     "5_ci_deploy_entrypoints": {
-      "status": "canonical_entrypoint_on_main_new_source_rollout_hold",
-      "notes": "Canonical Worker/environment admission is merged source. Mass production deploy trigger remains HOLD. HOLD evidence: lanes.source_delivered.mass_worker_build_on_dad020 (feea0136 / check 103821504107). Premium production has zero build triggers; Premium staging and Mass staging are manual-only (__manual_cloud_deploy__); required native CI deploy_command is the string true (no-op). Image dry-run is required CI, not product rollout.",
-      "python_default_offline_boundary": {
-        "status": "current_default_socket_guard",
-        "implementation_sha": "a012c2c11a91d5a14e1ea1b9ea017f086ca98566",
-        "implementation_sha_note": "Historical introduction of the pytest-socket pin. Current behavior is pyproject addopts --disable-socket --allow-unix-socket as documented in conftest.py. macOS --run-platform / isolated_runner tests were later retired (test_reduction_ledger S02); do not treat that retired lane as current.",
-        "scope": "Default pytest-socket blocks ordinary Python socket creation plus getaddrinfo/gethostbyname during test execution. Unix sockets allowed. Does not cover collection/imports, exec'd children, or native/Node/Worker runtimes.",
-        "residual": "Not all DNS APIs, not OS isolation, not completed global egress proof.",
-        "referenced_by": "docs/operations/test_reduction_ledger.json T02 (historical --run-platform text; S02 supersedes that platform lane)"
-      }
+      "status": "STAGING_ACCEPTED_PRODUCTION_HELD",
+      "notes": "Exact-source CI, canonical pinned config/cwd, module bytes and cloud-only Container build accepted. PR258 decouples monitoring from research success; not deployed.",
+      "python_default_offline_boundary": {"status": "current_default_socket_guard", "scope": "pyproject addopts --disable-socket --allow-unix-socket blocks ordinary Python socket creation plus getaddrinfo/gethostbyname during test execution. Unix sockets allowed.", "residual": "Not collection/imports, all DNS APIs, exec children, native/Node/Worker runtimes or OS-wide egress isolation. Retired macOS platform lane is not current acceptance; see test_reduction_ledger S02."}
     },
-    "6_shared_d1_receipt_reproof": {
-      "status": "staging_schema_prepared_production_not_rolled_out",
-      "notes": "Staging quant-ingest canonical 0001-0023 after one SCHEMA_PREPARED recovery; not JSDA --activate, not production, not shared-D1 restore. Whole shared-D1 restore remains removed from the operator. --rollback refuses FORWARD_REPAIR_REQUIRED. Production JSDA DLQ consumer declarations removed; main still dead-letters onto quant-jsda-ingestion-dlq. See PR207 comment for live SELECT readback.",
-      "cancelled_edits": {
-        "receipt_runtime_test_draft_stash": "4cfe6d0d; local-only; not accepted; do not drop or retry as acceptance",
-        "authority_do_joiner_recheck": "cancelled 2026-09-11T11:23:50Z; unapplied",
-        "independent_operation_runtime_test_use_tool_edit": "cancelled 2026-09-11T13:28Z; unapplied; do not bypass"
-      }
-    },
-    "7_dead_code_and_docs": {
-      "status": "test_audit_partial_source_merged",
-      "execution_ledger": "docs/operations/test_reduction_ledger.json",
-      "replay_distribution_boundary": {
-        "status": "t01_wheel_exclusion_slice_merged",
-        "implementation_sha": "60ffd280",
-        "implementation_sha_note": "Historical slice that excluded research.offline/unique_logic from ordinary wheel/Container input. Not proof of the whole PR131 acceptance (later S01/S02 and other files). T01 remains partial: replay-suite tiering remains.",
-        "scope": "Ordinary wheel/Container do not ship research.offline/unique_logic; replay artifacts unchanged.",
-        "residual": "Import smoke is not delayed execution, stand-alone wheel research, READY, or full T01.",
-        "referenced_by": "docs/operations/test_reduction_ledger.json T01"
-      },
-      "local_preservation": {
-        "receipt_runtime_stash": "4cfe6d0d",
-        "c09_stash": "75f5dffc",
-        "notes": "Local-only, excluded from acceptance. C15 optional context re-read was cancelled and not retried. Temporary Gateway/Mass dependency links were removed; original installed dependencies preserved."
-      },
-      "held_mcp_schema": {
-        "status": "held_after_cancelled_source_edit",
-        "branch": "refactor/mcp-schema-single-owner",
-        "base_sha": "1088c398048c578bc4430121b705ff1378440577",
-        "preservation": "Existing 14-file uncommitted draft preserved separately; not accepted source.",
-        "cancelled_at": "2026-09-11T11:37Z",
-        "session": "01a09001-625a-7562-a790-ece7038d92af",
-        "edit": "123",
-        "c5": "OPEN/NOT_REMEASURED",
-        "residual": "None-only metadata defaults, obsolete-digest rejection/error matching, generated hash-document-version metadata and real Python/OPS_TOOLS parity remain unresolved. Preserve original v2 on-wire 227465ce hash when authorized. No live parity. Do not resume from cancellation."
-      },
-      "held_c09": {
-        "status": "cancelled",
-        "cancelled_at": "2026-09-11T14:55:29Z",
-        "stash": "75f5dffc",
-        "notes": "Draft 3 files local-only; original tests restored; C09 not implemented. After user approval replace PASS with 38/40, 9 full days, allowance 2 and correct _rows keys. Do not bypass cancellation."
-      }
-    },
-    "8_rollout_and_research_go": {
-      "status": "pending",
-      "notes": "Receipt-chain staging accepted; see staging_acceptance_20260921. Remaining Workers and production/data/READY/Trader/Pilot are not accepted or newly authorized. Existing February recovery does not release further acquisition. SCHEMA_PREPARED is not JSDA activation; A6 GLOBAL remains OPEN."
-    },
-    "9_push_remote_and_fresh_clone_verify": {
-      "status": "runtime_source_verified_docs_followup_pending",
-      "notes": "Runtime source 20a81d04 fresh-cloned at merge-verification-20260921-final.8eQAkE: clean HEAD==origin/main, unpushed0, generated controlled-pilot contract check PASS. PR229–232 merged; PR137 held. This docs follow-up requires its own final-SHA CI/merge; it does not change accepted deployed source."
-    }
-  }
+    "6_shared_d1_receipt_reproof": {"status": "R2_FIRST_STAGING_ACTIVE_GLOBAL_OPEN", "notes": "New bodies in R2/bounded cloud scratch; D1 operation/segment metadata. Legacy signed history preserved. Whole shared-DB rollback refuses FORWARD_REPAIR_REQUIRED. No production DLQ pull/ack/purge or JSDA activation."},
+    "7_dead_code_and_docs": {"status": "PARTIAL", "execution_ledger": "docs/operations/test_reduction_ledger.json", "notes": "Offline/unique_logic excluded from normal wheel/Container; replay tiering and whole-repo closure open. Ledger consolidation is not global refactor completion. Held MCP/C09 work remains held."},
+    "8_rollout_and_research_go": {"status": "STAGING_CODE_ACCEPTED_RESEARCH_NO_GO", "notes": "Read lanes separately. Candidate active; READY/Trader/Pilot artifacts unproven, production/global Ops open."},
+    "9_push_remote_and_fresh_clone_verify": {"status": "RUNTIME_PUSHED_FINAL_AUDIT_PENDING", "notes": "PR257/258 merged; runtime and latest source stages differ. This docs change requires its own final-SHA CI/review/merge. Final separate fresh clone, drift and smoke remain."}
+  },
+  "pending_operations": [
+    {"id": "candidate_same_snapshot_proof", "status": "ACTIVE", "notes": "Observe attempt2 terminal, actual proofs, attributable usage and shutdown; no blind retry."},
+    {"id": "enumerate_legacy_am_gross_cap_engine_artifacts", "status": "HELD", "notes": "PR137 intentional Draft. Inventory completion unproven; preserve history, no overwrite/delete or cancellation bypass."},
+    {"id": "global_ops_and_schema_parity", "status": "OPEN", "notes": "Production projection, same-generation cursors, JSDA completeness and live tool/schema parity need authorized acceptance. Candidate approval excludes cancelled MCP/C09 activation."}
+  ],
+  "held_work": {
+    "pr137": "https://github.com/ddnne/quant-platform/pull/137 intentional held Draft; preserve worktree.",
+    "mcp_schema": "refactor/mcp-schema-single-owner, base1088c398, preserved14-file draft cancelled2026-09-11; not accepted source/parity. Do not resume implicitly.",
+    "c09": "Cancelled2026-09-11; stash75f5dffc preserved, not accepted. No activation under candidate approval.",
+    "local_drafts": "Receipt runtime stash4cfe6d0d and cancelled authority/test edits remain historical local-only work, not acceptance. Do not drop/restore automatically.",
+    "backup": "Operator declined additional full D1 export/encrypted backup. No initiate, new keys, local history or replacement framework. Preserve existing backups/evidence.",
+    "destructive_storage": "No historical D1 cleanup approved. New R2-first writes do not authorize deleting legacy signed evidence/raw.",
+    "access": "Earlier API9999/not_enabled; current UI requirement not established. Human terms/team choice conditional, not a prerequisite for unrelated source/staging work."
+  },
+  "open_findings": {"authority": "docs/phase633_finding_ledger.json", "p0_open_at_checkpoint": ["D2", "D3", "R5", "R10", "R11", "C4", "C10", "A2"], "notes": "Current ledger inventory, not a fresh finding-by-finding closure review. No row marked FIXED by this checkpoint."},
+  "next_prerequisite_chain": [
+    "Observe current candidate to terminal and verify shutdown/cost. Use actual compiler diagnostics for further approved2022 acquisition; never fabricate COMPLETE or empty gaps.",
+    "Only same-snapshot physical/scope/B0/B4/C8 PASS and exact plan/profile/closure pins permit conditional staging READY/Paper-only Trader. Terminal completion alone is insufficient.",
+    "Finish reviewed source work without changing active jobs. Production, cancelled MCP/C09, Pilot/backtests and destructive cleanup need their applicable authority; group any needed approval by outcome/cost/risk.",
+    "Audit all nine attachment requirements, remote/deployed source, final fresh clone/drift and each completion stage. Keep full goal active until proven."
+  ],
+  "history": {"git_sha": "805a47f8177b8eec0e6b77f53a8af949002a89ec", "url": "https://github.com/ddnne/quant-platform/blob/805a47f8177b8eec0e6b77f53a8af949002a89ec/docs/operations/current_work_ledger.json", "notes": "Full prior checkpoints, approvals, diagnostic counts and cancellations. History is not current dispatch authority. Linked PR observations are not immutable global release evidence."}
 }
