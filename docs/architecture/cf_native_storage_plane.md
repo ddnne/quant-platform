@@ -135,6 +135,16 @@ Source work and non-destructive verification can proceed while login is pending.
 
 ## Layers
 
+Premium's ordinary `upsertRecords` writer now has only R2 body persistence
+(including the existing master SCD2 path). The obsolete
+`ALLOW_D1_STRUCTURED_DATASETS` override and primary/revision/per-row-change
+SQL writer were removed; a stale variable cannot restore full-history writes.
+Bounded summary/watermark metadata remains in D1. This source change neither
+deletes existing D1 rows nor retires legacy readers or natural-key migration.
+The existing runtime identity/time-wall test now reads the R2 object and
+checks that the D1 body/revision/change tables receive no row copies.
+Deployment acceptance is separate from this source-level change.
+
 | Layer | Role | Location | Contents | Write policy |
 |-------|------|----------|----------|--------------|
 | Control / evidence | Governance, freshness, evidence | **D1 `quant-ingest` (lightweight)** | coverage ledger, receipts, projection meta, change_log (+ hot window only) | Minimal |

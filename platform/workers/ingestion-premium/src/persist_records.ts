@@ -1,12 +1,11 @@
 /**
- * Premium structured persist: D1 record upsert and watermark writes.
+ * Premium structured persist: R2 bodies and bounded D1 metadata.
  * Fetch/upsert stay together in index.ts as the ingestion façade.
  */
 
 import type { DatasetSpec } from "./catalog";
 import { pickAvailableAt } from "./availability";
 import { naturalKey, newRunId, pickEventTime, stableJson, toJstIso } from "./identity";
-import { isR2Only, wantsSummaryChangeLog } from "./write_path_config";
 import { writeJsonlToR2 } from "./r2_structured_writer";
 import {
   writeMasterScd2,
@@ -18,7 +17,6 @@ export type { MasterScd2UniverseEvidence };
 
 export type PersistEnv = Pick<Cloudflare.Env, "DB" | "STRUCTURED_BUCKET"> & {
   MASTER_SCD2_ONLY?: string;
-  ALLOW_D1_STRUCTURED_DATASETS?: string;
 };
 
 const RETRY_COUNT = 3;
@@ -87,19 +85,6 @@ interface StructuredRecord {
   rawPayload: string;
 }
 
-function recordBinds(records: StructuredRecord[]): unknown[] {
-  return records.flatMap((record) => [
-    record.source,
-    record.dataset,
-    record.naturalKey,
-    record.eventTime,
-    record.availableAt,
-    record.ingestedAt,
-    record.payload,
-    record.rawPayload,
-  ]);
-}
-
 export async function upsertRecords(
   env: PersistEnv,
   spec: DatasetSpec,
@@ -129,72 +114,21 @@ export async function upsertRecords(
   }
   const records = [...byKey.values()];
 
-  if (isR2Only(spec.id, env)) {
-    if (spec.id === "equities_master") {
-      const scd2 = await writeMasterScd2(
-        env,
-        records.map((record) => ({
-          naturalKey: record.naturalKey,
-          payload: record.payload,
-        })),
-        when,
-        evidence,
-      );
-      if (wantsSummaryChangeLog(spec.id)) {
-        const summaryPayload = JSON.stringify({
-          kind: "scd2_master_summary",
-          events_key: scd2.events_key,
-          events: scd2.inserted,
-        });
-        try {
-          await d1WithRetry(() =>
-            env.DB.prepare(
-              `INSERT OR IGNORE INTO ingestion_change_log
-               (table_name, source, dataset, natural_key, event_time, available_at,
-                ingested_at, payload, raw_payload, changed_at)
-               VALUES ('equities_master_scd2', 'jquants', ?, ?, ?, ?, ?, ?, NULL, ?)`,
-            ).bind(
-              spec.id,
-              `scd2-summary:${Date.now()}`,
-              toJstIso(when),
-              toJstIso(when),
-              toJstIso(when),
-              summaryPayload,
-              toJstIso(when),
-            ).run(),
-          );
-        } catch {
-          /* observability only */
-        }
-      }
-      return { inserted: scd2.inserted, revisions: scd2.revisions };
-    }
-
-    const runId = newRunId(`r2-${spec.id}`);
-    const objectId = persistId && persistId.length > 0 ? persistId : runId;
-    const r2Result = await writeJsonlToR2(
-      env.STRUCTURED_BUCKET,
-      spec.id,
-      objectId,
+  if (spec.id === "equities_master") {
+    const scd2 = await writeMasterScd2(
+      env,
       records.map((record) => ({
-        source: record.source,
-        dataset: record.dataset,
         naturalKey: record.naturalKey,
-        eventTime: record.eventTime,
-        availableAt: record.availableAt,
-        ingestedAt: record.ingestedAt,
         payload: record.payload,
-        rawPayload: record.rawPayload,
       })),
-      { runDate: toJstIso(when).slice(0, 10) },
+      when,
+      evidence,
     );
-    if (wantsSummaryChangeLog(spec.id)) {
+    {
       const summaryPayload = JSON.stringify({
-        kind: "r2_structured_summary",
-        key: r2Result.key,
-        sha256: r2Result.sha256,
-        count: r2Result.count,
-        bytes: r2Result.bytes,
+        kind: "scd2_master_summary",
+        events_key: scd2.events_key,
+        events: scd2.inserted,
       });
       try {
         await d1WithRetry(() =>
@@ -202,10 +136,10 @@ export async function upsertRecords(
             `INSERT OR IGNORE INTO ingestion_change_log
              (table_name, source, dataset, natural_key, event_time, available_at,
               ingested_at, payload, raw_payload, changed_at)
-             VALUES ('jquants_records_r2', 'jquants', ?, ?, ?, ?, ?, ?, NULL, ?)`,
+             VALUES ('equities_master_scd2', 'jquants', ?, ?, ?, ?, ?, ?, NULL, ?)`,
           ).bind(
             spec.id,
-            `r2-summary:${objectId}`,
+            `scd2-summary:${Date.now()}`,
             toJstIso(when),
             toJstIso(when),
             toJstIso(when),
@@ -214,143 +148,58 @@ export async function upsertRecords(
           ).run(),
         );
       } catch {
-        // Summary change_log is observability-only; never fail the ingest.
+        /* observability only */
       }
     }
-    return { inserted: records.length, revisions: 0 };
+    return { inserted: scd2.inserted, revisions: scd2.revisions };
   }
 
-  const CHUNK = Math.floor(100 / 8); // D1 max 100 binds; 8 fields/row → 12 rows.
-  const large = records.length > 200;
-  const D1_BATCH_STMTS = large ? 48 : 3;
-  let inserted = 0;
-  let revisions = 0;
-  type Stmt = ReturnType<D1Database["prepare"]>;
-  let pending: { stmt: Stmt; archive: boolean }[] = [];
-
-  const flush = async (): Promise<void> => {
-    if (pending.length === 0) return;
-    const batch = pending;
-    pending = [];
-    const results = await d1WithRetry(() =>
-      env.DB.batch(batch.map((entry) => entry.stmt)),
-    );
-    batch.forEach((entry, index) => {
-      if (entry.archive) {
-        revisions += (results[index]?.meta?.changes ?? 0) as number;
-      }
+  const runId = newRunId(`r2-${spec.id}`);
+  const objectId = persistId && persistId.length > 0 ? persistId : runId;
+  const r2Result = await writeJsonlToR2(
+    env.STRUCTURED_BUCKET,
+    spec.id,
+    objectId,
+    records.map((record) => ({
+      source: record.source,
+      dataset: record.dataset,
+      naturalKey: record.naturalKey,
+      eventTime: record.eventTime,
+      availableAt: record.availableAt,
+      ingestedAt: record.ingestedAt,
+      payload: record.payload,
+      rawPayload: record.rawPayload,
+    })),
+    { runDate: toJstIso(when).slice(0, 10) },
+  );
+  {
+    const summaryPayload = JSON.stringify({
+      kind: "r2_structured_summary",
+      key: r2Result.key,
+      sha256: r2Result.sha256,
+      count: r2Result.count,
+      bytes: r2Result.bytes,
     });
-  };
-
-  for (let i = 0; i < records.length; i += CHUNK) {
-    const chunk = records.slice(i, i + CHUNK);
-    const placeholders = chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
-    const binds = recordBinds(chunk);
-
-    const upsertSql =
-      `INSERT INTO jquants_records
-       (source, dataset, natural_key, event_time, available_at, ingested_at, payload, raw_payload)
-       VALUES ${placeholders}
-       ON CONFLICT(source, dataset, natural_key) DO UPDATE SET
-         event_time = CASE
-           WHEN jquants_records.payload IS excluded.payload THEN jquants_records.event_time
-           ELSE excluded.event_time END,
-         available_at = CASE
-           WHEN jquants_records.payload IS excluded.payload
-             THEN CASE
-               WHEN julianday(jquants_records.available_at)
-                    <= julianday(excluded.available_at)
-                 THEN jquants_records.available_at
-               ELSE excluded.available_at END
-           ELSE CASE
-             WHEN julianday(excluded.available_at)
-                  >= julianday(excluded.ingested_at)
-               THEN excluded.available_at
-             ELSE excluded.ingested_at END END,
-         ingested_at = excluded.ingested_at,
-         payload = CASE
-           WHEN jquants_records.payload IS excluded.payload THEN jquants_records.payload
-           ELSE excluded.payload END,
-         raw_payload = CASE
-           WHEN jquants_records.payload IS excluded.payload THEN jquants_records.raw_payload
-           ELSE excluded.raw_payload END`;
-
-    const archiveSql =
-      `WITH incoming
-       (source, dataset, natural_key, event_time, available_at, ingested_at, payload, raw_payload)
-       AS (VALUES ${placeholders})
-       INSERT OR IGNORE INTO jquants_records_revisions
-       (source, dataset, natural_key, event_time, available_at, ingested_at, payload, raw_payload)
-       SELECT current.source, current.dataset, current.natural_key,
-              current.event_time, current.available_at, current.ingested_at,
-              current.payload, current.raw_payload
-       FROM jquants_records AS current
-       JOIN incoming
-         ON current.source = incoming.source
-        AND current.dataset = incoming.dataset
-        AND current.natural_key = incoming.natural_key
-       WHERE current.payload IS NOT incoming.payload`;
-
-    // Change feed before primary upsert so it sees the displaced current row.
-    const changeSql =
-      `WITH incoming
-       (source, dataset, natural_key, event_time, available_at, ingested_at, payload, raw_payload)
-       AS (VALUES ${placeholders})
-       INSERT OR IGNORE INTO ingestion_change_log
-       (table_name, source, dataset, natural_key, event_time, available_at,
-        ingested_at, payload, raw_payload, changed_at)
-       SELECT 'jquants_records', incoming.source, incoming.dataset,
-              incoming.natural_key, incoming.event_time,
-              CASE WHEN current.natural_key IS NOT NULL
-                         AND current.payload IS NOT incoming.payload
-                   THEN CASE
-                     WHEN julianday(incoming.available_at)
-                          >= julianday(incoming.ingested_at)
-                       THEN incoming.available_at
-                     ELSE incoming.ingested_at END
-                   ELSE incoming.available_at END,
-              incoming.ingested_at, incoming.payload, incoming.raw_payload,
-              incoming.ingested_at
-       FROM incoming
-       LEFT JOIN jquants_records AS current
-         ON current.source = incoming.source
-        AND current.dataset = incoming.dataset
-        AND current.natural_key = incoming.natural_key
-       WHERE current.natural_key IS NULL
-          OR current.payload IS NOT incoming.payload`;
-
-    if (large) {
-      pending.push(
-        { stmt: env.DB.prepare(archiveSql).bind(...binds), archive: true },
-        { stmt: env.DB.prepare(changeSql).bind(...binds), archive: false },
-        { stmt: env.DB.prepare(upsertSql).bind(...binds), archive: false },
+    try {
+      await d1WithRetry(() =>
+        env.DB.prepare(
+          `INSERT OR IGNORE INTO ingestion_change_log
+           (table_name, source, dataset, natural_key, event_time, available_at,
+            ingested_at, payload, raw_payload, changed_at)
+           VALUES ('jquants_records_r2', 'jquants', ?, ?, ?, ?, ?, ?, NULL, ?)`,
+        ).bind(
+          spec.id,
+          `r2-summary:${objectId}`,
+          toJstIso(when),
+          toJstIso(when),
+          toJstIso(when),
+          summaryPayload,
+          toJstIso(when),
+        ).run(),
       );
-      if (pending.length >= D1_BATCH_STMTS) await flush();
-      continue;
+    } catch {
+      // Summary change_log is observability-only; never fail the ingest.
     }
-
-    const existing = await d1WithRetry(() =>
-      env.DB.prepare(
-        `SELECT natural_key FROM jquants_records
-         WHERE source = ? AND dataset = ?
-           AND natural_key IN (${chunk.map(() => "?").join(", ")})`,
-      ).bind("jquants", spec.id, ...chunk.map((record) => record.naturalKey)).all(),
-    );
-    inserted += chunk.length - (existing.results?.length ?? 0);
-    const batch = await d1WithRetry(() =>
-      env.DB.batch([
-        env.DB.prepare(archiveSql).bind(...binds),
-        env.DB.prepare(changeSql).bind(...binds),
-        env.DB.prepare(upsertSql).bind(...binds),
-      ]),
-    );
-    revisions += (batch[0]?.meta?.changes ?? 0) as number;
   }
-
-  await flush();
-  if (large) {
-    inserted = records.length; // existence SELECT skipped to keep RTT low
-  }
-
-  return { inserted, revisions };
+  return { inserted: records.length, revisions: 0 };
 }
