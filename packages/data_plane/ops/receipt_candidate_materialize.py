@@ -462,7 +462,7 @@ def materialize_receipt_segment(
                 closure.segment_id,
                 closure.artifact_key,
                 closure.structured_digest,
-                closure.artifact_byte_count,
+                0,  # Compressed body allocated by the streaming writer below.
                 closure.structured_row_count,
                 closure.artifact_byte_count,
                 closure.manifest_key,

@@ -331,7 +331,7 @@ def test_descriptor_raw_bytes_plus_one_rejects_before_persistence(
     store.close()
 
 
-def test_genuine_descriptor_persists_text_artifact_and_catalog_detects_corruption(
+def test_genuine_descriptor_compresses_artifact_and_catalog_detects_corruption(
     tmp_path: Path, receipt_ed25519_keys
 ) -> None:
     rows, product_path, raw_path, descriptor, receipt = _signed_bundle(
@@ -380,11 +380,24 @@ def test_genuine_descriptor_persists_text_artifact_and_catalog_detects_corruptio
     )
     with product_path.open("rb") as handle:
         file_measure = measure_product_artifact_jsonl(handle)
+    stored_body, signed_bytes = conn.execute(
+        "SELECT artifact_body,byte_count FROM receipt_product_materializations "
+        "WHERE operation_id=?", (operation_id,),
+    ).fetchone()
+    assert len(stored_body) < signed_bytes == product_path.stat().st_size
+    assert gzip.decompress(stored_body) == product_path.read_bytes()
     with open_stored_product_artifact(conn, operation_id) as first:
         first_measure = measure_product_artifact_jsonl(first)
     with open_stored_product_artifact(conn, operation_id) as second:
         second_measure = measure_product_artifact_jsonl(second)
     assert first_measure == second_measure == file_measure
+    conn.execute(
+        "UPDATE receipt_product_materializations SET artifact_body=? WHERE operation_id=?",
+        (stored_body[:-4], operation_id),
+    )
+    with pytest.raises(ValueError, match="gzip evidence is corrupt"):
+        with open_stored_product_artifact(conn, operation_id) as corrupt:
+            measure_product_artifact_jsonl(corrupt)
     conn.execute(
         "UPDATE receipt_product_materializations SET artifact_body=? "
         "WHERE operation_id=?",
