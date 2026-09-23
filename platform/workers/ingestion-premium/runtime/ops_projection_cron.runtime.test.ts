@@ -70,6 +70,23 @@ it("staging Cron publishes a sealed R2/D1 generation only after verification-key
   const generation = await active();
   expect(generation).toMatchObject({ status: "SEALED", producer_commit_sha: sourceSha });
   const signed = JSON.parse(String(generation!.signed_envelope_json));
+  // Python READY consumers require this closed, eight-field signed contract.
+  // Exercise the actual publisher output, not a separately assembled envelope.
+  const datasets = await env.OPS_PROJECTION_DB.prepare(
+    "SELECT dataset, status, coverage_mode, collection_scope, observed_start, observed_end FROM dataset_coverage WHERE projection_generation_id=?",
+  ).bind(generation!.generation_id).all();
+  expect(datasets.results.length).toBeGreaterThan(0);
+  for (const { dataset, ...coverage } of datasets.results) {
+    expect(signed.envelope.dataset_coverage[String(dataset)]).toEqual({
+      ...coverage,
+      policy_id: dataset,
+      policy_version: expect.any(String),
+      policy_digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+    });
+    expect(coverage.status).toBe("UNKNOWN");
+    expect(coverage.observed_start).toBeNull();
+    expect(coverage.observed_end).toBeNull();
+  }
   expect(signed.envelope.registry_digest).toBe(await digest(stagingOpsRegistry));
   expect(signed.envelope.evidence_digests.registry_identity_digest).toBe(await digest({
     document_digest: await digest(stagingOpsRegistry),

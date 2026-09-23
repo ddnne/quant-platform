@@ -1283,6 +1283,11 @@ export async function publishOpsProjection(
         ? await digest(policy)
         : await digest({ dataset, policy: "UNKNOWN" }),
       status: aggregateDatasetStatus(statuses),
+      coverage_mode: policy?.coverage_mode ?? "UNKNOWN",
+      collection_scope: policy?.collection_scope ?? "UNKNOWN",
+      // Segment targets are not independently observed data bounds.
+      observed_start: null,
+      observed_end: null,
     };
   }
   const catalogRows = catalogProjectionRows();
@@ -1293,6 +1298,10 @@ export async function publishOpsProjection(
       policy_version: row.coverage.policy_version,
       policy_digest: await digest(row.coverage),
       status: "UNKNOWN",
+      coverage_mode: row.coverage.coverage_mode,
+      collection_scope: row.coverage.collection_scope,
+      observed_start: null,
+      observed_end: null,
     };
   }
 
@@ -1363,10 +1372,10 @@ export async function publishOpsProjection(
         dataset,
         status: row.status,
         policy_version: row.policy_version,
-        collection_scope: coverage?.collection_scope ?? "UNKNOWN",
+        collection_scope: row.collection_scope,
         history_target_start: coverage?.history_target_start ?? "UNKNOWN",
         history_target_end_rule: coverage?.history_target_end_rule ?? "UNKNOWN",
-        coverage_mode: coverage?.coverage_mode ?? "UNKNOWN",
+        coverage_mode: row.coverage_mode,
         expected_frequency: coverage?.expected_frequency ?? "UNKNOWN",
         universe_rule: coverage?.universe_rule ?? "UNKNOWN",
         raw_retention_required: coverage?.raw_retention_required ? 1 : 0,
@@ -1374,8 +1383,8 @@ export async function publishOpsProjection(
           ? 1
           : 0,
         governance_tier: coverage?.governance_tier ?? "governed",
-        observed_start: null,
-        observed_end: null,
+        observed_start: row.observed_start,
+        observed_end: row.observed_end,
         row_count: 0,
         source_run_id: null,
         evaluated_at: generatedAt,
