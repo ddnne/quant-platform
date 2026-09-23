@@ -40,7 +40,12 @@ from research.research_data_profile import (
     ResearchDataProfileError,
     profile_from_dependency_closure,
 )
-from data_contracts.read_scopes import DatasetReadScope, VisibleObservationCount
+from data_contracts.read_scopes import (
+    DatasetReadScope,
+    DatasetRequirementError,
+    VisibleObservationCount,
+    combined_calendar_evidence_mode,
+)
 from execution.controlled_fill_contract import (
     CONTROLLED_FILL_CONTRACT_ID,
     CONTROLLED_FILL_CONTRACT_VERSION,
@@ -97,6 +102,37 @@ _CANONICAL_HISTORICAL_DATASETS = (
 
 def _payload() -> dict[str, object]:
     return load_experiment_plans()[0].to_dict()
+
+
+def test_calendar_reconstruction_requires_consistent_scheduling_declarations() -> None:
+    from types import SimpleNamespace
+
+    strict = DatasetReadRequirement(
+        consumer_kind="universe",
+        consumer_id="calendar-test",
+        clock="bound_decision_visible_view",
+        scope=DatasetReadScope(
+            dataset_id="markets_calendar", fields=("date", "holiday_division")
+        ),
+    )
+    historical = replace(strict, clock="snapshot_observed_effective_calendar")
+
+    def profile(*requirements):
+        return SimpleNamespace(dataset_scopes=({
+            "dataset_id": "markets_calendar",
+            "requirements": tuple(item.to_dict() for item in requirements),
+        },))
+
+    assert combined_calendar_evidence_mode((profile(strict),)) == "decision_visible"
+    assert combined_calendar_evidence_mode((profile(historical),)) == "historical_effective_calendar"
+    with pytest.raises(DatasetRequirementError, match="share one calendar"):
+        combined_calendar_evidence_mode((profile(strict, historical),))
+    with pytest.raises(DatasetRequirementError, match="scheduling read"):
+        replace(historical, consumer_kind="feature")
+    with pytest.raises(DatasetRequirementError, match="scheduling read"):
+        replace(historical, scope=DatasetReadScope(
+            dataset_id="equities_bars_daily", fields=("date", "close")
+        ))
 
 
 def test_exact_four_resolve_exact_strategy_and_feature_matrix() -> None:
