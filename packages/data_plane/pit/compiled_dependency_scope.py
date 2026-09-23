@@ -14,7 +14,11 @@ from types import MappingProxyType
 from typing import Any, Iterator, Mapping, Sequence
 
 from data_contracts.identity import natural_key as contract_natural_key
-from data_contracts.read_scopes import DatasetReadRequirement, combined_master_evidence_mode
+from data_contracts.read_scopes import (
+    DatasetReadRequirement,
+    combined_calendar_evidence_mode,
+    combined_master_evidence_mode,
+)
 from ops.receipt_product import PRODUCT_ARTIFACT_FIELDS, product_row_digest
 from storage.schema import CATALOG_CODE_SQL
 
@@ -56,6 +60,11 @@ class CompiledControlledSelection:
         default_factory=dict
     )
     master_evidence_mode: str = "decision_visible"
+    calendar_evidence_mode: str = "decision_visible"
+
+    @property
+    def historical_calendar(self) -> bool:
+        return self.calendar_evidence_mode == "historical_effective_calendar"
 
     @property
     def historical_master(self) -> bool:
@@ -65,6 +74,10 @@ class CompiledControlledSelection:
         return int(self.dataset_lookback_trading_days.get(dataset_id, 0))
 
     def __post_init__(self) -> None:
+        if self.calendar_evidence_mode not in {
+            "decision_visible", "historical_effective_calendar"
+        }:
+            raise PitError("compiled calendar evidence mode is invalid")
         if self.master_evidence_mode not in {
             "decision_visible", "historical_effective_membership"
         }:
@@ -375,7 +388,10 @@ def _select_compiled_dependency_scope(
         )
 
     calendar_by_date: dict[str, dict[str, Any]] = {}
-    for row in _facts("markets_calendar"):
+    for row in _facts(
+        "markets_calendar",
+        available_at_cutoff=observed_through if compiled.historical_calendar else None,
+    ):
         day = row["event_date"]
         if day in calendar_by_date:
             raise PitError(f"markets_calendar duplicates natural date {day}")
@@ -395,7 +411,9 @@ def _select_compiled_dependency_scope(
             if unsatisfied is None:
                 raise PitError(f"markets_calendar missing exact scope date {day}")
             continue
-        if row["available_at"] > _require_aware(am_information_cutoff(day), day):
+        if not compiled.historical_calendar and row["available_at"] > _require_aware(
+            am_information_cutoff(day), day
+        ):
             if unsatisfied is None:
                 raise PitError(f"markets_calendar {day} is late at decision time")
             continue

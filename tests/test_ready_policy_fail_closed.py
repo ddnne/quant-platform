@@ -1267,6 +1267,7 @@ def _seed_exact_pit_scope(
     poison_unselected_rows: bool = False,
     omit_bar_dates: tuple[str, ...] = (),
     split_predecessor_day: str = "2022-10-20",
+    calendar_ingested_at: str = "2023-01-04T00:00:00+09:00",
     environment: str = PRODUCTION_RECEIPT_ENVIRONMENT,
 ) -> tuple[object, object]:
     """Synthetic five-day exact natural-key closure with governed v4 receipts."""
@@ -1371,7 +1372,7 @@ def _seed_exact_pit_scope(
             for day in calendar_dates
         )
     ingestion_clocks = {
-        "markets_calendar": "2023-01-04T00:00:00+09:00",
+        "markets_calendar": calendar_ingested_at,
         "equities_master": "2022-10-03T08:00:00+09:00",
         "fins_summary": "2022-10-20T08:00:00+09:00",
         "indices_bars_daily_topix": "2023-01-06T16:00:00+09:00",
@@ -1610,7 +1611,7 @@ def _verify_scope(
     return _verify_exact_four_pit_dependency_scope(handle, binding)
 
 
-def _open_controlled_from_ready_proof(path: Path, proof, binding):
+def _open_controlled_from_ready_proof(path: Path, proof, binding, *, native_source=None):
     """Python consumer: READY proof entries + authenticated snapshot clock.
 
     Upstream Worker READY/projection signatures are stubbed.
@@ -1618,6 +1619,7 @@ def _open_controlled_from_ready_proof(path: Path, proof, binding):
     from pit.compiled_dependency_scope import (
         CompiledControlledSelection,
         combined_dataset_lookback_trading_days,
+        combined_calendar_evidence_mode,
     )
     from pit.governed_am_view import (
         _open_verified_controlled_snapshot,
@@ -1658,7 +1660,9 @@ def _open_controlled_from_ready_proof(path: Path, proof, binding):
             "entries": entries,
         },
         ready_manifest_digest=proof["proof_digest"],
-        signed_projection_document_digest=proof["proof_digest"],
+        signed_projection_document_digest=proof["proof_digest"] if native_source is None else None,
+        admitted_native_digest=proof["proof_digest"] if native_source is not None else None,
+        native_source=native_source,
         profile_digest=proof["profile_digest"],
     )
     periods = {
@@ -1680,6 +1684,7 @@ def _open_controlled_from_ready_proof(path: Path, proof, binding):
             ),
             profile_digest=binding.profile_digest,
             master_evidence_mode="historical_effective_membership",
+            calendar_evidence_mode=combined_calendar_evidence_mode(binding.profiles),
             feature_consumers=tuple(
                 profile.feature_consumers() for profile in binding.profiles
             ),
@@ -1707,7 +1712,8 @@ def test_exact_pit_dependency_scope_accepts_complete_receipt_bound_fixture(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db_path, binding = _seed_exact_pit_scope(
-        tmp_path, receipt_ed25519_keys
+        tmp_path, receipt_ed25519_keys,
+        calendar_ingested_at="2026-08-24T08:00:00+09:00",
     )
     proof = _verify_scope(db_path, binding, monkeypatch)
     assert proof["status"] == "PASS"
@@ -1729,6 +1735,76 @@ def test_exact_pit_dependency_scope_accepts_complete_receipt_bound_fixture(
     finally:
         listing_conn.close()
     assert listing is None
+    # Historical scheduling must agree at READY proof and runtime reopening,
+    # without relabelling the original later acquisition as contemporaneous.
+    handle = _open_controlled_from_ready_proof(db_path, proof, binding)
+    try:
+        assert handle.calendar_evidence_mode == "historical_effective_calendar"
+        connection = sqlite3.connect(db_path)
+        try:
+            clocks = connection.execute(
+                "SELECT DISTINCT available_at, ingested_at FROM jquants_records "
+                "WHERE dataset='markets_calendar'"
+            ).fetchall()
+        finally:
+            connection.close()
+        assert len(clocks) == 1
+        assert all(
+            normalize_as_of(stamp) == normalize_as_of("2026-08-24T08:00:00+09:00")
+            for stamp in clocks[0]
+        )
+    finally:
+        handle.close()
+
+
+def test_native_staging_runtime_uses_signed_receipt_environment(
+    tmp_path, receipt_ed25519_keys,
+) -> None:
+    from ops.receipt_candidate_materialize import (
+        freeze_receipt_candidate_snapshot, hash_receipt_candidate_snapshot,
+    )
+    from paper_runtime.ready_publication import _prove_exact_four_compiled_scope
+    from pit.compiled_scope_proof import compiled_scope_proof_session_from_store
+    from pit.errors import PitError
+
+    path, binding = _seed_exact_pit_scope(
+        tmp_path, receipt_ed25519_keys, environment="staging",
+        calendar_ingested_at="2026-08-24T08:00:00+09:00",
+    )
+    with SqliteStore(path) as store:
+        freeze_receipt_candidate_snapshot(store)
+        physical = hash_receipt_candidate_snapshot(store)
+        with compiled_scope_proof_session_from_store(store) as session:
+            evidence, observed, runset, _scope = _prove_exact_four_compiled_scope(
+                session, binding,
+                expected_environment="staging",
+                expected_authority_instance_digest=PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS["staging"],
+                snapshot_observed_through=AUTHENTICATED_EXPORT_AT,
+                physical_digest=physical,
+            )
+    proof = evidence.as_dict()
+    source = {
+        "kind": "governed-receipt-candidate",
+        "environment": "staging",
+        "authority_instance_digest": PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS["staging"],
+        "physical_digest": physical,
+        "observation_policy": "max_verified_claims_checked_at",
+        "observed_through": observed,
+        "compiled_scope_proof_digest": proof["proof_digest"],
+        "receipt_runset_digest": runset,
+    }
+    # The same staging receipts must not reopen as a production legacy session.
+    with pytest.raises(PitError):
+        _open_controlled_from_ready_proof(path, proof, binding)
+    handle = _open_controlled_from_ready_proof(path, proof, binding, native_source=source)
+    try:
+        handle._begin_controlled_batch_reads()
+        slices = handle.universe_day_slices(
+            period_start="2023-01-04", period_end="2023-01-06",
+        )
+        assert len(slices) == 3
+    finally:
+        handle.close()
 
 
 def test_preperiod_missing_bar_does_not_fail_in_period_ready(

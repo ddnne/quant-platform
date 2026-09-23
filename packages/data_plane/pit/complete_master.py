@@ -817,6 +817,7 @@ def _owned_complete_master_selection_from_connection(
     as_of_for_day: Mapping[str, str],
     official_calendar_raw: Sequence[bytes] | None = None,
     historical_master: bool = False,
+    historical_calendar: bool = False,
     expected_environment: str = PRODUCTION_RECEIPT_ENVIRONMENT,
     expected_authority_instance_digest: str = (
         PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
@@ -869,6 +870,7 @@ def _owned_complete_master_selection_from_connection(
         complete_membership=gate,
         product_fields=True,
         historical_master=historical_master,
+        historical_calendar=historical_calendar,
     )
     proof = CompleteMasterProof(
         format=COMPLETE_MASTER_SELECTION_EVIDENCE,
@@ -882,7 +884,7 @@ def _owned_complete_master_selection_from_connection(
         membership_evidence_mode=(
             "historical_effective_membership" if historical_master else "decision_visible"
         ),
-        contemporaneous_observation_unproven=historical_master,
+        contemporaneous_observation_unproven=historical_master or historical_calendar,
     )
     return _OwnedCompleteMasterSelection(slices=slices, proof=proof)
 
@@ -930,6 +932,7 @@ def _complete_master_day_slices_from_connection(
     period_end: str,
     as_of_for_day: Mapping[str, str],
     historical_master: bool = False,
+    historical_calendar: bool = False,
     expected_environment: str = PRODUCTION_RECEIPT_ENVIRONMENT,
     expected_authority_instance_digest: str = (
         PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
@@ -943,6 +946,7 @@ def _complete_master_day_slices_from_connection(
         period_end=period_end,
         as_of_for_day=as_of_for_day,
         historical_master=historical_master,
+        historical_calendar=historical_calendar,
         expected_environment=expected_environment,
         expected_authority_instance_digest=expected_authority_instance_digest,
     )

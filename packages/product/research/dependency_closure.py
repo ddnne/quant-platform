@@ -567,7 +567,7 @@ def validate_scoped_feature_binding(
 
 def _universe_requirements(
     universe: Sequence[ContractDependency],
-    *, historical_master: bool = False,
+    *, historical_master: bool = False, historical_calendar: bool = False,
 ) -> tuple[DatasetReadRequirement, ...]:
     requirements: list[DatasetReadRequirement] = []
     for dependency in universe:
@@ -616,7 +616,10 @@ def _universe_requirements(
             DatasetReadRequirement(
                 consumer_kind="universe",
                 consumer_id=consumer_id,
-                clock="bound_decision_visible_view",
+                clock=(
+                    "snapshot_observed_effective_calendar"
+                    if historical_calendar else "bound_decision_visible_view"
+                ),
                 scope=DatasetReadScope(
                     dataset_id="markets_calendar",
                     fields=("date", "holiday_division"),
@@ -648,6 +651,7 @@ def _unconsumed_membership_requirements(
 
 def _evaluation_requirements(
     evaluation: ContractDependency,
+    *, historical_calendar: bool = False,
 ) -> tuple[DatasetReadRequirement, ...]:
     consumer_id = f"{evaluation.dependency_id}@{evaluation.version}"
     requirements: list[DatasetReadRequirement] = []
@@ -658,7 +662,10 @@ def _evaluation_requirements(
                 DatasetReadRequirement(
                     consumer_kind="evaluation",
                     consumer_id=consumer_id,
-                    clock="period_end_session_close",
+                    clock=(
+                        "snapshot_observed_effective_calendar"
+                        if historical_calendar else "period_end_session_close"
+                    ),
                     scope=DatasetReadScope(
                         dataset_id="markets_calendar",
                         fields=("date", "holiday_division"),
@@ -712,6 +719,7 @@ def _controlled_fill_requirements() -> tuple[DatasetReadRequirement, ...]:
 
 def _calendar_prerequisites(
     feature_dependencies: Sequence[ResolvedFeatureDependency],
+    *, historical_calendar: bool = False,
 ) -> tuple[DatasetReadRequirement, ...]:
     requirements: list[DatasetReadRequirement] = []
     for dependency in feature_dependencies:
@@ -723,7 +731,10 @@ def _calendar_prerequisites(
                 DatasetReadRequirement(
                     consumer_kind="calendar_prerequisite",
                     consumer_id=_feature_consumer_id(dependency),
-                    clock="bound_decision_visible_view",
+                    clock=(
+                        "snapshot_observed_effective_calendar"
+                        if historical_calendar else "bound_decision_visible_view"
+                    ),
                     scope=DatasetReadScope(
                         dataset_id="markets_calendar",
                         fields=("date", "holiday_division"),
@@ -949,15 +960,22 @@ def build_strategy_dependency_closure(
                 *_universe_requirements(
                     universe,
                     historical_master=closure_version == PLAN_DEPENDENCY_CLOSURE_VERSION_V3,
+                    historical_calendar=closure_version == PLAN_DEPENDENCY_CLOSURE_VERSION_V3,
                 ),
-                *_evaluation_requirements(evaluation),
+                *_evaluation_requirements(
+                    evaluation,
+                    historical_calendar=closure_version == PLAN_DEPENDENCY_CLOSURE_VERSION_V3,
+                ),
                 *tuple(extra_requirements),
                 *_unconsumed_membership_requirements(
                     consumer_kind="risk",
                     consumer_id=f"{risk.dependency_id}@{risk.version}",
                     dataset_ids=risk.dataset_dependencies,
                 ),
-                *_calendar_prerequisites(feature_dependencies),
+                *_calendar_prerequisites(
+                    feature_dependencies,
+                    historical_calendar=closure_version == PLAN_DEPENDENCY_CLOSURE_VERSION_V3,
+                ),
             )
             _require_literal_observation_counts(
                 tuple(item.scope for item in requirements),

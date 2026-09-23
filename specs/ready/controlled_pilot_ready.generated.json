@@ -1,9 +1,9 @@
 {
   "attestation": {
     "applied_cursor": "g1",
-    "attestation_id": "ready-96ef8b942c77b6b9f9e74f6bdb7dcb6adf60462735ff2643c3ff31979c973936",
+    "attestation_id": "ready-39c5ef308ba6a8e4e06576473c5e4a7995c91e94a5932ec2e86dfbc6fc742adb",
     "authority_instance_id": "ready-authority/staging/v1",
-    "authority_resource_digest": "sha256:96ef8b942c77b6b9f9e74f6bdb7dcb6adf60462735ff2643c3ff31979c973936",
+    "authority_resource_digest": "sha256:39c5ef308ba6a8e4e06576473c5e4a7995c91e94a5932ec2e86dfbc6fc742adb",
     "b0_quality_proof_digest": "sha256:bfe658c95e53b8f8591abe088d5e13c4da2eb00b3ea537ae9c1cf4a683f5cb85",
     "b4_quality_proof_digest": "sha256:bfe658c95e53b8f8591abe088d5e13c4da2eb00b3ea537ae9c1cf4a683f5cb85",
     "coverage_policy_digest": "sha256:f98d44ec18da2e892fa8c138fa1785e969cc80fa08bf9d519c942ce026ab19d7",
@@ -16,9 +16,9 @@
       "indices_bars_daily_topix",
       "markets_calendar"
     ],
-    "dependency_closure_digest": "sha256:9e7829fd87b7da34d119d8b464de4fdf33c1405d3d9b1065a5c4ce7e6bc55ff9",
+    "dependency_closure_digest": "sha256:f47660d23bbe7379287d1e72ea3ef5e8bb72e6e1cb5b1da77197d726fe61d18a",
     "environment": "staging",
-    "evidence_digest": "sha256:26e2aa4dfd4f76b200f4af7c4f16d8b86314c7bce10aa8a0346f45ce0b82aadd",
+    "evidence_digest": "sha256:9099edab7cd69ed7857a59cdd95147317a5b9d023c43b3f4a6df683390e59c8e",
     "expires_at": "2026-09-02T13:00:00+00:00",
     "export_cursor": "g1",
     "fill_contract_digest": "sha256:3691b4c93bbafc1d5a0e8fec25eb14ec26fae9683aaffa07fd44bb80c4f486b8",
@@ -35,16 +35,16 @@
       "exp-fund-hold10-value-mom"
     ],
     "plan_set_digest": "sha256:b44265e98bc882dbfdde5d36afc34f41d768e271c430552cd236938845a2ad02",
-    "profile_digest": "sha256:42de1a66bd6a846d4e498a84e10bb90a33836bf9990d63ea5790226567876ca2",
+    "profile_digest": "sha256:ebf2006fd430c5e1d0a95852722be66efd40261fe6fca8676bbfac3ab85be50d",
     "profile_id": "controlled-pilot/exact-four",
     "profile_version": "research-data-profile-set/v1",
     "raw_proof_digest": "sha256:bfe658c95e53b8f8591abe088d5e13c4da2eb00b3ea537ae9c1cf4a683f5cb85",
     "readiness_scope": "PILOT",
-    "ready_manifest_digest": "sha256:af96ce666669f480acce68949a035a0e6df0d44b6b865cb0df81cfde4752be59",
+    "ready_manifest_digest": "sha256:bfd9c7674cd79d9f9151f33bf7aeda2a4ab222be7048f2799e2c1307250d83ec",
     "ready_state": "READY",
     "receipt_proof_digest": "sha256:bfe658c95e53b8f8591abe088d5e13c4da2eb00b3ea537ae9c1cf4a683f5cb85",
     "resolved_universe_digest": "sha256:d2a896a01bf1b1d203efc9a7f28b29c3e15712fa5e5f89cde4bd16ba459dfa8a",
-    "signature": "ed25519:MLCZkkfRcRcmrHnpnh5lXLNAp/sYnfvL0gjNJRoVTHJd++h//W81uBtV0UUm2NxAa73f3kWRsTHX55xPSEHzCQ==",
+    "signature": "ed25519:g8xN2uriEs7PLJgSrBgdP+9uQNKdC+lCZcQGgADvDDUp/N8e2imOTyq2jXbK3kCHeSo1ARWNT+6AqlgFe5RvBA==",
     "signed_projection_document_digest": "sha256:de9192fbbc81958e8ce7cabf476a1cc99d58339867c0c3871f446d24b18fff9a",
     "snapshot_id": "sha256:29058b15274a0bdf21e1946a7f363843b40b7a3ed338c8548ff1c8a97ab01d1b",
     "source_generation": "g1",
@@ -53,7 +53,7 @@
     "verified_at": "2026-09-02T12:00:00+00:00"
   },
   "controlled_session_scope": {
-    "dependency_scope_proof_digest": "sha256:344ea0bf1fa9329deb9c16f18aa7908e4cf87cf14f3738d35e72aac148d7c487",
+    "dependency_scope_proof_digest": "sha256:4d42adb38a35721bd5f395c9729dd15c67bc52b2bb9387499eef63f3a219b057",
     "entries": [
       {
         "dataset_id": "equities_bars_daily",
@@ -106,7 +106,7 @@
     "physical_db_digest": "sha256:1d673408ef5efa994659ecfe0082056807538233971523e120a01c5f79c57b5b"
   },
   "dependency_scope_evidence": {
-    "dependency_closure_digest": "sha256:9e7829fd87b7da34d119d8b464de4fdf33c1405d3d9b1065a5c4ce7e6bc55ff9",
+    "dependency_closure_digest": "sha256:f47660d23bbe7379287d1e72ea3ef5e8bb72e6e1cb5b1da77197d726fe61d18a",
     "entries": [
       {
         "dataset_id": "equities_bars_daily",
@@ -181,8 +181,8 @@
     "physical_db_digest": "sha256:1d673408ef5efa994659ecfe0082056807538233971523e120a01c5f79c57b5b",
     "plan_set_digest": "sha256:b44265e98bc882dbfdde5d36afc34f41d768e271c430552cd236938845a2ad02",
     "product_materialization_digest": "sha256:aeb2c5b0c3523abcb7dc6e2dbdf79ca363077b387675788b5d44e918e0aeb119",
-    "profile_digest": "sha256:42de1a66bd6a846d4e498a84e10bb90a33836bf9990d63ea5790226567876ca2",
-    "proof_digest": "sha256:344ea0bf1fa9329deb9c16f18aa7908e4cf87cf14f3738d35e72aac148d7c487",
+    "profile_digest": "sha256:ebf2006fd430c5e1d0a95852722be66efd40261fe6fca8676bbfac3ab85be50d",
+    "proof_digest": "sha256:4d42adb38a35721bd5f395c9729dd15c67bc52b2bb9387499eef63f3a219b057",
     "resolved_universe_digest": "sha256:d2a896a01bf1b1d203efc9a7f28b29c3e15712fa5e5f89cde4bd16ba459dfa8a",
     "status": "PASS",
     "universe_daily_summary": [],
@@ -214,16 +214,16 @@
       "markets_calendar"
     ],
     "dataset_membership_digest": "sha256:1ed847c466a4eb7287d55643a9d1654bb9f03fe5f1ec3c2f92e1eaae5adfc668",
-    "dependency_closure_digest": "sha256:9e7829fd87b7da34d119d8b464de4fdf33c1405d3d9b1065a5c4ce7e6bc55ff9",
+    "dependency_closure_digest": "sha256:f47660d23bbe7379287d1e72ea3ef5e8bb72e6e1cb5b1da77197d726fe61d18a",
     "export_cursor": "g1",
     "feature_generation": "sha256:bfe658c95e53b8f8591abe088d5e13c4da2eb00b3ea537ae9c1cf4a683f5cb85",
     "fill_contract_digest": "sha256:3691b4c93bbafc1d5a0e8fec25eb14ec26fae9683aaffa07fd44bb80c4f486b8",
     "format": "ready-manifest/v1",
     "identity": "controlled_pilot_v1",
-    "manifest_digest": "sha256:af96ce666669f480acce68949a035a0e6df0d44b6b865cb0df81cfde4752be59",
+    "manifest_digest": "sha256:bfd9c7674cd79d9f9151f33bf7aeda2a4ab222be7048f2799e2c1307250d83ec",
     "observed_through": "2026-09-02T21:00:00+09:00",
     "pit_contract_digests": {
-      "dependency_scope": "sha256:344ea0bf1fa9329deb9c16f18aa7908e4cf87cf14f3738d35e72aac148d7c487",
+      "dependency_scope": "sha256:4d42adb38a35721bd5f395c9729dd15c67bc52b2bb9387499eef63f3a219b057",
       "pit_api": "sha256:bfe658c95e53b8f8591abe088d5e13c4da2eb00b3ea537ae9c1cf4a683f5cb85"
     },
     "plan_ids": [
@@ -233,7 +233,7 @@
       "exp-fund-hold10-value-mom"
     ],
     "plan_set_digest": "sha256:b44265e98bc882dbfdde5d36afc34f41d768e271c430552cd236938845a2ad02",
-    "profile_digest": "sha256:42de1a66bd6a846d4e498a84e10bb90a33836bf9990d63ea5790226567876ca2",
+    "profile_digest": "sha256:ebf2006fd430c5e1d0a95852722be66efd40261fe6fca8676bbfac3ab85be50d",
     "profile_id": "controlled-pilot/exact-four",
     "profile_version": "research-data-profile-set/v1",
     "publication_scope": "PILOT",

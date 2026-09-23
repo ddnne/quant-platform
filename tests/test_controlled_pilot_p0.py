@@ -1425,9 +1425,9 @@ def test_native_handle_logical_id_uses_frozen_source_not_sqlite_identity(
     session_scope = _selected_session_scope_from_db(path, compiled)
     source = {
         "kind": "governed-receipt-candidate",
-        "environment": "staging",
+        "environment": "production",
         "authority_instance_digest": PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS[
-            "staging"
+            "production"
         ],
         "physical_digest": args["verified_physical_digest"],
         "observation_policy": "max_verified_claims_checked_at",

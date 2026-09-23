@@ -1125,6 +1125,7 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
             CompiledControlledSelection,
             combined_dataset_lookback_trading_days,
             combined_master_evidence_mode,
+            combined_calendar_evidence_mode,
         )
         from research.dependency_closure import resolve_strategy_spec
         from research.experiment_plans import PILOT_COST_SCENARIO
@@ -1169,6 +1170,7 @@ def execute_controlled_pilot_container(document: Any) -> dict[str, Any]:
             lookback_trading_days=max(dataset_lookbacks.values(), default=0),
             profile_digest=ready_binding.profile_digest,
             master_evidence_mode=combined_master_evidence_mode(ready_binding.profiles),
+            calendar_evidence_mode=combined_calendar_evidence_mode(ready_binding.profiles),
             feature_consumers=tuple(
                 profile.feature_consumers() for profile in ready_binding.profiles
             ),

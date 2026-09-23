@@ -528,7 +528,10 @@ def controlled_pilot_v1_contract() -> dict[str, Any]:
     """Machine-readable closed binding for Worker/Container Controlled Pilot."""
 
     from data_contracts.coverage import coverage_policy_set_binding
-    from data_contracts.read_scopes import combined_master_evidence_mode
+    from data_contracts.read_scopes import (
+        combined_calendar_evidence_mode,
+        combined_master_evidence_mode,
+    )
     from execution.controlled_fill_contract import controlled_fill_contract
     from paper_runtime.readiness_attestation import EXACT_FOUR_DATASET_IDS
     from research.experiment_plans import PILOT_EXPERIMENT_PLAN_IDS
@@ -584,6 +587,7 @@ def controlled_pilot_v1_contract() -> dict[str, Any]:
         "profile_version": binding.publication_profile_version,
         "profile_digest": binding.profile_set_digest,
         "master_evidence_mode": combined_master_evidence_mode(source.profiles),
+        "calendar_evidence_mode": combined_calendar_evidence_mode(source.profiles),
         "plan_set_digest": binding.plan_set_digest,
         "dependency_closure_digest": binding.dependency_closure_set_digest,
         "universe_rule_digest": RULE,

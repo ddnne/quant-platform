@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -528,6 +529,62 @@ def test_entrant_and_delisting(
         "2023-01-05": ("1001", "1003"),
         "2023-01-06": ("1003",),
     }
+
+
+def test_historical_calendar_preserves_source_clocks_and_observation_wall(
+    tmp_path: Path, receipt_ed25519_keys,
+) -> None:
+    path = tmp_path / "calendar-reconstruction.sqlite"
+    calendars = _seed_complete_master(
+        path, receipt_ed25519_keys,
+        snapshots={day: [_master_payload("1001", day)] for day in BUSINESS_DATES},
+    )
+    late = "2023-01-09T12:00:00+09:00"
+    with sqlite3.connect(path) as writer:
+        for table in ("jquants_records", "jquants_records_revisions"):
+            writer.execute(
+                f"UPDATE {table} SET available_at=?,ingested_at=? "
+                "WHERE dataset='markets_calendar'", (late, late),
+            )
+    conn = _open(path)
+    try:
+        with pytest.raises(PitError, match="not PIT-visible"):
+            _strict(conn, calendars)
+        before = tuple(tuple(row) for row in conn.execute(
+            "SELECT event_time,available_at,ingested_at,payload FROM jquants_records "
+            "WHERE dataset='markets_calendar' ORDER BY natural_key"
+        ))
+        owned = _owned_complete_master_selection_from_connection(
+            conn, period_start=PERIOD_START, period_end=PERIOD_END,
+            as_of_for_day=_as_of_for_day(), official_calendar_raw=calendars,
+            historical_calendar=True,
+        )
+        assert _member_codes(owned.slices) == {
+            day: ("1001",) for day in ("2023-01-04", "2023-01-05", "2023-01-06")
+        }
+        assert owned.proof.contemporaneous_observation_unproven
+        assert before == tuple(tuple(row) for row in conn.execute(
+            "SELECT event_time,available_at,ingested_at,payload FROM jquants_records "
+            "WHERE dataset='markets_calendar' ORDER BY natural_key"
+        ))
+        assert all(row[1] == row[2] == late for row in before)
+    finally:
+        conn.close()
+    with sqlite3.connect(path) as writer:
+        writer.execute(
+            "UPDATE snapshot_observation_clock SET observed_through=?",
+            ("2023-01-09T11:00:00+09:00",),
+        )
+    conn = _open(path)
+    try:
+        with pytest.raises(PitError, match="missing required date"):
+            _owned_complete_master_selection_from_connection(
+                conn, period_start=PERIOD_START, period_end=PERIOD_END,
+                as_of_for_day=_as_of_for_day(), official_calendar_raw=calendars,
+                historical_calendar=True,
+            )
+    finally:
+        conn.close()
 
 
 def test_split_visibility_rejects_strict_and_leaves_draft_partial(

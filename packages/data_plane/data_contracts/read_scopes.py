@@ -49,6 +49,7 @@ READ_CLOCKS = frozenset(
         "same_trading_date_pm_close",
         "unconsumed_policy_membership",
         "snapshot_observed_effective_membership",
+        "snapshot_observed_effective_calendar",
     }
 )
 _REQUIREMENT_KEYS = frozenset({"consumer_kind", "consumer_id", "clock", "scope"})
@@ -56,6 +57,35 @@ _REQUIREMENT_KEYS = frozenset({"consumer_kind", "consumer_id", "clock", "scope"}
 
 class DatasetRequirementError(ValueError):
     """Malformed dataset read requirement or dataset dependency scope."""
+
+
+def combined_calendar_evidence_mode(profiles: Sequence[Any]) -> str:
+    """Derive historical scheduling only from every digest-bound declaration.
+
+    Effective dates are not publication timestamps. Original availability and
+    ingestion clocks remain evidence; this mode cannot authorize feature reads.
+    """
+    modes: set[str] = set()
+    for profile in profiles:
+        found = False
+        for scope in profile.dataset_scopes:
+            if scope["dataset_id"] != "markets_calendar":
+                continue
+            for raw in scope.get("requirements") or ():
+                requirement = DatasetReadRequirement.from_mapping(raw)
+                if requirement.scope.unconsumed_membership:
+                    continue
+                modes.add(
+                    "historical_effective_calendar"
+                    if requirement.clock == "snapshot_observed_effective_calendar"
+                    else "decision_visible"
+                )
+                found = True
+        if not found:
+            raise DatasetRequirementError("profile is missing calendar requirements")
+    if len(modes) != 1:
+        raise DatasetRequirementError("profiles must share one calendar evidence policy")
+    return next(iter(modes))
 
 
 def combined_master_evidence_mode(profiles: Sequence[Any]) -> str:
@@ -392,6 +422,19 @@ class DatasetReadRequirement:
         if not isinstance(self.scope, DatasetReadScope):
             raise DatasetRequirementError("requirement scope must be DatasetReadScope")
         historical_master = self.clock == "snapshot_observed_effective_membership"
+        historical_calendar = self.clock == "snapshot_observed_effective_calendar"
+        if historical_calendar and not (
+            self.scope.dataset_id == "markets_calendar"
+            and self.consumer_kind in {"universe", "calendar_prerequisite", "evaluation"}
+            and not self.scope.initial_visible_state
+            and self.scope.observation_count is None
+            and not self.scope.split_safety_anchor_interval
+            and set(self.scope.fields) <= {"date", "holiday_division"}
+            and not self.scope.optional_fields
+        ):
+            raise DatasetRequirementError(
+                "historical calendar is only an effective-date scheduling read"
+            )
         if historical_master or self.scope.initial_visible_state == "latest_complete_effective_snapshot":
             if not (
                 historical_master
@@ -433,6 +476,7 @@ class DatasetReadRequirement:
             self.consumer_kind in {"universe", "calendar_prerequisite"}
             and self.clock != "bound_decision_visible_view"
             and not historical_master
+            and not historical_calendar
         ):
             raise DatasetRequirementError(
                 "universe and calendar prerequisites use the bound "
@@ -442,6 +486,7 @@ class DatasetReadRequirement:
             self.consumer_kind == "evaluation"
             and self.scope.dataset_id == "markets_calendar"
             and self.clock != "period_end_session_close"
+            and not historical_calendar
         ):
             raise DatasetRequirementError(
                 "evaluation calendar uses period_end_session_close"
