@@ -1,5 +1,12 @@
 {
   "schema": "quant-platform-work-ledger/v1",
+  "ops_cron_source_checkpoint_20260923": {
+    "status": "SOURCE_FIX_NOT_DEPLOYED_OR_ACTIVATED",
+    "scope": "Staging ACTIVE Cron now reaches the existing metadata-only Ops publisher after recovery/audit, only when OPS_PROJECTION_VERIFY_SPKI_B64 is configured. Publisher accepts the exact staging ACTIVE caller tag ra-s-c-<40SHA>, retaining the real Worker version UUID and bare source SHA. Removed unreachable staging canary branch from the non-staging path. Production tag behavior unchanged.",
+    "verification": "Premium typecheck and full npm test passed: 170 Node and 46 workerd tests. One added synthetic workerd regression exercises Cron through real crypto, R2 export and D1 SEALED activation; absent verifier/PENDING remain dormant, production rejects staging role tags, PENDING tags cannot publish, and Ops publication does not become research READY. Read-only independent review found no blocking diff-level issues. No authentic market data used locally.",
+    "live_gap": "Existing staging signer binding is present but matching verifier is not provisioned. Publisher fallback registry digest 093fb04a differs from current PENDING registry c97a025e; establish matching existing public key and registry configuration before activation. Source change alone does not publish Ops or activate keys. Production quant-mcp still reports STALE generation projgen-ef18b4f86ee946048161d25e2a30a2a8 after successful reconnection; production stale cause is not established by this staging fix.",
+    "next": "Independent review, exact-final-SHA native CI and merge before any approved rollout. Existing key identity/activation conditions, deployment HOLDs, candidate credentials, READY and Pilot gates remain unchanged. No new or rotated keys."
+  },
   "r2_reconciliation_checkpoint_20260923": {
     "status": "STAGING_ACCEPTED_FIRST_R2_SEGMENT_VERIFIED_RESEARCH_HELD",
     "supersedes": "For current staging receipt acquisition, this section supersedes the older source-only, June recovery-only, preperiod-unapproved and OAuth-blocked checkpoints below. Those dated sections are historical, not current dispatch instructions. Re-read live operation/control state before acting.",

@@ -1540,18 +1540,17 @@ export default {
       if (env.RECEIPT_AUTHORITY_OPERATION_MODE === "ACTIVE") {
         await recoverPreparedReceipts(env);
         await runStagingReceiptAuditRecoveryCanary(env);
+        // Staging publication stays dormant until its existing verification
+        // key is provisioned. The publisher still signs and self-verifies.
+        if (env.OPS_PROJECTION_VERIFY_SPKI_B64) {
+          await publishOpsProjectionBestEffort(env);
+        }
       }
       return;
     }
     ctx.waitUntil((async () => {
       await runIngestion(env, {}, "cron", fetch);
       await recoverPreparedReceipts(env);
-      if (
-        env.RECEIPT_AUTHORITY_OPERATION_MODE === "ACTIVE" &&
-        env.RECEIPT_AUTHORITY_ENVIRONMENT === "staging"
-      ) {
-        await runStagingReceiptAuditRecoveryCanary(env);
-      }
       await publishOpsProjectionBestEffort(env);
     })());
   },
