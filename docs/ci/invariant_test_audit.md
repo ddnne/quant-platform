@@ -79,6 +79,15 @@ charter for extra hostile-Python tests.
 
 ## Consolidation decisions
 
+- Removed the paper-runtime import test that only copied four static freeze
+  constants. Actual Paper service authorization/refusal tests import both
+  agents and the DTO adapter and remain. A constant staying false cannot prove
+  that an import did not execute work. Also removed three method/attribute-name
+  absence assertions from mixed artifact and option-sidecar tests; signed
+  immutable content, explicit evidence-only flags, poisoned-log rejection and
+  real sidecar reads remain. These changes do not alter runtime guards or
+  claim complete closure of the broader A06 audit.
+
 - Receipt monthly recovery keeps one realistic synthetic runtime regression
   (80,707 rows, >100 MB product) because the former five-row happy path could
   not catch monthly memory/D1 limits. It verifies acquisition through signing,
