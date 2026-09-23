@@ -1,5 +1,33 @@
 {
   "schema": "quant-platform-work-ledger/v1",
+  "r2_reconciliation_checkpoint_20260923": {
+    "status": "SOURCE_DRAFT_ROLLOUT_HELD",
+    "source_head_under_review": "5989485f2c5c727443b163160e1fe44211287a62",
+    "pr": "https://github.com/ddnne/quant-platform/pull/251",
+    "accepted_main": "9f446b8dac09adaef76b11ec0aaf224c58cf359a",
+    "source_scope": "New receipt reconciliation stores historical row bodies in R2 and bounded cloud DO scratch, not permanent D1 fact/shadow/change-log copies. Persisted legacy operations retain their original route and signed serialization. D1 retains operation/segment evidence and immutable receipt publication metadata. Migration0024 is source-only and has not been applied live.",
+    "verified_checks": {
+      "premium": "Full npm test: 170 Node tests and 45 Cloudflare runtime tests passed on source5989485f.",
+      "independent_review": "Whole 17-file diff at5989485f: no new concrete P0/P1 source-merge blocker. Review is not rollout acceptance; conditions below remain open.",
+      "native_ci": "Build43ab6eb4-7310-4580-8185-259ee01ce8bb observed IN_PROGRESS for5989485f; not success. Any subsequent source SHA requires its own authoritative check."
+    },
+    "quant_mcp_reconnection": {
+      "authentication": "SUCCESS: authenticated projection_status call after user reconnection",
+      "projection_status": "STALE",
+      "generated_at": "2026-08-21T12:30:49.152421+00:00",
+      "generation": "projgen-ef18b4f86ee946048161d25e2a30a2a8",
+      "refresh_attempt": false,
+      "refresh_success": false,
+      "meaning": "Supersedes the older OAuth reconnect blocker only. Authentication recovery does not prove fresh data, B0, READY or Pilot eligibility."
+    },
+    "remaining_rollout_conditions": [
+      "Ops now separately observes receipt_product_publications/v1, includes that observation in generation identity, and rejects mid-read drift or cross-generation rollback. The old jquants_records feed remains legacy-only. Research application/global READY integration remains incomplete; publication MAX is not a contiguous applied cursor.",
+      "Connect verified selected-operation candidate cursors to scope-bound snapshot/READY evidence while retaining authenticated descriptor provenance. Publication sequence is not itself a signed receipt claim or authority FINALIZED acknowledgement.",
+      "Prove the approved segment/concurrency envelope fits the shared 512MiB scratch admission limit. Inactive scratch expiry is opportunistic after24h, not a scheduled deletion guarantee; oversized segments cannot be fixed by blind retries.",
+      "Complete final source checks, exact-SHA native CI and review before merge; separately verify authorized migration/staging rollout and live evidence. No production activation from source merge."
+    ],
+    "preserved_holds": "No live migration, deploy or data removal in this checkpoint. Production, Pilot, Mass, FoF, broker, real orders and automatic promotion remain disabled. No authentic market history is persisted locally."
+  },
   "staging_acquisition_checkpoint_20260922": {
     "status": "FRESH_DISPATCH_HELD_RPC_CANCELLATION_UNRESOLVED_JUNE_RECOVERY_ONLY",
     "supersedes": "The dated 20260921 source-repair-pending, exhausted-January approval and receipt-chain deployment descriptions below are historical. This record governs the 20260922 approved staging outcome; other HOLDs remain unchanged.",

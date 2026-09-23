@@ -12,6 +12,7 @@ import {
   stableJson,
 } from "../../ingestion-premium/src/identity";
 import { parseStrictRawPage } from "./pagination_proof";
+import type { ReconciliationScratch } from "./reconciliation_scratch";
 import {
   loadRawPage,
   type Capture,
@@ -52,6 +53,7 @@ type D1Operation = {
   receipt_digest: string | null;
   checked_at: string;
   updated_at: string;
+  structured_storage: "legacy_d1" | "r2_scratch_v1";
 };
 
 export async function initializeD1Operation(
@@ -63,8 +65,9 @@ export async function initializeD1Operation(
     initial: Capture["initialRequest"];
     capture: Capture;
     checkedAt: string;
+    storageMode?: "legacy_d1" | "r2_scratch_v1";
   },
-): Promise<{ runId: number; checkedAt: string }> {
+): Promise<{ runId: number; checkedAt: string; storageMode: "legacy_d1" | "r2_scratch_v1" }> {
   const runDetail = canonicalJson({
     schema_version: "receipt-authority-ingestion-run/v1",
     operation_id: input.operationId,
@@ -112,8 +115,8 @@ export async function initializeD1Operation(
     `INSERT OR IGNORE INTO receipt_authority_operations
      (operation_id,request_digest,run_id,environment,source,contract_id,dataset,segment_id,
       segment_start,segment_end,state,raw_manifest_key,raw_manifest_digest,
-      raw_page_count,raw_row_count,raw_bytes,checked_at,updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,'COLLECTING',?,?,?,?,?,?,?)`,
+      raw_page_count,raw_row_count,raw_bytes,checked_at,updated_at,structured_storage)
+     VALUES (?,?,?,?,?,?,?,?,?,?,'COLLECTING',?,?,?,?,?,?,?,?)`,
   ).bind(
     input.operationId,
     input.requestDigest,
@@ -132,6 +135,7 @@ export async function initializeD1Operation(
     rawBytes,
     run.ran_at,
     run.ran_at,
+    input.storageMode ?? "legacy_d1",
   ).run();
   const row = await env.DB.prepare(
     "SELECT * FROM receipt_authority_operations WHERE operation_id=?",
@@ -149,7 +153,10 @@ export async function initializeD1Operation(
     row.raw_bytes !== rawBytes ||
     row.checked_at !== run.ran_at
   ) throw new Error("D1 receipt operation replay differs from authority measurement");
-  return { runId: run.id, checkedAt: run.ran_at };
+  if (row.structured_storage !== "legacy_d1" && row.structured_storage !== "r2_scratch_v1") {
+    throw new Error("receipt storage mode is unsupported");
+  }
+  return { runId: run.id, checkedAt: run.ran_at, storageMode: row.structured_storage };
 }
 
 async function productNaturalKey(
@@ -318,6 +325,7 @@ export async function reconcileStructured(
     spec: DatasetSpec;
     checkedAt: string;
   },
+  scratch?: ReconciliationScratch,
 ): Promise<{
     count: number;
     digest: string;
@@ -346,7 +354,23 @@ export async function reconcileStructured(
       nextRow > (input.capture.pages[progress.next_page]?.rowCount ?? 0)) {
     throw new Error(STRUCTURED_CARDINALITY_MISMATCH);
   }
-  const storedBefore = await countStructuredRows(env, input.operationId);
+  const countRows = () => scratch === undefined
+    ? countStructuredRows(env, input.operationId)
+    : Promise.resolve(scratch.count(input.operationId));
+  const storedBefore = await countRows();
+  // Scratch is disposable; its R2 checkpoint is not proof that temporary rows
+  // still exist. Rebuild an empty workspace from the retained immutable raw
+  // capture, using the original checkedAt. Partial mismatches still fail closed.
+  if (scratch !== undefined && storedBefore === 0 && progress.raw_rows_committed > 0) {
+    progress = {
+      schema_version: "receipt-authority-structured-progress/v1",
+      operation_id: input.operationId,
+      next_page: 0,
+      next_row: 0,
+      raw_rows_committed: 0,
+    };
+    await saveStructuredProgress(env, input.capture.rawManifestKey, progress);
+  }
   if (storedBefore < progress.raw_rows_committed) {
     throw new Error(STRUCTURED_CARDINALITY_MISMATCH);
   }
@@ -393,8 +417,12 @@ export async function reconcileStructured(
     const offset = progress.next_row ?? 0;
     const slice = rawRows.slice(offset, offset + STRUCTURED_SLICE_ROWS - rowsThisInvocation);
     const normalized = await normalizeRows(slice, input.spec, input.checkedAt);
-    await persistStructuredRows(env, input.operationId, normalized);
-    await persistGovernedProductSlice(env, normalized);
+    if (scratch === undefined) {
+      await persistStructuredRows(env, input.operationId, normalized);
+      await persistGovernedProductSlice(env, normalized);
+    } else {
+      scratch.append(input.operationId, normalized);
+    }
     progress = {
       ...progress,
       next_page: offset + slice.length === rawRows.length ? pageIndex + 1 : pageIndex,
@@ -409,7 +437,7 @@ export async function reconcileStructured(
     if (progress.next_row !== 0) throw new Error(STRUCTURED_SLICE_INCOMPLETE);
   }
   await saveStructuredProgress(env, input.capture.rawManifestKey, progress);
-  const storedCount = await countStructuredRows(env, input.operationId);
+  const storedCount = await countRows();
   if (progress.next_page !== input.capture.pages.length || storedCount !== rawCount) {
     throw new Error(STRUCTURED_CARDINALITY_MISMATCH);
   }
@@ -421,7 +449,29 @@ export async function reconcileStructured(
     capture: input.capture,
     expectedCount: rawCount,
     checkedAt: input.checkedAt,
-  });
+  }, scratch);
+  if (scratch !== undefined) {
+    const measurement = {
+      operation_id: input.operationId,
+      artifact_digest: product.digest,
+      row_count: product.count,
+      natural_key_digest: product.naturalKeyDigest,
+      last_event_time: scratch.lastEventTime(input.operationId),
+      measured_at: input.checkedAt,
+    };
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO receipt_r2_reconciliations
+       (operation_id,artifact_digest,row_count,natural_key_digest,last_event_time,measured_at)
+       VALUES (?,?,?,?,?,?)`,
+    ).bind(...Object.values(measurement)).run();
+    const persisted = await env.DB.prepare(
+      `SELECT operation_id,artifact_digest,row_count,natural_key_digest,last_event_time,measured_at
+       FROM receipt_r2_reconciliations WHERE operation_id=?`,
+    ).bind(input.operationId).first();
+    if (canonicalJson(persisted) !== canonicalJson(measurement)) {
+      throw new Error("R2 reconciliation measurement replay differs");
+    }
+  }
   await env.DB.prepare(
     `UPDATE receipt_authority_operations
      SET state='STRUCTURED_COMMITTED',structured_manifest_key=?,

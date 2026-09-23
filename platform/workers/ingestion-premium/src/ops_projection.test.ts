@@ -1244,6 +1244,14 @@ describe("ops projection cloud publisher", () => {
     const source = new DatabaseSync(":memory:");
     const target = new DatabaseSync(":memory:");
     applySqlDir(source, ingestionMigrations, "0010_raw_acquisition_status.sql");
+    // This read-model fixture supplies publication observations only; governed
+    // commit/migration constraints are covered by the receipt runtime test.
+    source.exec(`CREATE TABLE receipt_product_publications (
+      publication_seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      operation_id TEXT NOT NULL UNIQUE,
+      receipt_digest TEXT NOT NULL,
+      artifact_digest TEXT NOT NULL
+    )`);
     applySqlDir(target, projectionMigrations);
     seedBase(source, 20);
     insertSegment(source, {
@@ -1265,6 +1273,39 @@ describe("ops projection cloud publisher", () => {
     const second = await publishOpsProjection(await envFor(source, target, keys));
     expect(second.status).toBe("published");
     expect(second.generation_id).not.toBe(first.generation_id);
+    // Metadata-only observation must advance even without a legacy fact write.
+    // This fixture does not claim that these publications are verified/applied.
+    const publishMetadata = (operation: string) => source.prepare(
+      "INSERT INTO receipt_product_publications(operation_id,receipt_digest,artifact_digest) VALUES (?,?,?)",
+    ).run(operation, "sha256:" + "ab".repeat(32), "sha256:" + "cd".repeat(32));
+    publishMetadata("observation-only-1");
+    const r2Changed = await publishOpsProjection(env);
+    expect(r2Changed.status).toBe("published");
+    expect(r2Changed.generation_id).not.toBe(second.generation_id);
+    const payload = JSON.parse((target.prepare(
+      "SELECT payload_json FROM ops_storage_plane_status WHERE projection_generation_id=?",
+    ).get(r2Changed.generation_id) as { payload_json: string }).payload_json);
+    expect(payload.receipt_publications).toMatchObject({
+      namespace: "receipt_product_publications/v1",
+      source_cursor: 1,
+      status: "OBSERVED",
+      research_applied_cursor: null,
+    });
+    expect((source.prepare("SELECT MAX(change_seq) AS seq FROM ingestion_change_log").get() as { seq: number }).seq).toBe(20);
+    let publicationReads = 0;
+    await expect(publishOpsProjection(await envFor(source, target, keys, {
+      sourceBeforeQuery: (sql) => {
+        if (sql.includes("MAX(publication_seq)") && ++publicationReads === 2) {
+          publishMetadata("observation-only-2");
+        }
+      },
+    }))).rejects.toThrow(/receipt publication cursor changed/);
+    expect((target.prepare("SELECT generation_id FROM ops_projection_active WHERE singleton=1").get() as { generation_id: string }).generation_id).toBe(r2Changed.generation_id);
+    // Simulate restoring source metadata from an older backup, not an allowed
+    // mutation of the production append-only publication table.
+    source.exec("DELETE FROM receipt_product_publications");
+    await expect(publishOpsProjection(env)).rejects.toThrow(/receipt publication cursor would regress/);
+    publishMetadata("restored-observation");
     source.exec("DELETE FROM ingestion_change_log");
     source.prepare(
       `INSERT INTO ingestion_change_log(

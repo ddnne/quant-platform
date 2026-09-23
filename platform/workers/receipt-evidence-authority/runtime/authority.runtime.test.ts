@@ -27,6 +27,8 @@ import {
 } from "../src/event_checkpoint";
 import { authorityInstanceDigest } from "../src/authority_instance";
 import { requirePersistedDerivedClaims } from "../src/claims_validation";
+import { ReconciliationScratch } from "../src/reconciliation_scratch";
+import { initializeD1Operation } from "../src/structured_reconciliation";
 import { canonicalReceiptExpectedScope } from "../src/receipt_evidence";
 import { datasetById } from "../../ingestion-premium/src/catalog";
 import {
@@ -38,6 +40,8 @@ import {
 import {
   canonicalProductBody,
   compareUtf8Text,
+  materializeProduct,
+  type CanonicalStructuredRow,
 } from "../src/product_materialization";
 import {
   unwrapEd25519PrivateKey,
@@ -585,6 +589,44 @@ async function interruptAfterDurableCapture(
   };
 }
 
+// Seed an operation as it existed before the R2 writer upgrade. Exercise real
+// capture and legacy initialization, not a runtime flag or mocked producer.
+async function prepareLegacyOperation(
+  stub: InterruptedCapture["stub"],
+  issueRequest: ReceiptIssueRequestV1,
+): Promise<void> {
+  await runtimeEnv.DB.prepare(
+    `CREATE TRIGGER pause_before_operation BEFORE INSERT ON receipt_authority_operations
+     BEGIN SELECT RAISE(ABORT, 'test pre-upgrade initialization'); END`,
+  ).run();
+  try {
+    await expect(runInDurableObject(stub, (instance) =>
+      instance.issue_for_segment(issueRequest)
+    )).rejects.toThrow("test pre-upgrade initialization");
+  } finally {
+    await runtimeEnv.DB.prepare("DROP TRIGGER pause_before_operation").run();
+  }
+  const operationId = await canonicalDigest(issueRequest);
+  const captureKey = await runInDurableObject(stub, (_instance, state) =>
+    state.storage.sql.exec<{ capture_key: string }>(
+      "SELECT capture_key FROM authority_capture_attempts WHERE operation_id=? AND state='CAPTURED'",
+      operationId,
+    ).one().capture_key
+  );
+  const object = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.get(captureKey);
+  if (object === null) throw new Error("legacy fixture capture missing");
+  const { capture } = await object.json<TestCaptureStateV2>();
+  const run = await runtimeEnv.DB.prepare(
+    "SELECT ran_at FROM ingestion_run_log WHERE authority_operation_id=?",
+  ).bind(operationId).first<{ ran_at: string }>();
+  if (run === null) throw new Error("legacy fixture run missing");
+  await initializeD1Operation(runtimeEnv, {
+    operationId, requestDigest: operationId, request: issueRequest,
+    initial: capture.initialRequest, capture, checkedAt: run.ran_at,
+    storageMode: "legacy_d1",
+  });
+}
+
 async function replaceCaptureState(
   key: string,
   value: unknown,
@@ -637,6 +679,41 @@ afterEach(() => {
 });
 
 describe("Receipt Evidence Authority in workerd", () => {
+  it("bounds reconciliation scratch and retains exact replay across eviction", async () => {
+    const { stub } = await activateRegisteredTestKey();
+    const row = {
+      natural_key: "synthetic-key", source: "jquants" as const,
+      dataset: "indices_bars_daily_topix", event_time: "2024-02-01",
+      available_at: "2024-02-01T09:00:00Z", ingested_at: "2024-02-02T00:00:00Z",
+      payload: "{}", raw_payload: "{}", row_digest: "sha256:" + "1".repeat(64),
+    };
+    await runInDurableObject(stub, (_instance, state) => {
+      const scratch = new ReconciliationScratch(state.storage, 16 * 1024 * 1024);
+      scratch.append("first", [row]);
+      scratch.append("first", [row]);
+      scratch.append("second", [row]);
+      expect(scratch.count("first")).toBe(1);
+      expect(() => scratch.append("first", [{ ...row, payload: "changed" }]))
+        .toThrow("scratch replay differs");
+      const bounded = new ReconciliationScratch(state.storage, state.storage.sql.databaseSize);
+      expect(() => bounded.append("first", [{
+        ...row, natural_key: "large", payload: "x".repeat(32 * 1024),
+      }])).toThrow("scratch capacity exceeded");
+      expect(scratch.count("first")).toBe(1);
+    });
+    await evictDurableObject(stub);
+    await runInDurableObject(stub, (_instance, state) => {
+      const scratch = new ReconciliationScratch(state.storage, 16 * 1024 * 1024);
+      expect(scratch.page("first", "")).toEqual([row]);
+      scratch.append("abandoned", [row]);
+      scratch.expire(Date.now() + 1, ["first", "second"]);
+      expect(scratch.count("abandoned")).toBe(0);
+      expect(scratch.count("first")).toBe(1);
+      scratch.release("first");
+      expect(scratch.count("first")).toBe(0);
+      expect(scratch.page("second", "")).toEqual([row]);
+    });
+  });
   it("exposes only five public Durable Object RPC methods", async () => {
     const methods = Reflect.ownKeys(ReceiptEvidenceAuthority.prototype)
       .map(String)
@@ -1578,6 +1655,15 @@ describe("Receipt Evidence Authority in workerd", () => {
     await runtimeEnv.DB.prepare(
       "DROP TRIGGER inject_receipt_pre_sign_failure",
     ).run();
+    await runInDurableObject(stub, (_instance, state) => {
+      const scratch = new ReconciliationScratch(state.storage, 512 * 1024 * 1024);
+      expect(scratch.count(operationId)).toBeGreaterThan(0);
+      scratch.release(operationId);
+    });
+    await evictDurableObject(stub);
+    globalThis.fetch = (async () => {
+      throw new Error("scratch recovery must use retained raw without refetch");
+    }) as typeof fetch;
     const recovered = await stub.recover_issue({
       ...interruptedRequest,
       operation: "recover_issue",
@@ -1634,22 +1720,26 @@ describe("Receipt Evidence Authority in workerd", () => {
     };
     const operationId = await canonicalDigest(slicedRequest);
     if (interrupted) {
-      await runtimeEnv.DB.prepare(
-        `CREATE TRIGGER interrupt_third_page BEFORE INSERT ON receipt_authority_structured_rows
-         WHEN NEW.payload LIKE '%2024-02-03%'
-         BEGIN SELECT RAISE(ABORT, 'injected page interruption'); END`,
-      ).run();
+      await runInDurableObject(stub, (_instance, state) => {
+        new ReconciliationScratch(state.storage, 512 * 1024 * 1024);
+        state.storage.sql.exec(
+          `CREATE TRIGGER interrupt_third_page BEFORE INSERT ON reconciliation_scratch
+           WHEN NEW.row_json LIKE '%2024-02-03%'
+           BEGIN SELECT RAISE(ABORT, 'injected page interruption'); END`,
+        );
+      });
     }
     await expect(runInDurableObject(stub, (instance) =>
       instance.issue_for_segment(slicedRequest)
     )).rejects.toThrow(interrupted ? "injected page interruption" : "structured reconciliation slice is incomplete");
-    expect(await runtimeEnv.DB.prepare(
-      `SELECT COUNT(*) AS count FROM receipt_authority_structured_rows
-        WHERE operation_id=?`,
-    ).bind(operationId).first<{ count: number }>()).toEqual({ count: interrupted ? 2 : 4 });
+    expect(await runInDurableObject(stub, (_instance, state) =>
+      new ReconciliationScratch(state.storage, 512 * 1024 * 1024).count(operationId)
+    )).toBe(interrupted ? 2 : 4);
     if (interrupted) {
-      await runtimeEnv.DB.prepare("DROP TRIGGER interrupt_third_page").run();
-      // Simulate the crash window where D1 committed but the R2 cursor did not.
+      await runInDurableObject(stub, (_instance, state) => {
+        state.storage.sql.exec("DROP TRIGGER interrupt_third_page");
+      });
+      // Simulate the crash window where scratch committed but its R2 cursor did not.
       const objects = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.list({
         prefix: `raw/receipt-authority/production/${request.dataset_id}/${request.segment_id}/${operationId.slice(7)}/`,
       });
@@ -1674,15 +1764,17 @@ describe("Receipt Evidence Authority in workerd", () => {
       state: "FINALIZED",
       replayed: true,
     });
-    expect(await runtimeEnv.DB.prepare(
-      `SELECT COUNT(*) AS count FROM receipt_authority_structured_rows
-        WHERE operation_id=?`,
-    ).bind(operationId).first<{ count: number }>()).toEqual({ count: 5 });
+    expect(recovered.receipt.structured_row_count).toBe(5);
+    expect(await runInDurableObject(stub, (_instance, state) =>
+      new ReconciliationScratch(state.storage, 512 * 1024 * 1024).count(operationId)
+    )).toBe(0);
   });
 
   it("finishes a monthly-sized capture through bounded resumes and streamed product bytes", async () => {
     const pageCount = 29;
-    const rowsPerPage = 2783;
+    // Exceeds the observed staging monthly envelope (94,153 rows / 143MB)
+    // using synthetic content only, without another expensive test scenario.
+    const rowsPerPage = 3247;
     let calls = 0;
     globalThis.fetch = (async () => {
       const page = calls++;
@@ -1691,7 +1783,7 @@ describe("Receipt Evidence Authority in workerd", () => {
         data: Array.from({ length: rowsPerPage }, (_, index) => ({
           Date: `2024-02-${String(page + 1).padStart(2, "0")}`,
           Code: String(10000 + index), O: 100, C: 101, MC: 100.5,
-          SyntheticPadding: "x".repeat(560),
+          SyntheticPadding: "x".repeat(800),
         })),
         pagination_key: null,
       });
@@ -1701,10 +1793,15 @@ describe("Receipt Evidence Authority in workerd", () => {
     const monthly = { ...request, dataset_id: "equities_bars_daily", request_nonce: "9".repeat(64) };
     const rpc = workerExports.default;
     let result: ReceiptIssueResultV1 | undefined;
+    let peakObservedScratchDatabaseBytes = 0;
     for (let attempt = 0; attempt < 20 && result === undefined; attempt += 1) {
       const outcome = attempt === 0
         ? await rpc.issue_for_segment(monthly)
         : await rpc.recover_issue({ ...monthly, operation: "recover_issue" });
+      peakObservedScratchDatabaseBytes = Math.max(
+        peakObservedScratchDatabaseBytes,
+        await runInDurableObject(stub, (_instance, state) => state.storage.sql.databaseSize),
+      );
       if (outcome.state === "CONTINUATION_REQUIRED") {
         expect(outcome).toEqual({
           schema_version: "receipt-evidence-continuation/v1",
@@ -1720,6 +1817,16 @@ describe("Receipt Evidence Authority in workerd", () => {
     expect(result!.receipt.raw_row_count).toBe(pageCount * rowsPerPage);
     expect(result!.receipt.structured_row_count).toBe(pageCount * rowsPerPage);
     expect(await runtimeEnv.DB.prepare(
+      `SELECT (SELECT COUNT(*) FROM receipt_authority_structured_rows) AS shadow,
+              (SELECT COUNT(*) FROM jquants_records) AS facts,
+              (SELECT COUNT(*) FROM ingestion_change_log) AS changes,
+              (SELECT COUNT(*) FROM receipt_r2_reconciliations) AS measurements`,
+    ).first()).toEqual({ shadow: 0, facts: 0, changes: 0, measurements: 1 });
+    await runInDurableObject(stub, (_instance, state) => {
+      const scratch = new ReconciliationScratch(state.storage, 512 * 1024 * 1024);
+      expect(scratch.count(result!.operation_id)).toBe(0);
+    });
+    expect(await runtimeEnv.DB.prepare(
       "SELECT last_event_date,last_ingested_at FROM ingestion_watermarks WHERE dataset='equities_bars_daily'",
     ).first()).toEqual({
       last_event_date: "2024-02-29",
@@ -1732,7 +1839,13 @@ describe("Receipt Evidence Authority in workerd", () => {
       byte_count: number; manifest_key: string;
     }>();
     expect(product!.artifact_body).toBe("");
-    expect(product!.byte_count).toBeGreaterThan(100_000_000);
+    expect(product!.byte_count).toBeGreaterThan(150_000_000);
+    console.info("synthetic monthly reconciliation capacity", {
+      rows: pageCount * rowsPerPage,
+      artifactBytes: product!.byte_count,
+      peakObservedScratchDatabaseBytes,
+      admissionLimitBytes: 512 * 1024 * 1024,
+    });
     const artifact = await runtimeEnv.STRUCTURED_BUCKET.get(product!.artifact_key);
     const digest = new crypto.DigestStream("SHA-256");
     await artifact!.body.pipeTo(digest);
@@ -1756,6 +1869,7 @@ describe("Receipt Evidence Authority in workerd", () => {
       request_nonce: "a".repeat(63) + "1",
     };
     const operationId = await canonicalDigest(interruptedRequest);
+    await prepareLegacyOperation(stub, interruptedRequest);
     await runtimeEnv.DB.prepare(
       `CREATE TRIGGER inject_master_pre_sign_failure
        BEFORE UPDATE OF state ON receipt_authority_operations
@@ -1859,6 +1973,34 @@ describe("Receipt Evidence Authority in workerd", () => {
       recovered.receipt.digests.extra_digests.official_calendar_evidence_digest,
     ).toBe(expectedCalendarEvidenceDigest);
     expect(recovered.receipt.digests.extra_digests.product_manifest_digest).toBe(legacyDigest);
+    // The same persisted rows produce identical historical bytes through the
+    // scratch path. Empty scratch must not fall back to existing D1 history.
+    await runInDurableObject(stub, async (_instance, state) => {
+      const scratch = new ReconciliationScratch(state.storage, 16 * 1024 * 1024);
+      const input = {
+        operationId, runId: recovered.receipt.run_id,
+        capture: captureState.capture,
+        expectedCount: recovered.receipt.structured_row_count,
+        checkedAt: recovered.receipt.checked_at,
+      };
+      await expect(materializeProduct(runtimeEnv, input, scratch))
+        .rejects.toThrow("product materialization row count differs");
+      const rows = await runtimeEnv.DB.prepare(
+        `SELECT natural_key,source,dataset,event_time,available_at,ingested_at,
+                payload,raw_payload,row_digest FROM receipt_authority_structured_rows
+          WHERE operation_id=?`,
+      ).bind(operationId).all<CanonicalStructuredRow>();
+      scratch.append(operationId, rows.results);
+      // Force the producer loop, rather than only verifying an existing R2
+      // object. This deletion affects the synthetic runtime bucket only.
+      await runtimeEnv.STRUCTURED_BUCKET.delete(priorProduct!.artifact_key);
+      const product = await materializeProduct(runtimeEnv, input, scratch);
+      expect(product.digest).toBe(recovered.receipt.digests.structured_digest);
+      expect(product.manifestDigest).toBe(legacyDigest);
+      const rebuilt = await runtimeEnv.STRUCTURED_BUCKET.get(product.artifactKey);
+      expect(await rebuilt!.text()).toBe(priorBody);
+      scratch.release(operationId);
+    });
     const afterRaw = await runtimeEnv.RAW_BUCKET.list({ prefix });
     const afterAuthority = await runtimeEnv.AUTHORITY_EVIDENCE_BUCKET.list({
       prefix,
@@ -2167,6 +2309,7 @@ describe("Receipt Evidence Authority in workerd", () => {
   it("re-proves matching existing product rows with their original ingestion time", async () => {
     installAuthorityAcquisition();
     const { stub } = await activateRegisteredTestKey();
+    await prepareLegacyOperation(stub, { ...request, request_nonce: "2".repeat(64) });
     const first = await stub.issue_for_segment({
       ...request,
       request_nonce: "2".repeat(64),
@@ -2181,6 +2324,7 @@ describe("Receipt Evidence Authority in workerd", () => {
         WHERE table_name='jquants_records' AND source='jquants' AND dataset=?`,
     ).bind(priorIngestedAt, priorIngestedAt, request.dataset_id).run();
 
+    await prepareLegacyOperation(stub, { ...request, request_nonce: "3".repeat(64) });
     const reproved = await stub.issue_for_segment({
       ...request,
       request_nonce: "3".repeat(64),
@@ -2217,6 +2361,7 @@ describe("Receipt Evidence Authority in workerd", () => {
   it("rejects re-proof when an existing product payload differs", async () => {
     installAuthorityAcquisition();
     const { stub } = await activateRegisteredTestKey();
+    await prepareLegacyOperation(stub, { ...request, request_nonce: "4".repeat(64) });
     await stub.issue_for_segment({
       ...request,
       request_nonce: "4".repeat(64),
@@ -2225,6 +2370,7 @@ describe("Receipt Evidence Authority in workerd", () => {
       `UPDATE jquants_records SET payload='{}'
         WHERE source='jquants' AND dataset=?`,
     ).bind(request.dataset_id).run();
+    await prepareLegacyOperation(stub, { ...request, request_nonce: "5".repeat(64) });
     await expect(runInDurableObject(stub, (instance) =>
       instance.issue_for_segment({
         ...request,
@@ -2516,6 +2662,7 @@ describe("Receipt Evidence Authority in workerd", () => {
          );
        END`,
     ).run();
+    await prepareLegacyOperation(stub, { ...request, request_nonce: "7".repeat(64) });
     await expect(runInDurableObject(stub, (instance) =>
       instance.issue_for_segment({
         ...request,
@@ -2543,6 +2690,7 @@ describe("Receipt Evidence Authority in workerd", () => {
                  '{}','{"Date":"2024-02-01","Open":1,"Close":2}');
        END`,
     ).run();
+    await prepareLegacyOperation(stub, { ...request, request_nonce: "8".repeat(64) });
     await expect(runInDurableObject(stub, (instance) =>
       instance.issue_for_segment({
         ...request,
@@ -2563,6 +2711,7 @@ describe("Receipt Evidence Authority in workerd", () => {
       `INSERT INTO ingestion_run_log(ran_at,source,runtime,status,detail)
        VALUES ('2024-01-01T00:00:00Z','jquants','prior-test','SUCCESS','{}')`,
     ).run();
+    await prepareLegacyOperation(stub, { ...request, request_nonce: "9".repeat(64) });
     const result = await stub.issue_for_segment({
       ...request,
       request_nonce: "9".repeat(64),

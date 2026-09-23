@@ -3,6 +3,7 @@
  * publishes, never reads R2, never selects artifact_body / fact rows.
  */
 import controlledPilot from "../../../../specs/ready/controlled_pilot_v1.generated.json";
+import { reconciliationRead } from "./receipt_reconciliation_read";
 import {
   canonicalDigest,
   canonicalJson,
@@ -587,12 +588,20 @@ async function describeFromDb(
       budget,
       `SELECT name FROM sqlite_master
         WHERE type='table' AND name IN (SELECT value FROM json_each(?))`,
-      [JSON.stringify([...REQUIRED_TABLES, "ingestion_change_log"])],
+      [JSON.stringify([...REQUIRED_TABLES, "ingestion_change_log", "receipt_r2_reconciliations", "receipt_product_publications"])],
     )).map((row) => row.name),
   );
   for (const name of REQUIRED_TABLES) {
     if (!present.has(name)) throw new HoldError("MISSING_TABLE");
   }
+  const receiptCursor = async (): Promise<number | null> => {
+    if (!present.has("receipt_product_publications")) return null;
+    return requireInt((await sourceFirst<{ seq: number }>(
+      db, budget,
+      "SELECT COALESCE(MAX(publication_seq),0) AS seq FROM receipt_product_publications",
+    ))?.seq);
+  };
+  const receiptBefore = await receiptCursor();
 
   const changeBefore = present.has("ingestion_change_log")
     ? requireInt(
@@ -710,10 +719,11 @@ async function describeFromDb(
     throw new HoldError("MISSING_ROW", missingSelector(frozen, products));
   }
 
+  const reconciliation = reconciliationRead(present.has("receipt_r2_reconciliations"));
   const operations = await sourceAll<Record<string, unknown>>(
     db,
     budget,
-    `SELECT operation.operation_id, operation.run_id, operation.environment,
+    `SELECT ${reconciliation.columns} operation.operation_id, operation.run_id, operation.environment,
             operation.source, operation.contract_id, operation.dataset,
             operation.segment_id, operation.segment_start, operation.segment_end,
             operation.state, operation.receipt_digest, operation.request_digest,
@@ -721,6 +731,7 @@ async function describeFromDb(
             operation.raw_manifest_key, operation.raw_manifest_digest,
             operation.raw_page_count, operation.raw_row_count, operation.raw_bytes
        FROM receipt_authority_operations AS operation
+       ${reconciliation.join}
        JOIN json_each(?) AS wanted
          ON operation.source = json_extract(wanted.value, '$.source')
         AND operation.dataset = json_extract(wanted.value, '$.dataset')
@@ -762,6 +773,7 @@ async function describeFromDb(
     );
   }
 
+  const legacyOperations = operations.filter((row) => row.structured_storage === "legacy_d1");
   const naturalRows = await sourceAll<{ operation_id: string; n: number }>(
     db,
     budget,
@@ -770,11 +782,11 @@ async function describeFromDb(
        JOIN json_each(?) AS wanted
          ON structured.operation_id = wanted.value
       GROUP BY structured.operation_id`,
-    [JSON.stringify(operations.map((row) => String(row.operation_id)))],
+    [JSON.stringify(legacyOperations.map((row) => String(row.operation_id)))],
   );
-  if (naturalRows.length !== frozen.length) {
+  if (naturalRows.length !== legacyOperations.length) {
     const have = new Set(naturalRows.map((row) => String(row.operation_id)));
-    const missing = operations.find((row) => !have.has(String(row.operation_id)));
+    const missing = legacyOperations.find((row) => !have.has(String(row.operation_id)));
     throw new HoldError(
       "MISSING_ROW",
       selectorOf(missing?.dataset, missing?.segment_id),
@@ -835,6 +847,17 @@ async function describeFromDb(
     }
     const envelope = parseJsonObject(receipt[0]!.digests_json);
     if (!isPlainObject(envelope)) throw new HoldError("UNTRUSTED_CHAIN", selector);
+    const publication = operation[0]!;
+    const sourceCursor = publication.structured_storage === "r2_scratch_v1"
+      ? {
+        namespace: "receipt_product_publications/v1",
+        sequence: requireInt(publication.r2_publication_seq),
+      } : null;
+    if (sourceCursor !== null && (
+      sourceCursor.sequence === null || sourceCursor.sequence < 1 ||
+      publication.r2_publication_receipt_digest !== publication.receipt_digest ||
+      publication.r2_publication_artifact_digest !== product[0]!.artifact_digest
+    )) throw new HoldError("UNTRUSTED_CHAIN", selector);
     segments.push({
       source: ref.source,
       dataset: ref.dataset,
@@ -846,6 +869,7 @@ async function describeFromDb(
       receipt_run_id: ref.receipt_run_id,
       operation_id: String(operation[0]!.operation_id),
       receipt_digest: String(operation[0]!.receipt_digest),
+      source_cursor: sourceCursor,
       signed_receipt: envelope,
       product: {
         schema: "jquants_records/v1",
@@ -907,6 +931,7 @@ async function describeFromDb(
     segments,
   };
   const digest = await canonicalDigest(identity);
+  const receiptAfter = await receiptCursor();
   const body = {
     ...identity,
     input_set_digest: digest,
@@ -914,6 +939,11 @@ async function describeFromDb(
       checked_at: nowUtc(),
       source_change_seq_before: changeBefore,
       source_change_seq_after: changeAfter,
+      receipt_publication_cursor: {
+        namespace: "receipt_product_publications/v1",
+        before: receiptBefore,
+        after: receiptAfter,
+      },
       session_bookmark: sessionBookmark(db),
     },
   };

@@ -20,6 +20,7 @@ import {
   persistJsdaCaptureState,
 } from "./jsda_capture";
 import type { Capture } from "./raw_capture";
+import type { ReconciliationScratch } from "./reconciliation_scratch";
 import {
   initializeD1Operation,
   reconcileStructured,
@@ -44,6 +45,7 @@ function requireRequest(value: unknown): ReceiptRequestV1 {
 }
 
 export type InternalReceiptAuthority = {
+  scratch?: ReconciliationScratch;
   begin(
     operationId: string,
     requestDigest: string,
@@ -101,6 +103,9 @@ async function finalizeIssued(
     receiptDigest,
     result,
   );
+  // Never discard scratch before both D1 publication and durable finalization.
+  // If cleanup fails, the finalized replay below retries it without reissuing.
+  authority.scratch?.release(operationId);
   return replayed ? { ...finalized, replayed: true } : finalized;
 }
 
@@ -147,6 +152,7 @@ export async function executeReceiptRequest(
     : await authority.recover(operationId, requestDigest);
   if (snapshot.state === "FINALIZED") {
     if (snapshot.result === null) throw new Error("finalized operation lost its result");
+    authority.scratch?.release(operationId);
     return { ...snapshot.result, replayed: true };
   }
   const recoveredIssued = issuedFromSnapshot(snapshot);
@@ -233,15 +239,19 @@ export async function executeReceiptRequest(
     initial: capture.initialRequest,
     capture,
     checkedAt: observedAt,
+    storageMode: authority.scratch === undefined ? "legacy_d1" : "r2_scratch_v1",
   });
   const checkedAt = operation.checkedAt;
+  if (operation.storageMode === "r2_scratch_v1" && authority.scratch === undefined) {
+    throw new Error("R2 reconciliation scratch is unavailable");
+  }
   const structured = await reconcileStructured(env, {
     operationId,
     runId: operation.runId,
     capture,
     spec,
     checkedAt,
-  });
+  }, operation.storageMode === "r2_scratch_v1" ? authority.scratch : undefined);
   const claims = await measuredClaims({
     env,
     requestDigest,

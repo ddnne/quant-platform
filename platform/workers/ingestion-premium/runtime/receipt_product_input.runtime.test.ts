@@ -415,6 +415,7 @@ type SeedSpec = {
   rawPageCount?: number;
   rawBytes?: number;
   phase?: "complete" | "structured";
+  r2?: "verified" | "missing";
 };
 
 async function seedComplete(db: D1Database, spec: SeedSpec): Promise<void> {
@@ -470,11 +471,11 @@ async function seedComplete(db: D1Database, spec: SeedSpec): Promise<void> {
     `INSERT INTO receipt_authority_operations(
        operation_id,request_digest,run_id,environment,source,contract_id,dataset,segment_id,
        segment_start,segment_end,state,checked_at,updated_at,raw_manifest_key,
-       raw_manifest_digest,raw_page_count,raw_row_count,raw_bytes
+       raw_manifest_digest,raw_page_count,raw_row_count,raw_bytes,structured_storage
      ) VALUES (
        ?,?,?,'staging','jquants','jquants_premium_core',?,?,
        '2026-08-01','2026-08-31','COLLECTING','2026-08-01T00:00:00Z','2026-08-01T00:00:00Z',
-       ?,?,?,2,?
+       ?,?,?,2,?,?
      )`,
   ).bind(
     spec.operationId,
@@ -486,8 +487,9 @@ async function seedComplete(db: D1Database, spec: SeedSpec): Promise<void> {
     spec.objects.rawDigest,
     rawPageCount,
     rawBytes,
+    spec.r2 === undefined ? "legacy_d1" : "r2_scratch_v1",
   ).run();
-  await db.prepare(
+  if (spec.r2 === undefined) await db.prepare(
     `INSERT INTO receipt_authority_structured_rows(
        operation_id,natural_key,source,dataset,event_time,available_at,ingested_at,payload,raw_payload,row_digest
      ) VALUES
@@ -526,6 +528,15 @@ async function seedComplete(db: D1Database, spec: SeedSpec): Promise<void> {
     rawPageCount,
     rawBytes,
   ).run();
+  if (spec.r2 === "verified") {
+    await db.prepare(
+      `INSERT INTO receipt_r2_reconciliations
+       (operation_id,artifact_digest,row_count,natural_key_digest,last_event_time,measured_at)
+       VALUES (?,?,2,?,'2026-08-02','2026-08-01T00:00:00Z')`,
+    ).bind(spec.operationId, artifactDigest, await canonicalDigest({
+      operation_id: spec.operationId, natural_keys: ["k1", "k2"],
+    })).run();
+  }
   await db.prepare(
     `UPDATE receipt_authority_operations
         SET state='STRUCTURED_COMMITTED',
@@ -630,6 +641,7 @@ function postReceiptProducts(
 async function seedPair(options?: {
   calRequest?: "FINALIZED" | "PREPARED";
   barsArtifactDigest?: string;
+  barsR2?: "verified" | "missing";
 }) {
   await applyD1Migrations(runtimeEnv.DB, migrations);
   await seedBase(runtimeEnv.DB);
@@ -677,6 +689,7 @@ async function seedPair(options?: {
     envelope: await signV3Claims(pair, barsClaims),
     objects,
     artifactDigest: options?.barsArtifactDigest,
+    r2: options?.barsR2,
   });
   await seedComplete(runtimeEnv.DB, {
     dataset: "markets_calendar",
@@ -698,6 +711,7 @@ async function seedPair(options?: {
 
 async function seedUnknownStructuredForCommit(options?: {
   coverageEnd?: string;
+  r2?: "verified" | "missing";
 }): Promise<{
   registry: ReceiptVerifyRegistry;
   envelope: Record<string, unknown>;
@@ -771,6 +785,7 @@ async function seedUnknownStructuredForCommit(options?: {
     envelope,
     objects,
     phase: "structured",
+    r2: options?.r2,
   });
   await writeRequiredCoverageSegment(
     { DB: runtimeEnv.DB },
@@ -800,7 +815,7 @@ afterEach(async () => {
 
 describe("POST /v1/export/receipt-products workerd D1", () => {
   it("describes multi-segment evidence in sorted order with stable digest and plane metadata", async () => {
-    const { registry } = await seedPair();
+    const { registry } = await seedPair({ barsR2: "verified" });
     installRegistry("staging", registry);
     const env = exportEnv();
     const reverse = await postReceiptProducts(env, inputRequest([
@@ -838,6 +853,10 @@ describe("POST /v1/export/receipt-products workerd D1", () => {
       raw_bytes: 2,
     });
     expect(segments[0]!.product).not.toHaveProperty("artifact_body");
+    expect(segments[0]!.source_cursor).toEqual({
+      namespace: "receipt_product_publications/v1", sequence: 1,
+    });
+    expect(segments[1]!.source_cursor).toBeNull();
     expect(left.input_set_digest).toBe(right.input_set_digest);
     expect(left.segments).toEqual(right.segments);
     const observation = left.read_observation as Record<string, unknown>;
@@ -850,9 +869,22 @@ describe("POST /v1/export/receipt-products workerd D1", () => {
   });
 
   it("promotes matching UNKNOWN coverage on governed commit then describes", async () => {
-    const { registry, receipt } = await seedUnknownStructuredForCommit();
+    const { registry, receipt } = await seedUnknownStructuredForCommit({ r2: "missing" });
+    const authorityEnv = { DB: runtimeEnv.DB, STRUCTURED_BUCKET: runtimeEnv.STRUCTURED_BUCKET } as ReceiptAuthorityEnv;
+    await expect(commitReceipt(authorityEnv, "op-bars", receipt))
+      .rejects.toThrow("matching R2 reconciliation evidence");
+    expect(await runtimeEnv.DB.prepare(
+      "SELECT status FROM coverage_segments WHERE dataset='equities_bars_daily'",
+    ).first()).toEqual({ status: "UNKNOWN" });
+    await runtimeEnv.DB.prepare(
+      `INSERT INTO receipt_r2_reconciliations
+       (operation_id,artifact_digest,row_count,natural_key_digest,last_event_time,measured_at)
+       VALUES ('op-bars',?,2,?,'2026-08-02','2026-08-01T00:00:00Z')`,
+    ).bind(receipt.digests.structured_digest, await canonicalDigest({
+      operation_id: "op-bars", natural_keys: ["k1", "k2"],
+    })).run();
     const digest = await commitReceipt(
-      { DB: runtimeEnv.DB, STRUCTURED_BUCKET: runtimeEnv.STRUCTURED_BUCKET } as ReceiptAuthorityEnv,
+      authorityEnv,
       "op-bars",
       receipt,
     );
@@ -861,6 +893,20 @@ describe("POST /v1/export/receipt-products workerd D1", () => {
         WHERE dataset='equities_bars_daily' AND segment_id='2026-08'`,
     ).first<{ status: string; receipt_run_id: number }>();
     expect(coverage).toEqual({ status: "COMPLETE", receipt_run_id: 1 });
+    const published = await runtimeEnv.DB.prepare(
+      "SELECT publication_seq,receipt_digest FROM receipt_product_publications WHERE operation_id='op-bars'",
+    ).first();
+    expect(published).toEqual({ publication_seq: 1, receipt_digest: digest });
+    await commitReceipt(authorityEnv, "op-bars", receipt);
+    expect(await runtimeEnv.DB.prepare(
+      "SELECT COUNT(*) AS n FROM receipt_product_publications",
+    ).first()).toEqual({ n: 1 });
+    expect(await runtimeEnv.DB.prepare(
+      "SELECT COUNT(*) AS n FROM receipt_authority_structured_rows WHERE operation_id='op-bars'",
+    ).first()).toEqual({ n: 0 });
+    expect(await runtimeEnv.DB.prepare(
+      "SELECT last_event_date,last_export_cursor FROM ingestion_watermarks WHERE dataset='equities_bars_daily'",
+    ).first()).toEqual({ last_event_date: "2026-08-02", last_export_cursor: null });
     await runtimeEnv.DB.prepare(
       `INSERT INTO receipt_authority_requests(
          operation_id,request_nonce,environment,source,contract_id,dataset,segment_id,state,
@@ -875,7 +921,12 @@ describe("POST /v1/export/receipt-products workerd D1", () => {
       { dataset: "equities_bars_daily", segment_id: "2026-08" },
     ]));
     expect(res?.status).toBe(200);
-    expect(await res!.json()).toMatchObject({ status: "DESCRIBED" });
+    expect(await res!.json()).toMatchObject({
+      status: "DESCRIBED",
+      read_observation: { receipt_publication_cursor: {
+        namespace: "receipt_product_publications/v1", before: 1, after: 1,
+      } },
+    });
   });
 
   it("leaves mismatched planned coverage UNKNOWN so describe HOLDs incomplete", async () => {
@@ -967,6 +1018,16 @@ describe("POST /v1/export/receipt-products workerd D1", () => {
       status: "HOLD",
       hold_reason: "UNFINALIZED_REQUEST",
       hold_selector: { dataset: "markets_calendar", segment_id: "2026-08" },
+    });
+    await reset();
+    const missing = await seedPair({ barsR2: "missing" });
+    installRegistry("staging", missing.registry);
+    const absentMeasurement = await postReceiptProducts(exportEnv(), inputRequest([
+      { dataset: "equities_bars_daily", segment_id: "2026-08" },
+    ]));
+    expect(absentMeasurement?.status).toBe(409);
+    expect(await absentMeasurement!.json()).toMatchObject({
+      status: "HOLD", hold_reason: "UNTRUSTED_CHAIN",
     });
   });
 

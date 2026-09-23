@@ -691,6 +691,15 @@ export async function trustedComplete(
       item.receipt_digest === operation.receipt_digest,
   );
   if (!request) return false;
+  if (operation.structured_storage === "r2_scratch_v1") {
+    return operation.r2_artifact_digest === claims.structured_digest &&
+      operation.r2_natural_key_digest === claims.natural_key_digest &&
+      operation.r2_measured_at === claims.checked_at &&
+      operation.r2_row_count === product.row_count &&
+      operation.r2_row_count === claims.structured_count;
+  }
+  if (operation.structured_storage !== undefined &&
+      operation.structured_storage !== "legacy_d1") return false;
   const naturals = naturalByOp.get(String(operation.operation_id));
   if (naturals !== product.row_count) return false;
   if (Number(claims.structured_count) !== naturals) return false;

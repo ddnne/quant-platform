@@ -1,6 +1,7 @@
 /** Metadata-only Ops Projection publisher. Never reads market/fact tables. */
 
 import { catalogProjectionRows, datasetById } from "./catalog";
+import { reconciliationRead } from "./receipt_reconciliation_read";
 import {
   COVERAGE_POLICY_VERSION,
   aggregateDatasetStatus,
@@ -51,6 +52,8 @@ const SOURCE_WHITELIST = [
   "receipt_authority_operations",
   "receipt_authority_requests",
   "receipt_authority_structured_rows",
+  "receipt_r2_reconciliations",
+  "receipt_product_publications",
   "jsda_v3_cutover_control",
   "jsda_acquisition_jobs",
   "jsda_acquisition_jobs_v2",
@@ -754,6 +757,28 @@ export async function publishOpsProjection(
     if (await tableExists(source, name)) present.add(name);
   }
 
+  // Receipt publications are a separate feed, not a substitute for the legacy
+  // change-log cursor or proof that a research snapshot has applied any rows.
+  async function readReceiptPublicationCursor(): Promise<number | null> {
+    if (!present.has("receipt_product_publications")) return null;
+    const row = await sourceFirst<{ publication_seq: number }>(
+      source,
+      "SELECT COALESCE(MAX(publication_seq), 0) AS publication_seq FROM receipt_product_publications",
+    );
+    return requireInt(row?.publication_seq, "receipt publication_seq");
+  }
+  const receiptPublicationCursor = await readReceiptPublicationCursor();
+  async function assertReceiptPublicationStable(): Promise<void> {
+    const current = await readReceiptPublicationCursor();
+    if (current !== receiptPublicationCursor) {
+      throw new OpsProjectionPublishError("receipt publication cursor changed during projection; aborting without publish", {
+        source_cursor: receiptPublicationCursor,
+        reread_cursor: current,
+        namespace: "receipt_product_publications/v1",
+      });
+    }
+  }
+
   let sourceCursor: number | null = null;
   if (present.has("ingestion_change_log")) {
     const row = await sourceFirst<{ change_seq: number | null }>(
@@ -906,11 +931,12 @@ export async function publishOpsProjection(
       !/UNKNOWN/i.test(String(row.raw_manifest_digest || "")),
   );
 
+  const reconciliation = reconciliationRead(present.has("receipt_r2_reconciliations"));
   const operations = present.has("receipt_authority_operations") &&
       present.has("coverage_segments")
     ? await sourceAllPaged<Record<string, unknown>>(
         source,
-        `SELECT operation.operation_id, operation.run_id, operation.environment,
+        `SELECT ${reconciliation.columns} operation.operation_id, operation.run_id, operation.environment,
                 operation.source, operation.contract_id, operation.dataset,
                 operation.segment_id, operation.segment_start, operation.segment_end,
                 operation.state, operation.receipt_digest, operation.request_digest,
@@ -918,6 +944,7 @@ export async function publishOpsProjection(
                 operation.raw_manifest_key, operation.raw_manifest_digest,
                 operation.raw_page_count, operation.raw_row_count, operation.raw_bytes
            FROM receipt_authority_operations AS operation
+           ${reconciliation.join}
            JOIN coverage_segments AS segment
              ON segment.source=operation.source
             AND segment.dataset=operation.dataset
@@ -1050,6 +1077,7 @@ export async function publishOpsProjection(
     source: sourceIdentity,
     source_cursor: sourceCursor,
     runs,
+    receipt_publication_cursor: receiptPublicationCursor,
     validation,
     watermarks,
     coverage,
@@ -1089,13 +1117,25 @@ export async function publishOpsProjection(
   }>();
   let activeEvidence = "";
   let activeVersion = "";
+  let activeReceiptPublicationCursor: number | null = null;
   try {
     const parsed = JSON.parse(active?.detail_json || "{}") as Record<string, unknown>;
     activeEvidence = String(parsed.source_evidence_digest || "");
     activeVersion = String(parsed.worker_version_id || "");
+    if (typeof parsed.receipt_publication_cursor === "number") {
+      activeReceiptPublicationCursor = requireInt(parsed.receipt_publication_cursor, "active receipt publication_seq");
+    }
   } catch {
     activeEvidence = "";
     activeVersion = "";
+  }
+  await assertReceiptPublicationStable();
+  if (activeReceiptPublicationCursor !== null &&
+      (receiptPublicationCursor === null || receiptPublicationCursor < activeReceiptPublicationCursor)) {
+    throw new OpsProjectionPublishError("receipt publication cursor would regress", {
+      source_cursor: receiptPublicationCursor,
+      active_cursor: activeReceiptPublicationCursor,
+    });
   }
   if (
     active?.status === "SEALED" &&
@@ -1447,6 +1487,13 @@ export async function publishOpsProjection(
             reason: "metadata-only producer does not scan ingestion facts",
           },
           plane: "ops_current",
+          receipt_publications: {
+            namespace: "receipt_product_publications/v1",
+            source_cursor: receiptPublicationCursor,
+            status: receiptPublicationCursor === null ? "NOT_PROJECTED" : "OBSERVED",
+            research_applied_cursor: null,
+            reason: "publication observation only; research application requires selected-operation snapshot evidence",
+          },
           jsda,
           reason: present.has("ingestion_change_log") ? null : "source change log is NOT_PROJECTED",
           source_db_digest: sourceDbDigest,
@@ -1505,6 +1552,7 @@ export async function publishOpsProjection(
     return row?.change_seq == null ? null : requireInt(row.change_seq, "change_seq");
   }
   const sealedCursor = await rereadSourceCursor();
+  await assertReceiptPublicationStable();
   if (sealedCursor !== sourceCursor) {
     throw new OpsProjectionPublishError("source cursor changed during projection; aborting without publish", {
       source_cursor: sourceCursor,
@@ -1624,6 +1672,7 @@ export async function publishOpsProjection(
     ),
   };
   const beforeSealCursor = await rereadSourceCursor();
+  await assertReceiptPublicationStable();
   if (beforeSealCursor !== sourceCursor || beforeSealCursor !== verifiedSourceCursor) {
     throw new OpsProjectionPublishError("source cursor changed before seal; aborting without publish", {
       source_cursor: sourceCursor,
@@ -1645,6 +1694,7 @@ export async function publishOpsProjection(
   const signed = await signAndVerify(env, envelope);
   const detail = JSON.stringify({
     source_evidence_digest: sourceEvidenceDigest,
+    receipt_publication_cursor: receiptPublicationCursor,
     source_cursor: sourceCursor,
     export_cursor: exportCursor,
     applied_cursor: appliedCursor,

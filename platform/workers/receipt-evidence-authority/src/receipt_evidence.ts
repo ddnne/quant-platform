@@ -3,6 +3,7 @@ import {
   canonicalJson,
 } from "../../ingestion-secrets/src/jquants_acquisition_registry";
 import { requireProductObject } from "./product_materialization";
+import { base64ToBytes, isPlainObject, sha256Digest } from "./canonical";
 
 import type { DatasetSpec } from "../../ingestion-premium/src/catalog";
 import {
@@ -234,7 +235,7 @@ export async function commitReceipt(
   const operation = await env.DB.prepare(
     `SELECT run_id,dataset,segment_id,state,raw_manifest_key,
             raw_manifest_digest,raw_page_count,raw_row_count,raw_bytes,
-            structured_manifest_key,structured_digest
+            structured_manifest_key,structured_digest,structured_storage,receipt_digest
        FROM receipt_authority_operations WHERE operation_id=?`,
   ).bind(operationId).first<{
     run_id: number;
@@ -248,11 +249,14 @@ export async function commitReceipt(
     raw_bytes: number;
     structured_manifest_key: string;
     structured_digest: string;
+    structured_storage: "legacy_d1" | "r2_scratch_v1";
+    receipt_digest: string | null;
   }>();
   if (
     operation === null ||
     (operation.state !== "STRUCTURED_COMMITTED" &&
       operation.state !== "RECEIPT_COMMITTED") ||
+    (operation.state === "RECEIPT_COMMITTED" && operation.receipt_digest !== receiptDigest) ||
     operation.run_id !== receipt.run_id || operation.dataset !== receipt.dataset ||
     operation.segment_id !== receipt.segment_id ||
     operation.raw_page_count !== receipt.raw_page_count ||
@@ -287,6 +291,28 @@ export async function commitReceipt(
     typeof product.manifest_digest !== "string" || !product.manifest_digest ||
     typeof product.byte_count !== "number" || product.byte_count <= 0
   ) throw new Error("signed digest is not bound to the product materialization");
+  if (operation.structured_storage === "r2_scratch_v1") {
+    const measurement = await env.DB.prepare(
+      `SELECT artifact_digest,row_count,natural_key_digest,measured_at
+       FROM receipt_r2_reconciliations WHERE operation_id=?`,
+    ).bind(operationId).first<Record<string, unknown>>();
+    const body = base64ToBytes(receipt.digests.signed_body_b64);
+    const claims: unknown = JSON.parse(new TextDecoder().decode(body));
+    if (!isPlainObject(claims) ||
+        await sha256Digest(body) !== receipt.digests.body_digest ||
+        measurement === null ||
+        measurement.artifact_digest !== product.artifact_digest ||
+        measurement.row_count !== product.row_count ||
+        measurement.measured_at !== product.committed_at ||
+        measurement.natural_key_digest !== claims.natural_key_digest ||
+        claims.structured_digest !== product.artifact_digest ||
+        claims.structured_count !== product.row_count ||
+        claims.checked_at !== product.committed_at) {
+      throw new Error("receipt commit lacks matching R2 reconciliation evidence");
+    }
+  } else if (operation.structured_storage !== "legacy_d1") {
+    throw new Error("unknown receipt structured storage mode");
+  }
   // Legacy inline D1 bodies are not proof that the R2 product consumed by
   // research still exists. Recovery must verify that same artifact for both
   // manifest versions before publishing receipt/coverage success.
@@ -305,17 +331,23 @@ export async function commitReceipt(
     event_zero: receipt.observed_items === 0,
   });
   const promoteCoverage = receiptEligibleForCoverageComplete(receipt);
-  await env.DB.batch([
+  // The prior transaction may have committed before durable finalization.
+  // Do not reinsert through the pre-commit-only DB trigger on recovery;
+  // reverify the immutable stored receipt below instead.
+  if (operation.state !== "RECEIPT_COMMITTED") await env.DB.batch([
     // Acquisition no longer depends on a duplicate Premium write. Publish
     // operation-measured watermarks atomically with the receipt, including
     // recovery; older backfills/replays must not move them backwards.
     env.DB.prepare(
       `INSERT INTO ingestion_watermarks
          (dataset,last_event_date,last_ingested_at,last_export_cursor)
-       SELECT ?,substr(MAX(event_time),1,10),?,
-              (SELECT MAX(change_seq) FROM ingestion_change_log WHERE dataset=?)
-         FROM receipt_authority_structured_rows WHERE operation_id=?
-       HAVING COUNT(*) > 0
+       ${operation.structured_storage === "r2_scratch_v1"
+         ? `SELECT ?,substr(last_event_time,1,10),?,NULL
+              FROM receipt_r2_reconciliations WHERE operation_id=?`
+         : `SELECT ?,substr(MAX(event_time),1,10),?,
+                   (SELECT MAX(change_seq) FROM ingestion_change_log WHERE dataset=?)
+              FROM receipt_authority_structured_rows WHERE operation_id=?
+            HAVING COUNT(*) > 0`}
        ON CONFLICT(dataset) DO UPDATE SET
          last_event_date=CASE
            WHEN ingestion_watermarks.last_event_date IS NULL
@@ -325,8 +357,12 @@ export async function commitReceipt(
            WHEN ingestion_watermarks.last_ingested_at IS NULL
              OR julianday(excluded.last_ingested_at) > julianday(ingestion_watermarks.last_ingested_at)
            THEN excluded.last_ingested_at ELSE ingestion_watermarks.last_ingested_at END,
-         last_export_cursor=COALESCE(excluded.last_export_cursor,ingestion_watermarks.last_export_cursor)`,
-    ).bind(receipt.dataset, receipt.checked_at, receipt.dataset, operationId),
+         last_export_cursor=${operation.structured_storage === "r2_scratch_v1"
+           ? "NULL"
+           : "COALESCE(excluded.last_export_cursor,ingestion_watermarks.last_export_cursor)"}`,
+    ).bind(...(operation.structured_storage === "r2_scratch_v1"
+      ? [receipt.dataset, receipt.checked_at, operationId]
+      : [receipt.dataset, receipt.checked_at, receipt.dataset, operationId])),
     env.DB.prepare(
     `INSERT OR IGNORE INTO collection_receipts
      (source,dataset,segment_id,segment_start,segment_end,expected_scope,
