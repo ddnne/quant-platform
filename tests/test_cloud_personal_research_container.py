@@ -3983,9 +3983,14 @@ def _closed_lease(spec, owner, expires_at, fencing_token=1):
 def test_fresh_manager_observes_active_lease_then_claims_after_expiry() -> None:
     spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
     store = _ControlledCasStore()
-    now = __import__("time").time()
+    expired = threading.Event()
+    # Advance only the lease clock, not the process watchdog. CI scheduling
+    # must not expire the replacement lease while its child is starting.
+    def lease_clock() -> float:
+        return 1001.0 if expired.is_set() else 1000.0
+
     store.objects[spec.lease_key] = (
-        service._canonical_bytes(_closed_lease(spec, "oldowneroldowner", now + 0.25)),
+        service._canonical_bytes(_closed_lease(spec, "oldowneroldowner", 1000.25, 3)),
         "etag-old",
     )
     executions = _shared_execution_counter()
@@ -3999,45 +4004,23 @@ def test_fresh_manager_observes_active_lease_then_claims_after_expiry() -> None:
         max_job_seconds=5,
         retry_schedule=(0.01,),
         lease_ttl_seconds=0.4,
+        lease_clock=lease_clock,
     )
     first = manager.submit(spec)
     assert first["status"] == "RUNNING"
     assert executions.value == 0
     assert manager.status(spec.job_id)["status"] == "RUNNING"
-    assert done.wait(3.0)
+    assert manager.submit(spec)["status"] == "RUNNING"
+    assert executions.value == 0
+    expired.set()
+    assert done.wait(
+        5 + service.SUPERVISOR_TERM_GRACE_SECONDS + service.SUPERVISOR_KILL_GRACE_SECONDS
+    )
+    assert manager.status(spec.job_id)["status"] == "COMPLETED"
     assert executions.value == 1
     claimed, _ = store.object_reader(spec, spec.lease_key)
     assert claimed["owner_nonce"] != "oldowneroldowner"
-    assert claimed["fencing_token"] == 2
-
-
-def test_crash_before_executor_fresh_manager_takeover() -> None:
-    spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
-    store = _ControlledCasStore()
-    now = __import__("time").time()
-    store.objects[spec.lease_key] = (
-        service._canonical_bytes(_closed_lease(spec, "crashedcrashedcr", now + 0.2, 3)),
-        "etag-crash",
-    )
-    executions = _shared_execution_counter()
-    done = threading.Event()
-    manager = _job_manager(
-        _controlled_runner(executions),
-        terminal_uploader=store.upload,
-        terminal_reader=store.reader,
-        object_reader=store.object_reader,
-        on_terminal=done.set,
-        max_job_seconds=5,
-        retry_schedule=(0.01,),
-        lease_ttl_seconds=0.3,
-    )
-    observed = manager.submit(spec)
-    assert observed["status"] == "RUNNING"
-    assert executions.value == 0
-    later = manager.submit(spec)
-    assert later["status"] in {"RUNNING", "QUEUED", "COMPLETED"}
-    assert done.wait(3.0)
-    assert executions.value == 1
+    assert claimed["fencing_token"] == 4
 
 
 def test_heartbeat_cas_loss_fences_old_executor_zero_late_success(

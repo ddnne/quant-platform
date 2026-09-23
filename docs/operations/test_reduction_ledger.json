@@ -11,6 +11,14 @@
   "execution_rule": "DELETE can remove the listed redundant definitions. ASSERT/MERGE/REPLACE/TIER never mean delete all selected tests. Pending rows need their stated structural/behavioral prerequisite, not retention just in case.",
   "additional_ci_findings": [
     {
+      "id": "CI-A06",
+      "status": "targeted_checks_and_independent_review_pass_native_pending",
+      "change": "Main build 1efbe7c3-a3d6-4f4e-87be-9b9fbdc45dd6 failed the fresh-manager lease test at done.wait(3). Use the existing injected lease clock to explicitly cross expiry while retaining the real recovery timer, CAS, child process and real watchdog. Bound completion wait by watchdog plus shutdown grace, and require COMPLETED, one execution and fencing-token advancement.",
+      "removed": "test_crash_before_executor_fresh_manager_takeover duplicated the same seeded active lease and fresh-manager takeover, not an actual crash. Its repeated-submit and noninitial fencing-token cases are merged into the retained test. Separate actual lease-loss/process-death/race tests remain.",
+      "bug_missed_if_removed": "None of the duplicate test's distinct behavior is dropped. The retained test still rejects execution before expiry and requires recovery afterward; production timing, TTL and guards are unchanged. This fixes test timing dependence, not a proven production incident.",
+      "verification": "Five related lease/race/process-loss tests pass; retained takeover test passes five further isolated repeats. Independent read-only review accepted the actual diff and product callers. One test removed; no product/runtime change. Exact-source native CI is still required."
+    },
+    {
       "id": "CI-A01",
       "status": "implemented_local_verification",
       "commit": "dc4d545d",
