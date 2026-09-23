@@ -1,17 +1,12 @@
-"""CF mass-eval Worker invoke / deploy / run. Not a pass / not GO.
-
-wrangler deploy is opt-in fail-closed: only QP_ALLOW_MASS_EVAL_DEPLOY=1
-allows subprocess wrangler deploy. Does not enable Mass.
-"""
+"""CF mass-eval compatibility entrypoints. Not a pass / not GO."""
 from __future__ import annotations
 
 import json
-import os
 import time
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from research.closed_clients import ClosedDeployPort, ClosedJsonClient
+from research.closed_clients import ClosedJsonClient
 
 from research.cf_mass_eval_job import (
     CF_MASS_EVAL_VERSION,
@@ -25,14 +20,6 @@ from research.cf_mass_eval_job import (
     _freeze,
     refuse_missing_capability,
 )
-
-
-MASS_EVAL_DEPLOY_ENV = "QP_ALLOW_MASS_EVAL_DEPLOY"
-
-
-def mass_eval_deploy_allowed() -> bool:
-    """True only when QP_ALLOW_MASS_EVAL_DEPLOY=1. Does not enable Mass."""
-    return os.environ.get(MASS_EVAL_DEPLOY_ENV, "").strip() == "1"
 
 
 def invoke_cf_mass_eval_worker(
@@ -70,27 +57,6 @@ def invoke_cf_mass_eval_worker(
         **json.loads(text),
         "invoke_latency_sec": round(latency, 3),
         "worker_url": url,
-    }
-
-
-def deploy_cf_mass_eval_worker(
-    *,
-    deployer: ClosedDeployPort | None = None,
-    wrangler: str | Path | None = None,
-    timeout: int = 300,
-) -> dict[str, Any]:
-    if not mass_eval_deploy_allowed():
-        raise CfMassEvalError(
-            "wrangler deploy refused without QP_ALLOW_MASS_EVAL_DEPLOY=1"
-        )
-    if deployer is None:
-        raise CfMassEvalError("closed deploy port is required")
-    del wrangler, timeout
-    combined = deployer.deploy()
-    return {
-        "status": "deployed",
-        "wrangler_rc": 0,
-        "log_tail": combined[-1500:],
     }
 
 
@@ -147,4 +113,3 @@ def try_cf_mass_eval_status() -> dict[str, Any]:
         "n_survivors_are_not_a_pass": True,
         **_freeze(),
     }
-

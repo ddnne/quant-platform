@@ -4,6 +4,19 @@ This is a personal single-user Cloudflare quant research product on a trusted
 host. Tests catch real current failures; they do not simulate an untrusted
 multi-tenant enterprise.
 
+## Retired research deploy adapter
+
+The unused `deploy_cf_mass_eval_worker` adapter, its environment toggle and
+unused deploy protocols are removed together with
+`tests/test_cf_mass_eval_deploy_opt_in.py`. Repository caller inspection found
+only that test invoking the adapter. Its three cases checked the toggle,
+missing-toggle refusal and a fake deploy-port/subprocess success. Deleting the
+adapter removes that deployment capability rather than leaving an untested
+entrypoint. Actual Ops deployment configuration/version acceptance and its
+tests remain unchanged, as do Mass host refusal and no-HTTP tests. No numerical
+or budget calculation is removed. External users of this internal Python API
+were not inventoried; this is not cloud Worker retirement or rollout approval.
+
 **Policy**
 
 1. Prioritize real numeric correctness: known-input/expected-output,

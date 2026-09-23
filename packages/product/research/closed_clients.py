@@ -11,14 +11,6 @@ class ClosedJsonClient(Protocol):
     def post(self, body: Mapping[str, Any]) -> Mapping[str, Any]: ...
 
 
-class ClosedDeployResult(Protocol):
-    def text(self) -> str: ...
-
-
-class ClosedDeployPort(Protocol):
-    def deploy(self) -> str: ...
-
-
 class ClosedArtifactPut(Protocol):
     def put(self, name: str, payload: bytes) -> Mapping[str, Any]: ...
 
