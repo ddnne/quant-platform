@@ -340,7 +340,7 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
     expect((await env.STRUCTURED_BUCKET.list()).objects).toHaveLength(0);
   });
 
-  it("persists canonical daily identity and session_close available_at after rebuild", async () => {
+  it("persists canonical identity and session_close in R2 without D1 row copies", async () => {
     expect((await rebuildNaturalKeysV2(env.DB)).state).toBe("READY");
     const testEnv = runtimeEnv({ ALLOW_D1_STRUCTURED_DATASETS: "equities_bars_daily" });
     const vendorRow = {
@@ -356,14 +356,24 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
     expect(body.ok).toBe(true);
     expect(body.summary.passed).toBe(1);
     expect(body.summary.rowsInserted).toBe(1);
-    const stored = await env.DB.prepare(
-      "SELECT natural_key, available_at, raw_payload FROM jquants_records WHERE dataset = ?",
-    )
-      .bind("equities_bars_daily")
-      .first<{ natural_key: string; available_at: string; raw_payload: string }>();
+    // A stale deployment variable must not reactivate the retired D1 path.
+    const objects = await env.STRUCTURED_BUCKET.list({
+      prefix: "structured/jsonl/equities_bars_daily/",
+    });
+    expect(objects.objects).toHaveLength(1);
+    const object = await env.STRUCTURED_BUCKET.get(objects.objects[0]!.key);
+    const stored = JSON.parse((await object!.text()).trim()) as {
+      natural_key: string; available_at: string; raw_payload: string;
+    };
     expect(stored?.natural_key).toBe('{"Code":"8697","Date":"2024-06-03"}');
     expect(stored?.available_at).toBe("2024-06-03T15:00:00+09:00");
     expect(JSON.parse(stored!.raw_payload).available_at).toBe("1900-01-01T00:00:00Z");
+    for (const table of ["jquants_records", "jquants_records_revisions"]) {
+      expect((await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>())?.n).toBe(0);
+    }
+    expect((await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM ingestion_change_log WHERE table_name = 'jquants_records'",
+    ).first<{ n: number }>())?.n).toBe(0);
   });
 
   it("runs one canonical-month calendar range as UNKNOWN coverage and unsigned zero-row SUCCESS", async () => {

@@ -2,8 +2,8 @@
 #
 # Resources (Cloudflare, billed):
 #   * R2 bucket ``quant-raw``        — verbatim source JSON per fetch
-#   * R2 bucket ``quant-structured`` — (reserved; structured rows live in D1)
-#   * D1 database ``quant-ingest``   — PIT-shaped structured rows
+#   * R2 bucket ``quant-structured`` — structured history
+#   * D1 database ``quant-ingest``   — metadata plus preserved legacy rows
 #
 # Bindings (set up once via `wrangler`):
 #   npx wrangler r2 bucket create quant-raw
@@ -43,7 +43,7 @@ binding = "RAW_BUCKET"
 bucket_name = "quant-raw"
 
 # R2 — high-volume structured JSONL/Parquet partitions (historical SoT).
-# D1 holds control-plane + hot-window only; see write_path_config.ts.
+# New market bodies go to R2; D1 keeps control/evidence metadata.
 [[r2_buckets]]
 binding = "STRUCTURED_BUCKET"
 bucket_name = "quant-structured"
@@ -52,7 +52,7 @@ bucket_name = "quant-structured"
 binding = "AUTHORITY_EVIDENCE_BUCKET"
 bucket_name = "quant-receipt-evidence"
 
-# D1 — control plane + low-volume / hot-window structured (not full history).
+# D1 — control/evidence metadata; existing legacy rows remain unchanged.
 [[d1_databases]]
 binding = "DB"
 database_name = "quant-ingest"
