@@ -718,6 +718,8 @@ describe("personalResearchR2Outbound workerd/R2 runtime", () => {
     if (!parsed.ok) throw new Error(parsed.error);
     const pubDigest = await receiptCandidateRequestDigest(parsed.value);
     let publishMode: "stall" | "reject" | "verify" = "stall";
+    let publishedAt = "2026-09-02T12:00:00Z";
+    let attestationId = "ready-runtime";
     const terminalPresent: boolean[] = [];
     const publishAdmittedReceiptCandidate = vi.fn(async (): Promise<ReadyPublicationResult> => {
       terminalPresent.push(
@@ -745,12 +747,13 @@ describe("personalResearchR2Outbound workerd/R2 runtime", () => {
         mass_research: "NO-GO",
         automatic_promotion: false,
         live_orders_enabled: false,
-        attestation_id: "ready-runtime",
+        attestation_id: attestationId,
         snapshot_id: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         immutable_db_digest: CONTENT_DIGEST,
-        envelope_key: "research/controlled-pilot/ready/ready-runtime.json",
+        envelope_key: `research/controlled-pilot/ready/${attestationId}.json`,
         attestation_key:
-          "research/controlled-pilot/ready/ready-runtime.json.attestation.json",
+          `research/controlled-pilot/ready/${attestationId}.json.attestation.json`,
+        published_at: publishedAt,
       };
     });
     const publishEnv = {
@@ -940,7 +943,7 @@ describe("personalResearchR2Outbound workerd/R2 runtime", () => {
     );
     const afterAuth = publishAdmittedReceiptCandidate.mock.calls.length;
     await submitPersonalReceiptCandidate(publishEnv as never, parsed.value);
-    expect(publishAdmittedReceiptCandidate.mock.calls.length).toBe(afterAuth);
+    expect(publishAdmittedReceiptCandidate.mock.calls.length).toBe(afterAuth + 1);
     const afterPairedGet = publishAdmittedReceiptCandidate.mock.calls.length;
     const pairedStatus = (await (
       await personalReceiptCandidateStatus(publishEnv as never, "r05-candidate-pub")
@@ -953,6 +956,19 @@ describe("personalResearchR2Outbound workerd/R2 runtime", () => {
     expect(
       (pairedStatus.publication as Record<string, unknown>).attempt_status,
     ).toBeUndefined();
+    // Existing Trader bytes must not suppress renewal. The pointer advances
+    // through real R2 CAS, while GET stays observation-only and no build starts.
+    publishedAt = "2026-09-02T14:00:00Z";
+    attestationId = "ready-runtime-renewed";
+    expect(await (await submitPersonalReceiptCandidate(publishEnv as never, parsed.value)).json())
+      .toMatchObject({ publication: { persisted: true, pointer: { attestation_id: attestationId } } });
+    publishedAt = "2026-09-02T12:00:00Z";
+    attestationId = "ready-runtime";
+    expect(await (await submitPersonalReceiptCandidate(publishEnv as never, parsed.value)).json())
+      .toMatchObject({ publication: { persisted: false } });
+    expect(await (await personalReceiptCandidateStatus(publishEnv as never, parsed.value.job_id)).json())
+      .toMatchObject({ publication: { pointer: { attestation_id: "ready-runtime-renewed" } } });
+    expect(publishEnv.PERSONAL_RESEARCH_CONTAINER.getByName).not.toHaveBeenCalled();
     const expiredId = "r05-candidate-expired";
     const expiredCalls = publishAdmittedReceiptCandidate.mock.calls.length;
     await runtimeEnv.STRUCTURED_BUCKET.put(

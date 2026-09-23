@@ -111,7 +111,7 @@ export function nativePublishCandidateBucket(
       if (options?.onlyIf?.etagDoesNotMatch === "*" && exists) return null;
       if (
         options?.onlyIf?.etagMatches !== undefined &&
-        options.onlyIf.etagMatches !== currentEtag
+        options.onlyIf.etagMatches !== currentEtag?.replaceAll('"', "")
       ) {
         return null;
       }

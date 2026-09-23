@@ -7,9 +7,9 @@ import {
   isContainerRequestTimeout,
   withRequestDeadline,
 } from "./bounded_container_request";
-import { putJsonCreateOnly } from "./http";
+import { serializedJsonBytes } from "./http";
+import { canonicalJson, parseCanonicalUtc } from "./controlled_pilot_json";
 import { readSmallJson } from "./personal_job_state";
-import { controlledTraderAuthorizationKey } from "./controlled_pilot_contract";
 import { personalReceiptCandidatePublicationKey } from "./personal_receipt_candidate_contract";
 
 export const RECEIPT_CANDIDATE_PUBLICATION_POINTER_FORMAT =
@@ -40,6 +40,7 @@ export type ReceiptCandidatePublicationObservation = {
     immutable_db_digest: string;
     envelope_key: string;
     attestation_key: string;
+    published_at?: string;
   };
   attempt_status?: ReadyPublicationResult["status"];
 };
@@ -115,6 +116,7 @@ function pointerFrom(
     immutable_db_digest: string;
     envelope_key: string;
     attestation_key: string;
+    published_at?: string;
   },
 ): NonNullable<ReceiptCandidatePublicationObservation["pointer"]> {
   return {
@@ -125,6 +127,7 @@ function pointerFrom(
     immutable_db_digest: fields.immutable_db_digest,
     envelope_key: fields.envelope_key,
     attestation_key: fields.attestation_key,
+    ...(fields.published_at ? { published_at: fields.published_at } : {}),
   };
 }
 
@@ -154,6 +157,7 @@ function historicalFromStored(
       immutable_db_digest: stored.immutable_db_digest,
       envelope_key: stored.envelope_key,
       attestation_key: stored.attestation_key,
+      ...(typeof stored.published_at === "string" ? { published_at: stored.published_at } : {}),
     }),
   };
 }
@@ -181,22 +185,32 @@ async function persistVerifiedPointer(
   result: Extract<ReadyPublicationResult, { ok: true }>,
 ): Promise<boolean> {
   try {
-    const put = await putJsonCreateOnly(
-      env.STRUCTURED_BUCKET,
-      personalReceiptCandidatePublicationKey(jobId),
-      {
-        format: RECEIPT_CANDIDATE_PUBLICATION_POINTER_FORMAT,
-        job_id: jobId,
-        attestation_id: result.attestation_id,
-        snapshot_id: result.snapshot_id,
-        immutable_db_digest: result.immutable_db_digest,
-        envelope_key: result.envelope_key,
-        attestation_key: result.attestation_key,
-        ready_declared: false,
-        operational_go: false,
-      },
-    );
-    return !put.conflict;
+    const publishedAt = parseCanonicalUtc(result.published_at);
+    if (!Number.isFinite(publishedAt)) return false;
+    const key = personalReceiptCandidatePublicationKey(jobId);
+    const value = {
+      ...pointerFrom(jobId, result),
+      ready_declared: false,
+      operational_go: false,
+    };
+    // Only this small index is mutable. Signed READY/Trader objects stay
+    // create-only, and a delayed retry must never replace a newer issuance.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const object = await env.STRUCTURED_BUCKET.get(key);
+      if (object) {
+        if (object.size > POINTER_MAX_BYTES || !object.etag) return false;
+        const stored = JSON.parse(new TextDecoder().decode(await object.arrayBuffer()));
+        if (canonicalJson(stored) === canonicalJson(value)) return true;
+        const storedAt = parseCanonicalUtc(stored?.published_at);
+        if (Number.isFinite(storedAt) && storedAt >= publishedAt) return false;
+      }
+      const put = await env.STRUCTURED_BUCKET.put(key, serializedJsonBytes(value), {
+        httpMetadata: { contentType: "application/json; charset=utf-8" },
+        onlyIf: object ? { etagMatches: object.etag } : { etagDoesNotMatch: "*" },
+      });
+      if (put !== null) return true;
+    }
+    return false;
   } catch {
     return false;
   }
@@ -230,15 +244,6 @@ export async function publishAdmittedReceiptCandidatePointer(
         readStoredPublicationPointer(env, jobId),
         signal,
       );
-      if (stored?.pointer) {
-        const trader = await awaitUntilAborted(
-          env.STRUCTURED_BUCKET.head(
-            controlledTraderAuthorizationKey(jobId, stored.pointer.attestation_id),
-          ),
-          signal,
-        );
-        if (trader) return stored;
-      }
       const environment = configuredPublicationEnvironment(env);
       const rpc = publicationRpc(env.PILOT_READY_PUBLICATION);
       if (!environment || !rpc) {
@@ -258,19 +263,13 @@ export async function publishAdmittedReceiptCandidatePointer(
           ...(stored?.pointer ? { pointer: stored.pointer } : {}),
         };
       }
-      if (stored) {
-        return {
-          ...stored,
-          attempt_status: result.status,
-        };
-      }
       const persisted = await awaitUntilAborted(
         persistVerifiedPointer(env, jobId, result),
         signal,
       );
       return {
         ...observationBase(env, jobId),
-        historical: false,
+        historical: stored?.pointer?.attestation_id === result.attestation_id,
         persisted,
         attempt_status: result.status,
         pointer: pointerFrom(jobId, result),

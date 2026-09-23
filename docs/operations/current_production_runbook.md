@@ -76,6 +76,14 @@ remote apply results only in immutable release evidence.
   Scheduled Ops publication is separate monitoring: FRESH transport with
   mixed Coverage or UNKNOWN quality is not research readiness. Preserve
   historical evidence; do not fabricate global V3 or add another authority.
+  After this renewal source is deployed, an authenticated POST with the same
+  completed candidate job ID revalidates its existing evidence without starting
+  another Container. New authorization identities are bounded to one per UTC
+  hour, with the existing one-hour TTL; retries within that hour reuse the
+  immutable winner. Older signed READY/Trader bytes and v1 verification remain
+  intact. Only latest-publication indexes advance via R2 ETag CAS. GET remains
+  observation-only. Renewal does not change the job idempotency key, grant
+  Pilot approval, reset budgets, or authorize another execution.
 - **Release evidence:** authenticated **STAGING JSDA AUDIT_ONLY** intake exists
   in `scripts/build_release_evidence.py`. Caller JSON is untrusted. Local
   digest-named output is `STAGED_LOCAL_NOT_PUBLISHED` / `release_allowed=false`,
