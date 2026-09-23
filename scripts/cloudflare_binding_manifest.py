@@ -135,7 +135,7 @@ def _premium_receipt_expected_vars(environment: str) -> dict[str, str]:
         "INGEST_CONCURRENCY": "2" if staging else "6",
         "OPS_PROJECTION_ENVIRONMENT": "staging" if staging else "production",
         "OPS_PROJECTION_SIGNING_KEY_ID": (
-            "ops-projection-cloud-staging-v1" if staging else "ops-projection-20260826-v2"
+            "ops-projection-staging-20260923-v1" if staging else "ops-projection-20260826-v2"
         ),
         "RECEIPT_AUTHORITY_ENVIRONMENT": "staging" if staging else "production",
         "RECEIPT_AUTHORITY_OPERATION_MODE": "ACTIVE" if staging else "PENDING",
@@ -145,6 +145,10 @@ def _premium_receipt_expected_vars(environment: str) -> dict[str, str]:
         key_id, digest = _staging_active_receipt_key()
         expected["RECEIPT_AUTHORITY_ACTIVE_KEY_ID"] = key_id
         expected["RECEIPT_AUTHORITY_REGISTRY_DIGEST"] = digest
+        expected["OPS_PROJECTION_VERIFY_SPKI_B64"] = (
+            "MCowBQYDK2VwAyEASmRA/RpPa07NPKwbQq+aK/O0WE/3xmO1JKZ24W4ppqg="
+        )
+        expected["READY_ED25519_KEY_ID"] = "ready-staging-20260923-v1"
     return expected
 
 

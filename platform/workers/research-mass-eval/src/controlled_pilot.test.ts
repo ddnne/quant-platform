@@ -924,10 +924,11 @@ describe("strict JSON and Python-generated fixtures", () => {
     const readyStg = await registries.loadPinnedReadyKeys("staging");
     const traderProd = await registries.loadPinnedTraderKeys("production");
     const traderStg = await registries.loadPinnedTraderKeys("staging");
-    expect(Array.isArray(readyProd)).toBe(true);
-    expect(Array.isArray(readyStg)).toBe(true);
-    expect(Array.isArray(traderProd)).toBe(true);
-    expect(Array.isArray(traderStg)).toBe(true);
+    expect(readyProd.filter((key) => key.status === "active")).toEqual([]);
+    expect(traderProd.filter((key) => key.status === "active")).toEqual([]);
+    expect(readyStg.map((key) => key.key_id)).toEqual(["ready-staging-20260923-v1"]);
+    expect(traderStg.map((key) => key.key_id)).toEqual(["trader-staging-20260923-v1"]);
+    expect(readyStg[0]!.public_key).not.toEqual(traderStg[0]!.public_key);
     const observed = await registries.parseCommittedRegistryBytes(
       registries.COMMITTED_READY_DOCUMENTS.production,
       "production",

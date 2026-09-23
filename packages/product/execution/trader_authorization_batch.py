@@ -97,9 +97,9 @@ PINNED_TRADER_REGISTRY_RAW = {
         "sha256:ca52153e148fc0603a6073cd2eecb7eeaa058345eefc4dbfa882664fc1640e49",
     ),
     "staging": (
-        "sha256:cd9599a08f5e6ec9fcfc3f3441dfd78edb23ff0a7138102062c7fc9f201e093d",
-        187,
-        "sha256:99333ec060ada318e65d8bb61479397cd601f127a28c3d670fc8b24435efbdd1",
+        "sha256:67e9fb50c033634cc74f005edfaa51e5d99d3cece4ca7d83a245a7ccc113c0d2",
+        488,
+        "sha256:916c1277fd34a47752f4eb7bc5a76fdd9f02e3a3afcd0fe75d5d22d3c427f599",
     ),
 }
 TRADER_BATCH_PURPOSE = "controlled_trader_authorization_verification"

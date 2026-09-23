@@ -2,7 +2,13 @@ import { env } from "cloudflare:workers";
 import { applyD1Migrations, createExecutionContext, reset } from "cloudflare:test";
 import { afterEach, expect, inject, it, vi } from "vitest";
 import worker, { type Env } from "../src/index";
-import { publishOpsProjection } from "../src/ops_projection";
+import { digest, publishOpsProjection } from "../src/ops_projection";
+import stagingOpsRegistry from "../../../../specs/ops_projection/verify_public_keys.staging.json";
+import {
+  OPS_PROJECTION_REGISTRY_PINS,
+  OPS_PROJECTION_STAGING_RAW_DIGEST,
+  OPS_PROJECTION_STAGING_RAW_SIZE,
+} from "../../research-mass-eval/src/controlled_pilot_registry_raw.generated";
 import { bytesToBase64 } from "../../receipt-evidence-authority/src/canonical";
 
 // The audit protocol has its own tests. Isolate that precondition here; the
@@ -63,6 +69,16 @@ it("staging Cron publishes a sealed R2/D1 generation only after verification-key
   await worker.scheduled(controller, testEnv, createExecutionContext());
   const generation = await active();
   expect(generation).toMatchObject({ status: "SEALED", producer_commit_sha: sourceSha });
+  const signed = JSON.parse(String(generation!.signed_envelope_json));
+  expect(signed.envelope.registry_digest).toBe(await digest(stagingOpsRegistry));
+  expect(signed.envelope.evidence_digests.registry_identity_digest).toBe(await digest({
+    document_digest: await digest(stagingOpsRegistry),
+    body_digest: stagingOpsRegistry.registry_digest,
+    raw_sha: OPS_PROJECTION_STAGING_RAW_DIGEST,
+    raw_size: OPS_PROJECTION_STAGING_RAW_SIZE,
+    generation: OPS_PROJECTION_REGISTRY_PINS.staging.generation,
+    authority_status: stagingOpsRegistry.authority_status,
+  }));
   const object = await env.STRUCTURED_BUCKET.get(
     `ops-projection/staging/${generation!.generation_id}/export.json`,
   );

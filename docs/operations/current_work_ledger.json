@@ -1,5 +1,17 @@
 {
   "schema": "quant-platform-work-ledger/v1",
+  "staging_key_recovery_checkpoint_20260923": {
+    "status": "SOURCE_PREPARED_LIVE_KEYS_NOT_CHANGED",
+    "supersedes": "The user approved bounded staging MASS token and Ops/READY/Trader credential recovery; this supersedes earlier no-new-key/pending-approval notes for those staging credentials only. Receipt keys and production remain excluded.",
+    "approval": "https://github.com/ddnne/quant-platform/pull/253#issuecomment-5787989986",
+    "schema_evidence": "https://github.com/ddnne/quant-platform/pull/253#issuecomment-5787996734",
+    "credential_preparation": "https://github.com/ddnne/quant-platform/pull/253#issuecomment-5788022138",
+    "custody": "Prepared private values are in macOS Keychain under account quant-platform-staging and service prefix quant-platform/staging/recovery-20260923/. Suffixes: MASS_EVAL_TOKEN, OPS_PROJECTION_SIGNING_PKCS8_B64, READY_ED25519_PRIVATE_KEY, TRADER_ED25519_PRIVATE_KEY. Reuse these values, do not regenerate or print them. Independent synthetic challenge verified each prepared private/public pair; no real attestation was minted.",
+    "source_scope": "Activate staging public-key registries and corresponding Python/TS/config pins only. Preserve the old pending Ops public key and chain its prior registry digest. Publisher identity now derives from generated Ops registry bytes/pins, not duplicated literals or Receipt authority state. The obsolete local READY parser delegates to the canonical verifier instead of maintaining a second schema and stale pins.",
+    "checks": "Generated contract and binding manifest checks PASS; 135 focused Python tests PASS; Premium typecheck and 170 Node + 46 workerd tests PASS; Mass typecheck and 454 Node + 55 workerd tests PASS. Minimal existing tests strengthened; duplicate local-parser test removed. Independent read-only review found no actionable source blockers.",
+    "next": "Exact-source native CI/merge before coordinated staging secret provisioning and ordered Secrets/Receipt/Premium/Gateway/Mass rollout. Revalidate no in-flight acquisition/candidate and recover the version-specific audit pair. MCP deployment still requires its fresh signed projection predeploy gate; do not bypass it. No production rollout or Pilot execution. Existing bounded candidate limits and cost monitoring apply.",
+    "not_claimed": "Live signing-key match, authenticated candidate, FRESH projection, current research cursor, B0/B4, READY, Trader pairing and Pilot remain unproven. Schema initialization and public-key activation do not imply research GO."
+  },
   "ops_cron_source_checkpoint_20260923": {
     "status": "SOURCE_FIX_NOT_DEPLOYED_OR_ACTIVATED",
     "scope": "Staging ACTIVE Cron now reaches the existing metadata-only Ops publisher after recovery/audit, only when OPS_PROJECTION_VERIFY_SPKI_B64 is configured. Publisher accepts the exact staging ACTIVE caller tag ra-s-c-<40SHA>, retaining the real Worker version UUID and bare source SHA. Removed unreachable staging canary branch from the non-staging path. Production tag behavior unchanged.",

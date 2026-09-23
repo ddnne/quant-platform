@@ -47,10 +47,12 @@ RECEIPT_AUTHORITY_OPERATION_MODE = "ACTIVE"
 RECEIPT_AUTHORITY_ACTIVE_KEY_ID = "receipt-staging-98fa0160de908051"
 RECEIPT_AUTHORITY_REGISTRY_DIGEST = "sha256:8e69c9165619301b02c841215ccda639ab587936ecc222c6403ffe2838a7fe77"
 OPS_PROJECTION_ENVIRONMENT = "staging"
-OPS_PROJECTION_SIGNING_KEY_ID = "ops-projection-cloud-staging-v1"
+OPS_PROJECTION_SIGNING_KEY_ID = "ops-projection-staging-20260923-v1"
+OPS_PROJECTION_VERIFY_SPKI_B64 = "MCowBQYDK2VwAyEASmRA/RpPa07NPKwbQq+aK/O0WE/3xmO1JKZ24W4ppqg="
+READY_ED25519_KEY_ID = "ready-staging-20260923-v1"
 READY_DECLARED = "false"
-# OPS_PROJECTION_VERIFY_SPKI_B64 is provisioned after key review. Missing
-# SPKI fails publication closed. Deploy Premium before MCP.
+# Public verification material only. Provision matching staging secrets before
+# ordered rollout; READY_DECLARED stays false. Deploy Premium before MCP.
 
 [triggers]
 # Minute tick; absent/invalid control stays inactive (no 24-dataset ingest).

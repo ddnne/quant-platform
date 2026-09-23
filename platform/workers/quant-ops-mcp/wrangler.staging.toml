@@ -37,9 +37,8 @@ new_sqlite_classes = ["QuantOpsMcpAgent"]
 ALLOWED_LOGIN = "ddnne"
 DAILY_ROW_QUOTA = "25000"
 OPS_PROJECTION_ENVIRONMENT = "staging"
-OPS_PROJECTION_VERIFY_KEY_ID = "ops-projection-cloud-staging-v1"
-# OPS_PROJECTION_VERIFY_SPKI_B64 is provisioned after key review. Missing
-# SPKI fails deploy/runtime closed; do not commit placeholder keys.
+OPS_PROJECTION_VERIFY_KEY_ID = "ops-projection-staging-20260923-v1"
+OPS_PROJECTION_VERIFY_SPKI_B64 = "MCowBQYDK2VwAyEASmRA/RpPa07NPKwbQq+aK/O0WE/3xmO1JKZ24W4ppqg="
 
 [observability]
 enabled = true

@@ -3,5 +3,15 @@
   "purpose": "readiness_attestation_verification",
   "environment": "staging",
   "authority_instance_id": "ready-authority/staging/v1",
-  "keys": []
+  "keys": [
+    {
+      "key_id": "ready-staging-20260923-v1",
+      "algorithm": "Ed25519",
+      "public_key_b64": "IfNbiBzuKG8pSogE7cbssrDIBIwIAs3Of5a8MQTAgWQ=",
+      "status": "active",
+      "not_before": "2026-09-23T02:00:00Z",
+      "not_after": "2027-09-23T02:00:00Z",
+      "revoked_at": null
+    }
+  ]
 }

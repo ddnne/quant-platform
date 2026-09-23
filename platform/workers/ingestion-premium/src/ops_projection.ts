@@ -12,6 +12,13 @@ import {
 import { produceImmutableB0B4 } from "./snapshot_quality_evidence";
 import { sha256HexFromBytes, sha256HexFromString } from "./sha256";
 import {
+  OPS_PROJECTION_REGISTRY_PINS,
+  OPS_PROJECTION_PRODUCTION_RAW,
+  OPS_PROJECTION_PRODUCTION_RAW_DIGEST,
+  OPS_PROJECTION_STAGING_RAW,
+  OPS_PROJECTION_STAGING_RAW_DIGEST,
+} from "../../research-mass-eval/src/controlled_pilot_registry_raw.generated";
+import {
   nativeReadyEvidenceFingerprint,
   observeNativeReadyForOps,
 } from "./ops_ready_native_observation";
@@ -1590,13 +1597,14 @@ export async function publishOpsProjection(
   const manifest = await manifestFromRows(appliedRows);
   const contentDigest = await digest({ tables: manifest });
   const contractDigest = await digest({ tables: PROJECTED_CONTENT_TABLES });
-  const pinnedRegistryDigest = environment === "staging"
-    ? "sha256:093fb04a3530cb094b4c4eaf2bbd92f9813706c12a885aa70931fbc4d605b7b9"
-    : "sha256:5bebf8906b263fd9a2edf295a4e1e64e0a5a7e52bb3160123c455ebc3d39dadb";
-  const registryDigest = env.OPS_PROJECTION_REGISTRY_DIGEST &&
-    /^sha256:[0-9a-f]{64}$/.test(env.OPS_PROJECTION_REGISTRY_DIGEST)
-    ? env.OPS_PROJECTION_REGISTRY_DIGEST
-    : pinnedRegistryDigest;
+  const opsPins = OPS_PROJECTION_REGISTRY_PINS[environment];
+  const opsRegistryRaw = environment === "staging"
+    ? OPS_PROJECTION_STAGING_RAW : OPS_PROJECTION_PRODUCTION_RAW;
+  const opsRegistry = JSON.parse(new TextDecoder().decode(opsRegistryRaw));
+  const registryDigest = opsPins.document_digest;
+  if (env.OPS_PROJECTION_REGISTRY_DIGEST && env.OPS_PROJECTION_REGISTRY_DIGEST !== registryDigest) {
+    throw new OpsProjectionPublishError("configured Ops registry digest does not match committed registry", {});
+  }
   const meta = appliedRows.ops_projection_metadata[0] ?? {};
   const appliedCursor =
     typeof meta.applied_cursor === "number" ? meta.applied_cursor : null;
@@ -1655,13 +1663,12 @@ export async function publishOpsProjection(
       source_evidence_digest: sourceEvidenceDigest,
       registry_identity_digest: await digest({
         document_digest: registryDigest,
-        body_digest: pinnedRegistryDigest,
+        body_digest: opsPins.body_digest,
         raw_sha: environment === "staging"
-          ? "sha256:ae06407af2401545e59fb507aa9f9765b9840b4d7cfeb6d8fc528dc43416f2b0"
-          : "sha256:b8dbdbc826c7d6af6546fd3ba7b681a5c03a688cb0899ac449d1adbfaf96387a",
-        raw_size: environment === "staging" ? 655 : 1078,
-        generation: environment === "staging" ? 2 : 3,
-        authority_status: receiptRegistry?.authority_status ?? "PENDING",
+          ? OPS_PROJECTION_STAGING_RAW_DIGEST : OPS_PROJECTION_PRODUCTION_RAW_DIGEST,
+        raw_size: opsRegistryRaw.byteLength,
+        generation: opsPins.generation,
+        authority_status: opsRegistry.authority_status,
       }),
       receipt_registry_identity_digest: await digest({
         digest: receiptRegistry?.registry_digest ?? null,

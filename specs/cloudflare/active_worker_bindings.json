@@ -60,7 +60,7 @@
     ],
     "unclassified": "REJECT"
   },
-  "manifest_digest": "sha256:aef3691862e97e90f6b74646f700f63944bd4ff9be28c9c69f270215d3ef52b9",
+  "manifest_digest": "sha256:40b9782da26192977048adb22caa270063f89aaf21d23a33b41ec76bde865f93",
   "ops_binding_identity_digest": "sha256:881176391253aed791eeca79c264384838fe9f6edfc8f33e48c2353e450cb6e3",
   "project_account_id": "11233bca08d134a9b738eaa46b9751d9",
   "schema_version": "cloudflare-active-worker-bindings/v11",
@@ -1596,8 +1596,10 @@
         "vars": {
           "INGEST_CONCURRENCY": "2",
           "OPS_PROJECTION_ENVIRONMENT": "staging",
-          "OPS_PROJECTION_SIGNING_KEY_ID": "ops-projection-cloud-staging-v1",
+          "OPS_PROJECTION_SIGNING_KEY_ID": "ops-projection-staging-20260923-v1",
+          "OPS_PROJECTION_VERIFY_SPKI_B64": "MCowBQYDK2VwAyEASmRA/RpPa07NPKwbQq+aK/O0WE/3xmO1JKZ24W4ppqg=",
           "READY_DECLARED": "false",
+          "READY_ED25519_KEY_ID": "ready-staging-20260923-v1",
           "RECEIPT_AUTHORITY_ACTIVE_KEY_ID": "receipt-staging-98fa0160de908051",
           "RECEIPT_AUTHORITY_ENVIRONMENT": "staging",
           "RECEIPT_AUTHORITY_OPERATION_MODE": "ACTIVE",
@@ -2370,7 +2372,8 @@
           "ALLOWED_LOGIN": "ddnne",
           "DAILY_ROW_QUOTA": "25000",
           "OPS_PROJECTION_ENVIRONMENT": "staging",
-          "OPS_PROJECTION_VERIFY_KEY_ID": "ops-projection-cloud-staging-v1"
+          "OPS_PROJECTION_VERIFY_KEY_ID": "ops-projection-staging-20260923-v1",
+          "OPS_PROJECTION_VERIFY_SPKI_B64": "MCowBQYDK2VwAyEASmRA/RpPa07NPKwbQq+aK/O0WE/3xmO1JKZ24W4ppqg="
         },
         "version_metadata": {
           "binding": "CF_VERSION_METADATA"

@@ -33,11 +33,11 @@ export type PinnedVerifyKey = {
 
 export const READY_DIGEST = {
   production: "sha256:8f2f7fe9353dc2082d57a0a3bd480575adf1095836e4729364b763d8b4459d84",
-  staging: "sha256:30a7a04c4cca8ed96f0813423e1ceb049d4d80c36c0db62c01e327354e5c8aae",
+  staging: "sha256:bbae4be3268e1f45263a99f1d416333843d5f29653e9f3bed8936c7cf3e52bbf",
 } as const;
 export const TRADER_DIGEST = {
   production: "sha256:ca52153e148fc0603a6073cd2eecb7eeaa058345eefc4dbfa882664fc1640e49",
-  staging: "sha256:99333ec060ada318e65d8bb61479397cd601f127a28c3d670fc8b24435efbdd1",
+  staging: "sha256:916c1277fd34a47752f4eb7bc5a76fdd9f02e3a3afcd0fe75d5d22d3c427f599",
 } as const;
 export const READY_RAW = {
   production: { digest: READY_PRODUCTION_RAW_DIGEST, size: READY_PRODUCTION_RAW_SIZE },
