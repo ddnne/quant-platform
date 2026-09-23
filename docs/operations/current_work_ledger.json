@@ -1,6 +1,6 @@
 {
   "schema": "quant-platform-work-ledger/v1",
-  "updated_at": "2026-09-23T11:36:00Z",
+  "updated_at": "2026-09-23T12:30:28Z",
   "purpose": "Current checkpoint, not live authorization. Remeasure before acting. Source, staging, production, data, READY and execution are separate outcomes; superseded details live in Git history.",
   "user_pause": {"status": "RESUMED_BY_USER", "responsibility": "Codex implements while Grok is unavailable; no paid replacement. Main owns work, subagents only independent read-only review. Maximum three work units."},
   "approvals": {
@@ -27,8 +27,8 @@
     "source_delivered": {
       "status": "PR267_MERGED_NATIVE_MAIN_CI_SUCCESS",
       "accepted_source_sha": "f143c56b8b37335a831770894c3a07ff30d1706e",
-      "latest_main_sha": "f143c56b8b37335a831770894c3a07ff30d1706e",
-      "latest_main_status": "PR267_MERGED_MAIN_CI_SUCCESS_STAGING_ACCEPTED",
+      "latest_main_sha": "7d72b2cc528c0dcc1aed4371c0e1ffdc1ac78efe",
+      "latest_main_status": "PR268_CHECKPOINT_MERGED_MAIN_CI_SUCCESS; PR269_CALENDAR_REPAIR_DRAFT",
       "required_check_name": "Workers Builds: quant-platform-ci-aggregate-staging",
       "required_check_app_id": 85455,
       "strict": true,
@@ -45,7 +45,7 @@
       "notes": "Staging only; no historical body deletion, shared-DB restore or JSDA activation. PREPARED0 and mutation lease vacant rechecked before rollout."
     },
     "staging_deployed": {
-      "status": "FIVE_WORKERS_ACCEPTED_CANDIDATE_RUNNING",
+      "status": "FIVE_WORKERS_ACCEPTED_A5_TERMINAL_CONTAINER_INACTIVE",
       "source_sha": "f143c56b8b37335a831770894c3a07ff30d1706e",
       "versions": {
         "ingestion-secrets": "24db9ec5-805b-4739-83f1-a319c36849e2",
@@ -61,12 +61,12 @@
       "container_application": "a03b71dd-28e5-4781-9cd9-d6682596eb72",
       "container_version": 15,
       "container_image_digest": "sha256:f7fcd33f44b1740d9bc7b1ad5d4ed0be9f83c241d1f56c930aa46dcfe6a52564",
-      "container_rollout": "Application version15 observed at100%, version14 at0%; instance inactive before a5 admission, then running on exact new image. PREPARED0/audit_PREPARED0 and vacant mutation lease before admission.",
+      "container_rollout": "Application version15 observed at100%, version14 at0%; a5 completed on exact image, container inactive verified2026-09-23T12:06:44Z. Recheck before any new dispatch.",
       "evidence": ["https://github.com/ddnne/quant-platform/pull/267#issuecomment-5793983706", "https://github.com/ddnne/quant-platform/pull/267#issuecomment-5794025954"],
       "not_claimed": "JSDA/Ops MCP/observer not included. Not production, global Ops, scope, READY or Pilot acceptance."
     },
     "production_deployed": {"status": "HOLD", "notes": "No production rollout authorized. Mass main-trigger deploy intentionally exits HOLD after tests; distinct from required native CI. No retry/bypass."},
-    "data_activated": {"status": "CANDIDATE_A5_RUNNING", "notes": "No accepted candidate snapshot. a3 discovery failure fixed by PR266; a4 reached2022-12 but exceeded private scratch budget. PR267 compresses redundant candidate evidence; a5 is executing. Segment verified_uncommitted progress is not committed scope/READY proof."},
+    "data_activated": {"status": "A5_SCOPE_FAIL_QUALITY_PASS", "notes": "a5 materialized53 segments into3,514,544,128-byte cloud SQLite. Same-snapshot B0/B4/C8 PASS, but compiled scope FAIL: markets_calendar row for2023-01-04 is not PIT-visible. No accepted READY; preserve original clocks and R2 artifact."},
     "ready": {"status": "NOT_PROVEN", "notes": "Provisioned keys/code do not mint READY. Same physical snapshot, scope and measured B0/B4/C8 must pass before conditional staging publication."},
     "pilot_executed": {"status": "NOT_EXECUTED_NO_GO", "notes": "Current candidate approval excludes Pilot/backtests. No next generation, Mass/FoF/broker/orders or autopromotion."}
   },
@@ -80,11 +80,20 @@
       "request_digest": "sha256:66c6e693d216ca9cb55fa183a4ec6bf80b1acf8cf432093b5ea70df4ac2243b6",
       "accepted_at": "2026-09-23T11:29:59.546500Z",
       "durable_expires_at": "2026-09-23T14:29:54.994Z",
-      "last_durable_status": "PENDING",
+      "last_durable_status": "COMPLETED",
+      "finished_at": "2026-09-23T12:06:31.631422Z",
+      "compiled_scope_status": "FAIL",
+      "compiled_scope_error": "markets_calendar row for 2023-01-04 is not PIT-visible",
+      "snapshot_quality": "B0/B4/C8 PASS; 4396 master and bar issuers, latest4310 rows,193 trading dates,0 missing,lag0. Not a full scope proof or READY.",
+      "snapshot_digest": "sha256:dccbb67f234ed2c61a6d7fde34d1b5ac4317c34936e7518424ca63f27679e9b0",
+      "snapshot_key": "research/receipt-candidates/sha256=dccbb67f234ed2c61a6d7fde34d1b5ac4317c34936e7518424ca63f27679e9b0.sqlite.gz",
+      "quality_digest": "sha256:e4f9c7d34855a28f5a4713a5277cb0d60a07508e361b5718f3a09bd18837d65b",
+      "shutdown_verified_at": "2026-09-23T12:06:44Z",
+      "evidence": "https://github.com/ddnne/quant-platform/pull/267#issuecomment-5794510125",
       "container_instance": "6330a23ee3dbdc49ba682f1d462f2b8f5575a9e8149c2e3034d530eed41af2dc",
-      "last_container_status": "running",
+      "last_container_status": "inactive",
       "status_path": "/v1/receipt-candidate/receipt-candidate-20260923-a5",
-      "next": "Observe the same a5 handle and verify shutdown after terminal. Do not restart solely for polling timeout, PENDING metadata or a gap in segment logs. Conditional staging READY/Trader requires every same-snapshot gate; ordinary in-scope repair does not require another per-command approval."
+      "next": "Do not publish or reuse a5. Complete PR269 historical-calendar repair, independent review, exact-source/main native CI and coherent staging acceptance before the remaining a6 dispatch. A6 not submitted. Same-snapshot gates still govern conditional READY/Trader."
     }
   },
   "live_observation": {
@@ -94,7 +103,7 @@
   "items": {
     "1_fresh_clone_and_ledger": {"status": "FINAL_AUDIT_PENDING", "notes": "Fresh source-only clone at f143c56b has HEAD==origin/main, clean and unpushed0. Binding/migration/finding-ledger/governed-JS/pilot-policy drift checks passed. No market history. This is a runtime checkpoint, not final whole-goal completion verification."},
     "2_am_order_quantity_causality": {"status": "SOURCE_STAGING_PRESENT", "notes": "AM frozen quantities and adjusted historical MC/MAdjC/AAdjC retained; representative PM-mutation/holding tests passed. Historic artifact inventory remains held; original observation clocks/provenance stay unchanged."},
-    "3_dependency_scope": {"status": "CLOUD_PROOF_PENDING", "notes": "Shared dataset scopes, immutable day slices and owner import gate present. Actual seed/anchor/lookback/field completeness awaits candidate. No arbitrary fixed warmup expansion."},
+    "3_dependency_scope": {"status": "A5_CALENDAR_POLICY_MISMATCH_REPAIR_IN_PR269", "notes": "Historical calendar scheduling must be explicit in profile requirements, preserving source availability/ingestion and snapshot observation wall. PR269 binds compiler/candidate/READY/runtime and generated digests; targeted tests and independent review passed, remote final-SHA acceptance remains. No feature/price/earnings-calendar clock relaxation or arbitrary warmup expansion."},
     "4_receipt_to_ready_trader": {"status": "DEPLOYED_NOT_READY", "notes": "Container materializes, Premium signs, evaluator verifies only. Dedicated staging keys provisioned. Conditional READY/Trader still needs same-snapshot proof; no new Worker/authority."},
     "5_ci_deploy_entrypoints": {
       "status": "STAGING_ACCEPTED_PRODUCTION_HELD",
@@ -103,11 +112,11 @@
     },
     "6_shared_d1_receipt_reproof": {"status": "R2_FIRST_STAGING_ACTIVE_GLOBAL_OPEN", "notes": "New bodies in R2/bounded cloud scratch; D1 operation/segment metadata. Legacy signed history preserved. Whole shared-DB rollback refuses FORWARD_REPAIR_REQUIRED. No production DLQ pull/ack/purge or JSDA activation."},
     "7_dead_code_and_docs": {"status": "PARTIAL", "execution_ledger": "docs/operations/test_reduction_ledger.json", "notes": "Offline/unique_logic excluded from normal wheel/Container; replay tiering and whole-repo closure open. Ledger consolidation is not global refactor completion. Held MCP/C09 work remains held."},
-    "8_rollout_and_research_go": {"status": "STAGING_CODE_ACCEPTED_RESEARCH_NO_GO", "notes": "Read lanes separately. Candidate a5 running; READY/Trader/Pilot artifacts unproven, production/global Ops open. Private candidate compression is deployed, not a global artifact-format migration; the legacy Ops exporter must not receive compressed private candidate databases."},
-    "9_push_remote_and_fresh_clone_verify": {"status": "RUNTIME_PUSHED_FINAL_AUDIT_PENDING", "notes": "Runtime f143c56b merged, native main CI success, five staging Workers accepted. This checkpoint requires its own final-SHA CI/review/merge; do not deploy during the active candidate. Final whole-goal fresh clone, drift and smoke remain."}
+    "8_rollout_and_research_go": {"status": "STAGING_CODE_ACCEPTED_RESEARCH_NO_GO", "notes": "a5 terminal and shutdown verified; scope FAIL despite quality PASS. READY/Trader/Pilot unproven, production/global Ops open. Private candidate compression is not a global format migration; never route its SQLite to the legacy Ops exporter."},
+    "9_push_remote_and_fresh_clone_verify": {"status": "PR269_DRAFT_FINAL_SOURCE_ACCEPTANCE_PENDING", "notes": "Runtime f143c56b remains deployed. Docs main7d72b2cc independently fresh-cloned clean/unpushed0; main native CI c828a8a8-f3b1-4e74-9b9c-415c0af923a6 SUCCESS. PR269 source repair requires final-SHA CI/review/merge and new staged acceptance; source tests are not deployment evidence."}
   },
   "pending_operations": [
-    {"id": "candidate_same_snapshot_proof", "status": "A5_RUNNING", "notes": "Observe same job, exact image and costs; wait for actual terminal and shutdown. One additional fresh identity a6 remains under grouped extension, not permission to run concurrently or ignore stop conditions."},
+    {"id": "candidate_same_snapshot_proof", "status": "A5_SCOPE_FAIL_A6_NOT_SUBMITTED", "notes": "Only a6 remains. First finish calendar repair and staged acceptance. Preserve allocation, budgets, shutdown and original evidence; no production or Pilot execution."},
     {"id": "enumerate_legacy_am_gross_cap_engine_artifacts", "status": "HELD", "notes": "PR137 intentional Draft. Inventory completion unproven; preserve history, no overwrite/delete or cancellation bypass."},
     {"id": "global_ops_and_schema_parity", "status": "OPEN", "notes": "Production projection, same-generation cursors, JSDA completeness and live tool/schema parity need authorized acceptance. Candidate approval excludes cancelled MCP/C09 activation."}
   ],
@@ -122,7 +131,7 @@
   },
   "open_findings": {"authority": "docs/phase633_finding_ledger.json", "p0_open_at_checkpoint": ["D2", "D3", "R5", "R10", "R11", "C4", "C10", "A2"], "notes": "Current ledger inventory, not a fresh finding-by-finding closure review. No row marked FIXED by this checkpoint."},
   "next_prerequisite_chain": [
-    "Current candidate a5 is running under approved extension. Inspect its terminal proof and shutdown; never restart merely for an observation timeout. Use actual compiler diagnostics for further approved2022 acquisition; never fabricate COMPLETE or empty gaps.",
+    "a5 completed with calendar scope FAIL, quality PASS and verified shutdown. Finish PR269 profile-bound historical scheduling and native staging receipt-context repair, exact-source CI/review/merge, then staging rollout before a6. No additional human approval for these ordinary in-scope repairs.",
     "Only same-snapshot physical/scope/B0/B4/C8 PASS and exact plan/profile/closure pins permit conditional staging READY/Paper-only Trader. Terminal completion alone is insufficient.",
     "Finish reviewed source work without changing active jobs. Production, cancelled MCP/C09, Pilot/backtests and destructive cleanup need their applicable authority; group any needed approval by outcome/cost/risk.",
     "Audit all nine attachment requirements, remote/deployed source, final fresh clone/drift and each completion stage. Keep full goal active until proven."
