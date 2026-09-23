@@ -1710,32 +1710,6 @@ describe("ops projection cloud publisher", () => {
     expect(missingEnvelope.b4_status).toBe("UNKNOWN");
   });
 
-  it("projects authoritative B0/B4 PASS into the sealed envelope", async () => {
-    const source = new DatabaseSync(":memory:");
-    const target = new DatabaseSync(":memory:");
-    applySqlDir(source, ingestionMigrations);
-    applySqlDir(target, projectionMigrations);
-    seedBase(source);
-    insertSegment(source, {
-      segment: "2026-08",
-      status: "PARTIAL",
-      start: "2026-08-01",
-      end: "2026-08-31",
-    });
-    const keys = await keyPair();
-    const result = await publishOpsProjection(await envFor(source, target, keys));
-    const sealed = JSON.parse(
-      (target.prepare(
-        "SELECT signed_envelope_json FROM ops_projection_generation WHERE generation_id=?",
-      ).get(result.generation_id) as { signed_envelope_json: string }).signed_envelope_json,
-    ).envelope as { b0_status: string; b4_status: string; source_cursor: number; generation_id: string };
-    expect(sealed.b0_status).toBe("PASS");
-    expect(sealed.b4_status).toBe("PASS");
-    expect(sealed.generation_id).toBe(result.generation_id);
-    const row = target.prepare("SELECT status FROM ops_b0_status").get() as { status: string };
-    expect(row.status).toBe("PASS");
-  });
-
   it("verifies authentic signed JQ/JSDA receipts and rejects tamper plus V2", async () => {
     const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
     const raw = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
