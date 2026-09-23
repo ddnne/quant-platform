@@ -555,6 +555,16 @@ class _VerifiedControlledSessionScope:
         if self._token is not _SESSION_SCOPE_TOKEN:
             raise TypeError("controlled session scope is an opaque Worker capability")
 
+    def receipt_verification_context(self) -> dict[str, str]:
+        # Legacy projection sessions retain their production-only contract.
+        # Native sessions carry the environment in already-verified evidence.
+        if self.native_source is None:
+            return {}
+        return {
+            "expected_environment": self.native_source["environment"],
+            "expected_authority_instance_digest": self.native_source["authority_instance_digest"],
+        }
+
 
 _NATIVE_SOURCE_IDENTITY_FIELDS = (
     "kind",
@@ -1055,6 +1065,7 @@ class VerifiedControlledSnapshotHandle:
                 as_of_for_day=as_of_for_day,
                 historical_master=self._master_evidence_mode == "historical_effective_membership",
                 historical_calendar=self._calendar_evidence_mode == "historical_effective_calendar",
+                **self._verified_session_scope.receipt_verification_context(),
             )
 
     def am_session_data_view(self) -> "GovernedAmSessionDataView":
@@ -1747,6 +1758,7 @@ def _open_verified_controlled_snapshot(
                 as_of_for_day=as_of_for_day,
                 historical_master=compiled_selection.historical_master,
                 historical_calendar=compiled_selection.historical_calendar,
+                **verified_session_scope.receipt_verification_context(),
             )
         try:
             resolved_universe = resolve_membership(

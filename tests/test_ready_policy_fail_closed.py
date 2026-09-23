@@ -1611,7 +1611,7 @@ def _verify_scope(
     return _verify_exact_four_pit_dependency_scope(handle, binding)
 
 
-def _open_controlled_from_ready_proof(path: Path, proof, binding):
+def _open_controlled_from_ready_proof(path: Path, proof, binding, *, native_source=None):
     """Python consumer: READY proof entries + authenticated snapshot clock.
 
     Upstream Worker READY/projection signatures are stubbed.
@@ -1660,7 +1660,9 @@ def _open_controlled_from_ready_proof(path: Path, proof, binding):
             "entries": entries,
         },
         ready_manifest_digest=proof["proof_digest"],
-        signed_projection_document_digest=proof["proof_digest"],
+        signed_projection_document_digest=proof["proof_digest"] if native_source is None else None,
+        admitted_native_digest=proof["proof_digest"] if native_source is not None else None,
+        native_source=native_source,
         profile_digest=proof["profile_digest"],
     )
     periods = {
@@ -1751,6 +1753,56 @@ def test_exact_pit_dependency_scope_accepts_complete_receipt_bound_fixture(
             normalize_as_of(stamp) == normalize_as_of("2026-08-24T08:00:00+09:00")
             for stamp in clocks[0]
         )
+    finally:
+        handle.close()
+
+
+def test_native_staging_runtime_uses_signed_receipt_environment(
+    tmp_path, receipt_ed25519_keys,
+) -> None:
+    from ops.receipt_candidate_materialize import (
+        freeze_receipt_candidate_snapshot, hash_receipt_candidate_snapshot,
+    )
+    from paper_runtime.ready_publication import _prove_exact_four_compiled_scope
+    from pit.compiled_scope_proof import compiled_scope_proof_session_from_store
+    from pit.errors import PitError
+
+    path, binding = _seed_exact_pit_scope(
+        tmp_path, receipt_ed25519_keys, environment="staging",
+        calendar_ingested_at="2026-08-24T08:00:00+09:00",
+    )
+    with SqliteStore(path) as store:
+        freeze_receipt_candidate_snapshot(store)
+        physical = hash_receipt_candidate_snapshot(store)
+        with compiled_scope_proof_session_from_store(store) as session:
+            evidence, observed, runset, _scope = _prove_exact_four_compiled_scope(
+                session, binding,
+                expected_environment="staging",
+                expected_authority_instance_digest=PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS["staging"],
+                snapshot_observed_through=AUTHENTICATED_EXPORT_AT,
+                physical_digest=physical,
+            )
+    proof = evidence.as_dict()
+    source = {
+        "kind": "governed-receipt-candidate",
+        "environment": "staging",
+        "authority_instance_digest": PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS["staging"],
+        "physical_digest": physical,
+        "observation_policy": "max_verified_claims_checked_at",
+        "observed_through": observed,
+        "compiled_scope_proof_digest": proof["proof_digest"],
+        "receipt_runset_digest": runset,
+    }
+    # The same staging receipts must not reopen as a production legacy session.
+    with pytest.raises(PitError):
+        _open_controlled_from_ready_proof(path, proof, binding)
+    handle = _open_controlled_from_ready_proof(path, proof, binding, native_source=source)
+    try:
+        handle._begin_controlled_batch_reads()
+        slices = handle.universe_day_slices(
+            period_start="2023-01-04", period_end="2023-01-06",
+        )
+        assert len(slices) == 3
     finally:
         handle.close()
 
