@@ -1,6 +1,6 @@
 {
   "schema": "quant-platform-work-ledger/v1",
-  "updated_at": "2026-09-23T05:21:51Z",
+  "updated_at": "2026-09-23T08:29:44Z",
   "purpose": "Current checkpoint, not live authorization. Remeasure before acting. Source, staging, production, data, READY and execution are separate outcomes; superseded details live in Git history.",
   "user_pause": {"status": "RESUMED_BY_USER", "responsibility": "Codex implements while Grok is unavailable; no paid replacement. Main owns work, subagents only independent read-only review. Maximum three work units."},
   "approvals": {
@@ -25,16 +25,16 @@
   },
   "lanes": {
     "source_delivered": {
-      "status": "PR257_MERGED_NATIVE_MAIN_CI_SUCCESS",
-      "accepted_source_sha": "805a47f8177b8eec0e6b77f53a8af949002a89ec",
-      "latest_main_sha": "6546217c6b89c839d70237702303ce239e2bb8b4",
-      "latest_main_status": "PR258_MERGED_MAIN_CI_PENDING_STAGING_UNCHANGED",
+      "status": "PR264_MERGED_NATIVE_MAIN_CI_SUCCESS",
+      "accepted_source_sha": "afe28de2f15dc956de577b970ec1ee60c7a2268c",
+      "latest_main_sha": "afe28de2f15dc956de577b970ec1ee60c7a2268c",
+      "latest_main_status": "PR264_MERGED_MAIN_CI_SUCCESS_STAGING_ACCEPTED",
       "required_check_name": "Workers Builds: quant-platform-ci-aggregate-staging",
       "required_check_app_id": 85455,
       "strict": true,
-      "main_build": "1171a7f3-7ae9-4623-9a53-7ddcf2686b9b",
-      "evidence": "https://github.com/ddnne/quant-platform/pull/257#issuecomment-5789387198",
-      "notes": "Accepted runtime source before this docs change, not a self-SHA. PR255 fixed UTC/envelope compatibility, PR256 removed invented B0 cursors, PR257 aligned full-transport receipt digests. PR258 merged after final-source CI/review; its main CI remains pending and no deployment changed."
+      "main_build": "2a54add7-da6c-459f-b433-0db018191176",
+      "evidence": "https://github.com/ddnne/quant-platform/pull/264#issuecomment-5791514085",
+      "notes": "Accepted runtime source before this checkpoint change, not a self-SHA. PR260 revalidates completed candidates for hourly READY renewal without rerunning a Container; PR261 replaces the cloud SQLite full scan with indexed natural-key lookup; PR262 consolidates lease timing coverage; PR263 adds safe segment progress; PR264 fixes standalone receipt test import isolation. These changes are merged and included in staging."
     },
     "staging_schema_prepared": {
       "status": "CANONICAL_0001_TO_0024_APPLIED",
@@ -46,44 +46,44 @@
     },
     "staging_deployed": {
       "status": "FIVE_WORKERS_ACCEPTED_CANDIDATE_PENDING",
-      "source_sha": "805a47f8177b8eec0e6b77f53a8af949002a89ec",
+      "source_sha": "afe28de2f15dc956de577b970ec1ee60c7a2268c",
       "versions": {
-        "ingestion-secrets": "547668e2-c63e-4ea6-9a9c-b08991f1c177",
-        "receipt-evidence-authority": "82d55524-0b04-4ad6-862b-bf613ec8d327",
-        "ingestion-premium": "3bfefe2f-bfc5-485d-8a5a-03db85a5433c",
-        "research-ai-gateway": "400fdee9-456d-461b-80d0-72c2a4c064bc",
-        "research-mass-eval": "777c9dea-a532-4b4e-ba89-b9a915bff446"
+        "ingestion-secrets": "e89c76f7-9f01-461a-839f-e5b4f3fadc34",
+        "receipt-evidence-authority": "3b7b351c-0917-4684-bfab-1c3bf1a82824",
+        "ingestion-premium": "eeee251d-a19e-4fc9-9d67-1e28c93b8db6",
+        "research-ai-gateway": "0a2da74d-ccc8-4e8d-b659-072b3f14de90",
+        "research-mass-eval": "0ddbb341-bee6-4020-9a86-60b87b1a5d58"
       },
-      "receipt_acceptance_digest": "sha256:1d33d11e7ee41737e6716b073fab127d62753b43c3f8d004759eb36ef2c1438c",
+      "receipt_acceptance_digest": "sha256:936efe05f33c303c849a98a74a1d6605175e4bb9bc762051132c51d8b1f100ad",
       "receipt_acceptance": "AUDIT_ONLY/research_eligible=false. Exact modules, selected versions, unchanged Receipt key/namespace, closed public surfaces and signed runtime audit accepted. READY_DECLARED=false.",
       "gateway_mass_acceptance": "VERIFIED_EXACT_MODULE_BYTES; detailed module/deployment identities in evidence links.",
-      "mass_build": "c311f632-7eb8-4866-9f5a-b948fad6521b",
+      "mass_build": "f53fe3ef-2cde-418a-8d57-b8c9a9be2ea2",
       "container_application": "a03b71dd-28e5-4781-9cd9-d6682596eb72",
-      "container_version": 12,
-      "container_image_digest": "sha256:dfe63f5dee98738ed1b5a96180ba48ce7ba1d111d039b4b7c515151256460cee",
-      "container_rollout": "4e9101ff-0edc-4c1e-8814-7b3e0f908ed2 completed; instance inactive before attempt2",
-      "evidence": ["https://github.com/ddnne/quant-platform/pull/257#issuecomment-5789393993", "https://github.com/ddnne/quant-platform/pull/257#issuecomment-5789431672"],
+      "container_version": 13,
+      "container_image_digest": "sha256:bc38ae0b5833c5ecc788382834184980fc444d72fa3310228d7f63da99f7c325",
+      "container_rollout": "Application version13 observed at100%, version12 at0%; instance inactive before attempt3. Health HTTP200 and new-image progress logs accepted.",
+      "evidence": ["https://github.com/ddnne/quant-platform/pull/264#issuecomment-5791429797", "https://github.com/ddnne/quant-platform/pull/264#issuecomment-5791514085"],
       "not_claimed": "JSDA/Ops MCP/observer not included. Not production, global Ops, scope, READY or Pilot acceptance."
     },
     "production_deployed": {"status": "HOLD", "notes": "No production rollout authorized. Mass main-trigger deploy intentionally exits HOLD after tests; distinct from required native CI. No retry/bypass."},
-    "data_activated": {"status": "CANDIDATE_ATTEMPT2_PENDING", "notes": "R2 products and receipt metadata are not readiness. Candidate independently verifies bytes/hash/count/natural keys/full segments and all compiled seed/lookback/anchor/field scopes on cloud scratch."},
+    "data_activated": {"status": "CANDIDATE_ATTEMPT3_PENDING", "notes": "R2 products and receipt metadata are not readiness. Candidate independently verifies bytes/hash/count/natural keys/full segments and all compiled seed/lookback/anchor/field scopes on cloud scratch."},
     "ready": {"status": "NOT_PROVEN", "notes": "Provisioned keys/code do not mint READY. Same physical snapshot, scope and measured B0/B4/C8 must pass before conditional staging publication."},
     "pilot_executed": {"status": "NOT_EXECUTED_NO_GO", "notes": "Current candidate approval excludes Pilot/backtests. No next generation, Mass/FoF/broker/orders or autopromotion."}
   },
   "candidate": {
-    "attempts_submitted": 2,
+    "attempts_submitted": 3,
     "maximum_fresh_attempts": 3,
-    "previous": {"job_id": "receipt-candidate-20260923-a1", "status": "FAILED", "reason": "Transport digest compared with signed-claims body digest; repaired by PR257 without weakening verification.", "finished_at": "2026-09-23T04:14:29.733145Z", "shutdown_verified_at": "2026-09-23T04:14:41Z", "notes": "Preserve evidence. Cold-start resume used same identity, not another fresh attempt."},
+    "previous": {"job_id": "receipt-candidate-20260923-a2", "status": "FAILED", "reason": "absolute Container lifetime exceeded (10800s)", "finished_at": "2026-09-23T08:09:15.544461Z", "shutdown_verified_at": "2026-09-23T08:09:29Z", "notes": "a1 also FAILED with shutdown verified, see prior checkpoint history. PR261 fixes a measured cloud SQLite full-scan issue, not a proven sole cause of a2 timeout. Receipt jobs use the180-minute lifetime, not the separate165-minute personal backtest timeout. Preserve all historical evidence.", "evidence": "https://github.com/ddnne/quant-platform/pull/264#issuecomment-5791355047"},
     "current": {
-      "job_id": "receipt-candidate-20260923-a2",
-      "request_digest": "sha256:8c39b501a7114229720b2e267ed8ac5317b678ea764f3b1c6a60cd116a348956",
-      "accepted_at": "2026-09-23T05:09:14.316410Z",
-      "durable_expires_at": "2026-09-23T08:09:10.314Z",
+      "job_id": "receipt-candidate-20260923-a3",
+      "request_digest": "sha256:910ea77bee773145848c7dcc9f5b584658e5f8c123efec50087a919c3e52802f",
+      "accepted_at": "2026-09-23T08:21:38.343101Z",
+      "durable_expires_at": "2026-09-23T11:21:34.278Z",
       "last_durable_status": "PENDING",
       "container_instance": "6330a23ee3dbdc49ba682f1d462f2b8f5575a9e8149c2e3034d530eed41af2dc",
       "last_container_status": "running",
-      "status_path": "/v1/receipt-candidate/receipt-candidate-20260923-a2",
-      "next": "Poll same job plus authoritative Container state. PENDING alone is not liveness. Observation timeout is not terminal or retry authority. Verify actual scope/quality, terminal and shutdown before another attempt."
+      "status_path": "/v1/receipt-candidate/receipt-candidate-20260923-a3",
+      "next": "Poll same job plus authoritative Container state and safe progress logs. PENDING alone is not liveness. Observation timeout is not terminal. All3 fresh attempts are used: no a4 or deadline extension. Verify actual scope/quality, terminal, cost and shutdown; request a grouped scope change only if genuinely needed."
     }
   },
   "live_observation": {
@@ -91,22 +91,22 @@
     "production": {"status": "NOT_REMEASURED_BY_THIS_ROLLOUT", "last_known_generation": "projgen-ef18b4f86ee946048161d25e2a30a2a8", "last_known_generated_at": "2026-08-21T12:30:49.152421+00:00", "last_known_projection": "STALE", "last_known_ready": null, "notes": "Prior connector observation, not current acceptance. Reconnection and staging do not refresh production. Tools/schema parity, cursors, B0/B4 and global JSDA remain unproven."}
   },
   "items": {
-    "1_fresh_clone_and_ledger": {"status": "FINAL_AUDIT_PENDING", "notes": "Clean matching runtime805a47f8 verified. Earlier fresh clone is not final completion verification."},
+    "1_fresh_clone_and_ledger": {"status": "FINAL_AUDIT_PENDING", "notes": "Separate source-only clone updated to clean matching afe28de2; drift/schema checks and standalone receipt tests passed. No market history. This is a runtime checkpoint, not final whole-goal completion verification."},
     "2_am_order_quantity_causality": {"status": "SOURCE_STAGING_PRESENT", "notes": "AM frozen quantities and adjusted historical MC/MAdjC/AAdjC retained; representative PM-mutation/holding tests passed. Historic artifact inventory remains held; original observation clocks/provenance stay unchanged."},
     "3_dependency_scope": {"status": "CLOUD_PROOF_PENDING", "notes": "Shared dataset scopes, immutable day slices and owner import gate present. Actual seed/anchor/lookback/field completeness awaits candidate. No arbitrary fixed warmup expansion."},
     "4_receipt_to_ready_trader": {"status": "DEPLOYED_NOT_READY", "notes": "Container materializes, Premium signs, evaluator verifies only. Dedicated staging keys provisioned. Conditional READY/Trader still needs same-snapshot proof; no new Worker/authority."},
     "5_ci_deploy_entrypoints": {
       "status": "STAGING_ACCEPTED_PRODUCTION_HELD",
-      "notes": "Exact-source CI, canonical pinned config/cwd, module bytes and cloud-only Container build accepted. PR258 decouples monitoring from research success; not deployed.",
+      "notes": "Exact-source CI, canonical pinned config/cwd, module bytes and cloud-only Container build accepted at afe28de2. Monitoring and research success remain separate; READY renewal code is deployed, publication itself is unproven.",
       "python_default_offline_boundary": {"status": "current_default_socket_guard", "scope": "pyproject addopts --disable-socket --allow-unix-socket blocks ordinary Python socket creation plus getaddrinfo/gethostbyname during test execution. Unix sockets allowed.", "residual": "Not collection/imports, all DNS APIs, exec children, native/Node/Worker runtimes or OS-wide egress isolation. Retired macOS platform lane is not current acceptance; see test_reduction_ledger S02."}
     },
     "6_shared_d1_receipt_reproof": {"status": "R2_FIRST_STAGING_ACTIVE_GLOBAL_OPEN", "notes": "New bodies in R2/bounded cloud scratch; D1 operation/segment metadata. Legacy signed history preserved. Whole shared-DB rollback refuses FORWARD_REPAIR_REQUIRED. No production DLQ pull/ack/purge or JSDA activation."},
     "7_dead_code_and_docs": {"status": "PARTIAL", "execution_ledger": "docs/operations/test_reduction_ledger.json", "notes": "Offline/unique_logic excluded from normal wheel/Container; replay tiering and whole-repo closure open. Ledger consolidation is not global refactor completion. Held MCP/C09 work remains held."},
     "8_rollout_and_research_go": {"status": "STAGING_CODE_ACCEPTED_RESEARCH_NO_GO", "notes": "Read lanes separately. Candidate active; READY/Trader/Pilot artifacts unproven, production/global Ops open."},
-    "9_push_remote_and_fresh_clone_verify": {"status": "RUNTIME_PUSHED_FINAL_AUDIT_PENDING", "notes": "PR257/258 merged; runtime and latest source stages differ. This docs change requires its own final-SHA CI/review/merge. Final separate fresh clone, drift and smoke remain."}
+    "9_push_remote_and_fresh_clone_verify": {"status": "RUNTIME_PUSHED_FINAL_AUDIT_PENDING", "notes": "Runtime afe28de2 merged, native main CI success, five staging Workers accepted. This checkpoint requires its own final-SHA CI/review/merge; do not deploy during the active candidate. Final whole-goal fresh clone, drift and smoke remain."}
   },
   "pending_operations": [
-    {"id": "candidate_same_snapshot_proof", "status": "ACTIVE", "notes": "Observe attempt2 terminal, actual proofs, attributable usage and shutdown; no blind retry."},
+    {"id": "candidate_same_snapshot_proof", "status": "ACTIVE", "notes": "Observe final attempt3 terminal, actual proofs, attributable usage and shutdown; no new attempt authorized."},
     {"id": "enumerate_legacy_am_gross_cap_engine_artifacts", "status": "HELD", "notes": "PR137 intentional Draft. Inventory completion unproven; preserve history, no overwrite/delete or cancellation bypass."},
     {"id": "global_ops_and_schema_parity", "status": "OPEN", "notes": "Production projection, same-generation cursors, JSDA completeness and live tool/schema parity need authorized acceptance. Candidate approval excludes cancelled MCP/C09 activation."}
   ],
