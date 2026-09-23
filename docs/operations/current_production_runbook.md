@@ -73,6 +73,12 @@ remote apply results only in immutable release evidence.
   Evaluator remains verify-only. Candidate completion or provisioned keys
   alone are not permission to trade. Observe current job and proof artifacts
   through the work ledger, never turn missing evidence into zero/PASS.
+  After the progress-log source is deployed, Container stdout events named
+  `receipt_candidate_segment_progress` identify job, deployment, dataset and
+  segment at `fetch`, `reconcile` and `verified_uncommitted`. They contain no
+  market body or credentials. The last phase is still inside the candidate
+  transaction: it is not a committed snapshot, READY or GO. Use terminal
+  evidence and actual Container state for completion and shutdown.
   Scheduled Ops publication is separate monitoring: FRESH transport with
   mixed Coverage or UNKNOWN quality is not research readiness. Preserve
   historical evidence; do not fabricate global V3 or add another authority.

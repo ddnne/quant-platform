@@ -50,6 +50,21 @@ class ReceiptCandidateJobInputError(ValueError):
     """The Worker supplied a non-closed receipt-candidate job document."""
 
 
+def _log_segment_progress(
+    spec: ReceiptCandidateJobSpec, dataset: str, segment_id: str, phase: str
+) -> None:
+    # Operational metadata only, never the descriptor, signed receipt or body.
+    print(json.dumps({
+        "event": "receipt_candidate_segment_progress",
+        "job_id": spec.job_id,
+        "deployment_id": spec.deployment_id,
+        "dataset": dataset,
+        "segment_id": segment_id,
+        "phase": phase,
+        "go": False,
+    }, separators=(",", ":")), flush=True)
+
+
 def _canonical_bytes(value: Mapping[str, Any]) -> bytes:
     return json.dumps(
         value,
@@ -555,6 +570,7 @@ def _materialize_described_batch(
         segment_id = str(item["segment_id"])
         operation_id = str(item["operation_id"])
         receipt_digest = str(item["receipt_digest"])
+        _log_segment_progress(spec, dataset, segment_id, "fetch")
         product_path = job_root / f"product-{dataset}-{segment_id}.jsonl"
         raw_path = job_root / f"raw-{dataset}-{segment_id}.json"
         calendar_path = None
@@ -607,6 +623,7 @@ def _materialize_described_batch(
                 max_bytes=min(OFFICIAL_CALENDAR_MAX_BYTES, left),
                 opener=transport,
             )
+        _log_segment_progress(spec, dataset, segment_id, "reconcile")
         materialized.append(
             materialize_receipt_segment(
                 store,
@@ -618,6 +635,7 @@ def _materialize_described_batch(
                 max_database_bytes=spec.max_database_bytes,
             )
         )
+        _log_segment_progress(spec, dataset, segment_id, "verified_uncommitted")
         product_path.unlink(missing_ok=True)
         raw_path.unlink(missing_ok=True)
         if calendar_path is not None:
