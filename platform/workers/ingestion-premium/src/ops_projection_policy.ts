@@ -212,13 +212,16 @@ async function requireClosedClaims(value: unknown): Promise<SignedReceiptClaimsV
 }
 
 export const CANONICAL_UTC =
-  /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$/;
+  /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{3})?Z$/;
 
 export function requireCanonicalUtc(value: unknown): string | null {
   if (typeof value !== "string" || CANONICAL_UTC.test(value) === false) return null;
   const parsed = Date.parse(value);
   if (!Number.isFinite(parsed)) return null;
-  const canonical = new Date(parsed).toISOString().replace(/\.\d{3}Z$/, "Z");
+  // The authority emits Date.toISOString() milliseconds. Preserve signed bytes;
+  // accept the existing seconds form too, but never normalize invalid dates.
+  const iso = new Date(parsed).toISOString();
+  const canonical = value.includes(".") ? iso : iso.replace(/\.\d{3}Z$/, "Z");
   return canonical === value ? value : null;
 }
 
@@ -486,11 +489,11 @@ export async function verifySignedReceiptEnvelope(
   const notAfter = requireCanonicalUtc(key.not_after);
   if (key.not_before && !notBefore) return null;
   if (key.not_after && !notAfter) return null;
-  if (notBefore && issuedAt < notBefore) return null;
-  if (notAfter && issuedAt > notAfter) return null;
+  if (notBefore && Date.parse(issuedAt) < Date.parse(notBefore)) return null;
+  if (notAfter && Date.parse(issuedAt) > Date.parse(notAfter)) return null;
   if (key.revoked_at) {
     const revoked = requireCanonicalUtc(key.revoked_at);
-    if (!revoked || issuedAt >= revoked) return null;
+    if (!revoked || Date.parse(issuedAt) >= Date.parse(revoked)) return null;
   }
   return claims;
 }
