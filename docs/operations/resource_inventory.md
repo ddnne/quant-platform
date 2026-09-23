@@ -9,7 +9,7 @@ No market bodies, secrets, KV values or DLQ messages were read.
 |---|---:|---|
 | Workers | 19 | 15 quant-prefixed, 3 news-prefixed, 1 tmp-exp-eval |
 | D1 | 7 | 6 quant, 1 news |
-| R2 buckets | 7 | 5 quant, 2 news; object sizes/retention not inventoried |
+| R2 buckets | 7 | 5 quant, 2 news; quant lifecycle/public domains checked, object sizes not inventoried |
 | Queues | 4 | JSDA queue and DLQ in each environment |
 | KV namespaces | 3 | quant OAuth production/staging and news OAuth |
 | DO namespaces | 8 | Not an instance or billing count |
@@ -75,6 +75,33 @@ shortcut based only on the legacy change cursor would be unsafe: Receipt
 publications are explicitly tracked as a separate feed.
 
 ## Next work, without user login
+
+### Additional metadata observations (2026-09-24)
+
+All19 Worker settings showed no inbound Service Binding or tail-consumer
+reference to either retirement candidate. Workers invocation analytics for
+2026-09-16T15:27:04Z through2026-09-23T15:27:04Z returned no invocation rows
+for either, with no API errors. The positive-control staging Premium query
+returned10,018 requests. This is no observed use during that window, not proof
+of no external or dormant client. Neither Worker was disabled or removed.
+
+All five quant R2 buckets have managed r2.dev access disabled and no custom
+domains. This rules out direct public bucket domains at observation time,
+not unauthenticated access through a Worker or another credentialed interface.
+Their only lifecycle rule aborts incomplete multipart uploads after604,800
+seconds. No saved-object expiry or tier-transition rule was present; this
+is not a seven-day deletion rule for market data.
+
+Source places candidate manifests, publication/state records, compressed and
+physical SQLite, and PIT-scope evidence under `research/receipt-candidates/`.
+A blanket prefix expiry would therefore risk deleting referenced evidence.
+Key definitions do not prove which objects exist. Before retention changes,
+inventory object metadata and references, separating reproducible temporary
+objects from immutable evidence. No objects were downloaded or deleted.
+
+Linked audit evidence:
+https://github.com/ddnne/quant-platform/pull/271#issuecomment-5798484463.
+These are metadata observations, not a completed cost or security audit.
 
 ### Follow-up live binding/public-surface check
 
