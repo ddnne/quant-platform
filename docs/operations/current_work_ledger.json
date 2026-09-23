@@ -51,7 +51,7 @@
       "meaning": "Supersedes the older OAuth reconnect blocker only. Authentication recovery does not prove fresh data, B0, READY or Pilot eligibility."
     },
     "remaining_rollout_conditions": [
-      "Ops now separately observes receipt_product_publications/v1, includes that observation in generation identity, and rejects mid-read drift or cross-generation rollback. The old jquants_records feed remains legacy-only. Research application/global READY integration remains incomplete; publication MAX is not a contiguous applied cursor.",
+      "Ops source implementation separately observes receipt_product_publications/v1, includes that observation in generation identity, and rejects mid-read drift or cross-generation rollback. This is not live Ops acceptance; live projection remains STALE. The old jquants_records feed remains legacy-only. Research application/global READY integration remains incomplete; publication MAX is not a contiguous applied cursor.",
       "Connect verified selected-operation candidate cursors to scope-bound snapshot/READY evidence while retaining authenticated descriptor provenance. Publication sequence is not itself a signed receipt claim or authority FINALIZED acknowledgement.",
       "One monthly bars canary passed the bounded512MiB scratch route; this is not proof for every dataset/month or simultaneous workloads. Inactive scratch expiry is opportunistic after24h, not a scheduled deletion guarantee; oversized segments cannot be fixed by blind retries.",
       "Update Mass candidate source through the approved cloud-only staging rollout, then authenticated smoke/full product verification and scope checks. Existing MASS_EVAL_TOKEN location and matching READY/Trader public-key identities remain unresolved; no generation/rotation. No production activation from source merge."
@@ -152,7 +152,7 @@
     "integration": "Versioned closure V3 binds explicit effective membership through profile, candidate, publisher, pinned runtime and Python/Worker Paper provenance. Old V1/V2 compiler semantics stay strict. Generated digest chain updated atomically; old READY is not silently reused.",
     "remaining": "Source review/CI/merge complete; see staging_acceptance_20260921 for receipt-chain rollout. Authentic master reproof, production and Pilot remain incomplete."
   },
-  "updated_at": "2026-09-20T22:53:08Z",
+  "updated_at": "2026-09-23T01:23:00Z",
   "receipt_monthly_repair": {
     "status": "HISTORICAL_SOURCE_CHECKPOINT_SUPERSEDED",
     "branch": "fix/receipt-durable-capture-reconcile",
