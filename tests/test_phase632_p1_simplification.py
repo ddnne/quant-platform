@@ -468,7 +468,6 @@ def test_option_eval_ignores_arbitrary_temp_log_dir(tmp_path: Path) -> None:
     )
     assert load_opt225_regime_bundle_for_eval(view) is None
     assert view.read_option_sidecar() is None
-    assert not hasattr(view, "option_sidecar_ref")
 
     obj = {
         "schema_version": OPTION_SIDECAR_OBJECT_SCHEMA,

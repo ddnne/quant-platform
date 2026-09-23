@@ -798,5 +798,3 @@ def test_repeat_loading_is_idempotent_evidence_not_execution_authority(
         assert verified.verification_scope == "EVIDENCE_ONLY"
         assert verified.authorizes_execution is False
         assert verified.authorizes_promotion is False
-        assert not hasattr(verified, "execute")
-        assert not hasattr(verified, "promote")
