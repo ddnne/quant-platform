@@ -1189,40 +1189,16 @@ export async function publishOpsProjection(
     worker_version_id: versionId,
   })).slice("sha256:".length);
   const produced = await produceImmutableB0B4(env, source, generationId);
-  if (produced.status === "PASS" && produced.b4_status === "PASS") {
-    Object.assign(b0b4, {
-      status: produced.status,
-      policy_version: produced.policy_version,
-      evaluated_at: produced.evaluated_at,
-      summary_json: produced.summary_json,
-      results_json: produced.results_json,
-      source_build_id: produced.source_build_id,
-      b4_status: produced.b4_status,
-      b4_results: (() => { try { return parseB4(produced.results_json).results; } catch { return []; } })(),
-    });
-  } else if (produced.status === "UNKNOWN" || produced.b4_status === "UNKNOWN") {
-    Object.assign(b0b4, {
-      status: produced.status === "FAIL" ? "FAIL" : "UNKNOWN",
-      b4_status: produced.b4_status === "FAIL" ? "FAIL" : "UNKNOWN",
-      policy_version: produced.policy_version,
-      evaluated_at: produced.evaluated_at,
-      summary_json: produced.summary_json,
-      results_json: produced.results_json,
-      source_build_id: produced.source_build_id,
-      b4_results: (() => { try { return parseB4(produced.results_json).results; } catch { return []; } })(),
-    });
-  } else {
-    Object.assign(b0b4, {
-      status: produced.status,
-      b4_status: produced.b4_status,
-      policy_version: produced.policy_version,
-      evaluated_at: produced.evaluated_at,
-      summary_json: produced.summary_json,
-      results_json: produced.results_json,
-      source_build_id: produced.source_build_id,
-      b4_results: (() => { try { return parseB4(produced.results_json).results; } catch { return []; } })(),
-    });
-  }
+  Object.assign(b0b4, {
+    status: produced.b0_status,
+    b4_status: produced.b4_status,
+    policy_version: produced.policy_version,
+    evaluated_at: produced.evaluated_at,
+    summary_json: produced.summary_json,
+    results_json: produced.results_json,
+    source_build_id: produced.source_build_id,
+    b4_results: produced.results_json === "[]" ? [] : parseB4(produced.results_json).results,
+  });
 
   const existing = await env.OPS_PROJECTION_DB.prepare(
     "SELECT status, generated_at FROM ops_projection_generation WHERE generation_id=?",

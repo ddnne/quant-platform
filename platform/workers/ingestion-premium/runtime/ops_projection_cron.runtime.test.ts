@@ -35,6 +35,11 @@ it("staging Cron publishes a sealed R2/D1 generation only after verification-key
     (table_name,source,dataset,natural_key,event_time,available_at,ingested_at,payload,changed_at)
     VALUES ('jquants_daily_bars','jquants','equities_bars','1301',
       '2026-08-01','2026-08-01','2026-08-01','{}','2026-08-01T00:00:00Z')`).run();
+  await env.DB.prepare(`INSERT INTO coverage_segments
+    (source,dataset,segment_id,policy_version,segment_start,segment_end,
+     expected_scope,expected_items,status,evaluated_at,detail_json)
+    VALUES ('jquants','equities_bars_daily','2026-08','collection-coverage/v3',
+      '2026-08-01','2026-08-31','{}',1,'UNKNOWN','2026-08-01T00:00:00Z','{}')`).run();
   const pair = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
   const sourceSha = "a".repeat(40);
   const versionId = "10000000-0000-4000-8000-000000000001";
@@ -70,6 +75,15 @@ it("staging Cron publishes a sealed R2/D1 generation only after verification-key
   const generation = await active();
   expect(generation).toMatchObject({ status: "SEALED", producer_commit_sha: sourceSha });
   const signed = JSON.parse(String(generation!.signed_envelope_json));
+  // R2 exists and the legacy cursor is non-null, but no research snapshot has
+  // been exported/applied/measured. Neither condition may manufacture PASS.
+  expect(signed.envelope).toMatchObject({ b0_status: "UNKNOWN", b4_status: "UNKNOWN" });
+  expect(await env.DB.prepare(`SELECT source_cursor, export_cursor, applied_cursor,
+    b0_status, b4_status FROM snapshot_quality_evidence WHERE generation_id=?`)
+    .bind(generation!.generation_id).first()).toEqual({
+      source_cursor: 1, export_cursor: null, applied_cursor: null,
+      b0_status: "UNKNOWN", b4_status: "UNKNOWN",
+    });
   // Python READY consumers require this closed, eight-field signed contract.
   // Exercise the actual publisher output, not a separately assembled envelope.
   const datasets = await env.OPS_PROJECTION_DB.prepare(

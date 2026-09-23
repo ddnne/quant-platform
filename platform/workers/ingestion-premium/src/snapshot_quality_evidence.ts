@@ -193,10 +193,12 @@ export async function produceImmutableB0B4(
     };
   }
   const observed = await observedCursors(db);
-  const exportCursor = env.STRUCTURED_BUCKET && observed.source_cursor !== null
-    ? observed.source_cursor
-    : null;
-  const appliedCursor = exportCursor;
+  // This runs before the Ops export and apply. A bucket binding is not evidence
+  // that either operation completed, nor that a research snapshot was measured.
+  // Receipt candidates measure their own same-snapshot B0/B4 in cloud scratch;
+  // do not substitute the legacy change-log cursor for that proof.
+  const exportCursor = null;
+  const appliedCursor = null;
   const evidenceRows = {
     validation_rows: observed.validation_rows,
     coverage_rows: observed.coverage_rows,
@@ -287,9 +289,9 @@ export async function produceImmutableB0B4(
     loaded.canonical_evidence_digest !== signed.evidence_digest ||
     loaded.signature !== signed.signature ||
     loaded.generation_id !== generationId ||
-    Number(loaded.source_cursor) !== Number(observed.source_cursor) ||
-    Number(loaded.export_cursor) !== Number(exportCursor) ||
-    Number(loaded.applied_cursor) !== Number(appliedCursor)
+    loaded.source_cursor !== observed.source_cursor ||
+    loaded.export_cursor !== exportCursor ||
+    loaded.applied_cursor !== appliedCursor
   ) {
     throw new OpsProjectionPublishError("signed B0/B4 evidence readback failed");
   }
