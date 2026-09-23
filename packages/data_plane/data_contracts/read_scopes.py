@@ -73,6 +73,8 @@ def combined_calendar_evidence_mode(profiles: Sequence[Any]) -> str:
                 continue
             for raw in scope.get("requirements") or ():
                 requirement = DatasetReadRequirement.from_mapping(raw)
+                if requirement.scope.unconsumed_membership:
+                    continue
                 modes.add(
                     "historical_effective_calendar"
                     if requirement.clock == "snapshot_observed_effective_calendar"

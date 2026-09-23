@@ -1267,6 +1267,7 @@ def _seed_exact_pit_scope(
     poison_unselected_rows: bool = False,
     omit_bar_dates: tuple[str, ...] = (),
     split_predecessor_day: str = "2022-10-20",
+    calendar_ingested_at: str = "2023-01-04T00:00:00+09:00",
     environment: str = PRODUCTION_RECEIPT_ENVIRONMENT,
 ) -> tuple[object, object]:
     """Synthetic five-day exact natural-key closure with governed v4 receipts."""
@@ -1371,7 +1372,7 @@ def _seed_exact_pit_scope(
             for day in calendar_dates
         )
     ingestion_clocks = {
-        "markets_calendar": "2023-01-04T00:00:00+09:00",
+        "markets_calendar": calendar_ingested_at,
         "equities_master": "2022-10-03T08:00:00+09:00",
         "fins_summary": "2022-10-20T08:00:00+09:00",
         "indices_bars_daily_topix": "2023-01-06T16:00:00+09:00",
@@ -1618,6 +1619,7 @@ def _open_controlled_from_ready_proof(path: Path, proof, binding):
     from pit.compiled_dependency_scope import (
         CompiledControlledSelection,
         combined_dataset_lookback_trading_days,
+        combined_calendar_evidence_mode,
     )
     from pit.governed_am_view import (
         _open_verified_controlled_snapshot,
@@ -1680,6 +1682,7 @@ def _open_controlled_from_ready_proof(path: Path, proof, binding):
             ),
             profile_digest=binding.profile_digest,
             master_evidence_mode="historical_effective_membership",
+            calendar_evidence_mode=combined_calendar_evidence_mode(binding.profiles),
             feature_consumers=tuple(
                 profile.feature_consumers() for profile in binding.profiles
             ),
@@ -1707,7 +1710,8 @@ def test_exact_pit_dependency_scope_accepts_complete_receipt_bound_fixture(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db_path, binding = _seed_exact_pit_scope(
-        tmp_path, receipt_ed25519_keys
+        tmp_path, receipt_ed25519_keys,
+        calendar_ingested_at="2026-08-24T08:00:00+09:00",
     )
     proof = _verify_scope(db_path, binding, monkeypatch)
     assert proof["status"] == "PASS"
@@ -1729,6 +1733,26 @@ def test_exact_pit_dependency_scope_accepts_complete_receipt_bound_fixture(
     finally:
         listing_conn.close()
     assert listing is None
+    # Historical scheduling must agree at READY proof and runtime reopening,
+    # without relabelling the original later acquisition as contemporaneous.
+    handle = _open_controlled_from_ready_proof(db_path, proof, binding)
+    try:
+        assert handle.calendar_evidence_mode == "historical_effective_calendar"
+        connection = sqlite3.connect(db_path)
+        try:
+            clocks = connection.execute(
+                "SELECT DISTINCT available_at, ingested_at FROM jquants_records "
+                "WHERE dataset='markets_calendar'"
+            ).fetchall()
+        finally:
+            connection.close()
+        assert len(clocks) == 1
+        assert all(
+            normalize_as_of(stamp) == normalize_as_of("2026-08-24T08:00:00+09:00")
+            for stamp in clocks[0]
+        )
+    finally:
+        handle.close()
 
 
 def test_preperiod_missing_bar_does_not_fail_in_period_ready(

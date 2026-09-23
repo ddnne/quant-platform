@@ -415,6 +415,7 @@ def _missing_compiled_segments(
         CompiledControlledSelection,
         combined_dataset_lookback_trading_days,
         combined_master_evidence_mode,
+        combined_calendar_evidence_mode,
         compiled_scope_proof_session_from_store,
     )
     from pit.errors import PitError
@@ -468,6 +469,7 @@ def _missing_compiled_segments(
                 period_end=period_end,
                 observed_through=observed_through,
                 master_evidence_mode=combined_master_evidence_mode(binding.profiles),
+                calendar_evidence_mode=combined_calendar_evidence_mode(binding.profiles),
                 expected_environment=spec.environment,
                 expected_authority_instance_digest=(
                     PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS[spec.environment]
@@ -480,6 +482,7 @@ def _missing_compiled_segments(
                     lookback_trading_days=max_lookback,
                     profile_digest=binding.profile_digest,
                     master_evidence_mode=combined_master_evidence_mode(binding.profiles),
+                    calendar_evidence_mode=combined_calendar_evidence_mode(binding.profiles),
                     feature_consumers=tuple(
                         profile.feature_consumers() for profile in binding.profiles
                     ),

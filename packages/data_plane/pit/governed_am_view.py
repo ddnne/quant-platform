@@ -772,6 +772,7 @@ class VerifiedControlledSnapshotHandle:
         session_profile_digest: str,
         verified_session_scope: _VerifiedControlledSessionScope,
         master_evidence_mode: str = "decision_visible",
+        calendar_evidence_mode: str = "decision_visible",
     ) -> None:
         if token is not _HANDLE_TOKEN:
             raise TypeError(
@@ -801,6 +802,7 @@ class VerifiedControlledSnapshotHandle:
         self._session_profile_digest = session_profile_digest
         self._verified_session_scope = verified_session_scope
         self._master_evidence_mode = master_evidence_mode
+        self._calendar_evidence_mode = calendar_evidence_mode
         self._bound_plan_feature_binding: _BoundPlanFeatureBinding | None = None
 
     @property
@@ -810,6 +812,10 @@ class VerifiedControlledSnapshotHandle:
     @property
     def master_evidence_mode(self) -> str:
         return self._master_evidence_mode
+
+    @property
+    def calendar_evidence_mode(self) -> str:
+        return self._calendar_evidence_mode
 
     @property
     def observed_through(self) -> str:
@@ -1048,6 +1054,7 @@ class VerifiedControlledSnapshotHandle:
                 period_end=period_end,
                 as_of_for_day=as_of_for_day,
                 historical_master=self._master_evidence_mode == "historical_effective_membership",
+                historical_calendar=self._calendar_evidence_mode == "historical_effective_calendar",
             )
 
     def am_session_data_view(self) -> "GovernedAmSessionDataView":
@@ -1484,6 +1491,10 @@ class GovernedAmSessionDataView:
     def master_evidence_mode(self) -> str:
         return self._handle.master_evidence_mode
 
+    @property
+    def calendar_evidence_mode(self) -> str:
+        return self._handle.calendar_evidence_mode
+
     def logical_snapshot_id(self) -> str:
         return self._handle.logical_snapshot_id()
 
@@ -1735,6 +1746,7 @@ def _open_verified_controlled_snapshot(
                 period_end=compiled_selection.period_end,
                 as_of_for_day=as_of_for_day,
                 historical_master=compiled_selection.historical_master,
+                historical_calendar=compiled_selection.historical_calendar,
             )
         try:
             resolved_universe = resolve_membership(
@@ -1792,6 +1804,7 @@ def _open_verified_controlled_snapshot(
             session_profile_digest=verified_session_scope.profile_digest,
             verified_session_scope=verified_session_scope,
             master_evidence_mode=compiled_selection.master_evidence_mode,
+            calendar_evidence_mode=compiled_selection.calendar_evidence_mode,
         )
     except Exception:
         conn.close()
