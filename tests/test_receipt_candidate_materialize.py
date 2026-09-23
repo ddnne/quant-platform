@@ -53,6 +53,16 @@ CHECKED_AT = "2026-08-25T00:00:00+00:00"
 OPERATION_ID = "sha256:" + "ab" * 32
 
 
+@pytest.fixture(autouse=True)
+def _container_import_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    # These modules live beside the Container entrypoint, not in the wheel.
+    # Do not rely on another test module adding this directory during collection.
+    monkeypatch.syspath_prepend(str(
+        Path(__file__).resolve().parents[1]
+        / "platform/workers/research-mass-eval/container"
+    ))
+
+
 def _bar_rows(bar_date: str = "2023-01-04") -> list[dict[str, str]]:
     return normalize_generic(
         [
