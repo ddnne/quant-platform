@@ -66,6 +66,14 @@ it does not mint a fresh audit row each minute. Nevertheless idle polling and
 projection frequency need review. Preserve recovery and freshness requirements
 when reducing frequency; no Cron changed by this audit.
 
+`publishOpsProjection` also returns `noop` when the computed generation is
+already active and SEALED. Therefore a minute tick does not necessarily create
+a new snapshot. However table discovery, bounded source reads/evidence hashing
+and the B0/B4 producer occur before that check. Prioritize measuring/reducing
+these repeated reads rather than claiming one new artifact per minute. A
+shortcut based only on the legacy change cursor would be unsafe: Receipt
+publications are explicitly tracked as a separate feed.
+
 ## Next work, without user login
 
 1. Inventory callers/usage and public routes for retirement candidates.
