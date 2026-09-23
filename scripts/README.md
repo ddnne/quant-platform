@@ -208,16 +208,16 @@ and [`docs/architecture/wave_assets_deprecated.md`](../docs/architecture/wave_as
 The exact-four runtime and replay-isolation tests enforce the operational
 boundary; filenames are not used as a security or release boundary.
 
-Official OTC archive recovery (not a COMPLETE issuer). Host-local fetch and
-seal require `QP_ALLOW_LOCAL_MARKET_DATA=1`; the backfill planner launches the
-guarded fetch child and does not duplicate the opt-in.
+Official OTC archive recovery audit (not a COMPLETE issuer). The legacy
+host-local probe downloader and backfill planner have been retired. Use the
+governed Cloudflare acquisition path for new data; do not download market
+history to the host. Existing local recovery artifacts can still be audited:
 
 ```bash
-QP_ALLOW_LOCAL_MARKET_DATA=1 uv run python scripts/jsda_otc_official_backfill.py --year 2003 --n 100 --log-dir data/ops/otc_official_backfill --fetch
 QP_ALLOW_LOCAL_MARKET_DATA=1 uv run python scripts/jsda_otc_seal_official.py --log-dir data/ops/otc_official_backfill
 ```
 
-The second command records `FAILED/REPROOF_REQUIRED` plus
+This audit command records `FAILED/REPROOF_REQUIRED` plus
 `RECOVERED_RAW_ONLY`. It deliberately does not mutate structured facts, sign a
 trusted receipt, refresh COMPLETE, or publish an Ops projection. Reprocess the
 persisted raw through the governed acquisition/reconciliation service instead.
