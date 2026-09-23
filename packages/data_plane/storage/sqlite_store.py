@@ -239,14 +239,19 @@ class SqliteStore:
             return out
         one = "(" + ",".join("?" for _ in key_cols) + ")"
         chunk = max(1, 500 // max(1, len(key_cols)))
-        sel_prefix = (
-            f"SELECT * FROM {table} WHERE ({','.join(key_cols)}) IN (VALUES "
+        # SQLite 3.40 (the cloud image) scans the whole target for tuple IN
+        # (VALUES ...). Joining the small key batch uses the natural-key index
+        # there as well as on newer SQLite, without changing matched rows.
+        sel_prefix = f"WITH requested_keys ({','.join(key_cols)}) AS (VALUES "
+        sel_suffix = (
+            f") SELECT target.* FROM requested_keys JOIN {table} AS target ON "
+            + " AND ".join(f"target.{key}=requested_keys.{key}" for key in key_cols)
         )
         for i in range(0, len(rows), chunk):
             batch = rows[i : i + chunk]
             value_rows = ",".join(one for _ in batch)
             params = [v for r in batch for v in (r[k] for k in key_cols)]
-            cur = self._conn.execute(sel_prefix + value_rows + ")", params)
+            cur = self._conn.execute(sel_prefix + value_rows + sel_suffix, params)
             for row in cur.fetchall():
                 d = dict(row)
                 out[tuple(d[k] for k in key_cols)] = d
