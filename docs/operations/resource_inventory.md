@@ -76,6 +76,25 @@ publications are explicitly tracked as a separate feed.
 
 ## Next work, without user login
 
+### Follow-up live binding/public-surface check
+
+Management settings confirm production Ops MCP still binds `OPS_DB` to
+`quant-ingest`; staging Ops MCP binds it to `quant-ingest-staging`. Neither live
+MCP settings response lists the newer projection/quota DB bindings declared in
+source. This is deployment drift, not proof those newer databases are globally
+unused: Premium already uses staging projection. Keep held MCP work held and
+do not delete its planned databases based on one consumer.
+
+Production Ops MCP has both workers.dev and preview URLs enabled; staging MCP
+has both disabled. Production source declares previews disabled, so this also
+needs an explicit release decision. Public URL settings alone do not establish
+whether application authentication permits access.
+
+`tmp-exp-eval` and `quant-platform-jsda-otc-probe-w80` each have workers.dev and
+preview URLs enabled. The former has an AI binding. Audit authentication and
+real usage before a grouped retirement/disable proposal; do not invoke the AI
+endpoint merely to test it. No secret values were retrieved.
+
 1. Inventory callers/usage and public routes for retirement candidates.
 2. Measure idle scheduled work and separate acquisition/recovery needs from
    projection cadence before proposing a smaller schedule.
