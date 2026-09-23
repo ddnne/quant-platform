@@ -891,7 +891,7 @@ async function describeFromDb(
     });
   }
 
-  const reread = await loadCoverage(db, budget, request.segments, catalogById);
+  const reread = await loadCoverage(db, budget, selectors, catalogById);
   if (reread.length !== frozen.length) {
     throw new HoldError("REFERENCE_CHANGED", missingSelector(frozen, reread));
   }
