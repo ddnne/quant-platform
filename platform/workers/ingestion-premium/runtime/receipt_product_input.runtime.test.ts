@@ -866,6 +866,16 @@ describe("POST /v1/export/receipt-products workerd D1", () => {
     delete identity.input_set_digest;
     delete identity.read_observation;
     expect(left.input_set_digest).toBe(await canonicalDigest(identity));
+
+    const { segments: _selectors, ...pins } = inputRequest([]);
+    const discovered = await postReceiptProducts(env, {
+      ...pins,
+      discover: { dataset: "equities_bars_daily", on_or_before: "2026-09" },
+    });
+    expect(discovered?.status).toBe(200);
+    const discoveredBody = await discovered!.json() as Record<string, unknown>;
+    expect(discoveredBody.status).toBe("DESCRIBED");
+    expect(discoveredBody.segments).toEqual([segments[0]]);
   });
 
   it("promotes matching UNKNOWN coverage on governed commit then describes", async () => {
