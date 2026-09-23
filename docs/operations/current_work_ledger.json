@@ -1,6 +1,6 @@
 {
   "schema": "quant-platform-work-ledger/v1",
-  "updated_at": "2026-09-23T08:29:44Z",
+  "updated_at": "2026-09-23T08:47:00Z",
   "purpose": "Current checkpoint, not live authorization. Remeasure before acting. Source, staging, production, data, READY and execution are separate outcomes; superseded details live in Git history.",
   "user_pause": {"status": "RESUMED_BY_USER", "responsibility": "Codex implements while Grok is unavailable; no paid replacement. Main owns work, subagents only independent read-only review. Maximum three work units."},
   "approvals": {
@@ -45,7 +45,7 @@
       "notes": "Staging only; no historical body deletion, shared-DB restore or JSDA activation. PREPARED0 and mutation lease vacant rechecked before rollout."
     },
     "staging_deployed": {
-      "status": "FIVE_WORKERS_ACCEPTED_CANDIDATE_PENDING",
+      "status": "FIVE_WORKERS_ACCEPTED_CANDIDATE_FAILED",
       "source_sha": "afe28de2f15dc956de577b970ec1ee60c7a2268c",
       "versions": {
         "ingestion-secrets": "e89c76f7-9f01-461a-839f-e5b4f3fadc34",
@@ -66,7 +66,7 @@
       "not_claimed": "JSDA/Ops MCP/observer not included. Not production, global Ops, scope, READY or Pilot acceptance."
     },
     "production_deployed": {"status": "HOLD", "notes": "No production rollout authorized. Mass main-trigger deploy intentionally exits HOLD after tests; distinct from required native CI. No retry/bypass."},
-    "data_activated": {"status": "CANDIDATE_ATTEMPT3_PENDING", "notes": "R2 products and receipt metadata are not readiness. Candidate independently verifies bytes/hash/count/natural keys/full segments and all compiled seed/lookback/anchor/field scopes on cloud scratch."},
+    "data_activated": {"status": "CANDIDATE_ATTEMPT3_FAILED", "notes": "No accepted candidate snapshot. After in-period segment reconciliation, past-segment discovery failed. Read-only cloud metadata reproduction rejects all3 existing2022-12 seeds under old code; corrected resolved-selector reread describes all3. This is not full-scope or READY proof."},
     "ready": {"status": "NOT_PROVEN", "notes": "Provisioned keys/code do not mint READY. Same physical snapshot, scope and measured B0/B4/C8 must pass before conditional staging publication."},
     "pilot_executed": {"status": "NOT_EXECUTED_NO_GO", "notes": "Current candidate approval excludes Pilot/backtests. No next generation, Mass/FoF/broker/orders or autopromotion."}
   },
@@ -79,11 +79,14 @@
       "request_digest": "sha256:910ea77bee773145848c7dcc9f5b584658e5f8c123efec50087a919c3e52802f",
       "accepted_at": "2026-09-23T08:21:38.343101Z",
       "durable_expires_at": "2026-09-23T11:21:34.278Z",
-      "last_durable_status": "PENDING",
+      "last_durable_status": "FAILED",
+      "finished_at": "2026-09-23T08:39:32.296190Z",
+      "error": "ReceiptProductTransportError: receipt product input was not described",
       "container_instance": "6330a23ee3dbdc49ba682f1d462f2b8f5575a9e8149c2e3034d530eed41af2dc",
-      "last_container_status": "running",
+      "last_container_status": "inactive",
+      "shutdown_verified_at": "2026-09-23T08:39:45Z",
       "status_path": "/v1/receipt-candidate/receipt-candidate-20260923-a3",
-      "next": "Poll same job plus authoritative Container state and safe progress logs. PENDING alone is not liveness. Observation timeout is not terminal. All3 fresh attempts are used: no a4 or deadline extension. Verify actual scope/quality, terminal, cost and shutdown; request a grouped scope change only if genuinely needed."
+      "next": "Terminal failure and shutdown verified. All3 fresh attempts are used: no a4, identity reuse or deadline extension. Deliver the discovered-selector reread fix with independent review and exact-source CI; new candidate execution requires grouped additional approval. Existing source/Git repairs remain authorized."
     }
   },
   "live_observation": {
@@ -102,11 +105,11 @@
     },
     "6_shared_d1_receipt_reproof": {"status": "R2_FIRST_STAGING_ACTIVE_GLOBAL_OPEN", "notes": "New bodies in R2/bounded cloud scratch; D1 operation/segment metadata. Legacy signed history preserved. Whole shared-DB rollback refuses FORWARD_REPAIR_REQUIRED. No production DLQ pull/ack/purge or JSDA activation."},
     "7_dead_code_and_docs": {"status": "PARTIAL", "execution_ledger": "docs/operations/test_reduction_ledger.json", "notes": "Offline/unique_logic excluded from normal wheel/Container; replay tiering and whole-repo closure open. Ledger consolidation is not global refactor completion. Held MCP/C09 work remains held."},
-    "8_rollout_and_research_go": {"status": "STAGING_CODE_ACCEPTED_RESEARCH_NO_GO", "notes": "Read lanes separately. Candidate active; READY/Trader/Pilot artifacts unproven, production/global Ops open."},
+    "8_rollout_and_research_go": {"status": "STAGING_CODE_ACCEPTED_RESEARCH_NO_GO", "notes": "Read lanes separately. Candidate FAILED and stopped; READY/Trader/Pilot artifacts unproven, production/global Ops open. New source fix is not deployed by this checkpoint."},
     "9_push_remote_and_fresh_clone_verify": {"status": "RUNTIME_PUSHED_FINAL_AUDIT_PENDING", "notes": "Runtime afe28de2 merged, native main CI success, five staging Workers accepted. This checkpoint requires its own final-SHA CI/review/merge; do not deploy during the active candidate. Final whole-goal fresh clone, drift and smoke remain."}
   },
   "pending_operations": [
-    {"id": "candidate_same_snapshot_proof", "status": "ACTIVE", "notes": "Observe final attempt3 terminal, actual proofs, attributable usage and shutdown; no new attempt authorized."},
+    {"id": "candidate_same_snapshot_proof", "status": "FAILED_ATTEMPTS_EXHAUSTED", "notes": "Final attempt3 failed, shutdown verified. Repair the reproducible descriptor discovery bug; no new candidate attempt authorized."},
     {"id": "enumerate_legacy_am_gross_cap_engine_artifacts", "status": "HELD", "notes": "PR137 intentional Draft. Inventory completion unproven; preserve history, no overwrite/delete or cancellation bypass."},
     {"id": "global_ops_and_schema_parity", "status": "OPEN", "notes": "Production projection, same-generation cursors, JSDA completeness and live tool/schema parity need authorized acceptance. Candidate approval excludes cancelled MCP/C09 activation."}
   ],
@@ -121,7 +124,7 @@
   },
   "open_findings": {"authority": "docs/phase633_finding_ledger.json", "p0_open_at_checkpoint": ["D2", "D3", "R5", "R10", "R11", "C4", "C10", "A2"], "notes": "Current ledger inventory, not a fresh finding-by-finding closure review. No row marked FIXED by this checkpoint."},
   "next_prerequisite_chain": [
-    "Observe current candidate to terminal and verify shutdown/cost. Use actual compiler diagnostics for further approved2022 acquisition; never fabricate COMPLETE or empty gaps.",
+    "Current candidate is terminal FAILED and inactive. Finish reviewed descriptor discovery repair and request approval for any fresh attempt. Use actual compiler diagnostics for further approved2022 acquisition; never fabricate COMPLETE or empty gaps.",
     "Only same-snapshot physical/scope/B0/B4/C8 PASS and exact plan/profile/closure pins permit conditional staging READY/Paper-only Trader. Terminal completion alone is insufficient.",
     "Finish reviewed source work without changing active jobs. Production, cancelled MCP/C09, Pilot/backtests and destructive cleanup need their applicable authority; group any needed approval by outcome/cost/risk.",
     "Audit all nine attachment requirements, remote/deployed source, final fresh clone/drift and each completion stage. Keep full goal active until proven."
