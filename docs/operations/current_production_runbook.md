@@ -12,33 +12,21 @@ live in [`../phase633_finding_ledger.md`](../phase633_finding_ledger.md).
 
 Do not print secret values. Check presence only.
 
-## Accepted staging outcome — 2026-09-21
+## Current staging outcome
 
-Codex implements while Grok is unavailable. The user approved PR229/230
-integration, limited receipt-chain staging rollout and the existing February
-same-operation recovery, including ordinary follow-up fixes and verification.
-PR229–232 are merged. Source `20a81d04` passed the required native check and
-is deployed to the three receipt-chain staging Workers. Exact versions, CI,
-signed AUDIT_ONLY acceptance and remote evidence are recorded once in
-`current_work_ledger.json:staging_acceptance_20260921`.
+Codex implements while Grok is unavailable. Read `current_work_ledger.json`
+`approvals`, `lanes`, and `candidate` for dated source/rollout evidence and the
+one active job identity. Re-read live state before mutation. The approved
+staging outcome includes bounded candidate construction and conditional
+READY/Paper-only Trader publication after all proofs; it excludes actual
+Pilot/backtests, production and cancelled MCP/C09 activation.
 
-February's original operation is RECEIPT_COMMITTED / caller FINALIZED, with
-80,695 rows from 28 preserved raw pages. Post-deploy readback found 11 FINALIZED
-requests and no PREPARED requests. Do not reset this operation, reacquire its
-raw, or restart the obsolete compiled acquisition control. The overlapping
-caller timestamp bug is repaired and deployed; intermediate Service RPC hung
-diagnostics remain unexplained and are not claimed fixed.
-January bars remain on the existing 3/3-attempt HOLD; February's completion
-does not authorize resetting January's attempts or replacing its identity.
-
-This is staging receipt acceptance, not production, READY or Pilot acceptance.
-Historical master reconstruction preserves original acquisition clocks and
-labels contemporaneous observation unproven; it still needs authentic cloud
-reproof for the required scope. Current profile/closure pins must be used.
-Production mutation, READY, Pilot, Mass/broker, new full acquisition and new full
-D1 backup remain outside this approved outcome. Draft PR137 and its held
-worktree remain untouched. Prior pause transcripts and superseded local test
-counts are available in Git history, not executable instructions here.
+Receipt acceptance is AUDIT_ONLY, not research GO. Historical reconstruction
+preserves original acquisition clocks and does not prove contemporaneous
+observation. Keep current profile/closure pins and existing operation/attempt
+identities. Never restart completed acquisition controls or reset exhausted
+attempts from an old checkpoint. PR137 and preserved cancelled drafts remain
+held. Detailed old counts and commands are in Git history, not dispatch orders.
 
 ## Canonical machine-readable authorities
 
@@ -77,39 +65,17 @@ remote apply results only in immutable release evidence.
   require signed projection; PR168 native execution uses receipt-native signed
   evidence instead of `signed_projection_document`. Global live Ops projection
   freshness remains a separate outstanding acceptance gate. Do not infer GO.
-- **READY publication path:** live publication is PENDING/undeployed. Mass
-  submits Container `POST /v1/materialize-receipt-candidate`; COMPLETED PASS
-  freezes one candidate snapshot and may emit a receipt-native v2 manifest,
-  still `go:false` / `ready:false`. Current read-only Ops facts live in
-  `current_work_ledger.json` `live_observation` (not GO). Ops projection/v3
-  is not proof of Coverage V3 deployment. Do not replace unmeasured with 0
-  or close global GO. Coverage, raw, and receipt proofs are last-recorded
-  MISSING/unmeasured live evidence, not a claim that source cannot accept
-  complete authentic proofs. Public v2 attestation stays PENDING until that
-  live evidence exists. Product bytes use Service Binding `INGESTION_PREMIUM`
-  → `PremiumReceiptProductInputService`. Source-only `raw_collection_manifest`
-  re-reads collection-manifest bytes after in-place RAW_BUCKET page-body
-  checks (256 pages / 64MiB total / 16MiB per page are local verification
-  caps, not acquisition or platform limits; over-cap is HOLD). Live R2 page
-  inventory is not verified here. Scheduled Ops publisher is
-  `ops_projection.ts`; READY signer is `ready_publication.ts` (undeployed).
-  Native envelope execution is accepted source (PR168) and consumes
-  receipt-native evidence, not legacy `signed_projection_document`. Paired
-  Paper Trader v2 mint is on main (PR169 / 59109819) inside existing
-  `publishAdmittedReceiptCandidate`; runtime still PENDING without a dedicated
-  trader secret and one ACTIVE trader key. Live secret/registry state was not
-  remeasured; activation remains pending acceptance. PR170 (main 4e137) slimmed
-  the PENDING release-evidence builder; A6 remains OPEN. PR171
-  (https://github.com/ddnne/quant-platform/pull/171, feature `fe1b7f1`) Node Mass
-  native lifecycle consumes Premium-serialized READY+Trader bytes with real
-  verifiers; workerd publication RPC remains mocked; required native check
-  103777783817 was in_progress at 2026-09-13T19:26Z (historical; lookup
-  that PR for later acceptance, no success forecast from that timestamp). Existing Mass staging secret history is not
-  this SHA deployed. `POST /v1/export/receipt-products` is undeployed read-only
-  and is not READY. Generic v1/Python publication routes remain distinct.
-  Activating keys is not live READY or GO. Inactive source rollout is not
-  global live acceptance. Wire the existing trust root; do not add another
-  authority or Worker.
+- **READY publication path:** staging code and dedicated keys are deployed;
+  actual publication is not proven. Mass submits the existing Container
+  candidate job. The same snapshot must independently pass full Receipt
+  product reconciliation, compiled scope and B0/B4/C8 before the existing
+  Premium `ready_publication.ts` signer can issue bound READY/Paper-only Trader.
+  Evaluator remains verify-only. Candidate completion or provisioned keys
+  alone are not permission to trade. Observe current job and proof artifacts
+  through the work ledger, never turn missing evidence into zero/PASS.
+  Scheduled Ops publication is separate monitoring: FRESH transport with
+  mixed Coverage or UNKNOWN quality is not research readiness. Preserve
+  historical evidence; do not fabricate global V3 or add another authority.
 - **Release evidence:** authenticated **STAGING JSDA AUDIT_ONLY** intake exists
   in `scripts/build_release_evidence.py`. Caller JSON is untrusted. Local
   digest-named output is `STAGED_LOCAL_NOT_PUBLISHED` / `release_allowed=false`,
@@ -129,44 +95,11 @@ remote apply results only in immutable release evidence.
   depth if a closed route is attached later; it is not a shared Mass
   credential.
 
-- **Encrypted D1 backup (source present, operator declined additional job):** Mass
-  `POST /v1/d1-backup-encrypt` (MASS_EVAL_TOKEN, `go: false`) forwards to the
-  existing snapshot Container `POST /v1/encrypt-d1-backup`. Container internet
-  stays off. Operator helper from the repo root (project environment; it
-  imports `scripts.encrypt_d1_backup`, so `python3 scripts/...` fails):
-  `uv run --frozen python -m scripts.d1_export_poll_descriptor --help`.
-  `--environment` and `--output` are required. Example only. Do **not** run
-  `--initiate`: live export interrupts D1, and the operator declined an
-  additional full D1 backup. Preserve existing cloud raw / observations /
-  receipts / control / attempt history / key identity and existing backups.
-
-  ```bash
-  uv run --frozen python -m scripts.d1_export_poll_descriptor \
-    --environment staging \
-    --output "$HOME/.local/share/quant-platform/private/d1-export-bundle.json" \
-    --initiate
-  ```
-
-  The helper polls the D1 export API (metadata only; SQL never touches the Mac)
-  and writes one 0600 bundle (DB identity, `at_bookmark`, observed
-  `export_completed_at`, `signed_url`). Worker secret
-  `D1_BACKUP_EXPORT_BUNDLE` plus `D1_BACKUP_KEY`
-  are checked before SUBMITTED/Container boot. Job digest includes
-  `signed_url` sha256; `d1.export` download requires that fingerprint to match
-  the current bundle. `children-then-manifest` cannot carry the dump.
-  Ciphertext is a streaming create-only `research.r2` PUT under
-  `research/d1-backups/`. Restore/schema/`integrity_check` stay
-  `encrypt_d1_backup.py` QPDBENC2 on Container scratch with sqlite3 CLI.
-  Accepted restored sqlite is a postcondition (<= 5 GiB), not a hard runtime
-  disk cap. SQL dump stream is 4 GiB; ciphertext is dump plus QPDBENC2
-  framing. Runtime structural bound is the existing standard-4 Container
-  20 GB physical disk (image/files share it; not all usable scratch). The
-  180-minute process-group watchdog is a finite bound, not exact billing;
-  terminal publication, retry, shutdown, and cleanup can add time. Create-only
-  R2; COMPLETE is not issued before verification and upload succeed. D1
-  `file_size` is not dump size. Do not POST D1 export,
-  generate keys, or deploy this image until one combined approval. Whole-DB
-  restore after shared writers resume remains prohibited.
+- **Additional full D1 backup declined:** do not POST a D1 export, use
+  `--initiate`, generate backup keys or start the retained backup job.
+  Preserve existing cloud history, attempts, identities and backups.
+  This is not a prerequisite for the approved staging candidate. No new
+  backup framework; whole-DB restore after shared writers resume is prohibited.
 - **Mass product-lane deploy trigger:** deployment leg held. Trigger
   `b83cc2ee-8a40-4448-b517-80959796eb3e` had only its deploy command replaced
   via the Cloudflare API; build and test still run. Read-back verified
@@ -211,19 +144,11 @@ remote apply results only in immutable release evidence.
   is the final check, not a blocker for prerequisite Worker code rollout.
   This bounded repair does not run D1 migration, JSDA activation, or DLQ
   mutation.
-- **Current staging code rollout (not acceptance):** This paragraph is not
-  a live SHA table. Accepted Secrets/Receipt/Premium ACTIVE SHA, dated
-  PENDING `d37ef73` history, and Mass checkpoint live in
-  `current_work_ledger.json` `lanes.source_delivered` /
-  `lanes.staging_deployed` (accepted main
-  `26abffecd4463c5d052e9f28d862bc67a7c006a1`). Authenticated 403 smoke is
-  pending location of existing `MASS_EVAL_TOKEN` (no rotation; ask only
-  location or already-set process env; never print values). That gap
-  blocks only that smoke. Gateway, Mass, JSDA, Ops, and the observer were
-  not SHA-aligned in that unit. Worker/Container code rollout is not
-  auth-smoke, data, READY, or Pilot. Staging schema is `SCHEMA_PREPARED`
-  (canonical `0001`–`0023`), distinct from Worker code and from JSDA
-  `--activate`. `--activate` and production stay SHA-tag strict.
+- **Current staging rollout:** exact source, versions, migrations, module-byte
+  acceptance, cloud image and job identity live only in `current_work_ledger.json`
+  `lanes` / `candidate`. The staging MASS credential is recoverable; reuse it
+  without displaying it. Code rollout is not data/READY/Pilot acceptance.
+  JSDA `--activate`, cancelled MCP work and production remain separately held.
 - **JSDA cutover follow-ups (open):** whole shared-D1 Time Travel restore is
   removed from the operator. A Time Travel bookmark remains recovery-reference
   evidence only; Premium and Receipt writers are not fenced. `--rollback`
@@ -258,10 +183,10 @@ remote apply results only in immutable release evidence.
   registries, typed Service Bindings, content-addressed R2 snapshot, and
   BudgetLedger occupancy. Local six-principal OS users, root installers,
   WebAuthn, and external-anchor ceremonies are not production tasks on this
-  path. Operational activation remains open: Receipt is PENDING-only, READY
-  and trader registries have active keys=0, no accepted READY sidecar exists,
-  no signed FRESH projection has been produced, Coverage V3 cloud transition
-  is unaccepted, and A2, D2, D3, R5, R10, R11, C4 and C10 remain `OPEN`.
+  path. Staging Receipt ACTIVE, dedicated signing registries and authentic
+  Ops transport are accepted as recorded in the work ledger. Actual candidate
+  scope/quality and READY remain unproven; this does not activate production
+  or close the canonical finding ledger's OPEN items.
 - **Staged activation:** source now includes a narrow Receipt staging ACTIVE
   validator and a Cron-only `AUDIT_ONLY` recovery canary whose operator RPC is
   read-only. The canary has dedicated Durable Object state/events, never calls
@@ -313,16 +238,16 @@ remote apply results only in immutable release evidence.
   is accepted as recorded above; production is not. Replacing an acquisition
   control or changing keys requires its approved outcome, not merely a source
   merge. Do not restart the obsolete control or add a public Premium route.
-  Mass remains verify-only; READY and Pilot remain on HOLD. The all-P0 gate remains the final
+  Mass remains verify-only. Staging READY is conditional on the approved
+  same-snapshot proofs; actual Pilot execution remains excluded. The all-P0 gate remains the final
   release checklist. Runtime Worker paths separately enforce keys, READY,
   Trader authorization, and BudgetLedger occupancy; those checks are not the
   all-P0 gate.
-- **Equities master:** the closed acquisition route is available only as
-  `ACTIVE_RAW_ONLY`; COMPLETE/reproof eligibility remains
-  `PENDING_AUTHORITY_ACTIVATION`. The current generated registry expresses
-  those two axes by listing `equities_master` as both routed and PENDING. Do not
-  interpret route availability as COMPLETE eligibility; the next contract PR
-  must split those axes explicitly.
+- **Equities master:** route availability is not COMPLETE eligibility. Verify
+  the exact environment's committed Receipt products and compiled membership
+  scope. Historical effective membership does not prove observation at that
+  historical time; preserve its provenance and original clocks. Staging
+  reproof does not activate a production registry.
 
 ## 1. Preconditions
 
@@ -542,5 +467,6 @@ curl -fsS -X POST \
 - Controlled Pilot and Mass remain NO-GO until residual live evidence passes.
 - Access 9999 remains open for Worker Access JWT/hostname protection only;
   it is not a stop on ordinary source fixes, read-only Ops, or already
-  authorized staging schema work. Explicit production/data/JSDA-activate/
-  key/READY/Pilot/Ops-publication HOLDs are unchanged by generic continue.
+  authorized staging work. Apply the ledger's explicit outcome scopes:
+  conditional staging READY is not Pilot/production permission. Other
+  production/JSDA/MCP/cancellation HOLDs are unchanged by generic continue.
