@@ -5,6 +5,7 @@ import {
 import { defineConfig } from "vitest/config";
 
 const d1Migrations = await readD1Migrations("./migrations");
+const projectionMigrations = await readD1Migrations("../quant-ops-mcp/migrations/projection");
 
 export default defineConfig({
   plugins: [
@@ -14,7 +15,10 @@ export default defineConfig({
   ],
   test: {
     include: ["runtime/**/*.test.ts"],
-    provide: { premiumD1Migrations: d1Migrations },
+    provide: {
+      premiumD1Migrations: d1Migrations,
+      projectionD1Migrations: projectionMigrations,
+    },
     testTimeout: 20_000,
   },
 });

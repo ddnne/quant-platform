@@ -296,7 +296,12 @@ function deployProvenance(env: OpsProjectionEnv): {
   if (!tag || !versionId) {
     throw new OpsProjectionPublishError("deployment provenance is missing");
   }
-  if (!GIT_SHA.test(tag)) {
+  // Receipt ACTIVE staging deploys the caller with a role-qualified tag.
+  // Keep the actual version UUID and store only its source SHA in envelopes.
+  const producerSha = env.OPS_PROJECTION_ENVIRONMENT === "staging"
+    ? /^ra-s-c-([0-9a-f]{40})$/.exec(tag)?.[1] ?? tag
+    : tag;
+  if (!GIT_SHA.test(producerSha)) {
     throw new OpsProjectionPublishError("Worker tag is not a clean merged Git SHA");
   }
   if (!CF_UUID.test(versionId)) {
@@ -305,7 +310,7 @@ function deployProvenance(env: OpsProjectionEnv): {
   if (tag === versionId) {
     throw new OpsProjectionPublishError("Cloudflare version UUID is not a Git SHA");
   }
-  return { producerCommitSha: tag, workerVersionId: versionId };
+  return { producerCommitSha: producerSha, workerVersionId: versionId };
 }
 
 function parseB4(resultsJson: unknown): { status: "PASS" | "FAIL"; results: unknown[] } {
