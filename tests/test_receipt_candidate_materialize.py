@@ -282,13 +282,19 @@ def test_same_clock_distinct_version_is_not_overwritten(tmp_path: Path) -> None:
             ],
         )
     }
-    store.apply_exact_product_mirror("jquants_records", [row], commit=True)
+    # Cross the parameter chunk boundary and include repeated input keys.
+    rows = [row] + [dict(row, natural_key=f"synthetic-{i}") for i in range(200)]
+    store.apply_exact_product_mirror("jquants_records", rows, commit=True)
+    assert store.apply_exact_product_mirror(
+        "jquants_records", rows + rows[:2], commit=True
+    ) == 0
     changed = dict(row)
     changed["payload"] = "{\"Close\":2}"
     with pytest.raises(ValueError, match="version identity would be overwritten"):
         store.apply_exact_product_mirror("jquants_records", [changed], commit=True)
     stored = store.fetch_all("jquants_records")
-    assert stored[0]["payload"] == row["payload"]
+    assert len(stored) == len(rows)
+    assert all(item["payload"] == row["payload"] for item in stored)
     store.close()
 
 
