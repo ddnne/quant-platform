@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -217,7 +218,9 @@ def _guard_database_bytes(store: SqliteStore, *, max_database_bytes: int) -> Non
         )
 
 
-def _bind_descriptor_identities(closure: Any, descriptor: Mapping[str, Any]) -> str:
+def _bind_descriptor_identities(
+    closure: Any, descriptor: Mapping[str, Any], receipt: Any,
+) -> str:
     product_meta = descriptor.get("product")
     if type(product_meta) is not dict:
         raise ReceiptCandidateMaterializeError("product descriptor is missing")
@@ -229,7 +232,13 @@ def _bind_descriptor_identities(closure: Any, descriptor: Mapping[str, Any]) -> 
         "source": closure.source,
         "dataset": closure.dataset,
         "segment_id": closure.segment_id,
-        "receipt_digest": closure.receipt_digest,
+        # Premium publishes the persisted CollectionReceipt transport digest,
+        # not the signed claims body digest exposed by the verified closure.
+        # Reconstruct it from the envelope only after signature verification.
+        "receipt_digest": _sha256_bytes(json.dumps(
+            asdict(receipt), ensure_ascii=False, sort_keys=True,
+            separators=(",", ":"), allow_nan=False,
+        ).encode("utf-8")),
         "artifact_key": closure.artifact_key,
         "artifact_digest": closure.structured_digest,
         "byte_count": closure.artifact_byte_count,
@@ -339,7 +348,7 @@ def materialize_receipt_segment(
                 PINNED_RECEIPT_AUTHORITY_INSTANCE_DIGESTS[environment]
             ),
         )
-        operation_id = _bind_descriptor_identities(closure, descriptor)
+        operation_id = _bind_descriptor_identities(closure, descriptor, receipt)
         extras = closure.extra_digests
         raw_bytes = raw_path.read_bytes()
         document = _bind_raw_collection(closure, raw_bytes=raw_bytes, extras=extras)
