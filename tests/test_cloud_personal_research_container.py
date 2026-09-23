@@ -1762,7 +1762,7 @@ def test_manager_allows_only_one_active_job_and_same_job_is_idempotent() -> None
 
     def runner(spec):
         entered.set()
-        assert release.wait(2)
+        assert release.wait(10)
         return _manager_completed_result(spec)
 
     manager = _job_manager(
@@ -1773,17 +1773,16 @@ def test_manager_allows_only_one_active_job_and_same_job_is_idempotent() -> None
     first = _job("a" * 64, "job-one")
     second = _job("b" * 64, "job-two")
     manager.submit(first)
-    assert entered.wait(1)
-    assert manager.submit(first)["job_id"] == "job-one"
-    with pytest.raises(service.JobBusyError):
-        manager.submit(second)
-    release.set()
-    for _ in range(100):
-        if manager.status("job-one")["status"] == "COMPLETED":
-            break
-        time.sleep(0.01)
+    try:
+        assert entered.wait(10)
+        assert manager.submit(first)["job_id"] == "job-one"
+        with pytest.raises(service.JobBusyError):
+            manager.submit(second)
+    finally:
+        release.set()
+    # Completion is an event, not a one-second scheduling guarantee on CI.
+    assert terminal.wait(10)
     assert manager.status("job-one")["status"] == "COMPLETED"
-    assert terminal.wait(1)
     with pytest.raises(service.JobBusyError, match="shutting down"):
         manager.submit(second)
 
