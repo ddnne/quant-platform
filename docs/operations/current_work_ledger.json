@@ -1,15 +1,45 @@
 {
   "schema": "quant-platform-work-ledger/v1",
   "r2_reconciliation_checkpoint_20260923": {
-    "status": "SOURCE_DRAFT_ROLLOUT_HELD",
-    "source_head_under_review": "5989485f2c5c727443b163160e1fe44211287a62",
+    "status": "STAGING_ACCEPTED_FIRST_R2_SEGMENT_VERIFIED_RESEARCH_HELD",
+    "supersedes": "For current staging receipt acquisition, this section supersedes the older source-only, June recovery-only, preperiod-unapproved and OAuth-blocked checkpoints below. Those dated sections are historical, not current dispatch instructions. Re-read live operation/control state before acting.",
+    "accepted_source_head": "d5cbb3d542aeb8ba58b1210f072515d76a669daf",
     "pr": "https://github.com/ddnne/quant-platform/pull/251",
-    "accepted_main": "9f446b8dac09adaef76b11ec0aaf224c58cf359a",
-    "source_scope": "New receipt reconciliation stores historical row bodies in R2 and bounded cloud DO scratch, not permanent D1 fact/shadow/change-log copies. Persisted legacy operations retain their original route and signed serialization. D1 retains operation/segment evidence and immutable receipt publication metadata. Migration0024 is source-only and has not been applied live.",
+    "accepted_main": "fcfdb82e73cb74d75e0c0c1ee283191d10006958",
+    "source_scope": "New receipt reconciliation stores historical row bodies in R2 and bounded cloud DO scratch, not permanent D1 fact/shadow/change-log copies. Persisted legacy operations retain their original route and signed serialization. D1 retains operation/segment evidence and immutable receipt publication metadata. Migration0024 is applied to staging only; canonical0001-0024 all applied, pending none. No historical data removed.",
     "verified_checks": {
       "premium": "Full npm test: 170 Node tests and 45 Cloudflare runtime tests passed on source5989485f.",
-      "independent_review": "Whole 17-file diff at5989485f: no new concrete P0/P1 source-merge blocker. Review is not rollout acceptance; conditions below remain open.",
-      "native_ci": "Build43ab6eb4-7310-4580-8185-259ee01ce8bb observed IN_PROGRESS for5989485f; not success. Any subsequent source SHA requires its own authoritative check."
+      "independent_review": "Final source reviews and migration safety review completed before merge/rollout. Acceptance remains scoped to observed staging operation, not global research readiness.",
+      "native_ci": "Final PR source d5cbb3d5: build5e8cba37-9112-4abd-bdb2-c170ae994d13 SUCCESS. Merged main fcfdb82e: build884e84f5-16d5-42ce-9a62-8c2829caf062 SUCCESS, verify_ci: ok. Required Workers Builds: quant-platform-ci-aggregate-staging/app85455. Fresh source-only clone matched clean main. Separate Mass product deployment HOLD remains intentional."
+    },
+    "rollout": {
+      "migration_evidence": "https://github.com/ddnne/quant-platform/pull/251#issuecomment-5787007897",
+      "active_acceptance_evidence": "https://github.com/ddnne/quant-platform/pull/251#issuecomment-5787042265",
+      "evidence_digest": "sha256:04f6450b9c29fcc38214b3f77831b6c8f7bd5d5e93b24388db8ae4361d940f46",
+      "ingestion_secrets_version": "fda16c5c-9cb0-45e9-8fb7-e21b241ecd2d",
+      "receipt_authority_version": "036e922e-1d67-44a0-8c2b-d0ae11efe6f3",
+      "ingestion_premium_version": "30536d7c-1da4-4336-ac87-832c03ad2ba3",
+      "scope": "Ordered Secrets/Receipt/Premium staging rollout accepted: exact module bytes, selected-version rereads, bindings, closed HTTP/preview/routes, unchanged existing receipt key/namespace and ordinary Cron recovery/replay attestation. AUDIT_ONLY, research_eligible=false. JSDA unchanged in bridge mode; Gateway/Mass still at1cb283142cae3aa47c21a18ed4a24357c3852b2a."
+    },
+    "first_r2_segment": {
+      "evidence": "https://github.com/ddnne/quant-platform/pull/251#issuecomment-5787293878",
+      "dataset": "equities_bars_daily",
+      "segment_id": "2022-12",
+      "run_id": 7270,
+      "operation_id": "sha256:965c1a93a92b5cb3ef850def6bd466501be1a19dffeadb70efb308a1a3f457cf",
+      "state": "RECEIPT_COMMITTED / caller FINALIZED",
+      "row_count": 93164,
+      "product_bytes": 140850092,
+      "verification": "Existing staging public-key signature, signed/outer identity and counts, reconstructed whole-receipt digest, unique publication sequence1 and compact R2 measurement agree. Actual small manifest bytes from quant-receipt-evidence-staging match recorded digest. D1 artifact_body length0 and operation shadow rows0. Completed control cursor1/1, lease null. No market body downloaded locally. Full product reconciliation was executed by trusted cloud pipeline; cloud candidate must independently stream/verify products before scope/READY acceptance. Scratch physical cleanup not independently measured.",
+      "usage": "2026-09-23[00:50,01:14)UTC: staging D1 read21338/write65; Receipt DO SQL read1457145/write279575, duration35.914624512, cpuTime53078204; exceededCPU/exceededMemory/fatal errors0. Window includes background/checks and is not isolated job cost, invoice or hard cap. R2 operation analytics also observable; missing series remain UNKNOWN."
+    },
+    "preperiod_approval": {
+      "status": "APPROVED_BOUNDED_STAGING_ONLY",
+      "evidence": "https://github.com/ddnne/quant-platform/pull/251#issuecomment-5787064159",
+      "limits": "2022 bars/master/fins only, at most12 monthly segments newest first, concurrency1, max3 fresh attempts each, additionalUSD10 monitored stopping target not billing hard cap. No2021earlier, production, Pilot, new keys or local market history.",
+      "dispatch_checkpoint": "Two of maximum12 segments dispatched: bars2022-12 verified; master2022-12 submitted next after no PREPARED requests, vacant mutation lease and no existing master operation. Master completion unproven at submission. No other preperiod job queued. Re-read actual control/operation before retry or replacing control.",
+      "previous_completed_control_archive": "quant-structured-staging/control/archive/exact_five_compiled_acquisition/a388cb31ad289bae4315b23a7a004a1422dfe69afdcba3008913babdc33f9582.json",
+      "master_submitted_control_digest": "sha256:21a388ab4e1c7034c192c61548fc8b845854cf90ffb66f713f90f3e3ccac728d"
     },
     "quant_mcp_reconnection": {
       "authentication": "SUCCESS: authenticated projection_status call after user reconnection",
@@ -23,10 +53,10 @@
     "remaining_rollout_conditions": [
       "Ops now separately observes receipt_product_publications/v1, includes that observation in generation identity, and rejects mid-read drift or cross-generation rollback. The old jquants_records feed remains legacy-only. Research application/global READY integration remains incomplete; publication MAX is not a contiguous applied cursor.",
       "Connect verified selected-operation candidate cursors to scope-bound snapshot/READY evidence while retaining authenticated descriptor provenance. Publication sequence is not itself a signed receipt claim or authority FINALIZED acknowledgement.",
-      "Prove the approved segment/concurrency envelope fits the shared 512MiB scratch admission limit. Inactive scratch expiry is opportunistic after24h, not a scheduled deletion guarantee; oversized segments cannot be fixed by blind retries.",
-      "Complete final source checks, exact-SHA native CI and review before merge; separately verify authorized migration/staging rollout and live evidence. No production activation from source merge."
+      "One monthly bars canary passed the bounded512MiB scratch route; this is not proof for every dataset/month or simultaneous workloads. Inactive scratch expiry is opportunistic after24h, not a scheduled deletion guarantee; oversized segments cannot be fixed by blind retries.",
+      "Update Mass candidate source through the approved cloud-only staging rollout, then authenticated smoke/full product verification and scope checks. Existing MASS_EVAL_TOKEN location and matching READY/Trader public-key identities remain unresolved; no generation/rotation. No production activation from source merge."
     ],
-    "preserved_holds": "No live migration, deploy or data removal in this checkpoint. Production, Pilot, Mass, FoF, broker, real orders and automatic promotion remain disabled. No authentic market history is persisted locally."
+    "preserved_holds": "Only approved staging migration/receipt-chain rollout/acquisition performed. No data removal, production rollout, READY or Pilot execution. Mass research, FoF, broker, real orders and automatic promotion remain disabled. No authentic market history persisted locally."
   },
   "staging_acquisition_checkpoint_20260922": {
     "status": "FRESH_DISPATCH_HELD_RPC_CANCELLATION_UNRESOLVED_JUNE_RECOVERY_ONLY",
