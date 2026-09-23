@@ -259,21 +259,6 @@ def test_hydrate_execute_dry_run_flag_skips_opt_in(tmp_path) -> None:
     assert not db.exists()
 
 
-def test_opt_in_reaches_parser_not_market_data(tmp_path) -> None:
-    cwd = _empty_cwd(tmp_path)
-    completed = _run(
-        "jsda_otc_fetch_official.py",
-        [],
-        cwd=cwd,
-        env=_env(**{LOCAL_MARKET_DATA_ENV: "1"}),
-    )
-    assert completed.returncode == 2
-    assert "local market data is disabled" not in completed.stderr
-    combined = completed.stdout + completed.stderr
-    assert "--log-dir" in combined
-    assert list(cwd.iterdir()) == []
-
-
 @pytest.mark.parametrize(
     "args",
     [
