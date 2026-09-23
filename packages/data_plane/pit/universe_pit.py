@@ -207,6 +207,7 @@ def _event_from_row(
     insertion: int,
     dataset: str,
     historical_master: bool = False,
+    historical_calendar: bool = False,
 ) -> _Event:
     payload = _decode_mapping(raw.get("payload"), dataset_id=dataset)
     expected = contract_natural_key(payload, dataset)
@@ -248,6 +249,17 @@ def _event_from_row(
     available_at_text = raw.get("available_at")
     ingested_at_text = raw.get("ingested_at")
     activation = max(event_time, available)
+    if historical_calendar:
+        if (
+            dataset != "markets_calendar"
+            or _pick(payload, "Date") != calendar_date
+            or calendar_date
+            != event_time.astimezone(ZoneInfo("Asia/Tokyo")).date().isoformat()
+        ):
+            raise PitError("historical calendar requires matching source Date and event_time")
+        # Effective scheduling, not a claim that the response was observed then.
+        # Stored product fields and the separate observation cutoff stay intact.
+        activation = event_time
     if historical_master:
         # Date is the source's effective membership date, not a claim about
         # contemporaneous observation. Keep every original product field intact.
@@ -570,6 +582,7 @@ def _universe_day_slices_from_connection(
     complete_membership: _CompleteMembershipResolver | None = None,
     product_fields: bool = False,
     historical_master: bool = False,
+    historical_calendar: bool = False,
 ) -> tuple[UniverseDaySlice, ...]:
     """Resolve universe slices on an already-open verifier or READY connection.
 
@@ -581,6 +594,8 @@ def _universe_day_slices_from_connection(
 
     if historical_master and (complete_membership is None or not product_fields):
         raise PitError("historical master requires verified complete product membership")
+    if historical_calendar and (complete_membership is None or not product_fields):
+        raise PitError("historical calendar requires the complete product owner")
     requested = _calendar_dates(period_start, period_end)
     as_ofs = {
         day: _parse_dt(as_of_for_day[day], label="decision_as_of")
@@ -609,7 +624,8 @@ def _universe_day_slices_from_connection(
                 observed_through=observed_through,
             ):
                 event = _event_from_row(
-                    dict(raw), insertion=insertion, dataset="markets_calendar"
+                    dict(raw), insertion=insertion, dataset="markets_calendar",
+                    historical_calendar=historical_calendar,
                 )
                 insertion += 1
                 present_days.add(event.calendar_date)
