@@ -53,6 +53,30 @@ const MIN_TTL_MS = 60_000;
 const MAX_TTL_MS = 86_400_000;
 const FIVE_MINUTES_MS = 5 * 60_000;
 
+/** v1 remains verifiable; v2 adds a bounded issuance window, not a new snapshot. */
+export async function receiptNativeAuthorityResourceDigest(
+  binding: {
+    environment: string;
+    job_id: string;
+    snapshot_id: string;
+    immutable_db_digest: string;
+    unsigned_native_digest: string;
+    compiled_scope_proof_digest: string;
+  },
+  verifiedAt?: string,
+): Promise<string> {
+  return sha256Digest(canonicalJson({
+    format: verifiedAt === undefined
+      ? "ready-authority-resource/receipt-native/v1"
+      : "ready-authority-resource/receipt-native/v2",
+    ...binding,
+    authority_instance_id: `ready-authority/${binding.environment}/v1`,
+    ...(verifiedAt === undefined ? {} : {
+      issuance_hour: Math.floor(parseCanonicalUtc(verifiedAt) / 3_600_000),
+    }),
+  }));
+}
+
 const ENVELOPE_NATIVE_FIELDS = new Set([
   "format", "identity", "environment", "job_id", "admitted_native_digest",
   "attestation", "ready_manifest", "physical",
@@ -525,22 +549,23 @@ export async function verifyReceiptNativeReadyPublication(
   if (periodError) {
     return { ok: false, error: `READY dependency scope ${periodError}` };
   }
-  const expectedAuthority = await sha256Digest(
-    canonicalJson({
-      format: "ready-authority-resource/receipt-native/v1",
-      environment,
-      authority_instance_id: `ready-authority/${environment}/v1`,
-      job_id: document.job_id,
-      snapshot_id: snapshotId,
-      immutable_db_digest: digest,
-      unsigned_native_digest: document.admitted_native_digest,
-      compiled_scope_proof_digest: dependencyScope.proof_digest,
-    }),
-  );
-  if (attestation.authority_resource_digest !== expectedAuthority) {
+  const authorityBinding = {
+    environment,
+    job_id: document.job_id,
+    snapshot_id: snapshotId,
+    immutable_db_digest: digest,
+    unsigned_native_digest: document.admitted_native_digest,
+    compiled_scope_proof_digest: String(dependencyScope.proof_digest),
+  };
+  const legacyAuthority = await receiptNativeAuthorityResourceDigest(authorityBinding);
+  const renewedAuthority = Number.isFinite(parseCanonicalUtc(attestation.verified_at))
+    ? await receiptNativeAuthorityResourceDigest(authorityBinding, String(attestation.verified_at))
+    : null;
+  const expectedAuthority = attestation.authority_resource_digest;
+  if (expectedAuthority !== legacyAuthority && expectedAuthority !== renewedAuthority) {
     return { ok: false, error: "READY attestation authority resource digest is invalid" };
   }
-  if (attestation.attestation_id !== `ready-${expectedAuthority.slice("sha256:".length)}`) {
+  if (attestation.attestation_id !== `ready-${String(expectedAuthority).slice("sha256:".length)}`) {
     return { ok: false, error: "READY attestation content identity is invalid" };
   }
   const expectedEvidence = await sha256Digest(

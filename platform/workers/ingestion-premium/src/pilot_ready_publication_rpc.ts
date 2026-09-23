@@ -18,6 +18,7 @@ export type ReadyPublicationResult =
       immutable_db_digest: string;
       envelope_key: string;
       attestation_key: string;
+      published_at: string;
     }
   | {
       ok: false;

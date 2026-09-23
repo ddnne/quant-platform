@@ -8,6 +8,7 @@ import {
 import { keyUsableAt, loadPinnedReadyKeys, loadPinnedTraderKeys } from "../../research-mass-eval/src/controlled_pilot_registries";
 import {
   pinReceiptNativeSource,
+  receiptNativeAuthorityResourceDigest,
   verifyControlledPilotBinding,
   verifyReceiptNativePeriod,
   verifyReceiptNativeReadyPublication,
@@ -170,6 +171,7 @@ function readyPublicationSuccess(
   physicalDigest: string,
   envelopeKey: string,
   attestationKey: string,
+  publishedAt: string,
 ): ReadyPublicationResult {
   return {
     ok: true,
@@ -184,6 +186,7 @@ function readyPublicationSuccess(
     immutable_db_digest: physicalDigest,
     envelope_key: envelopeKey,
     attestation_key: attestationKey,
+    published_at: publishedAt,
   };
 }
 
@@ -386,7 +389,7 @@ async function casOpsReadyPointerOnce(
   }
   const storedBody = await readBoundedJson(existing, CREATE_ONLY_COMPARE_MAX_BYTES);
   const stored = parseOpsReadyPointer(storedBody);
-  const etag = existing.httpEtag;
+  const etag = existing.etag;
   if (!etag) {
     return { ok: false, retry: false, error: "ops READY pointer is missing etag" };
   }
@@ -464,6 +467,7 @@ async function pairPaperTraderAuthorization(
       expected.physicalDigest,
       expected.envelopeKey,
       expected.attestationKey,
+      String(attestation.verified_at),
     );
   };
   const existing = await env.STRUCTURED_BUCKET.get(authKey);
@@ -794,16 +798,18 @@ export async function publishAdmittedReceiptCandidate(
   );
   if (!session) return rejected("dependency-scope evidence is not exact-four PASS");
   const admittedNativeDigest = storedDigest;
-  const authorityResourceDigest = await digestOf({
-    format: "ready-authority-resource/receipt-native/v1",
+  const verifiedAtMs = Date.now();
+  const verifiedAt = isoUtc(verifiedAtMs);
+  // One immutable issuance per UTC hour. Retry reuses its winner; a later
+  // request revalidates this same candidate without materializing it again.
+  const authorityResourceDigest = await receiptNativeAuthorityResourceDigest({
     environment: pointer.environment,
-    authority_instance_id: authorityInstanceId(pointer.environment),
     job_id: pointer.job_id,
     snapshot_id: snapshotId,
     immutable_db_digest: physicalDigest,
     unsigned_native_digest: admittedNativeDigest,
     compiled_scope_proof_digest: proofDigest,
-  });
+  }, verifiedAt);
   const attestationId = `ready-${authorityResourceDigest.slice("sha256:".length)}`;
   const envelopeKey = controlledReadyKey(attestationId);
   const attestationKey = `${envelopeKey}.attestation.json`;
@@ -834,11 +840,9 @@ export async function publishAdmittedReceiptCandidate(
   if (registryKey.key_id !== keyId.trim()) {
     return rejected("READY attestation issuer is not trusted");
   }
-  const verifiedAtMs = Date.now();
   if (!keyUsableAt(registryKey, verifiedAtMs)) {
     return pending("READY key window denied");
   }
-  const verifiedAt = isoUtc(verifiedAtMs);
   const expiresAt = isoUtc(verifiedAtMs + 3600_000);
   const publicationManifest: Record<string, unknown> = {
     ...native,

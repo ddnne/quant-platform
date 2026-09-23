@@ -340,6 +340,27 @@ describe("pointer receipt-native READY publication", () => {
       newer.envelope_key,
     );
     expect(stored.get(minted.envelope_key)).toEqual(envelopeBytes);
+    // Human Pilot approval may arrive after the first short-lived grant.
+    // Renew authorization from the same validated bytes, not another build.
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-02T14:05:00Z"));
+    expect(await verifyReceiptNativeReadyPublication(
+      envelope, String(native.snapshot_id), "staging",
+    )).toMatchObject({ ok: false, error: "READY attestation is expired or time-incoherent" });
+    const renewed = await publishAdmittedReceiptCandidate(env as never, {
+      job_id: jobId, environment: "staging",
+    });
+    expect(renewed.ok).toBe(true);
+    if (!renewed.ok) throw new Error(renewed.error);
+    expect(renewed.attestation_id).not.toBe(minted.attestation_id);
+    expect(renewed.snapshot_id).toBe(minted.snapshot_id);
+    expect(renewed.immutable_db_digest).toBe(minted.immutable_db_digest);
+    expect(stored.get(minted.envelope_key)).toEqual(envelopeBytes);
+    expect(stored.get(authKey)).toEqual(authBytes);
+    expect(stored.has(controlledTraderAuthorizationKey(jobId, renewed.attestation_id))).toBe(true);
+    expect(JSON.parse(new TextDecoder().decode(stored.get(pointerKey))).envelope_key).toBe(renewed.envelope_key);
+    expect(await publishAdmittedReceiptCandidate(env as never, {
+      job_id: jobId, environment: "staging",
+    })).toMatchObject({ ok: true, attestation_id: renewed.attestation_id });
   });
 
   it("rejects outer PASS labels when B0 measure rows are not ok", async () => {
