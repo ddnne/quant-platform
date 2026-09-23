@@ -9,6 +9,7 @@ import io
 import json
 import sqlite3
 import threading
+from dataclasses import asdict
 from functools import partial
 from pathlib import Path
 
@@ -236,7 +237,11 @@ def _signed_dataset_bundle(
         "dataset": dataset,
         "segment_id": receipt.segment_id,
         "operation_id": operation_id,
-        "receipt_digest": receipt.digests["body_digest"],
+        # Match commitReceipt's full transport identity, not signed-body identity.
+        "receipt_digest": "sha256:" + hashlib.sha256(json.dumps(
+            asdict(receipt), ensure_ascii=False, sort_keys=True,
+            separators=(",", ":"), allow_nan=False,
+        ).encode("utf-8")).hexdigest(),
         "signed_receipt": dict(receipt.digests),
         "product": {
             "artifact_key": claims["artifact_key"],
@@ -313,7 +318,7 @@ def test_descriptor_raw_bytes_plus_one_rejects_before_persistence(
 def test_genuine_descriptor_persists_text_artifact_and_catalog_detects_corruption(
     tmp_path: Path, receipt_ed25519_keys
 ) -> None:
-    rows, product_path, raw_path, descriptor, _receipt = _signed_bundle(
+    rows, product_path, raw_path, descriptor, receipt = _signed_bundle(
         tmp_path, receipt_ed25519_keys
     )
     descriptor["source_cursor"] = {
@@ -321,6 +326,15 @@ def test_genuine_descriptor_persists_text_artifact_and_catalog_detects_corruptio
     }
     store = SqliteStore(tmp_path / "ok.sqlite")
     configure_receipt_candidate_limits(store, max_database_bytes=5 * 1024 * 1024)
+    assert descriptor["receipt_digest"] != receipt.digests["body_digest"]
+    with pytest.raises(ReceiptCandidateMaterializeError, match="receipt_digest"):
+        materialize_receipt_segment(
+            store, environment="production",
+            descriptor={**descriptor, "receipt_digest": receipt.digests["body_digest"]},
+            product_path=product_path, raw_path=raw_path, calendar_path=None,
+            max_database_bytes=5 * 1024 * 1024,
+        )
+    assert store.count("jquants_records") == 0
     result = materialize_receipt_segment(
         store,
         environment="production",
