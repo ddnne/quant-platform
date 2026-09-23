@@ -8,10 +8,13 @@ receipt table can never substitute for the product consumed by research.
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import io
 import json
 import sqlite3
+import tempfile
+import zlib
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, Iterable, Iterator, Mapping, Sequence
@@ -194,7 +197,12 @@ def persist_stored_product_artifact(
     source: Any,
     byte_count: int,
 ) -> None:
-    """Fill an existing zeroblob from a binary stream without a whole-body Python copy."""
+    """Store losslessly compressed evidence; signed counts still describe JSONL.
+
+    The temporary spool and SQLite body are streamed, not whole-body Python
+    copies. Only new private candidate snapshots use this writer; historic
+    uncompressed TEXT/BLOB generations remain readable and unchanged.
+    """
 
     if type(operation_id) is not str or not operation_id:
         raise ValueError("operation_id is missing")
@@ -209,25 +217,37 @@ def persist_stored_product_artifact(
     ).fetchone()
     if row is None:
         raise ValueError("product materialization artifact body is missing")
-    written = 0
-    with conn.blobopen(_ARTIFACT_TABLE, _ARTIFACT_COLUMN, int(row[0])) as blob:
-        while True:
-            chunk = read(_STREAM_CHUNK)
-            if not chunk:
-                break
-            if type(chunk) is not bytes:
-                raise ValueError("product artifact stream must be binary")
-            blob.write(chunk)
-            written += len(chunk)
-    if written != byte_count:
-        raise ValueError(
-            "product artifact spool size does not match the signed byte count"
+    with tempfile.TemporaryFile() as compressed:
+        written = 0
+        with gzip.GzipFile(fileobj=compressed, mode="wb", mtime=0) as encoder:
+            while chunk := read(_STREAM_CHUNK):
+                if type(chunk) is not bytes:
+                    raise ValueError("product artifact stream must be binary")
+                written += len(chunk)
+                if written > byte_count:
+                    raise ValueError("product artifact spool exceeds the signed byte count")
+                encoder.write(chunk)
+        if written != byte_count:
+            raise ValueError(
+                "product artifact spool size does not match the signed byte count"
+            )
+        conn.execute(
+            f"UPDATE {_ARTIFACT_TABLE} SET {_ARTIFACT_COLUMN}=zeroblob(?) WHERE rowid=?",
+            (compressed.tell(), int(row[0])),
         )
+        compressed.seek(0)
+        with conn.blobopen(_ARTIFACT_TABLE, _ARTIFACT_COLUMN, int(row[0])) as blob:
+            while chunk := compressed.read(_STREAM_CHUNK):
+                blob.write(chunk)
 
 
 @contextmanager
 def open_stored_product_artifact(conn: Any, operation_id: str) -> Iterator[Any]:
-    """Reopenable UTF-8 JSONL reader over one stored TEXT or BLOB generation body."""
+    """Read exact JSONL from legacy TEXT/BLOB or a gzip candidate body.
+
+    Canonical JSONL cannot start with gzip's binary magic. Decoding changes
+    only storage representation, not the bytes hashed by receipt verifiers.
+    """
 
     if type(operation_id) is not str or not operation_id:
         raise ValueError("operation_id is missing")
@@ -252,7 +272,14 @@ def open_stored_product_artifact(conn: Any, operation_id: str) -> Iterator[Any]:
         raw.close()
         raise
     try:
-        yield reader
+        if reader.peek(2).startswith(b"\x1f\x8b"):
+            try:
+                with gzip.GzipFile(fileobj=reader, mode="rb") as decoded:
+                    yield decoded
+            except (EOFError, OSError, zlib.error) as exc:
+                raise ValueError("product materialization gzip evidence is corrupt") from exc
+        else:
+            yield reader
     finally:
         reader.close()
 
