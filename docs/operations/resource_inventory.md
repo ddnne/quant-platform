@@ -1,0 +1,81 @@
+# Cloud resource inventory
+
+Observed 2026-09-23/24 JST using management API metadata and source
+`2ea7b14f8272ab7c9a18503408469501ed08661a`. This is a partial audit, not
+authorization to delete resources or evidence of zero usage/cost.
+No market bodies, secrets, KV values or DLQ messages were read.
+
+| Account resource | Count | Interpretation |
+|---|---:|---|
+| Workers | 19 | 15 quant-prefixed, 3 news-prefixed, 1 tmp-exp-eval |
+| D1 | 7 | 6 quant, 1 news |
+| R2 buckets | 7 | 5 quant, 2 news; object sizes/retention not inventoried |
+| Queues | 4 | JSDA queue and DLQ in each environment |
+| KV namespaces | 3 | quant OAuth production/staging and news OAuth |
+| DO namespaces | 8 | Not an instance or billing count |
+| Container applications | 2 | One production and one staging; both listed instances inactive |
+| Pages projects | 0 | Empty API inventory |
+
+## Candidates and dependencies
+
+- `tmp-exp-eval`: no repository reference found; AI binding, no Cron.
+  Retirement candidate pending ownership, inbound usage and route checks.
+- `quant-platform-jsda-otc-probe-w80`: no bindings or Cron. Its two legacy
+  host-local downloader/planner clients are retired by PR #271. Cloud Worker
+  deletion still requires checking external consumers and usage; not deleted.
+- `quant-platform-ci-aggregate-staging`: retain. Despite its old name, this
+  private anchor produces the required native Cloudflare merge check. It is not
+  the retired receipt-aggregation API. Two plain-text GitHub settings remain;
+  their necessity is not yet established. No Cron.
+- Ingestion, Receipt, Gateway and research Workers have source-level service
+  dependencies. That explains their present existence, not permanent necessity
+  of every separation. Evaluate consolidation against actual data/PIT/budget
+  responsibilities, not Worker count alone.
+- `news-*`, `news-db`, `news-text`, `news-db-backup` belong to another product;
+  absence of quant callers does not authorize removing them.
+
+## Storage and configuration findings
+
+- D1 `quant-ingest-staging`: 8,310,325,248 bytes; production `quant-ingest`:
+  752,893,952 bytes. Prioritize legacy duplication/retention analysis and verified
+  R2 replacements. No historic data deletion is authorized.
+- Both quota databases and production Ops projection report 24,576 bytes each.
+  Do not interpret the list API's `num_tables=0` as proof they are empty/unused.
+- R2 buckets: news-db-backup, news-text, quant-raw, quant-raw-staging,
+  quant-receipt-evidence-staging, quant-structured, quant-structured-staging.
+  Production receipt bucket is declared in source but absent from this list.
+  Declarations are not live deployment evidence.
+- Source declares production Receipt authority and both activation observers;
+  these were absent from the live Worker list. Do not count them as idle live
+  Workers or deploy them implicitly.
+- Source staging JSDA declares a DLQ consumer and rejects queue; live DLQ has
+  no consumer and no rejects queue was listed. Record as deployment drift,
+  not an invitation to activate a held pipeline.
+- DLQs without explicit producers remain referenced by their parent queue's
+  dead-letter configuration. Do not treat them as orphaned or pull/purge them.
+
+## Recurring work
+
+Live Cron: production Premium `15 * * * *`, staging Premium `* * * * *`,
+production JSDA `30 1 * * *`, staging JSDA none.
+
+The staging Premium scheduler checks bounded control jobs, recovers PREPARED
+receipts, checks a per-source/version audit canary, then invokes Ops publication
+when its verification key is configured. The canary reuses ATTESTED evidence;
+it does not mint a fresh audit row each minute. Nevertheless idle polling and
+projection frequency need review. Preserve recovery and freshness requirements
+when reducing frequency; no Cron changed by this audit.
+
+## Next work, without user login
+
+1. Inventory callers/usage and public routes for retirement candidates.
+2. Measure idle scheduled work and separate acquisition/recovery needs from
+   projection cadence before proposing a smaller schedule.
+3. Review image/object retention and duplicated DB representations using
+   metadata; never download authentic history to the host.
+4. Inspect redundant CI triggers/logging/settings when their API is available.
+   Existing CLI OAuth cannot access Builds (403); do not request user login
+   before the user's stated Monday availability.
+5. Present destructive changes as one grouped plan with impact and recovery.
+   No deletion, production rollout, research execution or new service is part
+   of this inventory.

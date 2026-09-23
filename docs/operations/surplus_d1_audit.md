@@ -1,5 +1,9 @@
 # Surplus D1 audit
 
+Historical snapshot only. For the current account-wide partial inventory, see
+[resource_inventory.md](resource_inventory.md). The August conclusion below
+does not describe the present seven-database inventory or authorize deletion.
+
 **Source:** GLM Worker4 (`GLM_W4_D1INV_OK`)  
 **Date:** 2026-08-11  
 
