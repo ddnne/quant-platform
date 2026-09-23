@@ -1763,6 +1763,17 @@ describe("ops projection cloud publisher", () => {
     const jsdaEnvelope = await signV3Claims(pair, jsdaClaims);
     expect(await verifySignedReceiptEnvelope(jqEnvelope, registry, "production")).not.toBeNull();
     expect(await verifySignedReceiptEnvelope(jsdaEnvelope, registry, "production")).not.toBeNull();
+    const millisecondClaims = {
+      ...await canonicalV3Claims(objects, { checked_at: "2026-08-01T00:00:00.244Z" }),
+      issued_at: "2026-08-01T00:00:01.369Z",
+    };
+    const millisecondEnvelope = await signV3Claims(pair, millisecondClaims);
+    expect(await verifySignedReceiptEnvelope(millisecondEnvelope, registry, "production"))
+      .toEqual(millisecondClaims);
+    const invalidDate = await signV3Claims(pair, {
+      ...millisecondClaims, issued_at: "2026-02-30T00:00:01.369Z",
+    });
+    expect(await verifySignedReceiptEnvelope(invalidDate, registry, "production")).toBeNull();
     const tampered = { ...jqEnvelope, body_digest: "sha256:" + "ff".repeat(32) };
     expect(await verifySignedReceiptEnvelope(tampered, registry, "production")).toBeNull();
     expect(await exactJqTrustedComplete(objects, jqEnvelope, registry)).toBe(true);
