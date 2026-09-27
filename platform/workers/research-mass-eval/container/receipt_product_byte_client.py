@@ -6,6 +6,7 @@ describe/metadata response cap, never a product-stream cap.
 
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import urllib.error
@@ -203,7 +204,36 @@ def spool_receipt_product_bytes(
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
     written = 0
-    with opener.urlopen(request, timeout=300) as response:
+    try:
+        response = opener.urlopen(request, timeout=300)
+    except urllib.error.HTTPError as error:
+        # Preserve the service's finite HOLD code, never its arbitrary body or
+        # HTTP reason text. A refusal is terminal here, not permission to retry.
+        reason = "UNKNOWN"
+        try:
+            with error:
+                raw = error.read(8193)
+            if len(raw) <= 8192:
+                detail = json.loads(raw)
+                code = detail.get("hold_reason") if type(detail) is dict else None
+                if (
+                    type(detail) is dict
+                    and detail.get("status") == "HOLD"
+                    and isinstance(code, str)
+                    and code in {
+                        "MISSING_TABLE", "MISSING_ROW", "COVERAGE_INCOMPLETE",
+                        "PENDING_REGISTRY", "UNTRUSTED_CHAIN", "UNFINALIZED_REQUEST",
+                        "REFERENCE_CHANGED", "READ_BUDGET", "READ_FAILURE",
+                    }
+                ):
+                    reason = code
+        except (OSError, ValueError, RecursionError, http.client.HTTPException):
+            pass
+        raise ReceiptProductTransportError(
+            f"receipt product bytes returned {error.code} "
+            f"(resource={resource}, hold_reason={reason})"
+        ) from None
+    with response:
         if int(response.status) != 200:
             raise ReceiptProductTransportError(
                 f"receipt product bytes returned {response.status}"

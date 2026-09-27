@@ -5,6 +5,7 @@ from __future__ import annotations
 import calendar
 import gzip
 import hashlib
+import http.client
 import io
 import json
 import sqlite3
@@ -1219,6 +1220,47 @@ def test_execute_pass_streams_closed_sqlite_before_gzip(
     assert "physical_key" not in failed
     assert "dependency_scope_key" not in failed
     assert "snapshot_key" not in failed
+
+
+@pytest.mark.parametrize("body,reason", [
+    ({"status": "HOLD", "hold_reason": "UNTRUSTED_CHAIN", "detail": "private-body"}, "UNTRUSTED_CHAIN"),
+    ({"status": "HOLD", "hold_reason": "private-body"}, "UNKNOWN"),
+    (None, "UNKNOWN"),  # Truncated error responses must not lose safe context.
+])
+def test_byte_refusal_keeps_safe_reason_without_retry(tmp_path, body, reason) -> None:
+    from receipt_product_byte_client import ReceiptProductTransportError, spool_receipt_product_bytes
+
+    class Truncated(io.BytesIO):
+        def read(self, size=-1):
+            raise http.client.IncompleteRead(b"private-partial-body")
+
+    class Refused:
+        calls = 0
+
+        def urlopen(self, request, timeout=None):
+            self.calls += 1
+            raise urllib.error.HTTPError(
+                request.full_url, 409, "private-http-reason", {},
+                Truncated() if body is None else io.BytesIO(json.dumps(body).encode()),
+            )
+
+    opener = Refused()
+    destination = tmp_path / "calendar.json"
+    with pytest.raises(ReceiptProductTransportError) as raised:
+        spool_receipt_product_bytes(
+            destination=destination, profile_id="controlled-pilot/exact-four",
+            profile_digest="sha256:" + "11" * 32,
+            dependency_closure_digest="sha256:" + "22" * 32,
+            dataset="equities_master", segment_id="2023-01",
+            operation_id=OPERATION_ID, receipt_digest="sha256:" + "33" * 32,
+            resource="official_calendar_raw", max_bytes=65536, opener=opener,
+        )
+    assert str(raised.value) == (
+        "receipt product bytes returned 409 "
+        f"(resource=official_calendar_raw, hold_reason={reason})"
+    )
+    assert opener.calls == 1
+    assert not destination.exists()
 
 
 def test_discover_latest_complete_preserves_service_failure_and_rejects_mismatch() -> None:
