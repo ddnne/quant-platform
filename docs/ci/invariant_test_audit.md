@@ -79,6 +79,14 @@ charter for extra hostile-Python tests.
 
 ## Consolidation decisions
 
+- Removed the concurrent audit-canary RPC call-count assertion. A caller may
+  receive an already finalized replay, so three calls rather than four is
+  valid (native build `b51d7523-696e-450f-8d74-8b2226c7825b`). The existing
+  test still requires both callers to return identical evidence, one ATTESTED
+  stored row with those exact bytes, and no collection issue/recovery calls.
+  No runtime change or retry-count matrix is needed; this client fake is not
+  a substitute for the authority's workerd persistence/replay tests.
+
 - Removed the paper-runtime import test that only copied four static freeze
   constants. Actual Paper service authorization/refusal tests import both
   agents and the DTO adapter and remain. A constant staying false cannot prove
