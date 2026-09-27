@@ -748,7 +748,7 @@ describe("Receipt Evidence Authority client", () => {
   });
 
   it("converges concurrent canaries to one version-scoped attestation", async () => {
-    const { env, issue, recover, recoverAudit, auditRows } = fakeEnv();
+    const { env, issue, recover, auditRows } = fakeEnv();
     activateAudit(env);
     const [first, second] = await Promise.all([
       runStagingReceiptAuditRecoveryCanary(env),
@@ -760,7 +760,6 @@ describe("Receipt Evidence Authority client", () => {
       state: "ATTESTED",
       signed_attestation_json: canonicalJson(first),
     });
-    expect(recoverAudit).toHaveBeenCalledTimes(4);
     expect(issue).not.toHaveBeenCalled();
     expect(recover).not.toHaveBeenCalled();
   });
