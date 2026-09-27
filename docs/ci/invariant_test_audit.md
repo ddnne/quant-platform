@@ -202,3 +202,12 @@ an allowlisted HOLD code and the requested resource, never arbitrary body text;
 no retry or destination file is produced. This diagnoses refusal, not acceptance
 of a receipt or proof of the original a6 failure cause. No new retry framework
 or exhaustive HTTP/status matrix is needed.
+
+Mass helper retirement (2026-09-28): removed unused `freezePayload`,
+`requireCapability`, and `netsOnlyGate` with their test-only consumers.
+The package is private and repository-wide references found no runtime caller.
+Two freeze-default and four nets-only tests therefore guarded no executable
+product path. The active `researchCapabilities` denial test remains, as does
+the workerd `retired_routes` test proving authenticated requests still return
+403 under claimed GO flags without touching R2, Gateway, Container or fetch.
+No replacement abstraction, authorization change or new test was added.
