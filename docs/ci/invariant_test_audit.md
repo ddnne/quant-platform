@@ -193,3 +193,12 @@ charter for extra hostile-Python tests.
 
 The final release evidence records suite totals and runtime suites. Test count
 is diagnostic only and is never a GO condition.
+
+Receipt byte HOLD diagnostics (2026-09-28): a6 failed with bare HTTP409,
+discarding the service reason. One behavioral regression (known/unknown reason
+and truncated error response)
+now checks the real urllib HTTPError path: a bounded response contributes only
+an allowlisted HOLD code and the requested resource, never arbitrary body text;
+no retry or destination file is produced. This diagnoses refusal, not acceptance
+of a receipt or proof of the original a6 failure cause. No new retry framework
+or exhaustive HTTP/status matrix is needed.
