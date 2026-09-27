@@ -31,11 +31,13 @@
   "lanes": {
     "source_delivered": {
       "accepted_main_sha": "f601bed6d31b20c8f121b3df2f58daaa25c61841",
+      "latest_main_sha": "f2c65c2afafa5a6b1654ac407e7d4a0264ae63b6",
+      "latest_main_native_status": "NOT_YET_VERIFIED",
       "native_build": "33bf3e71-0a8e-48ce-bd70-5fc3eea8b250",
       "native_status": "SUCCESS",
       "required_check": "Workers Builds: quant-platform-ci-aggregate-staging",
       "required_app_id": 85455,
-      "notes": "PR271-276 merged. PR277 diagnostic repair separately pending acceptance; do not imply deployment."
+      "notes": "PR277 merged after exact head7ac594e6 native build71426fbd-66be-4e5f-872f-ff01d288870c SUCCESS/app85455 and independent review. Latest merged-main CI separately unverified; accepted_main_sha/native_build above refer to earlier f601bed6. Diagnostic repair not deployed."
     },
     "staging_schema_prepared": {
       "database_id": "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb",
@@ -98,11 +100,11 @@
     "2_am_order_quantity_causality": "Adjusted AM frozen-quantity source/tests retained. Historical artifact inventory held under Draft137; preserve original clocks/provenance.",
     "3_dependency_scope": "Shared calendar repair deployed; a6 failed before full-snapshot proof. Tests do not close runtime evidence.",
     "4_receipt_to_ready_trader": "Container materializes, Premium signs, evaluator verifies only. Conditional publication needs same physical/scope/quality/profile/closure proof. No new authority.",
-    "5_ci_deploy_entrypoints": "f601bed6 native CI/coherent staging accepted; PR277 separately pending. Production HOLD verified. Python default socket guard is not OS-wide egress isolation.",
+    "5_ci_deploy_entrypoints": "f601bed6 native CI/coherent staging accepted; PR277 source merged, its merged-main CI not yet verified. Production HOLD verified. Python default socket guard is not OS-wide egress isolation.",
     "6_shared_d1_receipt_reproof": "R2-first new bodies/bounded metadata/cloud scratch; forward repair rather than old whole-DB restore. Legacy history/global reproof remain open; no production DLQ operations.",
     "7_dead_code_and_docs": "Partial: PR271-275 remove obsolete local OTC clients, static assertions, unused deploy adapter and legacy D1 write override;276 removes invalid concurrent call-count assertion. Policy docs/ci/invariant_test_audit.md; execution docs/operations/test_reduction_ledger.json. Held MCP/C09 not accepted.",
     "8_rollout_and_research_go": "Staging code accepted, candidateFAILED, READY/Trader not proven. Production/global Ops/current cursors/Coverage/tool parity unproven. Actual Pilot needs applicable approval and all gates.",
-    "9_push_remote_and_fresh_clone_verify": "Merged units remote-verified; PR277 pushed pending CI. Final branch/PR/main/generated drift/deployed source audit required. No full completion claim."
+    "9_push_remote_and_fresh_clone_verify": "PR277 merged; local main==origin/main f2c65c2a, clean; completed branch removed. Final fresh clone/generated drift/merged-main CI/deployed source audit required. No full completion claim."
   },
   "held_work": {
     "pr137": "https://github.com/ddnne/quant-platform/pull/137 intentional held Draft; preserve work.",
@@ -115,7 +117,7 @@
   },
   "open_findings": {"authority": "docs/phase633_finding_ledger.json", "p0_open_at_checkpoint": ["D2", "D3", "R5", "R10", "R11", "C4", "C10", "A2"], "notes": "Inventory, not fresh finding-by-finding closure; no P0 closed here."},
   "next": [
-    "Finish PR277 exact-source native CI/merge and verify merged main; keep deployed f601bed6 identity separate.",
+    "Verify f2c65c2a merged-main native CI and checkpoint PR final-source CI before merge; keep deployed f601bed6 identity separate.",
     "Diagnose failure without changing signed evidence. No seventh identity. Further finite execution outcome needs grouped approval after diagnosis, including scope/cost/stops/rollback/exclusions.",
     "Never promote a5/a6. Same-snapshot physical/scope/B0/B4/C8 and exact pins govern conditional staging READY/Trader. Pilot/backtests/production remain excluded.",
     "Audit all nine attachment requirements, held work, global evidence and remote/deployed/fresh-clone checks before declaring completion."
