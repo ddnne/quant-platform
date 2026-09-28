@@ -2149,7 +2149,7 @@ def _canonical_deploy_target(
     if containers:
         container_builds = (
             worker == "research-mass-eval"
-            and environment == "staging"
+            and environment in _SUPPORTED_DEPLOY_ENVIRONMENTS
             and environ.get("WORKERS_CI") == "1"
             and bool(_UUID.fullmatch(environ.get("WORKERS_CI_BUILD_UUID") or ""))
         )

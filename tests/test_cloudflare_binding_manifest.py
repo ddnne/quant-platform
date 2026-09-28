@@ -2026,16 +2026,18 @@ def test_deploy_tagged_rejects_unofficial_or_stale_main_before_wrangler(
     assert all("deploy" not in call for call in calls)
 
 
+@pytest.mark.parametrize("worker", ("ingestion-premium", "research-mass-eval"))
 def test_deploy_tagged_production_uses_pinned_executable_cwd_and_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    worker: str,
 ) -> None:
     _official_main(monkeypatch)
     executable = _prepare_pin(tmp_path, monkeypatch)
     runner = _canonical_runner(executable=executable)
     result = manifest_module.deploy_tagged(
-        worker="ingestion-premium",
+        worker=worker,
         environment="production",
         runner=runner,
         opener=runner.opener,
@@ -2043,11 +2045,16 @@ def test_deploy_tagged_production_uses_pinned_executable_cwd_and_env(
             "CLOUDFLARE_API_TOKEN": _TOKEN,
             "PATH": os.environ.get("PATH", ""),
             "AWS_SECRET_ACCESS_KEY": _SENTINEL_SECRET,
+            **({
+                "WORKERS_CI": "1",
+                "WORKERS_CI_BUILD_UUID": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "WORKERS_CI_COMMIT_SHA": _DEPLOY_SHA,
+            } if worker == "research-mass-eval" else {}),
         },
     )
     _assert_canonical_child_isolation(
         runner,
-        worker="ingestion-premium",
+        worker=worker,
         executable=executable,
         config="wrangler.toml",
         environment_args=("--env", "production"),
@@ -2177,9 +2184,6 @@ def test_deploy_tagged_staging_omits_env_selector(
             "production",
             {
                 "CLOUDFLARE_API_TOKEN": _TOKEN,
-                "WORKERS_CI": "1",
-                "WORKERS_CI_BUILD_UUID": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-                "WORKERS_CI_COMMIT_SHA": _DEPLOY_SHA,
             },
             "Container image",
         ),
