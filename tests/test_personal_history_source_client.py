@@ -41,6 +41,45 @@ client_mod = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = client_mod
 SPEC.loader.exec_module(client_mod)
 
+from personal_structured_bars import (
+    StructuredBarsObject,
+    iter_verified_structured_bars,
+)
+
+
+def test_stored_bars_reader_preserves_multiday_vintages_and_checks_bytes():
+    rows = [
+        {
+            "dataset": "equities_bars_daily",
+            "natural_key": {"Code": "12340", "Date": day},
+            "event_time": f"{day}T15:00:00+09:00",
+            "available_at": available,
+            "ingested_at": observed,
+            "payload": {"Code": "12340", "Date": day, "MAdjC": am, "AAdjC": 101},
+        }
+        for day, available, observed, am in (
+            ("2020-01-06", "2020-01-06T15:00:00+09:00", "2026-08-14T12:00:00+09:00", 100),
+            ("2020-01-07", "2020-01-07T15:00:00+09:00", "2026-08-14T12:00:00+09:00", None),
+            ("2020-01-06", "2026-08-15T12:00:00+09:00", "2026-08-15T12:00:00+09:00", 99),
+        )
+    ]
+    body = b"\n".join(json.dumps(row).encode() for row in rows) + b"\n"
+    source = StructuredBarsObject(
+        "structured/jsonl/equities_bars_daily/dt=2020-01-06/test.jsonl",
+        hashlib.sha256(body).hexdigest(), len(body), len(rows),
+    )
+    assert list(iter_verified_structured_bars(body, source, max_object_bytes=len(body))) == rows
+    with pytest.raises(PersonalHistoryError, match="digest mismatch"):
+        list(iter_verified_structured_bars(body.replace(b"101", b"102"), source, max_object_bytes=len(body)))
+    with pytest.raises(PersonalHistoryError, match="size/count rejected"):
+        list(iter_verified_structured_bars(body, source, max_object_bytes=len(body) - 1))
+
+    rows[-1]["ingested_at"] = "2020-01-06T15:00:00+09:00"
+    invalid = b"\n".join(json.dumps(row).encode() for row in rows)
+    invalid_source = StructuredBarsObject(source.key, hashlib.sha256(invalid).hexdigest(), len(invalid), len(rows))
+    with pytest.raises(PersonalHistoryError, match="vintage clocks"):
+        list(iter_verified_structured_bars(invalid, invalid_source, max_object_bytes=len(invalid)))
+
 
 class _Response(io.BytesIO):
     def __init__(self, payload: dict | bytes, headers: dict[str, str], status: int = 200):
