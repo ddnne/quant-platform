@@ -1,15 +1,13 @@
-"""PENDING capability types and digest-pinned protocol schema loaders."""
+"""Digest-pinned schema loaders for the authority-free protocol."""
 
 from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any
 
 from execution.exact_four_codec import (
-    AUTHORITY_PROTOCOL_STATE,
     ExactFourAuthorityContractError,
-    ExactFourAuthorityPending,
     _strict_json_loads,
     canonical_authority_digest,
 )
@@ -35,37 +33,6 @@ PINNED_EXACT_FOUR_RESULT_SCHEMA_DIGEST = (
 PINNED_EXACT_FOUR_RESULT_SCHEMA_RAW_DIGEST = (
     "sha256:3d60bb3cd7ad12307151de4dc1c73fe83036c6237df902bbe0aea30468e12f4c"
 )
-
-
-class _PendingCapability:
-    __slots__ = ()
-
-    def __new__(cls, *args: Any, **kwargs: Any) -> NoReturn:
-        del args, kwargs
-        raise ExactFourAuthorityPending(
-            f"{cls.__name__} is unavailable: {AUTHORITY_PROTOCOL_STATE}"
-        )
-
-
-class VerifiedPilotReadinessV2(_PendingCapability):
-    """Opaque future output of the isolated READY verifier."""
-
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        raise TypeError("VerifiedPilotReadinessV2 is final")
-
-
-class VerifiedExactFourTraderAuthorizationV2(_PendingCapability):
-    """Opaque future output of the isolated human Trader verifier."""
-
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        raise TypeError("VerifiedExactFourTraderAuthorizationV2 is final")
-
-
-class AuthorizedExactFourExecutionV2(_PendingCapability):
-    """Opaque future output of the controlled one-shot execution writer."""
-
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        raise TypeError("AuthorizedExactFourExecutionV2 is final")
 
 
 def authority_schema_path() -> Path:
@@ -158,44 +125,13 @@ def load_exact_four_result_schema() -> dict[str, Any]:
     return value
 
 
-def require_verified_pilot_readiness_v2(value: Any) -> VerifiedPilotReadinessV2:
-    """Nominal gate: claims/booleans/Trader tokens can never substitute READY."""
-    del value
-    raise ExactFourAuthorityPending("isolated v2 READY verification is not active")
-
-
-def require_verified_trader_authorization_v2(
-    value: Any,
-) -> VerifiedExactFourTraderAuthorizationV2:
-    """Nominal gate: READY or execution claims cannot authorize a Trader."""
-    del value
-    raise ExactFourAuthorityPending(
-        "isolated v2 human Trader authorization is not active"
-    )
-
-
-def require_authorized_exact_four_execution_v2(
-    value: Any,
-) -> AuthorizedExactFourExecutionV2:
-    """Nominal gate: only the future one-shot writer can return this type."""
-    del value
-    raise ExactFourAuthorityPending(
-        "isolated v2 controlled execution writer is not active"
-    )
-
 __all__ = [
-    "AuthorizedExactFourExecutionV2",
     "PINNED_EXACT_FOUR_AUTHORITY_SCHEMA_DIGEST",
     "PINNED_EXACT_FOUR_AUTHORITY_SCHEMA_RAW_DIGEST",
     "PINNED_EXACT_FOUR_RESULT_SCHEMA_DIGEST",
     "PINNED_EXACT_FOUR_RESULT_SCHEMA_RAW_DIGEST",
-    "VerifiedExactFourTraderAuthorizationV2",
-    "VerifiedPilotReadinessV2",
     "authority_schema_path",
     "exact_four_result_schema_path",
     "load_exact_four_authority_schema",
     "load_exact_four_result_schema",
-    "require_authorized_exact_four_execution_v2",
-    "require_verified_pilot_readiness_v2",
-    "require_verified_trader_authorization_v2",
 ]
