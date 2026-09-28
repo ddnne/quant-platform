@@ -1035,22 +1035,25 @@ class PersonalHistorySourceClient:
         return route
 
     def _load_structured_bar_month(self, month: str) -> None:
+        if self.structured_bar_sources is not None and "*" in self.structured_bar_sources:
+            indexed: dict[str, list[StructuredBarsObject]] = {}
+            for source in self.structured_bar_sources["*"]:
+                body = self._download_structured_bar_object(source)
+                months = set()
+                for envelope in iter_verified_structured_bars(body, source, max_object_bytes=STRUCTURED_BAR_OBJECT_MAX_BYTES):
+                    payload = envelope["payload"]
+                    if isinstance(payload, str):
+                        payload = json.loads(payload)
+                    months.add(str(payload["Date"])[:7])
+                for observed_month in months:
+                    indexed.setdefault(observed_month, []).append(source)
+            self.structured_bar_sources = {key: tuple(value) for key, value in indexed.items()}
         if month in self._structured_months_loaded:
             return
         sources = (self.structured_bar_sources or {}).get(month, ())
         if not sources:
             raise PersonalHistoryError(f"stored bars manifest missing month {month}")
         for source in sources:
-            # Keys are R2 paths, never arbitrary URLs or redirect destinations.
-            if (
-                not source.key.startswith("structured/jsonl/equities_bars_daily/")
-                or not source.key.endswith(".jsonl")
-                or any(part in {"", ".", ".."} for part in source.key.split("/"))
-                or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/-_.=" for char in source.key)
-                or type(source.size) is not int
-                or not 0 < source.size <= STRUCTURED_BAR_OBJECT_MAX_BYTES
-            ):
-                raise PersonalHistoryError("stored bars object request rejected")
             prior = self.spool._conn.execute(
                 "SELECT sha256,bytes,rows FROM structured_bar_objects WHERE object_key=?",
                 (source.key,),
@@ -1060,16 +1063,28 @@ class PersonalHistorySourceClient:
                     raise PersonalHistoryError("stored bars immutable descriptor conflict")
                 continue
             self.spool.guard_bounds(extra_pages=1, extra_bytes=source.size * 3)
-            url = f"{self.r2_origin}/{source.key}"
-            request = urllib.request.Request(url, headers={"accept-encoding": "identity"})
-            with self._r2_urlopen(request, timeout=CACHE_GET_TIMEOUT_S) as response:
-                if int(response.status) != 200 or response.geturl() != url:
-                    raise PersonalHistoryError("stored bars transport status/redirect rejected")
-                body = response.read(source.size + 1)
+            body = self._download_structured_bar_object(source)
             self.spool.record_structured_bars(
                 body, source, max_object_bytes=STRUCTURED_BAR_OBJECT_MAX_BYTES,
             )
         self._structured_months_loaded.add(month)
+
+    def _download_structured_bar_object(self, source: StructuredBarsObject) -> bytes:
+        if (
+            not source.key.startswith("structured/jsonl/equities_bars_daily/")
+            or not source.key.endswith(".jsonl")
+            or any(part in {"", ".", ".."} for part in source.key.split("/"))
+            or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/-_.=" for char in source.key)
+            or type(source.size) is not int
+            or not 0 < source.size <= STRUCTURED_BAR_OBJECT_MAX_BYTES
+        ):
+            raise PersonalHistoryError("stored bars object request rejected")
+        url = f"{self.r2_origin}/{source.key}"
+        request = urllib.request.Request(url, headers={"accept-encoding": "identity"})
+        with self._r2_urlopen(request, timeout=CACHE_GET_TIMEOUT_S) as response:
+            if int(response.status) != 200 or response.geturl() != url:
+                raise PersonalHistoryError("stored bars transport status/redirect rejected")
+            return response.read(source.size + 1)
 
     def _governed_request(
         self,

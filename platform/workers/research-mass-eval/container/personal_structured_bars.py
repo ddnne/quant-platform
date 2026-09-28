@@ -36,14 +36,17 @@ def decode_structured_bar_manifest(body: bytes, digest: str) -> dict[str, tuple[
         raise PersonalHistoryError("stored bars manifest size/digest rejected")
     try:
         document = json.loads(body)
-        if set(document) != {"schema", "months"} or document["schema"] != "personal-stored-bars/v1":
+        if set(document) not in ({"schema", "months"}, {"schema", "objects"}) or document["schema"] != "personal-stored-bars/v1":
             raise ValueError("schema")
-        months = document["months"]
+        # Flat metadata lists are indexed by actual row dates in the cloud.
+        # The internal '*' entry is never treated as a coverage claim.
+        unindexed = "objects" in document
+        months = {"*": document["objects"]} if unindexed else document["months"]
         if not isinstance(months, dict) or not months:
             raise ValueError("months")
         result = {}
         for month, objects in months.items():
-            if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month) or not isinstance(objects, list) or not objects:
+            if (not unindexed and not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month)) or not isinstance(objects, list) or not objects:
                 raise ValueError("month")
             sources = []
             for item in objects:

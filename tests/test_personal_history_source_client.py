@@ -147,10 +147,10 @@ def test_stored_bars_reader_preserves_multiday_vintages_and_checks_bytes(tmp_pat
         spool.close()
 
     downloads = []
-    manifest = json.dumps({"schema": "personal-stored-bars/v1", "months": {
-        "2020-01": [{"key": source.key, "sha256": source.sha256,
-                     "bytes": source.size, "rows": source.rows}],
-    }}).encode()
+    manifest = json.dumps({"schema": "personal-stored-bars/v1", "objects": [
+        {"key": source.key, "sha256": source.sha256,
+         "bytes": source.size, "rows": source.rows},
+    ]}).encode()
     manifest_digest = hashlib.sha256(manifest).hexdigest()
     class StoredResponse(io.BytesIO):
         status = 200
@@ -173,10 +173,10 @@ def test_stored_bars_reader_preserves_multiday_vintages_and_checks_bytes(tmp_pat
     try:
         assert len(client.fetch_dataset_evidenced("equities_bars_daily", date="2020-01-06").rows) == 2
         assert len(client.fetch_dataset_evidenced("equities_bars_daily", date="2020-01-07").rows) == 1
-        assert len(downloads) == 2  # manifest and one data object
+        assert len(downloads) == 3  # manifest, one indexing pass, one monthly load
         client.release_acquired_raw()
         assert len(client.fetch_dataset_evidenced("equities_bars_daily", date="2020-01-06").rows) == 2
-        assert len(downloads) == 3 and client.fetch_calls == 0
+        assert len(downloads) == 4 and client.fetch_calls == 0  # no second indexing pass
     finally:
         client.close()
 
