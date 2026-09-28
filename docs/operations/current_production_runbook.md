@@ -143,8 +143,14 @@ remote apply results only in immutable release evidence.
   ```
 
   Local CLI invocation from the repository or Worker directory is not a
-  working deployment path. Local and production Mass tagged deploy stay refused while a Container
-  image is declared. Worker multipart module-byte verification is not
+  working deployment path. Local Mass tagged deploy stays refused while a Container
+  image is declared. Explicitly approved manual production rollout may use the
+  same Cloudflare Builds-only command with `--env production`; clean live-main
+  SHA and module verification remain required. This capability does not enable
+  automatic production deployment or authorize READY/Pilot. Keep automatic
+  deployment on HOLD; use a manual-only trigger configuration for the approved
+  build and restore its previous configuration after dispatch.
+  Worker multipart module-byte verification is not
   Container image rollout or research GO. Image push can follow Worker
   upload and is not transactional. The 900s mutate timeout only waits on
   the Wrangler parent and does not confirm a detached Docker build/push
