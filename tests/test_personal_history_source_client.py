@@ -124,6 +124,25 @@ def test_stored_bars_reader_preserves_multiday_vintages_and_checks_bytes(tmp_pat
         assert spool.usage()[0] == 1
         assert spool._conn.execute("SELECT COUNT(*) FROM structured_bar_rows").fetchone()[0] == 3
         assert not spool.month_complete("equities_bars_daily", "2020-01")
+        overlap = StructuredBarsObject(source.key.replace("test.jsonl", "overlap.jsonl"),
+                                       source.sha256, source.size, source.rows)
+        spool.record_structured_bars(body, overlap, max_object_bytes=len(body))
+        fetched = spool.select_structured_bars("2020-01-06")
+        assert len(fetched.rows) == 2  # two vintages, not four duplicate records
+        provenance, _, selection = _page_evidence(fetched)
+        assert len(provenance) == 2 and selection is None
+        assert all(item["kind"] == "stored_structured_object" for item in provenance)
+        assert not fetched.pages  # never fabricate API pagination evidence
+        with pytest.raises(PersonalHistoryError, match="missing trading day"):
+            spool.select_structured_bars("2020-01-08")
+        conflicting = body.replace(b'"AAdjC": 101', b'"AAdjC": 102')
+        conflict_source = StructuredBarsObject(
+            source.key.replace("test.jsonl", "conflict.jsonl"),
+            hashlib.sha256(conflicting).hexdigest(), len(conflicting), source.rows,
+        )
+        spool.record_structured_bars(conflicting, conflict_source, max_object_bytes=len(conflicting))
+        with pytest.raises(PersonalHistoryError, match="conflicting overlapping vintage"):
+            spool.select_structured_bars("2020-01-06")
     finally:
         spool.close()
 

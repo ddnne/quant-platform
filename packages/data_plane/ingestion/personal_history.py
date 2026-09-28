@@ -664,6 +664,24 @@ def _page_evidence(
     pages = tuple(getattr(fetch_result, "pages", ()) or ())
     selected_rows = tuple(dict(row) for row in getattr(fetch_result, "rows", ()) or ())
     selection = getattr(fetch_result, "selection", None)
+    objects = tuple(getattr(fetch_result, "structured_objects", ()) or ())
+    if objects:
+        if pages or selection is not None or not selected_rows:
+            raise PersonalHistoryError("mixed or empty structured object evidence")
+        evidence = [dict(item) for item in objects]
+        for item in evidence:
+            if (
+                item.get("kind") != "stored_structured_object"
+                or not str(item.get("key", "")).startswith("structured/jsonl/equities_bars_daily/")
+                or type(item.get("bytes")) is not int or item["bytes"] <= 0
+                or type(item.get("rows")) is not int or item["rows"] <= 0
+            ):
+                raise PersonalHistoryError("invalid structured object evidence")
+            _page_digest_hex(item.get("sha256"))
+        if any(row.get("dataset") != "equities_bars_daily" for row in selected_rows):
+            raise PersonalHistoryError("structured object evidence is bars-only")
+        # Object provenance is not API pagination/discovery exhaustion or Receipt.
+        return evidence, _canonical_digest({"objects": evidence, "rows": selected_rows}), None
     if not pages:
         raise PersonalHistoryError("J-Quants response has no page evidence")
     evidence = [

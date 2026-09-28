@@ -291,6 +291,7 @@ class _Fetch:
     rows: tuple[dict[str, Any], ...]
     pages: tuple[SourcePage, ...]
     selection: SelectionEvidence | None = None
+    structured_objects: tuple[Mapping[str, Any], ...] = ()
 
 
 def selection_completion_digest(
@@ -368,6 +369,37 @@ class AcquisitionSpool:
             self._conn.rollback()
             raise
         self.guard_bounds()
+
+    def select_structured_bars(self, day: str) -> _Fetch:
+        """Read a day from verified objects; overlaps are not extra vintages."""
+        selected: dict[tuple[str, str], dict[str, Any]] = {}
+        objects: dict[str, Mapping[str, Any]] = {}
+        for record in self._conn.execute(
+            "SELECT r.envelope_json, o.* FROM structured_bar_rows r "
+            "JOIN structured_bar_objects o ON o.object_key=r.object_key "
+            "WHERE r.row_date=? ORDER BY r.object_key,r.ordinal", (day,),
+        ):
+            envelope = json.loads(record["envelope_json"])
+            payload = envelope["payload"]
+            if isinstance(payload, str):
+                payload = json.loads(payload)
+            envelope["payload"] = payload
+            identity = (str(payload["Code"]), envelope["ingested_at"])
+            previous = selected.get(identity)
+            if previous is not None:
+                fields = ("event_time", "available_at", "ingested_at", "payload")
+                if any(previous[field] != envelope[field] for field in fields):
+                    raise PersonalHistoryError("stored bars conflicting overlapping vintage")
+            else:
+                selected[identity] = envelope
+            objects[record["object_key"]] = {
+                "kind": "stored_structured_object",
+                "key": record["object_key"], "sha256": record["sha256"],
+                "bytes": record["bytes"], "rows": record["rows"],
+            }
+        if not selected:
+            raise PersonalHistoryError(f"stored bars missing trading day {day}")
+        return _Fetch(tuple(selected.values()), (), structured_objects=tuple(objects.values()))
 
     def reset(self) -> None:
         incomplete = self._conn.execute(
@@ -911,6 +943,7 @@ class PersonalHistorySourceClient:
         r2_opener: Any = None,
         r2_origin: str = CACHE_R2_ORIGIN,
         cache_only: bool = False,
+        structured_bars: bool = False,
         utc_today: Callable[[], date] | None = None,
         _sleep: Any = None,
         _max_attempts: int | None = None,
@@ -919,6 +952,7 @@ class PersonalHistorySourceClient:
             raise PersonalHistoryError("acquisition environment is invalid")
         self.environment = environment
         self.cache_only = cache_only
+        self.structured_bars = structured_bars
         self.period_end = period_end
         self.origin = origin.rstrip("/")
         self.r2_origin = r2_origin.rstrip("/")
@@ -967,6 +1001,8 @@ class PersonalHistorySourceClient:
         if dataset == "equities_master":
             return self._day_selection(dataset, str(params["date"]))
         if dataset == "equities_bars_daily":
+            if self.structured_bars:
+                return self.spool.select_structured_bars(str(params["date"]))
             return self._day_selection(dataset, str(params["date"]))
         return self._fins_code(str(params["code"]))
 
