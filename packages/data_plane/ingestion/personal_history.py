@@ -2376,6 +2376,16 @@ class PersonalHistoryHydrator:
                 stamp = str(row["ingested_at"])
                 latest = self._latest_compact_bar(code, day)
                 digest = _fact_content_digest(dataset, payload)
+                if stored_clocks:
+                    exact = self._connection.execute(
+                        "SELECT * FROM personal_history_compact_bars "
+                        "WHERE code=? AND date=? AND available_at=? AND ingested_at=?",
+                        (code, day, official, stamp),
+                    ).fetchone()
+                    if exact is not None:
+                        if _stored_bar_content_digest(exact) != digest:
+                            raise PersonalHistoryError("stored bar vintage conflicts with committed content")
+                        continue
                 if latest is not None and _stored_bar_content_digest(latest) == digest:
                     continue
                 available_at, ingested_at = (official, stamp) if stored_clocks else _vintage_clocks(

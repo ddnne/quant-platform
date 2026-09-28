@@ -1791,6 +1791,15 @@ def test_stored_bars_hydrate_through_compact_store_without_retimestamping(tmp_pa
             "2025-02-01T17:00:00+09:00" if row["ingested_at"].startswith("2025-02-02") else row["event_time"]
         ) for row in rows)
         assert all(row["morning_adjustment_close"] is not None for row in rows)
+        replay_rows = _compact_bars(
+            client.fetch_dataset_evidenced("equities_bars_daily", date="2025-01-06").rows,
+            trading_day="2025-01-06",
+            scope_union=frozenset(row["code"] for row in rows if row["date"] == "2025-01-06"),
+            ingested_at="2025-03-01T16:00:00+09:00",
+        )
+        hydrator = PersonalHistoryHydrator(client=client, store=store, plan=plan)
+        assert hydrator._insert_compact_facts("equities_bars_daily", replay_rows, stored_clocks=True) == 0
+        client.release_acquired_raw()
         evidence = store._conn.execute("SELECT page_evidence_json FROM personal_history_segments WHERE dataset='equities_bars_daily'").fetchall()
         assert evidence and all(json.loads(row[0])[0]["kind"] == "stored_structured_object" for row in evidence)
         assert client.spool.usage()[0] == 0
