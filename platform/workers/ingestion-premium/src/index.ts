@@ -174,11 +174,13 @@ function collectionSegment(
   queries: Record<string, string>[],
 ): CollectionSegment {
   const dates: string[] = [];
+  const publicationWindow = queries.some((query) => Boolean(query.published_date));
   for (const query of queries) {
     if (query.from) dates.push(query.from);
     if (query.to) dates.push(query.to);
     const dayKey = spec.dayParam || "date";
     if (query[dayKey]) dates.push(query[dayKey]);
+    if (query.published_date) dates.push(query.published_date);
   }
   if (dates.length === 0) {
     // Vendor snapshot has no date/from/to query; collection window is ingest JST day.
@@ -210,12 +212,12 @@ function collectionSegment(
   const requiredEnd = currentDay.slice(0, 7) === month
     ? currentDay
     : monthEnd(start);
-  const canonicalMonth = snapshot
+  const canonicalMonth = !publicationWindow && (snapshot
     ? id === currentDay
     : id === month
       && month <= currentDay.slice(0, 7)
       && start === requiredStart
-      && end === requiredEnd;
+      && end === requiredEnd);
   const identity = governedReceiptIdentity(spec.id);
   if (identity !== undefined && identity.source === "jquants") {
     const planned = canonicalReceiptExpectedScope(spec, {
@@ -237,6 +239,7 @@ function collectionSegment(
     start,
     end,
     expectedScope: {
+      ...(publicationWindow ? { query_date_field: "PubDate" } : {}),
       coverage_mode: spec.coverage.coverage_mode,
       expected_frequency: spec.coverage.expected_frequency,
       expected_item_unit: spec.coverage.expected_frequency === "event_driven"

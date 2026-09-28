@@ -290,15 +290,15 @@
       "natural_key_fields": ["Date", "Code"],
       "event_time_policy": "observation_date",
       "event_time_fields": ["Date"],
-      "available_at_policy": "ingest_time_conservative",
-      "availability_field": null,
+      "available_at_policy": "explicit_disclosure_date",
+      "availability_field": "PubDate",
       "known_publication_lag": null,
       "fallback_policy": "ingest_time_conservative",
       "observation_grain": "issuer_margin_observation_day",
       "bulk": "api",
-      "params": ["code", "date", "from", "to"],
+      "params": ["code", "date", "from", "to", "published_date"],
       "code_param": true,
-      "assumption": "Date is an observation day; no publication field or evidenced lag is available."
+      "assumption": "Date is the application date, not publication. From 2026-09-25 application dates, daily data has PubDate and six nullable Val fields; earlier history remains weekly with these fields null. Date-only PubDate is conservatively available at the next JST midnight, never application-day noon; absent PubDate retains ingest time. published_date cannot be combined with date/from/to and cannot retrieve legacy history. JSON/CSV fields are name-based, not positional. Source: https://jpx-jquants.com/ja/spec/mkt-margin-int"
     },
     {
       "dataset_id": "markets_margin_alert",
@@ -423,9 +423,9 @@
       "fallback_policy": "ingest_time_conservative",
       "observation_grain": "edinet_filing_document",
       "bulk": "api",
-      "params": ["code", "date"],
+      "params": ["edinet_code", "code", "date"],
       "code_param": true,
-      "assumption": "DocId identifies the filing and SubDate+SubTime is its explicit submission timestamp."
+      "assumption": "DocId identifies each filing, including corrections (document type 360 / LargeHldgTypeCode 6); retain ParDocId and RptOblgDate in the payload without replacing the original DocId. SubDate+SubTime is availability; RptOblgDate is not availability. edinet_code and code are mutually exclusive. Holdings differences around the 2026-05-01 reporting-rule change do not alone establish trades. Source: https://jpx-jquants.com/ja/spec/edinet-large-volume-shareholders"
     },
     {
       "dataset_id": "equities_valuation",
