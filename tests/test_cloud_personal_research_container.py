@@ -2215,8 +2215,30 @@ def test_absolute_watchdog_is_not_renewed_by_status_polling() -> None:
         manager.submit(_job("b" * 64, "second-job"))
 
 
-def test_timeout_kills_term_ignoring_group_before_failed_terminal(tmp_path: Path) -> None:
+def test_overdue_result_is_failed_even_when_watchdog_delivery_is_held(
+    held_retry_scheduler: list[_HeldTimer],
+) -> None:
+    terminal = threading.Event()
+    ticks = iter((0.0, 2.0))
+    manager = _job_manager(
+        _manager_completed_result,
+        clock=lambda: next(ticks, 2.0),
+        max_job_seconds=1,
+        terminal_uploader=lambda *_args, **_kwargs: None,
+        on_terminal=terminal.set,
+    )
+    spec = _job("a" * 64, "overdue-result")
+    manager.submit(spec)
+    assert terminal.wait(5)
+    assert manager.status(spec.job_id)["status"] == "FAILED"
+    assert "lifetime exceeded" in manager.status(spec.job_id)["error"]
+
+
+def test_timeout_kills_term_ignoring_group_before_failed_terminal(
+    tmp_path: Path, held_retry_scheduler: list[_HeldTimer]
+) -> None:
     entered = PROCESS_CONTEXT.Event()
+    hold_read, hold_write = os.pipe()
     terminal = threading.Event()
     late_write = tmp_path / "late-authoritative-write"
     supervised_pid = {"value": 0}
@@ -2224,7 +2246,7 @@ def test_timeout_kills_term_ignoring_group_before_failed_terminal(tmp_path: Path
     def runner(spec):
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         entered.set()
-        time.sleep(0.4)
+        os.read(hold_read, 1)
         late_write.write_text("forbidden", encoding="utf-8")
         return _manager_completed_result(spec)
 
@@ -2235,20 +2257,28 @@ def test_timeout_kills_term_ignoring_group_before_failed_terminal(tmp_path: Path
     manager = _job_manager(
         runner,
         on_terminal=terminal.set,
-        max_job_seconds=0.05,
+        max_job_seconds=30,
         terminal_uploader=uploader,
         process_term_grace_seconds=0.05,
         process_kill_grace_seconds=0.5,
     )
     spec = _job("a" * 64, "term-ignore-timeout")
-    manager.submit(spec)
-    assert manager._supervisor is not None
-    supervised_pid["value"] = manager._supervisor.pid
-    assert entered.wait(1)
-    assert terminal.wait(2)
-    assert manager.status(spec.job_id)["status"] == "FAILED"
-    time.sleep(0.45)
-    assert not late_write.exists()
+    try:
+        manager.submit(spec)
+        assert manager._supervisor is not None
+        supervised_pid["value"] = manager._supervisor.pid
+        assert entered.wait(5)
+        # Deliver expiry only after SIGTERM resistance is installed. The real
+        # process-group stop and publication ordering remain under test.
+        assert manager._watchdog is not None
+        manager._watchdog.fire()
+        assert terminal.wait(5)
+        assert manager.status(spec.job_id)["status"] == "FAILED"
+        assert not late_write.exists()
+    finally:
+        manager.cancel(spec.job_id)
+        os.close(hold_write)
+        os.close(hold_read)
 
 
 def test_root_exit_with_live_grandchild_is_stopped_before_terminal(tmp_path: Path) -> None:
@@ -2613,7 +2643,7 @@ def _put_then_get_404(monkeypatch, *, put_error):
 
 @pytest.mark.parametrize("status", (400, 403))
 def test_deterministic_put_then_terminal_get_404_shuts_down_fail_closed(
-    monkeypatch, status: int
+    held_retry_scheduler: list[_HeldTimer], monkeypatch, status: int
 ) -> None:
     fake = _put_then_get_404(
         monkeypatch,
@@ -2621,19 +2651,28 @@ def test_deterministic_put_then_terminal_get_404_shuts_down_fail_closed(
             url, status, "denied", Message(), io.BytesIO(b"")
         ),
     )
-    terminal = threading.Event()
+    shutdowns: list[int] = []
     spec = _job("a" * 64, f"denied-put-{status}")
     manager = _job_manager(
-        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
-        on_terminal=terminal.set,
-        retry_schedule=(0.05, 0.05),
+        lambda item: (_ for _ in ()).throw(
+            AssertionError("publication boundary test must not start a runner")
+        ),
+        on_terminal=lambda: shutdowns.append(1),
         max_job_seconds=30,
     )
-    manager.submit(spec)
-    assert terminal.wait(1)
+    # Process quiescence is covered by the supervisor tests. Exercise the real
+    # publication/HTTP path here without coupling denial handling to OS startup.
+    manager._begin_terminal_publication(
+        spec, manager._failure_terminal(spec, "runner failed")
+    )
+    assert shutdowns == [1]
     assert fake.puts == 1
+    assert fake.gets == 1
     assert manager._shutdown_notified is True
-    assert manager.status(spec.job_id)["status"] == "FAILED"
+    assert manager._pending_terminal is None
+    assert held_retry_scheduler == []
+    with pytest.raises(service.JobBusyError):
+        manager.submit(_job("b" * 64, "after-denied-terminal"))
 
 
 @pytest.mark.parametrize(

@@ -2799,6 +2799,7 @@ class JobManager:
         self._process_context = process_context
         self._supervisor: _ProcessGroupSupervisor | None = None
         self._requested_stop: tuple[str, str] | None = None
+        self._execution_deadline: float | None = None
 
     def submit(self, spec: JobSpecLike) -> dict[str, Any]:
         if isinstance(spec, ControlledPilotJobSpec):
@@ -3003,6 +3004,7 @@ class JobManager:
     def _start_local_executor_locked(self, spec: JobSpecLike) -> None:
         self._active_job_id = spec.job_id
         self._requested_stop = None
+        self._execution_deadline = self._clock() + self._max_job_seconds
         if isinstance(spec, ControlledPilotJobSpec):
             self._lease_lost.clear()
         work_root = self._work_root or Path(
@@ -3020,7 +3022,7 @@ class JobManager:
         self._supervisor = supervisor
         supervisor.start()
         watchdog = threading.Timer(
-            self._max_job_seconds,
+            max(0.0, self._execution_deadline - self._clock()),
             self._expire,
             args=(spec.job_id,),
         )
@@ -3724,6 +3726,14 @@ class JobManager:
             if self._supervisor is not supervisor:
                 return
             stop = self._requested_stop
+            # Timer delivery can lag under load. Startup belongs to the same
+            # absolute lifetime, and an overdue result must never become success.
+            if (
+                stop is None
+                and self._execution_deadline is not None
+                and self._clock() >= self._execution_deadline
+            ):
+                stop = ("timeout", "absolute Container lifetime exceeded")
             if not outcome.quiescent:
                 record = self._jobs[spec.job_id]
                 self._jobs[spec.job_id] = {
