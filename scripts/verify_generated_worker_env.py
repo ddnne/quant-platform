@@ -99,9 +99,9 @@ def expected_env_properties(
     """Return required Env keys plus optional keys Wrangler emits for ``base``.
 
     ``wrangler types --env=`` treats an empty selector as unset, so it hashes
-    every environment in the same ``wrangler.toml``. Bindings that exist only
-    under ``[env.production]`` are therefore required on ``ProductionEnv`` and
-    optional (``?:``) on aggregate ``Cloudflare.Env``. Staging lives in a
+    every environment in the same ``wrangler.toml``. Bindings present in only
+    base or production are optional (``?:``) on aggregate ``Cloudflare.Env``;
+    named environments retain their own required bindings. Staging lives in a
     separate config and is not part of that aggregate.
     """
     required = expected_types(
@@ -114,9 +114,10 @@ def expected_env_properties(
         )
         optional = {
             name: type_name
-            for name, type_name in production.items()
-            if name not in required
+            for name, type_name in (required | production).items()
+            if name not in required or name not in production
         }
+        required = {name: value for name, value in required.items() if name not in optional}
     return required, optional
 
 

@@ -27,7 +27,7 @@ function productRpc(
 /** Narrow receipt-product byte capability exposed only to receipt.products. */
 export async function receiptProductSourceOutbound(
   request: Request,
-  env: ProductEnv,
+  env: ProductEnv | Cloudflare.Env,
 ): Promise<Response> {
   const url = new URL(request.url);
   if (
@@ -41,7 +41,9 @@ export async function receiptProductSourceOutbound(
   if (request.method !== "POST") {
     return json({ error: "POST required" }, 405);
   }
-  const rpc = productRpc(env.INGESTION_PREMIUM);
+  const rpc = productRpc(
+    "INGESTION_PREMIUM" in env ? env.INGESTION_PREMIUM : undefined,
+  );
   if (rpc === undefined) {
     return json({ error: "receipt product binding unavailable" }, 503);
   }
