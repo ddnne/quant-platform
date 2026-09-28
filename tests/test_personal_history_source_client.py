@@ -74,6 +74,12 @@ def test_stored_bars_reader_preserves_multiday_vintages_and_checks_bytes():
     with pytest.raises(PersonalHistoryError, match="size/count rejected"):
         list(iter_verified_structured_bars(body, source, max_object_bytes=len(body) - 1))
 
+    rows[0]["natural_key"]["Code"] = "99990"
+    wrong_key = b"\n".join(json.dumps(row).encode() for row in rows)
+    wrong_source = StructuredBarsObject(source.key, hashlib.sha256(wrong_key).hexdigest(), len(wrong_key), len(rows))
+    with pytest.raises(PersonalHistoryError, match="natural key/payload"):
+        list(iter_verified_structured_bars(wrong_key, wrong_source, max_object_bytes=len(wrong_key)))
+    rows[0]["natural_key"]["Code"] = "12340"
     rows[-1]["ingested_at"] = "2020-01-06T15:00:00+09:00"
     invalid = b"\n".join(json.dumps(row).encode() for row in rows)
     invalid_source = StructuredBarsObject(source.key, hashlib.sha256(invalid).hexdigest(), len(invalid), len(rows))

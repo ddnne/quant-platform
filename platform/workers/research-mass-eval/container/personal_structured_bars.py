@@ -14,6 +14,7 @@ import io
 import json
 from typing import Any, Iterator
 
+from data_contracts.identity import natural_key
 from ingestion.personal_history import PersonalHistoryError
 
 
@@ -93,8 +94,15 @@ No latest-row collapse: the scratch consumer must retain distinct vintages.
             raise PersonalHistoryError("structured bars event/payload date mismatch")
         if observed < available or available < event:
             raise PersonalHistoryError("structured bars vintage clocks are inconsistent")
-        if not row.get("natural_key"):
-            raise PersonalHistoryError("structured bars missing natural key")
+        try:
+            key = row.get("natural_key")
+            if isinstance(key, str):
+                key = json.loads(key, parse_constant=_reject_nonfinite)
+            expected_key = json.loads(natural_key(payload, "equities_bars_daily"))
+        except (ValueError, TypeError) as exc:
+            raise PersonalHistoryError("structured bars invalid natural key") from exc
+        if key != expected_key:
+            raise PersonalHistoryError("structured bars natural key/payload mismatch")
         # Keep the original envelope (including its payload representation).
         # The existing compact normalizer owns field aliases and numeric checks.
         yield row
