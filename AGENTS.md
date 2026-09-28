@@ -8,7 +8,7 @@
 
 ## Correctness, cost and data
 
-- Preserve numeric correctness, PIT/AM-to-PM causality, historical provenance and budget limits. Missing observations are not zero returns or successful evidence. Keep Mass, FoF, broker, live orders and automatic promotion disabled unless explicitly authorized.
+- Preserve numeric correctness, PIT/AM-to-PM causality, historical provenance, immutable evidence and budget limits. Missing observations are not zero returns or successful evidence. Keep Mass, FoF, broker, live orders and automatic promotion disabled unless explicitly authorized.
 - Keep practical guards against corrupt/missing data, uncontrolled charges and accidental real orders. Before adding a layer or test, identify the realistic failure and whether existing structure already covers it.
 - Prefer one representative numeric or behavioral regression per distinct failure. Delete redundant implementation-copy, mock-self-check, library-guarantee and source-text tests. Test counts and coverage percentages are not goals. Detailed policy: [invariant test audit](docs/ci/invariant_test_audit.md).
 - Do not persist authentic market history locally or run local Docker/VM backtests. Small synthetic fixtures are permitted. Historical bodies belong in R2; use bounded D1 metadata and cloud scratch. Preserve existing data and signed evidence during authorized migrations. Architecture: [cloud storage plane](docs/architecture/cf_native_storage_plane.md).
