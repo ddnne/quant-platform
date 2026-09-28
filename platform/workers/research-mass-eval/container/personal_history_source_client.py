@@ -60,6 +60,8 @@ from personal_acquisition_cache import (
     write_month_shard,
 )
 
+from personal_structured_bars import StructuredBarsObject, iter_verified_structured_bars
+
 HISTORY_SOURCE_ORIGIN = "http://history.source"
 HISTORY_SOURCE_PATH = "/v1/fetch-governed-page"
 HISTORY_SOURCE_USER_AGENT = "quant-personal-history/v13"
@@ -130,6 +132,22 @@ CREATE TABLE IF NOT EXISTS month_state (
     PRIMARY KEY (dataset, month),
     CHECK (status IN ('FETCHING','COMPLETE'))
 );
+CREATE TABLE IF NOT EXISTS structured_bar_objects (
+    object_key TEXT PRIMARY KEY,
+    sha256 TEXT NOT NULL,
+    bytes INTEGER NOT NULL,
+    rows INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS structured_bar_rows (
+    object_key TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    row_date TEXT NOT NULL,
+    code TEXT NOT NULL,
+    envelope_json TEXT NOT NULL,
+    PRIMARY KEY (object_key, ordinal)
+);
+CREATE INDEX IF NOT EXISTS structured_bar_rows_date_code
+    ON structured_bar_rows(row_date, code);
 """
 
 
@@ -312,6 +330,45 @@ class AcquisitionSpool:
         self._verified_pages.clear()
         self._conn.close()
 
+    def record_structured_bars(
+        self, body: bytes, source: StructuredBarsObject, *, max_object_bytes: int
+    ) -> None:
+        """Stage one existing object atomically, without claiming API exhaustion."""
+        prior = self._conn.execute(
+            "SELECT sha256, bytes, rows FROM structured_bar_objects WHERE object_key=?",
+            (source.key,),
+        ).fetchone()
+        self.guard_bounds(
+            extra_pages=int(prior is None),
+            extra_bytes=len(body) * 3 if prior is None else 0,
+        )
+        self._conn.execute("BEGIN")
+        try:
+            if prior is not None and tuple(prior) != (source.sha256, source.size, source.rows):
+                raise PersonalHistoryError("structured bars immutable object conflict")
+            for ordinal, envelope in enumerate(iter_verified_structured_bars(
+                body, source, max_object_bytes=max_object_bytes
+            )):
+                payload = envelope["payload"]
+                if isinstance(payload, str):
+                    payload = json.loads(payload)
+                if prior is None:
+                    self._conn.execute(
+                        "INSERT INTO structured_bar_rows VALUES (?,?,?,?,?)",
+                        (source.key, ordinal, payload["Date"], str(payload["Code"]),
+                         canonical_json(envelope)),
+                    )
+            if prior is None:
+                self._conn.execute(
+                    "INSERT INTO structured_bar_objects VALUES (?,?,?,?)",
+                    (source.key, source.sha256, source.size, source.rows),
+                )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        self.guard_bounds()
+
     def reset(self) -> None:
         incomplete = self._conn.execute(
             """
@@ -341,7 +398,10 @@ class AcquisitionSpool:
 
     def usage(self) -> tuple[int, int]:
         pages = int(
-            self._conn.execute("SELECT COUNT(*) FROM source_pages").fetchone()[0]
+            self._conn.execute(
+                "SELECT (SELECT COUNT(*) FROM source_pages) + "
+                "(SELECT COUNT(*) FROM structured_bar_objects)"
+            ).fetchone()[0]
         )
         size = self.path.stat().st_size if self.path.exists() else 0
         for suffix in ("-wal", "-shm"):

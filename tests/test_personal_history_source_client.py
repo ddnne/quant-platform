@@ -47,7 +47,7 @@ from personal_structured_bars import (
 )
 
 
-def test_stored_bars_reader_preserves_multiday_vintages_and_checks_bytes():
+def test_stored_bars_reader_preserves_multiday_vintages_and_checks_bytes(tmp_path, monkeypatch):
     rows = [
         {
             "dataset": "equities_bars_daily",
@@ -85,6 +85,33 @@ def test_stored_bars_reader_preserves_multiday_vintages_and_checks_bytes():
     invalid_source = StructuredBarsObject(source.key, hashlib.sha256(invalid).hexdigest(), len(invalid), len(rows))
     with pytest.raises(PersonalHistoryError, match="vintage clocks"):
         list(iter_verified_structured_bars(invalid, invalid_source, max_object_bytes=len(invalid)))
+
+    spool = client_mod.AcquisitionSpool(tmp_path / "synthetic-structured.sqlite")
+    try:
+        spool.record_structured_bars(body, source, max_object_bytes=len(body))
+        with monkeypatch.context() as bounded:
+            bounded.setattr(client_mod, "MAX_SPOOL_PAGES", 1)
+            spool.record_structured_bars(body, source, max_object_bytes=len(body))
+        assert spool.usage()[0] == 1
+        original = spool._conn.execute(
+            "SELECT envelope_json FROM structured_bar_rows ORDER BY ordinal"
+        ).fetchall()
+        assert len(original) == 3
+        assert json.loads(original[1][0])["payload"]["MAdjC"] is None
+        assert json.loads(original[2][0])["ingested_at"] == "2026-08-15T12:00:00+09:00"
+        with pytest.raises(PersonalHistoryError, match="immutable object conflict"):
+            spool.record_structured_bars(invalid, invalid_source, max_object_bytes=len(invalid))
+        broken = StructuredBarsObject(
+            source.key.replace("test.jsonl", "late-invalid.jsonl"),
+            invalid_source.sha256, len(invalid), len(rows),
+        )
+        with pytest.raises(PersonalHistoryError, match="vintage clocks"):
+            spool.record_structured_bars(invalid, broken, max_object_bytes=len(invalid))
+        assert spool.usage()[0] == 1
+        assert spool._conn.execute("SELECT COUNT(*) FROM structured_bar_rows").fetchone()[0] == 3
+        assert not spool.month_complete("equities_bars_daily", "2020-01")
+    finally:
+        spool.close()
 
 
 class _Response(io.BytesIO):
