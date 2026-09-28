@@ -393,8 +393,12 @@ def _discover_bound(
     have: set[tuple[str, str]],
     pending: set[tuple[str, str]],
     period_start: str,
-) -> str:
-    months = [segment_id for name, segment_id in have | pending if name == dataset]
+) -> str | None:
+    # The last shortage was measured before these declared months were applied.
+    # Reassess after materialization instead of requesting still older history.
+    if any(name == dataset for name, _segment_id in pending):
+        return None
+    months = [segment_id for name, segment_id in have if name == dataset]
     if months:
         return _previous_month(min(months))
     return _previous_month(period_start[:7])
@@ -716,6 +720,8 @@ def execute_receipt_candidate_job(
                     bound = _discover_bound(
                         dataset, have, pending_keys, period_start
                     )
+                    if bound is None:
+                        continue
                     request_bound = bound
                     while (dataset, request_bound) in discovered_bounds:
                         nxt = _previous_month(request_bound)
