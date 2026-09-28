@@ -176,7 +176,7 @@
     "markets_short_ratio": {
       "history_target_start": "2013-01-04",
       "coverage_mode": "periodic_reconciled",
-      "expected_frequency": "weekly",
+      "expected_frequency": "trading_day",
       "universe_rule": "all_market_sections"
     },
     "markets_short_sale_report": {

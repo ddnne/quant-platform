@@ -423,9 +423,9 @@
       "fallback_policy": "ingest_time_conservative",
       "observation_grain": "edinet_filing_document",
       "bulk": "api",
-      "params": ["code", "date"],
+      "params": ["edinet_code", "code", "date"],
       "code_param": true,
-      "assumption": "DocId identifies the filing and SubDate+SubTime is its explicit submission timestamp."
+      "assumption": "DocId identifies each filing, including corrections (document type 360 / LargeHldgTypeCode 6); retain ParDocId and RptOblgDate in the payload without replacing the original DocId. SubDate+SubTime is availability; RptOblgDate is not availability. edinet_code and code are mutually exclusive. Holdings differences around the 2026-05-01 reporting-rule change do not alone establish trades. Source: https://jpx-jquants.com/ja/spec/edinet-large-volume-shareholders"
     },
     {
       "dataset_id": "equities_valuation",
