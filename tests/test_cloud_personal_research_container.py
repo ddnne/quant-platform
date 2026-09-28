@@ -2613,7 +2613,7 @@ def _put_then_get_404(monkeypatch, *, put_error):
 
 @pytest.mark.parametrize("status", (400, 403))
 def test_deterministic_put_then_terminal_get_404_shuts_down_fail_closed(
-    monkeypatch, status: int
+    held_retry_scheduler: list[_HeldTimer], monkeypatch, status: int
 ) -> None:
     fake = _put_then_get_404(
         monkeypatch,
@@ -2621,19 +2621,28 @@ def test_deterministic_put_then_terminal_get_404_shuts_down_fail_closed(
             url, status, "denied", Message(), io.BytesIO(b"")
         ),
     )
-    terminal = threading.Event()
+    shutdowns: list[int] = []
     spec = _job("a" * 64, f"denied-put-{status}")
     manager = _job_manager(
-        lambda item: (_ for _ in ()).throw(RuntimeError("runner failed")),
-        on_terminal=terminal.set,
-        retry_schedule=(0.05, 0.05),
+        lambda item: (_ for _ in ()).throw(
+            AssertionError("publication boundary test must not start a runner")
+        ),
+        on_terminal=lambda: shutdowns.append(1),
         max_job_seconds=30,
     )
-    manager.submit(spec)
-    assert terminal.wait(1)
+    # Process quiescence is covered by the supervisor tests. Exercise the real
+    # publication/HTTP path here without coupling denial handling to OS startup.
+    manager._begin_terminal_publication(
+        spec, manager._failure_terminal(spec, "runner failed")
+    )
+    assert shutdowns == [1]
     assert fake.puts == 1
+    assert fake.gets == 1
     assert manager._shutdown_notified is True
-    assert manager.status(spec.job_id)["status"] == "FAILED"
+    assert manager._pending_terminal is None
+    assert held_retry_scheduler == []
+    with pytest.raises(service.JobBusyError):
+        manager.submit(_job("b" * 64, "after-denied-terminal"))
 
 
 @pytest.mark.parametrize(
