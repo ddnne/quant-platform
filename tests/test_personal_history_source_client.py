@@ -146,6 +146,31 @@ def test_stored_bars_reader_preserves_multiday_vintages_and_checks_bytes(tmp_pat
     finally:
         spool.close()
 
+    downloads = []
+    class StoredResponse(io.BytesIO):
+        status = 200
+        def geturl(self):
+            return f"http://research.r2/{source.key}"
+    class StoredR2:
+        def urlopen(self, request, timeout):
+            downloads.append(request.full_url)
+            return StoredResponse(body)
+    client = client_mod.PersonalHistorySourceClient(
+        environment="staging", period_end="2020-01-31",
+        spool_path=tmp_path / "synthetic-month-reader.sqlite",
+        cache_only=True, r2_opener=StoredR2(),
+        structured_bar_sources={"2020-01": (source,)},
+    )
+    try:
+        assert len(client.fetch_dataset_evidenced("equities_bars_daily", date="2020-01-06").rows) == 2
+        assert len(client.fetch_dataset_evidenced("equities_bars_daily", date="2020-01-07").rows) == 1
+        assert len(downloads) == 1
+        client.release_acquired_raw()
+        assert len(client.fetch_dataset_evidenced("equities_bars_daily", date="2020-01-06").rows) == 2
+        assert len(downloads) == 2 and client.fetch_calls == 0
+    finally:
+        client.close()
+
 
 class _Response(io.BytesIO):
     def __init__(self, payload: dict | bytes, headers: dict[str, str], status: int = 200):

@@ -75,6 +75,7 @@ HISTORY_SOURCE_FIXED_HEADERS = MappingProxyType(
     }
 )
 _MAX_PAGES_PER_MONTH = 8192
+STRUCTURED_BAR_OBJECT_MAX_BYTES = 64 * 1024 * 1024
 _MAX_POST_ATTEMPTS = 4
 _TRANSIENT_POST_STATUSES = frozenset({502, 503, 504})
 _TRANSIENT_RETRY_DELAYS_S = (1, 2, 4)
@@ -943,7 +944,7 @@ class PersonalHistorySourceClient:
         r2_opener: Any = None,
         r2_origin: str = CACHE_R2_ORIGIN,
         cache_only: bool = False,
-        structured_bars: bool = False,
+        structured_bar_sources: Mapping[str, Sequence[StructuredBarsObject]] | None = None,
         utc_today: Callable[[], date] | None = None,
         _sleep: Any = None,
         _max_attempts: int | None = None,
@@ -952,7 +953,11 @@ class PersonalHistorySourceClient:
             raise PersonalHistoryError("acquisition environment is invalid")
         self.environment = environment
         self.cache_only = cache_only
-        self.structured_bars = structured_bars
+        self.structured_bar_sources = (
+            None if structured_bar_sources is None else
+            {month: tuple(sources) for month, sources in structured_bar_sources.items()}
+        )
+        self._structured_months_loaded: set[str] = set()
         self.period_end = period_end
         self.origin = origin.rstrip("/")
         self.r2_origin = r2_origin.rstrip("/")
@@ -988,6 +993,7 @@ class PersonalHistorySourceClient:
 
     def release_acquired_raw(self) -> None:
         self.spool.reset()
+        self._structured_months_loaded.clear()
         self._refresh_progress()
 
     def close(self) -> None:
@@ -1001,8 +1007,10 @@ class PersonalHistorySourceClient:
         if dataset == "equities_master":
             return self._day_selection(dataset, str(params["date"]))
         if dataset == "equities_bars_daily":
-            if self.structured_bars:
-                return self.spool.select_structured_bars(str(params["date"]))
+            if self.structured_bar_sources is not None:
+                day = str(params["date"])
+                self._load_structured_bar_month(_month_of(day))
+                return self.spool.select_structured_bars(day)
             return self._day_selection(dataset, str(params["date"]))
         return self._fins_code(str(params["code"]))
 
@@ -1011,6 +1019,43 @@ class PersonalHistorySourceClient:
         if route is None:
             raise PersonalHistoryError(f"{dataset} is not in the acquisition registry")
         return route
+
+    def _load_structured_bar_month(self, month: str) -> None:
+        if month in self._structured_months_loaded:
+            return
+        sources = (self.structured_bar_sources or {}).get(month, ())
+        if not sources:
+            raise PersonalHistoryError(f"stored bars manifest missing month {month}")
+        for source in sources:
+            # Keys are R2 paths, never arbitrary URLs or redirect destinations.
+            if (
+                not source.key.startswith("structured/jsonl/equities_bars_daily/")
+                or not source.key.endswith(".jsonl")
+                or any(part in {"", ".", ".."} for part in source.key.split("/"))
+                or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/-_.=" for char in source.key)
+                or type(source.size) is not int
+                or not 0 < source.size <= STRUCTURED_BAR_OBJECT_MAX_BYTES
+            ):
+                raise PersonalHistoryError("stored bars object request rejected")
+            prior = self.spool._conn.execute(
+                "SELECT sha256,bytes,rows FROM structured_bar_objects WHERE object_key=?",
+                (source.key,),
+            ).fetchone()
+            if prior is not None:
+                if tuple(prior) != (source.sha256, source.size, source.rows):
+                    raise PersonalHistoryError("stored bars immutable descriptor conflict")
+                continue
+            self.spool.guard_bounds(extra_pages=1, extra_bytes=source.size * 3)
+            url = f"{self.r2_origin}/{source.key}"
+            request = urllib.request.Request(url, headers={"accept-encoding": "identity"})
+            with self._r2_urlopen(request, timeout=CACHE_GET_TIMEOUT_S) as response:
+                if int(response.status) != 200 or response.geturl() != url:
+                    raise PersonalHistoryError("stored bars transport status/redirect rejected")
+                body = response.read(source.size + 1)
+            self.spool.record_structured_bars(
+                body, source, max_object_bytes=STRUCTURED_BAR_OBJECT_MAX_BYTES,
+            )
+        self._structured_months_loaded.add(month)
 
     def _governed_request(
         self,
