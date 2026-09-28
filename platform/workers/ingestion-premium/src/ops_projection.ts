@@ -1001,35 +1001,6 @@ export async function publishOpsProjection(
       )
     : [];
 
-  const naturalByOp = new Map<string, number>();
-  if (present.has("receipt_authority_structured_rows") &&
-      present.has("receipt_authority_operations") && present.has("coverage_segments")) {
-    const naturalCounts = await sourceAllPaged<{ operation_id: string; n: number }>(
-        source,
-        `SELECT structured.operation_id, COUNT(*) AS n
-           FROM receipt_authority_structured_rows AS structured
-           JOIN receipt_authority_operations AS operation
-             ON operation.operation_id=structured.operation_id
-           JOIN coverage_segments AS segment
-             ON segment.source=operation.source
-            AND segment.dataset=operation.dataset
-            AND segment.segment_id=operation.segment_id
-            AND segment.receipt_run_id=operation.run_id
-          WHERE segment.policy_version=?
-            AND segment.status='COMPLETE'
-            AND operation.environment=?
-            AND operation.state='RECEIPT_COMMITTED'
-          GROUP BY structured.operation_id
-          ORDER BY structured.operation_id`,
-        [COVERAGE_POLICY_VERSION, environment],
-        sourceReadBudget,
-      );
-    for (const row of naturalCounts) {
-      const operationId = String(row.operation_id ?? "");
-      if (operationId) naturalByOp.set(operationId, requireInt(row.n, "natural key count"));
-    }
-  }
-
   async function jobCount(table: string, where: string): Promise<number | null> {
     if (!present.has(table)) return null;
     const row = await sourceFirst<{ n: number }>(
@@ -1068,15 +1039,6 @@ export async function publishOpsProjection(
         )
       : null,
   };
-  let changeLogRowCount: number | null = null;
-  if (present.has("ingestion_change_log")) {
-    const counted = await sourceFirst<{ n: number }>(
-      source,
-      "SELECT COUNT(*) AS n FROM ingestion_change_log",
-    );
-    changeLogRowCount = requireInt(counted?.n ?? 0, "change log row count");
-  }
-
   const b0b4 = await readAuthoritativeB0B4(source, present);
   const nativeReady = await observeNativeReadyForOps(
     env.STRUCTURED_BUCKET,
@@ -1179,6 +1141,46 @@ export async function publishOpsProjection(
       source_cursor: sourceCursor,
       active_cursor: activeCursor,
     });
+  }
+
+  // These exact aggregates populate a new generation; they have never been
+  // inputs to the unchanged-evidence decision. Do not scan legacy row tables
+  // on a noop. Keep the original queries/validation for every new publication.
+  const naturalByOp = new Map<string, number>();
+  if (present.has("receipt_authority_structured_rows") &&
+      present.has("receipt_authority_operations") && present.has("coverage_segments")) {
+    const naturalCounts = await sourceAllPaged<{ operation_id: string; n: number }>(
+        source,
+        `SELECT structured.operation_id, COUNT(*) AS n
+           FROM receipt_authority_structured_rows AS structured
+           JOIN receipt_authority_operations AS operation
+             ON operation.operation_id=structured.operation_id
+           JOIN coverage_segments AS segment
+             ON segment.source=operation.source
+            AND segment.dataset=operation.dataset
+            AND segment.segment_id=operation.segment_id
+            AND segment.receipt_run_id=operation.run_id
+          WHERE segment.policy_version=?
+            AND segment.status='COMPLETE'
+            AND operation.environment=?
+            AND operation.state='RECEIPT_COMMITTED'
+          GROUP BY structured.operation_id
+          ORDER BY structured.operation_id`,
+        [COVERAGE_POLICY_VERSION, environment],
+        sourceReadBudget,
+      );
+    for (const row of naturalCounts) {
+      const operationId = String(row.operation_id ?? "");
+      if (operationId) naturalByOp.set(operationId, requireInt(row.n, "natural key count"));
+    }
+  }
+  let changeLogRowCount: number | null = null;
+  if (present.has("ingestion_change_log")) {
+    const counted = await sourceFirst<{ n: number }>(
+      source,
+      "SELECT COUNT(*) AS n FROM ingestion_change_log",
+    );
+    changeLogRowCount = requireInt(counted?.n ?? 0, "change log row count");
   }
 
   const generationId = (await digest({

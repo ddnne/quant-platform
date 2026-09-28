@@ -1434,10 +1434,11 @@ describe("ops projection cloud publisher", () => {
     const keys = await keyPair();
     const sourceQueries: string[] = [];
     const targetWrites: string[] = [];
-    const result = await publishOpsProjection(await envFor(source, target, keys, {
+    const env = await envFor(source, target, keys, {
       sourceBeforeQuery: (sql) => sourceQueries.push(sql),
       beforeRun: (sql) => targetWrites.push(sql),
-    }));
+    });
+    const result = await publishOpsProjection(env);
     expect(result.status).toBe("published");
     expect(
       (target.prepare(
@@ -1454,6 +1455,17 @@ describe("ops projection cloud publisher", () => {
       (sql) => /receipt_authority_structured_rows WHERE operation_id=\?/.test(sql),
     )).toHaveLength(0);
     expect(targetWrites.length).toBeLessThan(100);
+    // Count actual executed aggregate queries, not source-code spelling.
+    // Unchanged polling must not pay to rescan row-level history.
+    const historyAggregates = () => sourceQueries.filter((sql) =>
+      /COUNT\s*\(/i.test(sql) &&
+      /FROM\s+(receipt_authority_structured_rows|ingestion_change_log)\b/i.test(sql),
+    );
+    expect(historyAggregates().length).toBeGreaterThanOrEqual(2);
+    sourceQueries.length = 0;
+    const unchanged = await publishOpsProjection(env);
+    expect(unchanged).toMatchObject({ status: "noop", generation_id: result.generation_id });
+    expect(historyAggregates()).toHaveLength(0);
   });
 
   it("fails closed on placeholder verify keys", async () => {
