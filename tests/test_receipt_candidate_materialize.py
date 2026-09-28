@@ -1263,6 +1263,20 @@ def test_byte_refusal_keeps_safe_reason_without_retry(tmp_path, body, reason) ->
     assert not destination.exists()
 
 
+def test_discovery_waits_for_declared_months_before_extending_history() -> None:
+    from receipt_candidate_job import _discover_bound
+
+    have = {("equities_bars_daily", "2023-01")}
+    pending = {("equities_bars_daily", "2022-12")}
+    assert _discover_bound("equities_bars_daily", have, pending, "2023-01-04") is None
+    # Only a fresh shortage after December is applied can justify November.
+    assert _discover_bound(
+        "equities_bars_daily", have | pending, set(), "2023-01-04"
+    ) == "2022-11"
+    # Another dataset's pending month must not suppress the required seed lookup.
+    assert _discover_bound("fins_summary", have, pending, "2023-01-04") == "2022-12"
+
+
 def test_discover_latest_complete_preserves_service_failure_and_rejects_mismatch() -> None:
     from receipt_product_byte_client import (
         ReceiptProductTransportError,
