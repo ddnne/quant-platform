@@ -12,7 +12,7 @@ export type Env = Omit<
   | "INGESTION_PREMIUM"
   | "PILOT_READY_PUBLICATION"
 > & {
-  AI_GATEWAY: GatewayRpc;
+  AI_GATEWAY?: GatewayRpc;
   JQUANTS_ACQUISITION?: JquantsAcquisitionRpc;
   INGESTION_PREMIUM?: ReceiptProductBytesRpc;
   PILOT_READY_PUBLICATION?: PilotReadyPublicationRpc;

@@ -50,6 +50,8 @@ def test_personal_research_runner_has_an_eight_instance_hard_cap() -> None:
             and row.get("entrypoint") == "IngestionSecretsService"
             for row in services
         )
+        if environment == "production":
+            assert len(services) == 1
 
     drifted = copy.deepcopy(manifest)
     drifted["workers"]["research-mass-eval"]["production"]["containers"][0][

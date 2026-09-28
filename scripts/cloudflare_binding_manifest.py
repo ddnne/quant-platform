@@ -1550,6 +1550,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
                 "service": f"{service}{suffix}",
             }
             for binding, entrypoint, service in mass_eval_service_bindings
+            if environment != "production" or binding == "JQUANTS_ACQUISITION"
         ]
         return sorted(
             [dict(sorted(row.items())) for row in rows],
@@ -1561,9 +1562,8 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             environment
         ):
             raise ValueError(
-                f"research-mass-eval/{environment}: GatewayService, "
-                "IngestionSecretsService, PremiumReceiptProductInputService, and "
-                "PilotReadyPublicationService bindings are required"
+                f"research-mass-eval/{environment}: service binding scope drift "
+                "(production is DRAFT-only; base/staging retain controlled services)"
             )
 
     personal_container = [

@@ -127,25 +127,12 @@ required = ["MASS_EVAL_TOKEN"]
 binding = "STRUCTURED_BUCKET"
 bucket_name = "quant-structured"
 
-[[env.production.services]]
-binding = "AI_GATEWAY"
-service = "quant-platform-research-ai-gateway"
-entrypoint = "GatewayService"
-
+# Production currently supports personal DRAFT only. Gateway/Receipt/READY
+# entrypoints are not deployed there; keep those capabilities unbound.
 [[env.production.services]]
 binding = "JQUANTS_ACQUISITION"
 service = "quant-platform-ingestion-secrets"
 entrypoint = "IngestionSecretsService"
-
-[[env.production.services]]
-binding = "INGESTION_PREMIUM"
-service = "quant-platform-ingestion-premium"
-entrypoint = "PremiumReceiptProductInputService"
-
-[[env.production.services]]
-binding = "PILOT_READY_PUBLICATION"
-service = "quant-platform-ingestion-premium"
-entrypoint = "PilotReadyPublicationService"
 
 [env.production.vars]
 ENVIRONMENT = "production"

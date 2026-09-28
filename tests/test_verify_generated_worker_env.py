@@ -79,7 +79,8 @@ def test_typed_service_and_durable_object_refinements_are_required() -> None:
     gateway = expected_types("research-ai-gateway", "production")
     secrets = expected_types("ingestion-secrets", "production")
     observer = expected_types("receipt-activation-observer", "production")
-    assert mass["AI_GATEWAY"] == "Service"
+    assert "AI_GATEWAY" not in mass
+    assert mass_staging["AI_GATEWAY"] == "Service"
     assert mass["MASS_EVAL_TOKEN"] == "string"
     assert mass_staging["MASS_EVAL_TOKEN"] == "string"
     assert mass_staging["ENVIRONMENT"] == '"staging"'
@@ -103,6 +104,13 @@ def test_base_env_keeps_same_toml_production_bindings_optional() -> None:
     assert "JSDA_INGESTION" not in required
     assert optional["JSDA_INGESTION"] == "Service"
     assert "PREMIUM_RECEIPT_OPERATOR" not in optional
+    mass_required, mass_optional = expected_env_properties("research-mass-eval", "base")
+    assert mass_required["JQUANTS_ACQUISITION"] == "Service"
+    assert mass_optional == {
+        "AI_GATEWAY": "Service",
+        "INGESTION_PREMIUM": "Service",
+        "PILOT_READY_PUBLICATION": "Service",
+    }
     mcp_required, mcp_optional = expected_env_properties("quant-ops-mcp", "base")
     assert mcp_required["OPS_PROJECTION_ENVIRONMENT"] == '"production"'
     assert mcp_required["OPS_PROJECTION_VERIFY_KEY_ID"] == (

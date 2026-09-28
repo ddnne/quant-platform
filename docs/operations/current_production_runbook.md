@@ -1,5 +1,13 @@
 # Current production runbook
 
+Production personal DRAFT deployment binds only `JQUANTS_ACQUISITION` among
+services. Live Gateway and Premium versions do not export the new Gateway,
+Receipt-input or READY-publication entrypoints. These optional capabilities
+remain unbound in production rather than requiring unrelated Worker rollouts
+for an R2-only DRAFT run. Base/staging keep the controlled bindings. Restore
+production bindings only with separately accepted target deployments; missing
+capabilities refuse their routes, and all existing execution HOLDs remain.
+
 <!-- CURRENT_PRODUCTION_RUNBOOK -->
 
 This is the **only executable production operations document**. Historical
