@@ -26,6 +26,19 @@ _CANONICAL_VECTORS_PATH = (
 )
 
 
+def test_margin_publication_is_not_application_day_visibility():
+    row = {"Code": "86970", "Date": "2026-09-25", "PubDate": "2026-09-28"}
+    captured = "2026-09-28T16:15:00+09:00"
+    assert available_at_for(row, "markets_margin_interest", ingested_at=captured) == (
+        "2026-09-29T00:00:00+09:00"
+    )
+    legacy = {"Code": "86970", "Date": "2026-09-18", "PubDate": None, "ShrtVal": None}
+    assert available_at_for(legacy, "markets_margin_interest", ingested_at=captured) == captured
+    assert natural_key(row, "markets_margin_interest") == natural_key(
+        {**row, "PubDate": None}, "markets_margin_interest"
+    )
+
+
 def test_canonical_json_matches_shared_ecmascript_number_vectors() -> None:
     document = json.loads(_CANONICAL_VECTORS_PATH.read_text(encoding="utf-8"))
     assert document["number_rendering"] == "ECMASCRIPT_JSON_STRINGIFY"

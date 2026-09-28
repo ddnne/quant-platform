@@ -63,6 +63,13 @@ export function requestQueries(
   }
   if (spec.dateMode === "none") return [{}];
 
+  // Incremental collection uses publication day; explicit historical requests
+  // keep application-date semantics (legacy rows have no PubDate).
+  if (spec.id === "markets_margin_interest" && !opts.from && !opts.to && !opts.today
+      && todayJst() >= "2026-09-28") {
+    return [{ published_date: todayJst() }];
+  }
+
   // Single-day key: most series use `date=`; short-sale uses `disc_date=`.
   const dayKey = spec.dayParam || "date";
 

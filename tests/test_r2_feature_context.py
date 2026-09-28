@@ -436,7 +436,7 @@ def test_available_at_repair_calendar_only_no_lookahead():
     assert fr["n_fixed"] == 0
     assert fr["rows"][0]["available_at"] == "2024-10-05T15:00:00+09:00"
 
-    # margin: 2026 ingest stamp on 2022 event → research repair
+    # Historical margin has no publication date: retain ingest-time visibility.
     margin = [
         _aa_row(
             "2022-10-07",
@@ -448,9 +448,9 @@ def test_available_at_repair_calendar_only_no_lookahead():
     mr = repair_available_at_research(
         margin, dataset="markets_margin_interest", policy="auto"
     )
-    assert mr["n_fixed"] == 1
-    assert mr["repair_applied"] == "archive_ingest_pollution"
-    assert mr["rows"][0]["available_at"] == "2022-10-07T15:00:00+09:00"
+    assert mr["n_fixed"] == 0
+    assert mr["repair_applied"] == "none"
+    assert mr["rows"][0]["available_at"] == "2026-08-13T23:41:27+09:00"
     assert mr["look_ahead"] is False
 
 

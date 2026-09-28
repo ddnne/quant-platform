@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { datasetById } from "./catalog";
-import { fetchDataset, fetchOnePage } from "./fetch_jq";
+import { fetchDataset, fetchOnePage, requestQueries } from "./fetch_jq";
+import { pickAvailableAt } from "./identity";
 import { RateLimiter } from "./rate_limit";
 
 const API_KEY = "premium-test-jquants-key-do-not-leak";
@@ -86,6 +87,28 @@ describe("fetchDataset", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("collects margin publications without changing historical date queries or nullable fields", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-28T08:00:00Z"));
+    const spec = datasetById("markets_margin_interest")!;
+    const row = { Date: "2026-09-25", Code: "86970", PubDate: "2026-09-28",
+      IssType: "2", LongVol: 225000, ShrtVol: 257400, LongVal: 450000000,
+      ShrtVal: 514800000, LongNegVal: 163800000, ShrtNegVal: 485600000,
+      LongStdVal: 286200000, ShrtStdVal: 29200000 };
+    const legacy = { ...row, Date: "2026-09-18", PubDate: null, LongVal: null };
+    const urls: string[] = [];
+    const fetchImpl = (async (url: string) => {
+      urls.push(url);
+      return new Response(JSON.stringify({ data: [row, legacy] }));
+    }) as typeof fetch;
+    const result = await fetchDataset({ JQUANTS_API_KEY: API_KEY }, spec, {}, fetchImpl, limiter());
+    expect(new URL(urls[0]).search).toBe("?published_date=2026-09-28");
+    expect(result.rows).toEqual([row, legacy]);
+    expect(requestQueries(spec, { from: "2026-09-18", to: "2026-09-18" })).toEqual([{ date: "2026-09-18" }]);
+    expect(pickAvailableAt(row, spec, "2026-09-28T17:00:00+09:00")).toBe("2026-09-29T00:00:00+09:00");
+    expect(pickAvailableAt(legacy, spec, "2026-09-28T17:00:00+09:00")).toBe("2026-09-28T17:00:00+09:00");
   });
 
   it("fails closed when JQUANTS_API_KEY is missing", async () => {

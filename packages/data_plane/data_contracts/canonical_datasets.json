@@ -291,7 +291,7 @@
       "sla": {
         "expected_after": null,
         "usable_by": null,
-        "freshness_policy": "weekly"
+        "freshness_policy": "trading_day"
       }
     },
     {
