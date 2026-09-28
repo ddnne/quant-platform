@@ -452,6 +452,10 @@ def test_available_at_repair_calendar_only_no_lookahead():
     assert mr["repair_applied"] == "none"
     assert mr["rows"][0]["available_at"] == "2026-08-13T23:41:27+09:00"
     assert mr["look_ahead"] is False
+    explicit = repair_available_at_research(
+        margin, dataset="markets_margin_interest", policy="calendar_ingest_pollution"
+    )
+    assert explicit["rows"] == margin
 
 
 def test_multisignal_history_datasets_cover_s1_plus_expand():

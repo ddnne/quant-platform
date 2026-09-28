@@ -11,7 +11,7 @@ from typing import Any, Mapping, Sequence
 
 # Research-only PIT repairs. Never invent visibility. Never rewrite R2 SoT.
 AVAILABLE_AT_REPAIR_POLICY: dict[str, Any] = {
-    "version": "r2-available-at-repair/v1",
+    "version": "r2-available-at-repair/v2",
     "research_only": True,
     "r2_sot_rewrite": False,
     "repairs": {
@@ -38,8 +38,10 @@ def repair_available_at_research(
 ) -> dict[str, Any]:
     """Research-only available_at repairs. Never invent; never look-ahead."""
     ds = str(dataset).strip()
-    apply_cal = policy in ("auto", "calendar_ingest_pollution") and (
-        ds == "markets_calendar" or policy == "calendar_ingest_pollution"
+    apply_cal = (
+        ds != "markets_margin_interest"
+        and policy in ("auto", "calendar_ingest_pollution")
+        and (ds == "markets_calendar" or policy == "calendar_ingest_pollution")
     )
     # Margin Date is an application date. Even an explicit repair request
     # cannot turn unknown historical publication into same-day visibility.
