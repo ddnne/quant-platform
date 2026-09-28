@@ -1057,7 +1057,17 @@ def _compact_bars(
 ) -> list[dict]:
     compact: list[dict[str, Any]] = []
     seen: set[str] = set()
+    stored = bool(rows) and "dataset" in rows[0]
+    clocks: list[Mapping[str, Any]] = []
+    vintages: set[tuple[str, str]] = set()
     for source in rows:
+        envelope = source
+        if ("dataset" in source) != stored:
+            raise PersonalHistoryError("mixed stored and API bar rows")
+        if stored:
+            if source["dataset"] != "equities_bars_daily":
+                raise PersonalHistoryError("stored bar dataset mismatch")
+            source = _payload_mapping(source)
         source_day = str(_pick(source, "Date") or "")[:10]
         if source_day != trading_day:
             raise PersonalHistoryError(
@@ -1067,10 +1077,15 @@ def _compact_bars(
         code = str(_pick(source, "Code") or "").strip()
         if not code or code not in scope_union:
             continue
-        if code in seen:
+        if not stored and code in seen:
             raise PersonalHistoryError(
                 f"equities_bars_daily {trading_day} has duplicate Code={code}"
             )
+        if stored:
+            identity = (code, str(envelope["ingested_at"]))
+            if identity in vintages:
+                raise PersonalHistoryError("stored bars have ambiguous duplicate vintage")
+            vintages.add(identity)
         seen.add(code)
         item: dict[str, Any] = {"Code": code, "Date": trading_day}
         for canonical, aliases in _BAR_FIELDS:
@@ -1084,11 +1099,12 @@ def _compact_bars(
         if "Close" not in item:
             continue
         compact.append(item)
+        clocks.append(envelope)
     if not compact:
         raise PersonalHistoryError(
             f"equities_bars_daily {trading_day} has no rows in observed TOPIX union"
         )
-    observed = len(compact)
+    observed = len({item["Code"] for item in compact})
     expected = len(scope_union)
     missing = expected - observed
     allowed_missing = _allowed_missing_observed_bars(expected, minimum_ratio)
@@ -1105,24 +1121,34 @@ def _compact_bars(
             f"(missing {missing}, allowed-missing {allowed_missing})"
         )
     session_close = _session_close(trading_day, "equities_bars_daily.Date")
-    normalized = JN.normalize_generic(
-        compact,
-        dataset="equities_bars_daily",
-        ingested_at=ingested_at,
-        available_at=session_close,
+    normalized = [] if stored else JN.normalize_generic(
+        compact, dataset="equities_bars_daily",
+        ingested_at=ingested_at, available_at=session_close,
     )
+    for item, envelope in zip(compact, clocks) if stored else ():
+        available = str(envelope["available_at"])
+        stamp = str(envelope["ingested_at"])
+        if str(envelope["event_time"]) != session_close:
+            raise PersonalHistoryError("stored bar event_time is not session close")
+        if _canonical_jst(available, "stored bar available_at") < parse_dt(session_close):
+            raise PersonalHistoryError("stored bar available before session close")
+        _require_ingested_not_before(stamp, available, "stored bar")
+        normalized.extend(JN.normalize_generic(
+            [item], dataset="equities_bars_daily",
+            ingested_at=stamp, available_at=available,
+        ))
     for row in normalized:
         row["raw_payload"] = None
         if str(row["event_time"]) != session_close:
             raise PersonalHistoryError(
                 "equities_bars_daily event_time must be the official session close"
             )
-        if str(row["available_at"]) != session_close:
+        if not stored and str(row["available_at"]) != session_close:
             raise PersonalHistoryError(
                 "equities_bars_daily first-vintage available_at must be "
                 "the official session close"
             )
-    return normalized
+    return sorted(normalized, key=lambda row: parse_dt(str(row["ingested_at"]))) if stored else normalized
 
 
 _MASTER_CONTENT_FIELDS = (
@@ -1797,7 +1823,10 @@ class PersonalHistoryHydrator:
                     membership_digest,
                     expected_rows,
                     (
-                        len(rows) / expected_rows
+                        (
+                            len({str(row["natural_key"]) for row in rows})
+                            if dataset == "equities_bars_daily" else len(rows)
+                        ) / expected_rows
                         if expected_rows is not None and expected_rows > 0
                         else None
                     ),

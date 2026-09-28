@@ -19,6 +19,7 @@ from ingestion.personal_history import (
     PERSONAL_HISTORY_DATASETS,
     PersonalHistoryError,
     PersonalHistoryHydrator,
+    _compact_bars,
     _page_evidence,
     build_personal_history_plan,
 )
@@ -69,6 +70,19 @@ def test_stored_bars_reader_preserves_multiday_vintages_and_checks_bytes(tmp_pat
         hashlib.sha256(body).hexdigest(), len(body), len(rows),
     )
     assert list(iter_verified_structured_bars(body, source, max_object_bytes=len(body))) == rows
+    stored_day = [dict(row, payload={**row["payload"], "C": 101})
+                  for row in reversed(rows) if row["payload"]["Date"] == "2020-01-06"]
+    compact = _compact_bars(
+        stored_day, trading_day="2020-01-06", scope_union=frozenset({"12340"}),
+        ingested_at="2026-09-29T12:00:00+09:00", minimum_ratio=1.0,
+    )
+    assert [row["ingested_at"] for row in compact] == [
+        "2026-08-14T12:00:00+09:00", "2026-08-15T12:00:00+09:00",
+    ]
+    assert [row["available_at"] for row in compact] == [
+        "2020-01-06T15:00:00+09:00", "2026-08-15T12:00:00+09:00",
+    ]
+    assert [json.loads(row["payload"])["MorningAdjustmentClose"] for row in compact] == [100, 99]
     with pytest.raises(PersonalHistoryError, match="digest mismatch"):
         list(iter_verified_structured_bars(body.replace(b"101", b"102"), source, max_object_bytes=len(body)))
     with pytest.raises(PersonalHistoryError, match="size/count rejected"):
