@@ -1318,6 +1318,26 @@ async function personalResearchR2OutboundDispatch(
   if (key.startsWith(CONTROLLED_PILOT_KEY_PREFIX)) {
     return responseJson({ error: "controlled R2 prefix denied" }, 403);
   }
+  const storedManifest = /^research\/personal\/bar-inputs\/sha256=[0-9a-f]{64}\.json$/.test(key);
+  const storedBars = /^structured\/jsonl\/equities_bars_daily\/dt=\d{4}-\d{2}-\d{2}\/[A-Za-z0-9_.=-]+\.jsonl$/.test(key);
+  if (storedManifest || storedBars) {
+    if (request.method !== "GET" || request.headers.has("range")) {
+      return responseJson({ error: "stored bars are full-object read-only inputs" }, 403);
+    }
+    const object = await env.STRUCTURED_BUCKET.get(key);
+    if (!object) return responseJson({ error: "stored bars input missing" }, 404);
+    const maximum = storedManifest ? 1024 * 1024 : 64 * 1024 * 1024;
+    if (object.size < 1 || object.size > maximum) {
+      await object.body.cancel();
+      return responseJson({ error: "stored bars input exceeds size bound" }, 413);
+    }
+    // The container verifies pinned byte hashes before consuming any rows.
+    // Stream through the existing binding; never buffer market history here.
+    return new Response(object.body.pipeThrough(new FixedLengthStream(object.size)), {
+      headers: {"content-length": String(object.size),
+        "content-type": storedManifest ? "application/json" : "application/x-ndjson"},
+    });
+  }
   if (
     (request.method === "GET" || request.method === "HEAD") &&
     parseTerminalManifestKey(key)

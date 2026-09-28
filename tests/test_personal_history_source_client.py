@@ -1728,3 +1728,72 @@ def test_bar_months_are_released_so_physical_usage_is_not_cumulative(
     assert client.spool.usage()[0] == 0
     store.close()
     client.close()
+
+
+def test_stored_bars_hydrate_through_compact_store_without_retimestamping(tmp_path, monkeypatch):
+    from ingestion.jquants import normalize as JN
+
+    monkeypatch.setattr("ingestion.personal_history.now_iso", lambda: "2025-03-01T16:00:00+09:00")
+    plan = build_personal_history_plan(
+        period_start="2025-01-06", period_end="2025-01-08", lookback_sessions=1,
+        calendar_window_days=366, today=date(2025, 2, 1),
+    )
+    bodies, sources = {}, {}
+    for month in ("2024-12", "2025-01"):
+        envelopes = []
+        day = date.fromisoformat(month + "-01")
+        while day.isoformat().startswith(month):
+            if day.weekday() < 5:
+                envelopes.extend(JN.normalize_generic(
+                    _synthetic_bars_day(day.isoformat()), dataset="equities_bars_daily",
+                    ingested_at="2025-02-01T16:00:00+09:00",
+                    available_at=day.isoformat() + "T15:30:00+09:00",
+                ))
+            day += timedelta(days=1)
+        if month == "2025-01":
+            original_row = next(row for row in envelopes
+                                if json.loads(row["payload"])["Date"] == "2025-01-06")
+            correction = dict(original_row)
+            corrected_payload = json.loads(correction["payload"])
+            corrected_payload["Close"] += 1
+            correction["payload"] = json.dumps(corrected_payload)
+            correction["ingested_at"] = "2025-02-02T16:00:00+09:00"
+            correction["available_at"] = "2025-02-01T17:00:00+09:00"
+            envelopes.insert(0, correction)  # object order must not become vintage order
+        body = b"\n".join(json.dumps(row).encode() for row in envelopes)
+        key = f"structured/jsonl/equities_bars_daily/dt={month}-01/synthetic.jsonl"
+        bodies[key] = body
+        sources[month] = (StructuredBarsObject(key, hashlib.sha256(body).hexdigest(), len(body), len(envelopes)),)
+    class R2:
+        def urlopen(self, request, timeout):
+            if "/acquisition-cache/" in request.full_url:
+                return _Response(b"", {}, status=503)
+            response = _Response(bodies[request.full_url.removeprefix("http://research.r2/")], {})
+            response.geturl = lambda: request.full_url
+            return response
+    original = _synthetic_history_opener()
+    class Api:
+        def urlopen(self, request, timeout):
+            assert json.loads(request.data)["dataset_id"] != "equities_bars_daily"
+            return original.urlopen(request, timeout=timeout)
+    client = client_mod.PersonalHistorySourceClient(
+        environment="staging", period_end=plan.period_end, spool_path=tmp_path / "spool.sqlite",
+        opener=Api(), r2_opener=R2(), structured_bar_sources=sources,
+    )
+    store = SqliteStore(tmp_path / "history.sqlite")
+    try:
+        PersonalHistoryHydrator(client=client, store=store, plan=plan).hydrate()
+        rows = store._conn.execute("SELECT * FROM personal_history_compact_bars").fetchall()
+        assert rows and {row["ingested_at"] for row in rows} == {
+            "2025-02-01T16:00:00+09:00", "2025-02-02T16:00:00+09:00",
+        }
+        assert all(row["available_at"] == (
+            "2025-02-01T17:00:00+09:00" if row["ingested_at"].startswith("2025-02-02") else row["event_time"]
+        ) for row in rows)
+        assert all(row["morning_adjustment_close"] is not None for row in rows)
+        evidence = store._conn.execute("SELECT page_evidence_json FROM personal_history_segments WHERE dataset='equities_bars_daily'").fetchall()
+        assert evidence and all(json.loads(row[0])[0]["kind"] == "stored_structured_object" for row in evidence)
+        assert client.spool.usage()[0] == 0
+    finally:
+        store.close()
+        client.close()

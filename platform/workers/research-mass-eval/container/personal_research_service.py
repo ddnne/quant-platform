@@ -2567,6 +2567,9 @@ def _snapshot_manifest_base(
         "history_scope_id": PERSONAL_HISTORY_SCOPE_ID,
         "history_scope_version": PERSONAL_HISTORY_SCOPE_VERSION,
         "history_scope_digest": PERSONAL_HISTORY_SCOPE_DIGEST,
+        **({"structured_bar_manifest_sha256": spec.structured_bar_manifest_sha256,
+            "cache_only": spec.cache_only}
+           if spec.structured_bar_manifest_sha256 is not None else {}),
         "period_start": spec.period_start,
         "period_end": spec.period_end,
         "lookback_sessions": spec.lookback_sessions,

@@ -1814,7 +1814,8 @@ class PersonalHistoryHydrator:
                 self._upsert_shared_fins_scan(scan)
             if dataset in ("equities_master", "equities_bars_daily"):
                 written = self._insert_compact_facts(
-                    dataset, rows, revision=force_revision
+                    dataset, rows, revision=force_revision,
+                    stored_clocks=bool(getattr(fetched, "structured_objects", ())),
                 )
             else:
                 written = self.store.upsert("jquants_records", rows, commit=False)
@@ -2308,6 +2309,7 @@ class PersonalHistoryHydrator:
         rows: Sequence[Mapping[str, Any]],
         *,
         revision: bool = False,
+        stored_clocks: bool = False,
     ) -> int:
         """Insert-only compact vintages. Identical content is idempotent."""
 
@@ -2376,7 +2378,7 @@ class PersonalHistoryHydrator:
                 digest = _fact_content_digest(dataset, payload)
                 if latest is not None and _stored_bar_content_digest(latest) == digest:
                     continue
-                available_at, ingested_at = _vintage_clocks(
+                available_at, ingested_at = (official, stamp) if stored_clocks else _vintage_clocks(
                     official=official,
                     stamp=stamp,
                     first=latest is None and not revision,
