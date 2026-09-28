@@ -206,6 +206,7 @@ def test_unchanged_contract_reuses_legacy_registry_cache(tmp_path: Path) -> None
     first.close()
     saved_keys = set(r2.objects)
     second = _client(tmp_path, r2=r2, spool=tmp_path / "new.sqlite")
+    second.cache_only = True
     try:
         reused = second.fetch_dataset_evidenced(
             "markets_calendar", **{"from": "2024-03-10", "to": "2024-03-12"}
@@ -217,6 +218,11 @@ def test_unchanged_contract_reuses_legacy_registry_cache(tmp_path: Path) -> None
         changed = dict(second._cache_identity("markets_calendar", "2024-03"),
                        query_contract_digest="sha256:" + "0" * 64)
         assert cache_mod.legacy_cache_identity(changed) is None
+        with pytest.raises(client_mod.PersonalHistoryError, match="cache-only month unavailable"):
+            second.fetch_dataset_evidenced(
+                "markets_calendar", **{"from": "2024-04-01", "to": "2024-04-02"}
+            )
+        assert second.fetch_calls == 0
     finally:
         second.close()
 

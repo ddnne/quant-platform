@@ -14,6 +14,7 @@ export const PERSONAL_SNAPSHOT_MANIFEST_MAX_BYTES = 64 * 1024;
 const REQUIRED_FIELDS = ["job_id", "period_end", "period_start"] as const;
 
 export type PersonalSnapshotBuildRequest = {
+  cache_only?: boolean;
   job_id: string;
   period_start: string;
   period_end: string;
@@ -82,7 +83,10 @@ export function parsePersonalSnapshotBuildRequest(
     return { ok: false, error: "body must be a JSON object" };
   }
   const raw = body as Record<string, unknown>;
-  const keys = Object.keys(raw).sort();
+  const keys = Object.keys(raw).filter((key) => key !== "cache_only").sort();
+  if ("cache_only" in raw && typeof raw.cache_only !== "boolean") {
+    return { ok: false, error: "cache_only must be boolean" };
+  }
   const withLookback = [...REQUIRED_FIELDS, "lookback_sessions"].sort();
   const withoutLookback = [...REQUIRED_FIELDS].sort();
   const allowed =
@@ -140,6 +144,7 @@ export function parsePersonalSnapshotBuildRequest(
       period_start: start,
       period_end: end,
       lookback_sessions: lookback,
+      ...(raw.cache_only === true ? { cache_only: true } : {}),
     },
   };
 }
@@ -175,6 +180,7 @@ export async function personalSnapshotRequestDigest(
   request: PersonalSnapshotBuildRequest,
 ): Promise<string> {
   const canonical = JSON.stringify({
+    ...(request.cache_only === true ? { cache_only: true } : {}),
     format: PERSONAL_SNAPSHOT_FORMAT,
     job_id: request.job_id,
     lookback_sessions: request.lookback_sessions,

@@ -850,6 +850,7 @@ class PersonalHistorySourceClient:
         opener: Any = None,
         r2_opener: Any = None,
         r2_origin: str = CACHE_R2_ORIGIN,
+        cache_only: bool = False,
         utc_today: Callable[[], date] | None = None,
         _sleep: Any = None,
         _max_attempts: int | None = None,
@@ -857,6 +858,7 @@ class PersonalHistorySourceClient:
         if environment not in {"production", "staging"}:
             raise PersonalHistoryError("acquisition environment is invalid")
         self.environment = environment
+        self.cache_only = cache_only
         self.period_end = period_end
         self.origin = origin.rstrip("/")
         self.r2_origin = r2_origin.rstrip("/")
@@ -944,6 +946,11 @@ class PersonalHistorySourceClient:
         }
 
     def _post(self, payload: Mapping[str, Any]) -> tuple[bytes, Mapping[str, str], int]:
+        if self.cache_only:
+            raise PersonalHistoryError(
+                f"cache-only acquisition blocked: {payload.get('dataset_id')} "
+                f"{payload.get('segment_id')}"
+            )
         body = json.dumps(
             dict(payload),
             ensure_ascii=True,
@@ -1209,6 +1216,8 @@ class PersonalHistorySourceClient:
         if self._load_month_from_cache(dataset, month):
             self._refresh_progress()
             return
+        if self.cache_only:
+            raise PersonalHistoryError(f"cache-only month unavailable: {dataset} {month}")
         route = self._route(dataset)
         continuation: str | None = None
         identity: dict[str, Any] | None = None

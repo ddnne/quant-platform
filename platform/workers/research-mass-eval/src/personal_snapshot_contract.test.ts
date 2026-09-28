@@ -11,6 +11,16 @@ import {
 const NOW = new Date("2026-08-30T03:00:00.000Z");
 
 describe("personal snapshot request contract", () => {
+  it("binds cache-only acquisition to the request digest", async () => {
+    const raw = {job_id: "cache-only-proof", period_start: "2023-01-04",
+      period_end: "2023-10-13", cache_only: true};
+    const parsed = parsePersonalSnapshotBuildRequest(raw, NOW);
+    if (!parsed.ok) throw new Error(parsed.error);
+    expect(parsed.value.cache_only).toBe(true);
+    expect(await personalSnapshotRequestDigest(parsed.value)).not.toBe(
+      await personalSnapshotRequestDigest({...parsed.value, cache_only: false}));
+    expect(parsePersonalSnapshotBuildRequest({...raw, cache_only: "true"}, NOW).ok).toBe(false);
+  });
   it("accepts a closed bounded request and is digest-stable", async () => {
     const parsed = parsePersonalSnapshotBuildRequest(
       {

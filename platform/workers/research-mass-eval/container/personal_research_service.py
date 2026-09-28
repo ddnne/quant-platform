@@ -520,6 +520,7 @@ class SnapshotJobSpec:
     format: str
     max_database_bytes: int
     deployment_id: str
+    cache_only: bool = False
 
     @classmethod
     def from_document(cls, document: Any) -> "SnapshotJobSpec":
@@ -538,8 +539,10 @@ class SnapshotJobSpec:
             "request_digest",
             "runner_version",
         }
-        if set(document) != required:
+        if set(document) - {"cache_only"} != required:
             raise JobInputError("snapshot job fields are closed")
+        if type(document.get("cache_only", False)) is not bool:
+            raise JobInputError("cache_only must be boolean")
         lookback = document["lookback_sessions"]
         max_bytes = document["max_database_bytes"]
         if type(lookback) is not int or not 0 <= lookback <= 252:
@@ -561,6 +564,7 @@ class SnapshotJobSpec:
             format=document["format"],
             max_database_bytes=max_bytes,
             deployment_id=document["deployment_id"],
+            cache_only=document.get("cache_only", False),
         )
         spec.validate()
         return spec
@@ -593,6 +597,7 @@ class SnapshotJobSpec:
     def derived_request_digest(self) -> str:
         body = {
             "format": self.format,
+            **({"cache_only": True} if self.cache_only else {}),
             "job_id": self.job_id,
             "lookback_sessions": self.lookback_sessions,
             "period_end": self.period_end,
@@ -2615,6 +2620,7 @@ def execute_snapshot_job(
                     period_end=job.period_end,
                     spool_path=job_root / "acquisition-spool.sqlite",
                     r2_opener=urllib.request,
+                    cache_only=job.cache_only,
                 )
             ))(spec)
             hydrator = PersonalHistoryHydrator(
