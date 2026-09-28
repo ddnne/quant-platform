@@ -20,6 +20,11 @@ describe("personal snapshot request contract", () => {
     expect(await personalSnapshotRequestDigest(parsed.value)).not.toBe(
       await personalSnapshotRequestDigest({...parsed.value, cache_only: false}));
     expect(parsePersonalSnapshotBuildRequest({...raw, cache_only: "true"}, NOW).ok).toBe(false);
+    const pinned = parsePersonalSnapshotBuildRequest({...raw, structured_bar_manifest_sha256: "a".repeat(64)}, NOW);
+    if (!pinned.ok) throw new Error(pinned.error);
+    expect(await personalSnapshotRequestDigest(pinned.value)).not.toBe(await personalSnapshotRequestDigest(parsed.value));
+    expect(parsePersonalSnapshotBuildRequest({...raw, cache_only: false,
+      structured_bar_manifest_sha256: "a".repeat(64)}, NOW).ok).toBe(false);
   });
   it("accepts a closed bounded request and is digest-stable", async () => {
     const parsed = parsePersonalSnapshotBuildRequest(

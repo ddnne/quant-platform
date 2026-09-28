@@ -60,7 +60,10 @@ from personal_acquisition_cache import (
     write_month_shard,
 )
 
-from personal_structured_bars import StructuredBarsObject, iter_verified_structured_bars
+from personal_structured_bars import (
+    StructuredBarsObject, iter_verified_structured_bars,
+    decode_structured_bar_manifest, STRUCTURED_MANIFEST_MAX_BYTES,
+)
 
 HISTORY_SOURCE_ORIGIN = "http://history.source"
 HISTORY_SOURCE_PATH = "/v1/fetch-governed-page"
@@ -945,6 +948,7 @@ class PersonalHistorySourceClient:
         r2_origin: str = CACHE_R2_ORIGIN,
         cache_only: bool = False,
         structured_bar_sources: Mapping[str, Sequence[StructuredBarsObject]] | None = None,
+        structured_bar_manifest_sha256: str | None = None,
         utc_today: Callable[[], date] | None = None,
         _sleep: Any = None,
         _max_attempts: int | None = None,
@@ -963,6 +967,16 @@ class PersonalHistorySourceClient:
         self.r2_origin = r2_origin.rstrip("/")
         self._opener = opener
         self._r2_opener = r2_opener
+        if structured_bar_manifest_sha256 is not None:
+            if structured_bar_sources is not None or not __import__("re").fullmatch(r"[0-9a-f]{64}", structured_bar_manifest_sha256):
+                raise PersonalHistoryError("stored bars manifest identity rejected")
+            url = f"{self.r2_origin}/research/personal/bar-inputs/sha256={structured_bar_manifest_sha256}.json"
+            request = urllib.request.Request(url, headers={"accept-encoding": "identity"})
+            with self._r2_urlopen(request, timeout=CACHE_GET_TIMEOUT_S) as response:
+                if int(response.status) != 200 or response.geturl() != url:
+                    raise PersonalHistoryError("stored bars manifest transport rejected")
+                body = response.read(STRUCTURED_MANIFEST_MAX_BYTES + 1)
+            self.structured_bar_sources = decode_structured_bar_manifest(body, structured_bar_manifest_sha256)
         self._utc_today = cache_utc_today if utc_today is None else utc_today
         self._sleep = time.sleep if _sleep is None else _sleep
         self._max_attempts = _MAX_POST_ATTEMPTS if _max_attempts is None else _max_attempts

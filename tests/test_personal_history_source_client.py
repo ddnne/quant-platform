@@ -147,27 +147,36 @@ def test_stored_bars_reader_preserves_multiday_vintages_and_checks_bytes(tmp_pat
         spool.close()
 
     downloads = []
+    manifest = json.dumps({"schema": "personal-stored-bars/v1", "months": {
+        "2020-01": [{"key": source.key, "sha256": source.sha256,
+                     "bytes": source.size, "rows": source.rows}],
+    }}).encode()
+    manifest_digest = hashlib.sha256(manifest).hexdigest()
     class StoredResponse(io.BytesIO):
         status = 200
+        def __init__(self, data, url):
+            super().__init__(data)
+            self.url = url
         def geturl(self):
-            return f"http://research.r2/{source.key}"
+            return self.url
     class StoredR2:
         def urlopen(self, request, timeout):
             downloads.append(request.full_url)
-            return StoredResponse(body)
+            return StoredResponse(manifest if request.full_url.endswith(".json") else body,
+                                  request.full_url)
     client = client_mod.PersonalHistorySourceClient(
         environment="staging", period_end="2020-01-31",
         spool_path=tmp_path / "synthetic-month-reader.sqlite",
         cache_only=True, r2_opener=StoredR2(),
-        structured_bar_sources={"2020-01": (source,)},
+        structured_bar_manifest_sha256=manifest_digest,
     )
     try:
         assert len(client.fetch_dataset_evidenced("equities_bars_daily", date="2020-01-06").rows) == 2
         assert len(client.fetch_dataset_evidenced("equities_bars_daily", date="2020-01-07").rows) == 1
-        assert len(downloads) == 1
+        assert len(downloads) == 2  # manifest and one data object
         client.release_acquired_raw()
         assert len(client.fetch_dataset_evidenced("equities_bars_daily", date="2020-01-06").rows) == 2
-        assert len(downloads) == 2 and client.fetch_calls == 0
+        assert len(downloads) == 3 and client.fetch_calls == 0
     finally:
         client.close()
 

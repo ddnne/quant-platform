@@ -521,6 +521,7 @@ class SnapshotJobSpec:
     max_database_bytes: int
     deployment_id: str
     cache_only: bool = False
+    structured_bar_manifest_sha256: str | None = None
 
     @classmethod
     def from_document(cls, document: Any) -> "SnapshotJobSpec":
@@ -539,7 +540,7 @@ class SnapshotJobSpec:
             "request_digest",
             "runner_version",
         }
-        if set(document) - {"cache_only"} != required:
+        if set(document) - {"cache_only", "structured_bar_manifest_sha256"} != required:
             raise JobInputError("snapshot job fields are closed")
         if type(document.get("cache_only", False)) is not bool:
             raise JobInputError("cache_only must be boolean")
@@ -565,11 +566,18 @@ class SnapshotJobSpec:
             max_database_bytes=max_bytes,
             deployment_id=document["deployment_id"],
             cache_only=document.get("cache_only", False),
+            structured_bar_manifest_sha256=document.get("structured_bar_manifest_sha256"),
         )
         spec.validate()
         return spec
 
     def validate(self) -> None:
+        if self.structured_bar_manifest_sha256 is not None and (
+            not isinstance(self.structured_bar_manifest_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", self.structured_bar_manifest_sha256) is None
+            or not self.cache_only
+        ):
+            raise JobInputError("stored bar manifest requires a sha256 and cache_only")
         if _JOB_ID_RE.fullmatch(self.job_id) is None:
             raise JobInputError("job_id is invalid")
         start = _parse_day(self.period_start, "period_start")
@@ -598,6 +606,8 @@ class SnapshotJobSpec:
         body = {
             "format": self.format,
             **({"cache_only": True} if self.cache_only else {}),
+            **({"structured_bar_manifest_sha256": self.structured_bar_manifest_sha256}
+               if self.structured_bar_manifest_sha256 is not None else {}),
             "job_id": self.job_id,
             "lookback_sessions": self.lookback_sessions,
             "period_end": self.period_end,
@@ -2621,6 +2631,7 @@ def execute_snapshot_job(
                     spool_path=job_root / "acquisition-spool.sqlite",
                     r2_opener=urllib.request,
                     cache_only=job.cache_only,
+                    structured_bar_manifest_sha256=job.structured_bar_manifest_sha256,
                 )
             ))(spec)
             hydrator = PersonalHistoryHydrator(

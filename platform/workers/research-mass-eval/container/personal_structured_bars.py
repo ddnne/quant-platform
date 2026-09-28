@@ -12,6 +12,7 @@ from datetime import datetime
 import hashlib
 import io
 import json
+import re
 from typing import Any, Iterator
 
 from data_contracts.identity import natural_key
@@ -24,6 +25,45 @@ class StructuredBarsObject:
     sha256: str
     size: int
     rows: int
+
+
+STRUCTURED_MANIFEST_MAX_BYTES = 1024 * 1024
+
+
+def decode_structured_bar_manifest(body: bytes, digest: str) -> dict[str, tuple[StructuredBarsObject, ...]]:
+    """Resolve a pinned monthly input list, not a Coverage or Receipt proof."""
+    if not 0 < len(body) <= STRUCTURED_MANIFEST_MAX_BYTES or hashlib.sha256(body).hexdigest() != digest:
+        raise PersonalHistoryError("stored bars manifest size/digest rejected")
+    try:
+        document = json.loads(body)
+        if set(document) != {"schema", "months"} or document["schema"] != "personal-stored-bars/v1":
+            raise ValueError("schema")
+        months = document["months"]
+        if not isinstance(months, dict) or not months:
+            raise ValueError("months")
+        result = {}
+        for month, objects in months.items():
+            if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month) or not isinstance(objects, list) or not objects:
+                raise ValueError("month")
+            sources = []
+            for item in objects:
+                if set(item) != {"key", "sha256", "bytes", "rows"}:
+                    raise ValueError("object fields")
+                if (
+                    not isinstance(item["key"], str)
+                    or not re.fullmatch(r"structured/jsonl/equities_bars_daily/[A-Za-z0-9/_.=-]+\.jsonl", item["key"])
+                    or not isinstance(item["sha256"], str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])
+                    or any(type(item[field]) is not int or item[field] <= 0 for field in ("bytes", "rows"))
+                ):
+                    raise ValueError("object descriptor")
+                sources.append(StructuredBarsObject(item["key"], item["sha256"], item["bytes"], item["rows"]))
+            if len({source.key for source in sources}) != len(sources):
+                raise ValueError("duplicate object")
+            result[month] = tuple(sources)
+        return result
+    except (ValueError, TypeError, KeyError) as exc:
+        raise PersonalHistoryError("invalid stored bars manifest") from exc
 
 
 def _clock(value: Any, name: str) -> datetime:
