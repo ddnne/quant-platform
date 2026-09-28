@@ -110,6 +110,7 @@ export async function submitPersonalSnapshotBuild(
           format: PERSONAL_SNAPSHOT_FORMAT,
           job_id: request.job_id,
           lookback_sessions: request.lookback_sessions,
+          ...(request.cache_only === true ? { cache_only: true } : {}),
           manifest_key: personalSnapshotManifestKey(request.job_id),
           max_database_bytes: PERSONAL_SNAPSHOT_MAX_DATABASE_BYTES,
           period_end: request.period_end,

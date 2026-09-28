@@ -2971,6 +2971,19 @@ def _snapshot_request_digest(request: dict) -> str:
     ).hexdigest()
 
 
+def test_cache_only_snapshot_flag_is_digest_bound() -> None:
+    from dataclasses import asdict, replace
+
+    original = _snapshot_spec("cache-only-proof")
+    limited = replace(original, cache_only=True)
+    assert limited.derived_request_digest() != original.request_digest
+    document = asdict(limited)
+    with pytest.raises(service.JobInputError, match="request_digest mismatch"):
+        service.SnapshotJobSpec.from_document(document)
+    document["request_digest"] = limited.derived_request_digest()
+    assert service.SnapshotJobSpec.from_document(document).cache_only is True
+
+
 def _snapshot_spec(job_id: str) -> service.SnapshotJobSpec:
     request = {
         "job_id": job_id,
