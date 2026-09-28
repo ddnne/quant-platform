@@ -79,7 +79,8 @@ def test_typed_service_and_durable_object_refinements_are_required() -> None:
     gateway = expected_types("research-ai-gateway", "production")
     secrets = expected_types("ingestion-secrets", "production")
     observer = expected_types("receipt-activation-observer", "production")
-    assert mass["AI_GATEWAY"] == "Service"
+    assert "AI_GATEWAY" not in mass
+    assert mass_staging["AI_GATEWAY"] == "Service"
     assert mass["MASS_EVAL_TOKEN"] == "string"
     assert mass_staging["MASS_EVAL_TOKEN"] == "string"
     assert mass_staging["ENVIRONMENT"] == '"staging"'
