@@ -55,8 +55,9 @@ READY_DECLARED = "false"
 # ordered rollout; READY_DECLARED stays false. Deploy Premium before MCP.
 
 [triggers]
-# Minute tick; absent/invalid control stays inactive (no 24-dataset ingest).
-crons = ["* * * * *"]
+# Hourly: this tick also scans legacy Receipt/change-log rows for Ops projection.
+# Absent/invalid acquisition control stays inactive (no 24-dataset ingest).
+crons = ["15 * * * *"]
 
 [observability]
 enabled = true
