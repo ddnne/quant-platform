@@ -26,10 +26,47 @@ OFFICIAL_CALENDAR_MAX_BYTES = 65_536
 DESCRIBE_BATCH_SEGMENTS = 128
 _IDENTITY_HEADERS = frozenset({"x-quant-resource", "x-quant-receipt-digest"})
 _MONTH_ID = re.compile(r"^[0-9]{4}-[0-9]{2}$")
+_HOLD_REASONS = frozenset({
+    "MISSING_TABLE", "MISSING_ROW", "COVERAGE_INCOMPLETE",
+    "PENDING_REGISTRY", "UNTRUSTED_CHAIN", "UNFINALIZED_REQUEST",
+    "REFERENCE_CHANGED", "READ_BUDGET", "READ_FAILURE",
+})
 
 
 class ReceiptProductTransportError(RuntimeError):
     """Premium receipt-product transport refused the request."""
+
+
+def _hold_reason(detail: Any) -> str:
+    code = detail.get("hold_reason") if type(detail) is dict else None
+    if (
+        type(detail) is dict and detail.get("status") == "HOLD"
+        and isinstance(code, str) and code in _HOLD_REASONS
+    ):
+        return code
+    return "UNKNOWN"
+
+
+def _describe_refusal(
+    status: int, detail: dict[str, Any], segments: Sequence[Mapping[str, str]],
+) -> ReceiptProductTransportError:
+    context = f"http_status={status}, hold_reason={_hold_reason(detail)}"
+    selector = detail.get("hold_selector")
+    if type(selector) is dict:
+        for item in segments:
+            dataset, segment = item["dataset"], item["segment_id"]
+            if (
+                selector.get("dataset") == dataset
+                and selector.get("segment_id") == segment
+                and isinstance(dataset, str) and isinstance(segment, str)
+                and re.fullmatch(r"[a-z0-9_]{1,96}", dataset)
+                and _MONTH_ID.fullmatch(segment)
+            ):
+                context += f", dataset={dataset}, segment_id={segment}"
+                break
+    # Only finite service codes and matching requested selectors, never the
+    # arbitrary response body. Refusal remains terminal, not a retry trigger.
+    return ReceiptProductTransportError(f"receipt product input was not described ({context})")
 
 
 def _canonical_bytes(value: Mapping[str, Any]) -> bytes:
@@ -97,7 +134,7 @@ def describe_receipt_product_input(
     }
     status, parsed = _describe_http(payload, opener=opener)
     if status != 200 or parsed.get("status") != "DESCRIBED":
-        raise ReceiptProductTransportError("receipt product input was not described")
+        raise _describe_refusal(status, parsed, segments)
     if parsed.get("schema_version") != RECEIPT_PRODUCT_INPUT_SET:
         raise ReceiptProductTransportError("describe schema mismatch")
     return parsed
@@ -139,7 +176,7 @@ def discover_latest_complete_segment(
     ):
         return None
     if status != 200 or parsed.get("status") != "DESCRIBED":
-        raise ReceiptProductTransportError("receipt product input was not described")
+        raise _describe_refusal(status, parsed, [{"dataset": dataset, "segment_id": on_or_before}])
     if parsed.get("schema_version") != RECEIPT_PRODUCT_INPUT_SET:
         raise ReceiptProductTransportError("describe schema mismatch")
     rows = parsed.get("segments")
@@ -215,18 +252,7 @@ def spool_receipt_product_bytes(
                 raw = error.read(8193)
             if len(raw) <= 8192:
                 detail = json.loads(raw)
-                code = detail.get("hold_reason") if type(detail) is dict else None
-                if (
-                    type(detail) is dict
-                    and detail.get("status") == "HOLD"
-                    and isinstance(code, str)
-                    and code in {
-                        "MISSING_TABLE", "MISSING_ROW", "COVERAGE_INCOMPLETE",
-                        "PENDING_REGISTRY", "UNTRUSTED_CHAIN", "UNFINALIZED_REQUEST",
-                        "REFERENCE_CHANGED", "READ_BUDGET", "READ_FAILURE",
-                    }
-                ):
-                    reason = code
+                reason = _hold_reason(detail)
         except (OSError, ValueError, RecursionError, http.client.HTTPException):
             pass
         raise ReceiptProductTransportError(

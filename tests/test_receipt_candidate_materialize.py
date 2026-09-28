@@ -1266,6 +1266,7 @@ def test_byte_refusal_keeps_safe_reason_without_retry(tmp_path, body, reason) ->
 def test_discover_latest_complete_preserves_service_failure_and_rejects_mismatch() -> None:
     from receipt_product_byte_client import (
         ReceiptProductTransportError,
+        describe_receipt_product_input,
         discover_latest_complete_segment,
     )
 
@@ -1304,6 +1305,24 @@ def test_discover_latest_complete_preserves_service_failure_and_rejects_mismatch
         ),
     )
     assert none_match is None
+    # The real batch path must preserve the missing selector, not lose an
+    # expensive candidate's actionable failure behind a generic 409.
+    with pytest.raises(ReceiptProductTransportError) as refused:
+        describe_receipt_product_input(
+            profile_id=pins["profile_id"],
+            profile_digest=pins["profile_digest"],
+            dependency_closure_digest=pins["dependency_closure_digest"],
+            segments=[{"dataset": "fins_summary", "segment_id": "2022-12"}],
+            opener=_Opener(409, {
+                "status": "HOLD", "hold_reason": "MISSING_ROW",
+                "hold_selector": {"dataset": "fins_summary", "segment_id": "2022-12"},
+                "detail": "must-not-be-logged",
+            }),
+        )
+    assert str(refused.value) == (
+        "receipt product input was not described (http_status=409, "
+        "hold_reason=MISSING_ROW, dataset=fins_summary, segment_id=2022-12)"
+    )
     with pytest.raises(ReceiptProductTransportError):
         discover_latest_complete_segment(
             **pins,
