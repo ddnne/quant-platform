@@ -49,6 +49,7 @@ from personal_acquisition_cache import (
     cache_identity_document,
     cache_identity_hex,
     cache_object_key,
+    legacy_cache_identity,
     gunzip_to_path,
     gzip_bytes,
     month_completion_digest,
@@ -1070,10 +1071,19 @@ class PersonalHistorySourceClient:
         if self._r2_opener is None or not self._month_cacheable(month):
             return False
         identity = self._cache_identity(dataset, month)
-        identity_hex = cache_identity_hex(identity)
-        key = self._cache_key(dataset, month, identity)
         try:
-            body, headers = self._download_cache_gzip(key)
+            try:
+                body, headers = self._download_cache_gzip(
+                    self._cache_key(dataset, month, identity)
+                )
+            except AcquisitionCacheMiss:
+                legacy = legacy_cache_identity(identity)
+                if legacy is None:
+                    raise
+                identity = legacy
+                body, headers = self._download_cache_gzip(
+                    self._cache_key(dataset, month, identity)
+                )
         except AcquisitionCacheMiss:
             self.cache_misses += 1
             return False
@@ -1081,6 +1091,7 @@ class PersonalHistorySourceClient:
             self.cache_unavailable += 1
             return False
         _content_digest, raw_declared = require_cache_get_contract(headers, body)
+        identity_hex = cache_identity_hex(identity)
         work = Path(self.spool.path).parent
         sqlite_path = None
         try:

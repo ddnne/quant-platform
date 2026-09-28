@@ -194,6 +194,33 @@ def _client(tmp_path: Path, *, r2=None, spool=None, utc_today=None, dataset_end=
     )
 
 
+def test_unchanged_contract_reuses_legacy_registry_cache(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    r2 = MemoryR2()
+    first = _client(tmp_path, r2=r2, spool=tmp_path / "old.sqlite")
+    first._registry = replace(first._registry, digest=cache_mod._LEGACY_REGISTRY)
+    original = first.fetch_dataset_evidenced(
+        "markets_calendar", **{"from": "2024-03-10", "to": "2024-03-12"}
+    )
+    first.close()
+    saved_keys = set(r2.objects)
+    second = _client(tmp_path, r2=r2, spool=tmp_path / "new.sqlite")
+    try:
+        reused = second.fetch_dataset_evidenced(
+            "markets_calendar", **{"from": "2024-03-10", "to": "2024-03-12"}
+        )
+        assert second.fetch_calls == 0
+        assert second.cache_hits == 1
+        assert reused.rows == original.rows
+        assert set(r2.objects) == saved_keys  # no relabelled copy
+        changed = dict(second._cache_identity("markets_calendar", "2024-03"),
+                       query_contract_digest="sha256:" + "0" * 64)
+        assert cache_mod.legacy_cache_identity(changed) is None
+    finally:
+        second.close()
+
+
 def test_second_job_loads_closed_month_without_live_fetch(tmp_path: Path) -> None:
     r2 = MemoryR2()
     first = _client(tmp_path / "job-a", r2=r2, spool=tmp_path / "a.sqlite")

@@ -220,6 +220,32 @@ def cache_identity_document(
     }
 
 
+# Registry 6518802c predates the unrelated equities_valuation addition in
+# 7b0412cf. These four route contracts are byte-for-byte unchanged. Retain the
+# old identity when reading old shards; never rewrite their evidence as current.
+_LEGACY_REGISTRY = "sha256:1355e440a0a58356c90854646cdb82b5fd1dcc1e39adc8aa6fa5ea48a9211b52"
+_LEGACY_CONTRACTS = {
+    "equities_bars_daily": "2d2352598b2c28a20b0ce79383a28a89fc88565efcde574cdbdabc265c4707db",
+    "equities_master": "a0233dab738bcef4d5835e4629b9fe3657afbae55f5890291edad1082c10cbde",
+    "fins_summary": "ec8285602a34443961bc1070d0b0aaa6222f60709f3e88941bc4d9dc4a4d9c76",
+    "markets_calendar": "32ed907c64252ea1d4f78c7b9d8ae78f60050046397a7f63e94580842cda0e1e",
+}
+
+
+def legacy_cache_identity(identity: Mapping[str, Any]) -> dict[str, Any] | None:
+    """One audited DRAFT cache alias, never a Receipt/READY compatibility rule."""
+    if identity.get("target_registry_digest") == _LEGACY_REGISTRY:
+        return None
+    contract = {k: v for k, v in identity.items() if k not in {
+        "environment", "segment_id", "segment_start", "segment_end",
+        "target_registry_digest",
+    }}
+    fingerprint = hashlib.sha256(canonical_json(contract).encode()).hexdigest()
+    if fingerprint != _LEGACY_CONTRACTS.get(str(identity.get("dataset_id"))):
+        return None
+    return {**identity, "target_registry_digest": _LEGACY_REGISTRY}
+
+
 def cache_identity_hex(identity: Mapping[str, Any]) -> str:
     digest = hashlib.sha256(canonical_json(dict(identity)).encode("utf-8")).hexdigest()
     if _HEX64_RE.fullmatch(digest) is None:
