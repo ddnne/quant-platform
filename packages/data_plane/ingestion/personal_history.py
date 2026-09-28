@@ -664,6 +664,24 @@ def _page_evidence(
     pages = tuple(getattr(fetch_result, "pages", ()) or ())
     selected_rows = tuple(dict(row) for row in getattr(fetch_result, "rows", ()) or ())
     selection = getattr(fetch_result, "selection", None)
+    objects = tuple(getattr(fetch_result, "structured_objects", ()) or ())
+    if objects:
+        if pages or selection is not None or not selected_rows:
+            raise PersonalHistoryError("mixed or empty structured object evidence")
+        evidence = [dict(item) for item in objects]
+        for item in evidence:
+            if (
+                item.get("kind") != "stored_structured_object"
+                or not str(item.get("key", "")).startswith("structured/jsonl/equities_bars_daily/")
+                or type(item.get("bytes")) is not int or item["bytes"] <= 0
+                or type(item.get("rows")) is not int or item["rows"] <= 0
+            ):
+                raise PersonalHistoryError("invalid structured object evidence")
+            _page_digest_hex(item.get("sha256"))
+        if any(row.get("dataset") != "equities_bars_daily" for row in selected_rows):
+            raise PersonalHistoryError("structured object evidence is bars-only")
+        # Object provenance is not API pagination/discovery exhaustion or Receipt.
+        return evidence, _canonical_digest({"objects": evidence, "rows": selected_rows}), None
     if not pages:
         raise PersonalHistoryError("J-Quants response has no page evidence")
     evidence = [
@@ -1057,7 +1075,17 @@ def _compact_bars(
 ) -> list[dict]:
     compact: list[dict[str, Any]] = []
     seen: set[str] = set()
+    stored = bool(rows) and "dataset" in rows[0]
+    clocks: list[Mapping[str, Any]] = []
+    vintages: set[tuple[str, str]] = set()
     for source in rows:
+        envelope = source
+        if ("dataset" in source) != stored:
+            raise PersonalHistoryError("mixed stored and API bar rows")
+        if stored:
+            if source["dataset"] != "equities_bars_daily":
+                raise PersonalHistoryError("stored bar dataset mismatch")
+            source = _payload_mapping(source)
         source_day = str(_pick(source, "Date") or "")[:10]
         if source_day != trading_day:
             raise PersonalHistoryError(
@@ -1067,10 +1095,15 @@ def _compact_bars(
         code = str(_pick(source, "Code") or "").strip()
         if not code or code not in scope_union:
             continue
-        if code in seen:
+        if not stored and code in seen:
             raise PersonalHistoryError(
                 f"equities_bars_daily {trading_day} has duplicate Code={code}"
             )
+        if stored:
+            identity = (code, str(envelope["ingested_at"]))
+            if identity in vintages:
+                raise PersonalHistoryError("stored bars have ambiguous duplicate vintage")
+            vintages.add(identity)
         seen.add(code)
         item: dict[str, Any] = {"Code": code, "Date": trading_day}
         for canonical, aliases in _BAR_FIELDS:
@@ -1084,11 +1117,12 @@ def _compact_bars(
         if "Close" not in item:
             continue
         compact.append(item)
+        clocks.append(envelope)
     if not compact:
         raise PersonalHistoryError(
             f"equities_bars_daily {trading_day} has no rows in observed TOPIX union"
         )
-    observed = len(compact)
+    observed = len({item["Code"] for item in compact})
     expected = len(scope_union)
     missing = expected - observed
     allowed_missing = _allowed_missing_observed_bars(expected, minimum_ratio)
@@ -1105,24 +1139,34 @@ def _compact_bars(
             f"(missing {missing}, allowed-missing {allowed_missing})"
         )
     session_close = _session_close(trading_day, "equities_bars_daily.Date")
-    normalized = JN.normalize_generic(
-        compact,
-        dataset="equities_bars_daily",
-        ingested_at=ingested_at,
-        available_at=session_close,
+    normalized = [] if stored else JN.normalize_generic(
+        compact, dataset="equities_bars_daily",
+        ingested_at=ingested_at, available_at=session_close,
     )
+    for item, envelope in zip(compact, clocks) if stored else ():
+        available = str(envelope["available_at"])
+        stamp = str(envelope["ingested_at"])
+        if str(envelope["event_time"]) != session_close:
+            raise PersonalHistoryError("stored bar event_time is not session close")
+        if _canonical_jst(available, "stored bar available_at") < parse_dt(session_close):
+            raise PersonalHistoryError("stored bar available before session close")
+        _require_ingested_not_before(stamp, available, "stored bar")
+        normalized.extend(JN.normalize_generic(
+            [item], dataset="equities_bars_daily",
+            ingested_at=stamp, available_at=available,
+        ))
     for row in normalized:
         row["raw_payload"] = None
         if str(row["event_time"]) != session_close:
             raise PersonalHistoryError(
                 "equities_bars_daily event_time must be the official session close"
             )
-        if str(row["available_at"]) != session_close:
+        if not stored and str(row["available_at"]) != session_close:
             raise PersonalHistoryError(
                 "equities_bars_daily first-vintage available_at must be "
                 "the official session close"
             )
-    return normalized
+    return sorted(normalized, key=lambda row: parse_dt(str(row["ingested_at"]))) if stored else normalized
 
 
 _MASTER_CONTENT_FIELDS = (
@@ -1770,7 +1814,8 @@ class PersonalHistoryHydrator:
                 self._upsert_shared_fins_scan(scan)
             if dataset in ("equities_master", "equities_bars_daily"):
                 written = self._insert_compact_facts(
-                    dataset, rows, revision=force_revision
+                    dataset, rows, revision=force_revision,
+                    stored_clocks=bool(getattr(fetched, "structured_objects", ())),
                 )
             else:
                 written = self.store.upsert("jquants_records", rows, commit=False)
@@ -1797,7 +1842,10 @@ class PersonalHistoryHydrator:
                     membership_digest,
                     expected_rows,
                     (
-                        len(rows) / expected_rows
+                        (
+                            len({str(row["natural_key"]) for row in rows})
+                            if dataset == "equities_bars_daily" else len(rows)
+                        ) / expected_rows
                         if expected_rows is not None and expected_rows > 0
                         else None
                     ),
@@ -2261,6 +2309,7 @@ class PersonalHistoryHydrator:
         rows: Sequence[Mapping[str, Any]],
         *,
         revision: bool = False,
+        stored_clocks: bool = False,
     ) -> int:
         """Insert-only compact vintages. Identical content is idempotent."""
 
@@ -2327,9 +2376,19 @@ class PersonalHistoryHydrator:
                 stamp = str(row["ingested_at"])
                 latest = self._latest_compact_bar(code, day)
                 digest = _fact_content_digest(dataset, payload)
+                if stored_clocks:
+                    exact = self._connection.execute(
+                        "SELECT * FROM personal_history_compact_bars "
+                        "WHERE code=? AND date=? AND available_at=? AND ingested_at=?",
+                        (code, day, official, stamp),
+                    ).fetchone()
+                    if exact is not None:
+                        if _stored_bar_content_digest(exact) != digest:
+                            raise PersonalHistoryError("stored bar vintage conflicts with committed content")
+                        continue
                 if latest is not None and _stored_bar_content_digest(latest) == digest:
                     continue
-                available_at, ingested_at = _vintage_clocks(
+                available_at, ingested_at = (official, stamp) if stored_clocks else _vintage_clocks(
                     official=official,
                     stamp=stamp,
                     first=latest is None and not revision,

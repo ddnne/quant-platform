@@ -60,6 +60,11 @@ from personal_acquisition_cache import (
     write_month_shard,
 )
 
+from personal_structured_bars import (
+    StructuredBarsObject, iter_verified_structured_bars,
+    decode_structured_bar_manifest, STRUCTURED_MANIFEST_MAX_BYTES,
+)
+
 HISTORY_SOURCE_ORIGIN = "http://history.source"
 HISTORY_SOURCE_PATH = "/v1/fetch-governed-page"
 HISTORY_SOURCE_USER_AGENT = "quant-personal-history/v13"
@@ -73,6 +78,7 @@ HISTORY_SOURCE_FIXED_HEADERS = MappingProxyType(
     }
 )
 _MAX_PAGES_PER_MONTH = 8192
+STRUCTURED_BAR_OBJECT_MAX_BYTES = 64 * 1024 * 1024
 _MAX_POST_ATTEMPTS = 4
 _TRANSIENT_POST_STATUSES = frozenset({502, 503, 504})
 _TRANSIENT_RETRY_DELAYS_S = (1, 2, 4)
@@ -130,6 +136,22 @@ CREATE TABLE IF NOT EXISTS month_state (
     PRIMARY KEY (dataset, month),
     CHECK (status IN ('FETCHING','COMPLETE'))
 );
+CREATE TABLE IF NOT EXISTS structured_bar_objects (
+    object_key TEXT PRIMARY KEY,
+    sha256 TEXT NOT NULL,
+    bytes INTEGER NOT NULL,
+    rows INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS structured_bar_rows (
+    object_key TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    row_date TEXT NOT NULL,
+    code TEXT NOT NULL,
+    envelope_json TEXT NOT NULL,
+    PRIMARY KEY (object_key, ordinal)
+);
+CREATE INDEX IF NOT EXISTS structured_bar_rows_date_code
+    ON structured_bar_rows(row_date, code);
 """
 
 
@@ -273,6 +295,7 @@ class _Fetch:
     rows: tuple[dict[str, Any], ...]
     pages: tuple[SourcePage, ...]
     selection: SelectionEvidence | None = None
+    structured_objects: tuple[Mapping[str, Any], ...] = ()
 
 
 def selection_completion_digest(
@@ -312,6 +335,76 @@ class AcquisitionSpool:
         self._verified_pages.clear()
         self._conn.close()
 
+    def record_structured_bars(
+        self, body: bytes, source: StructuredBarsObject, *, max_object_bytes: int
+    ) -> None:
+        """Stage one existing object atomically, without claiming API exhaustion."""
+        prior = self._conn.execute(
+            "SELECT sha256, bytes, rows FROM structured_bar_objects WHERE object_key=?",
+            (source.key,),
+        ).fetchone()
+        self.guard_bounds(
+            extra_pages=int(prior is None),
+            extra_bytes=len(body) * 3 if prior is None else 0,
+        )
+        self._conn.execute("BEGIN")
+        try:
+            if prior is not None and tuple(prior) != (source.sha256, source.size, source.rows):
+                raise PersonalHistoryError("structured bars immutable object conflict")
+            for ordinal, envelope in enumerate(iter_verified_structured_bars(
+                body, source, max_object_bytes=max_object_bytes
+            )):
+                payload = envelope["payload"]
+                if isinstance(payload, str):
+                    payload = json.loads(payload)
+                if prior is None:
+                    self._conn.execute(
+                        "INSERT INTO structured_bar_rows VALUES (?,?,?,?,?)",
+                        (source.key, ordinal, payload["Date"], str(payload["Code"]),
+                         canonical_json(envelope)),
+                    )
+            if prior is None:
+                self._conn.execute(
+                    "INSERT INTO structured_bar_objects VALUES (?,?,?,?)",
+                    (source.key, source.sha256, source.size, source.rows),
+                )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        self.guard_bounds()
+
+    def select_structured_bars(self, day: str) -> _Fetch:
+        """Read a day from verified objects; overlaps are not extra vintages."""
+        selected: dict[tuple[str, str], dict[str, Any]] = {}
+        objects: dict[str, Mapping[str, Any]] = {}
+        for record in self._conn.execute(
+            "SELECT r.envelope_json, o.* FROM structured_bar_rows r "
+            "JOIN structured_bar_objects o ON o.object_key=r.object_key "
+            "WHERE r.row_date=? ORDER BY r.object_key,r.ordinal", (day,),
+        ):
+            envelope = json.loads(record["envelope_json"])
+            payload = envelope["payload"]
+            if isinstance(payload, str):
+                payload = json.loads(payload)
+            envelope["payload"] = payload
+            identity = (str(payload["Code"]), envelope["ingested_at"])
+            previous = selected.get(identity)
+            if previous is not None:
+                fields = ("event_time", "available_at", "ingested_at", "payload")
+                if any(previous[field] != envelope[field] for field in fields):
+                    raise PersonalHistoryError("stored bars conflicting overlapping vintage")
+            else:
+                selected[identity] = envelope
+            objects[record["object_key"]] = {
+                "kind": "stored_structured_object",
+                "key": record["object_key"], "sha256": record["sha256"],
+                "bytes": record["bytes"], "rows": record["rows"],
+            }
+        if not selected:
+            raise PersonalHistoryError(f"stored bars missing trading day {day}")
+        return _Fetch(tuple(selected.values()), (), structured_objects=tuple(objects.values()))
+
     def reset(self) -> None:
         incomplete = self._conn.execute(
             """
@@ -341,7 +434,10 @@ class AcquisitionSpool:
 
     def usage(self) -> tuple[int, int]:
         pages = int(
-            self._conn.execute("SELECT COUNT(*) FROM source_pages").fetchone()[0]
+            self._conn.execute(
+                "SELECT (SELECT COUNT(*) FROM source_pages) + "
+                "(SELECT COUNT(*) FROM structured_bar_objects)"
+            ).fetchone()[0]
         )
         size = self.path.stat().st_size if self.path.exists() else 0
         for suffix in ("-wal", "-shm"):
@@ -851,6 +947,8 @@ class PersonalHistorySourceClient:
         r2_opener: Any = None,
         r2_origin: str = CACHE_R2_ORIGIN,
         cache_only: bool = False,
+        structured_bar_sources: Mapping[str, Sequence[StructuredBarsObject]] | None = None,
+        structured_bar_manifest_sha256: str | None = None,
         utc_today: Callable[[], date] | None = None,
         _sleep: Any = None,
         _max_attempts: int | None = None,
@@ -859,11 +957,26 @@ class PersonalHistorySourceClient:
             raise PersonalHistoryError("acquisition environment is invalid")
         self.environment = environment
         self.cache_only = cache_only
+        self.structured_bar_sources = (
+            None if structured_bar_sources is None else
+            {month: tuple(sources) for month, sources in structured_bar_sources.items()}
+        )
+        self._structured_months_loaded: set[str] = set()
         self.period_end = period_end
         self.origin = origin.rstrip("/")
         self.r2_origin = r2_origin.rstrip("/")
         self._opener = opener
         self._r2_opener = r2_opener
+        if structured_bar_manifest_sha256 is not None:
+            if structured_bar_sources is not None or not __import__("re").fullmatch(r"[0-9a-f]{64}", structured_bar_manifest_sha256):
+                raise PersonalHistoryError("stored bars manifest identity rejected")
+            url = f"{self.r2_origin}/research/personal/bar-inputs/sha256={structured_bar_manifest_sha256}.json"
+            request = urllib.request.Request(url, headers={"accept-encoding": "identity"})
+            with self._r2_urlopen(request, timeout=CACHE_GET_TIMEOUT_S) as response:
+                if int(response.status) != 200 or response.geturl() != url:
+                    raise PersonalHistoryError("stored bars manifest transport rejected")
+                body = response.read(STRUCTURED_MANIFEST_MAX_BYTES + 1)
+            self.structured_bar_sources = decode_structured_bar_manifest(body, structured_bar_manifest_sha256)
         self._utc_today = cache_utc_today if utc_today is None else utc_today
         self._sleep = time.sleep if _sleep is None else _sleep
         self._max_attempts = _MAX_POST_ATTEMPTS if _max_attempts is None else _max_attempts
@@ -894,6 +1007,7 @@ class PersonalHistorySourceClient:
 
     def release_acquired_raw(self) -> None:
         self.spool.reset()
+        self._structured_months_loaded.clear()
         self._refresh_progress()
 
     def close(self) -> None:
@@ -907,6 +1021,10 @@ class PersonalHistorySourceClient:
         if dataset == "equities_master":
             return self._day_selection(dataset, str(params["date"]))
         if dataset == "equities_bars_daily":
+            if self.structured_bar_sources is not None:
+                day = str(params["date"])
+                self._load_structured_bar_month(_month_of(day))
+                return self.spool.select_structured_bars(day)
             return self._day_selection(dataset, str(params["date"]))
         return self._fins_code(str(params["code"]))
 
@@ -915,6 +1033,58 @@ class PersonalHistorySourceClient:
         if route is None:
             raise PersonalHistoryError(f"{dataset} is not in the acquisition registry")
         return route
+
+    def _load_structured_bar_month(self, month: str) -> None:
+        if self.structured_bar_sources is not None and "*" in self.structured_bar_sources:
+            indexed: dict[str, list[StructuredBarsObject]] = {}
+            for source in self.structured_bar_sources["*"]:
+                body = self._download_structured_bar_object(source)
+                months = set()
+                for envelope in iter_verified_structured_bars(body, source, max_object_bytes=STRUCTURED_BAR_OBJECT_MAX_BYTES):
+                    payload = envelope["payload"]
+                    if isinstance(payload, str):
+                        payload = json.loads(payload)
+                    months.add(str(payload["Date"])[:7])
+                for observed_month in months:
+                    indexed.setdefault(observed_month, []).append(source)
+            self.structured_bar_sources = {key: tuple(value) for key, value in indexed.items()}
+        if month in self._structured_months_loaded:
+            return
+        sources = (self.structured_bar_sources or {}).get(month, ())
+        if not sources:
+            raise PersonalHistoryError(f"stored bars manifest missing month {month}")
+        for source in sources:
+            prior = self.spool._conn.execute(
+                "SELECT sha256,bytes,rows FROM structured_bar_objects WHERE object_key=?",
+                (source.key,),
+            ).fetchone()
+            if prior is not None:
+                if tuple(prior) != (source.sha256, source.size, source.rows):
+                    raise PersonalHistoryError("stored bars immutable descriptor conflict")
+                continue
+            self.spool.guard_bounds(extra_pages=1, extra_bytes=source.size * 3)
+            body = self._download_structured_bar_object(source)
+            self.spool.record_structured_bars(
+                body, source, max_object_bytes=STRUCTURED_BAR_OBJECT_MAX_BYTES,
+            )
+        self._structured_months_loaded.add(month)
+
+    def _download_structured_bar_object(self, source: StructuredBarsObject) -> bytes:
+        if (
+            not source.key.startswith("structured/jsonl/equities_bars_daily/")
+            or not source.key.endswith(".jsonl")
+            or any(part in {"", ".", ".."} for part in source.key.split("/"))
+            or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/-_.=" for char in source.key)
+            or type(source.size) is not int
+            or not 0 < source.size <= STRUCTURED_BAR_OBJECT_MAX_BYTES
+        ):
+            raise PersonalHistoryError("stored bars object request rejected")
+        url = f"{self.r2_origin}/{source.key}"
+        request = urllib.request.Request(url, headers={"accept-encoding": "identity"})
+        with self._r2_urlopen(request, timeout=CACHE_GET_TIMEOUT_S) as response:
+            if int(response.status) != 200 or response.geturl() != url:
+                raise PersonalHistoryError("stored bars transport status/redirect rejected")
+            return response.read(source.size + 1)
 
     def _governed_request(
         self,

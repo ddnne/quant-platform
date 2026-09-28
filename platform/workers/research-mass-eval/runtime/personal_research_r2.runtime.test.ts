@@ -250,6 +250,28 @@ async function putCompletedManifest(
 }
 
 describe("personalResearchR2Outbound workerd/R2 runtime", () => {
+  it("streams pinned stored-bar inputs but cannot mutate them", async () => {
+    const keys = [
+      `research/personal/bar-inputs/sha256=${"a".repeat(64)}.json`,
+      "structured/jsonl/equities_bars_daily/dt=2020-01-06/synthetic.jsonl",
+    ];
+    for (const key of keys) {
+      await runtimeEnv.STRUCTURED_BUCKET.put(key, "synthetic-input");
+      const response = await personalResearchR2Outbound(new Request(`http://research.r2/${key}`), runtimeEnv);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("synthetic-input");
+      expect((await personalResearchR2Outbound(new Request(`http://research.r2/${key}`, {
+        method: "DELETE",
+      }), runtimeEnv)).status).toBe(403);
+      expect((await personalResearchR2Outbound(new Request(`http://research.r2/${key}`, {
+        headers: {range: "bytes=0-2"},
+      }), runtimeEnv)).status).toBe(403);
+      expect(await (await runtimeEnv.STRUCTURED_BUCKET.get(key))!.text()).toBe("synthetic-input");
+    }
+    expect((await personalResearchR2Outbound(new Request(
+      "http://research.r2/structured/jsonl/fins_summary/dt=2020-01-06/synthetic.jsonl",
+    ), runtimeEnv)).status).toBe(403);
+  });
   afterEach(() => reset());
 
   it.each([

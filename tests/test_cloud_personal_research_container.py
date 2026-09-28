@@ -2982,6 +2982,14 @@ def test_cache_only_snapshot_flag_is_digest_bound() -> None:
         service.SnapshotJobSpec.from_document(document)
     document["request_digest"] = limited.derived_request_digest()
     assert service.SnapshotJobSpec.from_document(document).cache_only is True
+    pinned = replace(limited, structured_bar_manifest_sha256="a" * 64)
+    assert pinned.derived_request_digest() != limited.derived_request_digest()
+    document = asdict(pinned)
+    document["request_digest"] = pinned.derived_request_digest()
+    assert service.SnapshotJobSpec.from_document(document).structured_bar_manifest_sha256 == "a" * 64
+    document["cache_only"] = False
+    with pytest.raises(service.JobInputError, match="requires a sha256 and cache_only"):
+        service.SnapshotJobSpec.from_document(document)
 
 
 def _snapshot_spec(job_id: str) -> service.SnapshotJobSpec:

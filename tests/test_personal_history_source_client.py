@@ -19,6 +19,7 @@ from ingestion.personal_history import (
     PERSONAL_HISTORY_DATASETS,
     PersonalHistoryError,
     PersonalHistoryHydrator,
+    _compact_bars,
     _page_evidence,
     build_personal_history_plan,
 )
@@ -40,6 +41,144 @@ assert SPEC is not None and SPEC.loader is not None
 client_mod = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = client_mod
 SPEC.loader.exec_module(client_mod)
+
+from personal_structured_bars import (
+    StructuredBarsObject,
+    iter_verified_structured_bars,
+)
+
+
+def test_stored_bars_reader_preserves_multiday_vintages_and_checks_bytes(tmp_path, monkeypatch):
+    rows = [
+        {
+            "dataset": "equities_bars_daily",
+            "natural_key": {"Code": "12340", "Date": day},
+            "event_time": f"{day}T15:00:00+09:00",
+            "available_at": available,
+            "ingested_at": observed,
+            "payload": {"Code": "12340", "Date": day, "MAdjC": am, "AAdjC": 101},
+        }
+        for day, available, observed, am in (
+            ("2020-01-06", "2020-01-06T15:00:00+09:00", "2026-08-14T12:00:00+09:00", 100),
+            ("2020-01-07", "2020-01-07T15:00:00+09:00", "2026-08-14T12:00:00+09:00", None),
+            ("2020-01-06", "2026-08-15T12:00:00+09:00", "2026-08-15T12:00:00+09:00", 99),
+        )
+    ]
+    body = b"\n".join(json.dumps(row).encode() for row in rows) + b"\n"
+    source = StructuredBarsObject(
+        "structured/jsonl/equities_bars_daily/dt=2020-01-06/test.jsonl",
+        hashlib.sha256(body).hexdigest(), len(body), len(rows),
+    )
+    assert list(iter_verified_structured_bars(body, source, max_object_bytes=len(body))) == rows
+    stored_day = [dict(row, payload={**row["payload"], "C": 101})
+                  for row in reversed(rows) if row["payload"]["Date"] == "2020-01-06"]
+    compact = _compact_bars(
+        stored_day, trading_day="2020-01-06", scope_union=frozenset({"12340"}),
+        ingested_at="2026-09-29T12:00:00+09:00", minimum_ratio=1.0,
+    )
+    assert [row["ingested_at"] for row in compact] == [
+        "2026-08-14T12:00:00+09:00", "2026-08-15T12:00:00+09:00",
+    ]
+    assert [row["available_at"] for row in compact] == [
+        "2020-01-06T15:00:00+09:00", "2026-08-15T12:00:00+09:00",
+    ]
+    assert [json.loads(row["payload"])["MorningAdjustmentClose"] for row in compact] == [100, 99]
+    with pytest.raises(PersonalHistoryError, match="digest mismatch"):
+        list(iter_verified_structured_bars(body.replace(b"101", b"102"), source, max_object_bytes=len(body)))
+    with pytest.raises(PersonalHistoryError, match="size/count rejected"):
+        list(iter_verified_structured_bars(body, source, max_object_bytes=len(body) - 1))
+
+    rows[0]["natural_key"]["Code"] = "99990"
+    wrong_key = b"\n".join(json.dumps(row).encode() for row in rows)
+    wrong_source = StructuredBarsObject(source.key, hashlib.sha256(wrong_key).hexdigest(), len(wrong_key), len(rows))
+    with pytest.raises(PersonalHistoryError, match="natural key/payload"):
+        list(iter_verified_structured_bars(wrong_key, wrong_source, max_object_bytes=len(wrong_key)))
+    rows[0]["natural_key"]["Code"] = "12340"
+    rows[-1]["ingested_at"] = "2020-01-06T15:00:00+09:00"
+    invalid = b"\n".join(json.dumps(row).encode() for row in rows)
+    invalid_source = StructuredBarsObject(source.key, hashlib.sha256(invalid).hexdigest(), len(invalid), len(rows))
+    with pytest.raises(PersonalHistoryError, match="vintage clocks"):
+        list(iter_verified_structured_bars(invalid, invalid_source, max_object_bytes=len(invalid)))
+
+    spool = client_mod.AcquisitionSpool(tmp_path / "synthetic-structured.sqlite")
+    try:
+        spool.record_structured_bars(body, source, max_object_bytes=len(body))
+        with monkeypatch.context() as bounded:
+            bounded.setattr(client_mod, "MAX_SPOOL_PAGES", 1)
+            spool.record_structured_bars(body, source, max_object_bytes=len(body))
+        assert spool.usage()[0] == 1
+        original = spool._conn.execute(
+            "SELECT envelope_json FROM structured_bar_rows ORDER BY ordinal"
+        ).fetchall()
+        assert len(original) == 3
+        assert json.loads(original[1][0])["payload"]["MAdjC"] is None
+        assert json.loads(original[2][0])["ingested_at"] == "2026-08-15T12:00:00+09:00"
+        with pytest.raises(PersonalHistoryError, match="immutable object conflict"):
+            spool.record_structured_bars(invalid, invalid_source, max_object_bytes=len(invalid))
+        broken = StructuredBarsObject(
+            source.key.replace("test.jsonl", "late-invalid.jsonl"),
+            invalid_source.sha256, len(invalid), len(rows),
+        )
+        with pytest.raises(PersonalHistoryError, match="vintage clocks"):
+            spool.record_structured_bars(invalid, broken, max_object_bytes=len(invalid))
+        assert spool.usage()[0] == 1
+        assert spool._conn.execute("SELECT COUNT(*) FROM structured_bar_rows").fetchone()[0] == 3
+        assert not spool.month_complete("equities_bars_daily", "2020-01")
+        overlap = StructuredBarsObject(source.key.replace("test.jsonl", "overlap.jsonl"),
+                                       source.sha256, source.size, source.rows)
+        spool.record_structured_bars(body, overlap, max_object_bytes=len(body))
+        fetched = spool.select_structured_bars("2020-01-06")
+        assert len(fetched.rows) == 2  # two vintages, not four duplicate records
+        provenance, _, selection = _page_evidence(fetched)
+        assert len(provenance) == 2 and selection is None
+        assert all(item["kind"] == "stored_structured_object" for item in provenance)
+        assert not fetched.pages  # never fabricate API pagination evidence
+        with pytest.raises(PersonalHistoryError, match="missing trading day"):
+            spool.select_structured_bars("2020-01-08")
+        conflicting = body.replace(b'"AAdjC": 101', b'"AAdjC": 102')
+        conflict_source = StructuredBarsObject(
+            source.key.replace("test.jsonl", "conflict.jsonl"),
+            hashlib.sha256(conflicting).hexdigest(), len(conflicting), source.rows,
+        )
+        spool.record_structured_bars(conflicting, conflict_source, max_object_bytes=len(conflicting))
+        with pytest.raises(PersonalHistoryError, match="conflicting overlapping vintage"):
+            spool.select_structured_bars("2020-01-06")
+    finally:
+        spool.close()
+
+    downloads = []
+    manifest = json.dumps({"schema": "personal-stored-bars/v1", "objects": [
+        {"key": source.key, "sha256": source.sha256,
+         "bytes": source.size, "rows": source.rows},
+    ]}).encode()
+    manifest_digest = hashlib.sha256(manifest).hexdigest()
+    class StoredResponse(io.BytesIO):
+        status = 200
+        def __init__(self, data, url):
+            super().__init__(data)
+            self.url = url
+        def geturl(self):
+            return self.url
+    class StoredR2:
+        def urlopen(self, request, timeout):
+            downloads.append(request.full_url)
+            return StoredResponse(manifest if request.full_url.endswith(".json") else body,
+                                  request.full_url)
+    client = client_mod.PersonalHistorySourceClient(
+        environment="staging", period_end="2020-01-31",
+        spool_path=tmp_path / "synthetic-month-reader.sqlite",
+        cache_only=True, r2_opener=StoredR2(),
+        structured_bar_manifest_sha256=manifest_digest,
+    )
+    try:
+        assert len(client.fetch_dataset_evidenced("equities_bars_daily", date="2020-01-06").rows) == 2
+        assert len(client.fetch_dataset_evidenced("equities_bars_daily", date="2020-01-07").rows) == 1
+        assert len(downloads) == 3  # manifest, one indexing pass, one monthly load
+        client.release_acquired_raw()
+        assert len(client.fetch_dataset_evidenced("equities_bars_daily", date="2020-01-06").rows) == 2
+        assert len(downloads) == 4 and client.fetch_calls == 0  # no second indexing pass
+    finally:
+        client.close()
 
 
 class _Response(io.BytesIO):
@@ -1589,3 +1728,81 @@ def test_bar_months_are_released_so_physical_usage_is_not_cumulative(
     assert client.spool.usage()[0] == 0
     store.close()
     client.close()
+
+
+def test_stored_bars_hydrate_through_compact_store_without_retimestamping(tmp_path, monkeypatch):
+    from ingestion.jquants import normalize as JN
+
+    monkeypatch.setattr("ingestion.personal_history.now_iso", lambda: "2025-03-01T16:00:00+09:00")
+    plan = build_personal_history_plan(
+        period_start="2025-01-06", period_end="2025-01-08", lookback_sessions=1,
+        calendar_window_days=366, today=date(2025, 2, 1),
+    )
+    bodies, sources = {}, {}
+    for month in ("2024-12", "2025-01"):
+        envelopes = []
+        day = date.fromisoformat(month + "-01")
+        while day.isoformat().startswith(month):
+            if day.weekday() < 5:
+                envelopes.extend(JN.normalize_generic(
+                    _synthetic_bars_day(day.isoformat()), dataset="equities_bars_daily",
+                    ingested_at="2025-02-01T16:00:00+09:00",
+                    available_at=day.isoformat() + "T15:30:00+09:00",
+                ))
+            day += timedelta(days=1)
+        if month == "2025-01":
+            original_row = next(row for row in envelopes
+                                if json.loads(row["payload"])["Date"] == "2025-01-06")
+            correction = dict(original_row)
+            corrected_payload = json.loads(correction["payload"])
+            corrected_payload["Close"] += 1
+            correction["payload"] = json.dumps(corrected_payload)
+            correction["ingested_at"] = "2025-02-02T16:00:00+09:00"
+            correction["available_at"] = "2025-02-01T17:00:00+09:00"
+            envelopes.insert(0, correction)  # object order must not become vintage order
+        body = b"\n".join(json.dumps(row).encode() for row in envelopes)
+        key = f"structured/jsonl/equities_bars_daily/dt={month}-01/synthetic.jsonl"
+        bodies[key] = body
+        sources[month] = (StructuredBarsObject(key, hashlib.sha256(body).hexdigest(), len(body), len(envelopes)),)
+    class R2:
+        def urlopen(self, request, timeout):
+            if "/acquisition-cache/" in request.full_url:
+                return _Response(b"", {}, status=503)
+            response = _Response(bodies[request.full_url.removeprefix("http://research.r2/")], {})
+            response.geturl = lambda: request.full_url
+            return response
+    original = _synthetic_history_opener()
+    class Api:
+        def urlopen(self, request, timeout):
+            assert json.loads(request.data)["dataset_id"] != "equities_bars_daily"
+            return original.urlopen(request, timeout=timeout)
+    client = client_mod.PersonalHistorySourceClient(
+        environment="staging", period_end=plan.period_end, spool_path=tmp_path / "spool.sqlite",
+        opener=Api(), r2_opener=R2(), structured_bar_sources=sources,
+    )
+    store = SqliteStore(tmp_path / "history.sqlite")
+    try:
+        PersonalHistoryHydrator(client=client, store=store, plan=plan).hydrate()
+        rows = store._conn.execute("SELECT * FROM personal_history_compact_bars").fetchall()
+        assert rows and {row["ingested_at"] for row in rows} == {
+            "2025-02-01T16:00:00+09:00", "2025-02-02T16:00:00+09:00",
+        }
+        assert all(row["available_at"] == (
+            "2025-02-01T17:00:00+09:00" if row["ingested_at"].startswith("2025-02-02") else row["event_time"]
+        ) for row in rows)
+        assert all(row["morning_adjustment_close"] is not None for row in rows)
+        replay_rows = _compact_bars(
+            client.fetch_dataset_evidenced("equities_bars_daily", date="2025-01-06").rows,
+            trading_day="2025-01-06",
+            scope_union=frozenset(row["code"] for row in rows if row["date"] == "2025-01-06"),
+            ingested_at="2025-03-01T16:00:00+09:00",
+        )
+        hydrator = PersonalHistoryHydrator(client=client, store=store, plan=plan)
+        assert hydrator._insert_compact_facts("equities_bars_daily", replay_rows, stored_clocks=True) == 0
+        client.release_acquired_raw()
+        evidence = store._conn.execute("SELECT page_evidence_json FROM personal_history_segments WHERE dataset='equities_bars_daily'").fetchall()
+        assert evidence and all(json.loads(row[0])[0]["kind"] == "stored_structured_object" for row in evidence)
+        assert client.spool.usage()[0] == 0
+    finally:
+        store.close()
+        client.close()

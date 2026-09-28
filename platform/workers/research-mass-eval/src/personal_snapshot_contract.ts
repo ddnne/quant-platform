@@ -15,6 +15,7 @@ const REQUIRED_FIELDS = ["job_id", "period_end", "period_start"] as const;
 
 export type PersonalSnapshotBuildRequest = {
   cache_only?: boolean;
+  structured_bar_manifest_sha256?: string;
   job_id: string;
   period_start: string;
   period_end: string;
@@ -83,7 +84,11 @@ export function parsePersonalSnapshotBuildRequest(
     return { ok: false, error: "body must be a JSON object" };
   }
   const raw = body as Record<string, unknown>;
-  const keys = Object.keys(raw).filter((key) => key !== "cache_only").sort();
+  const keys = Object.keys(raw).filter((key) => key !== "cache_only" && key !== "structured_bar_manifest_sha256").sort();
+  if ("structured_bar_manifest_sha256" in raw && (
+    typeof raw.structured_bar_manifest_sha256 !== "string" ||
+    !/^[0-9a-f]{64}$/.test(raw.structured_bar_manifest_sha256) || raw.cache_only !== true
+  )) return {ok: false, error: "stored bar manifest requires sha256 and cache_only"};
   if ("cache_only" in raw && typeof raw.cache_only !== "boolean") {
     return { ok: false, error: "cache_only must be boolean" };
   }
@@ -145,6 +150,8 @@ export function parsePersonalSnapshotBuildRequest(
       period_end: end,
       lookback_sessions: lookback,
       ...(raw.cache_only === true ? { cache_only: true } : {}),
+      ...(typeof raw.structured_bar_manifest_sha256 === "string" ?
+        {structured_bar_manifest_sha256: raw.structured_bar_manifest_sha256} : {}),
     },
   };
 }
@@ -187,6 +194,8 @@ export async function personalSnapshotRequestDigest(
     period_end: request.period_end,
     period_start: request.period_start,
     runner_version: PERSONAL_RESEARCH_RUNNER_VERSION,
+    ...(request.structured_bar_manifest_sha256 ?
+      {structured_bar_manifest_sha256: request.structured_bar_manifest_sha256} : {}),
   });
   return `sha256:${await sha256Hex(new TextEncoder().encode(canonical))}`;
 }
