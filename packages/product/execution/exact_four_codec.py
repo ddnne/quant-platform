@@ -27,7 +27,6 @@ PILOT_READINESS_SCOPE = "VERIFIED_PILOT_READINESS"
 TRADER_AUTHORIZATION_SCOPE = "EXACT_FOUR_TRADER_AUTHORIZATION"
 CONTROLLED_EXECUTION_SCOPE = "EXACT_FOUR_CONTROLLED_PAPER_EXECUTION"
 PILOT_EXECUTION_MODE = "paper"
-AUTHORITY_PROTOCOL_STATE = "PENDING_EXTERNAL_AUTHORITIES"
 
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _UNAVAILABLE_CURRENT_VALUES = frozenset(
@@ -48,10 +47,6 @@ _UNAVAILABLE_CURRENT_VALUES = frozenset(
 
 class ExactFourAuthorityContractError(MassResearchDisabledError):
     """Raised when immutable exact-four authority claims are not canonical."""
-
-
-class ExactFourAuthorityPending(ExactFourAuthorityContractError):
-    """Raised because no v2 publication/approval/execution principal exists."""
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -245,13 +240,11 @@ def _require_date(value: Any, label: str) -> str:
 
 
 __all__ = [
-    "AUTHORITY_PROTOCOL_STATE",
     "CONTROLLED_EXECUTION_CLAIMS_FORMAT",
     "CONTROLLED_EXECUTION_SCOPE",
     "CONTROLLED_PILOT_IDENTITY",
     "EXACT_FOUR_BINDING_FORMAT",
     "ExactFourAuthorityContractError",
-    "ExactFourAuthorityPending",
     "HISTORICAL_TRADER_AUTHORIZATION_CLAIMS_FORMAT",
     "PILOT_EXECUTION_MODE",
     "PILOT_READINESS_CLAIMS_FORMAT",

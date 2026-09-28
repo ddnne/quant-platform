@@ -1,4 +1,4 @@
-"""Behavioral invariants for the PENDING exact-four v2 authority protocol."""
+"""Behavioral invariants for the authority-free exact-four v2 protocol."""
 
 from __future__ import annotations
 
@@ -14,20 +14,15 @@ from jsonschema import Draft202012Validator, FormatChecker, ValidationError
 
 import execution.exact_four_claims as authority_module
 from execution.exact_four_authority_contract import (
-    AUTHORITY_PROTOCOL_STATE,
     CONTROLLED_PILOT_POLICY_DIGEST,
     CONTROLLED_PILOT_POLICY_RAW_DIGEST,
-    AuthorizedExactFourExecutionV2,
     ControlledExecutionClaimsV2,
     ExactFourAuthorityContractError,
-    ExactFourAuthorityPending,
     PINNED_EXACT_FOUR_AUTHORITY_SCHEMA_DIGEST,
     PINNED_EXACT_FOUR_AUTHORITY_SCHEMA_RAW_DIGEST,
     PilotReadinessAttestationClaimsV2,
     ReadySnapshotLineage,
     TraderAuthorizationClaimsV2,
-    VerifiedExactFourTraderAuthorizationV2,
-    VerifiedPilotReadinessV2,
     build_controlled_execution_claims_v2,
     build_trader_authorization_claims_v2,
     canonical_authority_digest,
@@ -38,9 +33,6 @@ from execution.exact_four_authority_contract import (
     parse_and_validate_controlled_execution_document,
     parse_and_validate_pilot_readiness_document,
     parse_and_validate_trader_authorization_document,
-    require_authorized_exact_four_execution_v2,
-    require_verified_pilot_readiness_v2,
-    require_verified_trader_authorization_v2,
     validate_exact_four_authority_claim_chain_v2,
     validate_exact_four_authority_claims_v2,
 )
@@ -631,30 +623,3 @@ def test_closed_schema_accepts_three_scopes_and_rejects_substitution() -> None:
     ] = 1
     with pytest.raises(ValidationError):
         validator.validate(wrong_topology)
-
-
-def test_pending_capabilities_cannot_be_constructed_or_object_new_bypassed() -> None:
-    readiness, trader, execution = _claims()
-    assert AUTHORITY_PROTOCOL_STATE == "PENDING_EXTERNAL_AUTHORITIES"
-
-    for capability_type in (
-        VerifiedPilotReadinessV2,
-        VerifiedExactFourTraderAuthorizationV2,
-        AuthorizedExactFourExecutionV2,
-    ):
-        with pytest.raises(ExactFourAuthorityPending):
-            capability_type()
-
-    forged_ready = object.__new__(VerifiedPilotReadinessV2)
-    forged_trader = object.__new__(VerifiedExactFourTraderAuthorizationV2)
-    forged_execution = object.__new__(AuthorizedExactFourExecutionV2)
-    for gate, value in (
-        (require_verified_pilot_readiness_v2, readiness),
-        (require_verified_pilot_readiness_v2, forged_ready),
-        (require_verified_trader_authorization_v2, trader),
-        (require_verified_trader_authorization_v2, forged_trader),
-        (require_authorized_exact_four_execution_v2, execution),
-        (require_authorized_exact_four_execution_v2, forged_execution),
-    ):
-        with pytest.raises(ExactFourAuthorityPending):
-            gate(value)

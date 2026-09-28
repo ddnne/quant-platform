@@ -2,8 +2,8 @@
 
 This module is deliberately authority-free.  It can compile immutable claims
 and lineage pins, but it cannot sign READY, record human approval, authorize a
-Trader, or start execution.  The three positive capability types are nominal
-and non-constructible until their separately permissioned verifiers exist.
+Trader, or start execution. Active Paper authorization uses the separate
+signed READY and Trader verification paths, not these unsigned claims.
 
 ``TraderAuthorizationClaimsV2`` is retained only so existing result manifests
 remain replayable. It is not a production authorization contract. WebAuthn
@@ -28,7 +28,6 @@ from execution.exact_four_binding import (
     load_exact_four_execution_binding,
 )
 from execution.exact_four_codec import (
-    AUTHORITY_PROTOCOL_STATE,
     CONTROLLED_EXECUTION_CLAIMS_FORMAT,
     CONTROLLED_EXECUTION_SCOPE,
     EXACT_FOUR_BINDING_FORMAT,
@@ -40,7 +39,6 @@ from execution.exact_four_codec import (
     TRADER_AUTHORIZATION_CLAIMS_FORMAT,
     TRADER_AUTHORIZATION_SCOPE,
     ExactFourAuthorityContractError,
-    ExactFourAuthorityPending,
     _parsed_timestamp,
     _require_bounded_window,
     _require_current_token,
@@ -55,16 +53,10 @@ from execution.exact_four_codec import (
     canonical_authority_digest,
 )
 from execution.exact_four_protocol import (
-    AuthorizedExactFourExecutionV2,
     PINNED_EXACT_FOUR_AUTHORITY_SCHEMA_DIGEST,
     PINNED_EXACT_FOUR_AUTHORITY_SCHEMA_RAW_DIGEST,
-    VerifiedExactFourTraderAuthorizationV2,
-    VerifiedPilotReadinessV2,
     authority_schema_path,
     load_exact_four_authority_schema,
-    require_authorized_exact_four_execution_v2,
-    require_verified_pilot_readiness_v2,
-    require_verified_trader_authorization_v2,
 )
 from selection.controlled_pilot_policy import (
     CONTROLLED_PILOT_IDENTITY,
@@ -1080,8 +1072,6 @@ def build_controlled_execution_claims_v2(
 
 
 __all__ = [
-    "AUTHORITY_PROTOCOL_STATE",
-    "AuthorizedExactFourExecutionV2",
     "CONTROLLED_EXECUTION_CLAIMS_FORMAT",
     "CONTROLLED_EXECUTION_SCOPE",
     "CONTROLLED_PILOT_IDENTITY",
@@ -1094,7 +1084,6 @@ __all__ = [
     "ControlledPilotPolicyPin",
     "EXACT_FOUR_BINDING_FORMAT",
     "ExactFourAuthorityContractError",
-    "ExactFourAuthorityPending",
     "ExactFourExecutionBinding",
     "FeatureExecutionPin",
     "HISTORICAL_TRADER_AUTHORIZATION_CLAIMS_FORMAT",
@@ -1110,8 +1099,6 @@ __all__ = [
     "TRADER_AUTHORIZATION_CLAIMS_FORMAT",
     "TRADER_AUTHORIZATION_SCOPE",
     "TraderAuthorizationClaimsV2",
-    "VerifiedExactFourTraderAuthorizationV2",
-    "VerifiedPilotReadinessV2",
     "authority_schema_path",
     "build_controlled_execution_claims_v2",
     "build_trader_authorization_claims_v2",
@@ -1123,9 +1110,6 @@ __all__ = [
     "parse_and_validate_controlled_execution_document",
     "parse_and_validate_pilot_readiness_document",
     "parse_and_validate_trader_authorization_document",
-    "require_authorized_exact_four_execution_v2",
-    "require_verified_pilot_readiness_v2",
-    "require_verified_trader_authorization_v2",
     "validate_exact_four_authority_claim_chain_v2",
     "validate_exact_four_authority_claims_v2",
 ]
