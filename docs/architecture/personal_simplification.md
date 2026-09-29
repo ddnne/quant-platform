@@ -83,6 +83,27 @@ Retiring unused paths reduces maintenance and test collection, not observed
 cloud runtime. Deleted lines are not measured billing savings. Do not claim
 the requested whole-repository reduction or a 50% target is complete.
 
+## Measured active-path consolidation
+
+Coverage refresh used to verify each signed receipt for observed history,
+candidate ranking, segment evaluation and selected-run persistence. It now
+verifies once for those steps, shares the existing immutable verified closure, and
+indexes candidates by exact segment identity. Required scope/policy checks use
+the same verifier-owned function; environment, signature and transport binding
+still run before preparation. No process-global receipt cache, new authority,
+external call or database is introduced. A later evaluation verifies again.
+The final persistence gate for existing COMPLETE inventory still independently
+verifies its exact inventory; this change does not bypass that gate or promise
+only one signature check across every production publication path.
+
+On the same synthetic publication fixture (6,000 data rows, 3,764 receipts,
+24 datasets), cProfile measured 15,056 to 3,764 receipt verifications and
+37.8 to 8.3 seconds for publication. Fixture construction itself was about
+2.4 seconds: repeated real processing, not fixture construction, was the main
+cost. These are local instrumented measurements, not production throughput or
+billing savings. Keep the existing policy/sticky-COMPLETE tests and one real
+signature regression for changed scope and changed transport across calls.
+
 ## Next acceptance work
 
 Continue the table above: consolidate active feature/evaluation/data access,

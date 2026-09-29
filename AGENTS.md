@@ -5,6 +5,7 @@
 - This is a personal single-user product. Operations and backups should be very simple. Do not add enterprise authority, monitoring or backup systems without a concrete user need. Reuse existing components and remove unnecessary layers.
 - The product outcome is reproducible strategy construction and comparable performance results. Report actual executions, economic rationale, periods, costs and limitations; CI, deployment and test counts are not research results.
 - Simplification covers the entire repository and processing chain, not only storage: acquisition, features, evaluation, reports, execution, CI, deployment and operations. Delete unused product paths with their tests and callers; centralize existing responsibilities instead of adding wrappers. Moving/splitting code is not a reduction. Use the repo-wide worklist in [simplification](docs/architecture/personal_simplification.md).
+- Periodically review the whole codebase for duplicate features, processing and scattered external access. Consolidate each domain's access in its existing owner so fixes reach every caller; avoid new general-purpose frameworks or enterprise-scale implementations for this single-user product.
 - Personal DRAFT and Controlled Pilot are distinct existing paths. Do not make unrelated production completion a prerequisite for DRAFT. Do not relabel failed Controlled evidence as DRAFT, bypass explicit HOLDs, or represent DRAFT results as verified Controlled results.
 
 ## Correctness, cost and data
