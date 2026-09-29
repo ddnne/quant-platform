@@ -44,6 +44,7 @@ SPEC.loader.exec_module(client_mod)
 
 from personal_structured_bars import (
     StructuredBarsObject,
+    index_structured_bars,
     iter_verified_structured_bars,
 )
 
@@ -177,6 +178,8 @@ def test_stored_bars_reader_preserves_multiday_vintages_and_checks_bytes(tmp_pat
         client.release_acquired_raw()
         assert len(client.fetch_dataset_evidenced("equities_bars_daily", date="2020-01-06").rows) == 2
         assert len(downloads) == 2 and client.fetch_calls == 0  # survives month spool reset
+        assert client.cache_metrics()["structured_full_object_scans"] == 1
+        assert client.cache_metrics()["structured_indexed_month_reads"] == 2
         reuse_root = Path(client._structured_reuse.name)
         cached = client._structured_reuse_entries[source]
         assert sum(p.stat().st_size for p in reuse_root.iterdir()) <= client_mod.STRUCTURED_REUSE_MAX_BYTES
@@ -215,27 +218,36 @@ def test_stored_bars_month_scope_retains_only_requested_rows_but_validates_all(t
          "available_at": f"{day}T15:00:00+09:00",
          "ingested_at": "2026-08-14T12:00:00+09:00",
          "payload": {"Code": "12340", "Date": day, "MAdjC": 100, "AAdjC": 101}}
-        for day in ("2020-01-06", "2020-02-03")
+        for day in ("2020-01-06", "2020-02-03", "2020-01-07")
     ]
     def encode():
-        body = b"\n".join(json.dumps(row).encode() for row in rows)
+        body = b"\n\n".join(json.dumps(row).encode() for row in rows)
         return body, StructuredBarsObject(
             "structured/jsonl/equities_bars_daily/dt=2020-01-06/two-months.jsonl",
             hashlib.sha256(body).hexdigest(), len(body), len(rows),
         )
     body, source = encode()
+    months, index = index_structured_bars(body, source, max_object_bytes=len(body), max_spans=3)
+    assert months == {"2020-01", "2020-02"} and index is not None
+    assert list(index.rows_for_month(body, source, "2020-01")) == [(0, rows[0]), (2, rows[2])]
+    assert index_structured_bars(body, source, max_object_bytes=len(body), max_spans=1) == (months, None)
+    with pytest.raises(PersonalHistoryError, match="identity mismatch"):
+        list(index.rows_for_month(body.replace(b"101", b"102"), source, "2020-01"))
     spool = client_mod.AcquisitionSpool(tmp_path / "synthetic-two-months.sqlite")
     try:
-        for month, day in (("2020-01", "2020-01-06"), ("2020-02", "2020-02-03")):
-            spool.record_structured_bars(body, source, max_object_bytes=len(body), month=month)
-            assert len(spool.select_structured_bars(day).rows) == 1
-            retained = spool._conn.execute(
-                "SELECT row_date FROM structured_bar_rows WHERE scope_month=?", (month,)
-            ).fetchall()
-            assert [row[0] for row in retained] == [day]
-        spool.reset()
+        for selected_index in (None, index):
+            for month, days in (("2020-01", ["2020-01-06", "2020-01-07"]), ("2020-02", ["2020-02-03"])):
+                spool.record_structured_bars(body, source, max_object_bytes=len(body), month=month, index=selected_index)
+                assert len(spool.select_structured_bars(days[0]).rows) == 1
+                retained = spool._conn.execute(
+                    "SELECT row_date FROM structured_bar_rows WHERE scope_month=? ORDER BY ordinal", (month,)
+                ).fetchall()
+                assert [row[0] for row in retained] == days
+            spool.reset()
         rows[1]["natural_key"]["Code"] = "99990"  # bad excluded February row
         body, source = encode()
+        with pytest.raises(PersonalHistoryError, match="natural key/payload"):
+            index_structured_bars(body, source, max_object_bytes=len(body), max_spans=0)
         with pytest.raises(PersonalHistoryError, match="natural key/payload"):
             spool.record_structured_bars(body, source, max_object_bytes=len(body), month="2020-01")
         assert spool.usage()[0] == 0
