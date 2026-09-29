@@ -234,6 +234,9 @@ class _MetricsClient:
             "cache_published": 3,
             "cache_unavailable": 0,
             "live_fetch_calls": 2,
+            "structured_full_object_scans": 1,
+            "structured_indexed_month_reads": 2,
+            "structured_download_bytes": 1024,
         }
 
     def close(self):
@@ -263,6 +266,9 @@ def test_snapshot_manifest_includes_cache_metrics_on_completion(
     assert manifest["cache_published"] == 3
     assert manifest["cache_unavailable"] == 0
     assert manifest["live_fetch_calls"] == 2
+    assert manifest["structured_full_object_scans"] == 1
+    assert manifest["structured_indexed_month_reads"] == 2
+    assert manifest["structured_download_bytes"] == 1024
     assert "authorization" not in json.dumps(manifest).lower()
 
 
@@ -293,6 +299,8 @@ def test_snapshot_manifest_includes_cache_metrics_on_failure(
     assert manifest["live_fetch_calls"] == 2
     assert uploads[-1][0] == spec.manifest_key
     assert uploads[-1][1]["cache_misses"] == 1
+    assert uploads[-1][1]["structured_full_object_scans"] == 1
+    assert uploads[-1][1]["structured_download_bytes"] == 1024
     assert "api_key" not in json.dumps(manifest).lower()
 
 

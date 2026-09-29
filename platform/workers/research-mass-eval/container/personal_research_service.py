@@ -2545,13 +2545,11 @@ def _snapshot_cache_metrics(client: Any) -> dict[str, int]:
         return {}
     try:
         payload = getter()
-        return {
-            "cache_hits": int(payload["cache_hits"]),
-            "cache_misses": int(payload["cache_misses"]),
-            "cache_published": int(payload["cache_published"]),
-            "cache_unavailable": int(payload["cache_unavailable"]),
-            "live_fetch_calls": int(payload["live_fetch_calls"]),
-        }
+        if not isinstance(payload, dict):
+            return {}
+        # Counter names belong to the source client; do not silently discard
+        # its download/scan measurements at this reporting boundary.
+        return {name: int(value) for name, value in payload.items()}
     except (TypeError, ValueError, KeyError):
         return {}
 
@@ -2721,7 +2719,7 @@ def execute_snapshot_job(
                 "status": "FAILED",
                 "error": _safe_detail(error),
             }
-        manifest = {**manifest, **_snapshot_cache_metrics(client)}
+        manifest = {**_snapshot_cache_metrics(client), **manifest}
         if manifest.get("status") == "COMPLETED":
             verify_snapshot_observation_evidence(
                 manifest,

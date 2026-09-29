@@ -98,6 +98,16 @@ charter for extra hostile-Python tests.
   metrics, short financing, risk gates and Worker evaluation are unchanged.
   In particular, this does not replace daily PnL with amortized-cost examples.
 
+- Merge the standalone cache-metric key-set test into the existing two-job
+  acquisition/reuse case. It now observes the public counter values alongside
+  identical returned evidence and zero second-job fetches. New diagnostic
+  fields no longer fail a spelling/shape freeze; a missing or wrong cost
+  counter used by that scenario still fails. Existing failed-cache behavior
+  also observes public `cache_unavailable`. Snapshot reporting forwards the
+  source client's numeric counter map instead of a duplicate five-name list;
+  existing success/failure manifest tests cover scan/read/download counts.
+  Canonical manifest fields take precedence over diagnostic counters.
+
 - Removed the concurrent audit-canary RPC call-count assertion. A caller may
   receive an already finalized replay, so three calls rather than four is
   valid (native build `b51d7523-696e-450f-8d74-8b2226c7825b`). The existing

@@ -233,19 +233,19 @@ def test_second_job_loads_closed_month_without_live_fetch(tmp_path: Path) -> Non
     live = first.fetch_dataset_evidenced(
         "markets_calendar", **{"from": "2024-03-10", "to": "2024-03-12"}
     )
-    assert first.fetch_calls == 1
-    assert first.cache_misses == 1
-    assert first.cache_published == 1
-    assert first.cache_hits == 0
+    assert first.cache_metrics()["live_fetch_calls"] == first.fetch_calls == 1
+    assert first.cache_metrics()["cache_misses"] == 1
+    assert first.cache_metrics()["cache_published"] == 1
+    assert first.cache_metrics()["cache_hits"] == 0
     first.close()
 
     second = _client(tmp_path / "job-b", r2=r2, spool=tmp_path / "b.sqlite")
     cached = second.fetch_dataset_evidenced(
         "markets_calendar", **{"from": "2024-03-10", "to": "2024-03-12"}
     )
-    assert second.fetch_calls == 0
-    assert second.cache_hits == 1
-    assert second.cache_misses == 0
+    assert second.cache_metrics()["live_fetch_calls"] == second.fetch_calls == 0
+    assert second.cache_metrics()["cache_hits"] == 1
+    assert second.cache_metrics()["cache_misses"] == 0
     assert [row["Date"] for row in cached.rows] == [row["Date"] for row in live.rows]
     assert cached.selection is not None and live.selection is not None
     assert cached.selection.selected_digest == live.selection.selected_digest
@@ -565,7 +565,7 @@ def test_bounded_5xx_records_unavailable_and_live_fetches(tmp_path: Path) -> Non
         "markets_calendar", **{"from": "2024-03-10", "to": "2024-03-12"}
     )
     assert fetched.selection is not None
-    assert client.cache_unavailable >= 1
+    assert client.cache_metrics()["cache_unavailable"] >= 1
     assert client.fetch_calls == 1
     client.close()
 
@@ -702,22 +702,3 @@ def test_python_cache_headers_are_the_closed_transport_set() -> None:
     )
     assert "authorization" not in put_headers
     assert "cookie" not in put_headers
-
-
-def test_cache_metrics_are_integers(tmp_path: Path) -> None:
-    r2 = MemoryR2()
-    client = _client(tmp_path, r2=r2)
-    client.fetch_dataset_evidenced(
-        "markets_calendar", **{"from": "2024-03-10", "to": "2024-03-12"}
-    )
-    metrics = client.cache_metrics()
-    assert set(metrics) == {
-        "cache_hits",
-        "cache_misses",
-        "cache_published",
-        "cache_unavailable",
-        "live_fetch_calls",
-    }
-    assert metrics["live_fetch_calls"] == client.fetch_calls == 1
-    assert metrics["cache_published"] == 1
-    client.close()
