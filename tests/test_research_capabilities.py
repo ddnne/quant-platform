@@ -103,20 +103,8 @@ def test_daily_path_driver_refuses_without_http(monkeypatch) -> None:
         )
 
 
-def test_propose_driver_refuses_without_http(monkeypatch) -> None:
-    from research.cf_propose_thesis import invoke_cf_propose_thesis
-
-    monkeypatch.setattr(urllib.request, "urlopen", _boom)
-    out = invoke_cf_propose_thesis(n=1, http_post=_boom)
-    assert out["ok"] is False
-    assert out["error"] == "capability_missing"
-    assert out["capability"] == "generation"
-    assert out["go"] is False
-
-
 def test_driver_env_flags_cannot_grant(monkeypatch) -> None:
     from research.cf_mass_eval_run import invoke_cf_mass_eval_worker
-    from research.cf_propose_thesis import invoke_cf_propose_thesis
 
     monkeypatch.setenv("MASS_RESEARCH", "GO")
     monkeypatch.setenv("PHASE7", "ON")
@@ -129,8 +117,3 @@ def test_driver_env_flags_cannot_grant(monkeypatch) -> None:
     assert mass["ok"] is False
     assert mass["error"] == "capability_missing"
     assert mass["go"] is False
-    gen = invoke_cf_propose_thesis(n=1, http_post=_boom)
-    assert gen["ok"] is False
-    assert gen["error"] == "capability_missing"
-    assert gen["capability"] == "generation"
-    assert gen["go"] is False

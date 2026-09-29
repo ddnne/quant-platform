@@ -81,3 +81,12 @@ instead of keeping an entire report module for a re-export. Current position,
 trade, return, cost, drawdown and risk computations remain unchanged. Retiring
 these already-unused paths reduces maintenance/collection, not live runtime;
 do not count their deleted lines as measured cloud speed or billing savings.
+
+The legacy Python thesis-proposal client and its second review/write-block
+policy are retired with their synthetic proposal stub and dedicated tests.
+Their only network target, `/v1/propose-thesis`, already refuses execution in
+the Worker. The Worker's existing policy owns its remaining callers; no new
+policy registry or Python-to-TypeScript generator is introduced. Current
+personal idea/plan execution, closed StrategySpec validation and the Worker
+refusal tests remain. Frozen catalog artifacts and recorded results are not
+deleted, and neither generation nor Mass is enabled by removing old clients.

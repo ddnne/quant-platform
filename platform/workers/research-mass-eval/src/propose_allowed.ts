@@ -1,5 +1,5 @@
 /// Static closed proposal policy. It is not generated from the retired catalog.
-/// Python research.unique_logic.constants / propose_review_tables is SoT.
+/// This Worker owns its proposal policy; there is no Python policy generator.
 export const PROPOSE_ALLOWED_GATES = [
   "afterclose",
   "cheap_iv",
