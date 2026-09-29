@@ -181,6 +181,43 @@ def test_stored_bars_reader_preserves_multiday_vintages_and_checks_bytes(tmp_pat
         client.close()
 
 
+def test_stored_bars_month_scope_retains_only_requested_rows_but_validates_all(tmp_path):
+    rows = [
+        {"dataset": "equities_bars_daily",
+         "natural_key": {"Code": "12340", "Date": day},
+         "event_time": f"{day}T15:00:00+09:00",
+         "available_at": f"{day}T15:00:00+09:00",
+         "ingested_at": "2026-08-14T12:00:00+09:00",
+         "payload": {"Code": "12340", "Date": day, "MAdjC": 100, "AAdjC": 101}}
+        for day in ("2020-01-06", "2020-02-03")
+    ]
+    def encode():
+        body = b"\n".join(json.dumps(row).encode() for row in rows)
+        return body, StructuredBarsObject(
+            "structured/jsonl/equities_bars_daily/dt=2020-01-06/two-months.jsonl",
+            hashlib.sha256(body).hexdigest(), len(body), len(rows),
+        )
+    body, source = encode()
+    spool = client_mod.AcquisitionSpool(tmp_path / "synthetic-two-months.sqlite")
+    try:
+        for month, day in (("2020-01", "2020-01-06"), ("2020-02", "2020-02-03")):
+            spool.record_structured_bars(body, source, max_object_bytes=len(body), month=month)
+            assert len(spool.select_structured_bars(day).rows) == 1
+            retained = spool._conn.execute(
+                "SELECT row_date FROM structured_bar_rows WHERE scope_month=?", (month,)
+            ).fetchall()
+            assert [row[0] for row in retained] == [day]
+        spool.reset()
+        rows[1]["natural_key"]["Code"] = "99990"  # bad excluded February row
+        body, source = encode()
+        with pytest.raises(PersonalHistoryError, match="natural key/payload"):
+            spool.record_structured_bars(body, source, max_object_bytes=len(body), month="2020-01")
+        assert spool.usage()[0] == 0
+        assert spool._conn.execute("SELECT COUNT(*) FROM structured_bar_rows").fetchone()[0] == 0
+    finally:
+        spool.close()
+
+
 class _Response(io.BytesIO):
     def __init__(self, payload: dict | bytes, headers: dict[str, str], status: int = 200):
         body = (
