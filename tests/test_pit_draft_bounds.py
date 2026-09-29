@@ -1020,8 +1020,8 @@ def test_first_historical_backfill_usable_under_now_snapshot(
 def test_long_history_run_length_peak_without_cartesian_product() -> None:
     import tracemalloc
 
+    from core.universe import ResolvedDailyUniverse
     from data_contracts.membership_runs import MembershipRun
-    from data_contracts.personal_universe import TOPIX_SCALE_CATEGORIES
     from research.personal_universe import (
         PERSONAL_UNIVERSE_RULE_VERSION,
         PersonalResolvedUniverseMembership,
@@ -1050,13 +1050,16 @@ def test_long_history_run_length_peak_without_cartesian_product() -> None:
     assert membership.codes_for(start.isoformat()) is codes
     assert membership.codes_for(mid) is codes
     assert membership.codes_for(end.isoformat()) is codes
-    assert membership.resolved_membership_digest.startswith("sha256:")
+    runtime = ResolvedDailyUniverse(membership)
+    assert runtime.codes_for(start.isoformat()) == codes
+    assert runtime.codes_for(mid) == codes
+    assert runtime.codes_for(end.isoformat()) == codes
+    assert runtime.resolved_membership_digest == membership.resolved_membership_digest
     _current, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     cartesian = 6500 * 2000 * 8
     assert peak < cartesian
     assert peak < 16 * 1024 * 1024
-    del TOPIX_SCALE_CATEGORIES
 
 
 def test_container_rejects_if_either_path_is_persistent(

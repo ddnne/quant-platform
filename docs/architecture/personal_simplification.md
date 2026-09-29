@@ -104,6 +104,15 @@ cost. These are local instrumented measurements, not production throughput or
 billing savings. Keep the existing policy/sticky-COMPLETE tests and one real
 signature regression for changed scope and changed transport across calls.
 
+Runtime universe binding now consumes the existing run-length mapping directly
+instead of expanding, sorting and recompressing every day's codes. Ordinary
+mapping inputs retain normalization, declared-run comparison and content digest
+checks. The daily PIT-master intersection is unchanged. Coalescing builds one
+run per interval, not a replacement run for every day. No data fetch or new
+cache is added. A synthetic 2008–2026, 4,885-session / 4,000-code / 977-run
+adapter measurement under tracemalloc changed from 6.29s / 1.00MiB peak to
+1.61s / 0.66MiB; the digest is identical. This is not end-to-end cloud timing.
+
 ## Next acceptance work
 
 Continue the table above: consolidate active feature/evaluation/data access,
