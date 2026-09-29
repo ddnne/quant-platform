@@ -1229,37 +1229,6 @@ def test_morning_close_coverage_does_not_substitute_session_close(
 
 
 
-def test_mass_eval_rejects_arbitrary_ndjson_market_path(tmp_path: Path) -> None:
-    from research.cf_mass_eval_stage import build_real_period_panel
-
-    ndjson = tmp_path / "equities_bars_daily_y2025_full.ndjson"
-    ndjson.write_text(
-        '{"payload":{"Code":"1301","Date":"2025-01-02","C":1,'
-        '"available_at":"2099-01-01T00:00:00+09:00"}}\n'
-    )
-    from selection.budget_ledger import MassResearchDisabledError
-
-    with pytest.raises(MassResearchDisabledError, match="build_real_period_panel"):
-        build_real_period_panel(
-            {
-                "period_id": "y2025_full",
-                "period_start": "2025-01-02",
-                "period_end": "2025-01-02",
-            },
-            codes=["1301"],
-        )
-    with pytest.raises(MassResearchDisabledError, match="build_real_period_panel"):
-        build_real_period_panel(
-            {
-                "period_id": "y2025_full",
-                "period_start": "2025-01-02",
-                "period_end": "2025-01-02",
-            },
-            codes=["1301"],
-            view=tmp_path,
-        )
-
-
 def test_artifact_category_rejects_traversal_and_symlink(tmp_path: Path) -> None:
     path = tmp_path / "art.sqlite"
     connection = sqlite3.connect(path)

@@ -122,7 +122,6 @@ Details + exceptions: ADR §5.
 | Phase 6.3.2 identity / path freeze | `CONTROLLED_PILOT_IDENTITY`, Draft purpose IDs; live-order code removed (Git is the archive) | [ADR simplification](./adr_phase632_architecture_simplification.md) (**Accepted**) |
 | New research hypothesis / comparable results | Current personal DRAFT batch or READY-bound Controlled Pilot | [ADR recording](./adr_research_recording.md) — preserve snapshot/source identity and R2 results; no retired catalog client or new `run_wNN` script |
 | Existing `run_w*` / wave proofs | **deleted** | [`wave_assets_deprecated.md`](./wave_assets_deprecated.md) |
-| Legacy eval recording | `research.eval_registry` (offline/R2 artifact helper only) | the former Ops-D1 migration owner was removed; Mass remains NO-GO |
 | Test tiers (G0/G1/G2) | `tests/README.md` | this map §11 B1-d |
 
 ---
