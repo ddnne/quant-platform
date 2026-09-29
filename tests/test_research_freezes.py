@@ -76,16 +76,6 @@ def test_unknown_cs_gate_fails_closed() -> None:
     assert pack.get("go") is not True
 
 
-def test_cf_combo_specs_carry_gates() -> None:
-    from research.cf_mass_eval_job import default_logic_specs
-
-    rows = default_logic_specs(["event_eqar_high_pead", "event_eqar_high_liq_high"])
-    by = {r["logic_id"]: r for r in rows}
-    assert by["event_eqar_high_pead"]["params"].get("gates")
-    assert "eq_ar_high" in by["event_eqar_high_pead"]["params"]["gates"]
-    assert "liq_high" in by["event_eqar_high_liq_high"]["params"]["gates"]
-
-
 def test_cheap_pb_event_not_csfundsnaps() -> None:
     from research.unique_logic.constants import (
         CHEAP_PB_CS_SOURCE,
@@ -109,16 +99,3 @@ def test_propose_calendar_gates_excluded_from_llm() -> None:
     assert PROPOSE_ALLOWED_GATES == COMBO_EVENT_GATES - PROPOSE_CALENDAR_GATES
     assert "skip_monday" in PROPOSE_CALENDAR_GATES
     assert "liq_high" in PROPOSE_ALLOWED_GATES
-
-
-def test_default_logic_specs_leftover_and_bar_native() -> None:
-    from research.cf_mass_eval_job import default_logic_specs
-
-    leftover = default_logic_specs(["rate_abs_level_xs"])
-    assert leftover
-    assert leftover[0]["logic_id"] == "rate_abs_level_xs"
-    assert leftover[0]["family_id"] == "unknown"
-    native = default_logic_specs(["mdh_sticky_momentum"])
-    assert native[0]["logic_id"] == "mdh_sticky_momentum"
-    assert native[0]["family_id"] == "multi_day_hold"
-    assert native[0]["params"]

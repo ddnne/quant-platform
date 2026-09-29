@@ -239,7 +239,6 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
     )
     assert "near_empty_member" in reasons
     from research.unique_logic.constants import THIN_SLEEVE_EXCLUDE_IDS
-    from research.cf_daily_path_job import sleeve_durability_logic_ids
 
     assert THIN_SLEEVE_EXCLUDE_IDS
     assert "surprise_xs_pb_rising_crowded" in THIN_SLEEVE_EXCLUDE_IDS
@@ -251,7 +250,6 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
     assert "event_eql_steep" in THIN_SLEEVE_EXCLUDE_IDS
     assert "surprise_xs_div_p10" in NEAR_EMPTY_PARK_IDS
     assert THIN_SLEEVE_EXCLUDE_IDS.isdisjoint(NEAR_EMPTY_PARK_IDS)
-    assert THIN_SLEEVE_EXCLUDE_IDS.isdisjoint(sleeve_durability_logic_ids())
     thin_reasons = validate_basket_members(
         ["event_eqar_high_liq_high", "event_p10_pb_rising"]
     )

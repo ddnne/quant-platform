@@ -207,7 +207,7 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "both_track_sleeve_durability",
         "track": EVAL_TRACK_LIQ_LARGE,
         "tracks": BOTH_EVAL_TRACK_IDS,
-        "entry": "research.cf_daily_path_job.run_both_track_sleeve_fanout",
+        "entry": None,  # Historical observation; the local fan-out client is retired.
         "why": (
             "recorded KEEP eval-cf-dp-both-sleeves-20260824df; descriptive; "
             "majority is not stable"

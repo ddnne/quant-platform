@@ -90,3 +90,9 @@ policy registry or Python-to-TypeScript generator is introduced. Current
 personal idea/plan execution, closed StrategySpec validation and the Worker
 refusal tests remain. Frozen catalog artifacts and recorded results are not
 deleted, and neither generation nor Mass is enabled by removing old clients.
+
+The old Mass/daily-path Python spec builders, HTTP clients and local fallback
+stubs are also retired together with their dedicated tests. No package caller
+remained outside this retired graph. Their refusal is structural (there is no
+local callable client); the existing Worker HTTP refusal remains tested.
+Common cost/spec/IR helpers still consumed by current code remain in place.
