@@ -79,6 +79,13 @@ charter for extra hostile-Python tests.
 
 ## Consolidation decisions
 
+- Remove the personal-paper call-order mock and the runner's duplicate fake-id
+  mutation test. The existing result-equivalence/read-session test now checks
+  two real identity reads; the service's drift test changes a real SQLite
+  schema version during calculation and requires rejection. Initial mismatch
+  still rejects before the engine runs. The canonical runner owns this check,
+  rather than both caller and callee scanning identity before/after execution.
+
 - Replace the two prepared-cache key-document shape/inequality tests with one
   real ephemeral-cache roundtrip. It proves ordinary and AM-session values
   remain separate and changed date/feature/version/definition/parameters miss.

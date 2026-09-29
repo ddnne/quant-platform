@@ -113,6 +113,15 @@ cache is added. A synthetic 2008–2026, 4,885-session / 4,000-code / 977-run
 adapter measurement under tracemalloc changed from 6.29s / 1.00MiB peak to
 1.61s / 0.66MiB; the digest is identical. This is not end-to-end cloud timing.
 
+Personal DRAFT now passes its expected snapshot id to the canonical paper
+runner. The runner alone reads logical identity before and after calculation,
+rejecting an initial mismatch before financing/engine reads and any change
+during execution. This removes the adapter's duplicate pair (four identity
+reads become two per backtest), without caching mutable identity or removing
+the final artifact check. A freshly materialized snapshot already returns
+verified, so its caller no longer immediately repeats the full hash/catalog
+verification. These savings concern cloud scratch SQLite/CPU, not D1 billing.
+
 ## Next acceptance work
 
 Continue the table above: consolidate active feature/evaluation/data access,

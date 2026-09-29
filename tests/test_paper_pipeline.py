@@ -174,19 +174,6 @@ def test_paper_config_rejects_unproven_adjusted_basis(paper_fixture):
         replace(_config(db, days), price_basis=PIT_ADJUSTED)
 
 
-def test_paper_run_fails_closed_when_snapshot_changes(
-    paper_fixture, monkeypatch
-):
-    from strategies.paper import runner
-
-    db, days = paper_fixture
-    snapshots = iter(("sha256:before", "sha256:after"))
-    monkeypatch.setattr(runner, "data_snapshot_id", lambda _path: next(snapshots))
-
-    with pytest.raises(RuntimeError, match="database changed during the run"):
-        run_paper(Return1dFeatureStrategy(), _config(db, days))
-
-
 def test_feature_strategy_passes_every_decision_as_of_explicitly(
     paper_fixture, monkeypatch
 ):
