@@ -210,7 +210,7 @@ def test_stored_bars_reader_preserves_multiday_vintages_and_checks_bytes(tmp_pat
             bounded.close()
 
 
-def test_stored_bars_month_scope_retains_only_requested_rows_but_validates_all(tmp_path):
+def test_stored_bars_month_scope_retains_only_requested_rows_but_validates_all(tmp_path, monkeypatch):
     rows = [
         {"dataset": "equities_bars_daily",
          "natural_key": {"Code": "12340", "Date": day},
@@ -254,6 +254,62 @@ def test_stored_bars_month_scope_retains_only_requested_rows_but_validates_all(t
         assert spool._conn.execute("SELECT COUNT(*) FROM structured_bar_rows").fetchone()[0] == 0
     finally:
         spool.close()
+
+    # Use one enclosing range, not one GET per span. Original ordinals, vintages
+    # and row selection survive interleaved months and spool resets.
+    rows[1]["natural_key"]["Code"] = "12340"
+    padding = {
+        **rows[1], "natural_key": {"Code": "12340", "Date": "2020-03-03"},
+        "event_time": "2020-03-03T15:00:00+09:00",
+        "available_at": "2020-03-03T15:00:00+09:00",
+        "payload": {**rows[1]["payload"], "Date": "2020-03-03"},
+    }
+    rows = [padding, *rows, padding]
+    body, source = encode()
+    downloaded = []
+    corrupt_range = False
+    class RangeResponse(io.BytesIO):
+        def geturl(self):
+            return self.url
+    class R2:
+        def urlopen(self, request, timeout):
+            selected = body
+            header = request.get_header("Range")
+            response_headers = {}
+            if header:
+                start, last = map(int, header.removeprefix("bytes=").split("-"))
+                selected = body[start:last + 1]
+                response_headers["content-range"] = f"bytes {start}-{last}/{len(body)}"
+                if corrupt_range:
+                    selected = selected.replace(b"101", b"102")
+            downloaded.append(len(selected))
+            response = RangeResponse(selected)
+            response.status = 206 if header else 200
+            response.headers = response_headers
+            response.url = request.full_url
+            return response
+    monkeypatch.setattr(client_mod, "STRUCTURED_REUSE_MAX_BYTES", 0)
+    client = client_mod.PersonalHistorySourceClient(
+        environment="staging", period_end="2020-02-28", cache_only=True,
+        spool_path=tmp_path / "range-reader.sqlite", r2_opener=R2(),
+        structured_bar_sources={"*": (source,)},
+    )
+    try:
+        for day in ("2020-01-06", "2020-02-03"):
+            fetched = client.fetch_dataset_evidenced("equities_bars_daily", date=day)
+            assert fetched.rows == tuple(row for row in rows if row["payload"]["Date"] == day)
+            assert fetched.structured_objects[0]["sha256"] == source.sha256
+            client.release_acquired_raw()
+        assert len(downloaded) == 3  # unchanged: first verification + two monthly reads
+        assert downloaded[0] == len(body)
+        assert 0 < downloaded[2] < downloaded[1] < len(body)
+        assert client.cache_metrics()["structured_download_bytes"] == sum(downloaded)
+        corrupt_range = True
+        with pytest.raises(PersonalHistoryError, match="identity mismatch"):
+            client.fetch_dataset_evidenced("equities_bars_daily", date="2020-02-03")
+        assert client.spool.usage()[0] == 0
+    finally:
+        client.close()
 
 
 class _Response(io.BytesIO):

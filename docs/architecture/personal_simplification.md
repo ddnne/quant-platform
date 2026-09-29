@@ -104,6 +104,22 @@ the requested whole-repository reduction or a 50% target is complete.
 
 ## Measured active-path consolidation
 
+The stored-bars reader now reuses its job-local month offsets for one bounded
+R2 Range GET when an object is not in the existing 1 GiB compressed cache.
+Initial whole-object verification is retained; selected-span hashes are derived
+from that verified body, without rehashing overlapping monthly windows. The
+reader keeps original ordinals, vintages and full-object provenance, and rejects
+short responses or changed selected spans without a second full GET. Interleaved input uses one
+enclosing range, not a request per span. No new persistent cache or cloud resource.
+The existing workerd/R2 and synthetic reader tests cover the transport and rows.
+
+For a synthetic sorted 12-month / 1,200-row / 356,160-byte object with cache
+disabled, observed transfer is 712,320 bytes across 13 GETs, versus 4,630,080
+bytes calculated for the previous 13 full-object reads (84.6% fewer bytes).
+GET count is unchanged; this is not an R2 operation-fee, production runtime or
+invoice saving measurement. Interleaved layouts can save less. Existing a3
+runs on the preceding image, so this source change does not improve that run.
+
 Coverage refresh used to verify each signed receipt for observed history,
 candidate ranking, segment evaluation and selected-run persistence. It now
 verifies once for those steps, shares the existing immutable verified closure, and

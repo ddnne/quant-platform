@@ -348,6 +348,7 @@ class AcquisitionSpool:
         self, body: bytes, source: StructuredBarsObject, *, max_object_bytes: int,
         month: str | None = None,
         index: StructuredBarsIndex | None = None,
+        body_offset: int | None = None,
     ) -> None:
         """Stage one existing object atomically, without claiming API exhaustion."""
         scope = month if month is not None else "*"
@@ -370,7 +371,7 @@ class AcquisitionSpool:
         self._conn.execute("BEGIN")
         try:
             rows = (
-                index.rows_for_month(body, source, month)
+                index.rows_for_month(body, source, month, body_offset=body_offset)
                 if index is not None and month is not None
                 else enumerate(iter_verified_structured_bars(
                     body, source, max_object_bytes=max_object_bytes,
@@ -1080,7 +1081,7 @@ class PersonalHistorySourceClient:
         if self.structured_bar_sources is not None and "*" in self.structured_bar_sources:
             indexed: dict[str, list[StructuredBarsObject]] = {}
             for source in self.structured_bar_sources["*"]:
-                body = self._download_structured_bar_object(source)
+                body, _ = self._download_structured_bar_object(source)
                 months = self._index_structured_bar_object(body, source)
                 for observed_month in months:
                     indexed.setdefault(observed_month, []).append(source)
@@ -1100,7 +1101,7 @@ class PersonalHistorySourceClient:
                     raise PersonalHistoryError("stored bars immutable descriptor conflict")
                 continue
             self.spool.guard_bounds(extra_pages=1, extra_bytes=source.size * 3)
-            body = self._download_structured_bar_object(source)
+            body, body_offset = self._download_structured_bar_object(source, month=month)
             if source not in self._structured_indexes:
                 self._index_structured_bar_object(body, source)
             index = self._structured_indexes.get(source)
@@ -1110,7 +1111,7 @@ class PersonalHistorySourceClient:
                 self._structured_index_reads += 1
             self.spool.record_structured_bars(
                 body, source, max_object_bytes=STRUCTURED_BAR_OBJECT_MAX_BYTES, month=month,
-                index=index,
+                index=index, body_offset=body_offset,
             )
         self._structured_months_loaded.add(month)
 
@@ -1125,7 +1126,9 @@ class PersonalHistorySourceClient:
             self._structured_index_spans += sum(len(spans) for spans in index.months.values())
         return months
 
-    def _download_structured_bar_object(self, source: StructuredBarsObject) -> bytes:
+    def _download_structured_bar_object(
+        self, source: StructuredBarsObject, *, month: str | None = None,
+    ) -> tuple[bytes, int | None]:
         if (
             not source.key.startswith("structured/jsonl/equities_bars_daily/")
             or not source.key.endswith(".jsonl")
@@ -1142,14 +1145,29 @@ class PersonalHistorySourceClient:
                 body = stream.read(source.size + 1)
             if len(body) != source.size or hashlib.sha256(body).hexdigest() != source.sha256:
                 raise PersonalHistoryError("stored bars reuse size/digest mismatch")
-            # Caller still validates every row and the original row count.
-            return body
-        request = urllib.request.Request(url, headers={"accept-encoding": "identity"})
+            return body, None
+        headers = {"accept-encoding": "identity"}
+        index = self._structured_indexes.get(source)
+        window = index.window(month) if index is not None and month is not None else None
+        if window == (0, source.size):
+            window = None
+        length = source.size
+        if window is not None:
+            start, end = window
+            headers["range"] = f"bytes={start}-{end - 1}"
+            length = end - start
+        request = urllib.request.Request(url, headers=headers)
         with self._r2_urlopen(request, timeout=CACHE_GET_TIMEOUT_S) as response:
-            if int(response.status) != 200 or response.geturl() != url:
+            if int(response.status) != (206 if window is not None else 200) or response.geturl() != url:
                 raise PersonalHistoryError("stored bars transport status/redirect rejected")
-            body = response.read(source.size + 1)
+            if window is not None and response.headers.get("content-range") != f"bytes {start}-{end - 1}/{source.size}":
+                raise PersonalHistoryError("stored bars range identity mismatch")
+            body = response.read(length + 1)
         self._structured_download_bytes += len(body)
+        if window is not None:
+            # The indexed reader checks the original verified selected-span digest
+            # inside the scratch transaction, before any rows are committed.
+            return body, start
         if len(body) != source.size or hashlib.sha256(body).hexdigest() != source.sha256:
             raise PersonalHistoryError("stored bars object size/digest mismatch")
         remaining = STRUCTURED_REUSE_MAX_BYTES - self._structured_reuse_bytes
@@ -1163,7 +1181,7 @@ class PersonalHistorySourceClient:
                 path.write_bytes(compressed)
                 self._structured_reuse_entries[source] = path
                 self._structured_reuse_bytes += len(compressed)
-        return body
+        return body, None
 
     def _governed_request(
         self,

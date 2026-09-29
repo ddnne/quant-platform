@@ -1321,21 +1321,40 @@ async function personalResearchR2OutboundDispatch(
   const storedManifest = /^research\/personal\/bar-inputs\/sha256=[0-9a-f]{64}\.json$/.test(key);
   const storedBars = /^structured\/jsonl\/equities_bars_daily\/dt=\d{4}-\d{2}-\d{2}\/[A-Za-z0-9_.=-]+\.jsonl$/.test(key);
   if (storedManifest || storedBars) {
-    if (request.method !== "GET" || request.headers.has("range")) {
-      return responseJson({ error: "stored bars are full-object read-only inputs" }, 403);
+    if (request.method !== "GET" || (storedManifest && request.headers.has("range"))) {
+      return responseJson({ error: "stored bars are read-only inputs" }, 403);
     }
-    const object = await env.STRUCTURED_BUCKET.get(key);
-    if (!object) return responseJson({ error: "stored bars input missing" }, 404);
     const maximum = storedManifest ? 1024 * 1024 : 64 * 1024 * 1024;
+    let range: { offset: number; length: number } | undefined;
+    if (request.headers.has("range")) {
+      const match = /^bytes=(\d+)-(\d+)$/.exec(request.headers.get("range")!);
+      const start = Number(match?.[1]), end = Number(match?.[2]);
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) ||
+          start < 0 || end < start || end >= maximum) {
+        return responseJson({ error: "stored bars range rejected" }, 416);
+      }
+      range = { offset: start, length: end - start + 1 };
+    }
+    const object = await env.STRUCTURED_BUCKET.get(key, { range });
+    if (!object) return responseJson({ error: "stored bars input missing" }, 404);
     if (object.size < 1 || object.size > maximum) {
       await object.body.cancel();
       return responseJson({ error: "stored bars input exceeds size bound" }, 413);
     }
-    // The container verifies pinned byte hashes before consuming any rows.
+    if (range && range.offset + range.length > object.size) {
+      await object.body.cancel();
+      return responseJson({ error: "stored bars range exceeds object" }, 416);
+    }
+    const length = range?.length ?? object.size;
+    const headers = new Headers({ "content-length": String(length),
+      "content-type": storedManifest ? "application/json" : "application/x-ndjson" });
+    if (range) headers.set("content-range",
+      `bytes ${range.offset}-${range.offset + length - 1}/${object.size}`);
+    // The container verifies the pinned whole hash, or selected-span hashes derived
+    // during that whole-object verification, before consuming any rows.
     // Stream through the existing binding; never buffer market history here.
-    return new Response(object.body.pipeThrough(new FixedLengthStream(object.size)), {
-      headers: {"content-length": String(object.size),
-        "content-type": storedManifest ? "application/json" : "application/x-ndjson"},
+    return new Response(object.body.pipeThrough(new FixedLengthStream(length)), {
+      status: range ? 206 : 200, headers,
     });
   }
   if (
