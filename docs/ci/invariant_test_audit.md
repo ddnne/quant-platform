@@ -80,6 +80,20 @@ charter for extra hostile-Python tests.
 
 ## Consolidation decisions
 
+- Remove the dedicated Worker proposal, old Gateway-client, Mass request-parser,
+  period-ranking and daily-path tests together with their unreachable subjects.
+  Keeping them would detect regressions only in retired internal APIs, not a
+  currently executable strategy. The existing `retired_routes.runtime.test.ts`
+  still invokes the real Worker and proves all three disabled routes refuse
+  execution without touching external capabilities. Current Personal/Controlled
+  tests, index-volatility math, canonical Paper accounting and Gateway budget
+  tests remain; do not replace the deleted tests with file-absence assertions.
+  The orphaned classifier/clock/path-label tests also leave with their subjects.
+  Delete the Python-to-retired-TS clock parity subprocess test: the retained
+  Python PIT entry regression already exercises the same missing, midnight
+  and after-close cases, plus non-trading-day entry. No current runtime needs
+  the removed TS clock or strategy-ID table.
+
 - Remove the personal-paper call-order mock and the runner's duplicate fake-id
   mutation test. The existing result-equivalence/read-session test now checks
   two real identity reads; the service's drift test changes a real SQLite

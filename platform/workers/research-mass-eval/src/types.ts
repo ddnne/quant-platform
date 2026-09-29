@@ -38,22 +38,6 @@ export interface PeriodSpec {
   period_end?: string;
 }
 
-export interface MassEvalRequest {
-  seed: number;
-  logics: LogicSpec[];
-  periods?: PeriodSpec[];
-  job_id: string;
-  mode?: "synthetic" | "r2_panels" | "nets_only";
-  eval_kind?: "screen" | "daily_path";
-  write_artifacts?: boolean;
-  panels_prefix?: string;
-  one_way_cost?: number;
-  max_codes?: number;
-  max_days?: number;
-  near_zero_abs?: number;
-  min_activation?: number;
-}
-
 export type BarSeries = Array<[string, number]>;
 export type BarsByCode = Record<string, BarSeries>;
 
@@ -168,84 +152,4 @@ export interface PeriodEvalRow {
   skip_reason?: string;
   path_collapsed?: boolean;
   error?: string;
-}
-
-export interface LogicEvalResult {
-  strategy_id: string;
-  logic_id: string;
-  family_id: string;
-  params: Record<string, unknown>;
-  status: string;
-  n_periods_ok: number;
-  n_periods_total: number;
-  period_rows: PeriodEvalRow[];
-  mean_gross: number | null;
-  mean_net: number | null;
-  mean_net_inverted: number | null;
-  t_stat: number | null;
-  t_stat_inverted: number | null;
-  t_stat_reason?: string;
-  raw_t_stat?: number | null;
-  low_variance_artifact?: boolean;
-  sharpe_period: number | null;
-  sharpe_period_inverted: number | null;
-  chosen_sign: "original" | "inverted" | "reject" | null;
-  mean_activation: number | null;
-  screen: {
-    survived: boolean;
-    reject_reasons: string[];
-    mean_net: number | null;
-    t_stat: number | null;
-    sharpe_period: number | null;
-    chosen_sign: string | null;
-    family_id: string;
-    logic_id: string;
-    strategy_id: string;
-    low_variance_artifact?: boolean;
-    t_stat_reason?: string;
-    raw_t_stat?: number | null;
-    screen_kind?: string;
-    daily_path_complete?: boolean;
-    candidate_grade?: boolean;
-    n_survivors_are_not_a_pass?: boolean;
-  };
-  errors: string[];
-  mass_research: string;
-  phase7: string;
-  ready_declared: boolean;
-  operational_go: boolean;
-  continuous_paper: string;
-  frozen_defaults_retuned: boolean;
-}
-
-export interface MassEvalJobResult {
-  version: string;
-  wave: string;
-  job_id: string;
-  seed: number;
-  mode: string;
-  n_logics: number;
-  n_periods: number;
-  n_eval_ok: number;
-  n_eval_fail: number;
-  n_survivors: number;
-  n_survivors_are_not_a_pass?: boolean;
-  screen_kind?: string;
-  daily_path_complete?: boolean;
-  candidate_grade?: boolean;
-  wall_time_ms: number;
-  ranking: Array<Record<string, unknown>>;
-  results: LogicEvalResult[];
-  r2_keys: Record<string, string>;
-  freezes: {
-    mass_research: string;
-    phase7: string;
-    ready_declared: boolean;
-    operational_go: boolean;
-    continuous_paper: string;
-    frozen_defaults_retuned: boolean;
-    connected_to_ready: boolean;
-    connected_to_mass: boolean;
-  };
-  note: string;
 }
