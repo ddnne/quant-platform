@@ -131,16 +131,18 @@ remote apply results only in immutable release evidence.
   Preserve existing cloud history, attempts, identities and backups.
   This is not a prerequisite for the approved staging candidate. No new
   backup framework; whole-DB restore after shared writers resume is prohibited.
-- **Mass product-lane deploy trigger:** deployment leg held. Trigger
-  `b83cc2ee-8a40-4448-b517-80959796eb3e` had only its deploy command replaced
-  via the Cloudflare API; build and test still run. Read-back verified
-  `2026-09-09T15:04Z`. Original deploy command:
-  `npm run deploy --prefix platform/workers/research-mass-eval`. Temporary
-  deploy command:
+- **Mass product-lane deploy trigger:** manual-only, deployment leg held.
+  Trigger `b83cc2ee-8a40-4448-b517-80959796eb3e` now selects only
+  `__manual_cloud_deploy__` (read-back verified 2026-09-29). Keeping its old
+  `main` selector ran another product build on each merge, only to fail the
+  intentional deployment HOLD. Dependency caching remains enabled.
+  Default deploy command:
   `python3 -c "raise SystemExit('DEPLOYMENT HOLD: coordinated staging rollout pending; see current_production_runbook.md')"`.
-  Authoritative repo-root CI is unchanged. Restore only after staged then
-  production code rollout is accepted for Secrets, Receipt, Premium
-  product+READY-publication bindings, Gateway, then Mass. Inactive Worker
+  Authoritative repo-root CI is unchanged. One approved rollout temporarily
+  uses the canonical deploy command below, then restores manual-only + HOLD;
+  do not restore automatic `main` builds. Accept separately any optional
+  Service Binding target before binding it; unrelated Premium/READY rollout
+  is not a prerequisite for the stored-R2 DRAFT path. Inactive Worker
   code rollout is not key activation, READY mint, or Pilot GO. Staging Mass
   tagged deploy is Cloudflare Builds only and requires approved rollout
   scope; ordinary same-scope bug fixes and reverification do not need a
@@ -166,7 +168,7 @@ remote apply results only in immutable release evidence.
   SHA and module verification remain required. This capability does not enable
   automatic production deployment or authorize READY/Pilot. Keep automatic
   deployment on HOLD; use a manual-only trigger configuration for the approved
-  build and restore its previous configuration after dispatch.
+  build and restore manual-only + HOLD after dispatch.
   Worker multipart module-byte verification is not
   Container image rollout or research GO. Image push can follow Worker
   upload and is not transactional. The 900s mutate timeout only waits on
