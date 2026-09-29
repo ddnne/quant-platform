@@ -173,12 +173,38 @@ def test_stored_bars_reader_preserves_multiday_vintages_and_checks_bytes(tmp_pat
     try:
         assert len(client.fetch_dataset_evidenced("equities_bars_daily", date="2020-01-06").rows) == 2
         assert len(client.fetch_dataset_evidenced("equities_bars_daily", date="2020-01-07").rows) == 1
-        assert len(downloads) == 3  # manifest, one indexing pass, one monthly load
+        assert len(downloads) == 2  # manifest and object; indexing/month reuse the same bytes
         client.release_acquired_raw()
         assert len(client.fetch_dataset_evidenced("equities_bars_daily", date="2020-01-06").rows) == 2
-        assert len(downloads) == 4 and client.fetch_calls == 0  # no second indexing pass
+        assert len(downloads) == 2 and client.fetch_calls == 0  # survives month spool reset
+        reuse_root = Path(client._structured_reuse.name)
+        cached = client._structured_reuse_entries[source]
+        assert sum(p.stat().st_size for p in reuse_root.iterdir()) <= client_mod.STRUCTURED_REUSE_MAX_BYTES
+        cached.write_bytes(client_mod.gzip.compress(b"corrupt", mtime=0))
+        client.release_acquired_raw()
+        with pytest.raises(PersonalHistoryError, match="reuse size/digest"):
+            client.fetch_dataset_evidenced("equities_bars_daily", date="2020-01-06")
+        assert len(downloads) == 2  # corruption must not silently select different bytes
     finally:
         client.close()
+    assert not reuse_root.exists()
+
+    # Capacity and free-space refusals leave the ordinary verified R2 path usable.
+    for max_bytes, free in ((1, 10**12), (10**6, 0)):
+        monkeypatch.setattr(client_mod, "STRUCTURED_REUSE_MAX_BYTES", max_bytes)
+        monkeypatch.setattr(client_mod.shutil, "disk_usage", lambda path: type("Usage", (), {"free": free})())
+        downloads.clear()
+        bounded = client_mod.PersonalHistorySourceClient(
+            environment="staging", period_end="2020-01-31",
+            spool_path=tmp_path / f"bounded-{max_bytes}.sqlite", cache_only=True,
+            r2_opener=StoredR2(), structured_bar_manifest_sha256=manifest_digest,
+        )
+        try:
+            assert len(bounded.fetch_dataset_evidenced("equities_bars_daily", date="2020-01-06").rows) == 2
+            assert len(downloads) == 3
+            assert not tuple(Path(bounded._structured_reuse.name).iterdir())
+        finally:
+            bounded.close()
 
 
 def test_stored_bars_month_scope_retains_only_requested_rows_but_validates_all(tmp_path):

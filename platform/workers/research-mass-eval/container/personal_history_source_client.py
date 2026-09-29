@@ -13,9 +13,11 @@ from calendar import monthrange
 from dataclasses import dataclass
 from datetime import date
 import hashlib
+import gzip
 import json
 from pathlib import Path
 import secrets
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -79,6 +81,8 @@ HISTORY_SOURCE_FIXED_HEADERS = MappingProxyType(
 )
 _MAX_PAGES_PER_MONTH = 8192
 STRUCTURED_BAR_OBJECT_MAX_BYTES = 64 * 1024 * 1024
+STRUCTURED_REUSE_MAX_BYTES = 1024 ** 3
+STRUCTURED_REUSE_MIN_FREE_BYTES = 512 * 1024 ** 2
 _MAX_POST_ATTEMPTS = 4
 _TRANSIENT_POST_STATUSES = frozenset({502, 503, 504})
 _TRANSIENT_RETRY_DELAYS_S = (1, 2, 4)
@@ -994,6 +998,11 @@ class PersonalHistorySourceClient:
         self._max_attempts = _MAX_POST_ATTEMPTS if _max_attempts is None else _max_attempts
         self._registry = acquisition._target_registry()
         self.spool = AcquisitionSpool(spool_path)
+        self._structured_reuse = tempfile.TemporaryDirectory(
+            prefix="stored-bars-reuse-", dir=self.spool.path.parent,
+        )
+        self._structured_reuse_entries: dict[StructuredBarsObject, Path] = {}
+        self._structured_reuse_bytes = 0
         self.fetch_calls = 0
         self.cache_hits = 0
         self.cache_misses = 0
@@ -1023,7 +1032,10 @@ class PersonalHistorySourceClient:
         self._refresh_progress()
 
     def close(self) -> None:
-        self.spool.close()
+        try:
+            self.spool.close()
+        finally:
+            self._structured_reuse.cleanup()
 
     def fetch_dataset_evidenced(self, dataset: str, **params: Any) -> _Fetch:
         if dataset not in PERSONAL_HISTORY_DATASETS:
@@ -1092,11 +1104,33 @@ class PersonalHistorySourceClient:
         ):
             raise PersonalHistoryError("stored bars object request rejected")
         url = f"{self.r2_origin}/{source.key}"
+        cached = self._structured_reuse_entries.get(source)
+        if cached is not None:
+            with gzip.open(cached, "rb") as stream:
+                body = stream.read(source.size + 1)
+            if len(body) != source.size or hashlib.sha256(body).hexdigest() != source.sha256:
+                raise PersonalHistoryError("stored bars reuse size/digest mismatch")
+            # Caller still validates every row and the original row count.
+            return body
         request = urllib.request.Request(url, headers={"accept-encoding": "identity"})
         with self._r2_urlopen(request, timeout=CACHE_GET_TIMEOUT_S) as response:
             if int(response.status) != 200 or response.geturl() != url:
                 raise PersonalHistoryError("stored bars transport status/redirect rejected")
-            return response.read(source.size + 1)
+            body = response.read(source.size + 1)
+        if len(body) != source.size or hashlib.sha256(body).hexdigest() != source.sha256:
+            raise PersonalHistoryError("stored bars object size/digest mismatch")
+        remaining = STRUCTURED_REUSE_MAX_BYTES - self._structured_reuse_bytes
+        # Preserve early objects when full: cycling during indexing would evict
+        # them before the first month is consumed. Uncached objects use R2.
+        if remaining > 0:
+            compressed = gzip.compress(body, compresslevel=1, mtime=0)
+            free = shutil.disk_usage(self.spool.path.parent).free
+            if len(compressed) <= remaining and free - len(compressed) >= STRUCTURED_REUSE_MIN_FREE_BYTES:
+                path = Path(self._structured_reuse.name) / str(len(self._structured_reuse_entries))
+                path.write_bytes(compressed)
+                self._structured_reuse_entries[source] = path
+                self._structured_reuse_bytes += len(compressed)
+        return body
 
     def _governed_request(
         self,
