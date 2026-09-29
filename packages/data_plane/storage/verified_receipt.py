@@ -337,6 +337,11 @@ class VerifiedCollectionClosure:
         self._assert_verifier_minted()
         return self._claims[name]
 
+    def require_scope(self, required: Any, policy_version: str) -> None:
+        """Bind this immutable proof to a plan within the current evaluation."""
+        self._assert_verifier_minted()
+        _validate_required_scope(self._claims, required, policy_version)
+
     @property
     def receipt_digest(self) -> str:
         self._assert_verifier_minted()
@@ -878,6 +883,25 @@ def _validate_bound_closure_fields(
                 f"extra_digests {key!r} does not bind envelope"
             )
 
+    _validate_required_scope(claims, required, expected_policy_version)
+    if raw is not None:
+        if type(raw) is not bytes:
+            raise ReceiptVerificationError("raw evidence must be exact bytes")
+        _require_same("raw evidence", claims["raw_digest"], compute_raw_digest(raw))
+    if structured_digest is not None:
+        if type(structured_digest) is not str:
+            raise ReceiptVerificationError(
+                "structured digest must be an exact string"
+            )
+        _require_same(
+            "structured evidence", claims["structured_digest"], structured_digest
+        )
+
+
+def _validate_required_scope(
+    claims: Mapping[str, Any], required: Any, expected_policy_version: str | None,
+) -> None:
+    """One scope check for freshly verified and already-frozen claims."""
     if required is not None:
         from storage.coverage_ledger import RequiredCoverageSegment
 
@@ -921,7 +945,9 @@ def _validate_bound_closure_fields(
             "expected_items": required_expected,
         }
         for name, value in required_bindings.items():
-            _require_same(f"required.{name}", claims[name], value)
+            _require_same(
+                f"required.{name}", _thaw_verified_json(claims[name]), value,
+            )
     if expected_policy_version is not None:
         if type(expected_policy_version) is not str:
             raise ReceiptVerificationError(
@@ -931,18 +957,6 @@ def _validate_bound_closure_fields(
             "coverage_policy_version",
             claims["coverage_policy_version"],
             expected_policy_version,
-        )
-    if raw is not None:
-        if type(raw) is not bytes:
-            raise ReceiptVerificationError("raw evidence must be exact bytes")
-        _require_same("raw evidence", claims["raw_digest"], compute_raw_digest(raw))
-    if structured_digest is not None:
-        if type(structured_digest) is not str:
-            raise ReceiptVerificationError(
-                "structured digest must be an exact string"
-            )
-        _require_same(
-            "structured evidence", claims["structured_digest"], structured_digest
         )
 
 

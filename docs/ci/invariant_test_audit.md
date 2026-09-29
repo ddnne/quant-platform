@@ -79,6 +79,21 @@ charter for extra hostile-Python tests.
 
 ## Consolidation decisions
 
+- Remove the personal-paper call-order mock and the runner's duplicate fake-id
+  mutation test. The existing result-equivalence/read-session test now checks
+  two real identity reads; the service's drift test changes a real SQLite
+  schema version during calculation and requires rejection. Initial mismatch
+  still rejects before the engine runs. The canonical runner owns this check,
+  rather than both caller and callee scanning identity before/after execution.
+
+- Replace the two prepared-cache key-document shape/inequality tests with one
+  real ephemeral-cache roundtrip. It proves ordinary and AM-session values
+  remain separate and changed date/feature/version/definition/parameters miss.
+  Mutating a Python dict and asserting inequality did not exercise caching.
+  Existing cached-vs-uncached price, financial and long/short results remain.
+  Extend the existing long-membership bound test through the core adapter,
+  rather than adding a separate scale-fixture or a wall-clock CI threshold.
+
 - Removed `research.offline` with the two tests whose only subject was its
   retired bar-evaluation wrappers (`test_offline_bar_eval_pure_on_synthetic_bars`
   and `test_cm_term_ratio_bar_native_spec_and_evaluator_wiring`). Outside those

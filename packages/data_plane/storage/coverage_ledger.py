@@ -59,6 +59,11 @@ from storage.receipt_crypto import (
     PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST,
     PRODUCTION_RECEIPT_ENVIRONMENT,
 )
+from storage.verified_receipt import (
+    ReceiptVerificationError,
+    VerifiedCollectionClosure,
+    require_verified_collection_closure,
+)
 
 
 def _now() -> str:
@@ -110,6 +115,54 @@ class CollectionReceipt:
     status: str
     error: str | None
     checked_at: str
+
+
+@dataclass(frozen=True)
+class _PreparedReceipt:
+    receipt: CollectionReceipt
+    closure: VerifiedCollectionClosure | None
+    error: str | None
+
+    @property
+    def rank(self) -> tuple:
+        item = self.closure or self.receipt
+        trusted = self.closure is not None and _has_nonempty_trusted_raw_evidence(
+            self.closure
+        )
+        recovered = is_recovered_only_digests(self.receipt.digests)
+        return (
+            int(trusted), -int(recovered), int(item.structured_row_count or 0),
+            item.checked_at, item.run_id,
+        )
+
+
+def _prepare_receipts(
+    receipts: Sequence[CollectionReceipt],
+    *,
+    expected_environment: str = PRODUCTION_RECEIPT_ENVIRONMENT,
+    expected_authority_instance_digest: str = (
+        PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
+    ),
+) -> list[_PreparedReceipt]:
+    """Verify once per evaluation; no proof survives into another refresh."""
+    prepared = []
+    for receipt in receipts:
+        try:
+            closure = require_verified_collection_closure(
+                receipt,
+                expected_environment=expected_environment,
+                expected_authority_instance_digest=expected_authority_instance_digest,
+            )
+            prepared.append(_PreparedReceipt(receipt, closure, None))
+        except ReceiptVerificationError as exc:
+            prepared.append(_PreparedReceipt(receipt, None, str(exc)))
+    return prepared
+
+
+def _segment_key(item: Any) -> tuple[str, str, str, str, str]:
+    return (
+        item.source, item.dataset, item.segment_id, item.segment_start, item.segment_end,
+    )
 
 
 class CoverageInventoryAuthorityUnavailable(RuntimeError):
@@ -831,23 +884,26 @@ def _evaluate_segment_with_closure(
     """Evaluate one segment and retain the verifier-minted closure internally."""
     if receipt is None:
         return "PARTIAL", {"reason": "missing collection receipt"}, None
-    # Persisted CollectionReceipt is an untrusted transport DTO.  From this
-    # boundary onward COMPLETE policy may observe only the opaque closure.
-    try:
-        from storage.verified_receipt import (
-            ReceiptVerificationError,
-            require_verified_collection_closure,
-        )
+    prepared = _prepare_receipts(
+        [receipt],
+        expected_environment=expected_environment,
+        expected_authority_instance_digest=expected_authority_instance_digest,
+    )[0]
+    return _evaluate_prepared_segment(policy, required, prepared)
 
-        closure = require_verified_collection_closure(
-            receipt,
-            expected_environment=expected_environment,
-            expected_authority_instance_digest=(
-                expected_authority_instance_digest
-            ),
-            required=required,
-            expected_policy_version=policy.policy_version,
-        )
+
+def _evaluate_prepared_segment(
+    policy: CollectionCoverageContract,
+    required: RequiredCoverageSegment,
+    prepared: _PreparedReceipt | None,
+) -> tuple[str, dict[str, Any], VerifiedCollectionClosure | None]:
+    if prepared is None:
+        return "PARTIAL", {"reason": "missing collection receipt"}, None
+    try:
+        closure = prepared.closure
+        if closure is None:
+            raise ReceiptVerificationError(prepared.error)
+        closure.require_scope(required, policy.policy_version)
     except ReceiptVerificationError as exc:
         return (
             "PARTIAL",
@@ -968,27 +1024,15 @@ def _date_prefix(value: str | None) -> str | None:
 
 
 def _receipt_observed_window(
-    receipts: Sequence[CollectionReceipt],
+    receipts: Sequence[_PreparedReceipt],
 ) -> tuple[str | None, str | None, int]:
     """Observed calendar span from verified v3 closures with retained rows."""
-    from storage.verified_receipt import (
-        ReceiptVerificationError,
-        require_verified_collection_closure,
-    )
-
     starts: list[str] = []
     ends: list[str] = []
     raw_total = 0
-    for receipt in receipts:
-        try:
-            closure = require_verified_collection_closure(
-                receipt,
-                expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
-                expected_authority_instance_digest=(
-                    PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
-                ),
-            )
-        except ReceiptVerificationError:
+    for prepared in receipts:
+        closure = prepared.closure
+        if closure is None:
             continue
         raw_n = closure.raw_row_count
         if raw_n <= 0:
@@ -1445,61 +1489,20 @@ def _verify_exact_coverage_complete_in_snapshot(
     )
 
 
-def _rank_receipt_for_match(item: CollectionReceipt) -> tuple:
-    """Trusted first, recovered last, then structured/time."""
-    trusted = 1 if is_complete_eligible_receipt(item) else 0
-    recovered = 1 if is_recovered_only_digests(item.digests) else 0
-    structured = int(item.structured_row_count or 0)
-    return (trusted, -recovered, structured, item.checked_at, item.run_id)
-
-
-def _latest_receipt_for(
-    receipts: Sequence[CollectionReceipt],
-    required: RequiredCoverageSegment,
-) -> CollectionReceipt | None:
-    """Best receipt for a segment; trusted wins over a newer recovered rebuild."""
-    exact = [
-        receipt for receipt in receipts
-        if receipt.source == required.source
-        and receipt.dataset == required.dataset
-        and receipt.segment_id == required.segment_id
-        and receipt.segment_start == required.segment_start
-        and receipt.segment_end == required.segment_end
-    ]
-    if not exact:
-        return None
-    return max(exact, key=_rank_receipt_for_match)
-
-
 def _latest_complete_receipt_for_required(
-    receipts: Sequence[CollectionReceipt],
+    receipts: Sequence[_PreparedReceipt],
     *,
     policy: CollectionCoverageContract,
     required: RequiredCoverageSegment,
 ) -> tuple[CollectionReceipt, Any] | None:
-    """Best receipt that independently evaluates COMPLETE for this scope."""
-    from storage.verified_receipt import (
-        ReceiptVerificationError,
-        require_verified_collection_closure,
-    )
-
+    """Best already-verified receipt that evaluates COMPLETE for this scope."""
     candidates: list[tuple[CollectionReceipt, Any]] = []
-    for receipt in receipts:
-        if evaluate_segment(policy, required, receipt)[0] != "COMPLETE":
-            continue
-        try:
-            closure = require_verified_collection_closure(
-                receipt,
-                expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
-                expected_authority_instance_digest=(
-                    PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
-                ),
-                required=required,
-                expected_policy_version=policy.policy_version,
-            )
-        except ReceiptVerificationError:  # defensive; evaluate already verified
-            continue
-        candidates.append((receipt, closure))
+    for prepared in receipts:
+        status, _detail, closure = _evaluate_prepared_segment(
+            policy, required, prepared,
+        )
+        if status == "COMPLETE":
+            candidates.append((prepared.receipt, closure))
     if not candidates:
         return None
     return max(
@@ -1518,11 +1521,13 @@ def evaluate_required_segments(
     receipts: Sequence[CollectionReceipt],
 ) -> tuple[str, list[tuple[RequiredCoverageSegment, CollectionReceipt | None, str, dict[str, Any]]]]:
     """Evaluate the planned inventory, including missing receipts."""
-    evaluated = []
-    for required in required_segments:
-        receipt = _latest_receipt_for(receipts, required)
-        status, detail = evaluate_segment(policy, required, receipt)
-        evaluated.append((required, receipt, status, detail))
+    indexed = _index_prepared_receipts(_prepare_receipts(receipts))
+    evaluated = [
+        (required, receipt, status, detail)
+        for required, receipt, status, detail, _closure in _evaluate_prepared_segments(
+            policy, required_segments, indexed,
+        )
+    ]
     statuses = [item[2] for item in evaluated]
     if any(status == "FAILED" for status in statuses):
         aggregate = "FAILED"
@@ -1531,6 +1536,30 @@ def evaluate_required_segments(
     else:
         aggregate = "PARTIAL"
     return aggregate, evaluated
+
+
+def _index_prepared_receipts(receipts: Sequence[_PreparedReceipt]) -> dict:
+    indexed: dict[tuple, list[_PreparedReceipt]] = {}
+    for prepared in receipts:
+        key = _segment_key(prepared.closure or prepared.receipt)
+        indexed.setdefault(key, []).append(prepared)
+    return indexed
+
+
+def _evaluate_prepared_segments(
+    policy: CollectionCoverageContract,
+    required_segments: Sequence[RequiredCoverageSegment],
+    indexed: Mapping[tuple, Sequence[_PreparedReceipt]],
+) -> Iterable[tuple[RequiredCoverageSegment, CollectionReceipt | None, str, dict[str, Any], VerifiedCollectionClosure | None]]:
+    for required in required_segments:
+        prepared = max(
+            indexed.get(_segment_key(required), ()),
+            key=lambda item: item.rank,
+            default=None,
+        )
+        status, detail, closure = _evaluate_prepared_segment(policy, required, prepared)
+        receipt = None if prepared is None else prepared.receipt
+        yield required, receipt, status, detail, closure
 
 
 def validation_coverage_cutoff_for_build(
@@ -1842,9 +1871,11 @@ def _refresh_coverage_ledger_in_transaction(
     for dataset in selected:
         policy = policies[dataset]
         source = _coverage_source(dataset)
+        prepared_receipts = _prepare_receipts(receipts_by_dataset[dataset])
+        indexed_receipts = _index_prepared_receipts(prepared_receipts)
         # D1 jquants_records is hot-window only; observed_*/C8 expand from SUCCESS raw receipts.
         receipt_start, receipt_end, receipt_raw_rows = _receipt_observed_window(
-            receipts_by_dataset[dataset]
+            prepared_receipts
         )
         dataset_evidence = by_dataset[dataset]
         if source == "jquants":
@@ -1914,12 +1945,12 @@ def _refresh_coverage_ledger_in_transaction(
                 expected_items_by_segment=expected_items_by_segment,
                 index_text=index_text,
             )
-        segment_aggregate, segment_evaluations = evaluate_required_segments(
-            policy, required_segments, receipts_by_dataset[dataset]
+        segment_evaluations = _evaluate_prepared_segments(
+            policy, required_segments, indexed_receipts
         )
         segment_statuses: list[str] = []
         for (
-            required_segment, receipt, segment_status, segment_detail
+            required_segment, receipt, segment_status, segment_detail, closure
         ) in segment_evaluations:
             # Sticky COMPLETE: never demote while a COMPLETE-eligible SUCCESS receipt remains.
             prior_inv = inventory_by_dataset[dataset].get(
@@ -1931,7 +1962,7 @@ def _refresh_coverage_ledger_in_transaction(
             sticky = None
             if segment_status != "COMPLETE" and prior_status == "COMPLETE":
                 sticky = _latest_complete_receipt_for_required(
-                    receipts_by_dataset[dataset],
+                    indexed_receipts.get(_segment_key(required_segment), ()),
                     policy=policy,
                     required=required_segment,
                 )
@@ -1950,22 +1981,11 @@ def _refresh_coverage_ledger_in_transaction(
                 }
                 segment_status = "COMPLETE"
                 receipt = sticky_receipt
+                closure = sticky_closure
             segment_statuses.append(segment_status)
             selected_run_id = None if receipt is None else receipt.run_id
             if segment_status == "COMPLETE":
-                from storage.verified_receipt import (
-                    require_verified_collection_closure,
-                )
-
-                selected_run_id = require_verified_collection_closure(
-                    receipt,
-                    expected_environment=PRODUCTION_RECEIPT_ENVIRONMENT,
-                    expected_authority_instance_digest=(
-                        PRODUCTION_RECEIPT_AUTHORITY_INSTANCE_DIGEST
-                    ),
-                    required=required_segment,
-                    expected_policy_version=policy.policy_version,
-                ).run_id
+                selected_run_id = closure.run_id
             segment_rows.append({
                 "source": required_segment.source,
                 "dataset": required_segment.dataset,

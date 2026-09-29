@@ -126,16 +126,22 @@ def coalesce_daily_memberships(
 
     runs: list[MembershipRun] = []
     interned: dict[tuple[str, ...], tuple[str, ...]] = {}
+    current_codes: tuple[str, ...] = ()
+    start = end = ""
     for raw_day, raw_codes in pairs:
         day = _iso_date(raw_day)
-        codes = interned.setdefault(
-            canonical_run_codes(raw_codes), canonical_run_codes(raw_codes)
-        )
-        if runs and runs[-1].codes is codes and _next_day(runs[-1].end) == day:
-            last = runs[-1]
-            runs[-1] = MembershipRun(start=last.start, end=day, codes=codes)
+        # A previously validated immutable tuple needs no per-day re-sorting.
+        codes = current_codes if raw_codes is current_codes else canonical_run_codes(raw_codes)
+        codes = interned.setdefault(codes, codes)
+        if start and current_codes is codes and _next_day(end) == day:
+            end = day
         else:
-            runs.append(MembershipRun(start=day, end=day, codes=codes))
+            if start:
+                runs.append(MembershipRun(start=start, end=end, codes=current_codes))
+            start = end = day
+            current_codes = codes
+    if start:
+        runs.append(MembershipRun(start=start, end=end, codes=current_codes))
     return tuple(runs)
 
 
@@ -240,6 +246,11 @@ class RunLengthMembershipMap(Mapping[str, tuple[str, ...]]):
 
     def __len__(self) -> int:
         return len(self._dates)
+
+    @property
+    def runs(self) -> tuple[MembershipRun, ...]:
+        """The immutable source runs, without expanding per-day code lists."""
+        return self._runs
 
 
 __all__ = [

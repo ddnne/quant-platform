@@ -90,51 +90,44 @@ class ResolvedDailyUniverse:
                 "daily resolved universe requires a governed rule, period, and digest"
             )
         existing_runs = getattr(universe, "membership_runs", ())
-        copied: dict[str, tuple[str, ...]] = {}
-        interned: dict[tuple[str, ...], tuple[str, ...]] = {}
-        for day, values in raw.items():
-            if isinstance(values, (str, bytes)):
-                raise RawFixedUniverseError(
-                    "daily resolved universe codes must be a sequence"
-                )
-            codes = tuple(sorted({str(code).strip() for code in values}))
-            normalized_day = _iso_date(day)
-            if (
-                not normalized_day
-                or normalized_day < period_start
-                or normalized_day > period_end
-                or not codes
-                or any(not code for code in codes)
-                or normalized_day in copied
-            ):
-                raise RawFixedUniverseError(
-                    "daily resolved universe has an invalid date or membership"
-                )
-            copied[normalized_day] = interned.setdefault(codes, codes)
-        try:
-            if existing_runs:
-                runs = validate_membership_runs(
-                    existing_runs,
-                    period_start=period_start,
-                    period_end=period_end,
-                )
-                if copied:
-                    from_daily = validate_membership_runs(
-                        coalesce_daily_memberships(tuple(copied.items())),
-                        period_start=period_start,
-                        period_end=period_end,
+        if type(raw) is RunLengthMembershipMap:
+            # This concrete mapping derives every lookup from these same runs.
+            # Keep its compact representation across product/runtime boundaries.
+            mapped_runs = raw.runs
+        else:
+            copied: dict[str, tuple[str, ...]] = {}
+            interned: dict[tuple[str, ...], tuple[str, ...]] = {}
+            for day, values in raw.items():
+                if isinstance(values, (str, bytes)):
+                    raise RawFixedUniverseError(
+                        "daily resolved universe codes must be a sequence"
                     )
-                    if from_daily != runs:
-                        raise RawFixedUniverseError(
-                            "daily resolved universe membership runs disagree with its map"
-                        )
-            else:
-                if not copied:
-                    raise RawFixedUniverseError("daily resolved universe is empty")
-                runs = validate_membership_runs(
-                    coalesce_daily_memberships(tuple(copied.items())),
-                    period_start=period_start,
-                    period_end=period_end,
+                codes = tuple(sorted({str(code).strip() for code in values}))
+                normalized_day = _iso_date(day)
+                if (
+                    not normalized_day
+                    or normalized_day < period_start
+                    or normalized_day > period_end
+                    or not codes
+                    or any(not code for code in codes)
+                    or normalized_day in copied
+                ):
+                    raise RawFixedUniverseError(
+                        "daily resolved universe has an invalid date or membership"
+                    )
+                copied[normalized_day] = interned.setdefault(codes, codes)
+            mapped_runs = coalesce_daily_memberships(tuple(copied.items()))
+        try:
+            runs = validate_membership_runs(
+                existing_runs or mapped_runs,
+                period_start=period_start,
+                period_end=period_end,
+            )
+            if existing_runs and mapped_runs and validate_membership_runs(
+                mapped_runs, period_start=period_start, period_end=period_end,
+            ) != runs:
+                raise RawFixedUniverseError(
+                    "daily resolved universe membership runs disagree with its map"
                 )
         except ValueError as exc:
             raise RawFixedUniverseError(str(exc)) from exc

@@ -21,8 +21,8 @@ from paper_runtime.personal_snapshot import (
     materialize_personal_snapshot,
     verify_personal_snapshot,
 )
-from paper_runtime.snapshot_identity import data_snapshot_id
 from pit.personal_draft import personal_paper_read_session
+from pit.errors import DatabaseNotFound
 from pit._draft_storage import (
     activate_prepared_sqlite,
     draft_artifact_root,
@@ -61,7 +61,6 @@ def prepare_draft_snapshot(
         period_end=period_end,
         closure_digests=tuple(closure_digests),
     )
-    verify_personal_snapshot(snapshot)
     activate_prepared_sqlite(view, snapshot.db_path)
     manifest = json.loads(snapshot.manifest_path.read_text(encoding="utf-8"))
     observed = str(manifest.get("observed_through") or "")
@@ -140,12 +139,6 @@ def run_bound_personal_paper(
             "personal paper execution requires a bound PersonalResearchDataView"
         )
     db_path = draft_sqlite_path(view)
-    try:
-        before = data_snapshot_id(db_path)
-    except (FileNotFoundError, RuntimeError) as exc:
-        raise RuntimeError(str(exc) or "database snapshot is unavailable") from exc
-    if before != expected_snapshot_id:
-        raise RuntimeError("database snapshot does not match expected_snapshot_id")
     prepared_frame = _active_personal_prepared_frame(db_path)
     if (
         prepared_frame is not None
@@ -156,16 +149,13 @@ def run_bound_personal_paper(
         )
     strategy = interpret_strategy_spec(spec)
     bound = replace(config, db_path=db_path)
-    with personal_paper_read_session(db_path):
-        result = run_paper(strategy, bound, store=None)
     try:
-        after = data_snapshot_id(db_path)
-    except (FileNotFoundError, RuntimeError) as exc:
-        raise RuntimeError(str(exc) or "database snapshot is unavailable") from exc
-    if after != expected_snapshot_id:
-        raise RuntimeError(
-            "database snapshot changed during personal paper execution"
-        )
+        with personal_paper_read_session(db_path):
+            result = run_paper(
+                strategy, bound, store=None, expected_snapshot_id=expected_snapshot_id,
+            )
+    except DatabaseNotFound as exc:
+        raise FileNotFoundError(str(exc)) from exc
     if type(result) is not PaperRunResult:
         raise RuntimeError(
             "personal paper execution returned a noncanonical DRAFT result"

@@ -14,7 +14,7 @@ from storage import (
     read_collection_receipts,
     record_collection_receipt,
 )
-from storage.coverage_ledger import EXPECTED_EMPTY_WITH_EVIDENCE
+from storage.coverage_ledger import EXPECTED_EMPTY_WITH_EVIDENCE, _prepare_receipts
 from storage.sqlite_store import SqliteStore
 from tests.receipt_test_support import (
     build_test_collection_receipt as _receipt,
@@ -74,7 +74,7 @@ def test_sticky_complete_cannot_use_transplanted_outer_identity(
         segment_end=required_b.segment_end,
     )
     assert _latest_complete_receipt_for_required(
-        (transplanted,), policy=policy, required=required_b
+        _prepare_receipts((transplanted,)), policy=policy, required=required_b
     ) is None
 
 
@@ -461,7 +461,7 @@ def test_receipt_observed_window_ignores_empty_success_shells(
     )
     failed = replace(failed, status="FAILED")
 
-    start, end, raw_total = _receipt_observed_window([empty_shell, failed, early])
+    start, end, raw_total = _receipt_observed_window(_prepare_receipts([empty_shell, failed, early]))
     assert start == "2008-05-01"
     assert end == "2008-05-31"
     assert raw_total == 100
@@ -488,7 +488,7 @@ def test_receipt_observed_window_ignores_mutated_outer_receipt(
         _receipt(required, signing_key=receipt_ed25519_keys.signing_key),
         raw_row_count=999,
     )
-    assert _receipt_observed_window((mutated,)) == (None, None, 0)
+    assert _receipt_observed_window(_prepare_receipts((mutated,))) == (None, None, 0)
 
 
 def test_merge_observed_window_preserves_hot_timestamp_when_same_day():

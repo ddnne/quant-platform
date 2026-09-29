@@ -578,7 +578,9 @@ def test_resolved_daily_universe_recomputes_membership_digest(tmp_path):
     )
 
 
-def test_resolved_daily_universe_rejects_self_reported_digest(tmp_path):
+@pytest.mark.parametrize("compressed", (False, True))
+def test_resolved_daily_universe_rejects_self_reported_digest(tmp_path, compressed):
+    from data_contracts.membership_runs import RunLengthMembershipMap, coalesce_daily_memberships
     from research.universe_contract import ResolvedUniverseMembership
 
     db = seed_db(tmp_path, codes=["1332", "7203"])
@@ -591,6 +593,10 @@ def test_resolved_daily_universe_rejects_self_reported_digest(tmp_path):
     )
     substituted_membership = dict(resolved.membership_by_date)
     substituted_membership[TRADING_DAYS[-1]] = ("7203",)
+    if compressed:
+        substituted_membership = RunLengthMembershipMap(
+            coalesce_daily_memberships(tuple(substituted_membership.items()))
+        )
     forged = SimpleNamespace(
         membership_by_date=substituted_membership,
         resolved_membership_digest=resolved.resolved_membership_digest,

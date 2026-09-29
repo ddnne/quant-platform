@@ -83,6 +83,45 @@ Retiring unused paths reduces maintenance and test collection, not observed
 cloud runtime. Deleted lines are not measured billing savings. Do not claim
 the requested whole-repository reduction or a 50% target is complete.
 
+## Measured active-path consolidation
+
+Coverage refresh used to verify each signed receipt for observed history,
+candidate ranking, segment evaluation and selected-run persistence. It now
+verifies once for those steps, shares the existing immutable verified closure, and
+indexes candidates by exact segment identity. Required scope/policy checks use
+the same verifier-owned function; environment, signature and transport binding
+still run before preparation. No process-global receipt cache, new authority,
+external call or database is introduced. A later evaluation verifies again.
+The final persistence gate for existing COMPLETE inventory still independently
+verifies its exact inventory; this change does not bypass that gate or promise
+only one signature check across every production publication path.
+
+On the same synthetic publication fixture (6,000 data rows, 3,764 receipts,
+24 datasets), cProfile measured 15,056 to 3,764 receipt verifications and
+37.8 to 8.3 seconds for publication. Fixture construction itself was about
+2.4 seconds: repeated real processing, not fixture construction, was the main
+cost. These are local instrumented measurements, not production throughput or
+billing savings. Keep the existing policy/sticky-COMPLETE tests and one real
+signature regression for changed scope and changed transport across calls.
+
+Runtime universe binding now consumes the existing run-length mapping directly
+instead of expanding, sorting and recompressing every day's codes. Ordinary
+mapping inputs retain normalization, declared-run comparison and content digest
+checks. The daily PIT-master intersection is unchanged. Coalescing builds one
+run per interval, not a replacement run for every day. No data fetch or new
+cache is added. A synthetic 2008–2026, 4,885-session / 4,000-code / 977-run
+adapter measurement under tracemalloc changed from 6.29s / 1.00MiB peak to
+1.61s / 0.66MiB; the digest is identical. This is not end-to-end cloud timing.
+
+Personal DRAFT now passes its expected snapshot id to the canonical paper
+runner. The runner alone reads logical identity before and after calculation,
+rejecting an initial mismatch before financing/engine reads and any change
+during execution. This removes the adapter's duplicate pair (four identity
+reads become two per backtest), without caching mutable identity or removing
+the final artifact check. A freshly materialized snapshot already returns
+verified, so its caller no longer immediately repeats the full hash/catalog
+verification. These savings concern cloud scratch SQLite/CPU, not D1 billing.
+
 ## Next acceptance work
 
 Continue the table above: consolidate active feature/evaluation/data access,

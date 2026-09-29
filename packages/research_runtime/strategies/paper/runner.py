@@ -330,6 +330,7 @@ def execute_paper_backtest(
     config: PaperRunConfig,
     *,
     am_session_data_view: Any = None,
+    expected_snapshot_id: str | None = None,
 ) -> tuple[BacktestResult, dict[str, Any], str]:
     """Canonical paper engine. Does not stamp lifecycle or persist.
 
@@ -346,9 +347,6 @@ def execute_paper_backtest(
     feature_hashes = feature_definition_hashes(feature_versions)
     strategy_hash = strategy_definition_hash(strategy)
     commit = git_commit()
-    sf_model, lev_model, financing_load = _build_financing_models(
-        config, db_path=configured_path
-    )
     identity = getattr(am_session_data_view, "logical_snapshot_id", None)
     format_attr = getattr(am_session_data_view, "data_snapshot_format", None)
     if callable(identity):
@@ -361,6 +359,11 @@ def execute_paper_backtest(
     else:
         before = data_snapshot_id(configured_path)
         snapshot_format = DATA_SNAPSHOT_FORMAT
+    if expected_snapshot_id is not None and before != expected_snapshot_id:
+        raise RuntimeError("database snapshot does not match expected_snapshot_id")
+    sf_model, lev_model, financing_load = _build_financing_models(
+        config, db_path=configured_path
+    )
     backtest = run_backtest(
         strategy,
         config.start,
@@ -407,13 +410,16 @@ def run_paper(
     config: PaperRunConfig,
     *,
     store: JsonPaperStore | None = None,
+    expected_snapshot_id: str | None = None,
 ) -> PaperRunResult:
     """Run an offline DRAFT through ``core.run_backtest`` and optionally persist it.
 
-    A cheap control-plane snapshot id is computed before and after the run. A
+    The logical snapshot id is computed once before and once after the run. A
     concurrent mutation fails closed rather than emitting reproduction
-    metadata for a mixed snapshot.  For this deterministic pure-backtest
-    runner, ``run_id == experiment_id`` by policy.
+    metadata for a mixed snapshot. When supplied, the caller's expected id is
+    checked before calculation without another identity read in the adapter.
+    For this deterministic pure-backtest runner, ``run_id == experiment_id``
+    by policy.
 
     W86 financing defaults (when enabled): mid short spread + daily repo
     series auto-loaded from the paper DB when present; leverage financing
@@ -431,7 +437,7 @@ def run_paper(
             "Cloudflare/READY evidence (PENDING: CONTROLLED_AUTHORITY_UNPROVISIONED)"
         )
     backtest, reproduction, experiment_id = execute_paper_backtest(
-        strategy, config
+        strategy, config, expected_snapshot_id=expected_snapshot_id
     )
     result = PaperRunResult(
         experiment_id=experiment_id,

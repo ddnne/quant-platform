@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
 from dataclasses import replace
 from datetime import date, timedelta
+import sqlite3
 
 import pit.query as query_module
 import pytest
@@ -129,19 +129,30 @@ def test_personal_service_reuses_one_pit_connection_without_changing_result(
     )
 
     real_connect = query_module.connect_readonly
+    from pit import sqlite_identity
+
+    real_identity_connect = sqlite_identity._connect_readonly
     connection_count = 0
+    identity_reads = 0
 
     def counting_connect(db_path):
         nonlocal connection_count
         connection_count += 1
         return real_connect(db_path)
 
+    def counting_identity_connect(*args, **kwargs):
+        nonlocal identity_reads
+        identity_reads += 1
+        return real_identity_connect(*args, **kwargs)
+
     monkeypatch.setattr(query_module, "connect_readonly", counting_connect)
+    monkeypatch.setattr(sqlite_identity, "_connect_readonly", counting_identity_connect)
     actual = _execute(
         PersonalPaperExecutionService(), spec, config, snapshot_id, refs, view
     )
 
     assert connection_count == 1
+    assert identity_reads == 2
     expected_pathless = replace(
         expected,
         reproducibility={
@@ -166,54 +177,6 @@ def test_personal_service_reuses_one_pit_connection_without_changing_result(
     )
     assert actual == expected_pathless
     assert query_module._scoped_read_connection(bound_path) is None
-
-
-def test_personal_service_scopes_only_run_paper_not_snapshot_verification(
-    tmp_path,
-    monkeypatch,
-):
-    spec, config, snapshot_id, refs, view, _db_path = _case(tmp_path)
-    from paper_runtime import personal_draft_bind as module
-
-    events: list[tuple[str, bool]] = []
-    active = False
-    real_snapshot_id = module.data_snapshot_id
-    real_run_paper = module.run_paper
-
-    @contextmanager
-    def observed_scope(_db_path):
-        nonlocal active
-        active = True
-        events.append(("scope-enter", active))
-        try:
-            yield
-        finally:
-            active = False
-            events.append(("scope-exit", active))
-
-    def observed_snapshot_id(db_path):
-        events.append(("snapshot", active))
-        return real_snapshot_id(db_path)
-
-    def observed_run_paper(*args, **kwargs):
-        events.append(("run-paper", active))
-        return real_run_paper(*args, **kwargs)
-
-    monkeypatch.setattr(module, "personal_paper_read_session", observed_scope)
-    monkeypatch.setattr(module, "data_snapshot_id", observed_snapshot_id)
-    monkeypatch.setattr(module, "run_paper", observed_run_paper)
-
-    _execute(
-        PersonalPaperExecutionService(), spec, config, snapshot_id, refs, view
-    )
-
-    assert events == [
-        ("snapshot", False),
-        ("scope-enter", True),
-        ("run-paper", True),
-        ("scope-exit", False),
-        ("snapshot", False),
-    ]
 
 
 def test_personal_service_rejects_non_draft(tmp_path):
@@ -245,12 +208,21 @@ def test_personal_service_rejects_database_path(tmp_path):
         )
 
 
-def test_personal_service_rejects_initial_snapshot_mismatch(tmp_path):
-    spec, config, _snapshot_id, refs, view, _db_path = _case(tmp_path)
+@pytest.mark.parametrize("missing", (False, True))
+def test_personal_service_rejects_unavailable_or_mismatched_snapshot(
+    tmp_path, monkeypatch, missing,
+):
+    spec, config, _snapshot_id, refs, view, db_path = _case(tmp_path)
+    if missing:
+        db_path.unlink()
 
+    def unexpected_calculation(*args, **kwargs):
+        pytest.fail("snapshot mismatch must reject before calculation")
+
+    monkeypatch.setattr("strategies.paper.runner.run_backtest", unexpected_calculation)
     with pytest.raises(
         PersonalPaperExecutionRejected,
-        match="does not match expected_snapshot_id",
+        match="not found" if missing else "does not match expected_snapshot_id",
     ):
         _execute(
             PersonalPaperExecutionService(),
@@ -283,12 +255,18 @@ def test_personal_service_rejects_miskeyed_prepared_frame(tmp_path):
 
 
 def test_personal_service_rejects_snapshot_tamper_after_run(tmp_path, monkeypatch):
-    spec, config, snapshot_id, refs, view, _db_path = _case(tmp_path)
-    observed = iter((snapshot_id, "sha256:" + "f" * 64))
-    monkeypatch.setattr(
-        "paper_runtime.personal_draft_bind.data_snapshot_id",
-        lambda _path: next(observed),
-    )
+    from strategies.paper import runner
+
+    spec, config, snapshot_id, refs, view, db_path = _case(tmp_path)
+    real_backtest = runner.run_backtest
+
+    def mutate_after_calculation(*args, **kwargs):
+        result = real_backtest(*args, **kwargs)
+        with sqlite3.connect(db_path) as writer:
+            writer.execute("PRAGMA user_version = 77")
+        return result
+
+    monkeypatch.setattr(runner, "run_backtest", mutate_after_calculation)
 
     with pytest.raises(PersonalPaperExecutionRejected, match="changed during"):
         _execute(
