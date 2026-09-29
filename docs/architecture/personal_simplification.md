@@ -103,3 +103,10 @@ catalog and its original manifest remain unchanged as audit evidence; a
 historical replay requiring old Python code should check out Git history, not
 keep an otherwise unused parallel product graph alive. Removing these tools
 does not remove current portfolio/risk measurements or authorize new research.
+
+Remove the old catalog-specific basket builder, reconstitution comparison and
+candidate-summary implementation with their callers. Retain shared numeric
+metrics, current portfolio/risk code and the evidence-IR/registry checks still
+used outside that graph. Tests asserting historical catalog membership,
+re-export identity or old report classifications do not protect the current
+research service and leave with the implementation they exclusively test.

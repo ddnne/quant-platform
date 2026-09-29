@@ -30,17 +30,6 @@ def test_empty_pool_does_not_fall_back_to_head_n() -> None:
     assert out == []
     assert out != list(EVAL_UNIVERSE_POOL)[:10]
 
-def test_eval_flags_are_single_sot() -> None:
-    import research.combo_basket_catalog as baskets
-    import research.eval_flags as flags
-    import research.eval_tracks as tracks
-
-    assert flags.RECONSTITUTION_APPLY is False
-    assert tracks.RECONSTITUTION_APPLY is flags.RECONSTITUTION_APPLY
-    assert baskets.RECONSTITUTION_APPLY is flags.RECONSTITUTION_APPLY
-    assert tracks.CATALOG_AND_PLUS_N_STOPPED is flags.CATALOG_AND_PLUS_N_STOPPED
-    assert tracks.CURRENT_EVAL_WAVE == flags.CURRENT_EVAL_WAVE
-
 def test_catalog_and_plus_n_stopped_and_known_thin() -> None:
     from research.eval_flags import (
         CATALOG_AND_PLUS_N_STOPPED,
