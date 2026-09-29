@@ -116,3 +116,12 @@ Current offline and Node/npm toolchain lanes remain distinct and mandatory;
 no live test or deployment is enabled. Historical numerical replay requires
 the historical source revision. Do not maintain catalog count/phrase/alias
 tests in current product CI merely to keep a test count unchanged.
+
+The remaining `research.unique_logic` evaluator/catalog/phrase-policy graph
+and catalog-only occupancy guards are now removed from source. They were
+already absent from the deployed wheel/Container and had no remaining product
+caller. Current personal strategy/feature modules, AM-to-PM timing, index SVI
+and volatility features, portfolio math and PIT tests are not this graph.
+The frozen JSONL/manifest are retained byte-for-byte. Historical execution can
+be recovered from pre-retirement Git history, without carrying a second engine
+or a phrase-policy copy in the current product.
