@@ -89,6 +89,15 @@ charter for extra hostile-Python tests.
   engine, cost and metric tests remain. Recover old experiments from Git, not
   an independently maintained evaluator. No new deletion/source-text test.
 
+- Remove the now-orphaned Python `holding_metrics` and `sign_selection` report
+  helpers with their dedicated tests. The only non-test `holding_metrics`
+  caller imported a re-exported cost constant; it now imports the canonical
+  `cost_defaults` directly. No runtime caller used the report or sign-choice
+  functions after offline retirement. The constant-equality/import-alias test
+  in `test_research_freezes` is removed, not replaced. Current equity/trade
+  metrics, short financing, risk gates and Worker evaluation are unchanged.
+  In particular, this does not replace daily PnL with amortized-cost examples.
+
 - Removed the concurrent audit-canary RPC call-count assertion. A caller may
   receive an already finalized replay, so three calls rather than four is
   valid (native build `b51d7523-696e-450f-8d74-8b2226c7825b`). The existing

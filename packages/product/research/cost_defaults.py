@@ -1,7 +1,7 @@
 """Shared 10bp one-way cost default. Not a trading model. Not GO.
 
 Live cost math stays in cost_models.py. This module is the single literal
-so holding_metrics / robustness_gate / paper_candidate_adapt do not each
+so cost_models / robustness_gate / paper_candidate_adapt do not each
 re-define 0.001.
 """
 

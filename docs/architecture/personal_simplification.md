@@ -73,3 +73,11 @@ This removes a second evaluation/report implementation, not the current
 personal, AM-to-PM, financial or index-volatility capabilities. Their numerical
 and PIT tests remain. The legacy `unique_logic` replay graph has other callers
 and is not claimed removed by this change.
+
+The orphaned holding-period illustration and sign-selection report modules
+also leave the current tree (986 implementation lines, 489 dedicated test
+lines). `occupancy_audit` imports its one cost constant from `cost_defaults`
+instead of keeping an entire report module for a re-export. Current position,
+trade, return, cost, drawdown and risk computations remain unchanged. Retiring
+these already-unused paths reduces maintenance/collection, not live runtime;
+do not count their deleted lines as measured cloud speed or billing savings.
