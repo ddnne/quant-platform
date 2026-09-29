@@ -78,6 +78,13 @@ a side effect of source cleanup; identify consumers and recovery first.
 - Remove the old wave-specific queue, implicit dispatch-only liquidity context
   and packaging exclusions for deleted code. ADV stays an explicit input;
   keep actual missing-ADV/cost behavior tests and current installed imports.
+- Remove the remaining unreachable Worker proposal/Gateway client, request
+  parser, period-ranking and daily-path wrappers, along with their dedicated
+  tests and unused evaluator re-export. Their only executable callers were
+  inside this retired graph or its tests; recover it from `0511df48dc00d22101482466e26471a0cf5d41e2`.
+  Keep the actual Worker 403 route tests, current Personal/Controlled handlers,
+  Gateway service and its budget tests, and shared index-volatility held-book
+  calculations. This does not retire a deployed Worker or alter stored results.
 
 Retiring unused paths reduces maintenance and test collection, not observed
 cloud runtime. Deleted lines are not measured billing savings. Do not claim

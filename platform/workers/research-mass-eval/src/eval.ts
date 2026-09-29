@@ -9,8 +9,6 @@ import type {
   PeriodPanel,
 } from "./types";
 
-export { evaluateLogicAcrossPeriods, rankSurvivors } from "./eval_orchestrate";
-
 const OPT225_IV_FIELDS_AVAILABLE_FROM = "2016-07-19";
 
 function observationsOnOrAfter(
