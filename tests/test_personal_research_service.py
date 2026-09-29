@@ -33,7 +33,7 @@ from personal_history_compact_support import (
 )
 from paper_runtime.personal_snapshot import PersonalSnapshot
 from paper_runtime.personal_prepared_frame import (
-    _feature_cache_key_document,
+    _is_cache_miss,
     _personal_prepared_frame_scope,
 )
 from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED
@@ -400,45 +400,33 @@ def _prepared_frame_case(
     return universe, (sessions[0], sessions[-1])
 
 
-def test_prepared_feature_key_binds_exact_snapshot_scope_and_definition() -> None:
-    document = _feature_cache_key_document(
-        snapshot_id="sha256:" + "1" * 64,
-        as_of="2024-01-05T15:30:00+09:00",
-        code="1301",
+def test_prepared_feature_cache_isolates_contract_and_session(tmp_path):
+    key = dict(
+        as_of="2024-01-05T11:30:00+09:00",
         feature_id="retrospective_price_ratio",
         feature_version="1.0.0",
         definition_digest="sha256:" + "2" * 64,
-        params={"mode": "return_ratio", "short_n": 20, "long_n": 252},
+        inputs={"code": "1301", "long_n": 252},
     )
-
-    assert document == {
-        "schema_version": "personal-prepared-feature-key/v1",
-        "snapshot_id": "sha256:" + "1" * 64,
-        "as_of": "2024-01-05T15:30:00+09:00",
-        "code_present": True,
-        "code": "1301",
-        "feature_id": "retrospective_price_ratio",
-        "feature_version": "1.0.0",
-        "feature_definition_digest": "sha256:" + "2" * 64,
-        "params": {"mode": "return_ratio", "short_n": 20, "long_n": 252},
-    }
-    assert document != _feature_cache_key_document(
-        snapshot_id="sha256:" + "1" * 64,
-        as_of="2024-01-05T15:30:00+09:00",
-        code=1301,
-        feature_id="retrospective_price_ratio",
-        feature_version="1.0.0",
-        definition_digest="sha256:" + "2" * 64,
-        params={"mode": "return_ratio", "short_n": 20, "long_n": 252},
-    )
-    for changed in (
-        {**document, "snapshot_id": "sha256:" + "3" * 64},
-        {**document, "as_of": "2024-01-08T15:30:00+09:00"},
-        {**document, "feature_version": "1.0.1"},
-        {**document, "feature_definition_digest": "sha256:" + "4" * 64},
-        {**document, "params": {**document["params"], "long_n": 120}},
-    ):
-        assert changed != document
+    with _personal_prepared_frame_scope(
+        db_path=tmp_path / "synthetic.sqlite", snapshot_id="sha256:" + "1" * 64,
+    ) as frame:
+        frame.store_feature(**key, value=1.25, metadata={"basis": "ordinary"})
+        assert frame.load_feature(**key).value == 1.25
+        for changed in (
+            {"as_of": "2024-01-08T11:30:00+09:00"},
+            {"feature_id": "am_session_price_ratio"},
+            {"feature_version": "1.0.1"},
+            {"definition_digest": "sha256:" + "3" * 64},
+            {"inputs": {"code": 1301, "long_n": 252}},
+            {"inputs": {"code": "1301", "long_n": 120}},
+            {"session_view_digest": "sha256:" + "4" * 64},
+        ):
+            assert _is_cache_miss(frame.load_feature(**{**key, **changed}))
+        am_key = {**key, "session_view_digest": "sha256:" + "4" * 64}
+        frame.store_feature(**am_key, value=0.75, metadata={"basis": "morning"})
+        assert frame.load_feature(**am_key).value == 0.75
+        assert frame.load_feature(**key).value == 1.25
 
 
 def test_prepared_frame_temp_sqlite_is_removed_after_exception(
