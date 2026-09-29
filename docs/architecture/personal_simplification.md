@@ -57,71 +57,38 @@ a side effect of source cleanup; identify consumers and recovery first.
   avoiding repeated full JSON/key parsing for each month; no new persistent DB.
 - Provider dependency caching enabled on the two existing root CI triggers.
 
-Remaining: the broad worklist is not closed, legacy replay/Controlled paths are
-not yet removed, docs-only CI selection is not implemented, and no new long-run
-strategy performance has been produced by this batch. Source acceptance alone
-does not authorize a new paid attempt or establish READY/Pilot GO.
+## Retired paths and retained guarantees
 
-## Retired evaluation path
+- `research.offline`: ten old evaluators/orchestrators/reports (4,014 lines),
+  plus orphaned holding/sign-selection reports (986 lines), had no current
+  executable caller. Source is recoverable at `c99640944c6acc9c768afbf5080433887bcedddd`.
+- The retired catalog graph: thesis-proposal and Mass/daily-path Python
+  clients, catalog compiler/adapters, basket/occupancy/reconstitution reports,
+  `research.unique_logic` evaluators and duplicate phrase policies are removed.
+  No product consumer remained outside that graph. Old source is recoverable
+  at `c353c2802f53cca0f5eeb5edbfcbbc96e722fd4a`.
+- The frozen catalog JSONL/manifest and persisted results remain unchanged.
+  No executable replay copy, new policy registry or generator replaces them.
+  Current personal/Controlled services, closed DSL, AM-to-PM timing, financial
+  and index-volatility/SVI features, portfolio/risk math and PIT tests remain.
+- Dedicated old catalog/count/phrase/alias tests leave with their subject.
+  Retire the separate replay CI lane and duplicate suite collection. Offline
+  and Node/npm toolchain checks remain mandatory. Actual workerd tests still
+  prove authenticated 403 with no external execution for the three old routes.
+- Remove the old wave-specific queue, implicit dispatch-only liquidity context
+  and packaging exclusions for deleted code. ADV stays an explicit input;
+  keep actual missing-ADV/cost behavior tests and current installed imports.
 
-Remove `research.offline`: ten modules / 4,014 implementation lines comprising
-the old bar evaluators, multi-year orchestration and duplicated report/gates.
-No executable caller remains outside the two dedicated tests removed with it;
-it was already excluded from the wheel and Container. Old source is recoverable
-at `c99640944c6acc9c768afbf5080433887bcedddd`, without another archive copy.
-This removes a second evaluation/report implementation, not the current
-personal, AM-to-PM, financial or index-volatility capabilities. Their numerical
-and PIT tests remain. The legacy `unique_logic` replay graph has other callers
-and is not claimed removed by this change.
+Retiring unused paths reduces maintenance and test collection, not observed
+cloud runtime. Deleted lines are not measured billing savings. Do not claim
+the requested whole-repository reduction or a 50% target is complete.
 
-The orphaned holding-period illustration and sign-selection report modules
-also leave the current tree (986 implementation lines, 489 dedicated test
-lines). `occupancy_audit` imports its one cost constant from `cost_defaults`
-instead of keeping an entire report module for a re-export. Current position,
-trade, return, cost, drawdown and risk computations remain unchanged. Retiring
-these already-unused paths reduces maintenance/collection, not live runtime;
-do not count their deleted lines as measured cloud speed or billing savings.
+## Next acceptance work
 
-The legacy Python thesis-proposal client and its second review/write-block
-policy are retired with their synthetic proposal stub and dedicated tests.
-Their only network target, `/v1/propose-thesis`, already refuses execution in
-the Worker. The Worker's existing policy owns its remaining callers; no new
-policy registry or Python-to-TypeScript generator is introduced. Current
-personal idea/plan execution, closed StrategySpec validation and the Worker
-refusal tests remain. Frozen catalog artifacts and recorded results are not
-deleted, and neither generation nor Mass is enabled by removing old clients.
-
-The old Mass/daily-path Python spec builders, HTTP clients and local fallback
-stubs are also retired together with their dedicated tests. No package caller
-remained outside this retired graph. Their refusal is structural (there is no
-local callable client); the existing Worker HTTP refusal remains tested.
-Common cost/spec/IR helpers still consumed by current code remain in place.
-
-Retire unused catalog compilation/activation adapters and the old occupancy/
-reconstitution report tools with their dedicated tests. The immutable JSONL
-catalog and its original manifest remain unchanged as audit evidence; a
-historical replay requiring old Python code should check out Git history, not
-keep an otherwise unused parallel product graph alive. Removing these tools
-does not remove current portfolio/risk measurements or authorize new research.
-
-Remove the old catalog-specific basket builder, reconstitution comparison and
-candidate-summary implementation with their callers. Retain shared numeric
-metrics, current portfolio/risk code and the evidence-IR/registry checks still
-used outside that graph. Tests asserting historical catalog membership,
-re-export identity or old report classifications do not protect the current
-research service and leave with the implementation they exclusively test.
-
-Retire the catalog replay test tier and its separate full-suite collection.
-Current offline and Node/npm toolchain lanes remain distinct and mandatory;
-no live test or deployment is enabled. Historical numerical replay requires
-the historical source revision. Do not maintain catalog count/phrase/alias
-tests in current product CI merely to keep a test count unchanged.
-
-The remaining `research.unique_logic` evaluator/catalog/phrase-policy graph
-and catalog-only occupancy guards are now removed from source. They were
-already absent from the deployed wheel/Container and had no remaining product
-caller. Current personal strategy/feature modules, AM-to-PM timing, index SVI
-and volatility features, portfolio math and PIT tests are not this graph.
-The frozen JSONL/manifest are retained byte-for-byte. Historical execution can
-be recovered from pre-retirement Git history, without carrying a second engine
-or a phrase-policy copy in the current product.
+Continue the table above: consolidate active feature/evaluation/data access,
+remove repeated current-path scans and heavyweight test setup, and reduce
+unnecessary build selection. Validate actual runtime/bytes/D1 reads separately
+from source size. Do not wait for this worklist to be exhausted before an
+authorized useful experiment. No new long-history performance was produced
+by source retirement; source acceptance does not authorize another paid
+attempt, change existing HOLDs, or establish READY/Pilot GO.
