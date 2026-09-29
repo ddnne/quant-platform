@@ -91,6 +91,12 @@ a side effect of source cleanup; identify consumers and recovery first.
   was that dead event-clock helper; the existing Python PIT entry regression
   covers missing/midnight/after-close clocks. Canonical Controlled plan
   validation and Personal signal construction are unchanged.
+- Remove the isolated Python cost-comparison/daily-MTM/eval-registry graph,
+  retired panel-staging stubs and historical hardcoded window lists. Their only
+  remaining callers were each other and dedicated tests. Retain current Paper
+  accounting, liquidity-linked costs, personal performance metrics and their
+  tests. No D1 tables, R2 evidence or results are deleted; source recovery is
+  available at `a2c5c90770874426c462690f8f9b4a7cd3dc98ff`.
 
 Retiring unused paths reduces maintenance and test collection, not observed
 cloud runtime. Deleted lines are not measured billing savings. Do not claim

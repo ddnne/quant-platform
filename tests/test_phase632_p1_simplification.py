@@ -16,7 +16,6 @@ from pit.personal_research_view import (
     OfflineFixtureDataView,
 )
 from research.personal_universe import PersonalResolvedUniverseMembership
-from selection.budget_ledger import MassResearchDisabledError
 
 
 def _catalog_db(path: Path, *, observed: str = "2099-01-01T00:00:00+09:00") -> sqlite3.Connection:
@@ -609,21 +608,3 @@ def test_fins_revision_as_of_keeps_later_correction(tmp_path: Path) -> None:
     assert fins_asof(stream, "2008-06-01")["eps"] == 1.0
     assert fins_asof(stream, "2008-08-02")["eps"] == 2.0
     assert view.typed_query_count == 2
-
-
-def test_disabled_mass_and_factory_fail_before_local_paths(tmp_path: Path) -> None:
-    from research.cf_mass_eval_stage import (
-        build_real_period_panel,
-        stage_real_panels_to_r2,
-    )
-
-    db = tmp_path / "must-not-open.sqlite"
-    db.write_text("not a database")
-    with pytest.raises(MassResearchDisabledError, match="stage_real_panels_to_r2"):
-        stage_real_panels_to_r2("x", staging_dir=tmp_path, view=db)
-    with pytest.raises(MassResearchDisabledError, match="build_real_period_panel"):
-        build_real_period_panel(
-            {"period_id": "p", "period_start": "2024-01-01", "period_end": "2024-01-02"},
-            view=db,
-        )
-    assert db.read_text() == "not a database"

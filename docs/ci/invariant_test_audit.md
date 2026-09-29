@@ -80,6 +80,17 @@ charter for extra hostile-Python tests.
 
 ## Consolidation decisions
 
+- Retire the isolated Python offline cost-verification/eval-registry/daily-MTM
+  graph with its three dedicated test files, plus two mixed-suite cases that
+  only called already-disabled panel-staging stubs. The stubs and unused fixed
+  period lists are removed, not made executable. Current `cost_models`
+  liquidity/borrow behavior, Personal metrics, AM-to-PM accounting and real
+  Mass/Controlled admission tests remain. The removed constant-equality,
+  fake artifact-put and duplicate-MTM cases catch no current product defect.
+  Do not preserve a second cost engine merely to keep these tests passing.
+  Remove the orphaned registry/basket/event fixture builders from the shared
+  test helper, retaining the helpers used by its three remaining test modules.
+
 - Remove the dedicated Worker proposal, old Gateway-client, Mass request-parser,
   period-ranking and daily-path tests together with their unreachable subjects.
   Keeping them would detect regressions only in retired internal APIs, not a
