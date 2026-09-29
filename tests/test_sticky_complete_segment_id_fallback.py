@@ -10,6 +10,7 @@ from tests.receipt_test_support import (
 from storage.coverage_ledger import (
     RequiredCoverageSegment,
     _latest_complete_receipt_for_required,
+    _prepare_receipts,
 )
 
 
@@ -54,5 +55,5 @@ def test_segment_id_fallback_rejects_end_drift(receipt_ed25519_keys):
     )
 
     assert _latest_complete_receipt_for_required(
-        (old_receipt,), policy=policy, required=rolled_required
+        _prepare_receipts((old_receipt,)), policy=policy, required=rolled_required
     ) is None

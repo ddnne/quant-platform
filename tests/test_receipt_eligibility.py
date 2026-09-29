@@ -10,8 +10,8 @@ from tests.receipt_test_support import (
     _reconcile_collection_evidence,
 )
 from storage.coverage_ledger import (
-    _latest_receipt_for,
     build_collection_receipt,
+    evaluate_required_segments,
     evaluate_segment,
     is_complete_eligible_receipt,
     plan_required_segments,
@@ -143,7 +143,9 @@ def test_malformed_recovery_sentinel_cannot_break_or_outrank_ledger(
             checked_at="2025-02-02T00:00:00+00:00",
             digests={**trusted.digests, key: value},
         )
-        assert _latest_receipt_for((trusted, malformed), req) is trusted
+        aggregate, selected = evaluate_required_segments(policy, [req], [trusted, malformed])
+        assert aggregate == "COMPLETE"
+        assert selected[0][1] is trusted
         status, _detail = evaluate_segment(policy, req, malformed)
         assert status == "PARTIAL"
 
@@ -159,3 +161,36 @@ def test_signed_empty_data_envelope_is_not_complete(
 
     with pytest.raises(ValueError, match="zero-row SUCCESS"):
         _issue(auth, req, raw, [])
+
+
+def test_evaluation_reuses_proof_but_rechecks_scope_and_changed_receipt(
+    receipt_ed25519_keys, monkeypatch,
+):
+    import storage.coverage_ledger as ledger
+
+    policy, required = _month_required()
+    receipt = _issue(
+        _authority(receipt_ed25519_keys), required,
+        b'{"data":[{"Date":"2025-01-01"}]}', [{"Date": "2025-01-01"}],
+    )
+    verify = ledger.require_verified_collection_closure
+    verified = []
+
+    def counted_verify(value, **kwargs):
+        verified.append(value)
+        return verify(value, **kwargs)
+
+    monkeypatch.setattr(ledger, "require_verified_collection_closure", counted_verify)
+    _aggregate, evaluated = evaluate_required_segments(
+        policy, [required, replace(required, expected_items=2)], [receipt],
+    )
+    assert [item[2] for item in evaluated] == ["COMPLETE", "PARTIAL"]
+    assert "required.expected_items" in evaluated[1][3]["reason"]
+    assert len(verified) == 1
+
+    # Same DTO, mutated nested transport: a later evaluation must verify again.
+    receipt.digests["signature"] = "ed25519:invalid"
+    aggregate, evaluated = evaluate_required_segments(policy, [required], [receipt])
+    assert aggregate == "PARTIAL"
+    assert "receipt closure invalid" in evaluated[0][3]["reason"]
+    assert len(verified) == 2
