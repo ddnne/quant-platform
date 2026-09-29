@@ -201,8 +201,11 @@ See also:
 
 - Deployed: `ingestion-premium` P0 write-path guard (`write_path_config.ts`, R2 JSONL).
 - Ops: `POST /v1/ops/archive-cold`, `POST /v1/ops/prune-changelog`.
-- Ops: `POST /v1/ops/jsonl-to-parquet-meta` (parquet-manifest/v1 bridge).
-- Ops: `POST /v1/ops/artifacts-join-plan` (read-only Artifacts plan; Mass NO-GO).
+- Historical only: the JSONL-to-Parquet metadata bridge and Artifacts join-plan
+  endpoints were removed in the 2026-09-29 source cleanup. Neither executed
+  Parquet conversion or research; the latter still scanned legacy D1. No
+  production caller was found in this repository. Use explicit R2 partition
+  manifests in the existing research reader; do not restore these endpoints.
 - `equities_master` live path: SCD2 event log + CURRENT.json on R2 (not full daily dump).
 - High-volume structured no longer inserts full history into D1.
 - Live: D1 ~651MB, cold `<2026-07-01` = 0, COMPLETE preserved.

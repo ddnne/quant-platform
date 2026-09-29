@@ -196,7 +196,7 @@ Ops visibility: `OpsCurrentReadService` over projected control DB / remote D1 �
 ### 2.8 How to read (operator sketch)
 
 1. **Confirm COMPLETE (receipt-owned):** remote Ops / D1 `dataset_coverage` + `coverage_segments` — not `COUNT(*)` on facts.  
-2. **History join / research:** list/read R2 `structured/jsonl/{dataset}/` and/or `archive/jquants_records/{dataset}/`; use `parquet-manifest/v1` / artifacts-join-plan for discovery.  
+2. **History join / research (historical sketch):** R2 `structured/jsonl/{dataset}/` and/or `archive/jquants_records/{dataset}/`. The former metadata bridge/join-plan endpoints were retired in the 2026-09-29 source cleanup; current consumers supply explicit partition manifests.
 3. **Tip / ops:** bounded D1 SQL above; JSDA via hot tables after `publish_jsda_hot_to_d1.py`.  
 4. **Never** claim local `data/structured/ingestion.sqlite` as CF SoT.  
 5. **Research fact API (when READY exists):** `QuantDataAccess.query_dataset` / PIT — permanent DEFER blocked (see §3).

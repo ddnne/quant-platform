@@ -73,6 +73,7 @@ export async function upsertWatermark(
 }
 
 export interface UpsertSummary { inserted: number; revisions: number; }
+export interface AvailableBounds { min: string | null; max: string | null; }
 
 interface StructuredRecord {
   source: string;
@@ -92,6 +93,7 @@ export async function upsertRecords(
   when: Date,
   evidence?: MasterScd2UniverseEvidence,
   persistId?: string,
+  bounds?: AvailableBounds,
 ): Promise<UpsertSummary> {
   if (rows.length === 0) return { inserted: 0, revisions: 0 };
   const ingestedAt = toJstIso(when);
@@ -113,6 +115,11 @@ export async function upsertRecords(
     });
   }
   const records = [...byKey.values()];
+  // Measure the normalized rows being persisted, not unrelated legacy D1 rows.
+  if (bounds) for (const { availableAt } of records) {
+    if (bounds.min === null || availableAt < bounds.min) bounds.min = availableAt;
+    if (bounds.max === null || availableAt > bounds.max) bounds.max = availableAt;
+  }
 
   if (spec.id === "equities_master") {
     const scd2 = await writeMasterScd2(
