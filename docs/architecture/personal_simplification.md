@@ -124,6 +124,16 @@ verification. These savings concern cloud scratch SQLite/CPU, not D1 billing.
 
 ## Next acceptance work
 
+Ops projection no longer mints legacy B0/B4 attestations. That producer always
+had null export/applied cursors (hence UNKNOWN), yet re-counted the whole change
+log, re-read validation/Coverage and inserted another signed source-DB row.
+Remove it and its legacy quality reader: global Ops B0/B4 stays explicitly
+UNKNOWN, while the existing native READY observer retains snapshot-scoped proof.
+Historical quality tables/rows and migrations are preserved, not deleted.
+The existing projection test now runs against an actually read-only source DB
+with a legacy PASS row, verifies UNKNOWN and unchanged-source no-op behavior.
+This removes queries by construction; production read/fee savings remain unmeasured.
+
 Continue the table above: consolidate active feature/evaluation/data access,
 remove repeated current-path scans and heavyweight test setup, and reduce
 unnecessary build selection. Validate actual runtime/bytes/D1 reads separately

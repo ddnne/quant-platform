@@ -1703,15 +1703,30 @@ describe("ops projection cloud publisher", () => {
     );
   });
 
-  it("fails closed when B0/B4 evidence is missing", async () => {
+  it("publishes from read-only source metadata without treating legacy quality as snapshot proof", async () => {
     const source = new DatabaseSync(":memory:");
     const target = new DatabaseSync(":memory:");
-    applySqlDir(source, ingestionMigrations, "0010_raw_acquisition_status.sql");
+    applySqlDir(source, ingestionMigrations);
     applySqlDir(target, projectionMigrations);
     seedBase(source);
-    source.exec("DELETE FROM snapshot_quality_results");
+    const legacyDigest = "sha256:" + "ab".repeat(32);
+    source.prepare(`INSERT INTO snapshot_quality_evidence (
+      evidence_digest, evidence_version, environment, generation_id,
+      snapshot_cursor, source_cursor, export_cursor, applied_cursor,
+      b0_status, b0_reason, b4_status, b4_reason, evaluated_at,
+      issuer_key_id, canonical_evidence_digest, signature, policy_version,
+      summary_json, results_json, source_build_id, status
+    ) VALUES (?, 'snapshot-quality-evidence/v1', 'production', 'legacy',
+      20,20,20,20,'PASS','legacy','PASS','legacy','2026-08-01T00:00:00Z',
+      'legacy',?,'ed25519:legacy','snapshot-quality/v1',
+      '{}','[{"check_id":"B4","status":"PASS"}]','legacy','PASS')`)
+      .run(legacyDigest, legacyDigest);
+    // The publisher must not append its own UNKNOWN attestation to ingestion.
+    // Use the database's actual read-only constraint, not a mocked SQL result.
+    source.exec("PRAGMA query_only=ON");
     const keys = await keyPair();
-    const missing = await publishOpsProjection(await envFor(source, target, keys));
+    const env = await envFor(source, target, keys);
+    const missing = await publishOpsProjection(env);
     expect(missing.status).toBe("published");
     const missingEnvelope = JSON.parse(
       (target.prepare(
@@ -1720,6 +1735,11 @@ describe("ops projection cloud publisher", () => {
     ).envelope as { b0_status: string; b4_status: string };
     expect(missingEnvelope.b0_status).toBe("UNKNOWN");
     expect(missingEnvelope.b4_status).toBe("UNKNOWN");
+    expect(await publishOpsProjection(env)).toMatchObject({
+      status: "noop", generation_id: missing.generation_id,
+    });
+    expect(source.prepare("SELECT evidence_digest FROM snapshot_quality_evidence").all())
+      .toEqual([{ evidence_digest: legacyDigest }]);
   });
 
   it("verifies authentic signed JQ/JSDA receipts and rejects tamper plus V2", async () => {
