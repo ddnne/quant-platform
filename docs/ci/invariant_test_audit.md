@@ -79,6 +79,35 @@ charter for extra hostile-Python tests.
 
 ## Consolidation decisions
 
+- Removed `research.offline` with the two tests whose only subject was its
+  retired bar-evaluation wrappers (`test_offline_bar_eval_pure_on_synthetic_bars`
+  and `test_cm_term_ratio_bar_native_spec_and_evaluator_wiring`). Outside those
+  tests, repository callers were internal to the deleted ten-module graph.
+  It was already absent from both wheel and Container. Retaining tests for that
+  graph would catch no defect in a current product path. Current class-signal
+  numeric cases, option-term source-date/missing-value tests, and Personal/AM-PM
+  engine, cost and metric tests remain. Recover old experiments from Git, not
+  an independently maintained evaluator. No new deletion/source-text test.
+
+- Remove the now-orphaned Python `holding_metrics` and `sign_selection` report
+  helpers with their dedicated tests. The only non-test `holding_metrics`
+  caller imported a re-exported cost constant; it now imports the canonical
+  `cost_defaults` directly. No runtime caller used the report or sign-choice
+  functions after offline retirement. The constant-equality/import-alias test
+  in `test_research_freezes` is removed, not replaced. Current equity/trade
+  metrics, short financing, risk gates and Worker evaluation are unchanged.
+  In particular, this does not replace daily PnL with amortized-cost examples.
+
+- Merge the standalone cache-metric key-set test into the existing two-job
+  acquisition/reuse case. It now observes the public counter values alongside
+  identical returned evidence and zero second-job fetches. New diagnostic
+  fields no longer fail a spelling/shape freeze; a missing or wrong cost
+  counter used by that scenario still fails. Existing failed-cache behavior
+  also observes public `cache_unavailable`. Snapshot reporting forwards the
+  source client's numeric counter map instead of a duplicate five-name list;
+  existing success/failure manifest tests cover scan/read/download counts.
+  Canonical manifest fields take precedence over diagnostic counters.
+
 - Removed the concurrent audit-canary RPC call-count assertion. A caller may
   receive an already finalized replay, so three calls rather than four is
   valid (native build `b51d7523-696e-450f-8d74-8b2226c7825b`). The existing

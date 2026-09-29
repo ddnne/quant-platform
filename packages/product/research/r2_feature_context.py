@@ -273,7 +273,7 @@ def extract_r2_history_feature_rows(
             raise R2FeatureContextError(
                 f"{context}: dataset {ds!r} has no R2 input channel "
                 "(object_keys / local_paths / raw_lines). "
-                "List keys via artifacts-join-plan or supply fixtures."
+                "Supply explicit R2 partition keys or synthetic fixtures."
             )
         channels: list[str] = []
         if has_keys:

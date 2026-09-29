@@ -63,7 +63,8 @@ from personal_acquisition_cache import (
 )
 
 from personal_structured_bars import (
-    StructuredBarsObject, iter_verified_structured_bars,
+    StructuredBarsObject, StructuredBarsIndex, index_structured_bars,
+    iter_verified_structured_bars,
     decode_structured_bar_manifest, STRUCTURED_MANIFEST_MAX_BYTES,
 )
 
@@ -83,6 +84,7 @@ _MAX_PAGES_PER_MONTH = 8192
 STRUCTURED_BAR_OBJECT_MAX_BYTES = 64 * 1024 * 1024
 STRUCTURED_REUSE_MAX_BYTES = 1024 ** 3
 STRUCTURED_REUSE_MIN_FREE_BYTES = 512 * 1024 ** 2
+STRUCTURED_INDEX_MAX_SPANS = 65_536
 _MAX_POST_ATTEMPTS = 4
 _TRANSIENT_POST_STATUSES = frozenset({502, 503, 504})
 _TRANSIENT_RETRY_DELAYS_S = (1, 2, 4)
@@ -345,6 +347,7 @@ class AcquisitionSpool:
     def record_structured_bars(
         self, body: bytes, source: StructuredBarsObject, *, max_object_bytes: int,
         month: str | None = None,
+        index: StructuredBarsIndex | None = None,
     ) -> None:
         """Stage one existing object atomically, without claiming API exhaustion."""
         scope = month if month is not None else "*"
@@ -366,13 +369,19 @@ class AcquisitionSpool:
         )
         self._conn.execute("BEGIN")
         try:
-            for ordinal, envelope in enumerate(iter_verified_structured_bars(
-                body, source, max_object_bytes=max_object_bytes
-            )):
+            rows = (
+                index.rows_for_month(body, source, month)
+                if index is not None and month is not None
+                else enumerate(iter_verified_structured_bars(
+                    body, source, max_object_bytes=max_object_bytes,
+                ))
+            )
+            for ordinal, envelope in rows:
                 payload = envelope["payload"]
                 if isinstance(payload, str):
                     payload = json.loads(payload)
-                # Verify every row, including excluded months, before commit.
+                # Indexes exist only after full verification; other inputs
+                # validate every row, including excluded months, before commit.
                 if prior is None and (month is None or payload["Date"][:7] == month):
                     self._conn.execute(
                         "INSERT INTO structured_bar_rows VALUES (?,?,?,?,?,?)",
@@ -978,6 +987,11 @@ class PersonalHistorySourceClient:
             {month: tuple(sources) for month, sources in structured_bar_sources.items()}
         )
         self._structured_months_loaded: set[str] = set()
+        self._structured_indexes: dict[StructuredBarsObject, StructuredBarsIndex | None] = {}
+        self._structured_index_spans = 0
+        self._structured_full_scans = 0
+        self._structured_index_reads = 0
+        self._structured_download_bytes = 0
         self.period_end = period_end
         self.origin = origin.rstrip("/")
         self.r2_origin = r2_origin.rstrip("/")
@@ -1024,6 +1038,9 @@ class PersonalHistorySourceClient:
             "cache_published": self.cache_published,
             "cache_unavailable": self.cache_unavailable,
             "live_fetch_calls": self.fetch_calls,
+            "structured_full_object_scans": self._structured_full_scans,
+            "structured_indexed_month_reads": self._structured_index_reads,
+            "structured_download_bytes": self._structured_download_bytes,
         }
 
     def release_acquired_raw(self) -> None:
@@ -1036,6 +1053,7 @@ class PersonalHistorySourceClient:
             self.spool.close()
         finally:
             self._structured_reuse.cleanup()
+            self._structured_indexes.clear()
 
     def fetch_dataset_evidenced(self, dataset: str, **params: Any) -> _Fetch:
         if dataset not in PERSONAL_HISTORY_DATASETS:
@@ -1063,12 +1081,7 @@ class PersonalHistorySourceClient:
             indexed: dict[str, list[StructuredBarsObject]] = {}
             for source in self.structured_bar_sources["*"]:
                 body = self._download_structured_bar_object(source)
-                months = set()
-                for envelope in iter_verified_structured_bars(body, source, max_object_bytes=STRUCTURED_BAR_OBJECT_MAX_BYTES):
-                    payload = envelope["payload"]
-                    if isinstance(payload, str):
-                        payload = json.loads(payload)
-                    months.add(str(payload["Date"])[:7])
+                months = self._index_structured_bar_object(body, source)
                 for observed_month in months:
                     indexed.setdefault(observed_month, []).append(source)
             self.structured_bar_sources = {key: tuple(value) for key, value in indexed.items()}
@@ -1088,10 +1101,29 @@ class PersonalHistorySourceClient:
                 continue
             self.spool.guard_bounds(extra_pages=1, extra_bytes=source.size * 3)
             body = self._download_structured_bar_object(source)
+            if source not in self._structured_indexes:
+                self._index_structured_bar_object(body, source)
+            index = self._structured_indexes.get(source)
+            if index is None:
+                self._structured_full_scans += 1
+            else:
+                self._structured_index_reads += 1
             self.spool.record_structured_bars(
                 body, source, max_object_bytes=STRUCTURED_BAR_OBJECT_MAX_BYTES, month=month,
+                index=index,
             )
         self._structured_months_loaded.add(month)
+
+    def _index_structured_bar_object(self, body: bytes, source: StructuredBarsObject) -> set[str]:
+        months, index = index_structured_bars(
+            body, source, max_object_bytes=STRUCTURED_BAR_OBJECT_MAX_BYTES,
+            max_spans=STRUCTURED_INDEX_MAX_SPANS - self._structured_index_spans,
+        )
+        self._structured_full_scans += 1
+        self._structured_indexes[source] = index
+        if index is not None:
+            self._structured_index_spans += sum(len(spans) for spans in index.months.values())
+        return months
 
     def _download_structured_bar_object(self, source: StructuredBarsObject) -> bytes:
         if (
@@ -1117,6 +1149,7 @@ class PersonalHistorySourceClient:
             if int(response.status) != 200 or response.geturl() != url:
                 raise PersonalHistoryError("stored bars transport status/redirect rejected")
             body = response.read(source.size + 1)
+        self._structured_download_bytes += len(body)
         if len(body) != source.size or hashlib.sha256(body).hexdigest() != source.sha256:
             raise PersonalHistoryError("stored bars object size/digest mismatch")
         remaining = STRUCTURED_REUSE_MAX_BYTES - self._structured_reuse_bytes

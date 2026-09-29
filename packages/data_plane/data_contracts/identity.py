@@ -175,8 +175,8 @@ def _pick(
     return None
 
 
-def natural_key(row: Mapping[str, Any], dataset_id: str) -> str:
-    """Return the complete contract-selected natural key.
+def natural_key_fields(row: Mapping[str, Any], dataset_id: str) -> dict[str, Any]:
+    """Return the complete contract-selected key before serialization.
 
     Composite keys are all-or-nothing. A missing governed discriminator is a
     malformed structured product and is rejected, matching the Worker ingest
@@ -193,7 +193,12 @@ def natural_key(row: Mapping[str, Any], dataset_id: str) -> str:
                 "structured product is rejected"
             )
         picked[field] = value
-    return canonical_json(picked)
+    return picked
+
+
+def natural_key(row: Mapping[str, Any], dataset_id: str) -> str:
+    """Return the canonical serialization of the contract-selected key."""
+    return canonical_json(natural_key_fields(row, dataset_id))
 
 
 def session_close_jst(date_yyyy_mm_dd: str, *, session: str | None = None) -> str:

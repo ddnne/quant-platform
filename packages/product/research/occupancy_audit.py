@@ -236,7 +236,7 @@ def usable_eval_snapshot(
 
     Does not fan out occupancy. Does not GO. Catalog SoT is the compiled map.
     """
-    from research.holding_metrics import DEFAULT_ONE_WAY_COST
+    from research.cost_defaults import DEFAULT_ONE_WAY_COST
     from research.unique_logic.worker_bodies import (
         CHEAP_PB_PRIMARY_GATE_CAP,
         countable_thesis_ids,

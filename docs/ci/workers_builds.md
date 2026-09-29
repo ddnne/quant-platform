@@ -35,14 +35,30 @@ Current live operator state (2026-08-25 JST):
   neither retrieved nor recorded.
 - Non-production trigger: `d9d45236-635c-42cc-a966-6360a6f3c076`; production
   trigger: `53389400-a65c-467f-9634-72861cc3fe68`. Both use repository root
-  `/`, build `bash scripts/workers_builds_verify_ci.sh`, deploy `true`, cache
-  disabled, and `SKIP_DEPENDENCY_INSTALL=1`.
+  `/`, build `bash scripts/workers_builds_verify_ci.sh`, deploy `true`, and
+  `SKIP_DEPENDENCY_INSTALL=1`. Dependency caching was enabled on both triggers
+  and read back on 2026-09-29; it does not reuse test results or bypass lockfiles.
 - Native context: `Workers Builds: quant-platform-ci-aggregate-staging`, GitHub
   App ID `85455`. Build `ce57148b-6c5f-4fc0-9edf-fcf15948011a` passed at commit
   `9b2397f1067781741b0bd8d72b5bc8015a42fec2`; check run `97625670308` concluded
   `success`.
 
 ## Authority (required check)
+
+### Cost correction (2026-09-29)
+
+The root CI Worker ran 56 builds (764.05 running minutes) created between
+2026-09-27T13:00Z and 2026-09-29T13:28Z. Four documentation-branch builds alone
+used 55.51 minutes. This is API wall-time accounting for this Worker, not an
+account invoice; product builds are additional. All 56 had caching disabled.
+Both triggers now enable the provider's dependency cache. Supported cache
+directories: [Cloudflare build caching](https://developers.cloudflare.com/workers/ci-cd/builds/build-caching/).
+
+Keep reviewable local commits but push related fixes together after focused
+synthetic checks; do not push each review edit just to rerun the full suite.
+No required check, deployment HOLD or test result has been bypassed. The
+current pipeline still runs full CI for docs-only changes and after merge;
+change-aware selection is remaining work, not a saving already delivered.
 
 **Merge authority** is the GitHub **check run** that the
 [Cloudflare Workers & Pages GitHub App](https://github.com/apps/cloudflare-workers-and-pages)

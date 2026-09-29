@@ -368,6 +368,15 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
     expect(stored?.natural_key).toBe('{"Code":"8697","Date":"2024-06-03"}');
     expect(stored?.available_at).toBe("2024-06-03T15:00:00+09:00");
     expect(JSON.parse(stored!.raw_payload).available_at).toBe("1900-01-01T00:00:00Z");
+    // R2-only ingestion measures this run, even with no legacy D1 body rows.
+    expect(await env.DB.prepare(
+      "SELECT available_at_min, available_at_max FROM ingestion_validation WHERE dataset='equities_bars_daily'",
+    ).first()).toEqual({
+      available_at_min: stored.available_at, available_at_max: stored.available_at,
+    });
+    expect(await env.DB.prepare(
+      "SELECT last_event_date, last_export_cursor FROM ingestion_watermarks WHERE dataset='equities_bars_daily'",
+    ).first()).toEqual({ last_event_date: "2024-06-03", last_export_cursor: 1 });
     for (const table of ["jquants_records", "jquants_records_revisions"]) {
       expect((await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>())?.n).toBe(0);
     }

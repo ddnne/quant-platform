@@ -1,6 +1,5 @@
 """Typed bar / index / options loaders. Skip missing and never invent.
 
-Fixture NDJSON compatibility lives only under :mod:`research.offline`.
 Bars versus nky/opt/margin/repo/fins are split across the sibling loaders.
 """
 from __future__ import annotations

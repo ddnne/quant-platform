@@ -3,7 +3,7 @@
  * Phase 3.5 — J-Quants Premium core ingestion on Cloudflare.
  *
  * Secrets on CF; INGESTION_RUN_TOKEN / DATA_EXPORT_TOKEN gate write/export.
- * R2 raw + D1 structured. Incremental primary; date params on `/v1/run`.
+ * R2 raw/structured + D1 metadata. Incremental primary; date params on `/v1/run`.
  * Per-dataset pass/fail (failures are not success). Local PIT via
  * `/v1/export/d1` and `/v1/export/changes`. Required set: `catalog.ts`.
  *
@@ -32,8 +32,6 @@ import {
 import { RateLimiter } from "./rate_limit";
 import { handleArchiveCold } from "./ops_cold_archive";
 import { handlePruneChangelog } from "./ops_prune_changelog";
-import { handleParquetManifest } from "./ops_parquet_manifest";
-import { handleArtifactsJoinPlan } from "./ops_artifacts_plan";
 import { handleExportPaths } from "./http_export";
 import { json } from "./http_json";
 import { ingestionTokenMatches } from "./ingestion_token";
@@ -46,6 +44,7 @@ import {
   upsertRecords,
   upsertWatermark,
   type MasterScd2UniverseEvidence,
+  type AvailableBounds,
 } from "./persist_records";
 import { fetchDataset, requestQueries } from "./fetch_jq";
 import {
@@ -441,6 +440,10 @@ async function persistAcquiredStructured(
 ): Promise<DatasetResult> {
   const rawPrefix = rawRunPrefix(spec.id, runId, when);
   const progress = await readStructuredProgress(env.RAW_BUCKET, rawPrefix);
+  // A resumed slice has not observed earlier normalized rows in this call.
+  // Leave run-wide bounds unknown rather than scan stale legacy D1 history.
+  const availableBounds: AvailableBounds | undefined = progress.next_page === 1
+    ? { min: null, max: null } : undefined;
   const capturedMs = Date.parse(acquired.fetchedAt);
   const capturedWhen = Number.isFinite(capturedMs) ? new Date(capturedMs) : when;
   let logicalRows = progress.logical_rows;
@@ -470,6 +473,7 @@ async function persistAcquiredStructured(
         queries,
       }),
       `run${runId}-master`,
+      availableBounds,
     );
     logicalRows = allRows.length;
     lastEvent = latestEventDate(allRows);
@@ -513,6 +517,7 @@ async function persistAcquiredStructured(
       capturedWhen,
       undefined,
       `run${runId}-p${page.page}`,
+      availableBounds,
     );
     logicalRows += pageRows.length;
     const ev = latestEventDate(pageRows);
@@ -593,7 +598,6 @@ async function persistAcquiredStructured(
     });
   }
 
-  const availableBounds = await selectAvailableBounds(env, spec.id);
   const ingestedAt = toJstIso(capturedWhen);
   let watermarkDetail = "";
   try {
@@ -610,8 +614,8 @@ async function persistAcquiredStructured(
     rowsSeen: acquired.rowCount,
     rowsInserted: logicalRows,
     rowsRevisions: 0,
-    availableAtMin: availableBounds.min,
-    availableAtMax: availableBounds.max,
+    availableAtMin: availableBounds?.min ?? null,
+    availableAtMax: availableBounds?.max ?? null,
     detail: `raw=${acquired.rawKey}${watermarkDetail}; structured_from_acquired=1`,
     rawKey: acquired.rawKey,
     rawBytes: acquired.rawBytes,
@@ -691,7 +695,8 @@ async function ingestOne(
     }
     return persistAcquiredStructured(env, spec, opts, runId, acquired, startedAt, when);
   }
-  const streamD1 = /options/i.test(spec.id);
+  const streamStructured = /options/i.test(spec.id);
+  const availableBounds: AvailableBounds = { min: null, max: null };
   let insertedTotal = 0;
   let revisionsTotal = 0;
   let structuredRowCount = 0;
@@ -723,8 +728,8 @@ async function ingestOne(
         digest,
         http_status: page.httpStatus,
       });
-      if (streamD1 && pageRows.length > 0) {
-        const r = await upsertRecords(env, spec, pageRows, when);
+      if (streamStructured && pageRows.length > 0) {
+        const r = await upsertRecords(env, spec, pageRows, when, undefined, undefined, availableBounds);
         insertedTotal += r.inserted;
         revisionsTotal += r.revisions;
         structuredRowCount += pageRows.length;
@@ -825,7 +830,7 @@ async function ingestOne(
     return res;
   }
 
-  if (!streamD1) {
+  if (!streamStructured) {
     const persisted = await readAcquiredRaw(env, spec.id, runId);
     if (!persisted) {
       throw new Error("acquired raw missing after successful fetch");
@@ -870,8 +875,6 @@ async function ingestOne(
     });
   }
 
-  const availableBounds = await selectAvailableBounds(env, spec.id);
-
   const ingestedAt = toJstIso(when);
   let watermarkDetail = "";
   try {
@@ -890,7 +893,7 @@ async function ingestOne(
     rowsRevisions: revisionsTotal,
     availableAtMin: availableBounds.min,
     availableAtMax: availableBounds.max,
-    detail: `raw=${rawKey}${watermarkDetail}${streamD1 ? "; stream_d1=1" : ""}`,
+    detail: `raw=${rawKey}${watermarkDetail}; structured_stream_r2=1`,
     rawKey,
     rawBytes: outcome.rawBytes,
   };
@@ -898,16 +901,6 @@ async function ingestOne(
     await writeValidation(env, runId, res);
   }
   return res;
-}
-
-async function selectAvailableBounds(
-  env: Env, dataset: string,
-): Promise<{ min: string | null; max: string | null }> {
-  const r = await env.DB.prepare(
-    `SELECT MIN(available_at) AS mn, MAX(available_at) AS mx
-     FROM jquants_records WHERE dataset = ?`,
-  ).bind(dataset).first();
-  return { min: (r?.mn as string) ?? null, max: (r?.mx as string) ?? null };
 }
 
 async function writeValidation(env: Env, runId: number, res: DatasetResult): Promise<void> {
@@ -1460,12 +1453,6 @@ export default {
     }
     if (url.pathname === "/v1/ops/prune-changelog") {
       return handlePruneChangelog(request, env);
-    }
-    if (url.pathname === "/v1/ops/jsonl-to-parquet-meta") {
-      return handleParquetManifest(request, env);
-    }
-    if (url.pathname === "/v1/ops/artifacts-join-plan") {
-      return handleArtifactsJoinPlan(request, env);
     }
     return json({ error: "not found" }, 404);
   },

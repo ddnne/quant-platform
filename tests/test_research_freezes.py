@@ -111,19 +111,6 @@ def test_propose_calendar_gates_excluded_from_llm() -> None:
     assert "liq_high" in PROPOSE_ALLOWED_GATES
 
 
-def test_cost_defaults_are_shared() -> None:
-    from research.cost_defaults import DEFAULT_ONE_WAY_COST, DEFAULT_ONE_WAY_COST_BP
-    from research.cost_models import DEFAULT_ONE_WAY_COST as cost_cost
-    from research.holding_metrics import DEFAULT_ONE_WAY_COST as hold_cost
-    from research.paper_candidate_adapt import DEFAULT_ONE_WAY_COST as paper_cost
-    from research.robustness_gate import DEFAULT_ONE_WAY_COST as gate_cost
-
-    assert DEFAULT_ONE_WAY_COST_BP == 10.0
-    assert DEFAULT_ONE_WAY_COST == 0.001
-    assert cost_cost == hold_cost == paper_cost == gate_cost == DEFAULT_ONE_WAY_COST
-
-
-
 def test_default_logic_specs_leftover_and_bar_native() -> None:
     from research.cf_mass_eval_job import default_logic_specs
 

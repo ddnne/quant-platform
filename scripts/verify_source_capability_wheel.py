@@ -111,7 +111,7 @@ def _installed_research_probe(expected_prefix: Path) -> dict[str, Any]:
     import importlib.util
 
     installed_root = expected_prefix.resolve()
-    excluded_packages = ["research.offline", "research.unique_logic"]
+    excluded_packages = ["research.unique_logic"]
     for name in excluded_packages:
         package_dir = installed_root.joinpath(*name.split("."))
         if package_dir.exists():

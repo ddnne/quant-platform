@@ -26,7 +26,7 @@ Controlled Pilot は `controlled_pilot_v1` の正確に四本です。実行に�
 
 個人 DRAFT の結果は研究用です。同じ規約の下で完備なら比較してよいですが、READY や Live ではありません。Mass は無効で、Pilot の証跡では Mass を有効化できません。凍結リプレイは通常実行ではありません。
 
-通常配布が除外するのは legacy の `research.offline` / `research.unique_logic` 系だけです。通常の research ルートは入り、origin を検査します。wheel は研究スキーマ全体の自己完結バンドルではなく、schema と `repo_root` は checkout とアプリ資源に依存します。実 Container の smoke は現行消費者の import を確認します。これは方針であり、[operations/current_work_ledger.json](operations/current_work_ledger.json) が受理する前に達成とは言いません。検証入口は [../scripts/verify_source_capability_wheel.py](../scripts/verify_source_capability_wheel.py) です。再生互換ソースは残しますが通常実行ではなく、T01 の replay 階層化は未完です。
+通常配布は legacy の `research.unique_logic` 系を除外します。呼出元が旧テストしか残っていなかった `research.offline` の評価・複数年レポート群は削除し、履歴は Git に保持します。現行の `personal_service`、AM→PM 評価、財務・指数ボラ特徴量は維持します。通常の research ルートは入り、origin を検査します。wheel は研究スキーマ全体の自己完結バンドルではなく、schema と `repo_root` は checkout とアプリ資源に依存します。実 Container の smoke は現行消費者の import を確認します。検証入口は [../scripts/verify_source_capability_wheel.py](../scripts/verify_source_capability_wheel.py) です。残る catalog 再生互換は通常実行ではなく、全廃済みとは扱いません。
 
 Coverage は契約と receipt からドメインを導きます。空の COMPLETE で無い被覆を埋めません。OpsCurrent は運用の読取モデルであり research READY ではありません。欠測投影を 0 とみなしません。運用ステータスや Cron PASS だけでは READY を証明しません。ソース公開、staging、production、データ有効化、READY、Pilot 実行は別工程です。承認と cancel / HOLD は他の CLI / API で迂回できません。本番 DLQ 本文は読まず、ack も purge もしません。共有 D1 は前方修復であり、ライター再開後の全 DB 復元ではありません。実行可能な運用手順は [operations/current_production_runbook.md](operations/current_production_runbook.md) だけです。文書の閲覧に許可は不要で、ライブ操作だけが現行認可と HOLD に従います。
 

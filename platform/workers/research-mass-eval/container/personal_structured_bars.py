@@ -15,7 +15,7 @@ import json
 import re
 from typing import Any, Iterator
 
-from data_contracts.identity import natural_key
+from data_contracts.identity import natural_key, natural_key_fields
 from ingestion.personal_history import PersonalHistoryError
 
 
@@ -25,6 +25,73 @@ class StructuredBarsObject:
     sha256: str
     size: int
     rows: int
+
+
+@dataclass(frozen=True)
+class StructuredBarsIndex:
+    """Job-local offsets from a completely validated object; no market copy."""
+
+    source: StructuredBarsObject
+    # Each span is (byte start, byte end, original nonblank row ordinal).
+    months: dict[str, list[tuple[int, int, int]]]
+
+    def rows_for_month(
+        self, body: bytes, source: StructuredBarsObject, month: str,
+    ) -> Iterator[tuple[int, dict[str, Any]]]:
+        if (source != self.source or len(body) != source.size
+                or hashlib.sha256(body).hexdigest() != source.sha256):
+            raise PersonalHistoryError("indexed bars object identity mismatch")
+        # The exact bytes were validated before this index was retained. Only
+        # decode selected rows; all original vintages and ordinals are kept.
+        stream = io.BytesIO(body)
+        for start, end, ordinal in self.months.get(month, ()):
+            stream.seek(start)
+            while stream.tell() < end:
+                line = stream.readline()
+                if line.strip():
+                    yield ordinal, json.loads(line)
+                    ordinal += 1
+
+
+def index_structured_bars(
+    body: bytes, source: StructuredBarsObject, *, max_object_bytes: int,
+    max_spans: int,
+) -> tuple[set[str], StructuredBarsIndex | None]:
+    """Validate once and retain bounded offsets, including unsorted months.
+
+    An unusually fragmented input still works through the ordinary reader.
+    Exhaust the verifier even when the offset budget is exhausted.
+    """
+    months: set[str] = set()
+    spans: dict[str, list[tuple[int, int, int]]] = {}
+    span_count = 0
+    previous_month = None
+    stream = io.BytesIO(body)
+    for ordinal, envelope in enumerate(iter_verified_structured_bars(
+        body, source, max_object_bytes=max_object_bytes,
+    )):
+        start = stream.tell()
+        while not stream.readline().strip():
+            start = stream.tell()
+        end = stream.tell()
+        payload = envelope["payload"]
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        month = payload["Date"][:7]
+        months.add(month)
+        if span_count <= max_spans:
+            if month == previous_month:
+                first, _, first_ordinal = spans[month][-1]
+                spans[month][-1] = (first, end, first_ordinal)
+            else:
+                span_count += 1
+                if span_count <= max_spans:
+                    spans.setdefault(month, []).append((start, end, ordinal))
+                else:
+                    spans.clear()
+        previous_month = month
+    index = StructuredBarsIndex(source, spans) if span_count <= max_spans else None
+    return months, index
 
 
 STRUCTURED_MANIFEST_MAX_BYTES = 1024 * 1024
@@ -141,7 +208,12 @@ No latest-row collapse: the scratch consumer must retain distinct vintages.
             key = row.get("natural_key")
             if isinstance(key, str):
                 key = json.loads(key, parse_constant=_reject_nonfinite)
-            expected_key = json.loads(natural_key(payload, "equities_bars_daily"))
+            expected_key = natural_key_fields(payload, "equities_bars_daily")
+            # Normal bar keys are strings: comparing their selected fields is
+            # identical to a canonical JSON round trip, without serializing
+            # every row. Preserve historical normalization for other types.
+            if not all(isinstance(value, str) for value in expected_key.values()):
+                expected_key = json.loads(natural_key(payload, "equities_bars_daily"))
         except (ValueError, TypeError) as exc:
             raise PersonalHistoryError("structured bars invalid natural key") from exc
         if key != expected_key:

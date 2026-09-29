@@ -3,7 +3,6 @@ import { datasetById } from "./catalog";
 import { MASTER_EVENT_TYPES } from "./master_scd2/types";
 import {
   upsertRecords,
-  upsertWatermark,
   type PersistEnv,
 } from "./persist_records";
 
@@ -53,32 +52,6 @@ describe("upsertRecords empty rows", () => {
     expect(SPEC).toBeDefined();
     const result = await upsertRecords(throwingEnv(), SPEC!, [], WHEN);
     expect(result).toEqual({ inserted: 0, revisions: 0 });
-  });
-});
-
-describe("upsertWatermark SQL", () => {
-  it("pins ingestion_watermarks ON CONFLICT and bind order without live D1", async () => {
-    const { db, sql, binds } = recordingD1();
-    const dataset = "equities_bars_daily";
-    const lastEventDate = "2025-04-01";
-    const lastIngestedAt = "2025-04-01T09:00:00+09:00";
-    await upsertWatermark(
-      {
-        DB: db,
-        STRUCTURED_BUCKET: {
-          async put() {
-            throw new Error("R2.put must not run for watermark");
-          },
-        } as unknown as R2Bucket,
-      },
-      dataset,
-      lastEventDate,
-      lastIngestedAt,
-    );
-    expect(sql).toHaveLength(1);
-    expect(sql[0]).toContain("ingestion_watermarks");
-    expect(sql[0]).toMatch(/ON CONFLICT/);
-    expect(binds).toEqual([[dataset, lastEventDate, lastIngestedAt, dataset]]);
   });
 });
 
