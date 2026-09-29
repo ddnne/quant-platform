@@ -32,11 +32,8 @@ checkout した開発者向けです。通常利用者の実行手順ではな�
 # ロックどおり開発 extra を同期する
 uv sync --frozen --extra dev
 
-# 通常スイート。toolchain / live / replay を除く。CLI -m は addopts の -m を置き換える
-.venv/bin/python -m pytest tests/ -m "not toolchain and not live and not replay"
-
-# 退役 catalog 互換
-.venv/bin/python -m pytest tests/ -m replay
+# 通常スイート。toolchain / live を除く。退役 catalog の再現は Git 履歴を使用
+.venv/bin/python -m pytest tests/ -m "not toolchain and not live"
 
 # toolchain。live は除く
 .venv/bin/python -m pytest tests/ -m "toolchain and not live"

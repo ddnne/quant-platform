@@ -110,3 +110,9 @@ metrics, current portfolio/risk code and the evidence-IR/registry checks still
 used outside that graph. Tests asserting historical catalog membership,
 re-export identity or old report classifications do not protect the current
 research service and leave with the implementation they exclusively test.
+
+Retire the catalog replay test tier and its separate full-suite collection.
+Current offline and Node/npm toolchain lanes remain distinct and mandatory;
+no live test or deployment is enabled. Historical numerical replay requires
+the historical source revision. Do not maintain catalog count/phrase/alias
+tests in current product CI merely to keep a test count unchanged.

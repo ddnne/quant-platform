@@ -222,36 +222,6 @@ def _weekdays(start: date, n: int) -> list[str]:
     return days
 
 
-def assert_unique_family_specs(
-    specs: list[dict[str, Any]],
-    expected_ids: frozenset[str],
-    *,
-    disjoint_from: tuple[frozenset[str], ...] = (),
-) -> None:
-    """YAML-backed unique family identity. Not a factory or GO check."""
-    from research.unique_logic.constants import (
-        KNOWN_DEMOTED_OR_WEAK,
-        KNOWN_WEAK_THESIS,
-        LOGIC_CATALOG_HEADLINE_BAN,
-    )
-
-    ids = [s["logic_id"] for s in specs]
-    assert ids == sorted(expected_ids)
-    assert ids
-    for s in specs:
-        assert s["new_unique_logic"] is True
-        assert s["catalog"] is True
-        assert s["catalog_map"] is None
-        lid = s["logic_id"]
-        assert lid not in LOGIC_CATALOG_HEADLINE_BAN
-        assert lid not in KNOWN_WEAK_THESIS
-        assert lid not in KNOWN_DEMOTED_OR_WEAK
-        for other in disjoint_from:
-            assert lid not in other
-        params = s.get("params")
-        assert isinstance(params, dict)
-
-
 def _eval_cell(logic_id: str, **fields):
     return {"logic_id": logic_id, **fields}
 
