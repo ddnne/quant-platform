@@ -96,3 +96,10 @@ stubs are also retired together with their dedicated tests. No package caller
 remained outside this retired graph. Their refusal is structural (there is no
 local callable client); the existing Worker HTTP refusal remains tested.
 Common cost/spec/IR helpers still consumed by current code remain in place.
+
+Retire unused catalog compilation/activation adapters and the old occupancy/
+reconstitution report tools with their dedicated tests. The immutable JSONL
+catalog and its original manifest remain unchanged as audit evidence; a
+historical replay requiring old Python code should check out Git history, not
+keep an otherwise unused parallel product graph alive. Removing these tools
+does not remove current portfolio/risk measurements or authorize new research.

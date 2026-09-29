@@ -3,11 +3,12 @@
 Expanded YAML was removed in a mechanical catalog migration.
 
 **Replay artifact:** `artifacts/replay/legacy_strategy_catalog/migration.jsonl` +
-`artifacts/replay/legacy_strategy_catalog/manifest.json` (`research.catalog_compiler`).
+`artifacts/replay/legacy_strategy_catalog/manifest.json`.
 `CATALOG_AND_PLUS_N_STOPPED` remains on. Do not add YAML here without a dated
 brief that flips the freeze.
 
-Candidate SoT is still `POST /v1/daily-path`. Scores go to R2 + D1.
+New experiments use the current personal DRAFT or READY-bound Controlled
+service. `/v1/daily-path` is retired and refuses execution.
 
 Schema (v1, fields required):
 
@@ -31,6 +32,6 @@ This directory is **empty**. Do not add YAML here. The schema above is the
 historical declaration shape; rows are audit/replay-only. Legacy evaluators live
 in `packages/product/research/unique_logic/` but are not imported by the
 exact-four Pilot or Mass scheduler. Local
-`python -m research.unique_logic` is a retired fail-closed stub, not candidate eval.
+`python -m research.unique_logic` is removed, not an execution entrypoint.
 
 Scores go to R2 + D1. Do not add `scripts/run_wNN_*.py`.
