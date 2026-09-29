@@ -85,6 +85,12 @@ a side effect of source cleanup; identify consumers and recovery first.
   Keep the actual Worker 403 route tests, current Personal/Controlled handlers,
   Gateway service and its budget tests, and shared index-volatility held-book
   calculations. This does not retire a deployed Worker or alter stored results.
+- Follow the deleted wrappers' dependencies: remove their now-orphaned local
+  strategy classifier, event-clock and path-label helpers and obsolete Mass
+  request/result types. Remove the cross-runtime test whose only Worker target
+  was that dead event-clock helper; the existing Python PIT entry regression
+  covers missing/midnight/after-close clocks. Canonical Controlled plan
+  validation and Personal signal construction are unchanged.
 
 Retiring unused paths reduces maintenance and test collection, not observed
 cloud runtime. Deleted lines are not measured billing savings. Do not claim

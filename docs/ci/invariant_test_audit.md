@@ -88,6 +88,11 @@ charter for extra hostile-Python tests.
   execution without touching external capabilities. Current Personal/Controlled
   tests, index-volatility math, canonical Paper accounting and Gateway budget
   tests remain; do not replace the deleted tests with file-absence assertions.
+  The orphaned classifier/clock/path-label tests also leave with their subjects.
+  Delete the Python-to-retired-TS clock parity subprocess test: the retained
+  Python PIT entry regression already exercises the same missing, midnight
+  and after-close cases, plus non-trading-day entry. No current runtime needs
+  the removed TS clock or strategy-ID table.
 
 - Remove the personal-paper call-order mock and the runner's duplicate fake-id
   mutation test. The existing result-equivalence/read-session test now checks
