@@ -70,8 +70,9 @@ export class PersonalResearchContainer extends Container<Env> {
   defaultPort = 8080;
   requiredPorts = [8080];
   pingEndpoint = "localhost/ready";
-  // Hard outer guard. The service exits itself immediately after its terminal
-  // manifest, so ordinary runs do not remain billable for this full window.
+  // Idle fallback, renewed by requests. The image CMD independently bounds
+  // its whole process lifetime, including startup and terminal publication.
+  // Ordinary runs exit earlier after their terminal manifest is persisted.
   sleepAfter = "180m";
   enableInternet = false;
 
