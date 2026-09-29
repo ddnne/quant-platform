@@ -8,6 +8,15 @@ for an R2-only DRAFT run. Base/staging keep the controlled bindings. Restore
 production bindings only with separately accepted target deployments; missing
 capabilities refuse their routes, and all existing execution HOLDs remain.
 
+The research Container image bounds its whole process lifetime at 180 minutes
+with the image entry command (TERM at 179m55s, KILL five seconds later). Startup
+and terminal-upload retries are included; `sleepAfter` is only an idle fallback.
+On deadline, a failure manifest may not be uploaded: use the existing durable
+job expiry, never infer success or resubmit automatically. Verify the deployed
+image and physical instance `inactive` after completion/expiry; process exit is
+not a guarantee of an exact invoice cutoff. Normal runs exit earlier after
+terminal publication.
+
 <!-- CURRENT_PRODUCTION_RUNBOOK -->
 
 This is the **only executable production operations document**. Historical
