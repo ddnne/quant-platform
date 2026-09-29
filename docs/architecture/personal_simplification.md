@@ -61,3 +61,15 @@ Remaining: the broad worklist is not closed, legacy replay/Controlled paths are
 not yet removed, docs-only CI selection is not implemented, and no new long-run
 strategy performance has been produced by this batch. Source acceptance alone
 does not authorize a new paid attempt or establish READY/Pilot GO.
+
+## Retired evaluation path
+
+Remove `research.offline`: ten modules / 4,014 implementation lines comprising
+the old bar evaluators, multi-year orchestration and duplicated report/gates.
+No executable caller remains outside the two dedicated tests removed with it;
+it was already excluded from the wheel and Container. Old source is recoverable
+at `c99640944c6acc9c768afbf5080433887bcedddd`, without another archive copy.
+This removes a second evaluation/report implementation, not the current
+personal, AM-to-PM, financial or index-volatility capabilities. Their numerical
+and PIT tests remain. The legacy `unique_logic` replay graph has other callers
+and is not claimed removed by this change.

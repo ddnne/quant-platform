@@ -79,6 +79,16 @@ charter for extra hostile-Python tests.
 
 ## Consolidation decisions
 
+- Removed `research.offline` with the two tests whose only subject was its
+  retired bar-evaluation wrappers (`test_offline_bar_eval_pure_on_synthetic_bars`
+  and `test_cm_term_ratio_bar_native_spec_and_evaluator_wiring`). Outside those
+  tests, repository callers were internal to the deleted ten-module graph.
+  It was already absent from both wheel and Container. Retaining tests for that
+  graph would catch no defect in a current product path. Current class-signal
+  numeric cases, option-term source-date/missing-value tests, and Personal/AM-PM
+  engine, cost and metric tests remain. Recover old experiments from Git, not
+  an independently maintained evaluator. No new deletion/source-text test.
+
 - Removed the concurrent audit-canary RPC call-count assertion. A caller may
   receive an already finalized replay, so three calls rather than four is
   valid (native build `b51d7523-696e-450f-8d74-8b2226c7825b`). The existing
