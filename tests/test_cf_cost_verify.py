@@ -124,18 +124,6 @@ def test_remote_cost_verify_uses_worker_put(monkeypatch) -> None:
     assert seen == ["research/eval/job=eval-cf-cost-test/cost_verify.json"]
 
 
-def test_eval_tracks_cost_models_hold_why() -> None:
-    from research.eval_tracks import NEXT_RESEARCH_QUEUE
-
-    row = next(q for q in NEXT_RESEARCH_QUEUE if q["id"] == "cost_models_modulation_hold")
-    assert row["why"] == (
-        "live math stays in cost_models; daily_path uses ADV 3-bucket "
-        "+ repo short-drag fail-closed missing ADV"
-    )
-    assert row["go"] is False
-    assert row["not_a_pass"] is True
-
-
 def test_liquidity_multipliers_are_behaviorally_ordered() -> None:
     from research.cost_models import LIQUIDITY_TX_MULT
 

@@ -1,10 +1,9 @@
 """Live research control flags. Not scores. Not GO.
 
-Single SoT for stop/apply/wave. ``eval_tracks`` and
-``combo_basket_catalog`` re-export. Flip only with a dated brief.
+Current ExperimentPlan checks consume these stop/apply flags.
+The historical catalog and its reconstitution tooling are retired.
 """
 
 EVENT_THREE_AND_PLUS_N_STOPPED: bool = True
 CATALOG_AND_PLUS_N_STOPPED: bool = True
 RECONSTITUTION_APPLY: bool = False
-CURRENT_EVAL_WAVE: str = "20260824ev"

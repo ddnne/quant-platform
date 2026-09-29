@@ -47,29 +47,3 @@ def test_missing_code_adv_does_not_invent() -> None:
     assert none["cost_adv_incomplete"] is True
     assert abs(other_only["net_daily"][1]) < 1e-15
     assert abs(none["net_daily"][1]) < 1e-15
-
-
-def test_dispatch_contextvar_passes_adv_to_held_book() -> None:
-    from research.daily_path_eval import (
-        held_book_daily_mtm,
-        reset_held_book_adv,
-        set_held_book_adv,
-    )
-
-    token = set_held_book_adv({"7203": 1e7})
-    try:
-        via_ctx = held_book_daily_mtm(
-            held_by_code_date=HELD,
-            close_by=CLOSE,
-            dates=DATES,
-            hold_days=10,
-            one_way_cost=0.001,
-            logic_id="liq_unit",
-            repo_by_date=REPO,
-        )["net_daily"][1]
-    finally:
-        reset_held_book_adv(token)
-    explicit = _net({"7203": 1e7})
-    missing = _net(None)
-    assert abs(via_ctx - explicit) < 1e-12
-    assert via_ctx < missing

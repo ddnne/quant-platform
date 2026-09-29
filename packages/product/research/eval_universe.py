@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from qp_paths import repo_root
-from research.eval_tracks import UNIVERSE_SELECT_ADV
 
 DEFAULT_SQLITE: Path = repo_root() / "data" / "structured" / "ingestion.sqlite"
 
@@ -148,7 +147,7 @@ EVAL_UNIVERSE_POOL: tuple[str, ...] = (
     "86980",
     "87290",
 )
-UNIVERSE_SELECT_RULE: str = UNIVERSE_SELECT_ADV
+UNIVERSE_SELECT_RULE: str = "adv_desc_skip_missing_bars_and_fins"
 UNIVERSE_MIN_BAR_DAYS: int = 40
 # One TA/EqAR print is enough to keep a name. Requiring 4 in a 10-month
 # window collapsed the pool to quarterly-only names (~7). Skip zero; no invent.
