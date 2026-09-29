@@ -137,18 +137,21 @@ CREATE TABLE IF NOT EXISTS month_state (
     CHECK (status IN ('FETCHING','COMPLETE'))
 );
 CREATE TABLE IF NOT EXISTS structured_bar_objects (
-    object_key TEXT PRIMARY KEY,
+    object_key TEXT NOT NULL,
+    scope_month TEXT NOT NULL,
     sha256 TEXT NOT NULL,
     bytes INTEGER NOT NULL,
-    rows INTEGER NOT NULL
+    rows INTEGER NOT NULL,
+    PRIMARY KEY (object_key, scope_month)
 );
 CREATE TABLE IF NOT EXISTS structured_bar_rows (
     object_key TEXT NOT NULL,
+    scope_month TEXT NOT NULL,
     ordinal INTEGER NOT NULL,
     row_date TEXT NOT NULL,
     code TEXT NOT NULL,
     envelope_json TEXT NOT NULL,
-    PRIMARY KEY (object_key, ordinal)
+    PRIMARY KEY (object_key, scope_month, ordinal)
 );
 CREATE INDEX IF NOT EXISTS structured_bar_rows_date_code
     ON structured_bar_rows(row_date, code);
@@ -336,12 +339,22 @@ class AcquisitionSpool:
         self._conn.close()
 
     def record_structured_bars(
-        self, body: bytes, source: StructuredBarsObject, *, max_object_bytes: int
+        self, body: bytes, source: StructuredBarsObject, *, max_object_bytes: int,
+        month: str | None = None,
     ) -> None:
         """Stage one existing object atomically, without claiming API exhaustion."""
-        prior = self._conn.execute(
-            "SELECT sha256, bytes, rows FROM structured_bar_objects WHERE object_key=?",
+        scope = month if month is not None else "*"
+        if month is not None and not __import__("re").fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
+            raise PersonalHistoryError("structured bars invalid month scope")
+        existing = self._conn.execute(
+            "SELECT sha256, bytes, rows FROM structured_bar_objects WHERE object_key=? LIMIT 1",
             (source.key,),
+        ).fetchone()
+        if existing is not None and tuple(existing) != (source.sha256, source.size, source.rows):
+            raise PersonalHistoryError("structured bars immutable object conflict")
+        prior = self._conn.execute(
+            "SELECT sha256, bytes, rows FROM structured_bar_objects WHERE object_key=? AND scope_month=?",
+            (source.key, scope),
         ).fetchone()
         self.guard_bounds(
             extra_pages=int(prior is None),
@@ -349,24 +362,23 @@ class AcquisitionSpool:
         )
         self._conn.execute("BEGIN")
         try:
-            if prior is not None and tuple(prior) != (source.sha256, source.size, source.rows):
-                raise PersonalHistoryError("structured bars immutable object conflict")
             for ordinal, envelope in enumerate(iter_verified_structured_bars(
                 body, source, max_object_bytes=max_object_bytes
             )):
                 payload = envelope["payload"]
                 if isinstance(payload, str):
                     payload = json.loads(payload)
-                if prior is None:
+                # Verify every row, including excluded months, before commit.
+                if prior is None and (month is None or payload["Date"][:7] == month):
                     self._conn.execute(
-                        "INSERT INTO structured_bar_rows VALUES (?,?,?,?,?)",
-                        (source.key, ordinal, payload["Date"], str(payload["Code"]),
+                        "INSERT INTO structured_bar_rows VALUES (?,?,?,?,?,?)",
+                        (source.key, scope, ordinal, payload["Date"], str(payload["Code"]),
                          canonical_json(envelope)),
                     )
             if prior is None:
                 self._conn.execute(
-                    "INSERT INTO structured_bar_objects VALUES (?,?,?,?)",
-                    (source.key, source.sha256, source.size, source.rows),
+                    "INSERT INTO structured_bar_objects VALUES (?,?,?,?,?)",
+                    (source.key, scope, source.sha256, source.size, source.rows),
                 )
             self._conn.commit()
         except Exception:
@@ -380,7 +392,7 @@ class AcquisitionSpool:
         objects: dict[str, Mapping[str, Any]] = {}
         for record in self._conn.execute(
             "SELECT r.envelope_json, o.* FROM structured_bar_rows r "
-            "JOIN structured_bar_objects o ON o.object_key=r.object_key "
+            "JOIN structured_bar_objects o ON o.object_key=r.object_key AND o.scope_month=r.scope_month "
             "WHERE r.row_date=? ORDER BY r.object_key,r.ordinal", (day,),
         ):
             envelope = json.loads(record["envelope_json"])
@@ -1055,8 +1067,8 @@ class PersonalHistorySourceClient:
             raise PersonalHistoryError(f"stored bars manifest missing month {month}")
         for source in sources:
             prior = self.spool._conn.execute(
-                "SELECT sha256,bytes,rows FROM structured_bar_objects WHERE object_key=?",
-                (source.key,),
+                "SELECT sha256,bytes,rows FROM structured_bar_objects WHERE object_key=? AND scope_month=?",
+                (source.key, month),
             ).fetchone()
             if prior is not None:
                 if tuple(prior) != (source.sha256, source.size, source.rows):
@@ -1065,7 +1077,7 @@ class PersonalHistorySourceClient:
             self.spool.guard_bounds(extra_pages=1, extra_bytes=source.size * 3)
             body = self._download_structured_bar_object(source)
             self.spool.record_structured_bars(
-                body, source, max_object_bytes=STRUCTURED_BAR_OBJECT_MAX_BYTES,
+                body, source, max_object_bytes=STRUCTURED_BAR_OBJECT_MAX_BYTES, month=month,
             )
         self._structured_months_loaded.add(month)
 
