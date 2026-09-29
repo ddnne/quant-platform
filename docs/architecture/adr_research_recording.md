@@ -29,9 +29,9 @@ W90–W98 wrote CF `research/mass_eval/job={id}/`. After W99, daily_path_DD live
 
 New hypothesis workflow:
 
-1. Add a logic spec (catalog), and an `evaluate_*` **function** only if the economics are new.
-2. Run existing `cf_mass_eval_job` (screen) and/or `daily_path_eval` (candidate-grade).
-3. Runner writes R2 + D1 index with `git_sha`.
+1. Add a current strategy/feature definition only if the economics are new; do not expand the retired catalog.
+2. Use the authorized cloud personal DRAFT batch or the separately READY-bound Controlled Pilot service.
+3. Runner writes immutable results with source/snapshot identity; history stays in R2, D1 holds small metadata.
 4. Do **not** add `scripts/run_wNN_*.py` or a wave proof scorecard.
 
 Markdown that restates numbers already in R2/D1 is not a record.
@@ -41,22 +41,21 @@ Markdown that restates numbers already in R2/D1 is not a record.
 - Create `scripts/run_wNN_*.py`
 - Create `docs/proof/w08*_wNN_*.md` except a genuine policy ADR
 - Append ALL-TRACK experiment logs to `phase62_residual_status.md`
-- Add a Mass strategy factory or `scripts/run_w*` runners (evaluators stay in `research.unique_logic` / `daily_path_eval`)
+- Add a Mass strategy factory or `scripts/run_w*` runners; reuse the current personal/Controlled entrypoints.
 
-## Two eval planes
+## Current execution paths (updated 2026-09-29)
 
-1. **Candidate-grade SoT** — `POST /v1/daily-path` via
-   `research.cf_daily_path_job` isolate fan-out + `daily_path_DD` recorded to
-   R2 `research/eval/job={id}/`. This is the **only** plane that scores unique
-   event/CS theses. Still never auto-promotes.
-2. **CF period-net auxiliary** — `POST /v1/mass-eval` for **bar-native**
-   logics only. Unique event/CS on this path collapse to MDH
-   (`path_collapsed` / `c21_lite_fallback_mdh:*`) and **must not** enter
-   `n_survivors`. `n_survivors` is never a pass.
+The old daily-path/period-net Python clients are removed; their Worker routes
+already refuse execution. Current personal DRAFT uses
+`POST /v1/personal-research-batch` against an authorized cloud snapshot.
+Controlled Pilot is a different service and requires its existing READY and
+Trader evidence. Neither path grants automatic promotion or enables Mass.
 
-A turn is not complete until a candidate-grade daily_path job exists on R2.
-Worker `n_survivors` without `daily_path_complete` must not be treated as a
-survivor for promotion.
+Keep comparable return/risk/cost metrics and actual observation periods with
+results. A source change or survivor count is not an executed experiment.
+Do not spend money just to finish a development turn, and do not persist market
+history on the developer's machine. Historical artifacts remain audit records,
+not callable execution recipes.
 
 ## Consequences
 

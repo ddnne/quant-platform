@@ -2,7 +2,7 @@
 
 SoT for the CF-evaluable bar-native logics (period-net). Factory templates
 consume this module for the overlapping ids (six factory-only ids stay offline).
-``cf_mass_eval_job`` / ``cf_daily_path_job`` load this instead of the factory.
+The retired local Mass and daily-path clients are not execution entrypoints.
 """
 
 from __future__ import annotations

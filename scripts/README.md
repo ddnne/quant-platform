@@ -10,9 +10,12 @@ CLIs (`issue_receipts_parallel`, `publish_ops_projection`, `export_ops_projectio
 `generate_governed_js`, `verify_governed_js_drift`,
 `report_raw_throughput`) use it.
 CLIs under `scripts/` and `scripts/ops/` use the same `_bootstrap` finder.
-Candidate eval is `POST /v1/daily-path`, not `python -m research.unique_logic`
-(that CLI is a retired fail-closed stub). Live counts / GO gates: [docs/phase62_residual_status.md](../docs/phase62_residual_status.md)
-only. Do not launch Mass / READY / Phase7 / `cf_premium_backfill` from residual prose alone.
+Current cloud DRAFT batches use `POST /v1/personal-research-batch` with their
+authorized snapshot. Controlled Pilot retains its separate READY-bound entry.
+The legacy `/v1/daily-path`, `/v1/mass-eval` and `/v1/propose-thesis` routes refuse
+execution; their Python clients are retired. Live counts / GO gates:
+[docs/phase62_residual_status.md](../docs/phase62_residual_status.md). Do not launch
+Mass / READY / Phase7 / `cf_premium_backfill` from residual prose alone.
 
 **Native CI (Cloudflare Workers Builds, not this Mac):** [`verify_ci.sh`](verify_ci.sh) (active Worker lanes in parallel; no `VERIFY_*` skips). It pins `uv 0.11.26`, runs `uv sync --frozen --extra dev`, the Python suite with two file-scoped pytest workers, verifies the machine-readable Cloudflare binding manifest, then runs each Worker through `npm ci`, tests, typecheck, base/production/staging Wrangler dry-runs, and generated-types checks. The legacy catalog is not compiled into CI or Worker source. Wrangler, TypeScript, and Workers types are exact-versioned. Never `--legacy-peer-deps`; never skip missing dependencies; never live `wrangler deploy`. Local developer verification is pytest from the repository README.
 

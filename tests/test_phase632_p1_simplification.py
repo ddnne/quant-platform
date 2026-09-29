@@ -612,9 +612,6 @@ def test_fins_revision_as_of_keeps_later_correction(tmp_path: Path) -> None:
 
 
 def test_disabled_mass_and_factory_fail_before_local_paths(tmp_path: Path) -> None:
-    from research.cf_daily_path_job import run_cf_daily_path_fanout
-    from research.cf_mass_eval_job import resolve_or_stage_panels
-    from research.cf_mass_eval_run import run_cf_mass_eval_job
     from research.cf_mass_eval_stage import (
         build_real_period_panel,
         stage_real_panels_to_r2,
@@ -622,10 +619,6 @@ def test_disabled_mass_and_factory_fail_before_local_paths(tmp_path: Path) -> No
 
     db = tmp_path / "must-not-open.sqlite"
     db.write_text("not a database")
-    with pytest.raises(MassResearchDisabledError, match="run_cf_mass_eval_job"):
-        run_cf_mass_eval_job(job_id="x", staging_dir=tmp_path)
-    with pytest.raises(MassResearchDisabledError, match="resolve_or_stage_panels"):
-        resolve_or_stage_panels(job_id="x", staging_dir=tmp_path)
     with pytest.raises(MassResearchDisabledError, match="stage_real_panels_to_r2"):
         stage_real_panels_to_r2("x", staging_dir=tmp_path, view=db)
     with pytest.raises(MassResearchDisabledError, match="build_real_period_panel"):
@@ -633,6 +626,4 @@ def test_disabled_mass_and_factory_fail_before_local_paths(tmp_path: Path) -> No
             {"period_id": "p", "period_start": "2024-01-01", "period_end": "2024-01-02"},
             view=db,
         )
-    with pytest.raises(MassResearchDisabledError, match="run_cf_daily_path_fanout"):
-        run_cf_daily_path_fanout(job_id="x", skip_stage=True, staging_dir=tmp_path)
     assert db.read_text() == "not a database"

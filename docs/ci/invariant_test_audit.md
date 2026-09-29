@@ -198,27 +198,20 @@ charter for extra hostile-Python tests.
 - Retained serialized fixture/schema/config reads only when the file itself is
   the governed input under test; those reads do not authorize READY or GO.
 
-- Retired full catalog compatibility uses a selected ``replay`` marker. Default
-  addopts are ``not replay``. A CLI ``-m`` replaces addopts ``-m`` and does not
-  AND. Native CI runs three disjoint non-live lanes in this order: ordinary
-  offline (``not toolchain and not live and not replay``), replay
-  (``replay and not toolchain and not live``), npm install, then toolchain
-  (``toolchain and not live``, including any future replay+toolchain). Frozen
-  artifact digest, installed-wheel/Container exclusion, numeric occupancy,
-  unknown dispatch, disabled unique_logic CLI, and live unique_logic
-  numerical/PIT kernels stay in the ordinary offline lane. This is not a claim
-  that every retired catalog consumer is marked.
-
-- T01/C19 ordinary implementation slim: `reconstitution_pending` imports
-  `combo_basket_catalog` symbols directly (no getattr/missing-preview
-  fallback). `catalog_compiler` dropped unused `catalog_active` re-exports
-  and the persist/CLI writer that could rewrite frozen replay bytes;
-  `compile_catalog` and `assert_legacy_catalog_artifact_frozen` remain
-  read-only. Detect-only reconstitution CLI, unique_logic retired CLI stub,
-  unknown dispatch, occupancy_audit wave-pack writer, unique_logic kernels,
-  and Mass/driver refuse probes stay. Frozen digest
-  `sha256:6ad5ba57dfa41ed9a97e5895d9238040fbb5539b310a2ea4aa349172b6cb8c69`
-  is not regenerated. Not whole T01/C19.
+- 2026-09-29: retire the unused Python catalog/evaluation/report graph and its
+  dedicated tests, including replay/phrase/count/re-export assertions. There
+  is no second catalog replay CI lane or duplicate full-suite collection.
+  Current offline (`not toolchain and not live`) and toolchain
+  (`toolchain and not live`) lanes remain disjoint and mandatory. The existing
+  workerd retired-route test still proves authenticated 403 with no external
+  execution for all three old endpoints. Current numerical/PIT/cost/service
+  tests remain; tests for source no longer shipped do not protect that runtime.
+  Historical replay uses Git history, not a maintained parallel engine. The
+  frozen catalog JSONL and manifest are retained without regeneration.
+- Remove the old wave-specific research queue and its literal-description
+  assertion. Keep actual liquidity/cost behavior checks, and pass ADV as input;
+  the deleted dispatcher's unused context-variable fallback is no longer an
+  alternative source of liquidity data. No new registry replaces these paths.
 
 The final release evidence records suite totals and runtime suites. Test count
 is diagnostic only and is never a GO condition.

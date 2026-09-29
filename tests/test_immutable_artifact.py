@@ -287,15 +287,3 @@ def test_put_research_artifact_remote_unbound_fail_closed(monkeypatch) -> None:
             b'{"n": 1}',
             http_post=_boom_remote,
         )
-
-
-def test_put_local_fallback_artifacts_is_mass_disabled(monkeypatch) -> None:
-    from research.cf_mass_eval_run import put_local_fallback_artifacts
-    from selection.budget_ledger import MassResearchDisabledError
-
-    with pytest.raises(MassResearchDisabledError, match="put_local_fallback_artifacts"):
-        put_local_fallback_artifacts(
-            {"job_id": "fallback-test"},
-            {"ok": True, "n_logics": 1},
-            r2_put=lambda *_a, **_k: {"status": "put_ok"},
-        )

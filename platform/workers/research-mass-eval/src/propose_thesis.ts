@@ -203,7 +203,7 @@ async function llmProposals(
 }
 
 /** Drop inverted / slang titles so they do not occupy an ok:true slot.
- * Python review_proposal_row remains the adopt gate. Never injects.
+ * This Worker owns proposal validation. Validation never authorizes adoption.
  */
 function occupancyExceptionTokens(gate: string): string[] {
   for (const [g, tokens] of OCCUPANCY_LABEL_EXCEPTIONS) {
@@ -364,4 +364,3 @@ export async function runProposeThesis(
   }
   return payload;
 }
-

@@ -1,5 +1,5 @@
 /// Static closed review policy. It is not generated from the retired catalog.
-/// Python research.unique_logic.propose_review_tables is SoT.
+/// This Worker owns its review policy; there is no Python policy generator.
 export const GATE_TITLE_CONTRA: Array<[string, string[]]> = [
   ["sales_down", ["rising sales", "sales up", "sales growth", "high sales", "sales increase", "sales tend to rise", "sales rise"]],
   ["np_negative", ["positive np", "positive profit", "rising profit", "profit up", "profits tend to rise", "profit tends to rise", "high np", "high profit"]],

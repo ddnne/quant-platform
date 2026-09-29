@@ -13,13 +13,6 @@ import pytest
 import qp_paths
 
 REPO = Path(__file__).resolve().parents[1]
-DOCKERFILE = (
-    REPO
-    / "platform"
-    / "workers"
-    / "research-mass-eval"
-    / "Dockerfile"
-)
 CONTAINER_DIR = (
     REPO / "platform" / "workers" / "research-mass-eval" / "container"
 )
@@ -118,13 +111,6 @@ def test_unset_repo_root_keeps_checkout_discovery(
     assert (qp_paths.repo_root() / "tests").is_dir()
 
 
-def test_dockerfile_does_not_copy_catalog_tests_or_artifacts() -> None:
-    text = DOCKERFILE.read_text(encoding="utf-8")
-    assert "legacy_strategy_catalog" not in text
-    assert "COPY tests" not in text
-    assert "COPY artifacts" not in text
-
-
 def _link_min_runtime_tree(dst: Path) -> None:
     shutil.copy2(REPO / "pyproject.toml", dst / "pyproject.toml")
     shutil.copy2(REPO / "qp_paths.py", dst / "qp_paths.py")
@@ -139,7 +125,7 @@ def _link_min_runtime_tree(dst: Path) -> None:
     assert not (dst / "artifacts").exists()
 
 
-def test_personal_research_service_imports_without_legacy_catalog(
+def test_personal_research_service_imports_from_minimal_runtime(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "runtime"
@@ -155,40 +141,11 @@ def test_personal_research_service_imports_without_legacy_catalog(
     ]
     code = r"""
 import importlib
-import pathlib
 import sys
 
 sys.path[:0] = sys.argv[1:]
 
-replay_name = "legacy_strategy_catalog"
-original_open = pathlib.Path.open
-original_read_text = pathlib.Path.read_text
-
-def reject_open(self, *args, **kwargs):
-    if replay_name in self.parts:
-        raise AssertionError(f"runtime import opened replay artifact: {self}")
-    return original_open(self, *args, **kwargs)
-
-def reject_read_text(self, *args, **kwargs):
-    if replay_name in self.parts:
-        raise AssertionError(f"runtime import read replay artifact: {self}")
-    return original_read_text(self, *args, **kwargs)
-
-pathlib.Path.open = reject_open
-pathlib.Path.read_text = reject_read_text
 importlib.import_module("personal_research_service")
-blocked = sorted(
-    name
-    for name in sys.modules
-    if name in {
-        "research.unique_logic.catalog",
-        "research.catalog_compiler",
-        "research.catalog_active",
-        "research.unique_logic.constants",
-    }
-)
-if blocked:
-    raise AssertionError(f"legacy catalog modules loaded: {blocked}")
 """
     env = os.environ.copy()
     env["QP_REPO_ROOT"] = str(root.resolve())

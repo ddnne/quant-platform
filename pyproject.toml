@@ -60,7 +60,7 @@ include = [
 ]
 # Note: do NOT use "data*" — it would exclude data_contracts / data_access.
 # Local data plane lives at repo-root data/ and is outside packages.find where=.
-exclude = ["tests*", "scripts*", "docs*", "platform*", "research.unique_logic", "research.unique_logic.*"]
+exclude = ["tests*", "scripts*", "docs*", "platform*"]
 
 [tool.setuptools]
 py-modules = ["qp_paths", "qp_ofd_continuity"]
@@ -77,10 +77,9 @@ storage = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --strict-markers --disable-socket --allow-unix-socket -m \"not replay\""
+addopts = "-q --strict-markers --disable-socket --allow-unix-socket"
 norecursedirs = [".*", "build", "dist"]
 markers = [
     "live: reserved marker for operator-gated live deployment acceptance; CI excludes it. QP_LIVE alone does not enable network",
     "toolchain: tests that require actual Node/npm",
-    "replay: retired full catalog compatibility; default pytest excludes it; a CLI -m replaces addopts -m",
 ]

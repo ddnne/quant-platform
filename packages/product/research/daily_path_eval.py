@@ -2,26 +2,12 @@
 from __future__ import annotations
 
 import math
-from contextvars import ContextVar
 from typing import Any, Mapping, Sequence
-
-_ADV_CTX: ContextVar[Mapping[str, float] | None] = ContextVar(
-    "held_book_adv_by_code", default=None
-)
 
 from research.stats_metrics import (
     equity_path_drawdown,
     evaluate_daily_path_dd_gate,
 )
-
-def set_held_book_adv(adv_by_code: Mapping[str, float] | None):
-    """Bind ADV for unique_logic callers that do not thread the arg."""
-    return _ADV_CTX.set(adv_by_code)
-
-
-def reset_held_book_adv(token) -> None:
-    _ADV_CTX.reset(token)
-
 
 def _finite_num(v: object) -> bool:
     if v is None:
@@ -128,10 +114,6 @@ def held_book_daily_mtm(
         raw_adv = extra.get("adv_by_code")
         if isinstance(raw_adv, Mapping):
             adv_by_code = raw_adv
-    if adv_by_code is None:
-        ctx_adv = _ADV_CTX.get()
-        if isinstance(ctx_adv, Mapping):
-            adv_by_code = ctx_adv
     h = int(hold_days)
     am_cost = float(amortized_one_way_cost(float(one_way_cost), h))
     daily_cost = float(am_cost) / float(h) if h > 0 else float(am_cost)
@@ -317,5 +299,4 @@ def panel_index(
         "dates": dates,
         "momentum_n": n,
     }
-
 

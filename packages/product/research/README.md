@@ -24,10 +24,9 @@ Personal/Controlled service entrypoints. `VerifiedPilotReadiness` and
 
 The legacy catalog lives only in
 `artifacts/replay/legacy_strategy_catalog/{manifest.json,migration.jsonl}`.
-`catalog_compiler` validates its closed DSL and hashes; `occupancy_audit` is
-explicit audit/replay only. Neither populates runtime strategy inventory.
-Offline helpers and the local CLI are developer/recovery compatibility, not the
-normal market-data or research path.
+Its manifest and rows remain audit records, not runtime inventory. Retired
+catalog compilation, occupancy reports, reconstitution reports and local CLI
+are recoverable from Git history rather than maintained as product entrypoints.
 
 Market acquisition belongs to the ingestion plane. Research orchestration must
 not fetch market HTTP or open fact SQLite directly. Cloud job SQLite is ephemeral;

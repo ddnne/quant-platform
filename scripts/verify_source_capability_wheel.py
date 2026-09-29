@@ -108,17 +108,8 @@ def _selected_interpreter_lib_dirs(python: Path, *, cwd: Path) -> list[str]:
 
 def _installed_research_probe(expected_prefix: Path) -> dict[str, Any]:
     import importlib
-    import importlib.util
 
     installed_root = expected_prefix.resolve()
-    excluded_packages = ["research.unique_logic"]
-    for name in excluded_packages:
-        package_dir = installed_root.joinpath(*name.split("."))
-        if package_dir.exists():
-            raise AssertionError(f"excluded research package present in wheel: {name}")
-        if importlib.util.find_spec(name) is not None:
-            raise AssertionError(f"excluded research package importable from wheel: {name}")
-
     module = importlib.import_module("research")
     origin = getattr(module, "__file__", None)
     if origin is None:
@@ -132,7 +123,6 @@ def _installed_research_probe(expected_prefix: Path) -> dict[str, Any]:
 
     return {
         "probed_modules": ["research"],
-        "excluded_packages": list(excluded_packages),
     }
 
 
@@ -357,7 +347,6 @@ def _installed_probe(
         "canonical_source_digest": canonical_source_digest,
         "route_digests": route_digests,
         "probed_modules": research_probe["probed_modules"],
-        "excluded_packages": research_probe["excluded_packages"],
     }
 
 

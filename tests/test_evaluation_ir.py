@@ -178,7 +178,7 @@ def test_smuggled_candidate_true_on_partial_rejected() -> None:
 
 
 def test_encode_candidate_is_job_candidate_grade() -> None:
-    """cf_daily_path_job assigns candidate_grade from encode_evaluation_ir."""
+    """The canonical IR derives candidate status from completeness, never a flag."""
     complete = dict(
         n_expected=4, n_cells=4, n_complete=4, n_collapsed=0, n_broken=0
     )

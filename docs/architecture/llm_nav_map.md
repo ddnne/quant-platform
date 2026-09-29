@@ -47,7 +47,7 @@
 ✗ Delete Python↔TS parity mirrors or governed.js codegen without replacement
 ✗ Create scripts/run_wNN_*.py or docs/proof/w08*_wNN_*.md as an eval warehouse
 ✗ Append ALL-TRACK experiment scorecards to phase62_residual_status.md
-✗ Import scripts/run_w* (gone; evaluators in research.unique_logic.{event,event_filters,event_sides,cross_section,cs_overlays,adaptive})
+✗ Import scripts/run_w* or research.unique_logic (retired; recover historical replay from Git)
 ✗ Treat .glm-logs or local sqlite as experiment SoT (R2 + D1 index only)
 ```
 
@@ -120,7 +120,7 @@ Details + exceptions: ADR §5.
 | Packaging / paths | `pyproject.toml`, `qp_paths.py` | this map + layout migration |
 | LLM-friendly refactor | plane READMEs + `tests/test_plane_import_boundaries.py` | [ADR](./adr_llm_friendly_refactor.md) (**Accepted**); residual for live status |
 | Phase 6.3.2 identity / path freeze | `CONTROLLED_PILOT_IDENTITY`, Draft purpose IDs; live-order code removed (Git is the archive) | [ADR simplification](./adr_phase632_architecture_simplification.md) (**Accepted**) |
-| New research hyp / daily_path_DD | `research.daily_path_eval` · `research.eval_registry` · `research.cf_mass_eval_job` | [ADR recording](./adr_research_recording.md) — **completion requires an R2 `research/eval/job={id}/` put**; no new `run_wNN` script |
+| New research hypothesis / comparable results | Current personal DRAFT batch or READY-bound Controlled Pilot | [ADR recording](./adr_research_recording.md) — preserve snapshot/source identity and R2 results; no retired catalog client or new `run_wNN` script |
 | Existing `run_w*` / wave proofs | **deleted** | [`wave_assets_deprecated.md`](./wave_assets_deprecated.md) |
 | Legacy eval recording | `research.eval_registry` (offline/R2 artifact helper only) | the former Ops-D1 migration owner was removed; Mass remains NO-GO |
 | Test tiers (G0/G1/G2) | `tests/README.md` | this map §11 B1-d |
