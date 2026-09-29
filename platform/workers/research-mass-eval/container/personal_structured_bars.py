@@ -15,7 +15,7 @@ import json
 import re
 from typing import Any, Iterator
 
-from data_contracts.identity import natural_key
+from data_contracts.identity import natural_key, natural_key_fields
 from ingestion.personal_history import PersonalHistoryError
 
 
@@ -141,7 +141,12 @@ No latest-row collapse: the scratch consumer must retain distinct vintages.
             key = row.get("natural_key")
             if isinstance(key, str):
                 key = json.loads(key, parse_constant=_reject_nonfinite)
-            expected_key = json.loads(natural_key(payload, "equities_bars_daily"))
+            expected_key = natural_key_fields(payload, "equities_bars_daily")
+            # Normal bar keys are strings: comparing their selected fields is
+            # identical to a canonical JSON round trip, without serializing
+            # every row. Preserve historical normalization for other types.
+            if not all(isinstance(value, str) for value in expected_key.values()):
+                expected_key = json.loads(natural_key(payload, "equities_bars_daily"))
         except (ValueError, TypeError) as exc:
             raise PersonalHistoryError("structured bars invalid natural key") from exc
         if key != expected_key:
