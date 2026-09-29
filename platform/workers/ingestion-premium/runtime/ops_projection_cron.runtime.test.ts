@@ -78,12 +78,11 @@ it("staging Cron publishes a sealed R2/D1 generation only after verification-key
   // R2 exists and the legacy cursor is non-null, but no research snapshot has
   // been exported/applied/measured. Neither condition may manufacture PASS.
   expect(signed.envelope).toMatchObject({ b0_status: "UNKNOWN", b4_status: "UNKNOWN" });
-  expect(await env.DB.prepare(`SELECT source_cursor, export_cursor, applied_cursor,
-    b0_status, b4_status FROM snapshot_quality_evidence WHERE generation_id=?`)
-    .bind(generation!.generation_id).first()).toEqual({
-      source_cursor: 1, export_cursor: null, applied_cursor: null,
-      b0_status: "UNKNOWN", b4_status: "UNKNOWN",
-    });
+  expect(await env.DB.prepare("SELECT evidence_digest FROM snapshot_quality_evidence LIMIT 1")
+    .first()).toBeNull();
+  expect(await publishOpsProjection(testEnv)).toMatchObject({
+    status: "noop", generation_id: generation!.generation_id,
+  });
   // Python READY consumers require this closed, eight-field signed contract.
   // Exercise the actual publisher output, not a separately assembled envelope.
   const datasets = await env.OPS_PROJECTION_DB.prepare(

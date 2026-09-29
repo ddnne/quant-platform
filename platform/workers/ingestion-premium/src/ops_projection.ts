@@ -9,7 +9,6 @@ import {
   projectedCompleteDetailJson,
   projectedSegmentStatus,
 } from "./ops_projection_policy";
-import { produceImmutableB0B4 } from "./snapshot_quality_evidence";
 import { sha256HexFromBytes, sha256HexFromString } from "./sha256";
 import {
   OPS_PROJECTION_REGISTRY_PINS,
@@ -65,8 +64,6 @@ const SOURCE_WHITELIST = [
   "jsda_acquisition_jobs",
   "jsda_acquisition_jobs_v2",
   "jsda_acquisition_jobs_v3",
-  "snapshot_quality_results",
-  "snapshot_quality_evidence",
 ] as const;
 
 const FORBIDDEN_SQL =
@@ -320,35 +317,6 @@ function deployProvenance(env: OpsProjectionEnv): {
   return { producerCommitSha: producerSha, workerVersionId: versionId };
 }
 
-function parseB4(resultsJson: unknown): { status: "PASS" | "FAIL"; results: unknown[] } {
-  let document: unknown = [];
-  if (typeof resultsJson === "string") {
-    try {
-      document = JSON.parse(resultsJson);
-    } catch {
-      throw new OpsProjectionPublishError("B4 evidence is malformed");
-    }
-  } else if (Array.isArray(resultsJson)) {
-    document = resultsJson;
-  }
-  if (!Array.isArray(document)) {
-    throw new OpsProjectionPublishError("B4 evidence is malformed");
-  }
-  const results = document.filter(
-    (row) => row && typeof row === "object" && !Array.isArray(row) &&
-      String((row as { check_id?: unknown }).check_id) === "B4",
-  );
-  if (results.length === 0) {
-    throw new OpsProjectionPublishError("B4 evidence is missing");
-  }
-  const status = results.every(
-    (row) => String((row as { status?: unknown }).status).toLowerCase() === "pass",
-  )
-    ? "PASS"
-    : "FAIL";
-  return { status, results };
-}
-
 function unknownB0B4(): {
   status: "UNKNOWN";
   policy_version: string;
@@ -363,71 +331,14 @@ function unknownB0B4(): {
     status: "UNKNOWN",
     policy_version: "",
     evaluated_at: "",
-    summary_json: "{}",
+    summary_json: JSON.stringify({
+      plane: "ops_current",
+      reason: "Ops metadata publication is not a research snapshot B0/B4 measurement",
+    }),
     results_json: "[]",
     source_build_id: "",
     b4_status: "UNKNOWN",
     b4_results: [],
-  };
-}
-
-async function readAuthoritativeB0B4(
-  source: SourceDb,
-  present: Set<string>,
-): Promise<{
-  status: "PASS" | "FAIL" | "UNKNOWN";
-  policy_version: string;
-  evaluated_at: string;
-  summary_json: string;
-  results_json: string;
-  source_build_id: string;
-  b4_status: "PASS" | "FAIL" | "UNKNOWN";
-  b4_results: unknown[];
-}> {
-  // Mutable snapshot_quality_results is audit-only. PASS requires an immutable
-  // signed evidence table produced by the governed verification path.
-  if (!present.has("snapshot_quality_evidence")) {
-    return unknownB0B4();
-  }
-  const row = await sourceFirst<Record<string, unknown>>(
-    source,
-    `SELECT evidence_digest, canonical_evidence_digest, status, b4_status, policy_version, evaluated_at,
-            summary_json, results_json, source_build_id, generation_id,
-            source_cursor, export_cursor, applied_cursor, signature
-       FROM snapshot_quality_evidence
-      ORDER BY evaluated_at DESC, evidence_digest DESC
-      LIMIT 1`,
-  );
-  if (!row) return unknownB0B4();
-  if (String(row.status) !== "PASS" || String(row.b4_status) !== "PASS") {
-    return {
-      ...unknownB0B4(),
-      status: String(row.status) === "FAIL" ? "FAIL" : "UNKNOWN",
-      b4_status: String(row.b4_status) === "FAIL" ? "FAIL" : "UNKNOWN",
-    };
-  }
-  if (typeof row.signature !== "string" || !row.signature.startsWith("ed25519:")) {
-    return unknownB0B4();
-  }
-  const digest = String(row.evidence_digest ?? "");
-  const canonical = String(row.canonical_evidence_digest ?? "");
-  if (digest !== canonical || !/^sha256:[0-9a-f]{64}$/.test(digest)) {
-    return unknownB0B4();
-  }
-  if (!row.generation_id || row.source_cursor == null || row.export_cursor == null) {
-    return unknownB0B4();
-  }
-  return {
-    status: "PASS",
-    policy_version: String(row.policy_version ?? ""),
-    evaluated_at: String(row.evaluated_at ?? ""),
-    summary_json: String(row.summary_json ?? "{}"),
-    results_json: typeof row.results_json === "string"
-      ? row.results_json
-      : JSON.stringify(row.results_json ?? []),
-    source_build_id: String(row.source_build_id ?? ""),
-    b4_status: "PASS",
-    b4_results: parseB4(row.results_json).results,
   };
 }
 
@@ -1039,7 +950,10 @@ export async function publishOpsProjection(
         )
       : null,
   };
-  const b0b4 = await readAuthoritativeB0B4(source, present);
+  // Metadata export/apply cannot prove research snapshot quality. Keep global
+  // B0/B4 UNKNOWN; the existing native READY observer verifies snapshot-scoped
+  // proof separately. Do not read or mint legacy quality rows in the source DB.
+  const b0b4 = unknownB0B4();
   const nativeReady = await observeNativeReadyForOps(
     env.STRUCTURED_BUCKET,
     env.OPS_PROJECTION_ENVIRONMENT,
@@ -1190,18 +1104,6 @@ export async function publishOpsProjection(
     producer_commit_sha: producerSha,
     worker_version_id: versionId,
   })).slice("sha256:".length);
-  const produced = await produceImmutableB0B4(env, source, generationId);
-  Object.assign(b0b4, {
-    status: produced.b0_status,
-    b4_status: produced.b4_status,
-    policy_version: produced.policy_version,
-    evaluated_at: produced.evaluated_at,
-    summary_json: produced.summary_json,
-    results_json: produced.results_json,
-    source_build_id: produced.source_build_id,
-    b4_results: produced.results_json === "[]" ? [] : parseB4(produced.results_json).results,
-  });
-
   const existing = await env.OPS_PROJECTION_DB.prepare(
     "SELECT status, generated_at FROM ops_projection_generation WHERE generation_id=?",
   )
@@ -1677,18 +1579,6 @@ export async function publishOpsProjection(
       source_cursor: sourceCursor,
       reread_cursor: beforeSealCursor,
     });
-  }
-  if (produced.evidence_digest) {
-    if (produced.generation_id !== generationId) {
-      throw new OpsProjectionPublishError("B0/B4 generation/cursors drifted before seal");
-    }
-    if (
-      produced.source_cursor != null &&
-      sourceCursor != null &&
-      Number(produced.source_cursor) !== Number(sourceCursor)
-    ) {
-      throw new OpsProjectionPublishError("B0/B4 generation/cursors drifted before seal");
-    }
   }
   const signed = await signAndVerify(env, envelope);
   const detail = JSON.stringify({
