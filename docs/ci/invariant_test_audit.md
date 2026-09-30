@@ -80,6 +80,12 @@ charter for extra hostile-Python tests.
 
 ## Consolidation decisions
 
+- Retiring the two legacy Worker D1 export routes also removes their Node
+  table/limit/cursor cases. Three public-dispatch tests retain no-IO 404,
+  receipt-product credential refusal and authorized decoder routing. Existing
+  workerd receipt-product success/method/body/size/identity tests remain the
+  authority for runtime behavior; no replacement mock database is introduced.
+
 - Remove six HTTP-local-sync cases with the retired transport: mocked sequence
   replay/non-monotonic pages, endless mock pages, shared-client reuse,
   explicit-since forwarding and fake unsigned-publication refusal. The real
