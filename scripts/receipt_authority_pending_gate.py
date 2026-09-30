@@ -183,7 +183,7 @@ def _require_zero_active_registry(
 
 def _require_binding_surface(
     environment: str, *, instance: dict[str, Any]
-) -> tuple[dict[str, Any], str]:
+) -> tuple[dict[str, Any], str, bool]:
     raw, frozen = _load_json(BINDING_MANIFEST_PATH)
     generated = build_manifest()
     if frozen != generated:
@@ -233,15 +233,16 @@ def _require_binding_surface(
             "Receipt PENDING Worker identity, resources, or private surface drifted"
         )
     premium = frozen["workers"]["ingestion-premium"][environment]
-    if premium.get("services") != [{
+    expected_caller = [{
         "binding": "RECEIPT_EVIDENCE_AUTHORITY",
         "entrypoint": "ReceiptAuthorityService",
         "service": instance["worker_name"],
-    }]:
+    }] if environment == "staging" else []
+    if premium.get("services") != expected_caller:
         raise PendingReceiptAuthorityError(
             "Receipt PENDING caller Service Binding identity drifted"
         )
-    return surface, "sha256:" + hashlib.sha256(raw).hexdigest()
+    return surface, "sha256:" + hashlib.sha256(raw).hexdigest(), bool(expected_caller)
 
 
 def validate_pending_receipt_authority(environment: str) -> dict[str, Any]:
@@ -249,7 +250,7 @@ def validate_pending_receipt_authority(environment: str) -> dict[str, Any]:
 
     selected = _require_environment(environment)
     instance, instance_digest = _authority_instance(selected)
-    surface, binding_digest = _require_binding_surface(selected, instance=instance)
+    surface, binding_digest, caller_connected = _require_binding_surface(selected, instance=instance)
     registry_raw_digest, registry_digest = _require_zero_active_registry(
         selected, authority_instance_digest=instance_digest
     )
@@ -260,6 +261,7 @@ def validate_pending_receipt_authority(environment: str) -> dict[str, Any]:
         "worker_name": surface["name"],
         "config": surface["config"],
         "authority_mode": "PENDING",
+        "caller_connected": caller_connected,
         "authority_instance_digest": instance_digest,
         "binding_manifest_raw_digest": binding_digest,
         "scoped_registry_raw_digest": registry_raw_digest,

@@ -213,6 +213,41 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
     await reset();
   });
 
+  it("production acquisition runs without dormant Receipt or projection resources", async () => {
+    expect((await rebuildNaturalKeysV2(env.DB)).state).toBe("READY");
+    await env.DB.prepare("DROP TABLE receipt_authority_requests").run();
+    const testEnv = runtimeEnv({
+      RECEIPT_AUTHORITY_ENVIRONMENT: "production",
+      RECEIPT_EVIDENCE_AUTHORITY: undefined,
+      OPS_PROJECTION_ENVIRONMENT: "production",
+      OPS_PROJECTION_DB: undefined,
+      OPS_PROJECTION_SIGNING_PKCS8_B64: undefined,
+      OPS_PROJECTION_VERIFY_SPKI_B64: undefined,
+    });
+    const vendor = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = fetchUrl(input);
+      if (url.origin !== "https://api.jquants.com") throw new Error("unexpected host");
+      const data = url.pathname === "/v2/markets/calendar"
+        ? [{ Date: "2024-06-03", HolDiv: "1" }] : [];
+      return Promise.resolve(Response.json({ data }));
+    });
+    // ACTIVE without its capability must reject before a paid fetch.
+    testEnv.RECEIPT_AUTHORITY_OPERATION_MODE = "ACTIVE";
+    await expect(worker.scheduled(scheduledAt(), testEnv, createExecutionContext()))
+      .rejects.toThrow("Receipt authority binding is not configured");
+    expect(vendor).not.toHaveBeenCalled();
+    testEnv.RECEIPT_AUTHORITY_OPERATION_MODE = "PENDING";
+    await worker.scheduled(scheduledAt(), testEnv, createExecutionContext());
+    expect(await env.DB.prepare(
+      "SELECT status,rows_seen FROM ingestion_validation WHERE dataset='markets_calendar'",
+    ).first()).toEqual({ status: "pass", rows_seen: 1 });
+    expect((await env.RAW_BUCKET.list()).objects.length).toBeGreaterThan(0);
+    expect((await env.STRUCTURED_BUCKET.list()).objects.length).toBeGreaterThan(0);
+    // Dropped Receipt table + absent Ops binding make accidental calls fail.
+    expect(await env.DB.prepare("SELECT status FROM ingestion_run_log").first())
+      .not.toEqual({ status: "running" });
+  });
+
   it("recovers a lost receipt response without rewriting a competing finalization", async () => {
     const digest = `sha256:${"b".repeat(64)}`;
     const completedAt = new Date(Date.now() + 1000).toISOString();

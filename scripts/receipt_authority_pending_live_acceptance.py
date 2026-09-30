@@ -900,6 +900,7 @@ def validate_live_pending_receipt_chain(
         "workers": accepted_workers,
         "active_key_count": 0,
         "authority_mode": "PENDING",
+        "caller_connected": pending["caller_connected"],
         "positive_operation_allowed": False,
         "research_eligible": False,
         "authorization_scope": "PENDING_LIVE_ACCEPTANCE_ONLY",

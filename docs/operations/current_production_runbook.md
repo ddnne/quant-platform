@@ -1,5 +1,15 @@
 # Current production runbook
 
+Premium base/production configuration is acquisition-only: `DB`, `RAW_BUCKET`,
+`STRUCTURED_BUCKET` and the three existing acquisition/export secrets. Receipt
+RPC, authority-evidence R2, Ops D1/signing and READY/Trader signing are not
+production deployment prerequisites. Their existing resources/evidence are not
+deleted. `PENDING` Cron performs ingestion only, without a Receipt recovery
+sweep or Ops publication; `ACTIVE` requires the authority binding. Staging
+retains its existing activation and signed-publication checks. Restore held
+production capabilities only with separately accepted activation; this source
+configuration does not itself prove deployment or reduced production billing.
+
 Production personal DRAFT deployment binds only `JQUANTS_ACQUISITION` among
 services. Live Gateway and Premium versions do not export the new Gateway,
 Receipt-input or READY-publication entrypoints. These optional capabilities
