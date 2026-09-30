@@ -16,6 +16,14 @@ export interface FetchEnv {
   JQUANTS_API_KEY: string;
 }
 
+export interface FetchOptions {
+  from?: string;
+  to?: string;
+  today?: string;
+  /** Internal Cron timestamp; never a caller-controlled acquisition timestamp. */
+  scheduledAt?: number;
+}
+
 const JQ_BASE = "https://api.jquants.com";
 
 // Per-HTTP-request retries on 429/5xx (matches Python ingestion/common/retry).
@@ -29,6 +37,50 @@ const RETRY_429_MAX_DELAY_MS = 3_000;
 /** Last completed JST day — "today" before close often yields empty `data`. */
 function defaultMarketDayJst(): string {
   return daysAgoJst(1);
+}
+
+/** Hourly Cron's acquisition plan, not a claim that the vendor finished updating.
+ * Publication and a later catchup replace all-dataset hourly refetches. 07:15
+ * revisits yesterday; older corrections require an explicit bounded collection.
+ * No weekday shortcut: derivatives publish the following day, and weekly
+ * investor statistics shift on holidays. Source: /ja/spec/data-update.
+ */
+function scheduledQueries(spec: DatasetSpec, scheduledAt: number): Record<string, string>[] {
+  const jst = new Date(scheduledAt + 9 * 3_600_000);
+  const hour = jst.getUTCHours();
+  const day = (offset = 0) => new Date(jst.getTime() + offset * 86_400_000)
+    .toISOString().slice(0, 10);
+  const financial = spec.id === "fins_summary" || spec.id === "fins_details";
+  const derivative = spec.path.startsWith("/v2/derivatives/");
+  let hours: readonly number[];
+  if (financial) hours = [hour]; // Premium disclosures remain hourly.
+  else if (spec.group === "edinet") hours = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18];
+  else if (derivative) hours = [3, 4, 7];
+  else switch (spec.id) {
+    case "equities_master": hours = [8, 9, 18, 20]; break;
+    case "equities_bars_daily_am": hours = [12, 13]; break;
+    case "fins_dividend": hours = [7, 12, 13, 14, 15, 16, 17, 18, 19, 20]; break;
+    case "fins_earnings_date": hours = [7, 10, 11, 20]; break;
+    case "equities_earnings_calendar": hours = [19, 20]; break;
+    case "markets_calendar": hours = [20]; break;
+    case "markets_margin_interest": hours = [7, 16, 17, 20]; break;
+    case "markets_short_sale_report":
+    case "markets_breakdown": hours = [7, 18, 20]; break;
+    default: hours = [7, 17, 20];
+  }
+  if (!hours.includes(hour)) return [];
+  // 24:30 final financial data and 27:00 derivatives belong to yesterday.
+  const target = day(hour === 7 || derivative || (financial && hour <= 1) ? -1 : 0);
+  if (spec.id === "equities_master") {
+    // A future date is clamped by JQ to the next business day's master.
+    return [{ date: day(hour >= 18 ? 1 : 0) }];
+  }
+  if (spec.id === "markets_margin_interest" && target >= "2026-09-28") {
+    return [{ published_date: target }];
+  }
+  return requestQueries(spec, spec.dateMode === "range"
+    ? { from: day(-5), to: day() }
+    : { today: target });
 }
 
 function inclusiveDates(from: string, to: string): string[] {
@@ -55,8 +107,11 @@ function inclusiveDates(from: string, to: string): string[] {
 
 export function requestQueries(
   spec: DatasetSpec,
-  opts: { from?: string; to?: string; today?: string },
+  opts: FetchOptions,
 ): Record<string, string>[] {
+  if (opts.scheduledAt !== undefined && !opts.from && !opts.to && !opts.today) {
+    return scheduledQueries(spec, opts.scheduledAt);
+  }
   // Vendor snapshot: AM is code+pagination_key; earnings is pagination_key. No date/from/to.
   if (spec.id === "equities_bars_daily_am" || spec.id === "equities_earnings_calendar") {
     return [{}];
@@ -187,7 +242,7 @@ export async function fetchOnePage(
 export async function fetchDataset(
   env: FetchEnv,
   spec: DatasetSpec,
-  opts: { from?: string; to?: string; today?: string },
+  opts: FetchOptions,
   fetchImpl: typeof fetch,
   limiter: RateLimiter,
   onPage?: (

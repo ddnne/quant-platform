@@ -80,6 +80,13 @@ charter for extra hostile-Python tests.
 
 ## Consolidation decisions
 
+- Extend the existing Premium workerd acquisition test to prove skipped data
+  causes no vendor request or validation row, current-day disclosures are
+  requested, AM stops refetching after its window and evening bars use today.
+  One small pure query-plan test covers midnight/final releases, Saturday
+  derivatives, publication-vs-application dates and unchanged explicit ranges.
+  Do not add a matrix copying every schedule constant or mock each storage call.
+
 - Personal execution and performance presentation share one positive, finite
   equity-to-return converter. Never delete an invalid observation and report
   the remaining path as a profitable shorter sample. The existing degenerate
