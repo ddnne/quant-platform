@@ -89,6 +89,24 @@ describe("fetchDataset", () => {
     vi.restoreAllMocks();
   });
 
+  it("plans publication dates across midnight without changing bounded manual requests", () => {
+    const scheduled = (id: string, at: string) => requestQueries(datasetById(id)!, {
+      scheduledAt: Date.parse(at),
+    });
+    // Friday's derivatives publish on Saturday; no weekday shortcut.
+    expect(scheduled("derivatives_bars_daily_options_225", "2026-10-03T03:15:00+09:00"))
+      .toEqual([{ date: "2026-10-02" }]);
+    expect(scheduled("fins_summary", "2026-10-01T01:15:00+09:00"))
+      .toEqual([{ date: "2026-09-30" }]);
+    expect(scheduled("markets_margin_interest", "2026-10-01T07:15:00+09:00"))
+      .toEqual([{ published_date: "2026-09-30" }]);
+    expect(scheduled("equities_master", "2026-10-02T18:15:00+09:00"))
+      .toEqual([{ date: "2026-10-02" }]); // Never prefetch tomorrow into CURRENT.
+    expect(requestQueries(datasetById("equities_bars_daily")!, {
+      from: "2020-09-30", to: "2020-10-01", scheduledAt: Date.parse("2026-10-01T02:15:00+09:00"),
+    })).toEqual([{ date: "2020-09-30" }, { date: "2020-10-01" }]);
+  });
+
   it("collects margin publications without changing historical date queries or nullable fields", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-28T08:00:00Z"));

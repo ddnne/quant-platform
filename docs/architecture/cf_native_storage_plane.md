@@ -200,7 +200,12 @@ See also:
 ## Implementation status (2026-08-12)
 
 - Deployed: `ingestion-premium` P0 write-path guard (`write_path_config.ts`, R2 JSONL).
-- Ops: `POST /v1/ops/archive-cold`, `POST /v1/ops/prune-changelog`.
+- Historical Ops only: `POST /v1/ops/archive-cold` and
+  `POST /v1/ops/prune-changelog` are retired in the 2026-09-30 source cleanup.
+  Repository caller inspection found only their dispatcher and dedicated mocks.
+  They now return 404 with no storage access. No persisted D1/R2 record was
+  deleted. Any future approved reclamation must use the bounded, evidence-based
+  runbook, not restore these untracked archive/delete endpoints.
 - Historical only: the JSONL-to-Parquet metadata bridge and Artifacts join-plan
   endpoints were removed in the 2026-09-29 source cleanup. Neither executed
   Parquet conversion or research; the latter still scanned legacy D1. No

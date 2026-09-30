@@ -18,6 +18,40 @@ Do not wait for a repo-wide rewrite before running a useful experiment. Keep
 logical changes separate in commits, but batch completed fixes into pushes to
 avoid repeated paid full builds. Main agent implements; reviewers only critique.
 
+### Scheduled acquisition
+
+`ingestion-premium/src/fetch_jq.ts` owns both query dates and Cron selection;
+the handler passes the scheduled timestamp, never backdating acquisition/PIT
+timestamps. Explicit manual and staging ranges keep their existing semantics.
+The hourly trigger remains; skipped datasets get no acquisition, validation or
+COMPLETE receipt. No new scheduler, DB, cache authority or resources are needed.
+
+The [official publication schedule](https://jpx-jquants.com/ja/spec/data-update)
+informs these JST hours (each at :15), including later catchup:
+
+| Data | Hours |
+| --- | --- |
+| Financial summary/details | Hourly; 00/01 and 07 revisit yesterday |
+| EDINET | 08–18 and 07 for yesterday |
+| Master | 08/09/18/20, current date only |
+| AM tip | 12/13 |
+| Dividend | 12–20 and 07 |
+| Earnings dates / earnings calendar tip | 10/11/20 and 07 / 19/20 |
+| Trading calendar | 20 |
+| Derivatives | 03/04/07, previous date, including Saturday |
+| Margin interest | 16/17/20 and 07, publication-date filter |
+| Short-sale report / breakdown | 18/20 and 07 |
+| Other daily/weekly datasets | 17/20 and 07 |
+
+07 revisits yesterday; existing range endpoints retain their five-day window.
+Weekly statistics are not restricted to Thursday because holidays shift release.
+Publication times are estimates, not completion evidence. Corrections outside
+these windows still require explicit bounded collection; this is not historical
+recertification. Query-plan reduction alone does not establish invoice savings.
+The current master SCD2 format dates observations at collection. Do not request
+tomorrow's membership; if JQ redirects a holiday query to a future `Date`, reject
+it before updating CURRENT. Raw acquisition stays available, not COMPLETE proof.
+
 ## Baseline and acceptance
 
 Tracked files at 9291e38a, before this batch, excluding lockfiles and generated

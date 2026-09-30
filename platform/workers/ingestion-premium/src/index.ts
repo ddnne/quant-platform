@@ -28,8 +28,6 @@ import {
   requireNaturalKeysV2Ready,
 } from "./natural_key_migration";
 import { RateLimiter } from "./rate_limit";
-import { handleArchiveCold } from "./ops_cold_archive";
-import { handlePruneChangelog } from "./ops_prune_changelog";
 import { handleExportPaths } from "./http_export";
 import { json } from "./http_json";
 import { ingestionTokenMatches } from "./ingestion_token";
@@ -44,7 +42,7 @@ import {
   type MasterScd2UniverseEvidence,
   type AvailableBounds,
 } from "./persist_records";
-import { fetchDataset, requestQueries } from "./fetch_jq";
+import { fetchDataset, requestQueries, type FetchOptions } from "./fetch_jq";
 import {
   runValuationBackfillTick,
   valuationIdleForExactFive,
@@ -323,6 +321,12 @@ type StructuredProgress = {
   logical_rows: number;
 };
 
+interface IngestionOptions extends FetchOptions {
+  dataset?: string;
+  operation?: string;
+  resumeAcquired?: boolean;
+}
+
 async function readAcquiredRaw(
   env: Env,
   dataset: string,
@@ -439,7 +443,7 @@ async function writeStructuredProgress(
 async function persistAcquiredStructured(
   env: Env,
   spec: DatasetSpec,
-  opts: { from?: string; to?: string; today?: string; operation?: string; resumeAcquired?: boolean },
+  opts: IngestionOptions,
   runId: number,
   acquired: AcquiredRaw,
   startedAt: string,
@@ -635,13 +639,7 @@ async function persistAcquiredStructured(
 async function ingestOne(
   env: Env,
   spec: DatasetSpec,
-  opts: {
-    from?: string;
-    to?: string;
-    today?: string;
-    operation?: string;
-    resumeAcquired?: boolean;
-  },
+  opts: IngestionOptions,
   fetchImpl: typeof fetch,
   runId: number | null,
   limiter: RateLimiter,
@@ -959,14 +957,7 @@ async function lastRunSummary(env: Env): Promise<RunSummary | null> {
 
 async function runIngestion(
   env: Env,
-  opts: {
-    from?: string;
-    to?: string;
-    today?: string;
-    dataset?: string;
-    operation?: string;
-    resumeAcquired?: boolean;
-  },
+  opts: IngestionOptions,
   triggeredBy: "cron" | "manual",
   fetchImpl: typeof fetch,
 ): Promise<RunSummary> {
@@ -1003,14 +994,10 @@ async function runIngestion(
   const selectedSpecs: DatasetSpec[] = opts.dataset
     ? (isPremiumCore(opts.dataset) ? [datasetById(opts.dataset)!] : [])
     : PREMIUM_CORE_DATASETS;
-  // The AM endpoint only exposes a tip, published around noon JST. Before
-  // then it is absent or yesterday's tip. Manual collection remains explicit.
-  // https://jpx-jquants.com/ja/spec/data-update
   const skipped: NonNullable<RunSummary["skipped"]> = [];
   const specs = selectedSpecs.filter((spec) => {
-    if (triggeredBy === "cron" && !opts.dataset &&
-        spec.id === "equities_bars_daily_am" && Number(startedAt.slice(11, 13)) < 12) {
-      skipped.push({ dataset: spec.id, reason: "BEFORE_SAME_DAY_PUBLICATION" });
+    if (opts.scheduledAt !== undefined && requestQueries(spec, opts).length === 0) {
+      skipped.push({ dataset: spec.id, reason: "OUTSIDE_PUBLICATION_WINDOW" });
       return false;
     }
     return true;
@@ -1472,17 +1459,11 @@ export default {
     if (url.pathname === "/v1/run") return handleRun(env, request, fetch);
     const exportResponse = await handleExportPaths(request, env);
     if (exportResponse) return exportResponse;
-    if (url.pathname === "/v1/ops/archive-cold") {
-      return handleArchiveCold(request, env);
-    }
-    if (url.pathname === "/v1/ops/prune-changelog") {
-      return handlePruneChangelog(request, env);
-    }
     return json({ error: "not found" }, 404);
   },
 
   async scheduled(
-    _controller: ScheduledController, env: Env, _ctx: ExecutionContext,
+    controller: ScheduledController, env: Env, _ctx: ExecutionContext,
   ): Promise<void> {
     if (env.RECEIPT_AUTHORITY_ENVIRONMENT === "staging") {
       const ingest = (
@@ -1547,7 +1528,7 @@ export default {
         }));
       }
     } else {
-      await runIngestion(env, {}, "cron", fetch);
+      await runIngestion(env, { scheduledAt: controller.scheduledTime }, "cron", fetch);
     }
     // Acquisition-only/PENDING deployments neither sweep Receipt D1 metadata
     // nor attempt projection publication. No new activation flag or fallback.
