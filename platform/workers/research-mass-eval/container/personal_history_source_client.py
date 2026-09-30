@@ -1147,23 +1147,27 @@ class PersonalHistorySourceClient:
         ):
             raise PersonalHistoryError("stored bars object request rejected")
         url = f"{self.r2_origin}/{source.key}"
+        index = self._structured_indexes.get(source)
+        window = index.window(month) if index is not None and month is not None else None
+        if window == (0, source.size):
+            window = None
+        length = source.size if window is None else window[1] - window[0]
         cached = self._structured_reuse_entries.get(source)
         if cached is not None:
             with gzip.open(cached, "rb") as stream:
+                if window is not None:
+                    # Reuse the same verified month spans as the R2 range path.
+                    # The scratch transaction checks selected bytes before commit.
+                    stream.seek(window[0])
+                    return stream.read(length), window[0]
                 body = stream.read(source.size + 1)
             if len(body) != source.size or hashlib.sha256(body).hexdigest() != source.sha256:
                 raise PersonalHistoryError("stored bars reuse size/digest mismatch")
             return body, None
         headers = {"accept-encoding": "identity"}
-        index = self._structured_indexes.get(source)
-        window = index.window(month) if index is not None and month is not None else None
-        if window == (0, source.size):
-            window = None
-        length = source.size
         if window is not None:
             start, end = window
             headers["range"] = f"bytes={start}-{end - 1}"
-            length = end - start
         request = urllib.request.Request(url, headers=headers)
         with self._r2_urlopen(request, timeout=CACHE_GET_TIMEOUT_S) as response:
             if int(response.status) != (206 if window is not None else 200) or response.geturl() != url:

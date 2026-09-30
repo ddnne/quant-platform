@@ -288,28 +288,36 @@ def test_stored_bars_month_scope_retains_only_requested_rows_but_validates_all(t
             response.headers = response_headers
             response.url = request.full_url
             return response
-    monkeypatch.setattr(client_mod, "STRUCTURED_REUSE_MAX_BYTES", 0)
-    client = client_mod.PersonalHistorySourceClient(
-        environment="staging", period_end="2020-02-28", cache_only=True,
-        spool_path=tmp_path / "range-reader.sqlite", r2_opener=R2(),
-        structured_bar_sources={"*": (source,)},
-    )
-    try:
-        for day in ("2020-01-06", "2020-02-03"):
-            fetched = client.fetch_dataset_evidenced("equities_bars_daily", date=day)
-            assert fetched.rows == tuple(row for row in rows if row["payload"]["Date"] == day)
-            assert fetched.structured_objects[0]["sha256"] == source.sha256
-            client.release_acquired_raw()
-        assert len(downloaded) == 3  # unchanged: first verification + two monthly reads
-        assert downloaded[0] == len(body)
-        assert 0 < downloaded[2] < downloaded[1] < len(body)
-        assert client.cache_metrics()["structured_download_bytes"] == sum(downloaded)
-        corrupt_range = True
-        with pytest.raises(PersonalHistoryError, match="identity mismatch"):
-            client.fetch_dataset_evidenced("equities_bars_daily", date="2020-02-03")
-        assert client.spool.usage()[0] == 0
-    finally:
-        client.close()
+    for reuse_bytes in (0, 1024 ** 3):
+        monkeypatch.setattr(client_mod, "STRUCTURED_REUSE_MAX_BYTES", reuse_bytes)
+        downloaded.clear()
+        corrupt_range = False
+        client = client_mod.PersonalHistorySourceClient(
+            environment="staging", period_end="2020-02-28", cache_only=True,
+            spool_path=tmp_path / "range-reader.sqlite", r2_opener=R2(),
+            structured_bar_sources={"*": (source,)},
+        )
+        try:
+            for day in ("2020-01-06", "2020-02-03"):
+                fetched = client.fetch_dataset_evidenced("equities_bars_daily", date=day)
+                assert fetched.rows == tuple(row for row in rows if row["payload"]["Date"] == day)
+                assert fetched.structured_objects[0]["sha256"] == source.sha256
+                client.release_acquired_raw()
+            assert downloaded[0] == len(body)
+            if reuse_bytes:
+                assert len(downloaded) == 1  # no refetch after month scratch reset
+                cached = client._structured_reuse_entries[source]
+                cached.write_bytes(client_mod.gzip.compress(body.replace(b"101", b"102"), mtime=0))
+            else:
+                assert len(downloaded) == 3  # first verification + two monthly ranges
+                assert 0 < downloaded[2] < downloaded[1] < len(body)
+                corrupt_range = True
+            assert client.cache_metrics()["structured_download_bytes"] == sum(downloaded)
+            with pytest.raises(PersonalHistoryError, match="identity mismatch"):
+                client.fetch_dataset_evidenced("equities_bars_daily", date="2020-02-03")
+            assert client.spool.usage()[0] == 0
+        finally:
+            client.close()
 
 
 class _Response(io.BytesIO):
