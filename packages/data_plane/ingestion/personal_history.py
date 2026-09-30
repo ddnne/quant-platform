@@ -31,6 +31,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import quote
 
 from data_contracts.identity import canonical_json, session_close_jst
+from data_contracts.market_sessions import is_tse_full_session
 from data_contracts.personal_history_compact import (
     DEFAULT_DAILY_MIN_OBSERVED_BAR_RATIO,
     DEFAULT_MIN_OBSERVED_BAR_RATIO,
@@ -1927,8 +1928,9 @@ class PersonalHistoryHydrator:
             holiday = str(
                 _pick(payload, "HolidayDivision", "HolDiv") or ""
             )
-            if holiday == "1":
-                trading.append(str(row["event_time"])[:10])
+            day = str(row["event_time"])[:10]
+            if is_tse_full_session(day, holiday):
+                trading.append(day)
         trading = sorted(set(trading))
         if not trading:
             raise PersonalHistoryError("markets_calendar has no observed trading days")

@@ -18,6 +18,7 @@ from data_contracts.personal_history_compact import (
     compact_history_state,
 )
 from ingestion.personal_history import PERSONAL_HISTORY_FORMAT
+from data_contracts.market_sessions import is_tse_full_session
 from research.eval_universe import (
     EVAL_UNIVERSE_POOL,
     UNIVERSE_MIN_BAR_DAYS,
@@ -440,7 +441,7 @@ def _calendar_from_snapshot(
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
             raise RuntimeError("markets_calendar fact date is invalid")
         facts.append({"Date": day, "HolidayDivision": holiday})
-        if holiday == "1":
+        if is_tse_full_session(day, holiday):
             trading.append(day)
     trading = sorted(set(trading))
     if not trading:

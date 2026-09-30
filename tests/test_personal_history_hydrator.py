@@ -1343,6 +1343,59 @@ def test_partial_calendar_window_is_not_silently_observed() -> None:
         )
 
 
+def test_documented_halt_is_not_a_session_but_ordinary_missing_bars_fail(tmp_path) -> None:
+    from core.engine import _trading_days
+    from pit.universe_pit import resolve_universe_day_slices
+
+    class HaltClient(_HistoryClient):
+        @staticmethod
+        def _fins(code):
+            return [{"Code": code, "DiscDate": "2020-09-01", "DiscTime": "09:00:00",
+                     "DiscNo": "synthetic-" + code, "EarningsPerShare": 12.0}]
+
+        def _bars(self, day):
+            assert day != "2020-10-01", "known whole-day halt must not request bars"
+            return super()._bars(day)
+
+    plan = build_personal_history_plan(
+        period_start="2020-09-30", period_end="2020-10-02",
+        lookback_sessions=0, today=date(2025, 2, 1),
+    )
+    store = SqliteStore(tmp_path / "halt.sqlite")
+    client = HaltClient()
+    try:
+        hydrator = PersonalHistoryHydrator(client=client, store=store, plan=plan)
+        hydrator.hydrate()
+        expected = ["2020-09-30", "2020-10-02"]
+        assert [row[0] for row in store._conn.execute(
+            "SELECT DISTINCT date FROM personal_history_compact_bars ORDER BY date"
+        )] == expected
+        # Original business-calendar evidence is retained, not rewritten as a holiday.
+        halt = next(row for row in _rows(store, "markets_calendar")
+                    if row["event_time"].startswith("2020-10-01"))
+        assert json.loads(halt["payload"])["HolidayDivision"] == "1"
+        assert _trading_days(
+            expected[0], expected[-1], db_path=store.path,
+            calendar_as_of="2026-09-30T12:00:00+09:00",
+        ) == expected
+        slices = resolve_universe_day_slices(
+            store.path, period_start=expected[0], period_end=expected[-1],
+            as_of_for_day={day: day + "T11:30:00+09:00"
+                           for day in (expected[0], "2020-10-01", expected[-1])},
+        )
+        assert [item.decision_date for item in slices] == expected
+    finally:
+        store.close()
+
+    missing = frozenset(("2020-10-02", code) for code in ("1001", "1002", "1003", "9001"))
+    store = SqliteStore(tmp_path / "missing.sqlite")
+    try:
+        with pytest.raises(PersonalHistoryError, match="2020-10-02 has no rows"):
+            PersonalHistoryHydrator(client=HaltClient(omit_bars=missing), store=store, plan=plan).hydrate()
+    finally:
+        store.close()
+
+
 def test_managed_database_is_rejected_before_hydrator_writes(tmp_path):
     db = tmp_path / "managed.sqlite"
     store = SqliteStore(db)

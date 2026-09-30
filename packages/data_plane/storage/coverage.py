@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from data_contracts.coverage import coverage_contract_for
+from data_contracts.market_sessions import is_tse_full_session
 from ingestion.jquants.catalog import PREMIUM_CORE_DATASETS, list_datasets
 
 from . import matrix
@@ -327,7 +328,7 @@ def _calendar_dates(
     period_start: str | None = None,
     period_end: str | None = None,
 ) -> set[str]:
-    """Dates from ``markets_calendar``. ``trading_only`` keeps HolidayDivision=1."""
+    """Observed calendar dates; ``trading_only`` selects full TSE cash sessions."""
     dates: set[str] = set()
     window = ""
     params: list[object] = []
@@ -373,7 +374,7 @@ def _calendar_dates(
             if trading_only and str(div) != "1":
                 continue
             dates.add(str(day))
-    return dates
+    return {day for day in dates if is_tse_full_session(day, "1")} if trading_only else dates
 
 
 def _check_c1(conn: sqlite3.Connection, datasets: Iterable[str]) -> list[CheckResult]:

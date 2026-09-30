@@ -104,6 +104,26 @@ the requested whole-repository reduction or a 50% target is complete.
 
 ## Measured active-path consolidation
 
+Full TSE cash sessions use one shared predicate in history hydration, PIT
+universe selection, compiled scope, snapshot range checks, Coverage gap checks,
+the index-volatility equity panel and the engine.
+The [official 2020-10-01 whole-day halt](https://www.jpx.co.jp/news/1030/20201001-04.html)
+is not a price-data gap. Retain the original calendar evidence and exclude
+this documented halt from the execution session axis: do not fabricate prices,
+zero returns or empty COMPLETE segments. An ordinary day's missing bars still
+fail. Business dates for master/settlement and derivatives remain distinct;
+this is not a general empty-day skip or permission to retry a paid run.
+
+The cloud acquisition spool selects individual symbols and exact dates through
+its existing indexes. SQLite's month-first plan otherwise scans unrelated rows
+again for each financial series. Month/PIT predicates, ordering and provenance
+are unchanged; range-only reads retain planner choice. No new index or cache.
+On a synthetic 6,000-row / three-month fixture, one symbol selection fell from
+36,274 to 225 SQLite VM steps and one exact-date selection from 36,206 to 121.
+Rows and provenance hashes matched before/after. One real SQLite regression
+bounds work rather than asserting SQL text or wall-clock timing. These are
+synthetic measurements, not production runtime or invoice savings.
+
 The stored-bars reader now reuses its job-local month offsets for one bounded
 R2 Range GET when an object is not in the existing 1 GiB compressed cache.
 Initial whole-object verification is retained; selected-span hashes are derived

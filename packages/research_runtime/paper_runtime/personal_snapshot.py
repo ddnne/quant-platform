@@ -19,6 +19,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from data_contracts.market_sessions import is_tse_full_session
 from pit._draft_storage import (
     PersonalSnapshotError,
     _SHA256_RE,
@@ -235,8 +236,9 @@ def _observed_dataset_evidence(
                 ),
                 "",
             )
-            if holiday == "1":
-                trading_days.append(str(row["event_date"]))
+            day = str(row["event_date"])
+            if is_tse_full_session(day, holiday):
+                trading_days.append(day)
         if not trading_days:
             raise PersonalSnapshotError(
                 "markets_calendar has no observed trading day in the requested period"

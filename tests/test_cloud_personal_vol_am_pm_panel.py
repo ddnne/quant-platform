@@ -633,6 +633,11 @@ def test_compact_v7_reads_compact_bars_without_source_predicate(
     )
     try:
         assert job._compact_v7_equity_bars_table(connection) == PERSONAL_HISTORY_COMPACT_BARS_TABLE
+        connection.execute(
+            "INSERT INTO jquants_records(source,dataset,event_time,payload) "
+            "VALUES ('jquants','markets_calendar','2020-10-01T00:00:00+09:00',?)",
+            (json.dumps({"Date": "2020-10-01", "HolidayDivision": "1"}),),
+        )
         trading, meta = job._calendar_from_snapshot(connection)
         assert trading == dates
         assert meta["checkpoints"]
@@ -652,7 +657,7 @@ def test_compact_v7_reads_compact_bars_without_source_predicate(
         ).fetchone()[0] == 0
         assert connection.execute(
             "SELECT COUNT(*) FROM jquants_records WHERE dataset='markets_calendar'"
-        ).fetchone()[0] == len(dates)
+        ).fetchone()[0] == len(dates) + 1
         assert connection.execute(
             "SELECT COUNT(*) FROM jquants_records WHERE dataset='fins_summary'"
         ).fetchone()[0] == 1
