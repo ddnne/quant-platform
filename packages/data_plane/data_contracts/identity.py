@@ -178,7 +178,8 @@ def _pick(
 def natural_key_fields(row: Mapping[str, Any], dataset_id: str) -> dict[str, Any]:
     """Return the complete contract-selected key before serialization.
 
-    Composite keys are all-or-nothing. A missing governed discriminator is a
+    Composite keys are all-or-nothing, except contract-declared explicit nulls.
+    A missing governed discriminator is a
     malformed structured product and is rejected, matching the Worker ingest
     authority. Hash fallback remains available only to ungoverned add-on
     normalizers through :func:`sha256_fallback`.
@@ -187,7 +188,12 @@ def natural_key_fields(row: Mapping[str, Any], dataset_id: str) -> dict[str, Any
     picked: dict[str, Any] = {}
     for field in contract.natural_key_fields:
         value = _pick(row, contract, field)
-        if value is None or value == "":
+        explicit_nullable = field in contract.nullable_natural_key_fields and any(
+            key in row and row[key] is None
+            for candidate in contract.aliases_for(field)
+            for key in (candidate, candidate.lower())
+        )
+        if value is None and not explicit_nullable:
             raise ValueError(
                 f"governed natural-key field {field} is absent; "
                 "structured product is rejected"

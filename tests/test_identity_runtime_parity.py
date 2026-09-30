@@ -88,6 +88,11 @@ def test_python_and_worker_share_canonical_identity_and_availability_semantics()
             "markets_short_ratio",
             {"Date": "2025-04-01", "S33": "0050", "Name": "電気・ガス"},
         ),
+        ("edinet_major_shareholders", {"Code": "86970", "DocId": "S0000001"}),
+        ("edinet_major_shareholders", {"Code": None, "DocId": "S0000001"}),
+        ("edinet_major_shareholders", {"Code": None, "DocId": "S0000002"}),
+        ("edinet_major_shareholders", {"DocId": "S0000001"}),
+        ("edinet_major_shareholders", {"Code": None}),
         (
             "markets_short_ratio",
             {
@@ -154,6 +159,12 @@ def test_python_and_worker_share_canonical_identity_and_availability_semantics()
                 {"status": "rejected", "error": str(error)}
             )
     assert worker_results == python_results
+    assert [item.get("key") for item in python_results[2:5]] == [
+        '{"Code":"86970","DocId":"S0000001"}',
+        '{"Code":null,"DocId":"S0000001"}',
+        '{"Code":null,"DocId":"S0000002"}',
+    ]
+    assert [item["status"] for item in python_results[5:7]] == ["rejected", "rejected"]
     assert python_results[-1] == {
         "status": "rejected",
         "error": (

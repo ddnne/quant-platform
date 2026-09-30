@@ -379,6 +379,7 @@
       "group": "edinet",
       "date_mode": "today",
       "natural_key_fields": ["Code", "DocId"],
+      "nullable_natural_key_fields": ["Code"],
       "event_time_policy": "explicit_timestamp_field",
       "event_time_fields": ["SubDate", "SubTime"],
       "available_at_policy": "explicit_timestamp_field",
@@ -389,7 +390,7 @@
       "bulk": "api",
       "params": ["code", "date"],
       "code_param": true,
-      "assumption": "DocId identifies the filing and SubDate+SubTime is its explicit submission timestamp."
+      "assumption": "DocId identifies the filing and SubDate+SubTime is its explicit submission timestamp. Unlisted-company filings may explicitly provide Code=null; retain that null with the required DocId without changing listed-company keys. An omitted Code or missing DocId remains invalid. Source: https://jpx-jquants.com/ja/spec/edinet-major-shareholders"
     },
     {
       "dataset_id": "edinet_cross_shareholdings",
