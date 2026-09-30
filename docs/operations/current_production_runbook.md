@@ -10,6 +10,17 @@ retains its existing activation and signed-publication checks. Restore held
 production capabilities only with separately accepted activation; this source
 configuration does not itself prove deployment or reduced production billing.
 
+The existing ACTIVE staging Receipt chain uses the same canonical
+`cloudflare_binding_manifest.py --deploy-tagged --worker <worker> --env staging`
+entrypoint, in order: `ingestion-secrets`, `receipt-evidence-authority`, then
+`ingestion-premium`, all from the same reviewed merged SHA. It derives the
+existing `ra-s-a-`, `ra-s-r-`, `ra-s-c-` tags and Receipt-chain messages; do not use
+a bare-SHA Wrangler deploy for these staging Workers. This preserves existing
+keys/bindings, does not activate anything, and does not authorize a rollout.
+Do not treat an intermediate mixed-version chain as accepted. Production
+acquisition-only Premium retains bare-SHA annotations; production authority and
+Secrets remain excluded from this common entrypoint.
+
 Production personal DRAFT deployment binds only `JQUANTS_ACQUISITION` among
 services. Live Gateway and Premium versions do not export the new Gateway,
 Receipt-input or READY-publication entrypoints. These optional capabilities

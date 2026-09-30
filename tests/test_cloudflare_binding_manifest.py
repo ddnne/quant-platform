@@ -1394,16 +1394,19 @@ def test_parse_selected_deployment_requires_one_100_percent_version() -> None:
 def test_parse_selected_version_requires_id_and_exact_sha_annotations() -> None:
     sha = "a" * 40
     version_id = "9d40fa96-e5c6-409e-b7bd-d66a3877afb2"
+    target = {"worker": "ingestion-premium", "environment": "production"}
     manifest_module.parse_selected_version(
         _version_view_payload(version_id=version_id, sha=sha),
         version_id=version_id,
         expected_sha=sha,
+        **target,
     )
     with pytest.raises(ValueError, match="does not match selected version"):
         manifest_module.parse_selected_version(
             _version_view_payload(version_id="other", sha=sha),
             version_id=version_id,
             expected_sha=sha,
+            **target,
         )
     with pytest.raises(ValueError, match="exact merged SHA"):
         manifest_module.parse_selected_version(
@@ -1413,12 +1416,14 @@ def test_parse_selected_version_requires_id_and_exact_sha_annotations() -> None:
             ),
             version_id=version_id,
             expected_sha=sha,
+            **target,
         )
     with pytest.raises(ValueError, match="exact merged SHA"):
         manifest_module.parse_selected_version(
             _version_view_payload(version_id=version_id, sha="b" * 40),
             version_id=version_id,
             expected_sha=sha,
+            **target,
         )
     with pytest.raises(ValueError, match="exact merged SHA"):
         manifest_module.parse_selected_version(
@@ -1432,6 +1437,17 @@ def test_parse_selected_version_requires_id_and_exact_sha_annotations() -> None:
             ),
             version_id=version_id,
             expected_sha=sha,
+            **target,
+        )
+    # The bare-SHA annotation that works in production breaks staging RPC
+    # provenance. Reject it rather than claiming the staged chain is deployed.
+    with pytest.raises(ValueError, match="exact merged SHA"):
+        manifest_module.parse_selected_version(
+            _version_view_payload(version_id=version_id, sha=sha),
+            version_id=version_id,
+            expected_sha=sha,
+            worker="ingestion-premium",
+            environment="staging",
         )
 
 
@@ -2078,11 +2094,15 @@ def test_deploy_tagged_production_uses_pinned_executable_cwd_and_env(
 
 
 @pytest.mark.parametrize(
-    "worker,extra_env",
+    "worker,role,tag_prefix,extra_env",
     (
-        ("ingestion-premium", {}),
+        ("ingestion-secrets", "acquisition", "ra-s-a-", {}),
+        ("receipt-evidence-authority", "authority", "ra-s-r-", {}),
+        ("ingestion-premium", "caller", "ra-s-c-", {}),
         (
             "research-mass-eval",
+            None,
+            "",
             {
                 "WORKERS_CI": "1",
                 "WORKERS_CI_BUILD_UUID": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -2099,11 +2119,23 @@ def test_deploy_tagged_staging_omits_env_selector(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     worker: str,
+    role: str | None,
+    tag_prefix: str,
     extra_env: dict[str, str],
 ) -> None:
     _official_main(monkeypatch)
     executable = _prepare_pin(tmp_path, monkeypatch)
-    runner = _canonical_runner(executable=executable)
+    tag = tag_prefix + _DEPLOY_SHA
+    message = (
+        f"quant-platform receipt-chain ACTIVE staging {role} source {_DEPLOY_SHA}"
+        if role else _DEPLOY_SHA
+    )
+    runner = _canonical_runner(
+        executable=executable,
+        version_payloads=[_version_view_payload(annotations={
+            "workers/tag": tag, "workers/message": message,
+        })],
+    )
     tagged_kwargs: dict[str, Any] = {}
     if worker == "ingestion-premium":
         secrets_file = tmp_path / "premium-staging-secrets.json"
@@ -2130,6 +2162,8 @@ def test_deploy_tagged_staging_omits_env_selector(
     )
     assert "wrangler.staging.toml" in deploy
     assert "--env" not in deploy
+    assert deploy[deploy.index("--tag") + 1] == tag
+    assert deploy[deploy.index("--message") + 1] == message
     if worker == "ingestion-premium":
         assert "--secrets-file" in deploy
         secrets_at = deploy.index("--secrets-file")

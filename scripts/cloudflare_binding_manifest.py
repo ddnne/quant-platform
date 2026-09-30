@@ -1962,6 +1962,29 @@ def _generic_wrapper_workers() -> frozenset[str]:
     )
 
 
+def _staging_receipt_role(worker: str, environment: str) -> str | None:
+    from scripts.receipt_authority_pending_live_acceptance import CHAIN
+
+    if environment == "staging":
+        return next((role for role, name in CHAIN if name == worker), None)
+    return None
+
+
+def _deployment_annotations(worker: str, environment: str, sha: str) -> tuple[str, str]:
+    from scripts.receipt_authority_pending_live_acceptance import (
+        deployment_message,
+        version_tag,
+    )
+
+    role = _staging_receipt_role(worker, environment)
+    if role is not None:
+        return (
+            version_tag(role, environment, sha, "ACTIVE"),
+            deployment_message(role, environment, sha, "ACTIVE"),
+        )
+    return sha, sha
+
+
 def _status_argv(
     executable: str, config: str, environment_args: tuple[str, ...]
 ) -> list[str]:
@@ -2026,6 +2049,8 @@ def parse_selected_version(
     *,
     version_id: str,
     expected_sha: str,
+    worker: str,
+    environment: str,
 ) -> None:
     if not _SHA40.fullmatch(expected_sha):
         raise ValueError("expected SHA is not a clean merged Git SHA")
@@ -2033,11 +2058,12 @@ def parse_selected_version(
     if document.get("id") != version_id:
         raise ValueError("version document id does not match selected version")
     annotations = document.get("annotations")
+    tag, message = _deployment_annotations(worker, environment, expected_sha)
     if not isinstance(annotations, dict):
         raise ValueError("selected version tag/message is not the exact merged SHA")
     if (
-        annotations.get("workers/tag") != expected_sha
-        or annotations.get("workers/message") != expected_sha
+        annotations.get("workers/tag") != tag
+        or annotations.get("workers/message") != message
     ):
         raise ValueError("selected version tag/message is not the exact merged SHA")
 
@@ -2052,6 +2078,8 @@ def _observe_selected_version(
     run: Any,
     command_env: Mapping[str, str] | None,
     expected_sha: str,
+    worker: str,
+    environment: str,
 ) -> dict[str, Any]:
     viewed = _run_pinned(
         run,
@@ -2066,6 +2094,8 @@ def _observe_selected_version(
         viewed.stdout or "",
         version_id=version_id,
         expected_sha=expected_sha,
+        worker=worker,
+        environment=environment,
     )
     return _load_json_object(viewed.stdout or "", label="version observation")
 
@@ -2102,10 +2132,15 @@ def _canonical_deploy_target(
         raise ValueError("canonical deploy target is unknown or inactive")
     if environment not in _SUPPORTED_DEPLOY_ENVIRONMENTS:
         raise ValueError("canonical deploy environment is unsupported")
-    if worker not in _generic_wrapper_workers():
+    staging_receipt = _staging_receipt_role(worker, environment) is not None
+    if worker not in _generic_wrapper_workers() and not staging_receipt:
         raise ValueError(
             f"{worker}: generic tagged deploy is not the specialized or PENDING entrypoint"
         )
+    if staging_receipt:
+        # Reuse the existing local validator for the already ACTIVE staging
+        # chain. This path never activates keys or allows production authority.
+        build_manifest()
     directory = WORKER_ROOT / worker
     if directory.is_symlink() or not directory.is_dir():
         raise ValueError(f"{worker}: worker directory is absent or indirect")
@@ -2369,6 +2404,7 @@ def deploy_tagged(
     sha = _clean_merged_sha(runner=run)
     if not _SHA40.fullmatch(sha):
         raise ValueError("merged SHA is not 40 hex")
+    tag, message = _deployment_annotations(worker, environment, sha)
     if (
         target["container_builds"]
         and process_env.get("WORKERS_CI_COMMIT_SHA") != sha
@@ -2459,9 +2495,9 @@ def deploy_tagged(
                     "--config",
                     target["config_name"],
                     "--tag",
-                    sha,
+                    tag,
                     "--message",
-                    sha,
+                    message,
                     *target["environment_args"],
                     *mutate_secrets,
                 ],
@@ -2494,6 +2530,8 @@ def deploy_tagged(
                 run=run,
                 command_env=mutate_env,
                 expected_sha=sha,
+                worker=worker,
+                environment=environment,
             )
             live_inventory = _live_version_module_inventory(
                 account_id=target["account_id"],
@@ -2524,6 +2562,8 @@ def deploy_tagged(
                 run=run,
                 command_env=mutate_env,
                 expected_sha=sha,
+                worker=worker,
+                environment=environment,
             )
             modules_reread = _live_version_module_inventory(
                 account_id=target["account_id"],
