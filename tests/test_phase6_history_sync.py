@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -150,102 +149,10 @@ def test_raw_retention_completeness_accepts_acquired_not_as_coverage(
     store.close()
 
 
-def test_change_feed_resumes_by_server_side_sequence(
-    tmp_path, monkeypatch, sync_module
-):
-    store = SqliteStore(tmp_path / "feed.sqlite")
-    calls: list[int] = []
-    versions = [
-        {"change_seq": 1, "table_name": "jquants_records", **_record(
-            100, ingested_at="2025-04-02T01:00:00+09:00"
-        )},
-        {"change_seq": 2, "table_name": "jquants_records", **_record(
-            101, ingested_at="2025-04-02T02:00:00+09:00"
-        )},
-    ]
-
-    def fake_get(client, url: str, token: str) -> dict:
-        query = parse_qs(urlparse(url).query)
-        after = int(query["after_seq"][0])
-        calls.append(after)
-        page = [row for row in versions if row["change_seq"] > after][:1]
-        next_seq = page[-1]["change_seq"] if page else after
-        return {
-            "format": "jquants-change-feed/v1",
-            "after_seq": after,
-            "rows": page,
-            "next_seq": next_seq,
-            "has_more": next_seq < 2,
-            "limit": 1,
-        }
-
-    monkeypatch.setattr(sync_module, "_http_get_json", fake_get)
-    result = sync_module._sync_changes(
-        store, object(), "https://fixture.invalid", "token", page_limit=1
-    )
-    assert result == (2, 2, 2, 2)
-    assert calls == [0, 1]
-    assert store.count("jquants_records") == 1
-    assert store.count("jquants_records_revisions") == 1
-
-    calls.clear()
-    result = sync_module._sync_changes(
-        store, object(), "https://fixture.invalid", "token", page_limit=1
-    )
-    assert result == (1, 0, 0, 2)
-    assert calls == [2]
-    store.close()
 
 
-def test_change_feed_rejects_non_monotonic_sequence(
-    tmp_path, monkeypatch, sync_module
-):
-    store = SqliteStore(tmp_path / "bad-feed.sqlite")
-    monkeypatch.setattr(
-        sync_module,
-        "_http_get_json",
-        lambda *_: {
-            "format": "jquants-change-feed/v1",
-            "rows": [
-                {"change_seq": 1, "table_name": "jquants_records", **_record(
-                    100, ingested_at="2025-04-02T01:00:00+09:00"
-                )},
-                {"change_seq": 1, "table_name": "jquants_records", **_record(
-                    101, ingested_at="2025-04-02T02:00:00+09:00"
-                )},
-            ],
-            "next_seq": 1,
-            "has_more": False,
-        },
-    )
-    with pytest.raises(ValueError, match="strictly increasing"):
-        sync_module._sync_changes(
-            store, object(), "https://fixture.invalid", "token", page_limit=10
-        )
-    assert sync_module._last_change_seq(store) == 0
-    store.close()
 
 
-def test_export_max_pages_guard(tmp_path, monkeypatch, sync_module):
-    store = SqliteStore(tmp_path / "pages.sqlite")
-
-    def endless(client, url: str, token: str) -> dict:
-        query = parse_qs(urlparse(url).query)
-        cursor = int(query.get("cursor", ["0"])[0])
-        return {
-            "table": "jquants_records",
-            "rows": [],
-            "has_more": True,
-            "next_cursor": cursor + 1,
-        }
-
-    monkeypatch.setattr(sync_module, "_http_get_json", endless)
-    with pytest.raises(ValueError, match="max_pages=2"):
-        sync_module._sync_table(
-            store, object(), "https://fixture.invalid", "token",
-            "jquants_records", page_limit=10, since=None, max_pages=2,
-        )
-    store.close()
 
 
 def _seed_snapshot_control(store: SqliteStore, datasets: tuple[str, ...]) -> None:

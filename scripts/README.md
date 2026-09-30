@@ -12,6 +12,9 @@ CLIs (`issue_receipts_parallel`, `publish_ops_projection`, `export_ops_projectio
 CLIs under `scripts/` and `scripts/ops/` use the same `_bootstrap` finder.
 Current cloud DRAFT batches use `POST /v1/personal-research-batch` with their
 authorized snapshot. Controlled Pilot retains its separate READY-bound entry.
+The mirror CLI's legacy HTTP `--url` transport is retired. Offline tests import
+synthetic SQLite artifacts; current research reads R2 on Cloudflare. The retained
+private-mirror verifier is not permission to export authentic history to a Mac.
 The legacy `/v1/daily-path`, `/v1/mass-eval` and `/v1/propose-thesis` routes refuse
 execution; their Python clients are retired. Live counts / GO gates:
 [docs/phase62_residual_status.md](../docs/phase62_residual_status.md). Do not launch

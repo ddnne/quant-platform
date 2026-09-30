@@ -96,11 +96,8 @@ The run summary (`/health` → `last_run`) now includes `concurrency` and
 6. **Failures ≠ success** — a fetch error sets `status='fail'`; the run
    summary status is `pass` / `partial` / `fail` (never silent). See
    ``cf_platform.ingest_premium.validate.classify_dataset`` for the rule.
-7. **Local-readable path** — ``scripts/sync_d1_to_sqlite.py`` uses the
-   operator's authenticated Wrangler session to export private D1 directly,
-   then builds a local PIT DB so ``pit.get_*`` reads work offline. No public
-   ingestion-premium hostname is required. The cursor-paginated HTTP export is
-   retained only as a bounded migration compatibility path.
+7. **Historical local mirror** — superseded by cloud R2 research. The local
+   HTTP sync client is retired; do not download authentic history to a Mac.
 
 ## Resources
 
@@ -138,20 +135,11 @@ canonical runbook is
 [`operations/current_production_runbook.md`](operations/current_production_runbook.md),
 whose D1 policy is observation/HOLD with remote mutation disabled.
 
-## Local sync (S6)
+## Research data access
 
-```bash
-python3 scripts/sync_d1_to_sqlite.py \
-  --wrangler-remote \
-  --db data/structured/ingestion.sqlite
-
-# Then verify pit reads work:
-python3 -c "
-import pit
-r = pit.get_equity_bars_daily(as_of='2025-04-01T17:00:00+09:00', code='8697')
-print(r.metadata, len(r))
-"
-```
+The local HTTP client is retired. Current research uses R2 and bounded cloud
+scratch; see [cloud storage](architecture/cf_native_storage_plane.md).
+Synthetic SQLite imports remain test-only examples, not market-data downloads.
 
 ## Ops
 

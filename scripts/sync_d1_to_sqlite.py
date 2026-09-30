@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """Phase 3.5 S6 — sync Cloudflare D1 → local SQLite for `pit.get_*`.
 
-The preferred production path uses the operator's authenticated Wrangler
-session to export the private ingestion D1 directly.  An explicit local D1 SQL
-export is also accepted for offline/bootstrap recovery, while the legacy
-authenticated Worker export remains available during migration.
+The retained authenticated mirror path uses the pinned private D1 acquisition.
+An explicit SQL/SQLite artifact is accepted for offline fixture import without
+READY authority. Local authentic market-data guards remain in force; current
+cloud research reads R2 rather than using this mirror CLI.
 
-No explicit source defaults to the pinned private production D1 path; legacy
-HTTP is used only with an explicit ``--url``. ``--incremental`` applies ``change_seq >
-last_applied_change_seq`` after each durable page. Full table export is
+No explicit source defaults to the pinned private D1 path. ``--incremental``
+applies ``change_seq > last_applied_change_seq`` after each durable page. Full table export is
 bootstrap.  Replaying a page after interruption is idempotent; the cursor is
 never allowed to move backwards.
 
@@ -32,7 +31,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import BinaryIO, Callable, Mapping, TypeVar
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
 from weakref import WeakKeyDictionary, WeakSet
 
 _here = Path(__file__).resolve().parent
@@ -77,11 +76,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Fail if one export stream exceeds this many pages (default: 10000).",
     )
     source = p.add_mutually_exclusive_group()
-    source.add_argument(
-        "--url",
-        default=None,
-        help="Legacy base URL of the authenticated ingestion-premium worker",
-    )
     source.add_argument(
         "--d1-export",
         default=None,
@@ -150,23 +144,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="With --publish-ops, also apply projection SQL to remote D1.",
     )
     return p
-
-
-def _new_http_client():
-    """Lazy httpx factory so tests can monkeypatch."""
-    try:
-        import httpx  # type: ignore
-    except ImportError as exc:  # pragma: no cover
-        raise RuntimeError("httpx is required for sync (pip install httpx)") from exc
-    return httpx.Client(timeout=120.0)
-
-
-def _http_get_json(client, url: str, token: str) -> dict:
-    """GET JSON; tests monkeypatch this symbol."""
-    headers = {"X-Ingestion-Token": token} if token else {}
-    resp = client.get(url, headers=headers)
-    resp.raise_for_status()
-    return resp.json()
 
 
 _materialize_d1_export = _private_export.materialize_d1_export
@@ -479,59 +456,6 @@ def _filter_since(rows: list[dict], since: str) -> tuple[list[dict], int]:
     return kept, skipped
 
 
-def _sync_table(
-    store: SqliteStore,
-    client,
-    base: str,
-    token: str,
-    table: str,
-    *,
-    page_limit: int,
-    since: str | None,
-    max_pages: int = DEFAULT_MAX_PAGES,
-) -> tuple[int, int, int, int, str | None]:
-    """Pull one table. Returns (pages, seen, registered, skipped, effective_since)."""
-    cursor: str | int | None = None
-    pages = seen = registered = skipped = 0
-    seen_cursors: set[str] = set()
-    while True:
-        if pages >= max_pages:
-            raise ValueError(
-                f"export exceeded max_pages={max_pages} for table={table}"
-            )
-        query: dict[str, str | int] = {"table": table, "limit": page_limit}
-        if cursor is not None:
-            query["cursor"] = cursor
-        endpoint = f"{base}/v1/export/d1?{urlencode(query)}"
-        payload = _http_get_json(client, endpoint, token)
-        if payload.get("table", table) != table:
-            raise ValueError(
-                f"export returned table={payload.get('table')!r}, expected {table!r}"
-            )
-        rows = payload.get("rows") or []
-        if not isinstance(rows, list):
-            raise ValueError("export rows must be a list")
-        if since:
-            rows, page_skipped = _filter_since(rows, since)
-            skipped += page_skipped
-        seen += len(rows)
-        page_registered = _sync_one(store, table, rows)[1]
-        registered += page_registered
-        pages += 1
-
-        if not payload.get("has_more", False):
-            break
-        next_cursor = payload.get("next_cursor")
-        if next_cursor is None or next_cursor == cursor:
-            raise ValueError("export pagination did not advance cursor")
-        cursor_token = str(next_cursor)
-        if cursor_token in seen_cursors:
-            raise ValueError("export pagination repeated a prior cursor")
-        seen_cursors.add(cursor_token)
-        cursor = next_cursor
-    return pages, seen, registered, skipped, since
-
-
 def _last_change_seq(store: SqliteStore) -> int:
     row = store._conn.execute(  # noqa: SLF001
         "SELECT last_applied_change_seq FROM main.sync_change_state "
@@ -591,75 +515,6 @@ def _apply_change_rows(store: SqliteStore, rows: list[dict]) -> tuple[int, int]:
         })
     flush()
     return registered, skipped
-
-
-def _sync_changes(
-    store: SqliteStore,
-    client,
-    base: str,
-    token: str,
-    *,
-    page_limit: int,
-    max_pages: int = DEFAULT_MAX_PAGES,
-    legacy_since: str | None = None,
-) -> tuple[int, int, int, int]:
-    """Consume the monotonic change feed. Returns (pages, seen, registered, last_seq)."""
-    after_seq = _last_change_seq(store)
-    pages = seen = registered = skipped = 0
-    visited = {after_seq}
-    while True:
-        if pages >= max_pages:
-            raise ValueError(f"change feed exceeded max_pages={max_pages}")
-        query = {
-            "after_seq": after_seq,
-            "limit": page_limit,
-            "table": "jquants_records",
-        }
-        endpoint = f"{base}/v1/export/changes?{urlencode(query)}"
-        payload = _http_get_json(client, endpoint, token)
-        rows = payload.get("rows") or []
-        if not isinstance(rows, list):
-            raise ValueError("change feed rows must be a list")
-        pages += 1
-
-        if payload.get("format") != "jquants-change-feed/v1":
-            filtered, _ = _filter_since(rows, legacy_since or "")
-            seen += len(filtered)
-            registered += _sync_one(store, "jquants_records", filtered)[1]
-            if payload.get("has_more", False):
-                raise ValueError(
-                    "legacy incremental response cannot safely paginate; "
-                    "deploy the Phase 6 change-feed Worker"
-                )
-            break
-
-        previous = after_seq
-        for row in rows:
-            seq = row.get("change_seq")
-            if not isinstance(seq, int) or seq <= previous:
-                raise ValueError("change feed sequence is not strictly increasing")
-            previous = seq
-        next_seq = payload.get("next_seq", previous)
-        if not isinstance(next_seq, int) or next_seq != previous:
-            raise ValueError("change feed next_seq does not match its final row")
-        seen += len(rows)
-        page_registered, page_skipped = _apply_change_rows(store, rows)
-        registered += page_registered
-        skipped += page_skipped
-        _record_change_seq(store, next_seq)
-        after_seq = next_seq
-        if not payload.get("has_more", False):
-            break
-        if not rows or after_seq in visited:
-            raise ValueError("change feed pagination did not advance")
-        visited.add(after_seq)
-    if skipped:
-        print(
-            f"[sync] change_feed: skipped_non_local={skipped} "
-            f"(R2/SCD2 markers; seq advanced)",
-            file=sys.stderr,
-        )
-    return pages, seen, registered, after_seq
 
 
 def _source_table_exists(conn: sqlite3.Connection, table: str) -> bool:
@@ -1835,96 +1690,6 @@ def _run_private_export_sync(
     return total_seen, total_registered, total_skipped, failures
 
 
-def _run_http_sync(
-    store: SqliteStore,
-    tables: list[str],
-    args,
-    *,
-    base: str,
-    token: str,
-) -> tuple[int, int, int, list[str]]:
-    """Run the legacy authenticated Worker export during client migration."""
-    total_seen = total_registered = total_skipped = 0
-    failures: list[str] = []
-    try:
-        client = _new_http_client()
-    except Exception as exc:  # noqa: BLE001
-        return 0, 0, 0, [f"http_client: {exc}"]
-    try:
-        change_feed_done = False
-        for table in tables:
-            if args.incremental and table in _CHANGE_FEED_TABLES:
-                if change_feed_done:
-                    continue
-                try:
-                    pages, seen, registered, change_seq = _sync_changes(
-                        store,
-                        client,
-                        base,
-                        token,
-                        page_limit=args.page_limit,
-                        max_pages=args.max_pages,
-                        legacy_since=args.since or _derive_since(store, table),
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    failures.append(f"change_feed: {exc}")
-                    print(f"[sync] change_feed FAILED: {exc}", file=sys.stderr)
-                else:
-                    total_seen += seen
-                    total_registered += registered
-                    print(
-                        f"[sync] change_feed: pages={pages} seen={seen} "
-                        f"registered={registered} change_seq={change_seq}"
-                    )
-                change_feed_done = True
-                continue
-            if args.incremental:
-                since = None if table in _NO_AVAILABLE_AT_TABLES else (
-                    args.since or _derive_since(store, table)
-                )
-                if since:
-                    print(
-                        f"[sync] {table}: incremental since={since}",
-                        file=sys.stderr,
-                    )
-                else:
-                    print(
-                        f"[sync] {table}: incremental since=<none> (full pull)",
-                        file=sys.stderr,
-                    )
-            else:
-                since = None
-            try:
-                pages, seen, registered, skipped, effective_since = _sync_table(
-                    store,
-                    client,
-                    base,
-                    token,
-                    table,
-                    page_limit=args.page_limit,
-                    since=since,
-                    max_pages=args.max_pages,
-                )
-            except Exception as exc:  # noqa: BLE001
-                failures.append(f"{table}: {exc}")
-                print(f"[sync] {table} FAILED: {exc}", file=sys.stderr)
-                continue
-            total_seen += seen
-            total_registered += registered
-            total_skipped += skipped
-            print(
-                f"[sync] {table}: pages={pages} seen={seen} "
-                f"registered={registered} skipped={skipped}"
-                + (f" since={effective_since}" if effective_since else "")
-            )
-    finally:
-        try:
-            client.close()
-        except Exception:  # pragma: no cover
-            pass
-    return total_seen, total_registered, total_skipped, failures
-
-
 def _finalize_sync_policy(
     store: SqliteStore,
     args,
@@ -2001,13 +1766,8 @@ def main(argv=None) -> int:
     if args.since and not args.incremental:
         print("[sync] --since requires --incremental", file=sys.stderr)
         return 2
-    if not args.d1_export and not args.wrangler_remote and not args.url:
-        # Production default: authenticated private D1 acquisition. The legacy
-        # Worker transport is entered only by an explicit --url argument.
+    if not args.d1_export and not args.wrangler_remote:
         args.wrangler_remote = True
-    private_mode = bool(args.d1_export or args.wrangler_remote)
-    url = args.url
-    token = os.environ.get("DATA_EXPORT_TOKEN")
 
     tables = args.table or list(DEFAULT_TABLES)
     try:
@@ -2020,39 +1780,38 @@ def main(argv=None) -> int:
     source_conn: sqlite3.Connection | None = None
     export_digest = ""
     artifact_format = ""
-    source_mode = "WORKER_HTTP"
+    source_mode = "LOCAL_ARTIFACT"
     authenticated_acquisition = None
-    if private_mode:
-        temporary = tempfile.TemporaryDirectory(prefix="quant-d1-sync-")
-        temporary_path = Path(temporary.name)
-        try:
-            if args.wrangler_remote:
-                authenticated_acquisition = (
-                    _private_export.acquire_pinned_wrangler_export(temporary_path)
-                )
-                export_digest = authenticated_acquisition.export_digest
-                artifact_size = authenticated_acquisition.artifact_size
-                artifact_format = authenticated_acquisition.artifact_format
-                source_conn = authenticated_acquisition.open_source()
-                source_mode = "WRANGLER_REMOTE"
-                print("[sync] acquired private D1 export via authenticated Wrangler")
-            else:
-                raw_artifact = Path(args.d1_export)
-                source_mode = "LOCAL_ARTIFACT"
-                materialized = temporary_path / "export.sqlite"
-                export_digest, artifact_size, artifact_format = _materialize_d1_export(
-                    raw_artifact,
-                    materialized,
-                )
-                source_conn = _open_export_sqlite(materialized)
-            print(
-                f"[sync] private export verified format={artifact_format} "
-                f"bytes={artifact_size} digest={export_digest}"
+    temporary = tempfile.TemporaryDirectory(prefix="quant-d1-sync-")
+    temporary_path = Path(temporary.name)
+    try:
+        if args.wrangler_remote:
+            authenticated_acquisition = (
+                _private_export.acquire_pinned_wrangler_export(temporary_path)
             )
-        except Exception as exc:  # noqa: BLE001 - operator CLI boundary
-            print(f"[sync] private export preparation FAILED: {exc}", file=sys.stderr)
-            temporary.cleanup()
-            return 1
+            export_digest = authenticated_acquisition.export_digest
+            artifact_size = authenticated_acquisition.artifact_size
+            artifact_format = authenticated_acquisition.artifact_format
+            source_conn = authenticated_acquisition.open_source()
+            source_mode = "WRANGLER_REMOTE"
+            print("[sync] acquired private D1 export via authenticated Wrangler")
+        else:
+            raw_artifact = Path(args.d1_export)
+            source_mode = "LOCAL_ARTIFACT"
+            materialized = temporary_path / "export.sqlite"
+            export_digest, artifact_size, artifact_format = _materialize_d1_export(
+                raw_artifact,
+                materialized,
+            )
+            source_conn = _open_export_sqlite(materialized)
+        print(
+            f"[sync] private export verified format={artifact_format} "
+            f"bytes={artifact_size} digest={export_digest}"
+        )
+    except Exception as exc:  # noqa: BLE001 - operator CLI boundary
+        print(f"[sync] private export preparation FAILED: {exc}", file=sys.stderr)
+        temporary.cleanup()
+        return 1
 
     store = SqliteStore(Path(args.db))
     begin_snapshot_sync(
@@ -2062,34 +1821,20 @@ def main(argv=None) -> int:
     total_seen = total_registered = total_skipped = 0
     failures: list[str] = []
     try:
-        if source_conn is not None:
-            (
-                total_seen,
-                total_registered,
-                total_skipped,
-                failures,
-            ) = _run_private_export_sync(
-                store,
-                source_conn,
-                tables,
-                args,
-                export_digest=export_digest,
-                artifact_format=artifact_format,
-                authenticated_acquisition=authenticated_acquisition,
-            )
-        else:
-            (
-                total_seen,
-                total_registered,
-                total_skipped,
-                failures,
-            ) = _run_http_sync(
-                store,
-                tables,
-                args,
-                base=(url or "").rstrip("/"),
-                token=token or "",
-            )
+        (
+            total_seen,
+            total_registered,
+            total_skipped,
+            failures,
+        ) = _run_private_export_sync(
+            store,
+            source_conn,
+            tables,
+            args,
+            export_digest=export_digest,
+            artifact_format=artifact_format,
+            authenticated_acquisition=authenticated_acquisition,
+        )
         _finalize_sync_policy(store, args, failures, source_mode=source_mode)
         if authenticated_acquisition is not None and not failures:
             try:

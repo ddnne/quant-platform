@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -267,144 +266,16 @@ def test_derive_since_returns_none_for_empty_table(tmp_path, sync_module):
     store.close()
 
 
-def test_incremental_skips_already_mirrored_rows(tmp_path, monkeypatch, sync_module):
-    """End-to-end: first pull populates the local DB; second pull with
-    ``--incremental`` fetches the same pages but registers nothing new."""
-    # Fresh local DB seeded with one batch at t0 (codes 1000/1001/1002).
-    first_rows = _rows("2025-04-01T10:00:00+09:00", 3, date="2025-04-01")
-    # The remote advances: the same 3 old rows + 2 new rows on a different
-    # date so they get distinct natural keys and land as new primary rows.
-    remote_rows = first_rows + _rows("2025-04-02T10:00:00+09:00", 2, date="2025-04-02")
-
-    calls: list[str] = []
-    client_sentinel = object()
-
-    def fake_http_get_json(client, url: str, token: str) -> dict:
-        # The same client object must be reused on every call — this proves
-        # the single-shared-client refactor and the network mock at once.
-        assert client is client_sentinel
-        calls.append(url)
-        q = parse_qs(urlparse(url).query)
-        cursor = int(q.get("cursor", ["0"])[0])
-        limit = int(q["limit"][0])
-        page = remote_rows[cursor : cursor + limit]
-        nxt = cursor + len(page)
-        return {
-            "table": q["table"][0],
-            "rows": page,
-            "cursor": cursor,
-            "next_cursor": nxt if nxt < len(remote_rows) else None,
-            "has_more": nxt < len(remote_rows),
-            "limit": limit,
-        }
-
-    monkeypatch.setattr(sync_module, "_new_http_client", lambda: client_sentinel)
-    monkeypatch.setattr(sync_module, "_http_get_json", fake_http_get_json)
-    monkeypatch.setenv("DATA_EXPORT_TOKEN", "fixture-token")
-
-    from storage.sqlite_store import SqliteStore
-
-    db = tmp_path / "incremental.sqlite"
-    # Seed: pre-load the old batch so MAX(ingested_at) is t0.
-    seed_store = SqliteStore(db)
-    seed_store.upsert("jquants_records", first_rows)
-    seed_store.close()
-
-    rc = sync_module.main(
-        [
-            "--db",
-            str(db),
-            "--url",
-            "https://fixture.invalid",
-            "--table",
-            "jquants_records",
-            "--page-limit",
-            "10",  # one page covers everything
-            "--incremental",
-        ]
-    )
-    assert rc == 0
-
-    # Walked exactly one page (limit > row count) and registered only the 2
-    # new rows; the 3 already-mirrored rows were filtered client-side.
-    assert len(calls) == 1
-    post = SqliteStore(db)
-    n_total = post.count("jquants_records")
-    # Seed had 3, sync added 2.
-    assert n_total == 5
-    post.close()
 
 
-def test_incremental_with_explicit_since_overrides_local_max(
-    tmp_path, monkeypatch, sync_module
-):
-    """--since bypasses _derive_since entirely."""
-    rows = _rows("2025-04-01T10:00:00+09:00") + _rows("2025-04-03T10:00:00+09:00")
-
-    def fake_http_get_json(client, url: str, token: str) -> dict:
-        q = parse_qs(urlparse(url).query)
-        return {
-            "table": q["table"][0],
-            "rows": rows,
-            "cursor": 0,
-            "next_cursor": None,
-            "has_more": False,
-            "limit": int(q["limit"][0]),
-        }
-
-    captured_since: list[str | None] = []
-
-    # Wrap the real _filter_since to capture the watermark it received. We
-    # do not change behaviour, only assert the override propagated.
-    real_filter = sync_module._filter_since
-
-    def wrapped(rows_in, since):
-        captured_since.append(since)
-        return real_filter(rows_in, since)
-
-    monkeypatch.setattr(sync_module, "_new_http_client", lambda: object())
-    monkeypatch.setattr(sync_module, "_http_get_json", fake_http_get_json)
-    monkeypatch.setattr(sync_module, "_filter_since", wrapped)
-    monkeypatch.setenv("DATA_EXPORT_TOKEN", "x")
-
-    db = tmp_path / "since.sqlite"
-    rc = sync_module.main(
-        [
-            "--db",
-            str(db),
-            "--url",
-            "https://fixture.invalid",
-            "--table",
-            "jquants_records",
-            "--page-limit",
-            "5",
-            "--incremental",
-            "--since",
-            "2025-04-02T00:00:00+09:00",
-        ]
-    )
-    assert rc == 0
-    assert captured_since == ["2025-04-02T00:00:00+09:00"]
 
 
-def test_since_requires_incremental(tmp_path, monkeypatch, sync_module):
+def test_since_requires_incremental(tmp_path, sync_module):
     """--since without --incremental is rejected before any network call."""
-    touched = {"http": False}
-
-    def fake_http_get_json(client, url, token):
-        touched["http"] = True
-        return {}
-
-    monkeypatch.setattr(sync_module, "_new_http_client", lambda: object())
-    monkeypatch.setattr(sync_module, "_http_get_json", fake_http_get_json)
-    monkeypatch.setenv("DATA_EXPORT_TOKEN", "x")
-
     rc = sync_module.main(
         [
             "--db",
             str(tmp_path / "x.sqlite"),
-            "--url",
-            "https://fixture.invalid",
             "--table",
             "jquants_records",
             "--since",
@@ -412,4 +283,4 @@ def test_since_requires_incremental(tmp_path, monkeypatch, sync_module):
         ]
     )
     assert rc == 2
-    assert touched["http"] is False
+    assert not (tmp_path / "x.sqlite").exists()

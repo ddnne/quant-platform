@@ -80,6 +80,15 @@ charter for extra hostile-Python tests.
 
 ## Consolidation decisions
 
+- Remove six HTTP-local-sync cases with the retired transport: mocked sequence
+  replay/non-monotonic pages, endless mock pages, shared-client reuse,
+  explicit-since forwarding and fake unsigned-publication refusal. The real
+  SQLite import tests retain same-key revisions, idempotent replay, interrupted
+  apply-before-cursor recovery, cursor rollback, bounded import and unauthenticated
+  artifact/READY refusal. The shared PIT fixture now imports a synthetic SQLite
+  artifact instead of testing its own HTTP pagination mock. No new test count
+  is needed. Private signed-mirror verification and cloud R2 tests are unchanged.
+
 - Retire the isolated Python offline cost-verification/eval-registry/daily-MTM
   graph with its three dedicated test files, plus two mixed-suite cases that
   only called already-disabled panel-staging stubs. The stubs and unused fixed

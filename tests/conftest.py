@@ -1,4 +1,4 @@
-"""Shared offline fixtures that mimic Cloudflare D1 export responses."""
+"""Shared synthetic SQLite export fixtures; no remote acquisition."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import sqlite3
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -123,61 +122,28 @@ def cf_d1_export_rows() -> dict[str, list[dict]]:
 
 
 @pytest.fixture
-def synced_cf_d1_db(
-    tmp_path, monkeypatch, sync_module, cf_d1_export_rows
-) -> SimpleNamespace:
-    """Run the real sync CLI against cursor-paginated in-memory D1 pages."""
-    calls: list[str] = []
+def synced_cf_d1_db(tmp_path, sync_module, cf_d1_export_rows) -> SimpleNamespace:
+    """Import a real synthetic SQLite artifact; no HTTP double or authority."""
+    from storage.sqlite_store import SqliteStore
 
-    def fake_export(client, url: str, token: str) -> dict:
-        assert token == "fixture-token"
-        calls.append(url)
-        query = parse_qs(urlparse(url).query)
-        table = query["table"][0]
-        limit = int(query["limit"][0])
-        cursor = int(query.get("cursor", ["0"])[0])
-        source_rows = cf_d1_export_rows.get(table, [])
-        page = deepcopy(source_rows[cursor : cursor + limit])
-        next_cursor = cursor + len(page)
-        has_more = next_cursor < len(source_rows)
-        return {
-            "table": table,
-            "rows": page,
-            "cursor": cursor,
-            "next_cursor": next_cursor if has_more else None,
-            "has_more": has_more,
-            "limit": limit,
-        }
-
-    # ``_new_http_client`` returns the real httpx.Client in production. Stub
-    # it with a sentinel so any accidental transport use inside a test fails
-    # fast rather than touching the network.
-    monkeypatch.setattr(sync_module, "_new_http_client", lambda: object())
-    monkeypatch.setattr(sync_module, "_http_get_json", fake_export)
-    monkeypatch.setenv("DATA_EXPORT_TOKEN", "fixture-token")
+    export = tmp_path / "synthetic-export.sqlite"
+    source = SqliteStore(export)
+    try:
+        for table, rows in cf_d1_export_rows.items():
+            source.upsert(table, rows)
+    finally:
+        source.close()
     db = tmp_path / "cf-export.sqlite"
-    rc = sync_module.main(
-        [
-            "--db",
-            str(db),
-            "--url",
-            "https://fixture.invalid",
-            "--table",
-            "jquants_records",
-            "--page-limit",
-            "2",
-        ]
-    )
-    # This fixture intentionally mirrors only one fact table and cannot pass
-    # the governed READY publication gate. Mark it as an unmanaged unit-test
-    # DB so PIT-shape tests can exercise rows; production sync never does this.
+    rc = sync_module.main([
+        "--db", str(db), "--d1-export", str(export),
+        "--table", "jquants_records", "--page-limit", "2",
+    ])
+    # Test-only PIT fixture, never authenticated READY evidence.
     with sqlite3.connect(db) as conn:
         conn.execute(
-            "UPDATE local_snapshot_policy SET require_manifest=0 "
-            "WHERE singleton=1"
+            "UPDATE local_snapshot_policy SET require_manifest=0 WHERE singleton=1"
         )
-    return SimpleNamespace(db=db, rc=rc, calls=calls, rows=cf_d1_export_rows)
-
+    return SimpleNamespace(db=db, rc=rc, rows=cf_d1_export_rows)
 
 @pytest.fixture
 def receipt_ed25519_keys(

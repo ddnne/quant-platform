@@ -85,8 +85,8 @@ History example: same fields with `kind`/`job_id` `history`, `start` ≥
    `ingestion_validation` with explicit `status ∈ {pass, fail}`.
 6. **Failures ≠ success** — a fetch error sets `status='fail'`; the run
    summary status is `pass` / `partial` / `fail` (never silent).
-7. **Local-readable path** — `scripts/sync_d1_to_sqlite.py` follows export
-   cursors to build a local PIT DB readable by `pit.get_*`.
+7. **Research-readable path** — cloud research reads R2 into bounded cloud
+   scratch. The old local HTTP mirror client is retired.
 
 ## Available_at policy (P0-1)
 
@@ -158,21 +158,8 @@ entry; direct Wrangler migration loops are forbidden. Use
 for its D1 lease, Time Travel, staging-first and recovery preconditions.
 Dry-run/typecheck commands remain safe.
 
-## Local sync (Phase 3.5 S6)
+## Research data access
 
-```bash
-# Pull the governed production D1 through the pinned authenticated Wrangler.
-python3 scripts/sync_d1_to_sqlite.py \
-  --wrangler-remote \
-  --db data/structured/ingestion.sqlite
-
-# Incremental: skip rows already mirrored locally by ingested_at watermark.
-python3 scripts/sync_d1_to_sqlite.py --incremental \
-  --wrangler-remote \
-  --db data/structured/ingestion.sqlite
-```
-
-See [docs/phase35_cf_ingest.md](../../../docs/phase35_cf_ingest.md) for the
-full closed-loop spec and ops runbook, and
-[docs/phase35_storage_scale.md](../../../docs/phase35_storage_scale.md) for
-the storage scale path (R2 parquet + watermarks + incremental sync).
+Current research reads stored R2 products on Cloudflare, not a local HTTP/D1
+mirror. See [cloud storage](../../../docs/architecture/cf_native_storage_plane.md)
+and the current production runbook above. Local authentic history is prohibited.
