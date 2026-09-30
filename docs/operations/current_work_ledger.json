@@ -1,110 +1,49 @@
 {
   "schema": "quant-platform-work-ledger/v1",
-  "updated_at": "2026-09-28",
-  "purpose": "Observed checkpoint, not authorization. Source, staging, production, data, READY and execution are separate outcomes. Remeasure before acting. Superseded observations remain in Git history.",
-  "operator": {
-    "status": "RESUMED_BY_USER",
-    "responsibility": "Codex implements while Grok subscription is unavailable; no paid replacement. Main owns implementation, subagents only independent read-only review; maximum three WIP.",
-    "quota_stop": "Below roughly20% weekly remaining, finish a safe checkpoint, save/push, explain remaining tasks and human steps, then pause. No reset credit without explicit approval.",
-    "authentication": "Cloudflare connector and CLI authentication restored and verified2026-09-27. No current login request. Authentication grants no new execution scope.",
-    "local_data": "No authentic market history persisted locally or local Docker/VM backtests. R2 market bodies, bounded D1 metadata, cloud scratch. Preserve signed bytes."
+  "updated_at": "2026-09-30",
+  "purpose": "Nine-requirement work index, not execution authorization or live acceptance. A source merge or historical checkpoint does not establish current deployment, data quality or research readiness.",
+  "ownership": {
+    "development_policy": "AGENTS.md",
+    "simplification": "docs/architecture/personal_simplification.md",
+    "test_policy": "docs/ci/invariant_test_audit.md",
+    "findings": "docs/phase633_finding_ledger.json",
+    "resources": "docs/operations/resource_inventory.md"
   },
-  "approvals": {
-    "candidate": {
-      "evidence": "https://github.com/ddnne/quant-platform/pull/266#issuecomment-5793212154",
-      "scope": "Staging Receipt-to-cloud candidate; same-scope source/Git/rollout repairs; conditional READY/Paper-only Trader after every same-snapshot gate.",
-      "limits": "Initial a1-a3 and extension a4-a6 exhausted. Concurrency1; each180-minute watchdog and verified shutdown. Extension aggregateUSD5 monitored target, NOT invoice hard cap. No a7 or terminal-job restart authorized.",
-      "stop_rule": "Stop missing data/signature mismatch/untrackable cost/unknown shutdown/unexpected permissions. Observation timeout is not terminal. Preserve identity and original deadline.",
-      "excludes": "Production, Pilot/backtests, Mass Research, paid inference, FoF/broker/orders, automatic promotion, local market history, full DB backup, cancelled MCP/C09 activation."
-    },
-    "preperiod": {
-      "evidence": "https://github.com/ddnne/quant-platform/pull/251#issuecomment-5787064159",
-      "scope": "Staging2022 bars/master/fins; max12 monthly segments newest-first, concurrency1, max3 fresh attempts per segment, additionalUSD10 monitored target; no2021earlier.",
-      "checkpoint": "Three2022-12 segments completed; control cursor1/1, lease null, finished at prior observation. Do not restart. Presence does not prove compiled warmup sufficient."
-    },
-    "credentials": {
-      "evidence": "https://github.com/ddnne/quant-platform/pull/253#issuecomment-5787989986",
-      "status": "PROVISIONED",
-      "custody": "Existing macOS Keychain account quant-platform-staging, service prefix quant-platform/staging/recovery-20260923/; MASS_EVAL_TOKEN and Ops/READY/Trader keys. Reuse without printing/regenerating. Receipt key and production excluded."
-    }
+  "source_checkpoint": {
+    "sha": "aec752305193d167d564a547c0650d301417b3f7",
+    "pr": "https://github.com/ddnne/quant-platform/pull/314",
+    "native_check": "Workers Builds: quant-platform-ci-aggregate-staging",
+    "status": "PR_AND_MERGED_MAIN_CHECK_SUCCESS",
+    "verification": "Fresh clone matched origin/main, clean, zero unpushed; generated binding/acquisition/governed-routing/pilot-contract checks passed.",
+    "scope": "Historical source-only checkpoint, not an automatically updated latest SHA. Test/docs changes do not require an unchanged Worker to be redeployed."
   },
-  "lanes": {
-    "source_delivered": {
-      "accepted_main_sha": "f601bed6d31b20c8f121b3df2f58daaa25c61841",
-      "latest_main_sha": "f2c65c2afafa5a6b1654ac407e7d4a0264ae63b6",
-      "latest_main_native_status": "NOT_YET_VERIFIED",
-      "native_build": "33bf3e71-0a8e-48ce-bd70-5fc3eea8b250",
-      "native_status": "SUCCESS",
-      "required_check": "Workers Builds: quant-platform-ci-aggregate-staging",
-      "required_app_id": 85455,
-      "notes": "PR277 merged after exact head7ac594e6 native build71426fbd-66be-4e5f-872f-ff01d288870c SUCCESS/app85455 and independent review. Latest merged-main CI separately unverified; accepted_main_sha/native_build above refer to earlier f601bed6. Diagnostic repair not deployed."
-    },
-    "staging_schema_prepared": {
-      "database_id": "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb",
-      "ops_database_id": "68ee96d5-766c-4832-836b-54c079bd6265",
-      "status": "CANONICAL_0001_TO_0024_AND_OPS_0001_TO_0003_APPLIED",
-      "notes": "PREPARED0/lease vacant before rollout. No historical deletion or whole-DB restore. Staging D1 about8.31GB; new R2 writes do not remove legacy copies."
-    },
-    "staging_deployed": {
-      "status": "COHERENT_FIVE_WORKER_ACCEPTANCE",
-      "source_sha": "f601bed6d31b20c8f121b3df2f58daaa25c61841",
-      "versions": {
-        "ingestion-secrets": "cc76316c-110b-4f32-bfe1-0f6d3bffa85d",
-        "receipt-evidence-authority": "5e6902a2-da40-4840-968d-6319f4e1b8c8",
-        "ingestion-premium": "d89f6729-9774-4c7a-844f-9254124eaf22",
-        "research-ai-gateway": "ac185720-d26e-4d8e-823b-326364b16d35",
-        "research-mass-eval": "0bee4bb8-f1cc-4b21-b605-109d9d74a5bc"
-      },
-      "receipt_acceptance_digest": "sha256:6f1bc08b8d17aee8e5740d36190cc2c1f504f6e2896326655e38f37ac424d399",
-      "receipt_acceptance": "Exact modules/runtime signatures/public surfaces passed; AUDIT_ONLY/research_eligible=false, unchanged Receipt key/DO namespace. Not READY.",
-      "mass_build": "a4158195-6772-4144-ad14-0b541f5e42ca",
-      "container_application": "a03b71dd-28e5-4781-9cd9-d6682596eb72",
-      "container_version": 16,
-      "container_image_digest": "sha256:de220b4a8c3f14882ba60715fb3c5cddb423a2406d6bd334e3aa1dbf2b37c6a9",
-      "evidence": "https://github.com/ddnne/quant-platform/pull/276#issuecomment-5856838509",
-      "not_claimed": "Production/global Ops/JSDA/MCP parity, compiled scope, READY or Pilot acceptance."
-    },
-    "production_deployed": {
-      "status": "HOLD",
-      "notes": "Historical build71b4c127-8a47-4853-a62c-97b51b590b6c now diagnosed: tests/typecheck passed, configured deploy HOLD deliberately exited. No retry/settings change/deployment. Not current production acceptance.",
-      "evidence": "https://github.com/ddnne/quant-platform/pull/276#issuecomment-5856922007"
-    },
-    "data_activated": {"status": "NO_ACCEPTED_CANDIDATE", "notes": "a5 scopeFAIL/qualityPASS; a6 FAILED. Neither eligible for promotion."},
-    "ready": {"status": "NOT_PROVEN", "notes": "No accepted same-snapshot scope/physical/quality proof. Keys and deployed code are not READY evidence."},
-    "pilot_executed": {"status": "NOT_EXECUTED_NO_GO", "notes": "Current approval excludes actual Pilot/backtests. No next generation or automatic promotion."}
+  "acceptance": {
+    "source": "Use the exact reviewed commit and its native check, not a phase label or this checkpoint's age.",
+    "staging_and_production": "Use the current approved target-specific record: source, actual module and Container image where applicable, bindings and smokes. Do not copy a mutable version inventory here or claim all Workers coherent from a subset.",
+    "data": "No accepted full candidate scope is established here. Acquisition or Cron PASS is not snapshot reproof.",
+    "ready": "NOT_PROVEN_BY_THIS_LEDGER. Requires same-snapshot scope, physical bytes, quality, profile and closure evidence.",
+    "pilot": "NOT_PROVEN_BY_THIS_LEDGER. Requires applicable execution approval and all live gates; DRAFT cannot substitute.",
+    "mass_and_orders": "Disabled; no Mass, FoF, broker, live orders or automatic promotion."
   },
-  "candidate": {
-    "attempts_submitted": 6,
-    "maximum_fresh_attempts": 6,
-    "allocation": "EXHAUSTED_NO_A7",
-    "current": {
-      "job_id": "receipt-candidate-20260927-a6",
-      "request_digest": "sha256:5003b5039a7badb33f1e23094b8423085f686b3b13a85107c6f5ca66bda4f732",
-      "submitted_at": "2026-09-27T14:41:01.277Z",
-      "original_deadline": "2026-09-27T17:41:01.277Z",
-      "status": "FAILED",
-      "finished_at": "2026-09-27T14:55:17.044008Z",
-      "error": "HTTPError: HTTP Error 409: Conflict",
-      "last_progress": "equities_bars_daily2023-10 verified_uncommitted; equities_master2023-01 fetch. Not committed snapshot proof.",
-      "container_instance": "6330a23ee3dbdc49ba682f1d462f2b8f5575a9e8149c2e3034d530eed41af2dc",
-      "container_status": "inactive",
-      "provider_shutdown_updated_at": "2026-09-27T14:55:29Z",
-      "evidence": "https://github.com/ddnne/quant-platform/pull/276#issuecomment-5856990919",
-      "diagnosis": "Request length556 matches raw_collection_manifest for pinned master2023-01; Premium trace canceled/wall18599ms, proxy409. Original HOLD reason discarded. Current19 raw pages match size/hash; manifest/calendar signed metadata match. No current corruption established; original precise cause unproven.",
-      "diagnosis_evidence": "https://github.com/ddnne/quant-platform/pull/277#issuecomment-5857043257"
-    },
-    "previous": {"job_id": "receipt-candidate-20260923-a5", "status": "COMPLETED_SCOPE_FAIL", "reason": "markets_calendar2023-01-04 not PIT-visible; B0/B4/C8PASS does not override scopeFAIL", "shutdown_verified_at": "2026-09-23T12:06:44Z", "evidence": "https://github.com/ddnne/quant-platform/pull/267#issuecomment-5794510125"}
+  "execution_rules": {
+    "quota_stop": "Below roughly 20 percent weekly remaining, finish a safe saved/pushed checkpoint, report remaining work and human steps, then stop. Do not use a reset credit without explicit approval.",
+    "work_in_progress": "At most three simultaneous work items; main implements and subagents only perform independent read-only review under AGENTS.md.",
+    "approval": "Use current explicit grouped approval. Authentication and historical assent are not new job or spending authority. Exhausted allocations and terminal jobs must not restart implicitly.",
+    "scope": "Source, rollout, data activation, authority activation and research execution are separate outcomes. Rollout approval does not authorize research.",
+    "cost": "No assurance-only market scans, repeated counts or unchanged-state polling. A monitored cost target is not an invoice hard cap.",
+    "storage": "No authentic market history persisted locally or local Docker/VM backtests. R2 market bodies, bounded D1 metadata, cloud scratch. Preserve signed bytes.",
+    "recovery": "No production DLQ body reads/ack/purge. No old whole-DB restore after writers resume. Preserve signed evidence and use forward repair."
   },
   "items": {
-    "1_fresh_clone_and_ledger": "Fresh source-only clone f601bed6 clean/remote-equal; four generated drift checks passed using existing environment, not fresh frozen install. Final whole-goal audit pending.",
-    "2_am_order_quantity_causality": "Adjusted AM frozen-quantity source/tests retained. Historical artifact inventory held under Draft137; preserve original clocks/provenance.",
-    "3_dependency_scope": "Shared calendar repair deployed; a6 failed before full-snapshot proof. Tests do not close runtime evidence.",
-    "4_receipt_to_ready_trader": "Container materializes, Premium signs, evaluator verifies only. Conditional publication needs same physical/scope/quality/profile/closure proof. No new authority.",
-    "5_ci_deploy_entrypoints": "f601bed6 native CI/coherent staging accepted; PR277 source merged, its merged-main CI not yet verified. Production HOLD verified. Python default socket guard is not OS-wide egress isolation.",
-    "6_shared_d1_receipt_reproof": "R2-first new bodies/bounded metadata/cloud scratch; forward repair rather than old whole-DB restore. Legacy history/global reproof remain open; no production DLQ operations.",
-    "7_dead_code_and_docs": "Partial: PR271-275 remove obsolete local OTC clients, static assertions, unused deploy adapter and legacy D1 write override;276 removes invalid concurrent call-count assertion. Policy docs/ci/invariant_test_audit.md; execution docs/operations/test_reduction_ledger.json. Held MCP/C09 not accepted.",
-    "8_rollout_and_research_go": "Staging code accepted, candidateFAILED, READY/Trader not proven. Production/global Ops/current cursors/Coverage/tool parity unproven. Actual Pilot needs applicable approval and all gates.",
-    "9_push_remote_and_fresh_clone_verify": "PR277 merged; local main==origin/main f2c65c2a, clean; completed branch removed. Final fresh clone/generated drift/merged-main CI/deployed source audit required. No full completion claim."
+    "1_fresh_clone_and_ledger": "Source checkpoint verified above; whole-goal completion still needs final current main, generated outputs and stage-specific evidence.",
+    "2_am_order_quantity_causality": "AM frozen-quantity source and adjusted-path regression remain. PM prices evaluate fills and gross breaches, not hindsight resizing. Historical artifact inventory remains held in Draft137; do not overwrite artifacts.",
+    "3_dependency_scope": "Compiler/runtime declarations and synthetic evidence exist. Accepted full-cloud-snapshot scope and financial anchor availability remain unproved; do not substitute universal warmup or fabricated rows.",
+    "4_receipt_to_ready_trader": "Existing Container, Premium signer and verify-only evaluator form the source path. Same physical/scope/quality/profile/closure proof is required before READY and Paper-only Trader; no new authority or DRAFT relabeling.",
+    "5_ci_deploy_entrypoints": "Mass runtime tests are in canonical npm test. Pure Python and toolchain lanes are separate; default pytest socket denial is not host-wide network isolation. Exact-SHA native acceptance and production automatic-deploy HOLD remain.",
+    "6_shared_d1_receipt_reproof": "R2-first bodies and operation-scoped Receipt checks avoid legacy history scans. Global reproof and operational closure are not established by source tests. Shared-writer recovery and untouched production DLQ remain requirements.",
+    "7_dead_code_and_docs": "Ongoing whole-repository simplification: follow personal_simplification.md and invariant_test_audit.md. Retired catalog/local transports and duplicate tests are removed with callers; this is not a completed 50-percent reduction claim.",
+    "8_rollout_and_research_go": "Accept only the targeted deployment and observed generation. Global Ops, cursors, Coverage, MCP parity, READY and Pilot need their own evidence. Do not rerun terminal work merely to update this document.",
+    "9_push_remote_and_fresh_clone_verify": "Each finished batch needs push, normal merge after exact-head native CI/review, merged-main check and independent fresh-clone verification. Delete only completed branches; preserve held work."
   },
   "held_work": {
     "pr137": "https://github.com/ddnne/quant-platform/pull/137 intentional held Draft; preserve work.",
@@ -112,15 +51,20 @@
     "c09": "Cancelled2026-09-11; stash75f5dffc preserved; no activation under candidate approval.",
     "local_drafts": "Stash4cfe6d0d and cancelled authority/test edits not accepted source; do not drop/restore automatically.",
     "backup_storage": "Additional full D1 export/encrypted backup declined. No new backup framework/historical D1 deletion. Preserve existing backups/signed evidence.",
-    "resources": "docs/operations/resource_inventory.md. Idle candidates not authorized for deletion; unrelated news resources preserved.",
-    "access": "Historical Access API9999/not_enabled is not current UI evidence. Terms/team choice only if actually requested; no current login request."
+    "resources": "docs/operations/resource_inventory.md. Idle candidates not authorized for deletion; unrelated news resources preserved."
   },
-  "open_findings": {"authority": "docs/phase633_finding_ledger.json", "p0_open_at_checkpoint": ["D2", "D3", "R5", "R10", "R11", "C4", "C10", "A2"], "notes": "Inventory, not fresh finding-by-finding closure; no P0 closed here."},
-  "next": [
-    "Verify f2c65c2a merged-main native CI and checkpoint PR final-source CI before merge; keep deployed f601bed6 identity separate.",
-    "Diagnose failure without changing signed evidence. No seventh identity. Further finite execution outcome needs grouped approval after diagnosis, including scope/cost/stops/rollback/exclusions.",
-    "Never promote a5/a6. Same-snapshot physical/scope/B0/B4/C8 and exact pins govern conditional staging READY/Trader. Pilot/backtests/production remain excluded.",
-    "Audit all nine attachment requirements, held work, global evidence and remote/deployed/fresh-clone checks before declaring completion."
+  "historical_approval_evidence": [
+    "https://github.com/ddnne/quant-platform/pull/266#issuecomment-5793212154",
+    "https://github.com/ddnne/quant-platform/pull/251#issuecomment-5787064159",
+    "https://github.com/ddnne/quant-platform/pull/253#issuecomment-5787989986"
   ],
-  "history": {"source": "https://github.com/ddnne/quant-platform/blob/f601bed6d31b20c8f121b3df2f58daaa25c61841/docs/operations/current_work_ledger.json", "notes": "Prior attempts/approvals/legacy projection observations/cancellations preserved in Git and linked PRs; never substitute historical observations for current evidence."}
+  "history": {
+    "checkpoint": "https://github.com/ddnne/quant-platform/blob/ac27ea0e84d01936af9876ebb93fdbd5a806990c/docs/operations/current_work_ledger.json",
+    "notes": "Previous attempts, exhausted allocations, resource IDs and stale observations remain in Git history, not current authority. Keep private operational/credential records out of public PRs."
+  },
+  "next": [
+    "Batch meaningful active-path efficiency fixes; reuse measured evidence and existing owners instead of adding frameworks.",
+    "Additional paid attempts require applicable grouped approval; timeout is not terminal and terminal IDs must not restart.",
+    "Before claiming completion, prove all nine requirements against current source and matching live evidence, not this index."
+  ]
 }
