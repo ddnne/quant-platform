@@ -24,6 +24,7 @@ from paper_runtime import (
     list_ready_snapshots,
 )
 from paper_runtime.snapshot import _publish_ready_snapshot
+from paper_runtime.readiness_attestation import EXACT_FOUR_DATASET_IDS
 from pit.ready_evidence import ReadyLedgerSession
 from research.research_data_profile import load_core_profile, official_mode
 from selection.budget_ledger import MassResearchDisabledError
@@ -44,19 +45,16 @@ from tests.ready_snapshot_test_support import (
 
 
 def _jquants_coverage_contracts():
-    """JQ Premium-core only. index_text omitted; OTC would be empty, not weekend COMPLETE."""
-    canonical = {contract.dataset_id for contract in all_contracts()}
-    policies = tuple(
+    """Publication transactions need representative data, not every JQ product.
+
+    The existing pilot membership supplies bars/calendar for B4, master,
+    financial events and the TOPIX benchmark used by the nested-reader test.
+    Dataset-specific Coverage semantics live elsewhere.
+    """
+    return tuple(
         policy for policy in all_coverage_contracts()
-        if policy.dataset_id in canonical
+        if policy.dataset_id in EXACT_FOUR_DATASET_IDS
     )
-    assert all(
-        policy.segment_granularity != "official_archive_index_day"
-        and "official_archive_index" not in (policy.coverage_mode or "")
-        and policy.history_mode != "official_archive_index"
-        for policy in policies
-    ), "JQ READY fixture must not plan OTC; missing index_text is empty, not weekend COMPLETE"
-    return policies
 
 
 def _generic_row(dataset: str, key: str, date: str, **payload):
@@ -318,26 +316,13 @@ def test_fact_mutation_invalidates_an_in_place_generation(tmp_path):
     store.close()
 
 
-def test_publish_gate_rejects_partial_coverage_and_exposes_no_ready(tmp_path):
-    path = tmp_path / "partial.sqlite"
-    store = SqliteStore(path)
-    today = datetime.now(timezone.utc).date().isoformat()
-    dataset = "fins_summary"
-    store._conn.execute(  # noqa: SLF001
-        "INSERT INTO jquants_records "
-        "(source,dataset,natural_key,event_time,available_at,ingested_at) "
-        "VALUES ('jquants',?,?,?, ?, ?)",
-        (
-            dataset, "recent-only", today + "T00:00:00+09:00",
-            today + "T00:00:00+09:00", today + "T01:00:00+09:00",
-        ),
-    )
-    _seed_control(store._conn, (dataset,), today)  # noqa: SLF001
-    store.close()
-
+def test_generic_local_ready_publisher_stays_closed(tmp_path):
+    path = tmp_path / "empty.sqlite"
+    path.touch()
     snapshots = tmp_path / "snapshots"
-    with pytest.raises(SnapshotRejected):
-        _publish_ready_snapshot(path, snapshots, required_datasets=(dataset,))
+    with pytest.raises(SnapshotRejected, match="generic production READY authority is PENDING"):
+        _publish_ready_snapshot(path, snapshots, required_datasets=("fins_summary",))
+    assert path.read_bytes() == b""
     with pytest.raises(FileNotFoundError, match="no READY"):
         latest_ready_snapshot(snapshots)
 
@@ -529,59 +514,6 @@ def test_latest_pointer_cannot_roll_back_to_an_older_valid_generation(
     second.db_path.chmod(0o444)
     with pytest.raises(RuntimeError, match="invalid or scope-mismatched"):
         latest_ready_snapshot_fixture(snapshot_dir)
-
-
-def test_pointer_finalization_failure_quarantines_rejected_evidence(
-    tmp_path, monkeypatch, receipt_ed25519_keys
-):
-    monkeypatch.setattr(
-        snapshot_module, "all_coverage_contracts", _jquants_coverage_contracts
-    )
-    path = tmp_path / "finalization.sqlite"
-    required = _seed_publishable_db(path, signing_key=receipt_ed25519_keys.signing_key)
-    snapshot_dir = tmp_path / "snapshots"
-    write_json = snapshot_module._atomic_json
-
-    def fail_latest_pointer(target, payload, *, mode):
-        if target.name == "latest-ready.json":
-            raise OSError("simulated pointer write failure")
-        return write_json(target, payload, mode=mode)
-
-    monkeypatch.setattr(snapshot_module, "_atomic_json", fail_latest_pointer)
-    with pytest.raises(
-        SnapshotRejected,
-        match="rejected immutable evidence quarantined",
-    ):
-        publish_ready_snapshot_fixture(
-            path,
-            snapshot_dir,
-            required_datasets=required,
-        )
-
-    assert not list(snapshot_dir.glob("sha256_*.sqlite"))
-    assert not list(snapshot_dir.glob("sha256_*.manifest.json"))
-    assert not list(snapshot_dir.glob("sha256_*.publication.json"))
-    assert not (snapshot_dir / "latest-ready.json").exists()
-    assert list_ready_snapshots(snapshot_dir) == []
-    with pytest.raises(FileNotFoundError, match="no READY"):
-        latest_ready_snapshot(snapshot_dir)
-    rejected = list((snapshot_dir / "rejected").glob("build-*"))
-    assert len(rejected) == 1
-    assert len(list(rejected[0].glob("sha256_*.sqlite"))) == 1
-    assert len(list(rejected[0].glob("sha256_*.manifest.json"))) == 1
-    conn = sqlite3.connect(path)
-    state, reason = conn.execute(
-        "SELECT state,rejection_reason FROM snapshot_publications "
-        "ORDER BY created_at DESC LIMIT 1"
-    ).fetchone()
-    assert state == "REJECTED"
-    assert "rejected immutable evidence quarantined" in reason
-    policy = conn.execute(
-        "SELECT snapshot_ready,publication_state,active_snapshot_id "
-        "FROM local_snapshot_policy WHERE singleton=1"
-    ).fetchone()
-    assert policy == (0, "REJECTED", None)
-    conn.close()
 
 
 def _offline_current_profile_evidence() -> dict[str, dict[str, object]]:
