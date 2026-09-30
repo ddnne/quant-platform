@@ -1,13 +1,12 @@
 # ingestion-premium (Phase 3.5)
 
 Cloudflare Worker that implements the **J-Quants Premium core** ingestion loop
-on CF. It owns the schedule, secrets, R2 raw persistence, D1 structured rows, and
+on CF. It owns the schedule, secrets, R2 raw/structured persistence, D1 metadata, and
 the validation log. The loop is live only after the resources, migration,
 existing secret values, Worker, and Cron Trigger are deployed successfully.
 
-Deployment status (2026-08-11 JST): resources, migration, both existing secret
-bindings, Worker, and hourly Cron Trigger are deployed; readiness and a
-paginated export request have been verified.
+Live deployment and research acceptance are tracked separately in the
+[current runbook](../../../docs/operations/current_production_runbook.md).
 
 ## Resources
 
@@ -15,15 +14,14 @@ paginated export request have been verified.
 |------|------|---------|
 | R2 | `quant-raw` | Full response pages + digest manifest per dataset/run |
 | R2 | `quant-structured` | Structured JSONL partitions; mutable `control/equities_valuation/backfill.json` |
-| D1 | `quant-ingest` | PIT-shaped structured rows (mirror of `storage/schema.py`) + watermarks |
+| D1 | `quant-ingest` | Small mutable ingestion/run/receipt metadata and watermarks; legacy bodies retained, not the current writer |
 | Secret | `JQUANTS_API_KEY` | Required for upstream fetch; bind the existing value |
 | Secret | `INGESTION_RUN_TOKEN` | Manual run and migration rebuild only |
-| Secret | `DATA_EXPORT_TOKEN` | Structured export endpoints only |
+| Secret | `DATA_EXPORT_TOKEN` | Receipt-product metadata endpoint only |
 
-After 0002, D1 also holds `ingestion_watermarks` (one row per dataset,
-advanced after every successful ingest). The local sync script reads it
-through `/v1/export/d1?table=ingestion_watermarks`; see
-`docs/phase35_storage_scale.md` for the full scale-path plan.
+`ingestion_watermarks` retains one metadata row per dataset. Legacy D1 body
+and change-feed HTTP exports are retired and return 404. Cloud research uses
+the existing R2 data plane; no local market-history mirror is needed.
 
 ## Schedule
 
@@ -33,9 +31,11 @@ stressing the 500 req/min cap. Override in `wrangler.toml`.
 
 ## Staging valuation acquisition
 
-Staging cron is `* * * * *` and does **not** run the 24-dataset Premium loop,
-Receipt recovery, OPS projection, or READY. It ticks `equities_valuation` only
-when `STRUCTURED_BUCKET` `control/equities_valuation/backfill.json` is a valid
+Staging cron is hourly at :15, like production. It does not run the production
+24-dataset loop. Its existing receipt recovery/audit and Ops projection are
+separate from this valuation control and do not imply READY. It ticks
+`equities_valuation` only when `STRUCTURED_BUCKET`
+`control/equities_valuation/backfill.json` is a valid
 job (`kind` `canary` or `history`). Absent object is a no-op; invalid object
 STOPs without fetch. Activation is putting that mutable control object — not a
 GO flag, READY, COMPLETE, Pilot, or Mass.
@@ -70,13 +70,13 @@ History example: same fields with `kind`/`job_id` `history`, `start` ≥
 |--------|------|------|-------------|
 | GET | `/health` | none | Readiness + last-run summary |
 | POST | `/v1/run?dataset=&from=&to=&today=` | `X-Ingestion-Token` | Manual trigger (one or all datasets) |
-| GET | `/v1/export/d1?table=&cursor=&limit=` | `X-Ingestion-Token` | Read one cursor-paginated D1 JSON page |
+| POST | `/v1/export/receipt-products` | `X-Ingestion-Token` | Bounded receipt-product metadata, not historical D1 rows |
 
 ## Closed-loop guarantees
 
 1. **Scheduled** via Workers Cron (`scheduled` handler).
 2. **Secrets only on CF** — upstream, run, and export capabilities are separate and never logged.
-3. **Persist R2 raw + D1 structured** — every response page is retained under
+3. **Persist R2 raw + structured, D1 metadata** — every response page is retained under
    `raw/<dataset>/<run_id>/page-NNNNNN.json`; `manifest.json` records page/row
    counts, SHA-256 digests, and completeness. Production never stores a sample-only body.
 4. **Incremental primary**; backfill separable via `/v1/run?from=&to=`. Date-only

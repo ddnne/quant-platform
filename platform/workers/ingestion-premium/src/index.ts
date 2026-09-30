@@ -4,14 +4,12 @@
  *
  * Secrets on CF; INGESTION_RUN_TOKEN / DATA_EXPORT_TOKEN gate write/export.
  * R2 raw/structured + D1 metadata. Incremental primary; date params on `/v1/run`.
- * Per-dataset pass/fail (failures are not success). Local PIT via
- * `/v1/export/d1` and `/v1/export/changes`. Required set: `catalog.ts`.
+ * Per-dataset pass/fail (failures are not success). Cloud research uses R2.
+ * Required set: `catalog.ts`.
  *
  * Endpoints:
  *   GET  /health
  *   POST /v1/run[?dataset=..&from=..&to=..]
- *   GET  /v1/export/d1?table=..&cursor=..&limit=..
- *   GET  /v1/export/changes?after_seq=..&limit=..
  *   POST /v1/export/receipt-products
  */
 

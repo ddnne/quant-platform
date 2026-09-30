@@ -65,7 +65,14 @@ a side effect of source cleanup; identify consumers and recovery first.
   existing apply path. Keep cursor/revision/crash recovery and the existing
   apply-only/READY refusal checks. Signed private-mirror verification remains
   because READY consumers still import it; this change does not enable that
-  path locally, retire Worker export routes or delete any stored data.
+  path locally or delete any stored data.
+- Retire its matching Worker `/v1/export/d1` and `/v1/export/changes` handlers;
+  the repository has no remaining executable caller. Unknown/retired paths use
+  the existing 404 without storage access. Keep the current bounded
+  receipt-product metadata endpoint/RPC and its real workerd tests. Replace
+  the old transport's Node matrix with three public-dispatch checks. No new
+  proxy, redirect, database migration, history deletion or secret rotation.
+  Unknown external callers are not claimed to have been inspected.
 
 - `research.offline`: ten old evaluators/orchestrators/reports (4,014 lines),
   plus orphaned holding/sign-selection reports (986 lines), had no current
