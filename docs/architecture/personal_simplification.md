@@ -159,6 +159,15 @@ the requested whole-repository reduction or a 50% target is complete.
 
 ## Measured active-path consolidation
 
+Structured-bar scratch text is internal JSON decoded by the same source client,
+not a signed artifact or digest input. Use the standard finite JSON encoder
+there; decoded rows still use canonical encoding at protocol/evidence boundaries.
+A synthetic 12,000-row insertion with an already verified index took median 0.396 seconds
+with the canonical renderer versus 0.125 seconds with standard JSON (three
+passes, identical selected values). This excludes initial verification, the
+whole cloud snapshot and billing. Page primary keys and existing contiguous
+ordinal checks also make a second duplicate-page GROUP BY unnecessary.
+
 Hourly production ingestion excludes the same-day AM tip before its official
 noon-JST publication window and records `BEFORE_SAME_DAY_PUBLICATION` separately
 from attempted dataset results. No vendor fetch, receipt or successful empty

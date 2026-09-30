@@ -84,6 +84,15 @@ charter for extra hostile-Python tests.
 
 ## Consolidation decisions
 
+- Private structured-bar scratch rows use ordinary finite JSON, not the signed
+  artifact canonical renderer. The existing multiday test checks fractional
+  prices, revisions, original clocks, conflicting overlap and rollback. Keep
+  canonical serialization at all evidence/digest boundaries. Remove the
+  private-method test supplying a fabricated duplicate page list: the real
+  spool primary key prevents duplicates, and contiguous-ordinal validation
+  already rejects duplicate/gapped lists. Retain the actual DB gap test;
+  remove the redundant duplicate-page GROUP BY and duplicate row-count branch.
+
 - Retire unused archive-cold and changelog-prune handlers with their dedicated
   fake-DB/R2 tests. The prune code could delete the intended retained tail and
   both paths added legacy D1 scan/delete capabilities without a current repo
