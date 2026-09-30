@@ -14,7 +14,7 @@
 | R2 partitions | [`docs/architecture/r2_partition_scheme.md`](../architecture/r2_partition_scheme.md) |
 | Write routing | [`docs/architecture/write_routing_rules.md`](../architecture/write_routing_rules.md) |
 | Read service | `packages/data_plane/data_access/service.py` · `adapter.py` |
-| Worker write path | `platform/workers/ingestion-premium/src/write_path_config.ts` · `r2_structured_writer.ts` · `ops_cold_archive.ts` · `ops_artifacts_plan.ts` |
+| Worker write path | `platform/workers/ingestion-premium/src/write_path_config.ts` · `r2_structured_writer.ts`; historical archive/artifact-plan endpoints retired in September source cleanup |
 | PIT contracts | `packages/data_plane/data_contracts/jquants_premium_core.json` · `jsda_governed.json` · `identity.py` |
 | Permanent DEFER lock | [`docs/proof/w0815ak_w44_defer_lock_20260815.md`](w0815ak_w44_defer_lock_20260815.md) |
 

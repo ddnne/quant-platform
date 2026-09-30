@@ -18,11 +18,11 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it("retired D1 exports and unknown paths return 404 without storage or outbound IO", async () => {
-  for (const path of ["d1", "changes", "unknown"]) {
+it("retired D1 exports/maintenance and unknown paths return 404 without storage or outbound IO", async () => {
+  for (const path of ["export/d1", "export/changes", "export/unknown", "ops/archive-cold", "ops/prune-changelog"]) {
     const response = await worker.fetch(new Request(
-      `https://ingestion-premium.test/v1/export/${path}`,
-      { headers: { "X-Ingestion-Token": TOKEN } },
+      `https://ingestion-premium.test/v1/${path}`,
+      { method: "POST", headers: { "X-Ingestion-Token": TOKEN } },
     ), noStorageEnv(TOKEN));
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({ error: "not found" });

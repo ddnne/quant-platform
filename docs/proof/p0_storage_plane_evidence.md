@@ -30,7 +30,8 @@
 ## Ops visibility
 
 - MCP tool: **`storage_plane_status`** (deployed on quant-platform-ops-read-mcp)
-- Worker routes: `/v1/ops/archive-cold`, `/v1/ops/prune-changelog`, R2-only write path via `write_path_config.ts`
+- Historical Worker archive/prune routes retired in the 2026-09-30 source
+  cleanup (404/no I/O); R2-only write path remains via `write_path_config.ts`.
 
 ## Explicit non-claims
 

@@ -28,8 +28,6 @@ import {
   requireNaturalKeysV2Ready,
 } from "./natural_key_migration";
 import { RateLimiter } from "./rate_limit";
-import { handleArchiveCold } from "./ops_cold_archive";
-import { handlePruneChangelog } from "./ops_prune_changelog";
 import { handleExportPaths } from "./http_export";
 import { json } from "./http_json";
 import { ingestionTokenMatches } from "./ingestion_token";
@@ -1461,12 +1459,6 @@ export default {
     if (url.pathname === "/v1/run") return handleRun(env, request, fetch);
     const exportResponse = await handleExportPaths(request, env);
     if (exportResponse) return exportResponse;
-    if (url.pathname === "/v1/ops/archive-cold") {
-      return handleArchiveCold(request, env);
-    }
-    if (url.pathname === "/v1/ops/prune-changelog") {
-      return handlePruneChangelog(request, env);
-    }
     return json({ error: "not found" }, 404);
   },
 

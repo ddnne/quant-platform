@@ -80,6 +80,13 @@ charter for extra hostile-Python tests.
 
 ## Consolidation decisions
 
+- Retire unused archive-cold and changelog-prune handlers with their dedicated
+  fake-DB/R2 tests. The prune code could delete the intended retained tail and
+  both paths added legacy D1 scan/delete capabilities without a current repo
+  caller. The existing public-dispatch test now proves both paths return 404
+  before any storage/network access. No real records are deleted or archived;
+  current R2 writes, signed evidence, numerical and runtime ingestion tests stay.
+
 - Extend the existing Premium workerd acquisition test to prove skipped data
   causes no vendor request or validation row, current-day disclosures are
   requested, AM stops refetching after its window and evening bars use today.
