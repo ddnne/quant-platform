@@ -124,7 +124,7 @@ def test_stored_bars_reader_preserves_multiday_vintages_and_checks_bytes(tmp_pat
             spool.record_structured_bars(invalid, broken, max_object_bytes=len(invalid))
         assert spool.usage()[0] == 1
         assert spool._conn.execute("SELECT COUNT(*) FROM structured_bar_rows").fetchone()[0] == 3
-        assert not spool.month_complete("equities_bars_daily", "2020-01")
+        assert spool.verified_complete_month("equities_bars_daily", "2020-01") is None
         overlap = StructuredBarsObject(source.key.replace("test.jsonl", "overlap.jsonl"),
                                        source.sha256, source.size, source.rows)
         spool.record_structured_bars(body, overlap, max_object_bytes=len(body))
@@ -734,7 +734,7 @@ def test_partial_paginated_month_is_cleared_and_refetched(tmp_path: Path) -> Non
     )
     with pytest.raises(RuntimeError, match="page-2 failed"):
         first.fetch_dataset_evidenced("equities_bars_daily", date="2024-03-01")
-    assert first.spool.has_month("equities_bars_daily", "2024-03") is False
+    assert first.spool.verified_complete_month("equities_bars_daily", "2024-03") is None
     first.close()
     failed_calls = list(calls)
     second = client_mod.PersonalHistorySourceClient(
@@ -776,7 +776,7 @@ def test_crash_after_exhausted_before_complete_refetches(tmp_path: Path) -> None
     )
     with pytest.raises(RuntimeError, match="crash before COMPLETE"):
         first.fetch_dataset_evidenced("equities_bars_daily", date="2024-03-01")
-    assert first.spool.has_month("equities_bars_daily", "2024-03") is False
+    assert first.spool.verified_complete_month("equities_bars_daily", "2024-03") is None
     first.close()
     second = client_mod.PersonalHistorySourceClient(
         environment="production",
@@ -787,7 +787,7 @@ def test_crash_after_exhausted_before_complete_refetches(tmp_path: Path) -> None
     fetched = second.fetch_dataset_evidenced("equities_bars_daily", date="2024-03-01")
     assert second.fetch_calls == 1
     assert [row["Code"] for row in fetched.rows] == ["1001"]
-    assert second.spool.has_month("equities_bars_daily", "2024-03") is True
+    assert second.spool.verified_complete_month("equities_bars_daily", "2024-03") is not None
     second.close()
 
 
@@ -1182,7 +1182,7 @@ def test_deleted_page_is_cleared_and_refetched(tmp_path: Path) -> None:
         ("equities_bars_daily", "2024-03"),
     )
     client.spool._conn.commit()
-    assert client.spool.has_month("equities_bars_daily", "2024-03") is False
+    assert client.spool.verified_complete_month("equities_bars_daily", "2024-03") is None
     fetched = client.fetch_dataset_evidenced("equities_bars_daily", date="2024-03-01")
     assert client.fetch_calls == 4
     assert len(fetched.pages) == 2
@@ -1207,7 +1207,7 @@ def test_broken_pagination_and_dangling_cursor_are_rejected(tmp_path: Path) -> N
         ("equities_bars_daily", "2024-03"),
     )
     client.spool._conn.commit()
-    assert client.spool.has_month("equities_bars_daily", "2024-03") is False
+    assert client.spool.verified_complete_month("equities_bars_daily", "2024-03") is None
     client.close()
 
 
@@ -1218,7 +1218,7 @@ def test_forged_completion_digest_and_mutated_page_are_rejected(tmp_path: Path) 
         ("sha256:" + "f" * 64, "equities_bars_daily", "2024-03"),
     )
     client.spool._conn.commit()
-    assert client.spool.has_month("equities_bars_daily", "2024-03") is False
+    assert client.spool.verified_complete_month("equities_bars_daily", "2024-03") is None
     client.close()
 
     client = _two_page_client(tmp_path)
@@ -1238,7 +1238,7 @@ def test_forged_completion_digest_and_mutated_page_are_rejected(tmp_path: Path) 
         ("equities_bars_daily", "2024-03"),
     )
     client.spool._conn.commit()
-    assert client.spool.has_month("equities_bars_daily", "2024-03") is False
+    assert client.spool.verified_complete_month("equities_bars_daily", "2024-03") is None
     client.close()
 
 
@@ -1655,7 +1655,7 @@ def test_source_client_preserves_metrics_across_spool_reset(tmp_path: Path) -> N
     assert client.cache_metrics() == metrics
     assert client.fetch_calls == 2
     assert client.spool.usage()[0] == 0
-    assert client.spool.has_month("equities_bars_daily", "2024-03") is False
+    assert client.spool.verified_complete_month("equities_bars_daily", "2024-03") is None
     client.close()
 
 

@@ -52,21 +52,23 @@ terminal publication.
 This is the **only executable production operations document**. Historical
 Phase 6.1 / 6.2 runbooks are non-executable. Live GO flags live in
 [`../phase62_residual_status.md`](../phase62_residual_status.md); dated
-observation tables there are history. Current source, staging-schema, and
-read-only Ops facts live in
-[`current_work_ledger.json`](current_work_ledger.json). Review findings
+observation tables there are history. The requirement and evidence-owner index is
+[`current_work_ledger.json`](current_work_ledger.json), not a current live-state
+inventory or approval. Use the latest target-specific accepted evidence and
+explicit approval; revalidate the scoped live state before mutation. Review findings
 live in [`../phase633_finding_ledger.md`](../phase633_finding_ledger.md).
 
 Do not print secret values. Check presence only.
 
 ## Current staging outcome
 
-Codex implements while Grok is unavailable. Read `current_work_ledger.json`
-`approvals`, `lanes`, and `candidate` for dated source/rollout evidence and the
-one active job identity. Re-read live state before mutation. The approved
-staging outcome includes bounded candidate construction and conditional
-READY/Paper-only Trader publication after all proofs; it excludes actual
-Pilot/backtests, production and cancelled MCP/C09 activation.
+Codex implements while Grok is unavailable. A source or rollout checkpoint does
+not establish an active job, an unconsumed attempt, or current execution authority.
+Follow the latest explicit approval for the exact target, source and operation;
+track any admitted job by that same identity until authoritative terminal state.
+Candidate construction, READY/Paper-only Trader publication, research execution
+and production are separate approval and evidence stages. Cancelled MCP/C09 work
+must not resume implicitly. Never infer new permission from a historical ledger.
 
 Receipt acceptance is AUDIT_ONLY, not research GO. Historical reconstruction
 preserves original acquisition clocks and does not prove contemporaneous
@@ -213,11 +215,12 @@ remote apply results only in immutable release evidence.
   is the final check, not a blocker for prerequisite Worker code rollout.
   This bounded repair does not run D1 migration, JSDA activation, or DLQ
   mutation.
-- **Current staging rollout:** exact source, versions, migrations, module-byte
-  acceptance, cloud image and job identity live only in `current_work_ledger.json`
-  `lanes` / `candidate`. The staging MASS credential is recoverable; reuse it
-  without displaying it. Code rollout is not data/READY/Pilot acceptance.
-  JSDA `--activate`, cancelled MCP work and production remain separately held.
+- **Staging rollout acceptance:** record exact source, versions, migrations when
+  applicable, module bytes, cloud image and any admitted job identity in the
+  target-specific evidence. The work ledger indexes requirements, not live
+  versions. Reuse existing credentials without displaying them. Code rollout is
+  not data/READY/Pilot acceptance; JSDA activation, cancelled MCP work, production
+  and research are not implicitly authorized by staging acceptance.
 - **JSDA cutover follow-ups (open):** whole shared-D1 Time Travel restore is
   removed from the operator. A Time Travel bookmark remains recovery-reference
   evidence only; Premium and Receipt writers are not fenced. `--rollback`

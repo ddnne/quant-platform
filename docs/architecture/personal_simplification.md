@@ -159,6 +159,27 @@ the requested whole-repository reduction or a 50% target is complete.
 
 ## Measured active-path consolidation
 
+Month-cache shard writing streams SQLite rows into a single prepared batch
+instead of retaining a second complete row list and rebuilding SQL per row.
+The verifier keeps bounded whole-table counts, checks each exact page's actual
+rows once, and compares total observed rows against the table count. This
+covers foreign/orphan rows without separate ownership scans or per-page COUNTs.
+Cache bytes, schema, provenance and completion digests are unchanged. Import
+remains one rollback-capable transaction; no new database, format or authority.
+Six unused spool convenience/read methods are removed with test-only callers
+redirected to the real verifier. Existing cache corruption/reuse tests retain
+their guarantees; foreign-month and fractional-page cases plus a real SQLite
+interrupted-import assertion extend those tests rather than adding a parallel
+mock suite. Page ordinals must be actual integers, not truncated floats, so
+the ownership check agrees with the later row/page join.
+
+On a synthetic 60,000-row / 20-page shard (three tracemalloc-instrumented runs),
+write median changed from 1.766s / 39.75MB peak to 0.269s / 2.12MB; verification
+from 2.215s to 1.718s. The output SQLite SHA-256 was identical. Import time was
+not improved (0.444s before / 0.456s after); its batch removes repetitive glue,
+not proven runtime cost. These are local synthetic processing measurements,
+not end-to-end cloud timings, fewer R2 requests or D1/invoice savings.
+
 Personal DRAFT snapshot creation reuses its own measured dataset observations
 and hashes when constructing the returned value. The backup still checks the
 final standalone SQLite file; publication checks destination bytes and exact

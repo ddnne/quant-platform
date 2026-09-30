@@ -550,7 +550,7 @@ def write_month_shard(
         ORDER BY page_ordinal, row_index
         """,
         (dataset, month),
-    ).fetchall()
+    )
     if destination.exists():
         destination.unlink()
     shard = sqlite3.connect(str(destination))
@@ -640,22 +640,16 @@ def write_month_shard(
                 str(state["completion_digest"]),
             ),
         )
-        for page in pages:
-            shard.execute(
-                f"""
-                INSERT INTO source_pages ({", ".join(_PAGE_COLUMNS)})
-                VALUES ({", ".join("?" for _ in _PAGE_COLUMNS)})
-                """,
-                tuple(page[name] for name in _PAGE_COLUMNS),
-            )
-        for row in rows:
-            shard.execute(
-                f"""
-                INSERT INTO source_rows ({", ".join(_ROW_COLUMNS)})
-                VALUES ({", ".join("?" for _ in _ROW_COLUMNS)})
-                """,
-                tuple(row[name] for name in _ROW_COLUMNS),
-            )
+        shard.executemany(
+            f"INSERT INTO source_pages ({', '.join(_PAGE_COLUMNS)}) "
+            f"VALUES ({', '.join('?' for _ in _PAGE_COLUMNS)})",
+            (tuple(page) for page in pages),
+        )
+        shard.executemany(
+            f"INSERT INTO source_rows ({', '.join(_ROW_COLUMNS)}) "
+            f"VALUES ({', '.join('?' for _ in _ROW_COLUMNS)})",
+            (tuple(row) for row in rows),
+        )
         shard.commit()
         shard.execute("VACUUM")
     finally:
@@ -748,33 +742,6 @@ def verify_month_shard(
         )
         if total_row_sql > CACHE_MAX_ROWS_TOTAL:
             raise AcquisitionCacheInvalid("cache row count exceeds the bound")
-        declared_row_sum = int(
-            connection.execute(
-                "SELECT COALESCE(SUM(row_count), 0) FROM source_pages"
-            ).fetchone()[0]
-        )
-        if declared_row_sum != total_row_sql or declared_row_sum > CACHE_MAX_ROWS_TOTAL:
-            raise AcquisitionCacheInvalid("cache row counts do not match pages")
-        extra_rows = connection.execute(
-            "SELECT COUNT(*) FROM source_rows WHERE dataset!=? OR month!=?",
-            (dataset, month),
-        ).fetchone()
-        if int(extra_rows[0]) != 0:
-            raise AcquisitionCacheInvalid("cache rows include a foreign month")
-        orphan = connection.execute(
-            """
-            SELECT 1 FROM source_rows
-            WHERE NOT EXISTS (
-                SELECT 1 FROM source_pages
-                WHERE source_pages.dataset = source_rows.dataset
-                  AND source_pages.month = source_rows.month
-                  AND source_pages.page_ordinal = source_rows.page_ordinal
-            )
-            LIMIT 1
-            """
-        ).fetchone()
-        if orphan is not None:
-            raise AcquisitionCacheInvalid("cache has orphan source_rows")
         pages = connection.execute(
             f"""
             SELECT {", ".join(_PAGE_COLUMNS)}
@@ -789,7 +756,10 @@ def verify_month_shard(
         count = len(pages)
         expected_ordinal = 0
         for page in pages:
-            if int(page["page_ordinal"]) != expected_ordinal:
+            if (
+                type(page["page_ordinal"]) is not int
+                or page["page_ordinal"] != expected_ordinal
+            ):
                 raise AcquisitionCacheInvalid("cache page ordinals are not contiguous")
             expected_ordinal += 1
         if expected_ordinal != count or count != declared:
@@ -808,17 +778,6 @@ def verify_month_shard(
             stored_count = int(page["row_count"])
             if stored_count < 0 or stored_count > CACHE_MAX_ROWS_PER_PAGE:
                 raise AcquisitionCacheInvalid("cache page row count exceeds the bound")
-            row_sql_count = int(
-                connection.execute(
-                    """
-                    SELECT COUNT(*) FROM source_rows
-                    WHERE dataset=? AND month=? AND page_ordinal=?
-                    """,
-                    (dataset, month, ordinal),
-                ).fetchone()[0]
-            )
-            if row_sql_count != stored_count:
-                raise AcquisitionCacheInvalid("cache page row count does not match")
             page_rows = connection.execute(
                 f"""
                 SELECT {", ".join(_ROW_COLUMNS)}
@@ -827,11 +786,11 @@ def verify_month_shard(
                 ORDER BY row_index
                 """,
                 (dataset, month, ordinal),
-            ).fetchall()
+            )
             _require_json_object(str(page["request_params_json"]), "request params")
             expected_index = 0
             for row in page_rows:
-                if int(row["row_index"]) != expected_index:
+                if expected_index >= stored_count or int(row["row_index"]) != expected_index:
                     raise AcquisitionCacheInvalid("cache page rows do not match descriptor")
                 if str(row["dataset"]) != dataset or str(row["month"]) != month:
                     raise AcquisitionCacheInvalid("cache rows include a foreign month")
@@ -845,6 +804,10 @@ def verify_month_shard(
             if expected_index != stored_count:
                 raise AcquisitionCacheInvalid("cache page row count does not match")
             copied_pages.append({name: page[name] for name in _PAGE_COLUMNS})
+        # Exact-page iteration covers every row, including total ownership.
+        # Compare observed counts, not a coerced sum of declared row counts.
+        if len(copied_rows) != total_row_sql:
+            raise AcquisitionCacheInvalid("cache has unassigned source_rows")
         reconstructed = [
             {
                 "body_digest": page["body_digest"],
