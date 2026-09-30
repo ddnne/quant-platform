@@ -159,6 +159,25 @@ the requested whole-repository reduction or a 50% target is complete.
 
 ## Measured active-path consolidation
 
+Personal DRAFT snapshot creation reuses its own measured dataset observations
+and hashes when constructing the returned value. The backup still checks the
+final standalone SQLite file; publication checks destination bytes and exact
+manifest collisions. Reopening artifacts and end-of-run verification retain
+the full independent verifier. No caller-supplied evidence or verification-skip
+switch is added. A synthetic 18,976,768-byte fixture (three fresh creations)
+reduced creation-only median time from 0.0835 to 0.0549 seconds: full-file hashes
+3→2, dataset aggregate passes 2→1 and SQLite quick checks 3→1. This is not a cloud
+snapshot benchmark or invoice measurement; the post-benchmark external verify
+also passed and is excluded from those timings.
+
+The continuous index-volatility base sleeve and subsequent candidate evaluation
+share the existing bounded prepared frame for one pinned view. Do not delete
+that cache between these stages. Snapshot/feature/session/as-of keys, size caps
+and exception cleanup are unchanged; numerical rules and execution clocks are
+unchanged. The service regression now runs a real canonical cohort on synthetic
+data through both stages and observes reuse, replacing the isolated dispatch
+predicate probe. Existing cached/uncached result-equivalence tests remain.
+
 Structured-bar scratch text is internal JSON decoded by the same source client,
 not a signed artifact or digest input. Use the standard finite JSON encoder
 there; decoded rows still use canonical encoding at protocol/evidence boundaries.

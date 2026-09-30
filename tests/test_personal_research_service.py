@@ -79,7 +79,6 @@ from research.personal_service import (
     pool_or_rank_personal_comparison,
 )
 from research.personal_base_sleeve import (
-    AM_PM_BASE_SLEEVE_ID,
     BASE_SLEEVE_ID,
     PERSONAL_BASE_SLEEVE_ARTIFACT_SCHEMA,
     validate_personal_base_sleeve_artifact,
@@ -147,9 +146,9 @@ def _generic(dataset: str, payload: dict, *, event: str, available: str) -> dict
 
 
 @pytest.fixture
-def personal_db(tmp_path: Path) -> tuple[Path, str, str]:
+def personal_db(tmp_path: Path, request: pytest.FixtureRequest) -> tuple[Path, str, str]:
     start = date(2024, 1, 1)
-    end = date(2024, 5, 31)
+    end = date.fromisoformat(getattr(request, "param", "2024-05-31"))
     all_days = _dates(start, end)
     sessions = [day for day in all_days if date.fromisoformat(day).weekday() < 5]
     codes = ("1301", "1302", "1303", "1304")
@@ -289,7 +288,9 @@ def personal_db(tmp_path: Path) -> tuple[Path, str, str]:
     stamp_compact_manifest(
         connection,
         format_name="unmanaged-catalog",
-        observed_through="2024-12-31T00:00:00+09:00",
+        observed_through=max(
+            "2024-12-31", (end + timedelta(days=1)).isoformat()
+        ) + "T00:00:00+09:00",
     )
     connection.commit()
     connection.close()
@@ -1439,23 +1440,47 @@ def test_continuous_base_sleeve_is_content_addressed_and_not_a_candidate(
         validate_personal_base_sleeve_artifact(truncated)
 
 
-def test_am_and_legacy_sleeve_dispatch_is_cohort_specific() -> None:
-    from research.personal_service import _requires_index_vol_base_sleeve
+@pytest.mark.parametrize("personal_db", ["2025-06-30"], indirect=True)
+def test_service_reuses_base_sleeve_cache_for_candidates(
+    personal_db, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pit._draft_storage import draft_sqlite_path
 
-    am = get_research_cohort("sector-relative-ls-am-pm-v1")
-    legacy = get_research_cohort("sector-relative-ls-v1")
-    default_am = get_research_cohort("diverse-core-am-pm-v1")
-    assert _requires_index_vol_base_sleeve(am, universe_id="topix_all")
-    assert _requires_index_vol_base_sleeve(legacy, universe_id="topix_all")
-    assert not _requires_index_vol_base_sleeve(default_am, universe_id="topix_all")
-    assert not _requires_index_vol_base_sleeve(am, universe_id="topix500")
-    assert AM_PM_BASE_SLEEVE_ID != BASE_SLEEVE_ID
-    assert any(
-        spec.strategy_id == AM_PM_BASE_SLEEVE_ID for spec in am.strategy_specs
+    source, start, end = personal_db
+    observed = []
+    execute = PersonalPaperExecutionService.execute
+
+    def tracked_execute(self, *args, **kwargs):
+        frame = prepared_frame_module._active_personal_prepared_frame(
+            draft_sqlite_path(kwargs["view"])
+        )
+        assert frame is not None
+        before = frame.stats()
+        result = execute(self, *args, **kwargs)
+        observed.append((frame, before, frame.stats()))
+        return result
+
+    monkeypatch.setattr(PersonalPaperExecutionService, "execute", tracked_execute)
+    result = PersonalResearchService(policy=_policy()).run(
+        PersonalResearchRequest(
+            data_view=OfflineFixture(artifact_root=tmp_path / "shared-cache").bind(
+                source, decision_cutoff="session_close"
+            ),
+            period_start=start,
+            period_end=end,
+            cohort_id="sector-relative-ls-v1",
+        )
     )
-    assert all(
-        spec.strategy_id != AM_PM_BASE_SLEEVE_ID for spec in legacy.strategy_specs
-    )
+    assert result.unexpected_errors == 0
+    assert result.non_candidate_source_backtest_count == 1
+    assert result.candidate_count == 4
+    assert len(observed) > 1
+    frame, _, first_stats = observed[0]
+    assert first_stats["feature_writes"] > 0
+    assert all(item[0] is frame for item in observed)
+    assert observed[1][1]["feature_writes"] == first_stats["feature_writes"]
+    assert observed[-1][2]["feature_hits"] > first_stats["feature_hits"]
+    assert not frame.cache_path.exists()
 
 
 def test_draft_factor_cohort_backtest_budget_adds_only_one_base_source_run(

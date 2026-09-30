@@ -338,7 +338,20 @@ def materialize_personal_snapshot(
 
         _write_manifest_without_replace(manifest_path, manifest)
         os.chmod(manifest_path, 0o444)
-        return verify_personal_snapshot(manifest_path)
+        # Backup health, dataset observations and published bytes were checked
+        # above. Reuse those measurements inside this creation call; reopening
+        # an artifact still performs the full independent verification below.
+        return PersonalSnapshot(
+            snapshot_id=snapshot_id,
+            db_path=database_path,
+            manifest_path=manifest_path,
+            database_sha256=database_sha256,
+            logical_data_snapshot_id=logical_id,
+            required_datasets=datasets,
+            period_start=start,
+            period_end=end,
+            closure_digests=closures,
+        )
     finally:
         temporary.unlink(missing_ok=True)
 

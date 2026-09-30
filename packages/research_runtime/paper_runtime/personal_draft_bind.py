@@ -7,7 +7,7 @@ may unwrap the private draft storage bind.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
 from typing import Any
@@ -207,10 +207,6 @@ def execute_personal_draft(
         approved_feature_refs=iter_feature_refs(spec),
         view=view,
     )
-
-
-def paper_config_fields(result_config: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    return dict(result_config or {})
 
 
 __all__ = [

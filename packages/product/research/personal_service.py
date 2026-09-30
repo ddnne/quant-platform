@@ -2270,8 +2270,8 @@ class PersonalResearchService:
         else:
             fold_periods, holdout_period = periods
             executor = PersonalPaperExecutionService()
-            if base_sleeve_required:
-                with prepared_frame_scope(view):
+            with prepared_frame_scope(view):
+                if base_sleeve_required:
                     if cohort_ref is None:
                         raise RuntimeError("base sleeve cohort provenance is absent")
                     matching = [
@@ -2300,13 +2300,12 @@ class PersonalResearchService:
                         execution_mode=execution_mode,
                         execution_contract=execution_contract,
                     )
-            candidate_execution = {
-                **candidate_execution,
-                "model": "serial",
-                "worker_processes": 1,
-                "max_parallel_bound": 1,
-            }
-            with prepared_frame_scope(view):
+                candidate_execution = {
+                    **candidate_execution,
+                    "model": "serial",
+                    "worker_processes": 1,
+                    "max_parallel_bound": 1,
+                }
                 for spec, closure in zip(specs, closures, strict=True):
                     if request.deadline is not None:
                         request.deadline.check()
