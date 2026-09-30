@@ -1,7 +1,7 @@
-"""Phase 3.5 — private D1 export and legacy HTTP local-sync behavior.
+"""Private D1 export and offline SQLite artifact import behavior.
 
 No explicit source selects the pinned remote D1. Offline artifact tests never
-touch the network; live HTTP smokes are ``@pytest.mark.live``.
+touch the network. Current cloud research reads R2 independently.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import sqlite3
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import unquote
 
 import pytest
 import pit
@@ -245,12 +245,8 @@ def test_sync_preserves_request_planned_coverage_inventory(tmp_path, sync_module
 
 
 def test_cf_export_sync_reaches_nonempty_pit_path(synced_cf_d1_db):
-    """CF-shaped export → paginated sync → generic-record PIT bars."""
+    """Synthetic SQLite export → paginated apply → generic-record PIT bars."""
     assert synced_cf_d1_db.rc == 0
-    assert len(synced_cf_d1_db.calls) > 1
-    queries = [parse_qs(urlparse(url).query) for url in synced_cf_d1_db.calls]
-    assert all(query["limit"] == ["2"] for query in queries)
-    assert any("cursor" in query for query in queries[1:])
 
     with draft_pit_observation_clock("2025-04-04T15:30:00+09:00"):
         bars = pit.get_equity_bars_daily(
@@ -1339,29 +1335,3 @@ def test_publish_ops_flag_default_off(sync_module):
     assert on.publish_ops is True
     off = parser.parse_args(["--db=test.sqlite"])
     assert off.publish_ops is False
-
-
-def test_unsigned_pilot_ready_json_is_rejected(
-    tmp_path, sync_module, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    class OfflineClient:
-        def close(self) -> None:
-            return None
-
-    monkeypatch.setattr(sync_module, "_new_http_client", OfflineClient)
-    monkeypatch.setattr(
-        sync_module,
-        "_sync_table",
-        lambda *_args, **_kwargs: (1, 0, 0, 0, None),
-    )
-    rc = sync_module.main(
-        [
-            "--db",
-            str(tmp_path / "local.sqlite"),
-            "--url",
-            "https://offline.invalid",
-            "--pilot-ready-evidence",
-            str(tmp_path / "unsigned.json"),
-        ]
-    )
-    assert rc == 1

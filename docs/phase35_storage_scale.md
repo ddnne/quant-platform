@@ -69,49 +69,12 @@ The Worker also surfaces the table on `/v1/export/d1?table=ingestion_watermarks`
 so an operator can ask "when did dataset X last advance?" without touching the
 D1 console.
 
-## Private local bootstrap and incremental sync
+## Historical local mirror
 
-The production path does not expose ingestion-premium on `workers.dev`.
-Instead, `scripts/sync_d1_to_sqlite.py --wrangler-remote` invokes the
-repository-pinned Wrangler 4.125.0 with the operator's existing authenticated profile,
-wired only to the repository-pinned production config and governed
-`quant-ingest` database id. The CLI exposes no executable, config, environment,
-database-name, or database-id override. It
-writes the remote D1 export only inside a mode-`0700` temporary directory, and
-removes it after apply. Provider stdout/stderr and credentials are never
-printed.
-
-The export is materialized into an isolated read-only SQLite source and checked
-with `PRAGMA integrity_check`. A full bootstrap applies every governed fact and
-control table and advances `sync_change_state` only after the complete table
-set succeeds. `--incremental` consumes `ingestion_change_log` where
-`change_seq > last_applied_change_seq` and commits the applied cursor after
-each durable page. If the process stops after fact upsert but before cursor
-commit, replay is idempotent. An export older than the local cursor is rejected.
-
-```bash
-# First private bootstrap
-.venv/bin/python scripts/sync_d1_to_sqlite.py \
-  --db data/structured/ingestion.sqlite \
-  --wrangler-remote
-
-# Later monotonic applies
-.venv/bin/python scripts/sync_d1_to_sqlite.py \
-  --db data/structured/ingestion.sqlite \
-  --wrangler-remote \
-  --incremental
-```
-
-`--d1-export /path/to/export.sql` accepts a previously acquired SQL or
-standalone SQLite artifact for offline recovery. That operator-supplied mode is
-explicitly apply-only and cannot publish production READY or trusted cursor
-evidence. An authenticated full bootstrap removes prior governed rows before
-apply, then verifies source/local row counts and digests. Authenticated
-incremental apply requires the prior trusted content identity to match before
-it can advance. Every private apply records artifact digest, source cursor,
-applied cursor, source/local content identities, and status in
-`local_d1_export_sync_runs`. The HTTP `/v1/export/*` path remains temporarily
-available for legacy clients but is no longer the production default.
+The local HTTP client is retired. This historical design is superseded by
+[cloud R2 storage](architecture/cf_native_storage_plane.md). The retained private
+mirror verifier and offline SQLite importer do not authorize local authentic
+market downloads; unsigned artifacts remain apply-only, never READY evidence.
 
 ## Migration path (out of the generic `jquants_records` dump)
 

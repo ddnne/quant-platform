@@ -59,6 +59,14 @@ a side effect of source cleanup; identify consumers and recovery first.
 
 ## Retired paths and retained guarantees
 
+- Retire the local mirror's legacy HTTP transport (`--url`), its separate
+  paging loop and mock-only transport tests. Cloud research already consumes
+  R2; synthetic PIT fixtures now import real SQLite artifacts through the
+  existing apply path. Keep cursor/revision/crash recovery and the existing
+  apply-only/READY refusal checks. Signed private-mirror verification remains
+  because READY consumers still import it; this change does not enable that
+  path locally, retire Worker export routes or delete any stored data.
+
 - `research.offline`: ten old evaluators/orchestrators/reports (4,014 lines),
   plus orphaned holding/sign-selection reports (986 lines), had no current
   executable caller. Source is recoverable at `c99640944c6acc9c768afbf5080433887bcedddd`.

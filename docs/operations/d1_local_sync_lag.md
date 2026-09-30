@@ -79,61 +79,9 @@ Does **not** claim READY, paper-research readiness, or full fact materialization
    `scripts/sync_d1_to_sqlite.py --incremental --table jquants_records`
    after skipping non-local markers (`jquants_records_r2`, `equities_master_scd2`).
 
-## How to re-measure
+## Current operation
 
-Remote (from `platform/workers/ingestion-premium`):
-
-```bash
-npx wrangler d1 execute quant-ingest --remote --command \
-  "SELECT COUNT(*) AS n,
-          COUNT(CASE WHEN last_export_cursor IS NULL THEN 1 END) AS null_export
-   FROM ingestion_watermarks;"
-
-npx wrangler d1 execute quant-ingest --remote --command \
-  "SELECT MAX(change_seq) AS max_seq, COUNT(*) AS n FROM ingestion_change_log;"
-
-npx wrangler d1 execute quant-ingest --remote --command \
-  "SELECT dataset, last_export_cursor FROM ingestion_watermarks
-   WHERE dataset IN ('markets_calendar','equities_bars_daily','indices_bars_daily_topix')
-   ORDER BY dataset;"
-```
-
-Local + lag report (read-only):
-
-```bash
-# use repo .venv (cryptography / package imports)
-source .venv/bin/activate
-python scripts/report_d1_local_sync_lag.py \
-  --db data/structured/ingestion.sqlite \
-  --remote-max-seq 2859284 \
-  --remote-change-log-n 367 \
-  --focus markets_calendar,equities_bars_daily,indices_bars_daily_topix
-```
-
-## Private sync commands
-
-```bash
-source .venv/bin/activate
-
-# First bootstrap: authenticated Wrangler talks to D1 without a public Worker.
-python scripts/sync_d1_to_sqlite.py \
-  --db data/structured/ingestion.sqlite \
-  --wrangler-remote
-
-# Subsequent apply: sequenced pages resume after the durable local cursor.
-python scripts/sync_d1_to_sqlite.py \
-  --db data/structured/ingestion.sqlite \
-  --wrangler-remote \
-  --incremental \
-  --page-limit 500
-```
-
-The executable, production config/environment, database name, and database id
-are repository-pinned and are not CLI inputs. Wrangler reads its authenticated
-profile directly; no API token or export
-secret is passed on the command line. Its provider output is withheld. The
-temporary SQL is mode `0600` inside a mode `0700` directory and is removed
-after apply. `--d1-export` is offline recovery only and cannot mint READY or a
-trusted source/export cursor. A remote full bootstrap exact-reconciles the
-governed tables; remote incremental apply refuses any DB whose prior trusted
-content identity has changed.
+The preceding measurements are historical, not current operational evidence.
+Local HTTP sync is retired; do not repeat the former whole-table counts or
+market-history downloads. Use the [current runbook](current_production_runbook.md)
+and [cloud storage architecture](../architecture/cf_native_storage_plane.md).
