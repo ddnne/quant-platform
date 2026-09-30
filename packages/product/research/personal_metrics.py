@@ -139,32 +139,35 @@ def _drawdown(
     )
 
 
-def _return_series_from_equity(
+def equity_return_series(
     equity_curve: Sequence[Mapping[str, Any]],
     *,
     starting_capital: float,
-) -> tuple[list[float], list[str], list[float], int]:
+) -> tuple[list[float], list[str], list[float]]:
+    """Convert a complete positive equity path; never censor failed observations.
+
+    Personal execution does not define returns after insolvency or capital
+    injection. Such paths and missing/non-finite observations are unavailable
+    for comparison, not a shorter, apparently profitable equity curve.
+    """
     previous = _finite(starting_capital)
     if previous is None or previous <= 0.0:
         raise ValueError("starting_capital must be positive and finite")
     returns: list[float] = []
     dates: list[str] = []
     equities = [previous]
-    invalid = 0
     for row in equity_curve:
         current = _finite(row.get("equity"))
         if current is None or current <= 0.0:
-            invalid += 1
-            continue
+            raise ValueError("paper equity must be positive and finite")
         value = current / previous - 1.0
         if not math.isfinite(value):
-            invalid += 1
-            continue
+            raise ValueError("paper equity return must be finite")
         returns.append(value)
         dates.append(str(row.get("date") or ""))
         equities.append(current)
         previous = current
-    return returns, dates, equities, invalid
+    return returns, dates, equities
 
 
 def _monthly_returns(returns: Sequence[float], dates: Sequence[str]) -> list[float]:
@@ -301,7 +304,7 @@ def summarize_performance(
     annualization = _finite(periods_per_year)
     if annualization is None or annualization <= 0.0:
         raise ValueError("periods_per_year must be positive and finite")
-    returns, dates, equities, invalid = _return_series_from_equity(
+    returns, dates, equities = equity_return_series(
         equity_curve,
         starting_capital=starting_capital,
     )
@@ -364,7 +367,7 @@ def summarize_performance(
                 "fill events must not be labelled winning trades"
             ),
         },
-        "invalid_equity_observations": invalid,
+        "invalid_equity_observations": 0,
         "year_metrics": _year_metrics(
             returns,
             dates,
@@ -567,6 +570,7 @@ __all__ = [
     "PERSONAL_FOLD_STABILITY_SCHEMA",
     "PERSONAL_PERFORMANCE_DELTA_SCHEMA",
     "PERSONAL_PERFORMANCE_SCHEMA",
+    "equity_return_series",
     "performance_delta",
     "summarize_performance",
     "summarize_validation_performance",

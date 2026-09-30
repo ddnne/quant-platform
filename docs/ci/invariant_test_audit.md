@@ -80,6 +80,13 @@ charter for extra hostile-Python tests.
 
 ## Consolidation decisions
 
+- Personal execution and performance presentation share one positive, finite
+  equity-to-return converter. Never delete an invalid observation and report
+  the remaining path as a profitable shorter sample. The existing degenerate
+  metrics test covers an invalid terminal value through both consumers; normal
+  return/drawdown/financing tests remain. Insolvency/recapitalization accounting
+  is not introduced, and historical result artifacts are not rewritten.
+
 - Retiring the two legacy Worker D1 export routes also removes their Node
   table/limit/cursor cases. Three public-dispatch tests retain no-IO 404,
   receipt-product credential refusal and authorized decoder routing. Existing
