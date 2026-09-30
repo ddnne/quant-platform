@@ -514,6 +514,68 @@ def test_empty_actual_day_page_is_kept_without_inventing_bytes(tmp_path: Path) -
     client.close()
 
 
+def test_selective_spool_reads_do_not_scan_unrelated_symbols(tmp_path: Path) -> None:
+    spool = client_mod.AcquisitionSpool(tmp_path / "synthetic.sqlite")
+    months = ("2024-01", "2024-02", "2024-03")
+    expected = []
+    try:
+        for month in months:
+            rows = [
+                {"Code": str(10000 + i), "Date": month + ("-01" if i == 0 else "-15")}
+                for i in range(2000)
+            ]
+            expected.append(rows[0])
+            spool.begin_month("fins_summary", month, {
+                "dataset_id": "fins_summary", "segment_id": month,
+            })
+            spool.record_page(
+                dataset="fins_summary", month=month, page_ordinal=0,
+                slice_date=None, body_digest="sha256:" + hashlib.sha256(
+                    canonical_json(rows).encode()
+                ).hexdigest(), row_count=len(rows), request_path="/v2/fins/summary",
+                request_params={"from": month + "-01"}, response_status=200,
+                pagination_in=None, pagination_out=None, evidence_state="RAW_PAGE", rows=rows,
+            )
+            pages = tuple(spool._page_from_row(row) for row in spool._conn.execute(
+                "SELECT * FROM source_pages WHERE dataset=? AND month=? ORDER BY page_ordinal",
+                ("fins_summary", month),
+            ))
+            spool.complete_month(
+                "fins_summary", month, page_count=1,
+                completion_digest=client_mod.month_completion_digest(pages),
+            )
+        # Initial full validation is required once; subsequent selection must
+        # scale with matching rows, not repeat the entire 6,000-row scan.
+        all_pages = spool.pages_for_months("fins_summary", months)
+        for selection, selected_months, wanted, contributing_pages in (
+            ({"code": "10000"}, months, expected, all_pages),
+            ({"row_date": "2024-03-01"}, months, expected[-1:], all_pages[-1:]),
+            ({"code": "10000", "date_from": "2024-02-01", "date_to": "2024-02-29"},
+             months[1:], expected[1:2], all_pages[1:2]),
+        ):
+            steps = 0
+
+            def count_steps():
+                nonlocal steps
+                steps += 1
+                return 0
+
+            spool._conn.set_progress_handler(count_steps, 1)
+            try:
+                result = spool.select_rows("fins_summary", selected_months, **selection)
+            finally:
+                spool._conn.set_progress_handler(None, 0)
+            selected, contributing, pages, source_count = result
+            assert selected == wanted
+            assert contributing == tuple(page.body_digest for page in contributing_pages)
+            assert pages == all_pages[-len(selected_months):]
+            assert source_count == 2000 * len(selected_months)
+            # Generous VM-work ceiling, not timing or an exact query-plan string.
+            assert steps < 3000
+    finally:
+        spool.close()
+
+
 def test_restart_reuses_ephemeral_spool_without_refetch(tmp_path: Path) -> None:
     calls = {"n": 0}
     spool = tmp_path / "spool.sqlite"

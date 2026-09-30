@@ -104,6 +104,16 @@ the requested whole-repository reduction or a 50% target is complete.
 
 ## Measured active-path consolidation
 
+The cloud acquisition spool selects individual symbols and exact dates through
+its existing indexes. SQLite's month-first plan otherwise scans unrelated rows
+again for each financial series. Month/PIT predicates, ordering and provenance
+are unchanged; range-only reads retain planner choice. No new index or cache.
+On a synthetic 6,000-row / three-month fixture, one symbol selection fell from
+36,274 to 225 SQLite VM steps and one exact-date selection from 36,206 to 121.
+Rows and provenance hashes matched before/after. One real SQLite regression
+bounds work rather than asserting SQL text or wall-clock timing. These are
+synthetic measurements, not production runtime or invoice savings.
+
 The stored-bars reader now reuses its job-local month offsets for one bounded
 R2 Range GET when an object is not in the existing 1 GiB compressed cache.
 Initial whole-object verification is retained; selected-span hashes are derived

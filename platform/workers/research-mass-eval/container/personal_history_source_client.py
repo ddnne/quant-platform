@@ -942,10 +942,18 @@ class AcquisitionSpool:
         if code is not None:
             clauses.append("code=?")
             params.append(code)
+        # A month-first plan scans every symbol again for each financial series.
+        # Use the existing selective index; retain the same month/PIT filters
+        # and explicit provenance order. Range-only reads keep planner choice.
+        source_index = (
+            " INDEXED BY source_rows_dataset_code" if code is not None
+            else " INDEXED BY source_rows_dataset_date" if row_date is not None
+            else ""
+        )
         where = " AND ".join(clauses)
         rows = self._conn.execute(
             f"""
-            SELECT row_json, body_digest FROM source_rows
+            SELECT row_json, body_digest FROM source_rows{source_index}
             JOIN source_pages USING (dataset, month, page_ordinal)
             JOIN month_state USING (dataset, month)
             WHERE {where}
