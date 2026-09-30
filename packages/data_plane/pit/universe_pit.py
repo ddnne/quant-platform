@@ -20,6 +20,7 @@ from typing import Any, Iterable, Mapping, Protocol, Sequence
 from zoneinfo import ZoneInfo
 
 from data_contracts.identity import natural_key as contract_natural_key
+from data_contracts.market_sessions import is_tse_full_session
 from data_contracts.personal_history_compact import (
     compact_history_state,
     compact_rebuild_reason,
@@ -770,7 +771,7 @@ def _universe_day_slices_from_connection(
                     f"markets_calendar has duplicate natural keys for {day}"
                 )
             calendar_event = next(iter(visible_calendar.values()))
-            if calendar_event.holiday != "1":
+            if not is_tse_full_session(day, calendar_event.holiday):
                 continue
             saw_trading_day = True
             if not current_snapshot or not current_members:

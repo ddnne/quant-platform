@@ -14,6 +14,7 @@ from types import MappingProxyType
 from typing import Any, Iterator, Mapping, Sequence
 
 from data_contracts.identity import natural_key as contract_natural_key
+from data_contracts.market_sessions import is_tse_full_session
 from data_contracts.read_scopes import (
     DatasetReadRequirement,
     combined_calendar_evidence_mode,
@@ -420,11 +421,11 @@ def _select_compiled_dependency_scope(
         selected_keys["markets_calendar"].add(row["natural_key"])
         selected_digests["markets_calendar"].add(row["product_row_digest"])
         selected_event_dates["markets_calendar"].add(day)
-        if (
+        if is_tse_full_session(
+            day,
             _payload_value(
                 row["payload"], "HolidayDivision", "HolDiv", "holiday_division"
-            )
-            == "1"
+            ),
         ):
             trading_dates.append(day)
     in_period_trading = tuple(

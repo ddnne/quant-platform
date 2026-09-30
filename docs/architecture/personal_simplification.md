@@ -104,6 +104,16 @@ the requested whole-repository reduction or a 50% target is complete.
 
 ## Measured active-path consolidation
 
+Full TSE cash sessions use one shared predicate in history hydration, PIT
+universe selection, compiled scope, snapshot range checks, Coverage gap checks,
+the index-volatility equity panel and the engine.
+The [official 2020-10-01 whole-day halt](https://www.jpx.co.jp/news/1030/20201001-04.html)
+is not a price-data gap. Retain the original calendar evidence and exclude
+this documented halt from the execution session axis: do not fabricate prices,
+zero returns or empty COMPLETE segments. An ordinary day's missing bars still
+fail. Business dates for master/settlement and derivatives remain distinct;
+this is not a general empty-day skip or permission to retry a paid run.
+
 The cloud acquisition spool selects individual symbols and exact dates through
 its existing indexes. SQLite's month-first plan otherwise scans unrelated rows
 again for each financial series. Month/PIT predicates, ordering and provenance

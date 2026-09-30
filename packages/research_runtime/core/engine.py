@@ -16,6 +16,7 @@ from typing import Any, Mapping, Sequence
 
 import features
 import pit
+from data_contracts.market_sessions import is_tse_full_session
 from features.runtime import (
     _BoundScopedFeatureReads,
     bind_personal_retrospective_am_session_daily_bars,
@@ -79,9 +80,6 @@ from .universe import ResolvedDailyUniverse, load_master, resolve_injected_unive
 CORE_ENGINE_VERSION = "0.9.0"
 AM_FROZEN_ORDER_BATCH_POLICY = "am_frozen_order_batch/v1"
 GOVERNED_AM_DATASET_ID = "equities_bars_daily_am"
-
-# J-Quants HolidayDivision: "1" == trading day (exchange open).
-_TRADING_HOLIDAY_DIVISION = "1"
 
 _PREPARED_BAR_FIELDS = (
     "source",
@@ -1226,7 +1224,7 @@ def _apply_fills(
 def _trading_days(
     start: str, end: str, *, db_path: Any, calendar_as_of: str | None
 ) -> list[str]:
-    """Trading days in ``[start, end]`` (``holiday_division == "1"``). Calendar is read at close(end)."""
+    """Full cash sessions in ``[start, end]``. Calendar is read at close(end)."""
     as_of = calendar_as_of or close_as_of(end)
     result = pit.get_market_calendar(
         as_of=as_of, from_date=start, to_date=end, db_path=db_path
@@ -1234,7 +1232,7 @@ def _trading_days(
     days = sorted(
         row["date"]
         for row in result.rows
-        if row.get("holiday_division") == _TRADING_HOLIDAY_DIVISION
+        if is_tse_full_session(row["date"], row.get("holiday_division"))
         and start <= row.get("date", "") <= end
     )
     return days

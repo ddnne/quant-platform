@@ -251,28 +251,26 @@ def test_B4_K3_pass_on_complete_fixture(matrix_db):
     assert k3[0].status == "pass", k3[0].detail
 
 
-def test_B4_fails_when_trading_day_missing_bars(tmp_path):
-    """Drop one trading day's bars → B4 should detect the gap."""
+def test_B4_distinguishes_missing_bars_from_documented_full_day_halt(tmp_path):
+    """An ordinary missing day fails; the official whole-market halt is not a gap."""
     p = tmp_path / "gappy.sqlite"
     store = SqliteStore(p)
-    # All 4 calendar days are trading days, but only 3 of them have bars.
+    # Provider business-day flags stay intact, including the documented halt.
     store.upsert(
         "jquants_market_calendar",
         normalize_market_calendar(
-            [{"Date": "2025-04-01", "HolidayDivision": "1"},
-             {"Date": "2025-04-02", "HolidayDivision": "1"},
-             {"Date": "2025-04-03", "HolidayDivision": "1"},
-             {"Date": "2025-04-04", "HolidayDivision": "1"}],
+            [{"Date": "2020-09-30", "HolidayDivision": "1"},
+             {"Date": "2020-10-01", "HolidayDivision": "1"},
+             {"Date": "2020-10-02", "HolidayDivision": "1"},
+             {"Date": "2020-10-05", "HolidayDivision": "1"}],
             ingested_at=INGESTED,
         ),
     )
-    # Bars for 8697 on 04-01, 04-02, 04-04 — 04-03 missing.
+    # The ordinary 10-02 session is missing too: do not silently skip it.
     bars = [
-        {"Code": "8697", "Date": "2025-04-01", "Close": 100.0, "Open": 100.0,
+        {"Code": "8697", "Date": "2020-09-30", "Close": 100.0, "Open": 100.0,
          "High": 100.0, "Low": 100.0, "Volume": 1.0, "TurnoverValue": 1.0},
-        {"Code": "8697", "Date": "2025-04-02", "Close": 101.0, "Open": 101.0,
-         "High": 101.0, "Low": 101.0, "Volume": 1.0, "TurnoverValue": 1.0},
-        {"Code": "8697", "Date": "2025-04-04", "Close": 103.0, "Open": 103.0,
+        {"Code": "8697", "Date": "2020-10-05", "Close": 103.0, "Open": 103.0,
          "High": 103.0, "Low": 103.0, "Volume": 1.0, "TurnoverValue": 1.0},
     ]
     store.upsert("jquants_daily_bars", normalize_daily_bars(bars, ingested_at=INGESTED))
@@ -280,7 +278,7 @@ def test_B4_fails_when_trading_day_missing_bars(tmp_path):
     out = run_coverage(p, tier="daily")
     b4 = _results_by_id(out, "B4")
     assert b4[0].status == "fail"
-    assert "2025-04-03" in b4[0].metrics["missing_days"]
+    assert b4[0].metrics["missing_days"] == ["2020-10-02"]
 
 
 def test_K3_fails_when_bar_date_not_in_calendar(tmp_path):
