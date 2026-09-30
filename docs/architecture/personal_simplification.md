@@ -59,6 +59,12 @@ a side effect of source cleanup; identify consumers and recovery first.
 
 ## Retired paths and retained guarantees
 
+- Compile each four-plan shortlist and its dependency closures once per loader
+  call; derive profiles and execution pins from the same artifacts. Public
+  constructors still compare complete artifacts with freshly compiled canonical
+  values. Remove the second canonical compilation after that validation, not
+  the validation itself. No global cache, new authority or changed digest format.
+  Keep file edits observable on the next call and retain immutable owned values.
 - Retire the local mirror's legacy HTTP transport (`--url`), its separate
   paging loop and mock-only transport tests. Cloud research already consumes
   R2; synthetic PIT fixtures now import real SQLite artifacts through the

@@ -121,12 +121,18 @@ def _require_typed_payload(payload: Mapping[str, Any]) -> ExperimentPlan:
         raise ValueError(f"{plan.plan_id}: evaluation_protocol required")
     if plan.risk_policy != PILOT_RISK_POLICY:
         raise ValueError(f"{plan.plan_id}: risk_policy must be {PILOT_RISK_POLICY!r}")
-    build_plan_dependency_closure(plan)
     return plan
 
 
-def load_experiment_plans(*, root: Path | None = None) -> tuple[ExperimentPlan, ...]:
-    """Load the explicit four-plan shortlist. Does not rewrite the catalog."""
+def compile_experiment_plans(
+    *, root: Path | None = None, closure_version: str = PLAN_DEPENDENCY_CLOSURE_VERSION
+) -> tuple[tuple[ExperimentPlan, ...], tuple[PlanDependencyClosure, ...]]:
+    """Read the shortlist once and retain its validated dependency closures.
+
+    Results belong to this call, not a process-wide cache: the next operation
+    rereads the governed files. Profiles and execution bindings derive from
+    these same closures instead of reopening and recompiling the shortlist.
+    """
     if PILOT_EXECUTION_ENABLED is not False:
         raise MassResearchDisabledError("pilot execution switch must stay off")
     if len(PILOT_EXPERIMENT_PLAN_IDS) != PILOT_PLAN_COUNT:
@@ -173,20 +179,25 @@ def load_experiment_plans(*, root: Path | None = None) -> tuple[ExperimentPlan, 
         raise ValueError("duplicate exact StrategySpec across ExperimentPlans")
     if len({experiment_plan_digest(plan) for plan in plans}) != PILOT_PLAN_COUNT:
         raise ValueError("duplicate ExperimentPlan canonical digest")
-    closures = tuple(build_plan_dependency_closure(plan) for plan in plans)
+    closures = tuple(
+        build_plan_dependency_closure(plan, closure_version=closure_version)
+        for plan in plans
+    )
     if len({closure.closure_digest for closure in closures}) != PILOT_PLAN_COUNT:
         raise ValueError("duplicate PlanDependencyClosure digest")
-    return tuple(plans)
+    return tuple(plans), closures
+
+
+def load_experiment_plans(*, root: Path | None = None) -> tuple[ExperimentPlan, ...]:
+    """Load the explicit four-plan shortlist. Does not rewrite the catalog."""
+    return compile_experiment_plans(root=root)[0]
 
 
 def load_experiment_plan_closures(
     *, root: Path | None = None, closure_version: str = PLAN_DEPENDENCY_CLOSURE_VERSION
 ) -> tuple[PlanDependencyClosure, ...]:
     """Compile the exact dependency closure for each of the four plans."""
-    return tuple(
-        build_plan_dependency_closure(plan, closure_version=closure_version)
-        for plan in load_experiment_plans(root=root)
-    )
+    return compile_experiment_plans(root=root, closure_version=closure_version)[1]
 
 
 def load_experiment_plan_profiles(
@@ -226,6 +237,7 @@ __all__ = [
     "PILOT_RISK_POLICY",
     "PLANS_REL",
     "SCHEMA_REL",
+    "compile_experiment_plans",
     "experiment_plan_schema_path",
     "experiment_plans_dir",
     "load_experiment_plan_schema",

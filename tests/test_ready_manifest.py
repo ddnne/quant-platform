@@ -480,6 +480,9 @@ def test_exact_four_loader_rejects_self_consistent_alternate_root(
     target.mkdir(parents=True)
     for item in source.glob("*.json"):
         target.joinpath(item.name).write_bytes(item.read_bytes())
+    # A later call must reread this root; an earlier valid binding is no cache
+    # authority for a subsequently edited plan.
+    original = load_exact_four_pilot_ready_binding(root=tmp_path)
     alternate = target / "exp-mdh-hold10-momentum.json"
     payload = json.loads(alternate.read_text(encoding="utf-8"))
     payload["hypothesis"] = "caller-controlled alternate root"
@@ -490,6 +493,7 @@ def test_exact_four_loader_rejects_self_consistent_alternate_root(
 
     with pytest.raises(MassResearchDisabledError, match="noncanonical"):
         load_exact_four_pilot_ready_binding(root=tmp_path)
+    assert original.plans[0].hypothesis != payload["hypothesis"]
 
 
 def test_exact_four_binding_discards_caller_mutable_sequence_aliases() -> None:
