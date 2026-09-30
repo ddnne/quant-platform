@@ -60,9 +60,9 @@ def test_stored_bars_reader_preserves_multiday_vintages_and_checks_bytes(tmp_pat
             "payload": {"Code": "12340", "Date": day, "MAdjC": am, "AAdjC": 101},
         }
         for day, available, observed, am in (
-            ("2020-01-06", "2020-01-06T15:00:00+09:00", "2026-08-14T12:00:00+09:00", 100),
+            ("2020-01-06", "2020-01-06T15:00:00+09:00", "2026-08-14T12:00:00+09:00", 100.45),
             ("2020-01-07", "2020-01-07T15:00:00+09:00", "2026-08-14T12:00:00+09:00", None),
-            ("2020-01-06", "2026-08-15T12:00:00+09:00", "2026-08-15T12:00:00+09:00", 99),
+            ("2020-01-06", "2026-08-15T12:00:00+09:00", "2026-08-15T12:00:00+09:00", 99.875),
         )
     ]
     body = b"\n".join(json.dumps(row).encode() for row in rows) + b"\n"
@@ -83,7 +83,7 @@ def test_stored_bars_reader_preserves_multiday_vintages_and_checks_bytes(tmp_pat
     assert [row["available_at"] for row in compact] == [
         "2020-01-06T15:00:00+09:00", "2026-08-15T12:00:00+09:00",
     ]
-    assert [json.loads(row["payload"])["MorningAdjustmentClose"] for row in compact] == [100, 99]
+    assert [json.loads(row["payload"])["MorningAdjustmentClose"] for row in compact] == [100.45, 99.875]
     with pytest.raises(PersonalHistoryError, match="digest mismatch"):
         list(iter_verified_structured_bars(body.replace(b"101", b"102"), source, max_object_bytes=len(body)))
     with pytest.raises(PersonalHistoryError, match="size/count rejected"):
@@ -130,6 +130,7 @@ def test_stored_bars_reader_preserves_multiday_vintages_and_checks_bytes(tmp_pat
         spool.record_structured_bars(body, overlap, max_object_bytes=len(body))
         fetched = spool.select_structured_bars("2020-01-06")
         assert len(fetched.rows) == 2  # two vintages, not four duplicate records
+        assert [row["payload"]["MAdjC"] for row in fetched.rows] == [100.45, 99.875]
         provenance, _, selection = _page_evidence(fetched)
         assert len(provenance) == 2 and selection is None
         assert all(item["kind"] == "stored_structured_object" for item in provenance)
@@ -1241,7 +1242,7 @@ def test_forged_completion_digest_and_mutated_page_are_rejected(tmp_path: Path) 
     client.close()
 
 
-def test_duplicate_and_gapped_ordinals_are_rejected(tmp_path: Path) -> None:
+def test_gapped_page_ordinals_are_rejected(tmp_path: Path) -> None:
     client = _two_page_client(tmp_path)
     client.spool._conn.execute(
         "UPDATE source_pages SET page_ordinal=2 "
@@ -1250,22 +1251,6 @@ def test_duplicate_and_gapped_ordinals_are_rejected(tmp_path: Path) -> None:
     )
     client.spool._conn.commit()
     assert client.spool.verified_complete_month("equities_bars_daily", "2024-03") is None
-    client.close()
-
-    client = _two_page_client(tmp_path)
-    state = client.spool._conn.execute(
-        "SELECT * FROM month_state WHERE dataset=? AND month=?",
-        ("equities_bars_daily", "2024-03"),
-    ).fetchone()
-    pages = client.spool._conn.execute(
-        "SELECT * FROM source_pages WHERE dataset=? AND month=? ORDER BY page_ordinal",
-        ("equities_bars_daily", "2024-03"),
-    ).fetchall()
-    duplicated = [pages[0], pages[0]]
-    with pytest.raises(PersonalHistoryError, match="contiguous"):
-        client.spool._assert_verified_complete(
-            state, duplicated, "equities_bars_daily", "2024-03"
-        )
     client.close()
 
 

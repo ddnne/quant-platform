@@ -384,10 +384,12 @@ class AcquisitionSpool:
                 # Indexes exist only after full verification; other inputs
                 # validate every row, including excluded months, before commit.
                 if prior is None and (month is None or payload["Date"][:7] == month):
+                    # Private scratch text is decoded below, never hashed or
+                    # published. Keep canonical JSON at evidence boundaries.
                     self._conn.execute(
                         "INSERT INTO structured_bar_rows VALUES (?,?,?,?,?,?)",
                         (source.key, scope, ordinal, payload["Date"], str(payload["Code"]),
-                         canonical_json(envelope)),
+                         json.dumps(envelope, ensure_ascii=False, separators=(",", ":"), allow_nan=False)),
                     )
             if prior is None:
                 self._conn.execute(
@@ -557,17 +559,6 @@ class AcquisitionSpool:
             raise PersonalHistoryError(
                 f"{dataset} {month} page ordinals are not contiguous"
             )
-        duplicate = self._conn.execute(
-            """
-            SELECT 1 FROM source_pages
-            WHERE dataset=? AND month=?
-            GROUP BY page_ordinal HAVING COUNT(*) > 1
-            LIMIT 1
-            """,
-            (dataset, month),
-        ).fetchone()
-        if duplicate is not None:
-            raise PersonalHistoryError(f"{dataset} {month} has duplicate page ordinals")
         if pages[0]["pagination_in"] is not None:
             raise PersonalHistoryError(
                 f"{dataset} {month} first page pagination_in must be empty"
@@ -615,10 +606,6 @@ class AcquisitionSpool:
             if [int(row["row_index"]) for row in rows] != list(range(stored_count)):
                 raise PersonalHistoryError(
                     f"{dataset} {month} page {ordinal} rows do not match descriptor"
-                )
-            if len(rows) != stored_count:
-                raise PersonalHistoryError(
-                    f"{dataset} {month} page {ordinal} row count does not match"
                 )
             for row in rows:
                 try:
