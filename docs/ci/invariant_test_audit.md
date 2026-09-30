@@ -93,6 +93,14 @@ charter for extra hostile-Python tests.
 
 ## Consolidation decisions
 
+- Lease takeover uses the existing held timer and injected lease clock to
+  drive the callback actually scheduled by the manager, before and after
+  expiry. Keep the real child execution, terminal result, execution count and
+  incremented fencing token checks; always reap the child on failure. This
+  removes dependence on short wall-clock recovery timers in busy CI without
+  extending a timeout or replacing the lease logic with a fake. Process
+  timeout/kill and concurrent-manager tests remain separate.
+
 - Private structured-bar scratch rows use ordinary finite JSON, not the signed
   artifact canonical renderer. The existing multiday test checks fractional
   prices, revisions, original clocks, conflicting overlap and rollback. Keep
