@@ -464,6 +464,12 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
     // Replay the same summary after another dataset writes. SQLite's connection
     // last-insert id must not leak across datasets when INSERT OR IGNORE skips.
     const captured = new Date("2024-06-04T07:00:00Z");
+    await expect(upsertRecords(testEnv, datasetById("equities_master")!, [
+      { Code: "86970", Date: "2024-06-05", CoName: "Tomorrow" },
+    ], captured, { paginationExhausted: true, fullUniverse: true }))
+      .rejects.toThrow("future-effective master cannot update CURRENT");
+    expect(await env.STRUCTURED_BUCKET.get("structured/scd2/equities_master/CURRENT.json"))
+      .toBeNull();
     const replay = () => upsertRecords(
       testEnv, datasetById("equities_bars_daily")!, [vendorRow], captured,
       undefined, "cursor-replay",

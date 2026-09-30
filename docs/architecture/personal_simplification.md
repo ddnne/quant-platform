@@ -33,7 +33,7 @@ informs these JST hours (each at :15), including later catchup:
 | --- | --- |
 | Financial summary/details | Hourly; 00/01 and 07 revisit yesterday |
 | EDINET | 08–18 and 07 for yesterday |
-| Master | 08/09 current day; 18/20 next business day via JQ date clamping |
+| Master | 08/09/18/20, current date only |
 | AM tip | 12/13 |
 | Dividend | 12–20 and 07 |
 | Earnings dates / earnings calendar tip | 10/11/20 and 07 / 19/20 |
@@ -48,6 +48,9 @@ Weekly statistics are not restricted to Thursday because holidays shift release.
 Publication times are estimates, not completion evidence. Corrections outside
 these windows still require explicit bounded collection; this is not historical
 recertification. Query-plan reduction alone does not establish invoice savings.
+The current master SCD2 format dates observations at collection. Do not request
+tomorrow's membership; if JQ redirects a holiday query to a future `Date`, reject
+it before updating CURRENT. Raw acquisition stays available, not COMPLETE proof.
 
 ## Baseline and acceptance
 

@@ -120,6 +120,12 @@ export async function upsertRecords(
 ): Promise<UpsertSummary> {
   if (rows.length === 0) return { inserted: 0, revisions: 0 };
   const ingestedAt = toJstIso(when);
+  // JQ can redirect a holiday to the next business day's master. The current
+  // SCD2 format dates observations at collection, so never activate it early.
+  if (spec.id === "equities_master" && rows.some((row) =>
+    typeof row.Date === "string" && row.Date > ingestedAt.slice(0, 10))) {
+    throw new Error("future-effective master cannot update CURRENT");
+  }
   const byKey = new Map<string, StructuredRecord>();
   for (const row of rows) {
     const nk = await naturalKey(row, spec);

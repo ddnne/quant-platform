@@ -72,8 +72,8 @@ function scheduledQueries(spec: DatasetSpec, scheduledAt: number): Record<string
   // 24:30 final financial data and 27:00 derivatives belong to yesterday.
   const target = day(hour === 7 || derivative || (financial && hour <= 1) ? -1 : 0);
   if (spec.id === "equities_master") {
-    // A future date is clamped by JQ to the next business day's master.
-    return [{ date: day(hour >= 18 ? 1 : 0) }];
+    // CURRENT/SCD2 records observations, not tomorrow's effective membership.
+    return [{ date: day() }];
   }
   if (spec.id === "markets_margin_interest" && target >= "2026-09-28") {
     return [{ published_date: target }];

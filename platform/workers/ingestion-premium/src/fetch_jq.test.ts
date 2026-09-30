@@ -101,7 +101,7 @@ describe("fetchDataset", () => {
     expect(scheduled("markets_margin_interest", "2026-10-01T07:15:00+09:00"))
       .toEqual([{ published_date: "2026-09-30" }]);
     expect(scheduled("equities_master", "2026-10-02T18:15:00+09:00"))
-      .toEqual([{ date: "2026-10-03" }]); // JQ resolves to next business day.
+      .toEqual([{ date: "2026-10-02" }]); // Never prefetch tomorrow into CURRENT.
     expect(requestQueries(datasetById("equities_bars_daily")!, {
       from: "2020-09-30", to: "2020-10-01", scheduledAt: Date.parse("2026-10-01T02:15:00+09:00"),
     })).toEqual([{ date: "2020-09-30" }, { date: "2020-10-01" }]);
