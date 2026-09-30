@@ -710,18 +710,15 @@ class ExactFourPilotReadyBinding:
         from research.dependency_closure import (
             PLAN_DEPENDENCY_CLOSURE_VERSION_V3,
             PlanDependencyClosure,
-            verify_plan_dependency_closure,
         )
         from research.experiment_plans import (
             PILOT_EXPERIMENT_PLAN_IDS,
             PILOT_PLAN_COUNT,
-            load_experiment_plan_closures,
-            load_experiment_plan_profiles,
-            load_experiment_plans,
+            compile_experiment_plans,
         )
         from research.research_data_profile import (
-            PROFILE_VERSION_V3,
             ResearchDataProfile,
+            profile_from_dependency_closure,
         )
 
         if (
@@ -783,36 +780,15 @@ class ExactFourPilotReadyBinding:
             raise MassResearchDisabledError(
                 "controlled pilot profile order does not match plan order"
             )
-        for plan, closure, profile in zip(
-            self.plans, self.closures, self.profiles, strict=True
-        ):
-            verify_plan_dependency_closure(plan, closure)
-            if (
-                profile.plan_digest != closure.plan_digest
-                or profile.dependency_closure_digest != closure.closure_digest
-                or tuple(profile.required_datasets) != tuple(closure.required_datasets)
-                or profile.period_start != closure.period_start
-                or profile.period_end != closure.period_end
-                or profile.required_lookback_trading_days
-                != closure.required_lookback_trading_days
-                or list(profile.to_dict()["dataset_scopes"])
-                != [scope.to_dict() for scope in closure.dataset_scopes]
-                or profile.profile_version != PROFILE_VERSION_V3
-                or closure.version != PLAN_DEPENDENCY_CLOSURE_VERSION_V3
-            ):
-                raise MassResearchDisabledError(
-                    f"controlled pilot profile binding mismatch for {plan.plan_id}"
-                )
-
         # Public construction cannot turn a self-consistent alternate set into
         # the governed pilot. Compare every canonical artifact and digest with
-        # the checked-in exact-four compiler output.
-        canonical_plans = load_experiment_plans()
-        canonical_closures = load_experiment_plan_closures(
+        # one checked-in exact-four compilation. Full equality also checks
+        # profile/closure consistency; rebuilding each candidate first is redundant.
+        canonical_plans, canonical_closures = compile_experiment_plans(
             closure_version=PLAN_DEPENDENCY_CLOSURE_VERSION_V3
         )
-        canonical_profiles = load_experiment_plan_profiles(
-            closure_version=PLAN_DEPENDENCY_CLOSURE_VERSION_V3
+        canonical_profiles = tuple(
+            profile_from_dependency_closure(closure) for closure in canonical_closures
         )
         if tuple(plan.to_dict() for plan in self.plans) != tuple(
             plan.to_dict() for plan in canonical_plans
@@ -1058,19 +1034,17 @@ def load_exact_four_pilot_ready_binding(
 ) -> ExactFourPilotReadyBinding:
     """Compile the only supported pilot READY plan/profile/closure binding."""
     from research.dependency_closure import PLAN_DEPENDENCY_CLOSURE_VERSION_V3
-    from research.experiment_plans import (
-        load_experiment_plan_closures,
-        load_experiment_plan_profiles,
-        load_experiment_plans,
-    )
+    from research.experiment_plans import compile_experiment_plans
+    from research.research_data_profile import profile_from_dependency_closure
 
+    plans, closures = compile_experiment_plans(
+        root=root, closure_version=PLAN_DEPENDENCY_CLOSURE_VERSION_V3
+    )
     return ExactFourPilotReadyBinding(
-        plans=load_experiment_plans(root=root),
-        closures=load_experiment_plan_closures(
-            root=root, closure_version=PLAN_DEPENDENCY_CLOSURE_VERSION_V3
-        ),
-        profiles=load_experiment_plan_profiles(
-            root=root, closure_version=PLAN_DEPENDENCY_CLOSURE_VERSION_V3
+        plans=plans,
+        closures=closures,
+        profiles=tuple(
+            profile_from_dependency_closure(closure) for closure in closures
         ),
     )
 

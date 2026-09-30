@@ -83,6 +83,7 @@ from research.factor_cohorts import (
     personal_specs_for_cohort,
 )
 from research.personal_metrics import (
+    equity_return_series,
     performance_delta,
     summarize_performance,
     summarize_validation_performance,
@@ -642,15 +643,7 @@ def _periods(
 def _daily_returns_from_equity_curve(
     equity_curve: Sequence[Mapping[str, Any]], starting_capital: float
 ) -> list[float]:
-    previous = float(starting_capital)
-    values: list[float] = []
-    for row in equity_curve:
-        current = float(row["equity"])
-        if previous <= 0.0 or current <= 0.0:
-            raise RuntimeError("paper equity became non-positive")
-        values.append(current / previous - 1.0)
-        previous = current
-    return values
+    return equity_return_series(equity_curve, starting_capital=starting_capital)[0]
 
 
 def _daily_returns(result: PaperRunResult, starting_capital: float) -> list[float]:

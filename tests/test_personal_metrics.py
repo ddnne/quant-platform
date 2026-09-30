@@ -167,3 +167,17 @@ def test_degenerate_returns_use_none_instead_of_nan_or_infinity() -> None:
     assert performance["max_drawdown_recovered"] is True
     assert performance["positive_active_day_rate"] is None
     json.dumps(performance, allow_nan=False)
+
+    # A lost/missing terminal observation cannot turn 100 -> 110 -> bad into
+    # a successful +10% report. The execution and presentation paths share this.
+    from research.personal_service import _daily_returns_from_equity_curve
+
+    for terminal in (0.0, None, float("nan")):
+        curve = [
+            {"date": "2024-01-01", "equity": 110.0},
+            {"date": "2024-01-02", "equity": terminal},
+        ]
+        with pytest.raises(ValueError, match="positive and finite"):
+            summarize_performance(starting_capital=100.0, equity_curve=curve, trades=[])
+        with pytest.raises(ValueError, match="positive and finite"):
+            _daily_returns_from_equity_curve(curve, 100.0)
