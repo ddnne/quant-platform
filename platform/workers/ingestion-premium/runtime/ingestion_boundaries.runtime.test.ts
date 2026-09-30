@@ -212,10 +212,13 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
     await reset();
   });
 
-  it("production acquisition runs without dormant Receipt or projection resources", async () => {
+  it("production acquisition respects AM publication and nullable filing codes without dormant authorities", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-30T02:59:59Z"));
     expect((await rebuildNaturalKeysV2(env.DB)).state).toBe("READY");
     await env.DB.prepare("DROP TABLE receipt_authority_requests").run();
     const testEnv = runtimeEnv({
@@ -230,7 +233,11 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
       const url = fetchUrl(input);
       if (url.origin !== "https://api.jquants.com") throw new Error("unexpected host");
       const data = url.pathname === "/v2/markets/calendar"
-        ? [{ Date: "2024-06-03", HolDiv: "1" }] : [];
+        ? [{ Date: "2026-09-30", HolDiv: "1" }]
+        : url.pathname === "/v2/edinet/major-shareholders"
+          ? [{ Code: null, DocId: "S0000001", EdinetCode: "E00001",
+               SubDate: "2026-09-29", SubTime: "10:00:00", Hldrs: [] }]
+          : [];
       return Promise.resolve(Response.json({ data }));
     });
     // ACTIVE without its capability must reject before a paid fetch.
@@ -243,11 +250,30 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
     expect(await env.DB.prepare(
       "SELECT status,rows_seen FROM ingestion_validation WHERE dataset='markets_calendar'",
     ).first()).toEqual({ status: "pass", rows_seen: 1 });
+    expect(await env.DB.prepare(
+      "SELECT status,rows_seen FROM ingestion_validation WHERE dataset='edinet_major_shareholders'",
+    ).first()).toEqual({ status: "pass", rows_seen: 1 });
+    const amCalls = () => vendor.mock.calls.filter(([input]) =>
+      fetchUrl(input).pathname === "/v2/equities/bars/daily/am");
+    expect(amCalls()).toHaveLength(0);
+    expect(await env.DB.prepare(
+      "SELECT status FROM ingestion_validation WHERE dataset='equities_bars_daily_am'",
+    ).first()).toBeNull();
+    const latest = async () => JSON.parse(String((await env.DB.prepare(
+      "SELECT detail FROM ingestion_run_log ORDER BY id DESC LIMIT 1",
+    ).first())!.detail));
+    expect((await latest()).skipped).toEqual([
+      { dataset: "equities_bars_daily_am", reason: "BEFORE_SAME_DAY_PUBLICATION" },
+    ]);
     expect((await env.RAW_BUCKET.list()).objects.length).toBeGreaterThan(0);
     expect((await env.STRUCTURED_BUCKET.list()).objects.length).toBeGreaterThan(0);
     // Dropped Receipt table + absent Ops binding make accidental calls fail.
     expect(await env.DB.prepare("SELECT status FROM ingestion_run_log").first())
       .not.toEqual({ status: "running" });
+    vi.setSystemTime(new Date("2026-09-30T03:00:00Z"));
+    await worker.scheduled(scheduledAt(), testEnv, createExecutionContext());
+    expect(amCalls()).toHaveLength(1);
+    expect((await latest()).skipped).toBeUndefined();
   });
 
   it("recovers a lost receipt response without rewriting a competing finalization", async () => {

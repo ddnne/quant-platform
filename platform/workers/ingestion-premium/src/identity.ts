@@ -79,7 +79,10 @@ export async function naturalKey(
   const picked: Record<string, unknown> = {};
   for (const field of spec.natural_key_fields) {
     const value = pick(row, spec, field);
-    if (value === null || value === "") {
+    const explicitNullable = spec.nullable_natural_key_fields?.includes(field) &&
+      aliasesFor(spec, field).some((candidate) =>
+        [candidate, candidate.toLowerCase()].some((key) => row[key] === null));
+    if (value === null && !explicitNullable) {
       throw new Error(
         `governed natural-key field ${field} is absent; structured product is rejected`,
       );

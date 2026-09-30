@@ -52,6 +52,7 @@ class DatasetContract:
     group: str
     date_mode: str
     natural_key_fields: tuple[str, ...]
+    nullable_natural_key_fields: tuple[str, ...]
     event_time_policy: str
     event_time_fields: tuple[str, ...]
     available_at_policy: str
@@ -92,6 +93,13 @@ class DatasetContract:
             raise ValueError(
                 f"{dataset_id}: fallback_policy must be ingest_time_conservative"
             )
+        nullable_keys = _string_tuple(
+            raw.get("nullable_natural_key_fields", []),
+            f"{dataset_id}.nullable_natural_key_fields",
+        )
+        key_fields = _string_tuple(raw["natural_key_fields"], f"{dataset_id}.natural_key_fields")
+        if not set(nullable_keys) < set(key_fields):
+            raise ValueError(f"{dataset_id}: nullable keys must leave a required discriminator")
         aliases_raw = raw.get("field_aliases", {})
         if not isinstance(aliases_raw, dict):
             raise ValueError(f"{dataset_id}.field_aliases must be an object")
@@ -109,9 +117,8 @@ class DatasetContract:
             path=path,
             group=_nonempty(raw["group"], f"{dataset_id}.group"),
             date_mode=_nonempty(raw["date_mode"], f"{dataset_id}.date_mode"),
-            natural_key_fields=_string_tuple(
-                raw["natural_key_fields"], f"{dataset_id}.natural_key_fields"
-            ),
+            natural_key_fields=key_fields,
+            nullable_natural_key_fields=nullable_keys,
             event_time_policy=event_policy,
             event_time_fields=_string_tuple(
                 raw.get("event_time_fields", []), f"{dataset_id}.event_time_fields"

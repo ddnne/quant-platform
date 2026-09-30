@@ -104,6 +104,23 @@ the requested whole-repository reduction or a 50% target is complete.
 
 ## Measured active-path consolidation
 
+Hourly production ingestion excludes the same-day AM tip before its official
+noon-JST publication window and records `BEFORE_SAME_DAY_PUBLICATION` separately
+from attempted dataset results. No vendor fetch, receipt or successful empty
+segment is produced for that skip. Explicit manual requests are unchanged;
+missing/malformed responses after the window still fail. See the
+[official update schedule](https://jpx-jquants.com/ja/spec/data-update).
+
+The shared Python/Worker key contract accepts explicitly null `Code` only for
+EDINET major-shareholder filings, which include unlisted companies. It still
+requires `DocId` and preserves the existing `{Code, DocId}` key for listed
+filings. Omitted fields and unrelated dataset null keys still fail. No legacy
+key rewrite, migration, history scan or data deletion is needed. Evidence:
+[official document scope](https://jpx-jquants.com/ja/spec/edinet-major-shareholders).
+Extend the existing cross-runtime vectors and real D1/R2 ingestion test instead
+of adding a parallel mock suite. This is a contract repair, not recertification
+of old receipts or authorization for another paid research run.
+
 Full TSE cash sessions use one shared predicate in history hydration, PIT
 universe selection, compiled scope, snapshot range checks, Coverage gap checks,
 the index-volatility equity panel and the engine.

@@ -27,6 +27,7 @@ interface ContractJson {
   group: string;
   date_mode: DateMode;
   natural_key_fields: string[];
+  nullable_natural_key_fields?: string[];
   event_time_policy: EventTimePolicy;
   event_time_fields: string[];
   available_at_policy: AvailabilityPolicy;
