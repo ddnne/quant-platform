@@ -43,6 +43,10 @@ were not inventoried; this is not cloud Worker retirement or rollout approval.
    fakes. Small logical commits; do not drop active numerical semantics.
 6. Do not weaken authentic data, PIT, budget enforcement, or explicit
    deployment HOLDs merely to simplify.
+7. Refusals that happen before database reads do not need a complete ingestion
+   fixture. The stale-profile and legacy-core publication tests use absent or
+   empty paths and retain their actual rejection checks. Publication atomicity
+   and data-quality tests still exercise their required rows and evidence.
 
 This document is the detailed policy linked from root `AGENTS.md`. It is not
 a claim that every module or test has been reviewed.

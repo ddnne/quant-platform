@@ -601,10 +601,9 @@ def _offline_current_profile_evidence() -> dict[str, dict[str, object]]:
 
 
 def test_profile_bound_publisher_fails_closed_on_stale_profile_evidence(
-    tmp_path, receipt_ed25519_keys,
+    tmp_path,
 ):
     path = tmp_path / "profile-gap.sqlite"
-    _seed_publishable_db(path, signing_key=receipt_ed25519_keys.signing_key)
     profile = load_core_profile()
     snapshot_dir = tmp_path / "snapshots"
 
@@ -620,11 +619,12 @@ def test_profile_bound_publisher_fails_closed_on_stale_profile_evidence(
             profile_id=profile.profile_id,
             evidence_by_dataset=evidence,
         )
+    assert not path.exists()
     assert not list(snapshot_dir.glob("sha256_*"))
 
 
 def test_legacy_core_fixture_cannot_mint_verified_readiness(
-    tmp_path, monkeypatch, receipt_ed25519_keys
+    tmp_path, monkeypatch
 ):
     """Exercise the real closed path with explicit offline V3 capability fixtures."""
     monkeypatch.setattr(
@@ -633,23 +633,8 @@ def test_legacy_core_fixture_cannot_mint_verified_readiness(
         lambda _dataset_id: object(),
     )
     path = tmp_path / "profile-ready.sqlite"
-    _seed_publishable_db(path, signing_key=receipt_ed25519_keys.signing_key)
+    path.touch()  # Membership is rejected before the database is opened.
     profile = load_core_profile()
-    conn = sqlite3.connect(path)
-    run = conn.execute(
-        "SELECT id, detail FROM ingestion_run_log ORDER BY id DESC LIMIT 1"
-    ).fetchone()
-    detail = json.loads(run[1])
-    detail.update(
-        datasetCount=len(profile.required_datasets),
-        passed=len(profile.required_datasets),
-    )
-    conn.execute(
-        "UPDATE ingestion_run_log SET detail=? WHERE id=?",
-        (json.dumps(detail), run[0]),
-    )
-    conn.commit()
-    conn.close()
     snapshot_dir = tmp_path / "snapshots"
 
     with pytest.raises(SnapshotRejected, match="every governed dataset"):
