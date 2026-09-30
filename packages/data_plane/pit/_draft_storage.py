@@ -292,7 +292,6 @@ def _backup_sqlite(source_path: Path, target_path: Path) -> dict[str, Any]:
         source_provenance = _source_policy_provenance(target)
         _install_personal_draft_policy(target, source_provenance)
         target.commit()
-        _quick_check(target)
         # The artifact must be a standalone main database with no required
         # WAL sidecar.  Backup already copied committed WAL pages.
         target.execute("PRAGMA wal_checkpoint(TRUNCATE)")

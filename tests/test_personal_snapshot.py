@@ -356,6 +356,14 @@ def test_materialize_is_idempotent_for_same_database_and_canonical_scope(
         first.manifest_path.name,
         first.db_path.name,
     }
+    # Reusing a content address must verify the existing bytes, not just trust
+    # the fresh copy's measurement or the destination filename.
+    os.chmod(first.db_path, 0o644)
+    with first.db_path.open("ab") as handle:
+        handle.write(b"corrupted-existing-artifact")
+    os.chmod(first.db_path, 0o444)
+    with pytest.raises(PersonalSnapshotError, match="collision or tamper"):
+        _materialize(source, tmp_path / "snapshots")
 
 
 @pytest.mark.parametrize("source_state", ["SYNCED", "REJECTED"])
