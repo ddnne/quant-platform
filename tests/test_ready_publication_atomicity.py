@@ -355,13 +355,20 @@ def test_rejected_pointer_finalization_removes_already_minted_sidecar(
     assert not list(snapshot_dir.glob("sha256_*.publication.json"))
     quarantined = list((snapshot_dir / "rejected").glob("build-*"))
     assert len(quarantined) == 1
+    assert len(list(quarantined[0].glob("sha256_*.sqlite"))) == 1
+    assert len(list(quarantined[0].glob("sha256_*.manifest.json"))) == 1
     source = sqlite3.connect(staging)
     try:
-        state = source.execute(
-            "SELECT state FROM snapshot_publications "
+        state, reason = source.execute(
+            "SELECT state,rejection_reason FROM snapshot_publications "
             "ORDER BY created_at DESC LIMIT 1"
-        ).fetchone()[0]
+        ).fetchone()
         assert state == "REJECTED"
+        assert "rejected immutable evidence quarantined" in reason
+        assert source.execute(
+            "SELECT snapshot_ready,publication_state,active_snapshot_id "
+            "FROM local_snapshot_policy WHERE singleton=1"
+        ).fetchone() == (0, "REJECTED", None)
     finally:
         source.close()
 

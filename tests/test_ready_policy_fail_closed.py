@@ -51,7 +51,7 @@ from paper_runtime.ready_policy import (
     collect_typed_evidence,
 )
 from pit.ready_evidence import ReadyLedgerSession
-from paper_runtime.snapshot import SnapshotRejected, _publish_ready_snapshot
+from paper_runtime.snapshot import SnapshotRejected
 from paper_runtime.snapshot_publish_policy import _raw_manifests_for
 import research.research_data_profile as profile_module
 import research.ready_manifest as ready_module
@@ -2717,16 +2717,3 @@ def test_exact_pit_dependency_scope_rejects_noncanonical_natural_key(
     )
     with pytest.raises(MassResearchDisabledError, match="natural key"):
         _verify_scope(db_path, binding, monkeypatch)
-
-
-def test_caller_controlled_pytest_environment_cannot_enable_fixture_ready(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("PYTEST_CURRENT_TEST", "caller-controlled")
-    with pytest.raises(TypeError, match="unexpected keyword argument"):
-        _publish_ready_snapshot(
-            tmp_path / "current.sqlite",
-            tmp_path / "snapshots",
-            required_datasets=("equities_bars_daily",),
-            _fixture_policy=True,
-        )  # type: ignore[call-arg]

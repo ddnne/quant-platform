@@ -47,6 +47,15 @@ were not inventoried; this is not cloud Worker retirement or rollout approval.
    fixture. The stale-profile and legacy-core publication tests use absent or
    empty paths and retain their actual rejection checks. Publication atomicity
    and data-quality tests still exercise their required rows and evidence.
+8. Publication filesystem/transaction tests use the existing pilot dataset
+   membership, not unrelated JQ products and their full historical receipts.
+   Keep actual middle-gap, immutable-reader, rollback and B4 checks. Consolidate
+   pointer-finalization cleanup into the existing sidecar-finalization failure test;
+   it also checks quarantine contents and source rejection state. Two purported
+   partial-Coverage publisher tests only reached the unconditional local-authority
+   refusal: retain one accurately named refusal with an empty file instead.
+   Remove the constructor-is-not-None probe and Python's unexpected-keyword
+   rejection probe; actual policy and fixture/production separation remain tested.
 
 This document is the detailed policy linked from root `AGENTS.md`. It is not
 a claim that every module or test has been reviewed.
