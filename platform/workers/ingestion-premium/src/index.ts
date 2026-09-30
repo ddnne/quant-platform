@@ -99,19 +99,28 @@ export type Env = Omit<
   | "RECEIPT_AUTHORITY_OPERATION_MODE"
   | "OPS_PROJECTION_ENVIRONMENT"
 > & {
-  RECEIPT_EVIDENCE_AUTHORITY: ReceiptAuthorityServiceRpc;
+  RECEIPT_EVIDENCE_AUTHORITY?: ReceiptAuthorityServiceRpc;
   RECEIPT_AUTHORITY_ENVIRONMENT: ReceiptAuthorityEnvironment;
   RECEIPT_AUTHORITY_OPERATION_MODE: "PENDING" | "ACTIVE";
   JQUANTS_API_KEY: string;
   INGESTION_RUN_TOKEN?: string;
   DATA_EXPORT_TOKEN?: string;
   MASTER_SCD2_ONLY?: string;
-  OPS_PROJECTION_DB: D1Database;
-  OPS_PROJECTION_SIGNING_PKCS8_B64: string;
-  OPS_PROJECTION_VERIFY_SPKI_B64: string;
+  OPS_PROJECTION_DB?: D1Database;
+  OPS_PROJECTION_SIGNING_PKCS8_B64?: string;
+  OPS_PROJECTION_VERIFY_SPKI_B64?: string;
   OPS_PROJECTION_SIGNING_KEY_ID: string;
   OPS_PROJECTION_ENVIRONMENT: "staging" | "production";
 };
+
+/** Optional in acquisition-only production, required at every authority call. */
+function withReceiptAuthority(env: Env): Env & {
+  RECEIPT_EVIDENCE_AUTHORITY: ReceiptAuthorityServiceRpc;
+} {
+  const authority = env.RECEIPT_EVIDENCE_AUTHORITY;
+  if (!authority) throw new Error("Receipt authority binding is not configured");
+  return { ...env, RECEIPT_EVIDENCE_AUTHORITY: authority };
+}
 
 // P0-4 parallel ingest knobs — drive near Premium ~500/min ceiling.
 const DEFAULT_CONCURRENCY = 6;
@@ -547,7 +556,7 @@ async function persistAcquiredStructured(
       : undefined;
     try {
       await issueGovernedReceipt(
-        env,
+        withReceiptAuthority(env),
         receiptEnvironment(env),
         spec.id,
         segment.id,
@@ -654,7 +663,7 @@ async function ingestOne(
       let receipt;
       try {
         receipt = (await issueGovernedReceipt(
-          env, receiptEnvironment(env), spec.id, segment.id, undefined, nonce,
+          withReceiptAuthority(env), receiptEnvironment(env), spec.id, segment.id, undefined, nonce,
         )).result.receipt;
       } catch (error) {
         // Once prepared, only the existing same-identity recovery may proceed.
@@ -852,7 +861,7 @@ async function ingestOne(
     collected.canonicalMonth
   ) {
     await issueGovernedReceipt(
-      env,
+      withReceiptAuthority(env),
       receiptEnvironment(env),
       spec.id,
       collected.id,
@@ -962,6 +971,9 @@ async function runIngestion(
   triggeredBy: "cron" | "manual",
   fetchImpl: typeof fetch,
 ): Promise<RunSummary> {
+  if (env.RECEIPT_AUTHORITY_OPERATION_MODE === "ACTIVE") {
+    withReceiptAuthority(env); // Reject misconfiguration before any acquisition.
+  }
   const startedAt = toJstIso(new Date());
 
   await requireNaturalKeysV2Ready(env.DB);
@@ -1376,7 +1388,7 @@ async function performPendingPublicKeyRegistration(
   const environment = receiptEnvironment(env);
   const version = receiptOperatorVersion(env);
   const registration = await requirePendingReceiptRegistration(
-    await env.RECEIPT_EVIDENCE_AUTHORITY.public_key_registration(),
+    await withReceiptAuthority(env).RECEIPT_EVIDENCE_AUTHORITY.public_key_registration(),
     { environment, sourceSha: version.sourceSha },
   );
   return {
@@ -1406,7 +1418,7 @@ export class PremiumReceiptAuditEvidenceService
   extends WorkerEntrypoint<Env>
   implements PremiumReceiptAuditEvidenceRpc {
   staging_recovery_audit_evidence(): Promise<ReceiptOperatorAuditEvidenceV1> {
-    return readStagingReceiptAuditRecoveryEvidence(this.env);
+    return readStagingReceiptAuditRecoveryEvidence(withReceiptAuthority(this.env));
   }
 }
 
@@ -1458,7 +1470,7 @@ export default {
   },
 
   async scheduled(
-    _controller: ScheduledController, env: Env, ctx: ExecutionContext,
+    _controller: ScheduledController, env: Env, _ctx: ExecutionContext,
   ): Promise<void> {
     if (env.RECEIPT_AUTHORITY_ENVIRONMENT === "staging") {
       const ingest = (
@@ -1522,25 +1534,27 @@ export default {
           jobs: acquisition.jobs,
         }));
       }
-      // PENDING staging does not issue governed PREPARED receipts.
-      // ACTIVE staging uses tag ra-s-c (PENDING uses rp-s-c). Recover
-      // leftover PREPARED identities, then run the existing AUDIT_ONLY
-      // canary. PENDING does not invoke the canary.
-      if (env.RECEIPT_AUTHORITY_OPERATION_MODE === "ACTIVE") {
-        await recoverPreparedReceipts(env);
-        await runStagingReceiptAuditRecoveryCanary(env);
-        // Staging publication stays dormant until its existing verification
-        // key is provisioned. The publisher still signs and self-verifies.
-        if (env.OPS_PROJECTION_VERIFY_SPKI_B64) {
-          await publishOpsProjectionBestEffort(env);
-        }
-      }
-      return;
-    }
-    ctx.waitUntil((async () => {
+    } else {
       await runIngestion(env, {}, "cron", fetch);
-      await recoverPreparedReceipts(env);
-      await publishOpsProjectionBestEffort(env);
-    })());
+    }
+    // Acquisition-only/PENDING deployments neither sweep Receipt D1 metadata
+    // nor attempt projection publication. No new activation flag or fallback.
+    if (env.RECEIPT_AUTHORITY_OPERATION_MODE !== "ACTIVE") return;
+    const authorityEnv = withReceiptAuthority(env);
+    await recoverPreparedReceipts(authorityEnv);
+    if (env.RECEIPT_AUTHORITY_ENVIRONMENT === "staging") {
+      await runStagingReceiptAuditRecoveryCanary(authorityEnv);
+    }
+    // As in staging, publication stays dormant before SPKI provisioning.
+    const { OPS_PROJECTION_DB, OPS_PROJECTION_SIGNING_PKCS8_B64,
+      OPS_PROJECTION_VERIFY_SPKI_B64 } = env;
+    if (!OPS_PROJECTION_VERIFY_SPKI_B64) return;
+    if (!OPS_PROJECTION_DB || !OPS_PROJECTION_SIGNING_PKCS8_B64) {
+      throw new Error("Ops projection publication bindings are incomplete");
+    }
+    await publishOpsProjectionBestEffort({
+      ...env, OPS_PROJECTION_DB, OPS_PROJECTION_SIGNING_PKCS8_B64,
+      OPS_PROJECTION_VERIFY_SPKI_B64,
+    });
   },
 };

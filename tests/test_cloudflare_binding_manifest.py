@@ -62,9 +62,19 @@ def test_personal_research_runner_has_an_eight_instance_hard_cap() -> None:
 
 
 def test_receipt_authority_uses_dedicated_evidence_and_premium_owned_migrations() -> None:
-    receipt = manifest_module.build_manifest()["workers"][
-        "receipt-evidence-authority"
-    ]
+    workers = manifest_module.build_manifest()["workers"]
+    receipt = workers["receipt-evidence-authority"]
+    # Ordinary acquisition must not require activation of dormant authorities.
+    for environment in ("base", "production"):
+        premium = workers["ingestion-premium"][environment]
+        assert premium["services"] == []
+        assert [row["binding"] for row in premium["d1_databases"]] == ["DB"]
+        assert [row["binding"] for row in premium["r2_buckets"]] == [
+            "RAW_BUCKET", "STRUCTURED_BUCKET",
+        ]
+        assert premium["secret_names"] == [
+            "DATA_EXPORT_TOKEN", "INGESTION_RUN_TOKEN", "JQUANTS_API_KEY",
+        ]
     for environment, evidence_bucket in {
         "base": "quant-receipt-evidence",
         "production": "quant-receipt-evidence",
@@ -297,9 +307,12 @@ def test_premium_owns_jsda_v2_v3_migrations_in_production_and_staging() -> None:
         premium = manifest["workers"]["ingestion-premium"][environment][
             "d1_databases"
         ]
-        assert [row["binding"] for row in premium] == ["DB", "OPS_PROJECTION_DB"]
+        assert [row["binding"] for row in premium] == (
+            ["DB", "OPS_PROJECTION_DB"] if environment == "staging" else ["DB"]
+        )
         assert premium[0]["migrations_dir"] == "migrations"
-        assert premium[1]["migrations_table"] == "d1_migrations_ops_projection"
+        if environment == "staging":
+            assert premium[1]["migrations_table"] == "d1_migrations_ops_projection"
         jsda = manifest["workers"]["ingestion-jsda"][environment]["d1_databases"]
         assert len(jsda) == 1
         assert jsda[0]["binding"] == "DB"

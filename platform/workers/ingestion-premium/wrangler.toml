@@ -25,8 +25,9 @@
 # workers_dev=false: no stable *.workers.dev hostname.
 # preview_urls=false: version preview URLs are not a product surface
 # (wrangler 4.125.0 supports preview_urls).
-# Staging is not [env.staging] in this file (would share the production
-# Cloudflare account). See wrangler.staging.toml — HUMAN separate account.
+# Staging has separate resources in wrangler.staging.toml.
+# Production is acquisition-only: Receipt, Ops publication and READY remain
+# unbound until their own activation is approved. Existing data is not deleted.
 
 name = "quant-platform-ingestion-premium"
 main = "src/index.ts"
@@ -35,7 +36,7 @@ workers_dev = false
 preview_urls = false
 
 [secrets]
-required = ["DATA_EXPORT_TOKEN", "INGESTION_RUN_TOKEN", "JQUANTS_API_KEY", "OPS_PROJECTION_SIGNING_PKCS8_B64", "READY_ED25519_PRIVATE_KEY", "TRADER_ED25519_PRIVATE_KEY"]
+required = ["DATA_EXPORT_TOKEN", "INGESTION_RUN_TOKEN", "JQUANTS_API_KEY"]
 
 # R2 — full response pages + manifest under raw/{dataset}/{run_id}/.
 [[r2_buckets]]
@@ -48,28 +49,12 @@ bucket_name = "quant-raw"
 binding = "STRUCTURED_BUCKET"
 bucket_name = "quant-structured"
 
-[[r2_buckets]]
-binding = "AUTHORITY_EVIDENCE_BUCKET"
-bucket_name = "quant-receipt-evidence"
-
 # D1 — control/evidence metadata; existing legacy rows remain unchanged.
 [[d1_databases]]
 binding = "DB"
 database_name = "quant-ingest"
 database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 migrations_dir = "migrations"
-
-[[d1_databases]]
-binding = "OPS_PROJECTION_DB"
-database_name = "quant-ops-projection"
-database_id = "1b497e8a-5c69-4e19-ae2e-89a8f3185272"
-migrations_dir = "../quant-ops-mcp/migrations/projection"
-migrations_table = "d1_migrations_ops_projection"
-
-[[services]]
-binding = "RECEIPT_EVIDENCE_AUTHORITY"
-service = "quant-platform-receipt-evidence-authority"
-entrypoint = "ReceiptAuthorityService"
 
 # Secrets bound via `wrangler secret put` (never in this file):
 # - JQUANTS_API_KEY            (required for fetch)
@@ -84,8 +69,7 @@ RECEIPT_AUTHORITY_OPERATION_MODE = "PENDING"
 OPS_PROJECTION_ENVIRONMENT = "production"
 OPS_PROJECTION_SIGNING_KEY_ID = "ops-projection-20260826-v2"
 READY_DECLARED = "false"
-# OPS_PROJECTION_VERIFY_SPKI_B64 is a public var provisioned after key review.
-# Missing SPKI fails publication closed. Deploy this Worker before MCP.
+# No projection signer/target or READY signer is bound in production.
 # MASTER_SCD2_ONLY = "1"  # optional: route equities_master structured to R2 only
 
 [triggers]
@@ -105,7 +89,7 @@ workers_dev = false
 preview_urls = false
 
 [env.production.secrets]
-required = ["DATA_EXPORT_TOKEN", "INGESTION_RUN_TOKEN", "JQUANTS_API_KEY", "OPS_PROJECTION_SIGNING_PKCS8_B64", "READY_ED25519_PRIVATE_KEY", "TRADER_ED25519_PRIVATE_KEY"]
+required = ["DATA_EXPORT_TOKEN", "INGESTION_RUN_TOKEN", "JQUANTS_API_KEY"]
 
 [[env.production.r2_buckets]]
 binding = "RAW_BUCKET"
@@ -115,27 +99,11 @@ bucket_name = "quant-raw"
 binding = "STRUCTURED_BUCKET"
 bucket_name = "quant-structured"
 
-[[env.production.r2_buckets]]
-binding = "AUTHORITY_EVIDENCE_BUCKET"
-bucket_name = "quant-receipt-evidence"
-
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "quant-ingest"
 database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 migrations_dir = "migrations"
-
-[[env.production.d1_databases]]
-binding = "OPS_PROJECTION_DB"
-database_name = "quant-ops-projection"
-database_id = "1b497e8a-5c69-4e19-ae2e-89a8f3185272"
-migrations_dir = "../quant-ops-mcp/migrations/projection"
-migrations_table = "d1_migrations_ops_projection"
-
-[[env.production.services]]
-binding = "RECEIPT_EVIDENCE_AUTHORITY"
-service = "quant-platform-receipt-evidence-authority"
-entrypoint = "ReceiptAuthorityService"
 
 [env.production.vars]
 INGEST_CONCURRENCY = "6"

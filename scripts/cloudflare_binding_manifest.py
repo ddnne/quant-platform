@@ -333,9 +333,6 @@ PRODUCTION_SECRET_NAMES: dict[str, tuple[str, ...]] = {
         "DATA_EXPORT_TOKEN",
         "INGESTION_RUN_TOKEN",
         "JQUANTS_API_KEY",
-        "OPS_PROJECTION_SIGNING_PKCS8_B64",
-        "READY_ED25519_PRIVATE_KEY",
-        "TRADER_ED25519_PRIVATE_KEY",
     ),
     "ingestion-secrets": (
         "JQUANTS_API_KEY",
@@ -1774,11 +1771,12 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
                 "must consume Premium-owned D1 without migration metadata"
             )
         caller = workers["ingestion-premium"][environment]["services"]
-        if caller != [{
+        expected_caller = [{
             "binding": "RECEIPT_EVIDENCE_AUTHORITY",
             "entrypoint": "ReceiptAuthorityService",
             "service": caller_targets[environment],
-        }]:
+        }] if environment == "staging" else []
+        if caller != expected_caller:
             raise ValueError(
                 f"ingestion-premium/{environment}: typed Receipt binding drift"
             )

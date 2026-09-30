@@ -46,6 +46,10 @@ it("staging Cron publishes a sealed R2/D1 generation only after verification-key
   // Test harness omits secret refinements; no live credentials are used.
   const testEnv = {
     ...env,
+    // No PREPARED receipt in this fixture; any recovery RPC would be a bug.
+    RECEIPT_EVIDENCE_AUTHORITY: {
+      recover_issue() { throw new Error("unexpected Receipt recovery RPC"); },
+    },
     RECEIPT_AUTHORITY_OPERATION_MODE: "ACTIVE",
     RECEIPT_AUTHORITY_ENVIRONMENT: "staging",
     OPS_PROJECTION_ENVIRONMENT: "staging",

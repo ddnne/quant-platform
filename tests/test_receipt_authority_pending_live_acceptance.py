@@ -208,6 +208,7 @@ def test_exact_live_pending_chain_is_read_only_and_source_bound() -> None:
     assert result["source_sha"] == SHA
     assert result["account_id"] == ACCOUNT
     assert result["authority_mode"] == "PENDING"
+    assert result["caller_connected"] is False
     assert result["active_key_count"] == 0
     assert result["positive_operation_allowed"] is False
     assert result["research_eligible"] is False
