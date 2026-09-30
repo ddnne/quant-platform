@@ -286,11 +286,6 @@ class PilotReadinessAttestationClaimsV2:
             ttl_seconds=self.exact_four.lease_ttl_seconds,
             label="READY claims",
         )
-        canonical = load_exact_four_execution_binding()
-        if self.exact_four.binding_digest != canonical.binding_digest:
-            raise ExactFourAuthorityContractError(
-                "READY claims exact-four binding is not canonical"
-            )
         if (
             self.snapshot.governed_membership_digest
             != self.exact_four.required_dataset_membership_digest

@@ -20,7 +20,10 @@ from execution.exact_four_codec import (
     _require_text,
     canonical_authority_digest,
 )
-from research.ready_manifest import load_exact_four_pilot_ready_binding
+from research.ready_manifest import (
+    ExactFourPilotReadyBinding,
+    load_exact_four_pilot_ready_binding,
+)
 from research.universe_contract import EXACT_FOUR_UNIVERSE_RULE_DIGEST
 from selection.controlled_pilot_policy import (
     CONTROLLED_PILOT_IDENTITY,
@@ -254,8 +257,9 @@ class ControlledPilotArtifactCardinality:
         }
 
 
-def _compiled_plan_bindings() -> tuple[PlanExecutionBinding, ...]:
-    binding = load_exact_four_pilot_ready_binding()
+def _compiled_plan_bindings(
+    binding: ExactFourPilotReadyBinding,
+) -> tuple[PlanExecutionBinding, ...]:
     compiled: list[PlanExecutionBinding] = []
     for ordinal, (closure, profile) in enumerate(
         zip(binding.closures, binding.profiles, strict=True), start=1
@@ -379,7 +383,8 @@ class ExactFourExecutionBinding:
             )
         self.artifact_cardinality.__post_init__()
         plans = tuple(self.plan_bindings)
-        expected = _compiled_plan_bindings()
+        source = load_exact_four_pilot_ready_binding()
+        expected = _compiled_plan_bindings(source)
         if (
             len(plans) != self.policy.plans_exactly
             or any(type(item) is not PlanExecutionBinding for item in plans)
@@ -407,7 +412,6 @@ class ExactFourExecutionBinding:
             "execution_limit_set_digest",
         ):
             _require_digest(getattr(self, name), name)
-        source = load_exact_four_pilot_ready_binding()
         if (
             self.publication_profile_id != source.profile_id
             or self.publication_profile_version != source.profile_version
@@ -492,7 +496,7 @@ class ExactFourExecutionBinding:
 def load_exact_four_execution_binding() -> ExactFourExecutionBinding:
     source = load_exact_four_pilot_ready_binding()
     policy = load_controlled_pilot_policy()
-    plan_bindings = _compiled_plan_bindings()
+    plan_bindings = _compiled_plan_bindings(source)
     return ExactFourExecutionBinding(
         plan_bindings=plan_bindings,
         policy=policy,

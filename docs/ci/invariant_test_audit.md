@@ -80,6 +80,14 @@ charter for extra hostile-Python tests.
 
 ## Consolidation decisions
 
+- Repeated exact-four compilation is production overhead, not a reason to hide
+  work behind a test fixture cache. One compiler now supplies plan/closure/profile
+  consumers within the operation. Full canonical comparison replaces duplicate
+  profile-field/rebuild checks. Extend the existing alternate-root test with a
+  successful read before editing the file, then require the next call to reject
+  it. Existing substitution/order/immutable-alias tests and generated-contract
+  drift check retain the guarantees; no new test matrix or test-count target.
+
 - Retiring the two legacy Worker D1 export routes also removes their Node
   table/limit/cursor cases. Three public-dispatch tests retain no-IO 404,
   receipt-product credential refusal and authorized decoder routing. Existing
