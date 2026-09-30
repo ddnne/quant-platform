@@ -263,9 +263,20 @@ describe("personalResearchR2Outbound workerd/R2 runtime", () => {
       expect((await personalResearchR2Outbound(new Request(`http://research.r2/${key}`, {
         method: "DELETE",
       }), runtimeEnv)).status).toBe(403);
-      expect((await personalResearchR2Outbound(new Request(`http://research.r2/${key}`, {
-        headers: {range: "bytes=0-2"},
-      }), runtimeEnv)).status).toBe(403);
+      const ranged = await personalResearchR2Outbound(new Request(`http://research.r2/${key}`, {
+        headers: {range: "bytes=3-7"},
+      }), runtimeEnv);
+      if (key.endsWith(".jsonl")) {
+        expect(ranged.status).toBe(206);
+        expect(ranged.headers.get("content-range")).toBe("bytes 3-7/15");
+        expect(ranged.headers.get("content-length")).toBe("5");
+        expect(await ranged.text()).toBe("theti");
+        expect((await personalResearchR2Outbound(new Request(`http://research.r2/${key}`, {
+          headers: {range: "bytes=3-99"},
+        }), runtimeEnv)).status).toBe(416);
+      } else {
+        expect(ranged.status).toBe(403);
+      }
       expect(await (await runtimeEnv.STRUCTURED_BUCKET.get(key))!.text()).toBe("synthetic-input");
     }
     expect((await personalResearchR2Outbound(new Request(

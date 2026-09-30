@@ -34,19 +34,33 @@ class StructuredBarsIndex:
     source: StructuredBarsObject
     # Each span is (byte start, byte end, original nonblank row ordinal).
     months: dict[str, list[tuple[int, int, int]]]
+    month_digests: dict[str, str]
+
+    def window(self, month: str) -> tuple[int, int]:
+        spans = self.months[month]
+        return spans[0][0], spans[-1][1]
 
     def rows_for_month(
         self, body: bytes, source: StructuredBarsObject, month: str,
+        *, body_offset: int | None = None,
     ) -> Iterator[tuple[int, dict[str, Any]]]:
-        if (source != self.source or len(body) != source.size
-                or hashlib.sha256(body).hexdigest() != source.sha256):
+        start, end = self.window(month)
+        size = source.size if body_offset is None else end - start
+        digest = source.sha256 if body_offset is None else self.month_digests[month]
+        if (source != self.source or len(body) != size
+                or body_offset is not None and body_offset != start):
+            raise PersonalHistoryError("indexed bars object identity mismatch")
+        actual = hashlib.sha256(body).hexdigest() if body_offset is None else _span_digest(
+            body, self.months[month], body_offset,
+        )
+        if actual != digest:
             raise PersonalHistoryError("indexed bars object identity mismatch")
         # The exact bytes were validated before this index was retained. Only
         # decode selected rows; all original vintages and ordinals are kept.
         stream = io.BytesIO(body)
         for start, end, ordinal in self.months.get(month, ()):
-            stream.seek(start)
-            while stream.tell() < end:
+            stream.seek(start - (body_offset or 0))
+            while stream.tell() < end - (body_offset or 0):
                 line = stream.readline()
                 if line.strip():
                     yield ordinal, json.loads(line)
@@ -90,8 +104,22 @@ def index_structured_bars(
                 else:
                     spans.clear()
         previous_month = month
-    index = StructuredBarsIndex(source, spans) if span_count <= max_spans else None
+    # Hash disjoint selected spans, not overlapping enclosing windows: all
+    # month hashes together traverse at most one object's worth of bytes.
+    # One enclosing window per month still keeps the GET count unchanged.
+    index = StructuredBarsIndex(source, spans, {
+        month: _span_digest(body, parts, 0)
+        for month, parts in spans.items()
+    }) if span_count <= max_spans else None
     return months, index
+
+
+def _span_digest(body: bytes, spans: list[tuple[int, int, int]], offset: int) -> str:
+    digest = hashlib.sha256()
+    view = memoryview(body)
+    for start, end, _ in spans:
+        digest.update(view[start - offset:end - offset])
+    return digest.hexdigest()
 
 
 STRUCTURED_MANIFEST_MAX_BYTES = 1024 * 1024
