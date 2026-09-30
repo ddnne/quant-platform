@@ -491,16 +491,6 @@ class AcquisitionSpool:
                 f"bytes={next_bytes} max={MAX_SPOOL_BYTES}"
             )
 
-    def month_complete(self, dataset: str, month: str) -> bool:
-        return self.verified_complete_month(dataset, month) is not None
-
-    def has_month(self, dataset: str, month: str) -> bool:
-        return self.verified_complete_month(dataset, month) is not None
-
-    def month_completion_digest(self, dataset: str, month: str) -> str | None:
-        pages = self.verified_complete_month(dataset, month)
-        return None if pages is None else month_completion_digest(pages)
-
     def verified_complete_month(
         self, dataset: str, month: str
     ) -> tuple[SourcePage, ...] | None:
@@ -602,18 +592,24 @@ class AcquisitionSpool:
                 ORDER BY row_index
                 """,
                 (dataset, month, ordinal),
-            ).fetchall()
-            if [int(row["row_index"]) for row in rows] != list(range(stored_count)):
-                raise PersonalHistoryError(
-                    f"{dataset} {month} page {ordinal} rows do not match descriptor"
-                )
+            )
+            observed_count = 0
             for row in rows:
+                if int(row["row_index"]) != observed_count:
+                    raise PersonalHistoryError(
+                        f"{dataset} {month} page {ordinal} rows do not match descriptor"
+                    )
                 try:
                     json.loads(str(row["row_json"]))
                 except json.JSONDecodeError as error:
                     raise PersonalHistoryError(
                         f"{dataset} {month} page {ordinal} row is not JSON"
                     ) from error
+                observed_count += 1
+            if observed_count != stored_count:
+                raise PersonalHistoryError(
+                    f"{dataset} {month} page {ordinal} rows do not match descriptor"
+                )
             reconstructed.append(self._page_from_row(page))
         actual = month_completion_digest(reconstructed)
         stored_digest = str(state["completion_digest"] or "")
@@ -712,48 +708,26 @@ class AcquisitionSpool:
                     cached.completion_digest,
                 ),
             )
-            for page in cached.pages:
-                self._conn.execute(
-                    """
-                    INSERT INTO source_pages (
-                        dataset, month, page_ordinal, slice_date, body_digest,
-                        row_count, request_path, request_params_json, response_status,
-                        pagination_in, pagination_out, evidence_state
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-                    """,
-                    (
-                        page["dataset"],
-                        page["month"],
-                        page["page_ordinal"],
-                        page["slice_date"],
-                        page["body_digest"],
-                        page["row_count"],
-                        page["request_path"],
-                        page["request_params_json"],
-                        page["response_status"],
-                        page["pagination_in"],
-                        page["pagination_out"],
-                        page["evidence_state"],
-                    ),
-                )
-            for row in cached.rows:
-                self._conn.execute(
-                    """
-                    INSERT INTO source_rows (
-                        dataset, month, page_ordinal, row_index, code, row_date,
-                        row_json
-                    ) VALUES (?,?,?,?,?,?,?)
-                    """,
-                    (
-                        row["dataset"],
-                        row["month"],
-                        row["page_ordinal"],
-                        row["row_index"],
-                        row["code"],
-                        row["row_date"],
-                        row["row_json"],
-                    ),
-                )
+            self._conn.executemany(
+                """
+                INSERT INTO source_pages (
+                    dataset, month, page_ordinal, slice_date, body_digest,
+                    row_count, request_path, request_params_json, response_status,
+                    pagination_in, pagination_out, evidence_state
+                ) VALUES (:dataset, :month, :page_ordinal, :slice_date, :body_digest,
+                    :row_count, :request_path, :request_params_json, :response_status,
+                    :pagination_in, :pagination_out, :evidence_state)
+                """,
+                cached.pages,
+            )
+            self._conn.executemany(
+                """
+                INSERT INTO source_rows (
+                    dataset, month, page_ordinal, row_index, code, row_date, row_json
+                ) VALUES (:dataset, :month, :page_ordinal, :row_index, :code, :row_date, :row_json)
+                """,
+                cached.rows,
+            )
             self._conn.commit()
         except Exception:
             self._conn.rollback()
@@ -842,9 +816,6 @@ class AcquisitionSpool:
             slice_date=row["slice_date"],
         )
 
-    def pages_for_month(self, dataset: str, month: str) -> tuple[SourcePage, ...]:
-        return self.verified_complete_month(dataset, month) or ()
-
     def pages_for_months(
         self, dataset: str, months: Sequence[str]
     ) -> tuple[SourcePage, ...]:
@@ -857,45 +828,6 @@ class AcquisitionSpool:
                 )
             collected.extend(verified)
         return tuple(collected)
-
-    def pages_for_slice(self, dataset: str, slice_date: str) -> tuple[SourcePage, ...]:
-        rows = self._conn.execute(
-            """
-            SELECT body_digest, row_count, request_path, request_params_json,
-                   response_status, pagination_in, pagination_out,
-                   evidence_state, slice_date
-            FROM source_pages
-            JOIN month_state USING (dataset, month)
-            WHERE dataset=? AND slice_date=? AND month_state.status='COMPLETE'
-            ORDER BY month, page_ordinal
-            """,
-            (dataset, slice_date),
-        ).fetchall()
-        return tuple(self._page_from_row(row) for row in rows)
-
-    def contributing_pages(
-        self,
-        dataset: str,
-        *,
-        digests: Sequence[str],
-    ) -> tuple[SourcePage, ...]:
-        if not digests:
-            return ()
-        placeholders = ",".join("?" for _ in digests)
-        rows = self._conn.execute(
-            f"""
-            SELECT body_digest, row_count, request_path, request_params_json,
-                   response_status, pagination_in, pagination_out,
-                   evidence_state, slice_date
-            FROM source_pages
-            JOIN month_state USING (dataset, month)
-            WHERE dataset=? AND body_digest IN ({placeholders})
-              AND month_state.status='COMPLETE'
-            ORDER BY month, page_ordinal
-            """,
-            (dataset, *digests),
-        ).fetchall()
-        return tuple(self._page_from_row(row) for row in rows)
 
     def select_rows(
         self,
@@ -947,11 +879,14 @@ class AcquisitionSpool:
             ORDER BY month, page_ordinal, row_index
             """,
             params,
-        ).fetchall()
-        selected = [json.loads(row["row_json"]) for row in rows]
-        contributing = tuple(dict.fromkeys(str(row["body_digest"]) for row in rows))
+        )
+        selected: list[dict[str, Any]] = []
+        contributing: dict[str, None] = {}
+        for row in rows:
+            selected.append(json.loads(row["row_json"]))
+            contributing[str(row["body_digest"])] = None
         source_count = sum(page.row_count for page in pages)
-        return selected, contributing, pages, source_count
+        return selected, tuple(contributing), pages, source_count
 
 
 class PersonalHistorySourceClient:

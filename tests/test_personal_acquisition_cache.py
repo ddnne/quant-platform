@@ -272,6 +272,17 @@ def test_live_and_cache_restored_page_evidence_match(tmp_path: Path) -> None:
     assert len(cached.pages) == 2
     assert cached.pages[0].pagination_out == live.pages[0].pagination_out
     assert cached.pages[-1].pagination_out is None
+    # A failure after some batch inserts must restore the prior complete month.
+    second.spool._conn.execute("""
+        CREATE TEMP TRIGGER interrupt_import BEFORE INSERT ON source_rows
+        WHEN NEW.page_ordinal = 1
+        BEGIN SELECT RAISE(ABORT, 'synthetic import interruption'); END
+    """)
+    with pytest.raises(sqlite3.IntegrityError, match="synthetic import interruption"):
+        second._load_month_from_cache("equities_bars_daily", "2024-03")
+    second.spool._conn.execute("DROP TRIGGER interrupt_import")
+    restored = second.fetch_dataset_evidenced("equities_bars_daily", date="2024-03-01")
+    assert restored == cached and second.fetch_calls == 0
     second.close()
 
 
@@ -391,7 +402,13 @@ def _publish_calendar(tmp_path: Path) -> tuple[MemoryR2, bytes, str]:
             lambda conn: conn.execute(
                 "UPDATE source_pages SET row_count=99 WHERE page_ordinal=0"
             ),
-            "row counts do not match pages",
+            "page row count does not match",
+        ),
+        (
+            lambda conn: conn.execute(
+                "UPDATE source_pages SET page_ordinal=0.5 WHERE page_ordinal=0"
+            ),
+            "page ordinals are not contiguous",
         ),
         (
             lambda conn: conn.execute(
@@ -405,7 +422,13 @@ def _publish_calendar(tmp_path: Path) -> tuple[MemoryR2, bytes, str]:
             ),
             "row index does not match row_json",
         ),
-        (_insert_orphan_row, "orphan"),
+        (_insert_orphan_row, "page row count does not match"),
+        (
+            lambda conn: conn.execute(
+                "UPDATE source_rows SET month='2024-02' WHERE row_index=0"
+            ),
+            "rows do not match descriptor",
+        ),
         (
             lambda conn: conn.execute(
                 "UPDATE source_pages SET pagination_out='cursor' "
@@ -592,7 +615,7 @@ def test_put_transport_outage_allows_valid_snapshot_month(tmp_path: Path) -> Non
         "markets_calendar", **{"from": "2024-03-10", "to": "2024-03-12"}
     )
     assert fetched.selection is not None
-    assert client.spool.has_month("markets_calendar", "2024-03") is True
+    assert client.spool.verified_complete_month("markets_calendar", "2024-03") is not None
     assert client.cache_unavailable >= 1
     assert client.cache_published == 0
     client.close()
