@@ -941,6 +941,7 @@ export interface RunSummary {
   /** Shared limiter minimum interval in ms (P0-4). */
   rateLimitMs: number;
   failures: { dataset: string; detail: string }[];
+  skipped?: { dataset: string; reason: string }[];
 }
 
 async function lastRunSummary(env: Env): Promise<RunSummary | null> {
@@ -1001,9 +1002,21 @@ async function runIngestion(
     runId = (ins.meta?.last_row_id ?? null) as number | null;
   }
 
-  const specs: DatasetSpec[] = opts.dataset
+  const selectedSpecs: DatasetSpec[] = opts.dataset
     ? (isPremiumCore(opts.dataset) ? [datasetById(opts.dataset)!] : [])
     : PREMIUM_CORE_DATASETS;
+  // The AM endpoint only exposes a tip, published around noon JST. Before
+  // then it is absent or yesterday's tip. Manual collection remains explicit.
+  // https://jpx-jquants.com/ja/spec/data-update
+  const skipped: NonNullable<RunSummary["skipped"]> = [];
+  const specs = selectedSpecs.filter((spec) => {
+    if (triggeredBy === "cron" && !opts.dataset &&
+        spec.id === "equities_bars_daily_am" && Number(startedAt.slice(11, 13)) < 12) {
+      skipped.push({ dataset: spec.id, reason: "BEFORE_SAME_DAY_PUBLICATION" });
+      return false;
+    }
+    return true;
+  });
 
   const failures: { dataset: string; detail: string }[] = [];
   let passed = 0;
@@ -1103,6 +1116,7 @@ async function runIngestion(
     concurrency,
     rateLimitMs: RATE_LIMIT_INTERVAL_MS,
     failures,
+    ...(skipped.length ? { skipped } : {}),
   };
 
   if (runId !== null) {
