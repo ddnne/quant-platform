@@ -4039,12 +4039,14 @@ def _closed_lease(spec, owner, expires_at, fencing_token=1):
     }
 
 
-def test_fresh_manager_observes_active_lease_then_claims_after_expiry() -> None:
+def test_fresh_manager_observes_active_lease_then_claims_after_expiry(
+    held_retry_scheduler: list[_HeldTimer],
+) -> None:
     spec = service.ControlledPilotJobSpec.from_document(_controlled_job_spec())
     store = _ControlledCasStore()
     expired = threading.Event()
-    # Advance only the lease clock, not the process watchdog. CI scheduling
-    # must not expire the replacement lease while its child is starting.
+    # Drive the actual scheduled recovery callback after advancing the lease
+    # clock. This tests lease takeover, not CI's wall-clock timer latency.
     def lease_clock() -> float:
         return 1001.0 if expired.is_set() else 1000.0
 
@@ -4065,21 +4067,28 @@ def test_fresh_manager_observes_active_lease_then_claims_after_expiry() -> None:
         lease_ttl_seconds=0.4,
         lease_clock=lease_clock,
     )
-    first = manager.submit(spec)
-    assert first["status"] == "RUNNING"
-    assert executions.value == 0
-    assert manager.status(spec.job_id)["status"] == "RUNNING"
-    assert manager.submit(spec)["status"] == "RUNNING"
-    assert executions.value == 0
-    expired.set()
-    assert done.wait(
-        5 + service.SUPERVISOR_TERM_GRACE_SECONDS + service.SUPERVISOR_KILL_GRACE_SECONDS
-    )
-    assert manager.status(spec.job_id)["status"] == "COMPLETED"
-    assert executions.value == 1
-    claimed, _ = store.object_reader(spec, spec.lease_key)
-    assert claimed["owner_nonce"] != "oldowneroldowner"
-    assert claimed["fencing_token"] == 4
+    try:
+        assert manager.submit(spec)["status"] == "RUNNING"
+        assert manager.status(spec.job_id)["status"] == "RUNNING"
+        assert manager.submit(spec)["status"] == "RUNNING"
+        recovery = manager._lease_recovery
+        assert recovery in held_retry_scheduler and recovery.started
+        recovery.fire()
+        assert executions.value == 0
+        previous = recovery
+        recovery = manager._lease_recovery
+        assert recovery is not previous and not recovery.fired and not recovery.cancelled
+        assert recovery in held_retry_scheduler and recovery.started
+        expired.set()
+        recovery.fire()
+        assert done.wait(5)
+        assert manager.status(spec.job_id)["status"] == "COMPLETED"
+        assert executions.value == 1
+        claimed, _ = store.object_reader(spec, spec.lease_key)
+        assert claimed["owner_nonce"] != "oldowneroldowner"
+        assert claimed["fencing_token"] == 4
+    finally:
+        _cancel_held_retries_after_worker(manager, None)
 
 
 def test_heartbeat_cas_loss_fences_old_executor_zero_late_success(
