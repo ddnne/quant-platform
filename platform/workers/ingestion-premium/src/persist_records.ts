@@ -56,20 +56,43 @@ export async function upsertWatermark(
   await env.DB.prepare(
     `INSERT INTO ingestion_watermarks
        (dataset, last_event_date, last_ingested_at, last_export_cursor)
-     VALUES (
-       ?,
-       ?,
-       ?,
-       (SELECT MAX(change_seq) FROM ingestion_change_log WHERE dataset = ?)
-     )
+     VALUES (?, ?, ?, NULL)
      ON CONFLICT(dataset) DO UPDATE SET
        last_event_date  = COALESCE(excluded.last_event_date, ingestion_watermarks.last_event_date),
-       last_ingested_at = excluded.last_ingested_at,
-       last_export_cursor = COALESCE(
-         (SELECT MAX(change_seq) FROM ingestion_change_log WHERE dataset = excluded.dataset),
-         ingestion_watermarks.last_export_cursor
-       )`,
-  ).bind(dataset, lastEventDate, lastIngestedAt, dataset).run();
+       last_ingested_at = excluded.last_ingested_at`,
+  ).bind(dataset, lastEventDate, lastIngestedAt).run();
+}
+
+/** Summary + cursor commit together. No history scan or per-row D1 body copy. */
+async function writeSummary(
+  db: D1Database,
+  table: "equities_master_scd2" | "jquants_records_r2",
+  dataset: string,
+  identity: string,
+  capturedAt: string,
+  payload: string,
+): Promise<void> {
+  try {
+    await d1WithRetry(() => db.batch([
+      db.prepare(
+        `INSERT OR IGNORE INTO ingestion_change_log
+         (table_name, source, dataset, natural_key, event_time, available_at,
+          ingested_at, payload, raw_payload, changed_at)
+         VALUES (?, 'jquants', ?, ?, ?, ?, ?, ?, NULL, ?)`,
+      ).bind(table, dataset, identity, capturedAt, capturedAt, capturedAt, payload, capturedAt),
+      db.prepare(
+        `INSERT INTO ingestion_watermarks
+           (dataset, last_event_date, last_ingested_at, last_export_cursor)
+         SELECT ?, NULL, ?, last_insert_rowid() WHERE changes() > 0
+         ON CONFLICT(dataset) DO UPDATE SET
+           last_export_cursor = MAX(COALESCE(ingestion_watermarks.last_export_cursor, 0),
+                                    excluded.last_export_cursor)`,
+      ).bind(dataset, capturedAt),
+    ]));
+  } catch {
+    // Observability only. Never fabricate a cursor after failure. A duplicate
+    // retry changes no rows: the prior atomic batch already saved its cursor.
+  }
 }
 
 export interface UpsertSummary { inserted: number; revisions: number; }
@@ -131,33 +154,14 @@ export async function upsertRecords(
       when,
       evidence,
     );
-    {
-      const summaryPayload = JSON.stringify({
+    await writeSummary(
+      env.DB, "equities_master_scd2", spec.id, `scd2-summary:${Date.now()}`, ingestedAt,
+      JSON.stringify({
         kind: "scd2_master_summary",
         events_key: scd2.events_key,
         events: scd2.inserted,
-      });
-      try {
-        await d1WithRetry(() =>
-          env.DB.prepare(
-            `INSERT OR IGNORE INTO ingestion_change_log
-             (table_name, source, dataset, natural_key, event_time, available_at,
-              ingested_at, payload, raw_payload, changed_at)
-             VALUES ('equities_master_scd2', 'jquants', ?, ?, ?, ?, ?, ?, NULL, ?)`,
-          ).bind(
-            spec.id,
-            `scd2-summary:${Date.now()}`,
-            toJstIso(when),
-            toJstIso(when),
-            toJstIso(when),
-            summaryPayload,
-            toJstIso(when),
-          ).run(),
-        );
-      } catch {
-        /* observability only */
-      }
-    }
+      }),
+    );
     return { inserted: scd2.inserted, revisions: scd2.revisions };
   }
 
@@ -179,34 +183,15 @@ export async function upsertRecords(
     })),
     { runDate: toJstIso(when).slice(0, 10) },
   );
-  {
-    const summaryPayload = JSON.stringify({
+  await writeSummary(
+    env.DB, "jquants_records_r2", spec.id, `r2-summary:${objectId}`, ingestedAt,
+    JSON.stringify({
       kind: "r2_structured_summary",
       key: r2Result.key,
       sha256: r2Result.sha256,
       count: r2Result.count,
       bytes: r2Result.bytes,
-    });
-    try {
-      await d1WithRetry(() =>
-        env.DB.prepare(
-          `INSERT OR IGNORE INTO ingestion_change_log
-           (table_name, source, dataset, natural_key, event_time, available_at,
-            ingested_at, payload, raw_payload, changed_at)
-           VALUES ('jquants_records_r2', 'jquants', ?, ?, ?, ?, ?, ?, NULL, ?)`,
-        ).bind(
-          spec.id,
-          `r2-summary:${objectId}`,
-          toJstIso(when),
-          toJstIso(when),
-          toJstIso(when),
-          summaryPayload,
-          toJstIso(when),
-        ).run(),
-      );
-    } catch {
-      // Summary change_log is observability-only; never fail the ingest.
-    }
-  }
+    }),
+  );
   return { inserted: records.length, revisions: 0 };
 }

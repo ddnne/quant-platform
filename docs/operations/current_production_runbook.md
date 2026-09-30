@@ -10,6 +10,15 @@ retains its existing activation and signed-publication checks. Restore held
 production capabilities only with separately accepted activation; this source
 configuration does not itself prove deployment or reduced production billing.
 
+D1 export watermarks advance with each actually inserted R2 summary, in the
+same batch. Routine date updates do not rescan the change log. This cursor is
+observability metadata, including partial ingestion, not a successful run,
+applied research cursor, Receipt or READY proof. Old missing cursors are not
+backfilled or declared current during deployment; no historical scan is needed.
+For a previously unseen dataset, the first summary also initializes
+`last_ingested_at`; that initial timestamp can describe partial acquisition.
+Use the run/validation result, not timestamp presence, to assess success.
+
 The existing ACTIVE staging Receipt chain uses the same canonical
 `cloudflare_binding_manifest.py --deploy-tagged --worker <worker> --env staging`
 entrypoint, in order: `ingestion-secrets`, `receipt-evidence-authority`, then

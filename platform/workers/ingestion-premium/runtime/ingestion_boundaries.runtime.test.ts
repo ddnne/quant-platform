@@ -2,6 +2,8 @@ import { env } from "cloudflare:workers";
 import { applyD1Migrations, createExecutionContext, reset } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, inject, vi } from "vitest";
 import worker, { type Env } from "../src/index";
+import { datasetById } from "../src/catalog";
+import { upsertRecords, upsertWatermark } from "../src/persist_records";
 import { NATURAL_KEY_MIGRATION_ID, rebuildNaturalKeysV2 } from "../src/natural_key_migration";
 import {
   runValuationBackfillTick,
@@ -418,6 +420,39 @@ describe("ingestion-premium workerd ingestion boundaries", () => {
     expect((await env.DB.prepare(
       "SELECT COUNT(*) AS n FROM ingestion_change_log WHERE table_name = 'jquants_records'",
     ).first<{ n: number }>())?.n).toBe(0);
+
+    // Replay the same summary after another dataset writes. SQLite's connection
+    // last-insert id must not leak across datasets when INSERT OR IGNORE skips.
+    const captured = new Date("2024-06-04T07:00:00Z");
+    const replay = () => upsertRecords(
+      testEnv, datasetById("equities_bars_daily")!, [vendorRow], captured,
+      undefined, "cursor-replay",
+    );
+    await replay();
+    const watermark = () => env.DB.prepare(
+      "SELECT last_export_cursor FROM ingestion_watermarks WHERE dataset='equities_bars_daily'",
+    ).first<{ last_export_cursor: number }>();
+    const ownCursor = (await watermark())!.last_export_cursor;
+    expect(ownCursor).toBeGreaterThan(1);
+    await upsertRecords(testEnv, datasetById("markets_calendar")!, [
+      { Date: "2024-06-04", HolidayDivision: "1" },
+    ], captured, undefined, "other-dataset");
+    expect((await env.DB.prepare(
+      "SELECT last_export_cursor FROM ingestion_watermarks WHERE dataset='markets_calendar'",
+    ).first<{ last_export_cursor: number }>())!.last_export_cursor).toBeGreaterThan(ownCursor);
+    await replay();
+    await upsertWatermark(testEnv, "equities_bars_daily", null, captured.toISOString());
+    expect((await watermark())!.last_export_cursor).toBe(ownCursor);
+
+    // Force the second statement to fail: its summary must roll back as well.
+    await env.DB.prepare(`CREATE TRIGGER reject_cursor BEFORE UPDATE ON ingestion_watermarks
+      WHEN NEW.dataset='equities_bars_daily' BEGIN SELECT RAISE(ABORT, 'cursor unavailable'); END`).run();
+    await upsertRecords(testEnv, datasetById("equities_bars_daily")!, [vendorRow],
+      captured, undefined, "cursor-rollback");
+    expect(await env.DB.prepare(
+      "SELECT change_seq FROM ingestion_change_log WHERE natural_key='r2-summary:cursor-rollback'",
+    ).first()).toBeNull();
+    expect((await watermark())!.last_export_cursor).toBe(ownCursor);
   });
 
   it("runs one canonical-month calendar range as UNKNOWN coverage and unsigned zero-row SUCCESS", async () => {
