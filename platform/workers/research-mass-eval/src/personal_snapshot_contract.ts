@@ -14,6 +14,7 @@ export const PERSONAL_SNAPSHOT_MANIFEST_MAX_BYTES = 64 * 1024;
 const REQUIRED_FIELDS = ["job_id", "period_end", "period_start"] as const;
 
 export type PersonalSnapshotBuildRequest = {
+  data_profile?: "price_only";
   cache_only?: boolean;
   structured_bar_manifest_sha256?: string;
   job_id: string;
@@ -84,7 +85,10 @@ export function parsePersonalSnapshotBuildRequest(
     return { ok: false, error: "body must be a JSON object" };
   }
   const raw = body as Record<string, unknown>;
-  const keys = Object.keys(raw).filter((key) => key !== "cache_only" && key !== "structured_bar_manifest_sha256").sort();
+  const keys = Object.keys(raw).filter((key) => key !== "cache_only" && key !== "structured_bar_manifest_sha256" && key !== "data_profile").sort();
+  if ("data_profile" in raw && raw.data_profile !== "price_only" && raw.data_profile !== "with_fins") {
+    return {ok: false, error: "personal data_profile must be with_fins or price_only"};
+  }
   if ("structured_bar_manifest_sha256" in raw && (
     typeof raw.structured_bar_manifest_sha256 !== "string" ||
     !/^[0-9a-f]{64}$/.test(raw.structured_bar_manifest_sha256) || raw.cache_only !== true
@@ -149,6 +153,7 @@ export function parsePersonalSnapshotBuildRequest(
       period_start: start,
       period_end: end,
       lookback_sessions: lookback,
+      ...(raw.data_profile === "price_only" ? {data_profile: "price_only" as const} : {}),
       ...(raw.cache_only === true ? { cache_only: true } : {}),
       ...(typeof raw.structured_bar_manifest_sha256 === "string" ?
         {structured_bar_manifest_sha256: raw.structured_bar_manifest_sha256} : {}),
@@ -188,6 +193,7 @@ export async function personalSnapshotRequestDigest(
 ): Promise<string> {
   const canonical = JSON.stringify({
     ...(request.cache_only === true ? { cache_only: true } : {}),
+    ...(request.data_profile ? {data_profile: request.data_profile} : {}),
     format: PERSONAL_SNAPSHOT_FORMAT,
     job_id: request.job_id,
     lookback_sessions: request.lookback_sessions,

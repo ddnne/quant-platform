@@ -77,11 +77,12 @@ describe("personal snapshot build dispatch", () => {
   });
 
   it("uses the singleton snapshot runner, not a legacy research name", async () => {
-    const fetch = vi.fn(async (request: Request) =>
-      new URL(request.url).pathname === "/ready"
-        ? ready()
-        : new Response('{"accepted":true}', { status: 202 }),
-    );
+    let dispatched: Record<string, unknown> | undefined;
+    const fetch = vi.fn(async (request: Request) => {
+      if (new URL(request.url).pathname === "/ready") return ready();
+      dispatched = await request.json() as Record<string, unknown>;
+      return new Response('{"accepted":true}', {status: 202});
+    });
     const getByName = vi.fn(() => ({ destroy: vi.fn(), fetch }));
     const env = {
       ENVIRONMENT: "production",
@@ -93,10 +94,11 @@ describe("personal snapshot build dispatch", () => {
       },
       PERSONAL_RESEARCH_CONTAINER: { getByName },
     } as unknown as Env;
-    const response = await submitPersonalSnapshotBuild(env, REQUEST.value);
+    const response = await submitPersonalSnapshotBuild(env, {...REQUEST.value, data_profile: "price_only"});
     expect(response.status).toBe(202);
     expect(getByName).toHaveBeenCalledWith(PERSONAL_SNAPSHOT_CONTAINER_NAME);
     expect(getByName).not.toHaveBeenCalledWith("personal-research-v12");
+    expect(dispatched?.data_profile).toBe("price_only");
   });
 
   it("reads durable status without downloading a snapshot object", async () => {

@@ -589,6 +589,19 @@ def test_master_scale_correction_obeys_decision_cutoff(tmp_path: Path) -> None:
 
     assert morning.codes_for(day) == ("1001",)
     assert close_small.codes_for(day) == ("1001",)
+    with sqlite3.connect(path) as connection:
+        connection.execute("DELETE FROM jquants_records WHERE dataset='fins_summary'")
+    price_morning = resolve_personal_universe(
+        _view(path, cutoff="morning_close"), period_start=day, period_end=day,
+        universe_id="topix_core30", data_profile="price_only",
+    )
+    assert price_morning.codes_for(day) == ("1001",)
+    assert price_morning.rule_digest != morning.rule_digest
+    price_close = resolve_personal_universe(
+        _view(path, cutoff="session_close"), period_start=day, period_end=day,
+        universe_id="topix_small", data_profile="price_only",
+    )
+    assert price_close.codes_for(day) == ("1001",)
     with pytest.raises(PersonalUniverseError, match="resolves no master members"):
         resolve_personal_universe(
             _view(path, cutoff="session_close"),

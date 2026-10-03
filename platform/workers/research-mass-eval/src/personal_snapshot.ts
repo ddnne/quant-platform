@@ -110,6 +110,7 @@ export async function submitPersonalSnapshotBuild(
           format: PERSONAL_SNAPSHOT_FORMAT,
           job_id: request.job_id,
           lookback_sessions: request.lookback_sessions,
+          ...(request.data_profile ? {data_profile: request.data_profile} : {}),
           ...(request.cache_only === true ? { cache_only: true } : {}),
           ...(request.structured_bar_manifest_sha256 ?
             {structured_bar_manifest_sha256: request.structured_bar_manifest_sha256} : {}),

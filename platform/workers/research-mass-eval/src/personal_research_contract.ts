@@ -35,6 +35,7 @@ export const PERSONAL_RESEARCH_LEGACY_COHORT_IDS = [
 ] as const;
 export const PERSONAL_RESEARCH_AM_PM_COHORT_IDS = [
   "price-relative-am-pm-v1",
+  "price-master-am-pm-v1",
   "fundamental-relative-am-pm-v1",
   "diverse-core-am-pm-v1",
   "compact-market-diverse-am-pm-v1",
@@ -125,6 +126,8 @@ const PERSONAL_RESEARCH_COHORT_DIGESTS: Record<
   PersonalResearchHistoricalCohortId,
   `sha256:${string}`
 > = {
+  "price-master-am-pm-v1":
+    "sha256:4c51e03858935378821c86facf65aa5cbee304b13e0825d70760a9956f1dc0a5",
   "price-relative-v1":
     "sha256:461d3f7db9490b32e2016778e6f675bed29c0721767a95ad585015805ece5c59",
   "fundamental-relative-v1":
@@ -335,10 +338,25 @@ export function personalResearchUniverseRuleDigest(
   universeId: PersonalResearchUniverseId,
   cohortId: PersonalResearchHistoricalCohortId,
 ): `sha256:${string}` {
+  if (cohortId === "price-master-am-pm-v1") {
+    return PERSONAL_PRICE_MASTER_RULE_DIGESTS[universeId];
+  }
   return PERSONAL_RESEARCH_UNIVERSE_RULE_DIGESTS[
     personalResearchUniverseDecisionCutoff(cohortId)
   ][universeId];
 }
+
+const PERSONAL_PRICE_MASTER_RULE_DIGESTS: Record<PersonalResearchUniverseId, `sha256:${string}`> = {
+  topix_all: "sha256:3b7c4c63e2bcc55ab41568e3ee11241814f36900b69cff7c047a07ca3bab5a9f",
+  topix_core30: "sha256:07a497653f17f12ee691669a0938af482d88f0a7d24173e851ec13fb2a50b2a1",
+  topix_large70: "sha256:35b3a195673915bb8eeb56ed0fcc7d7d7d6aa414cc35abb910c3049d94f35880",
+  topix_mid400: "sha256:bdb201b5948dd7aae58fdf739f47b1a67fcb747531369a16be90ee5752b17329",
+  topix_small1: "sha256:4f28f75f16ab0851e93420619f7d009386932f9bf1771bbfbc754f05ceec7a4d",
+  topix_small2: "sha256:8937a09e3b8e54786b27169c15a67b7bfb3e6f3abd419c3faacfc50c7ed728df",
+  topix_small: "sha256:a2f96fe84b34a4664bed0eceabb4bf76167ad5db85c835931aa6fd6b46057433",
+  topix100: "sha256:f6925b92229faf8e7f99362faae8f23a91418cd9f852b74b62e9809ecd6a8fdc",
+  topix500: "sha256:2ddd1a690d025d6e6a8dd754504b3d081138525e8e03f8b51cfb80a89d7d9e97",
+};
 
 export function personalResearchCohortDigest(
   cohortId: PersonalResearchHistoricalCohortId,

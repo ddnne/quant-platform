@@ -90,6 +90,9 @@ from ingestion.personal_history import (
     build_personal_history_plan,
 )
 from storage.sqlite_store import SqliteStore
+from data_contracts.personal_universe import (
+    PERSONAL_WITH_FINS_PROFILE, personal_history_datasets, personal_history_scope,
+)
 from pit.personal_retrospective_session import am_session_view_digest
 from research.factor_cohorts import (
     AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT,
@@ -98,6 +101,7 @@ from research.factor_cohorts import (
     LEGACY_NEXT_CLOSE_EXECUTION_MODE,
     get_research_cohort,
     is_am_pm_factor_cohort,
+    personal_data_profile_for_cohort,
 )
 from research.personal_universe import (
     PersonalUniverseError,
@@ -148,6 +152,7 @@ DEFAULT_PERSONAL_COHORT_ID = "diverse-core-am-pm-v1"
 PERSONAL_EXECUTABLE_COHORT_IDS = frozenset(
     {
         "price-relative-am-pm-v1",
+        "price-master-am-pm-v1",
         "fundamental-relative-am-pm-v1",
         "diverse-core-am-pm-v1",
         "compact-market-diverse-am-pm-v1",
@@ -481,6 +486,7 @@ class JobSpec:
             expected_universe_digest = personal_research_universe_rule_digest(
                 self.universe_id,
                 am_pm=bool(identity["am_pm"]),
+                data_profile=personal_data_profile_for_cohort(self.cohort_id),
             )
         except PersonalUniverseError as exc:
             raise JobInputError(
@@ -522,6 +528,7 @@ class SnapshotJobSpec:
     deployment_id: str
     cache_only: bool = False
     structured_bar_manifest_sha256: str | None = None
+    data_profile: str = PERSONAL_WITH_FINS_PROFILE
 
     @classmethod
     def from_document(cls, document: Any) -> "SnapshotJobSpec":
@@ -540,7 +547,7 @@ class SnapshotJobSpec:
             "request_digest",
             "runner_version",
         }
-        if set(document) - {"cache_only", "structured_bar_manifest_sha256"} != required:
+        if set(document) - {"cache_only", "structured_bar_manifest_sha256", "data_profile"} != required:
             raise JobInputError("snapshot job fields are closed")
         if type(document.get("cache_only", False)) is not bool:
             raise JobInputError("cache_only must be boolean")
@@ -567,11 +574,16 @@ class SnapshotJobSpec:
             deployment_id=document["deployment_id"],
             cache_only=document.get("cache_only", False),
             structured_bar_manifest_sha256=document.get("structured_bar_manifest_sha256"),
+            data_profile=document.get("data_profile", PERSONAL_WITH_FINS_PROFILE),
         )
         spec.validate()
         return spec
 
     def validate(self) -> None:
+        try:
+            personal_history_datasets(self.data_profile)
+        except ValueError as error:
+            raise JobInputError(str(error)) from error
         if self.structured_bar_manifest_sha256 is not None and (
             not isinstance(self.structured_bar_manifest_sha256, str)
             or re.fullmatch(r"[0-9a-f]{64}", self.structured_bar_manifest_sha256) is None
@@ -605,6 +617,7 @@ class SnapshotJobSpec:
     def derived_request_digest(self) -> str:
         body = {
             "format": self.format,
+            **({"data_profile": self.data_profile} if self.data_profile != PERSONAL_WITH_FINS_PROFILE else {}),
             **({"cache_only": True} if self.cache_only else {}),
             **({"structured_bar_manifest_sha256": self.structured_bar_manifest_sha256}
                if self.structured_bar_manifest_sha256 is not None else {}),
@@ -2557,14 +2570,18 @@ def _snapshot_cache_metrics(client: Any) -> dict[str, int]:
 def _snapshot_manifest_base(
     spec: SnapshotJobSpec, *, started_at: str, finished_at: str
 ) -> dict[str, Any]:
+    scope = personal_history_scope(spec.data_profile)
     return {
         "version": RUNNER_VERSION,
         "job_id": spec.job_id,
         "request_digest": spec.request_digest,
         "format": PERSONAL_HISTORY_FORMAT,
         "history_scope_id": PERSONAL_HISTORY_SCOPE_ID,
-        "history_scope_version": PERSONAL_HISTORY_SCOPE_VERSION,
-        "history_scope_digest": PERSONAL_HISTORY_SCOPE_DIGEST,
+        "history_scope_version": scope["scope_version"],
+        "history_scope_digest": scope["scope_digest"],
+        **({"data_profile": spec.data_profile,
+            "dataset_dependencies": list(personal_history_datasets(spec.data_profile))}
+           if spec.data_profile != PERSONAL_WITH_FINS_PROFILE else {}),
         **({"structured_bar_manifest_sha256": spec.structured_bar_manifest_sha256,
             "cache_only": spec.cache_only}
            if spec.structured_bar_manifest_sha256 is not None else {}),
@@ -2615,6 +2632,7 @@ def execute_snapshot_job(
                 period_start=spec.period_start,
                 period_end=spec.period_end,
                 lookback_sessions=spec.lookback_sessions,
+                data_profile=spec.data_profile,
             )
             # Period-dependent planning allowance, not a conservative proof.
             # The physical file-size guard after hydrate remains the measured cap.

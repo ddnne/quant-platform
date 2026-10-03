@@ -3,9 +3,9 @@
 This registry is intentionally a handful of four-candidate batches, not a
 strategy catalog.  Each batch has one dependency-specific history floor so a
 price-only idea can use the 2008 history without being truncated to the 2016
-IV floor.  The personal service uses its selected PIT ``TOPIX with financials``
-universe, so the executable floor is the first financial-summary date rather
-than the two-month-earlier raw price floor.  All entries are DRAFT research;
+IV floor. Historical price cohorts retain the PIT TOPIX-with-financials universe.
+The explicit price-master AM cohort uses master-only membership and its earlier
+bar/master floor. All entries are DRAFT research;
 none promotes or trades.
 """
 
@@ -18,6 +18,10 @@ from dataclasses import dataclass
 from datetime import date
 from types import MappingProxyType
 from typing import Any, Mapping
+from data_contracts.personal_universe import (
+    PERSONAL_PRICE_DATASETS, PERSONAL_PRICE_ONLY_PROFILE, PERSONAL_WITH_FINS_PROFILE,
+)
+from data_contracts.source_capability import source_capability_contract_for
 
 from strategies.spec import FactorLeg, FeatureRef, StrategySpec, strategy_spec_digest
 
@@ -42,6 +46,7 @@ LEGACY_PERSONAL_SHORT_FINANCING_COHORT_ID = "sector-relative-ls-v1"
 COMPACT_MARKET_COHORT_ID = LEGACY_COMPACT_MARKET_COHORT_ID
 PERSONAL_SHORT_FINANCING_COHORT_ID = LEGACY_PERSONAL_SHORT_FINANCING_COHORT_ID
 PRICE_RELATIVE_AM_PM_COHORT_ID = "price-relative-am-pm-v1"
+PRICE_MASTER_AM_PM_COHORT_ID = "price-master-am-pm-v1"
 FUNDAMENTAL_RELATIVE_AM_PM_COHORT_ID = "fundamental-relative-am-pm-v1"
 DEFAULT_FACTOR_COHORT_ID = "diverse-core-am-pm-v1"
 COMPACT_MARKET_AM_PM_COHORT_ID = "compact-market-diverse-am-pm-v1"
@@ -69,6 +74,7 @@ LEGACY_PERSONAL_EXECUTABLE_COHORT_IDS = (
 )
 AM_PM_PERSONAL_EXECUTABLE_COHORT_IDS = (
     PRICE_RELATIVE_AM_PM_COHORT_ID,
+    PRICE_MASTER_AM_PM_COHORT_ID,
     FUNDAMENTAL_RELATIVE_AM_PM_COHORT_ID,
     DEFAULT_FACTOR_COHORT_ID,
     COMPACT_MARKET_AM_PM_COHORT_ID,
@@ -676,6 +682,22 @@ def _am_pm_factor_cohort(
 _COHORTS[PRICE_RELATIVE_AM_PM_COHORT_ID] = _am_pm_factor_cohort(
     PRICE_RELATIVE_AM_PM_COHORT_ID, _COHORTS["price-relative-v1"]
 )
+_COHORTS[PRICE_MASTER_AM_PM_COHORT_ID] = ResearchCohort(
+    cohort_id=PRICE_MASTER_AM_PM_COHORT_ID,
+    backend="strategy_spec",
+    history_data_start=max(
+        source_capability_contract_for(dataset).earliest_official_availability
+        for dataset in PERSONAL_PRICE_DATASETS
+    ),
+    warmup_sessions=_COHORTS[PRICE_RELATIVE_AM_PM_COHORT_ID].warmup_sessions,
+    dataset_dependencies=PERSONAL_PRICE_DATASETS,
+    strategy_specs=_COHORTS[PRICE_RELATIVE_AM_PM_COHORT_ID].strategy_specs,
+    description=("Price, realized-volatility and turnover ratios in the dated PIT "
+                 "TOPIX master; no financial-disclosure membership filter."
+                 + _AM_PM_DESCRIPTION_SUFFIX),
+    document_version=AM_PM_COHORT_DOCUMENT_VERSION,
+    execution_contract=AM_SIGNAL_PM_CLOSE_EXECUTION_CONTRACT,
+)
 _COHORTS[FUNDAMENTAL_RELATIVE_AM_PM_COHORT_ID] = _am_pm_factor_cohort(
     FUNDAMENTAL_RELATIVE_AM_PM_COHORT_ID, _COHORTS["fundamental-relative-v1"]
 )
@@ -705,6 +727,11 @@ def get_research_cohort(cohort_id: str) -> ResearchCohort:
 
 def is_am_pm_factor_cohort(cohort_id: str | None) -> bool:
     return cohort_id in AM_PM_PERSONAL_EXECUTABLE_COHORT_IDS
+
+
+def personal_data_profile_for_cohort(cohort_id: str | None) -> str:
+    return (PERSONAL_PRICE_ONLY_PROFILE if cohort_id == PRICE_MASTER_AM_PM_COHORT_ID
+            else PERSONAL_WITH_FINS_PROFILE)
 
 
 def is_compact_market_cohort(cohort_id: str | None) -> bool:

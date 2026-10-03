@@ -25,6 +25,15 @@ describe("personal snapshot request contract", () => {
     expect(await personalSnapshotRequestDigest(pinned.value)).not.toBe(await personalSnapshotRequestDigest(parsed.value));
     expect(parsePersonalSnapshotBuildRequest({...raw, cache_only: false,
       structured_bar_manifest_sha256: "a".repeat(64)}, NOW).ok).toBe(false);
+    const price = parsePersonalSnapshotBuildRequest({...raw, data_profile: "price_only"}, NOW);
+    if (!price.ok) throw new Error(price.error);
+    expect(await personalSnapshotRequestDigest(price.value)).not.toBe(await personalSnapshotRequestDigest(parsed.value));
+    // Captured from the Python SnapshotJobSpec canonical request.
+    expect(await personalSnapshotRequestDigest(price.value)).toBe(
+      "sha256:1a7c73ec70e26bf67cefb2b9a3a9e097e8248c70d7cf9908598598343fd141bc");
+    const legacy = parsePersonalSnapshotBuildRequest({...raw, data_profile: "with_fins"}, NOW);
+    if (!legacy.ok) throw new Error(legacy.error);
+    expect(await personalSnapshotRequestDigest(legacy.value)).toBe(await personalSnapshotRequestDigest(parsed.value));
   });
   it("accepts a closed bounded request and is digest-stable", async () => {
     const parsed = parsePersonalSnapshotBuildRequest(
