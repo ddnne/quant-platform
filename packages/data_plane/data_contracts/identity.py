@@ -29,6 +29,7 @@ from .source_capability import (
 JST = timezone(timedelta(hours=9))
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _LAG_RE = re.compile(r"^P(?:(\d+)D)?(?:T(?:(\d+)H)?)?$")
+_STRING_ENCODER = json.JSONEncoder(ensure_ascii=False, separators=(",", ":"))
 
 
 def _utf16_sort_key(value: str) -> bytes:
@@ -36,7 +37,7 @@ def _utf16_sort_key(value: str) -> bytes:
 
 
 def _json_string(value: str) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return _STRING_ENCODER.encode(value)
 
 
 def _js_number(value: int | float) -> str:
@@ -47,6 +48,10 @@ def _js_number(value: int | float) -> str:
     leading zeros from the digit string must also move the decimal point;
     otherwise ``0.45`` is emitted as ``4.5``.
     """
+    # Safe integers have the same decimal representation in both runtimes.
+    # Larger integers still follow the existing binary64 coercion below.
+    if type(value) is int and abs(value) <= (1 << 53) - 1:
+        return str(value)
     number = float(value)
     if not math.isfinite(number):
         return "null"
