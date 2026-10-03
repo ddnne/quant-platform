@@ -41,6 +41,10 @@ from data_contracts.personal_history_compact import (
     allowed_missing_observed_bars as _allowed_missing_observed_bars,
 )
 from data_contracts.personal_universe import (
+    PERSONAL_HISTORY_DATASETS,
+    PERSONAL_WITH_FINS_PROFILE,
+    personal_history_datasets,
+    personal_history_scope,
     PERSONAL_HISTORY_SCOPE_DIGEST,
     PERSONAL_HISTORY_SCOPE_ID,
     PERSONAL_HISTORY_SCOPE_VERSION,
@@ -53,26 +57,18 @@ from .jquants import normalize as JN
 from .pipeline import _assert_personal_draft_store_is_unmanaged
 
 
-PERSONAL_HISTORY_DATASETS: tuple[str, ...] = (
-    "markets_calendar",
-    "equities_master",
-    "fins_summary",
-    "equities_bars_daily",
-)
-
-
 def _official_availability(dataset: str) -> str:
     return source_capability_contract_for(dataset).earliest_official_availability
 
 
-def personal_snapshot_data_floor() -> str:
+def personal_snapshot_data_floor(data_profile: str = PERSONAL_WITH_FINS_PROFILE) -> str:
     """Earliest day a personal snapshot can hydrate bars.
 
     The floor is the latest ``earliest_official_availability`` among the
     compact-v8 source contracts. It is not a hardcoded calendar date.
     """
 
-    return max(_official_availability(dataset) for dataset in PERSONAL_HISTORY_DATASETS)
+    return max(_official_availability(dataset) for dataset in personal_history_datasets(data_profile))
 
 
 PERSONAL_HISTORY_FORMAT = PERSONAL_HISTORY_COMPACT_FORMAT
@@ -172,9 +168,24 @@ class PersonalHistoryPlan:
     history_scope_id: str = PERSONAL_HISTORY_SCOPE_ID
     history_scope_version: str = PERSONAL_HISTORY_SCOPE_VERSION
     history_scope_digest: str = PERSONAL_HISTORY_SCOPE_DIGEST
+    data_profile: str = PERSONAL_WITH_FINS_PROFILE
+
+    def __post_init__(self) -> None:
+        scope = personal_history_scope(self.data_profile)
+        object.__setattr__(self, "history_scope_version", scope["scope_version"])
+        object.__setattr__(self, "history_scope_digest", scope["scope_digest"])
+
+    @property
+    def requires_financials(self) -> bool:
+        return self.data_profile == PERSONAL_WITH_FINS_PROFILE
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        body = asdict(self)
+        if self.requires_financials:
+            del body["data_profile"]  # Preserve legacy checkpoint/hash bytes.
+        else:
+            body["dataset_dependencies"] = list(personal_history_datasets(self.data_profile))
+        return body
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,6 +281,7 @@ def build_personal_history_plan(
     lookback_sessions: int = DEFAULT_LOOKBACK_SESSIONS,
     calendar_window_days: int = DEFAULT_CALENDAR_WINDOW_DAYS,
     today: date | None = None,
+    data_profile: str = PERSONAL_WITH_FINS_PROFILE,
 ) -> PersonalHistoryPlan:
     """Validate a requested research range and return a side-effect-free plan."""
 
@@ -291,7 +303,7 @@ def build_personal_history_plan(
     lookback = int(lookback_sessions)
     window_days = int(calendar_window_days)
     calendar_floor = date.fromisoformat(_official_availability("markets_calendar"))
-    profile_floor = date.fromisoformat(personal_snapshot_data_floor())
+    profile_floor = date.fromisoformat(personal_snapshot_data_floor(data_profile))
     if end < profile_floor:
         raise PersonalHistoryError(
             "period_end is before the personal snapshot data floor"
@@ -325,7 +337,8 @@ def build_personal_history_plan(
     )
     # calendar windows + daily master + daily fins + daily bars. Pagination is
     # intentionally not guessed, so this is labelled a lower bound.
-    requests = calendar_segments + estimated_sessions * 2 + all_days
+    requires_financials = data_profile == PERSONAL_WITH_FINS_PROFILE
+    requests = calendar_segments + estimated_sessions * 2 + (all_days if requires_financials else 0)
     bar_rows = estimated_sessions * DEFAULT_TOPIX_CODE_ESTIMATE
     # Period-dependent membership-change planning allowance for compact
     # master snapshots: half of estimated trading sessions, rounded up,
@@ -337,7 +350,7 @@ def build_personal_history_plan(
     master_rows = DEFAULT_TOPIX_CODE_ESTIMATE * _membership_change_planning_allowance(
         estimated_sessions
     )
-    generic_json_rows = all_days * 100
+    generic_json_rows = all_days * 100 if requires_financials else (end - calendar_start).days + 1
     estimated_rows = bar_rows + master_rows + generic_json_rows
     # Compact WITHOUT ROWID bar/master rows are planned at 256 bytes/row.
     # Calendar/fins generic JSON uses a separate 1024 byte/row estimate.
@@ -357,6 +370,7 @@ def build_personal_history_plan(
         estimated_requests_lower_bound=requests,
         estimated_structured_rows=estimated_rows,
         estimated_bytes=estimated_bytes,
+        data_profile=data_profile,
     )
 
 
@@ -1569,11 +1583,11 @@ class PersonalHistoryHydrator:
                 PERSONAL_HISTORY_FORMAT,
                 plan_digest,
                 plan_json,
-                PERSONAL_HISTORY_SCOPE_ID,
-                PERSONAL_HISTORY_SCOPE_VERSION,
-                PERSONAL_HISTORY_SCOPE_DIGEST,
+                self.plan.history_scope_id,
+                self.plan.history_scope_version,
+                self.plan.history_scope_digest,
                 MASTER_AVAILABILITY_POLICY,
-                FINS_AVAILABILITY_POLICY,
+                FINS_AVAILABILITY_POLICY if self.plan.requires_financials else "NOT_APPLICABLE",
                 now_iso(),
             ),
         )
@@ -1935,7 +1949,7 @@ class PersonalHistoryHydrator:
         return trading
 
     def _bar_and_master_days(self, trading: Sequence[str]) -> tuple[str, list[str]]:
-        profile_floor = personal_snapshot_data_floor()
+        profile_floor = personal_snapshot_data_floor(self.plan.data_profile)
         master_floor = _official_availability("equities_master")
         usable = [
             day
@@ -1969,6 +1983,10 @@ class PersonalHistoryHydrator:
             day for day in trading if master_floor <= day < bar_days[0]
         ]
         if not seed_days:
+            if not self.plan.requires_financials:
+                # Same-day master publishes at 08:00, before the 11:30 decision.
+                # At the official floor there cannot be a prior-day seed.
+                return bar_start, bar_days
             raise PersonalHistoryError(
                 "observed calendar does not contain a master seed on or after "
                 "official master availability"
@@ -2170,8 +2188,8 @@ class PersonalHistoryHydrator:
         revision_only: bool = False,
     ) -> None:
         snapshots = self._master_memberships()
-        first_fins = self._first_visible_fins_by_code()
-        profile_floor = personal_snapshot_data_floor()
+        first_fins = self._first_visible_fins_by_code() if self.plan.requires_financials else {}
+        profile_floor = personal_snapshot_data_floor(self.plan.data_profile)
         started = False
         snapshot_index = -1
         current_topix: frozenset[str] | None = None
@@ -2218,7 +2236,7 @@ class PersonalHistoryHydrator:
             if rebuilt or current_expected is None:
                 current_topix = topix
                 current_expected = frozenset(
-                    code for code in topix if code in visible
+                    code for code in topix if not self.plan.requires_financials or code in visible
                 )
                 current_digest = (
                     _canonical_digest(sorted(current_expected))
@@ -2741,14 +2759,16 @@ class PersonalHistoryHydrator:
         expected = {
             CALENDAR_AVAILABILITY_POLICY,
             MASTER_AVAILABILITY_POLICY,
-            FINS_AVAILABILITY_POLICY,
             BARS_AVAILABILITY_POLICY,
         }
+        if self.plan.requires_financials:
+            expected.add(FINS_AVAILABILITY_POLICY)
         if policies != expected:
             raise PersonalHistoryError(
                 f"personal history PIT policies are incomplete: {sorted(policies)}"
             )
-        self._validate_shared_fins_scan_evidence()
+        if self.plan.requires_financials:
+            self._validate_shared_fins_scan_evidence()
 
     def _assert_compact_timestamps(self) -> None:
         canonical = (
@@ -2825,12 +2845,13 @@ class PersonalHistoryHydrator:
             self._checkpoint_wal()
             self._guard_capacity(phase="after master stage")
             self._release_acquired_raw_if_committed(before_segments=before)
-            scope_union = self._topix_union()
-            before = self._new_segments
-            self._hydrate_fins(scope_union)
-            self._checkpoint_wal()
-            self._guard_capacity(phase="after fins stage")
-            self._release_acquired_raw_if_committed(before_segments=before)
+            if self.plan.requires_financials:
+                scope_union = self._topix_union()
+                before = self._new_segments
+                self._hydrate_fins(scope_union)
+                self._checkpoint_wal()
+                self._guard_capacity(phase="after fins stage")
+                self._release_acquired_raw_if_committed(before_segments=before)
             self._hydrate_bars(bar_start=bar_start, trading=trading)
             self._checkpoint_wal()
             self._guard_capacity(phase="after bars stage")
@@ -2865,7 +2886,7 @@ class PersonalHistoryHydrator:
                 "BUILDING", f"{type(exc).__name__}: {exc}"[:2000]
             )
             raise
-        counts = {dataset: 0 for dataset in PERSONAL_HISTORY_DATASETS}
+        counts = {dataset: 0 for dataset in personal_history_datasets(self.plan.data_profile)}
         for outcome in self._outcomes:
             counts[outcome.dataset] += 1
         return PersonalHistorySummary(
@@ -2881,6 +2902,8 @@ class PersonalHistoryHydrator:
             lookback_truncated=actual_lookback < requested_lookback,
             revision_window_calendar_days=DEFAULT_REVISION_WINDOW_CALENDAR_DAYS,
             revision_coverage=revision_coverage,
+            history_scope_version=self.plan.history_scope_version,
+            history_scope_digest=self.plan.history_scope_digest,
         )
 
 

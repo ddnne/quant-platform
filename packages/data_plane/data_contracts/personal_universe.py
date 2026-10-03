@@ -14,6 +14,20 @@ from typing import Any, Mapping
 
 PERSONAL_HISTORY_SCOPE_ID = "topix_all"
 PERSONAL_HISTORY_SCOPE_VERSION = "personal-topix-scale-history/v1"
+PERSONAL_WITH_FINS_PROFILE = "with_fins"
+PERSONAL_PRICE_ONLY_PROFILE = "price_only"
+PERSONAL_PRICE_DATASETS = ("markets_calendar", "equities_master", "equities_bars_daily")
+PERSONAL_HISTORY_DATASETS = (
+    "markets_calendar", "equities_master", "fins_summary", "equities_bars_daily"
+)
+
+
+def personal_history_datasets(data_profile: str = PERSONAL_WITH_FINS_PROFILE) -> tuple[str, ...]:
+    if data_profile == PERSONAL_WITH_FINS_PROFILE:
+        return PERSONAL_HISTORY_DATASETS
+    if data_profile == PERSONAL_PRICE_ONLY_PROFILE:
+        return PERSONAL_PRICE_DATASETS
+    raise ValueError("personal data_profile must be with_fins or price_only")
 
 TOPIX_CORE30 = "TOPIX Core30"
 TOPIX_LARGE70 = "TOPIX Large70"
@@ -79,7 +93,20 @@ PERSONAL_HISTORY_SCOPE_DIGEST = _canonical_digest(
 )
 
 
+def personal_history_scope(data_profile: str = PERSONAL_WITH_FINS_PROFILE) -> dict[str, Any]:
+    datasets = personal_history_datasets(data_profile)
+    body = dict(PERSONAL_HISTORY_SCOPE_DOCUMENT)
+    if data_profile == PERSONAL_PRICE_ONLY_PROFILE:
+        body.update(scope_version="personal-topix-price-history/v1",
+                    data_profile=data_profile, dataset_dependencies=datasets)
+    return {**body, "scope_digest": _canonical_digest(body)}
+
+
 __all__ = [
+    "PERSONAL_HISTORY_DATASETS",
+    "PERSONAL_PRICE_DATASETS",
+    "PERSONAL_PRICE_ONLY_PROFILE",
+    "PERSONAL_WITH_FINS_PROFILE",
     "PERSONAL_HISTORY_SCOPE_DIGEST",
     "PERSONAL_HISTORY_SCOPE_DOCUMENT",
     "PERSONAL_HISTORY_SCOPE_ID",
@@ -91,4 +118,6 @@ __all__ = [
     "TOPIX_SMALL_1",
     "TOPIX_SMALL_2",
     "canonical_topix_scale_category",
+    "personal_history_datasets",
+    "personal_history_scope",
 ]
