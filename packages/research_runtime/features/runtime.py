@@ -29,7 +29,7 @@ from .am_session_features import AM_SESSION_FEATURE_IDS
 from .dataset_guard import master_pit_history_start, require_feature_dataset
 from .types import FeatureDefinition, FeatureOutput
 
-FEATURES_RUNTIME_VERSION = "0.8.3"
+FEATURES_RUNTIME_VERSION = "0.8.4"
 
 
 class AsOfRequired(ValueError):
@@ -53,8 +53,14 @@ _RESOURCE_DATASETS = {
 def _feature_bar_rows(rows, *, scope, filters):
     """Project declared fields and filter *within* already selected rows."""
     allowed = {"code", "date", *scope.fields, *scope.optional_fields}
-    selected = [{key: value for key, value in row.items() if key in allowed}
-                for row in rows]
+    selected = []
+    for row in rows:
+        projected = {key: value for key, value in row.items() if key in allowed}
+        if "payload" in allowed and ("payload" in row or "raw_payload" in row):
+            from pit.scoped_selection import _bar_size_payload
+
+            projected["payload"] = _bar_size_payload(row)
+        selected.append(projected)
     for argument, predicate in (
         ("from_event", lambda day, limit: day >= limit),
         ("to_event", lambda day, limit: day <= limit),
@@ -532,10 +538,7 @@ def _compute(
                     "equities_bars_daily", code, split_anchor=split_anchor
                 )
                 rows = _feature_bar_rows(
-                    ({field: getattr(bar, field) for field in (
-                        "code", "date", "close", "adjustment_close",
-                        "volume", "adjustment_volume",
-                    )} for bar in selected),
+                    (bar.feature_row() for bar in selected),
                     scope=requirement.scope,
                     filters=kwargs,
                 )
@@ -548,6 +551,10 @@ def _compute(
                         "count": len(rows),
                         "pit_api_version": pit.PIT_API_VERSION,
                         "source": "jquants",
+                        **({
+                            "session_view": daily_bars_capability.session_view,
+                            "session_view_digest": daily_bars_capability.session_view_digest,
+                        } if daily_bars_capability is not None and daily_bars_capability.session_view else {}),
                     },
                 )
             raise ValueError(

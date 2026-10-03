@@ -70,6 +70,32 @@ _PRICE_DATASETS = ("equities_bars_daily",)
 _FUNDAMENTAL_DATASETS = ("equities_bars_daily", "fins_summary")
 
 
+def _price_read_scopes(*, am_session: bool) -> tuple[DatasetReadScope, ...]:
+    size = DatasetReadScope(
+        dataset_id="equities_bars_daily",
+        observation_count=VisibleObservationCount.literal(2 if am_session else 1),
+        fields=("date",),
+        # The D AM row cannot expose size or payload. The consumer selects
+        # strictly-prior size and returns None when its observation is absent.
+        optional_fields=("market_cap", "payload"),
+    )
+    turnover = DatasetReadScope(
+        dataset_id="equities_bars_daily",
+        observation_count=VisibleObservationCount.named_integer_input_plus("long_n", add=0),
+        fields=("date", "morning_turnover_value" if am_session else "turnover_value"),
+    )
+    prices = DatasetReadScope(
+        dataset_id="equities_bars_daily",
+        observation_count=VisibleObservationCount.named_integer_input_plus("long_n", add=1),
+        fields=("date", "adjustment_close"),
+    )
+    return (DatasetReadScope(
+        dataset_id="equities_bars_daily", input_name="mode",
+        cases=tuple((mode, size if mode == "market_cap" else turnover
+                     if mode == "turnover_ratio" else prices) for mode in PRICE_RATIO_MODES),
+    ),)
+
+
 def _fundamental_read_scopes(*, latest_bars: int) -> tuple[DatasetReadScope, ...]:
     per_share = DatasetReadScope(
         dataset_id="equities_bars_daily",
@@ -637,6 +663,7 @@ RetrospectivePriceRatio: FeatureDefinition = register(
         ),
         compute=_retrospective_price_ratio,
         dataset_dependencies=_PRICE_DATASETS,
+        read_scopes=_price_read_scopes(am_session=False),
         tags=(
             "price",
             "ratio",

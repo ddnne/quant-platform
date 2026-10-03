@@ -96,9 +96,20 @@ runtime resolve the same effective inputs; state mismatch or catalog bypass
 is refused before statement-cache lookup. Non-nested cases do not change
 ordinary scope bytes or legacy v1 feature hashes. No calculation is changed.
 
-This is not complete DRAFT plan binding: price-ratio/other legacy declarations,
-AM scoped field/session projection and DRAFT closure-to-runtime identity remain
-open work. Do not add READY/Receipt authorities to close that DRAFT gap.
+Price-ratio scopes use the same closed mode resolution: latest 1 ordinary/2 AM
+rows for size, `long_n` for turnover and `long_n + 1` for price windows. AM
+turnover is MVa throughout, including zero; scalar aliases use the existing
+ingestion normalization priority, while positive price parsing is unchanged.
+Size aliases are projected by one DataPlane owner, not the full vendor payload.
+The D AM row omits full-day turnover, size and payload; optional size evidence
+stays `absent_am_allowlist` and the consumer uses strictly-prior size. Scoped AM
+result metadata comes from the existing trusted session capability. Legacy v1
+hashes and formulas are unchanged; new scope-enabled metadata binds these needs.
+
+This is not complete DRAFT plan binding: other legacy declarations and DRAFT
+closure-to-runtime identity remain open work. Raw v0 features whose null-tail
+fallback can inspect older history are not falsely assigned a fixed count.
+Do not add READY/Receipt authorities to close that DRAFT gap.
 Existing real SQLite boundary/numeric regressions cover these guards rather
 than new getter-routing spies or context-shape-only tests.
 

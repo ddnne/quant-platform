@@ -25,6 +25,7 @@ from .financial_observations import (
     FinancialCatalogState,
     STATEMENT_RATIO_STATE,
     financial_text,
+    catalog_row_payload,
     _owned_selection_from_raw_rows,
     _product_digest_from_raw,
 )
@@ -40,6 +41,7 @@ _MASTER_DATASET = "equities_master"
 _PAGE_ASC = "event_time, natural_key, source"
 _PAGE_DESC = "event_time DESC, natural_key DESC, source DESC"
 _OWNER_TOKEN = object()
+_MARKET_CAP_ALIASES = ("MarketCapitalization", "MarketCap", "MktCap")
 _AM_ALIASES: Mapping[str, tuple[str, ...]] = MappingProxyType(
     {
         "close": ("MC", "MorningClose", "morning_close"),
@@ -53,6 +55,7 @@ _AM_ALIASES: Mapping[str, tuple[str, ...]] = MappingProxyType(
             "MAdjVo",
             "morning_adjustment_volume",
         ),
+        "morning_turnover_value": ("MorningTurnoverValue", "MVa"),
         "date": ("Date", "date"),
         "code": ("Code", "code"),
     }
@@ -63,6 +66,10 @@ _DAILY_ALIASES: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "adjustment_close": ("AdjustmentClose", "AdjClose", "AdjC"),
         "volume": ("Volume", "Vo"),
         "adjustment_volume": ("AdjustmentVolume", "AdjVolume", "AdjVo"),
+        "turnover_value": ("TurnoverValue", "Va"),
+        "morning_turnover_value": ("MorningTurnoverValue", "MVa"),
+        "market_cap": ("market_cap",),
+        "payload": _MARKET_CAP_ALIASES,
         "date": ("Date", "date"),
         "code": ("Code", "code"),
     }
@@ -71,6 +78,12 @@ _DAILY_ALIASES: Mapping[str, tuple[str, ...]] = MappingProxyType(
 
 class ScopedSelectionError(PitError):
     """Declared-scope selection failed closed."""
+
+
+def _bar_size_payload(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Preserve size alias priority without exposing unrelated vendor fields."""
+    payload = catalog_row_payload(row)
+    return {key: payload[key] for key in _MARKET_CAP_ALIASES if key in payload}
 
 
 def _require_active_sqlite_transaction(conn: sqlite3.Connection) -> None:
@@ -101,10 +114,27 @@ class ScopedBarView:
     adjustment_close: float | None
     volume: float | None
     adjustment_volume: float | None
+    turnover_value: float | None
+    morning_turnover_value: float | None
+    market_cap: float | None
+    payload: Mapping[str, Any]
     field_evidence: Mapping[str, str]
     contemporaneous_observation_unproven: bool
     product_row_digest: str
     same_day_am: bool
+
+    def feature_row(self) -> dict[str, Any]:
+        """Compact consumer row; only the DataPlane owns the D AM mask."""
+        row = {
+            "code": self.code, "date": self.date, "close": self.close,
+            "adjustment_close": self.adjustment_close,
+            "adjustment_volume": self.adjustment_volume,
+            "morning_turnover_value": self.morning_turnover_value,
+        }
+        if not self.same_day_am:
+            row.update(volume=self.volume, turnover_value=self.turnover_value,
+                       market_cap=self.market_cap, payload=dict(self.payload))
+        return row
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,7 +230,7 @@ def _bar_field_evidence(
     aliases = _AM_ALIASES if same_day_am else _DAILY_ALIASES
     evidence: dict[str, str] = {}
     for field in tuple(scope.fields) + tuple(scope.optional_fields):
-        if same_day_am and field == "volume":
+        if same_day_am and field in {"volume", "turnover_value", "market_cap", "payload", "raw_payload"}:
             evidence[field] = "absent_am_allowlist"
             continue
         evidence[field] = alias_field_evidence(payload, aliases.get(field, (field,)))
@@ -322,7 +352,7 @@ def _public_bar_view(
     )
     if same_day:
         projected = _synthetic_d_am_signal_row(
-            source_bar, include_morning_turnover_history=False
+            source_bar, include_morning_turnover_history=True
         )
         close = projected.get("close")
         adjustment_close = projected.get("adjustment_close")
@@ -351,6 +381,10 @@ def _public_bar_view(
         adjustment_close=None if adjustment_close is None else adjustment_close,
         volume=volume,
         adjustment_volume=adjustment_volume,
+        turnover_value=None if same_day else source_bar.get("turnover_value"),
+        morning_turnover_value=source_bar.get("morning_turnover_value"),
+        market_cap=None if same_day else source_bar.get("market_cap"),
+        payload=MappingProxyType({} if same_day else _bar_size_payload({"payload": payload or {}})),
         field_evidence=MappingProxyType(evidence),
         contemporaneous_observation_unproven=same_day,
         product_row_digest=digest,

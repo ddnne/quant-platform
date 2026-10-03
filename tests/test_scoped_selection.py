@@ -185,6 +185,10 @@ def _seed_revision_bars(tmp_path: Path) -> Path:
             "AdjC": 100.0,
             "MC": 99.0,
             "MAdjC": 99.0,
+            "Va": 0.0,
+            "MVa": 0.0,
+            "market_cap": 0.0,
+            "MarketCap": 321.0,
         },
         event_time=PM_CLOSE,
         available_at=OLD_AT,
@@ -217,6 +221,9 @@ def _seed_revision_bars(tmp_path: Path) -> Path:
             "MAdjC": 10.0,
             "AAdjC": 999.0,
             "Volume": 123456,
+            "Va": 987654.0,
+            "MVa": 0.0,
+            "MarketCap": 777777.0,
         },
         event_time=D_EVENT,
         available_at=D_EVENT,
@@ -290,6 +297,28 @@ def test_prior_rows_rank_at_decision_not_observed_through(tmp_path: Path) -> Non
         assert current.close == 10.0
         assert current.volume is None
         assert current.contemporaneous_observation_unproven is True
+        # Additional declared inputs preserve zero, original alias provenance,
+        # and the D AM mask; later revisions cannot repair the prior observation.
+        ratio_scope = replace(_bars_requirement(), scope=DatasetReadScope(
+            dataset_id="equities_bars_daily",
+            observation_count=VisibleObservationCount.literal(2),
+            fields=("date", "morning_turnover_value"),
+            optional_fields=("market_cap", "payload"),
+        ))
+        size_prior, size_d = owner.select_am_research_scope(
+            requirement=ratio_scope, decision_as_of=DECISION,
+            observed_through=OBSERVED, codes=(CODE,),
+        )
+        assert size_prior.morning_turnover_value == size_d.morning_turnover_value == 0.0
+        assert size_prior.turnover_value == size_prior.market_cap == 0.0
+        assert dict(size_prior.payload) == {"MarketCap": 321.0}
+        assert size_d.market_cap is size_d.turnover_value is None
+        assert dict(size_d.payload) == {}
+        assert size_d.field_evidence["market_cap"] == "absent_am_allowlist"
+        assert size_d.field_evidence["payload"] == "absent_am_allowlist"
+        assert {"volume", "turnover_value", "market_cap", "payload", "raw_payload"}.isdisjoint(
+            size_d.feature_row()
+        )
         public = json.dumps(
             {
                 "code": current.code,

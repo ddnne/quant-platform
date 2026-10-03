@@ -186,8 +186,8 @@ def test_price_ratio_fails_closed_for_short_or_unadjusted_history() -> None:
     assert missing.metadata["raw_fallback"] is False
 
 
-@pytest.mark.parametrize("field", ["MarketCapitalization", "MarketCap", "MktCap"])
-def test_market_cap_reads_latest_pit_bar_payload_for_sector_ranking(field) -> None:
+def test_market_cap_reads_latest_pit_bar_payload_for_sector_ranking() -> None:
+    field = "MktCap"
     rows = _bars([100.0, 101.0])
     rows[0]["raw_payload"] = {field: 90_000.0}
     rows[1]["raw_payload"] = {field: 123_456.0}
@@ -213,6 +213,8 @@ def test_market_cap_prefers_typed_bar_column_over_payload_alias() -> None:
     assert output.value == 222_000.0
     assert output.metadata["value_field"] == "market_cap"
     assert output.metadata["value_source"] == "latest_PIT_visible_typed_bar"
+    rows[-1]["market_cap"] = 0.0
+    assert _price("market_cap", rows).value is None  # No positive-alias rescue.
 
 
 def test_market_cap_does_not_substitute_close_or_other_size_levels() -> None:
