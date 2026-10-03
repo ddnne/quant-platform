@@ -21,6 +21,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Mapping, Protocol
 
 import pit
+from pit.api import _date_bound
 from pit.read_clock import normalize_as_of, resolve_db_path
 
 from . import registry as _registry
@@ -41,6 +42,31 @@ class MissingInput(KeyError):
 
 _NO_DEFAULT = object()
 _RUNTIME_SCOPE_FIELDS = frozenset({"as_of", "db_path"})
+_RESOURCE_DATASETS = {
+    "equity_bars_daily": "equities_bars_daily",
+    "financial_state": "fins_summary",
+    "equity_master": "equities_master",
+    "market_calendar": "markets_calendar",
+    "jsda_repo_rates": "jsda_tokyo_repo_rates",
+}
+
+
+def _feature_bar_rows(rows, *, scope, filters):
+    """Project declared fields and filter *within* already selected rows."""
+    allowed = {"code", "date", *scope.fields, *scope.optional_fields}
+    selected = [{key: value for key, value in row.items() if key in allowed}
+                for row in rows]
+    for argument, predicate in (
+        ("from_event", lambda day, limit: day >= limit),
+        ("to_event", lambda day, limit: day <= limit),
+    ):
+        if filters.get(argument) is not None:
+            limit = _date_bound(filters[argument])
+            selected = [row for row in selected
+                        if predicate(row["date"], limit)]
+    if filters.get("latest_n") is not None:
+        selected = selected[-int(filters["latest_n"]):]
+    return selected
 
 
 class _BoundDailyBarsReader(Protocol):
@@ -422,6 +448,7 @@ def _compute(
             )
 
     selected_by_dataset: dict[tuple[str, str], Any] = {}
+    read_scopes = {scope.dataset_id: scope for scope in feature.read_scopes}
 
     def _declared_selected(
         dataset_id: str, code: str, *, split_anchor: str | None = None
@@ -440,20 +467,21 @@ def _compute(
         return selected_by_dataset[key]
 
     def _read_pit(resource: str, kwargs: Mapping[str, Any]):
+        dataset_id = (str(kwargs.get("dataset") or "")
+                      if resource == "jquants_records"
+                      else _RESOURCE_DATASETS.get(resource, ""))
+        if read_scopes and dataset_id not in feature.dataset_dependencies:
+            raise ValueError(f"undeclared {dataset_id or resource} read for feature {feature.id!r}")
+        scope = read_scopes.get(dataset_id)
+        if scope is not None and (
+            scope.unconsumed_membership
+            or (dataset_id == "equities_bars_daily" and resource != "equity_bars_daily")
+        ):
+            raise ValueError(f"declared {dataset_id} scope does not permit this reader")
         if scoped_feature_reads is not None:
             declared = scoped_feature_reads.data_view._declared_feature_dataset_ids(
                 consumer_id=scoped_feature_reads.consumer_id
             )
-            if resource == "jquants_records":
-                dataset_id = str(kwargs.get("dataset") or "")
-            else:
-                dataset_id = {
-                    "equity_bars_daily": "equities_bars_daily",
-                    "financial_state": "fins_summary",
-                    "equity_master": "equities_master",
-                    "market_calendar": "markets_calendar",
-                    "jsda_repo_rates": "jsda_tokyo_repo_rates",
-                }.get(resource, "")
             if not dataset_id or dataset_id not in declared:
                 raise ValueError(
                     f"undeclared {dataset_id or resource} read for the current plan consumer"
@@ -493,32 +521,14 @@ def _compute(
                 selected = _declared_selected(
                     "equities_bars_daily", code, split_anchor=split_anchor
                 )
-                allowed = frozenset(requirement.scope.fields) | frozenset(
-                    requirement.scope.optional_fields
+                rows = _feature_bar_rows(
+                    ({field: getattr(bar, field) for field in (
+                        "code", "date", "close", "adjustment_close",
+                        "volume", "adjustment_volume",
+                    )} for bar in selected),
+                    scope=requirement.scope,
+                    filters=kwargs,
                 )
-                rows = []
-                for bar in selected:
-                    row = {"code": bar.code, "date": bar.date}
-                    if "close" in allowed:
-                        row["close"] = bar.close
-                    if "adjustment_close" in allowed:
-                        row["adjustment_close"] = bar.adjustment_close
-                    if "volume" in allowed:
-                        row["volume"] = bar.volume
-                    if "adjustment_volume" in allowed:
-                        row["adjustment_volume"] = bar.adjustment_volume
-                    rows.append(row)
-                from_event = kwargs.get("from_event")
-                if from_event is not None:
-                    start = str(from_event)[:10]
-                    rows = [row for row in rows if row["date"] >= start]
-                to_event = kwargs.get("to_event")
-                if to_event is not None:
-                    end = str(to_event)[:10]
-                    rows = [row for row in rows if row["date"] <= end]
-                latest_n = kwargs.get("latest_n")
-                if latest_n is not None:
-                    rows = rows[-int(latest_n) :]
                 return pit.PitResult(
                     rows=rows,
                     metadata={
@@ -533,8 +543,6 @@ def _compute(
             raise ValueError(
                 f"undeclared {dataset_id} read for the current plan consumer"
             )
-        if resource == "equity_bars_daily" and daily_bars_capability is not None:
-            return daily_bars_capability.reader(**dict(kwargs))
         readers = {
             "equity_bars_daily": pit.get_equity_bars_daily,
             "equity_master": pit.get_equity_master,
@@ -547,7 +555,38 @@ def _compute(
             reader = readers[resource]
         except KeyError as exc:  # pragma: no cover - context methods are closed
             raise RuntimeError(f"unknown FeatureContext resource: {resource!r}") from exc
-        return reader(as_of=as_of_iso, db_path=resolved_db, **dict(kwargs))
+        def read(arguments):
+            if resource == "equity_bars_daily" and daily_bars_capability is not None:
+                return daily_bars_capability.reader(**arguments)
+            return reader(as_of=as_of_iso, db_path=resolved_db, **arguments)
+
+        if resource != "equity_bars_daily" or scope is None:
+            return read(dict(kwargs))
+        scope = scope.resolve({**feature.inputs.optional_kwargs, **inputs})
+        arguments = dict(kwargs)
+        # A split-safety interval includes a predecessor and the full anchor
+        # interval; its observation count is not a total-row limit.
+        if scope.observation_count is not None and not scope.split_safety_anchor_interval:
+            code = kwargs.get("code")
+            if code is None or not str(code).strip() or kwargs.get("codes") is not None:
+                raise ValueError("declared bar count requires one code")
+            count = scope.observation_count.value
+            latest_n = kwargs.get("latest_n")
+            if latest_n is not None and (type(latest_n) is not int or not 1 <= latest_n <= count):
+                raise ValueError("bar read exceeds declared observation count")
+            # Select the declared latest visible tail first. A date filter
+            # must not move the consumer into an older, undeclared window.
+            arguments.pop("from_event", None)
+            arguments.pop("to_event", None)
+            arguments["latest_n"] = count
+            key = (dataset_id, str(code))
+            if key not in selected_by_dataset:
+                selected_by_dataset[key] = read(arguments)
+            result = selected_by_dataset[key]
+        else:
+            result = read(arguments)
+        rows = _feature_bar_rows(result.rows, scope=scope, filters=kwargs)
+        return pit.PitResult(rows=rows, metadata={**result.metadata, "count": len(rows)})
 
     ctx = FeatureContext(
         as_of=as_of_iso,

@@ -79,6 +79,22 @@ Legacy compatibility must name its remaining caller and removal condition;
 "just in case" is not a reason to retain it. Do not delete persisted history as
 a side effect of source cleanup; identify consumers and recovery first.
 
+### Feature read scopes
+
+The existing feature runtime projects declared bar fields for both Controlled
+selection and DRAFT PIT/AM readers. Pure observation-count scopes select the
+latest decision-visible N rows once per compute, then apply caller date filters;
+an older `to_event` cannot shift that declared tail into old history. An
+unbounded retry reuses that tail, and undeclared datasets/oversized reads are
+refused before storage access. Split-safety scopes retain their predecessor plus
+anchor interval rather than incorrectly truncating the whole interval to N.
+
+This is not complete DRAFT plan binding: AM/other legacy definitions without
+read scopes, financial-state selection and DRAFT closure-to-runtime identity
+remain separate open work. Do not add READY/Receipt authorities to close that
+DRAFT gap. One real SQLite boundary/numeric regression replaces the previous
+getter-routing spy and context-shape-only tests.
+
 ## First batch (source only)
 
 - Remove the legacy D1 availability scan after R2 persistence; measure current
