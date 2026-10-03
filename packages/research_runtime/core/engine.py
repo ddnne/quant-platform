@@ -163,7 +163,13 @@ def _make_feature_accessor(
 ):
     """Bind the trusted PIT scope used by one decision context."""
 
-    prepared_frame = _active_personal_prepared_frame(db_path)
+    # Personal DRAFT cells do not carry current-plan consumer scope. A hit
+    # must never bypass Controlled binding checks or seed a scoped result.
+    prepared_frame = (
+        _active_personal_prepared_frame(db_path)
+        if bound_feature_binding is None and governed_am_view is None
+        else None
+    )
     session_view_digest = getattr(daily_bars_capability, "session_view_digest", None)
 
     def compute_feature(
