@@ -139,6 +139,9 @@ real; run boundaries check file identity/stat/permissions and sidecars. Mutable
 input keeps its before/after measurements, Controlled is unchanged, and the
 service's final raw-byte hash/catalog/SQLite verification remains. This removes
 repeated whole-history COUNT/MAX work across folds without a new cache store.
+Reusing a prepared view also requires the same normalized dataset membership,
+period and dependency-closure digests. A changed request is rejected before
+the existing artifact verification; it needs a separately bound view.
 Personal prepared feature cells are DRAFT-only: the engine neither loads nor
 stores them when a governed view or bound feature consumer is present. Thus a
 matching cached value cannot skip Controlled current-plan validation. The

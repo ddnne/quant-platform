@@ -48,7 +48,10 @@ from research.factor_cohorts import (
     LEGACY_NEXT_CLOSE_LABEL,
 )
 from pit import observed_market_bar_coverage, universe_corporate_action_check
-from pit.personal_research_view import OfflineFixture, OfflineFixtureDataView, SnapshotIdentity
+from pit.personal_research_view import (
+    OfflineFixture, OfflineFixtureDataView, PersonalResearchViewError,
+    SnapshotIdentity,
+)
 from research.personal_service import (
     PERSONAL_BAR_COVERAGE_EVIDENCE,
     PERSONAL_DECISION_POLICY,
@@ -1132,6 +1135,11 @@ def test_personal_research_runs_real_paper_and_is_idempotent(
     assert first.report_id == second.report_id
     assert first.report_json_path == second.report_json_path
     assert first.snapshot == second.snapshot
+    # Reusing the same view with a changed plan period must not silently bind
+    # a new report to the first request's immutable snapshot manifest.
+    changed_end = (date.fromisoformat(end) - timedelta(days=1)).isoformat()
+    with pytest.raises(PersonalResearchViewError, match="does not match the current request"):
+        service.run(replace(request, period_end=changed_end))
     report = json.loads(first.report_json_path.read_text(encoding="utf-8"))
     assert report["version"] == PERSONAL_RESEARCH_REPORT_VERSION
     assert report["decision_policy"] == PERSONAL_DECISION_POLICY
