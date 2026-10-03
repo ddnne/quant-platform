@@ -62,6 +62,13 @@ describe("d1 export Container outbound", () => {
     expect(stale.status).toBe(409);
     expect(await stale.text()).not.toContain("X-Amz-Signature");
 
+    // Valid admission without an explicit transport must not reach real R2.
+    await expect(fetch(ALLOWED)).rejects.toThrow("Node unit HTTP disabled");
+    const unstubbed = await d1ExportSourceOutbound(download, {
+      D1_BACKUP_EXPORT_BUNDLE: JSON.stringify(BUNDLE),
+    });
+    expect(unstubbed.status).toBe(502);
+
     const sql = new TextEncoder().encode("CREATE TABLE t(id INTEGER);\n");
     vi.stubGlobal(
       "fetch",
@@ -78,6 +85,9 @@ describe("d1 export Container outbound", () => {
     });
     expect(streamed.status).toBe(200);
     expect(new Uint8Array(await streamed.arrayBuffer())).toEqual(sql);
+
+    vi.unstubAllGlobals();
+    await expect(fetch(ALLOWED)).rejects.toThrow("Node unit HTTP disabled");
 
     const parsed = await parseD1ExportBundle(JSON.stringify(BUNDLE));
     expect(parsed.ok).toBe(true);

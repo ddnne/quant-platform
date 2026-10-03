@@ -4,6 +4,16 @@ This is a personal single-user Cloudflare quant research product on a trusted
 host. Tests catch real current failures; they do not simulate an untrusted
 multi-tenant enterprise.
 
+## Node transport baseline
+
+The four Node unit lanes reuse one setup for crypto compatibility and a denied
+default `fetch`. A missing stub must not download an actual export or call an
+acquisition/provider endpoint. Per-test stub restoration returns to that denied
+baseline. The existing admitted export-stream test exercises this failure and
+explicit stub success; no new test function or case matrix. This is test-only,
+not a production permission change or an OS/socket sandbox for all runtimes.
+Workerd and multi-Worker harness tests retain their explicit fixture transports.
+
 ## Price-only research regression coverage
 
 Existing hydrator/resume/universe/AM-service/request tests cover the new closed
