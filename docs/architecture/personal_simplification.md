@@ -95,6 +95,26 @@ remain separate open work. Do not add READY/Receipt authorities to close that
 DRAFT gap. One real SQLite boundary/numeric regression replaces the previous
 getter-routing spy and context-shape-only tests.
 
+Personal `am_signal_pm_close` uses historical morning fields inside daily bars,
+not the tip-only AM endpoint. Its closure and coverage read use that same daily
+source and canonical retrospective field mask. A nonpositive/missing morning
+adjusted close is missing evidence, never a daily-close fallback. Coverage is
+labelled `RETROSPECTIVE_FIELD_TIME`, with no contemporaneous publication claim.
+Paper reads retain the adapter's fixed, non-promotable observation cutoff; the
+Controlled snapshot clock and READY requirements are unchanged. The existing
+AM report test now runs a synthetic daily-only cohort through actual evaluation,
+instead of stopping before warmup; compact coverage keeps its missing-price case.
+Corporate-action AM-tip evidence can still be UNKNOWN and remains an explicit
+report limitation, not a fictitious PASS.
+
+The existing job-local prepared frame also reuses a measured logical snapshot
+ID for an unchanged, standalone read-only DRAFT file. Initial ID comparison is
+real; run boundaries check file identity/stat/permissions and sidecars. Mutable
+input keeps its before/after measurements, Controlled is unchanged, and the
+service's final raw-byte hash/catalog/SQLite verification remains. This removes
+repeated whole-history COUNT/MAX work across folds without a new cache store.
+It does not establish a particular speed, disk-read or invoice reduction.
+
 ## First batch (source only)
 
 - Remove the legacy D1 availability scan after R2 persistence; measure current

@@ -322,16 +322,6 @@ _EVALUATION = ContractDependency(
     version="personal-walk-forward/v1",
     dataset_dependencies=("equities_bars_daily", "markets_calendar"),
 )
-_EVALUATION_AM = ContractDependency(
-    kind="evaluation",
-    dependency_id="personal_walk_forward",
-    version="personal-walk-forward/v1",
-    dataset_dependencies=(
-        "equities_bars_daily",
-        "equities_bars_daily_am",
-        "markets_calendar",
-    ),
-)
 _RISK = ContractDependency(
     kind="risk",
     dependency_id="personal_drawdown",
@@ -587,15 +577,9 @@ def _closures(
                 plan_digest=_digest(plan_body),
                 spec=spec,
                 universe_dependencies=(universe_dependency,),
-                evaluation_dependency=(
-                    _EVALUATION_AM
-                    if (
-                        isinstance(execution_contract, Mapping)
-                        and execution_contract.get("execution_mode")
-                        == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
-                    )
-                    else _EVALUATION
-                ),
+                # Both DRAFT modes use daily history. AM timing remains bound
+                # by the plan's execution contract, not the tip-only AM feed.
+                evaluation_dependency=_EVALUATION,
                 risk_dependency=_RISK,
                 cost_dependency=_SHORT_COST if uses_short else _COST,
                 research_data_profile_id=PERSONAL_DATA_PROFILE,

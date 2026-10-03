@@ -287,18 +287,10 @@ def test_am_dual_clock_is_exact_and_dataset_scoped(tmp_path: Path) -> None:
         _universe("2024-01-05", codes=("1301", "1302", "1305")),
         minimum_ratio=1.0,
     )
-    assert coverage["status"] == "PASS"
-    assert coverage["observed_rows"] == 3
-    late_coverage = view.observed_bar_coverage(
-        _universe("2024-01-05", codes=("1304",)), minimum_ratio=1.0
-    )
-    assert late_coverage["status"] == "FAIL"
-    assert late_coverage["observed_rows"] == 0
-    pre_window_coverage = view.observed_bar_coverage(
-        _universe("2024-01-05", codes=("1300",)), minimum_ratio=1.0
-    )
-    assert pre_window_coverage["status"] == "FAIL"
-    assert pre_window_coverage["observed_rows"] == 0
+    # Timely tip-AM records above do not prove retrospective daily history.
+    assert coverage["status"] == "UNKNOWN"
+    assert coverage["historical_source"] == "equities_bars_daily"
+    assert coverage["publication_claim"] is False
 
 
 def test_morning_corporate_action_requires_end_day_every_code(tmp_path: Path) -> None:
@@ -420,16 +412,24 @@ def test_morning_long_names_and_madjc_only_factor_proof_are_explicit(
     assert advisory["extreme_price_move_events"]
 
 
-def test_am_coverage_rejects_pm_only_payload_in_am_dataset(tmp_path: Path) -> None:
+def test_am_coverage_rejects_pm_only_payload_in_daily_history(tmp_path: Path) -> None:
     path = tmp_path / "am-pm-poison.sqlite"
     con = _catalog_db(path)
+    # The canonical reader merges typed and catalog daily bars. A missing
+    # typed table would test UNKNOWN schema evidence, not the PM-field guard.
+    con.execute(
+        "CREATE TABLE jquants_daily_bars ("
+        "source TEXT, code TEXT, date TEXT, event_time TEXT, available_at TEXT, "
+        "ingested_at TEXT, close REAL, adjustment_close REAL, volume REAL, "
+        "adjustment_volume REAL)"
+    )
     _insert_record(
         con,
-        dataset="equities_bars_daily_am",
+        dataset="equities_bars_daily",
         payload={"Code": "1301", "Date": "2024-01-05", "AAdjC": 999.0},
-        event_time="2024-01-05T11:30:00+09:00",
-        available_at="2024-01-05T12:15:00+09:00",
-        ingested_at="2024-01-05T12:15:00+09:00",
+        event_time="2024-01-05T15:00:00+09:00",
+        available_at="2024-01-05T15:00:00+09:00",
+        ingested_at="2024-01-05T15:00:00+09:00",
     )
     con.commit()
     con.close()
@@ -441,6 +441,7 @@ def test_am_coverage_rejects_pm_only_payload_in_am_dataset(tmp_path: Path) -> No
     )
     assert coverage["status"] == "FAIL"
     assert coverage["observed_rows"] == 0
+    assert coverage["publication_claim"] is False
 
 
 def test_option_eval_ignores_arbitrary_temp_log_dir(tmp_path: Path) -> None:

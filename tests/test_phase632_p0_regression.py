@@ -1190,6 +1190,7 @@ def test_morning_close_coverage_does_not_substitute_session_close(
         code="1301",
         day="2025-01-02",
         close=10.0,
+        morning_adjustment_close=None,
         available_at="2025-01-02T15:30:00+09:00",
         ingested_at="2025-01-02T16:00:00+09:00",
         event_time="2025-01-02T15:30:00+09:00",
@@ -1223,7 +1224,9 @@ def test_morning_close_coverage_does_not_substitute_session_close(
     )
     coverage = view.observed_bar_coverage(universe, minimum_ratio=1.0)
     assert coverage["status"] in {"FAIL", "UNKNOWN"}
-    assert coverage.get("bar_dataset") == "equities_bars_daily_am"
+    assert coverage.get("bar_dataset") == "equities_bars_daily"
+    assert coverage["evidence_kind"] == "RETROSPECTIVE_FIELD_TIME"
+    assert coverage["publication_claim"] is False
     assert int(coverage.get("observed_rows") or 0) == 0
     assert coverage.get("status") != "PASS"
 
