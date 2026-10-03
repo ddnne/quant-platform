@@ -85,3 +85,30 @@ def test_feature_context_reads_declared_fields_and_latest_visible_tail(
         "code": code,
         "default": 7,
     }
+
+    # Dataset membership is required even without detailed field/window scopes.
+    # Use an absent DB to prove the undeclared read is refused before storage.
+    def undeclared_catalog(ctx):
+        ctx.get_jquants_records(dataset="fins_summary", code=code)
+        raise AssertionError("undeclared catalog was read")
+
+    unscoped = replace(definition, read_scopes=(), compute=undeclared_catalog)
+    with pytest.raises(ValueError, match="undeclared fins_summary"):
+        features.compute(
+            unscoped, as_of=f"{TRADING_DAYS[-1]}T15:30:00+09:00",
+            code=code, n=1, db_path=tmp_path / "absent.sqlite",
+        )
+
+    def undeclared_financial(ctx):
+        ctx.get_financial_state(
+            dataset="fins_summary", code=code,
+            initial_visible_state="all_visible_existence_and_count",
+        )
+        raise AssertionError("undeclared financial state was read")
+
+    with pytest.raises(ValueError, match="undeclared fins_summary"):
+        features.compute(
+            replace(unscoped, compute=undeclared_financial),
+            as_of=f"{TRADING_DAYS[-1]}T15:30:00+09:00",
+            code=code, n=1, db_path=tmp_path / "absent.sqlite",
+        )

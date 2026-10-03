@@ -29,7 +29,7 @@ from .am_session_features import AM_SESSION_FEATURE_IDS
 from .dataset_guard import master_pit_history_start, require_feature_dataset
 from .types import FeatureDefinition, FeatureOutput
 
-FEATURES_RUNTIME_VERSION = "0.8.0"
+FEATURES_RUNTIME_VERSION = "0.8.1"
 
 
 class AsOfRequired(ValueError):
@@ -44,7 +44,6 @@ _NO_DEFAULT = object()
 _RUNTIME_SCOPE_FIELDS = frozenset({"as_of", "db_path"})
 _RESOURCE_DATASETS = {
     "equity_bars_daily": "equities_bars_daily",
-    "financial_state": "fins_summary",
     "equity_master": "equities_master",
     "market_calendar": "markets_calendar",
     "jsda_repo_rates": "jsda_tokyo_repo_rates",
@@ -468,9 +467,9 @@ def _compute(
 
     def _read_pit(resource: str, kwargs: Mapping[str, Any]):
         dataset_id = (str(kwargs.get("dataset") or "")
-                      if resource == "jquants_records"
+                      if resource in {"jquants_records", "financial_state"}
                       else _RESOURCE_DATASETS.get(resource, ""))
-        if read_scopes and dataset_id not in feature.dataset_dependencies:
+        if dataset_id not in feature.dataset_dependencies:
             raise ValueError(f"undeclared {dataset_id or resource} read for feature {feature.id!r}")
         scope = read_scopes.get(dataset_id)
         if scope is not None and (

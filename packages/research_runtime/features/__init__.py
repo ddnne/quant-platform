@@ -40,7 +40,7 @@ from .registry import (
     get_for_strategy,
     register,
 )
-from .runtime import compute, compute_many
+from .runtime import FEATURES_RUNTIME_VERSION, compute, compute_many
 from .v0 import (
     Return1d,
     MomentumN,
@@ -193,4 +193,4 @@ __all__ = [
     "__version__",
 ]
 
-__version__ = "0.8.0"
+__version__ = FEATURES_RUNTIME_VERSION

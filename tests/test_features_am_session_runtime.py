@@ -93,6 +93,7 @@ def test_am_capability_d_row_has_no_full_or_afternoon_fields(tmp_path):
         inputs=features.FeatureInput(required_kwargs=("code",)),
         description="inspect AM D row",
         compute=inspect,
+        dataset_dependencies=("equities_bars_daily",),
         intended_role="utility",
     )
     cap = bind_personal_retrospective_am_session_daily_bars(
