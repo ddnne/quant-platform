@@ -2051,8 +2051,11 @@ def test_controlled_bound_v3_current_plan_numeric_and_rejects_foreign_consumer(
 ) -> None:
     from _coreseed import seed_governed_am_pm_session_db
     from core import PERSONAL_RETROSPECTIVE_ADJUSTED, run_backtest, standard_cost
+    from core.engine import _make_feature_accessor
     from core.execution import morning_close_as_of
     from core.universe import membership_at
+    from features.runtime import bind_verified_controlled_am_session_daily_bars
+    from paper_runtime.personal_prepared_frame import _personal_prepared_frame_scope
     from research.ready_manifest import load_exact_four_pilot_ready_binding
 
     code = "1332"
@@ -2168,17 +2171,38 @@ def test_controlled_bound_v3_current_plan_numeric_and_rejects_foreign_consumer(
                 seen["last_adj"] = momentum.metadata["last_adjustment_close"]
                 return []
 
-        res = run_backtest(
-            BoundProbe(),
-            days[0],
-            days[-1],
-            db_path=db,
-            universe=universe,
-            execution_mode="am_signal_pm_close",
-            price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
-            cost_model=standard_cost(bps=0.0),
-            am_session_data_view=view,
-        )
+        with _personal_prepared_frame_scope(
+            db_path=db, snapshot_id=view.logical_snapshot_id()
+        ) as frame:
+            # Real DRAFT computations on the same immutable fixture may be
+            # cached, but must not authorize a different Controlled consumer.
+            as_of = morning_close_as_of(days[-1])
+            warm = _make_feature_accessor(
+                as_of,
+                db,
+                daily_bars_capability=bind_verified_controlled_am_session_daily_bars(
+                    as_of=as_of, db_path=db, data_view=view
+                ),
+            )
+            warm("disclosure_flag_fins", version="1.0.0", code=code)
+            warm(
+                "retrospective_split_adjusted_momentum_n",
+                version="1.0.0", code=code, n=5,
+            )
+            assert frame.stats()["feature_writes"] == 2
+            res = run_backtest(
+                BoundProbe(),
+                days[0],
+                days[-1],
+                db_path=db,
+                universe=universe,
+                execution_mode="am_signal_pm_close",
+                price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
+                cost_model=standard_cost(bps=0.0),
+                am_session_data_view=view,
+            )
+            assert frame.stats()["feature_requests"] == 2
+            assert frame.stats()["feature_writes"] == 2
     finally:
         handle._end_controlled_batch_reads()
         handle.close()

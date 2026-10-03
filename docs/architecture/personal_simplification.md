@@ -121,6 +121,11 @@ real; run boundaries check file identity/stat/permissions and sidecars. Mutable
 input keeps its before/after measurements, Controlled is unchanged, and the
 service's final raw-byte hash/catalog/SQLite verification remains. This removes
 repeated whole-history COUNT/MAX work across folds without a new cache store.
+Personal prepared feature cells are DRAFT-only: the engine neither loads nor
+stores them when a governed view or bound feature consumer is present. Thus a
+matching cached value cannot skip Controlled current-plan validation. The
+existing Controlled numeric/foreign-consumer regression warms real cells first;
+DRAFT cache reuse remains covered by its existing query-count regression.
 
 Scalar canonical encoding reuses the existing JSON encoder and directly renders
 safe integers; binary64 coercion outside that range and finite/Unicode guards
