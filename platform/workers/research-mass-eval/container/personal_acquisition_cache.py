@@ -457,11 +457,12 @@ def assert_deterministic_gzip(blob: bytes) -> None:
         raise AcquisitionCacheInvalid("cache gzip mtime must be 0")
 
 
-def gunzip_to_path(blob: bytes, destination: Path) -> None:
+def gunzip_to_path(blob: bytes, destination: Path) -> str:
     if len(blob) > CACHE_GZIP_MAX_BYTES:
         raise AcquisitionCacheInvalid("cache gzip exceeds the bound")
     assert_deterministic_gzip(blob)
     written = 0
+    digest = hashlib.sha256()
     with gzip.GzipFile(fileobj=io.BytesIO(blob), mode="rb") as compressed:
         if int(getattr(compressed, "mtime", 0) or 0) != 0:
             raise AcquisitionCacheInvalid("cache gzip mtime must be 0")
@@ -474,8 +475,10 @@ def gunzip_to_path(blob: bytes, destination: Path) -> None:
                 if written > CACHE_SQLITE_MAX_BYTES:
                     raise AcquisitionCacheInvalid("cache sqlite exceeds the bound")
                 handle.write(chunk)
+                digest.update(chunk)
     if written < 1:
         raise AcquisitionCacheInvalid("cache sqlite is empty")
+    return "sha256:" + digest.hexdigest()
 
 
 def _table_names(connection: sqlite3.Connection) -> tuple[str, ...]:

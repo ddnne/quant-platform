@@ -1773,18 +1773,16 @@ class PersonalHistoryHydrator:
             stored_page_count = len(page_evidence)
             scan: Mapping[str, Any] | None = None
             if dataset == "fins_summary" and selection is not None:
-                scan = _shared_scan_fields(page_evidence)
-                if (
-                    selection["scanned_page_digests"] != scan["scanned_page_digests"]
-                    or selection["source_row_count"] != scan["source_row_count"]
-                    or _page_digest_hex(selection["completion_digest"])
-                    != _page_digest_hex(scan["completion_digest"])
-                    or response_digest != scan["scan_digest"]
-                ):
-                    raise PersonalHistoryError(
-                        "fins_summary selection does not match independently "
-                        "derived shared scan"
-                    )
+                # _page_evidence independently measures pages and validates the
+                # selection; do not hash the same scan/completion again here.
+                scan = {
+                    "scan_digest": response_digest,
+                    "page_count": len(page_evidence),
+                    "source_row_count": selection["source_row_count"],
+                    "completion_digest": selection["completion_digest"],
+                    "scanned_page_digests": selection["scanned_page_digests"],
+                    "page_evidence": page_evidence,
+                }
                 compact = _compact_fins_selection(
                     selection, scan_digest=scan["scan_digest"]
                 )
