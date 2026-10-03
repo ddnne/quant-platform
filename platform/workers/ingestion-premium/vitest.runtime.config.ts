@@ -3,6 +3,7 @@ import {
   readD1Migrations,
 } from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
+import { denyTestOutbound } from "../../worker_support/test_outbound.mjs";
 
 const d1Migrations = await readD1Migrations("./migrations");
 const projectionMigrations = await readD1Migrations("../quant-ops-mcp/migrations/projection");
@@ -10,6 +11,7 @@ const projectionMigrations = await readD1Migrations("../quant-ops-mcp/migrations
 export default defineConfig({
   plugins: [
     cloudflareTest({
+      miniflare: { outboundService: denyTestOutbound },
       wrangler: { configPath: "./wrangler.test.toml" },
     }),
   ],
