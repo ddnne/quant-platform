@@ -113,6 +113,23 @@ real; run boundaries check file identity/stat/permissions and sidecars. Mutable
 input keeps its before/after measurements, Controlled is unchanged, and the
 service's final raw-byte hash/catalog/SQLite verification remains. This removes
 repeated whole-history COUNT/MAX work across folds without a new cache store.
+
+Scalar canonical encoding reuses the existing JSON encoder and directly renders
+safe integers; binary64 coercion outside that range and finite/Unicode guards
+are unchanged. New compact facts do not hash content for a comparison when no
+previous vintage exists. Actual stored-vintage conflicts and idempotence retain
+their comparisons. A bounded synthetic preparation profile preserves all stored
+columns, source-response and facts digests; its local improvement is not evidence
+of cloud runtime or invoice savings. Existing identity/numeric/hydration tests
+cover the change; no additional mock or test-count target is introduced.
+
+Stored-bar indexing emits bounded process-log metadata every 32 objects and when
+a month is staged into the source spool, not when final snapshot facts complete.
+It reuses measured counters, without reading storage, bodies
+or secrets for diagnosis. Object-key `dt` names only the first row date and must
+not be reported as the current hydration month. Logs help distinguish parsing,
+range reuse and phase progress when a hard deadline prevents a terminal manifest;
+they are neither snapshot completion nor permission for another paid attempt.
 It does not establish a particular speed, disk-read or invoice reduction.
 
 ## First batch (source only)
