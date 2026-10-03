@@ -4,15 +4,23 @@ This is a personal single-user Cloudflare quant research product on a trusted
 host. Tests catch real current failures; they do not simulate an untrusted
 multi-tenant enterprise.
 
-## Node transport baseline
+## Test transport baseline
 
-The four Node unit lanes reuse one setup for crypto compatibility and a denied
-default `fetch`. A missing stub must not download an actual export or call an
-acquisition/provider endpoint. Per-test stub restoration returns to that denied
-baseline. The existing admitted export-stream test exercises this failure and
-explicit stub success; no new test function or case matrix. This is test-only,
-not a production permission change or an OS/socket sandbox for all runtimes.
-Workerd and multi-Worker harness tests retain their explicit fixture transports.
+Node unit lanes and all three multi-Worker harnesses share a denied default
+`fetch`; the four TypeScript unit lanes retain their crypto shim. All eight
+workerd configurations bind the same denial to Miniflare `outboundService`.
+An omitted stub must not download an export or call an acquisition/provider
+endpoint. Per-test restoration returns to the denied baseline. Internal
+Service Bindings, local D1/R2/Queue and explicit fixture transports remain
+available. An auxiliary Miniflare Worker must declare its own outbound policy;
+the runner's option is not inherited. This is test-only HTTP isolation, not a
+production permission change or an OS/socket sandbox.
+
+Existing admitted export, R2 create-only, OAuth and separate-isolate acquisition
+cases cover denial and successful local binding/fixture use. No new test
+function or case matrix. The pinned plugin and Wrangler have an internet
+fallback unless this boundary is supplied; a missing setup is not harmless
+merely because current tests normally stub HTTP.
 
 ## Price-only research regression coverage
 

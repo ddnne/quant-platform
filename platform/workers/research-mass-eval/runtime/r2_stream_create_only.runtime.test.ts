@@ -77,6 +77,10 @@ describe("putStreamCreateOnly workerd/R2", () => {
   afterEach(() => reset());
 
   it("creates once, retries identical content, and rejects a different body", async () => {
+    const unstubbed = await fetch("https://unconfigured.invalid");
+    expect(unstubbed.status).toBe(500);
+    expect(await unstubbed.text()).toContain("Test HTTP disabled");
+
     const key = "c13/stream/idempotent";
     const firstBytes = new Uint8Array([1, 2, 3]);
     const otherBytes = new Uint8Array([4, 5, 6]);

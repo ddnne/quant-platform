@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
 import { createTestHarness } from "wrangler";
+import "../../../worker_support/test_node_http.mjs";
 
 const root = new URL("../", import.meta.url);
 const server = createTestHarness({
@@ -116,6 +117,10 @@ after(async () => {
 });
 
 test("separate-isolate Service Binding preserves exact Response bytes and metadata", async () => {
+  const unstubbed = await server.fetch("/outbound-probe");
+  assert.equal(unstubbed.status, 500);
+  assert.match(await unstubbed.text(), /Test HTTP disabled/);
+
   const document = await registry();
   const row = document.datasets.find(
     (item) => item.canonical_dataset.dataset_id === "indices_bars_daily_topix",

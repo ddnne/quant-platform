@@ -9,6 +9,7 @@ function getCallback(search) {
 }
 
 test("GET /callback without code/state is 400 missing code/state", async () => {
+  await assert.rejects(fetch("https://unconfigured.invalid"), /Test HTTP disabled/);
   const cases = ["", "?code=abc", "?state=xyz", "?code=", "?state=", "?code=&state="];
   for (const search of cases) {
     const res = await getCallback(search);

@@ -1,10 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
-
-// Install the baseline before per-test stubs capture it. Restoring those stubs
-// must not restore real HTTP access to acquisition/export/provider endpoints.
-globalThis.fetch = async () => {
-  throw new Error("Node unit HTTP disabled; inject or stub the transport");
-};
+import "./test_node_http.mjs";
 
 const subtle = globalThis.crypto.subtle as SubtleCrypto & {
   timingSafeEqual?: (a: ArrayBuffer, b: ArrayBuffer) => boolean;

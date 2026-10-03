@@ -449,7 +449,8 @@ _PINNED_PACKAGE_SCRIPTS = {
             + _generic_tagged_deploy_command("quant-ops-mcp")
         ),
         "test": (
-            "node --experimental-test-module-mocks --test test/*.test.mjs && "
+            "node --import ../../worker_support/test_node_http.mjs "
+            "--experimental-test-module-mocks --test test/*.test.mjs && "
             "vitest run --config vitest.runtime.config.ts && "
             "vitest run --config vitest.harness.config.ts"
         ),
