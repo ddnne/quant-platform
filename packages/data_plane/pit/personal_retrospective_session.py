@@ -377,26 +377,31 @@ def get_personal_retrospective_am_signal_equity_bars_daily(
             "personal retrospective AM signal as_of must not be later than "
             "snapshot observed_through"
         )
-    include_d = True
-    if from_event is not None and _as_day(from_event) > decision_date:
-        include_d = False
-    if to_event is not None and _as_day(to_event) < decision_date:
-        include_d = False
+    from_day = None if from_event is None else _as_day(from_event)
+    to_day = None if to_event is None else _as_day(to_event)
+    include_d = (
+        (from_day is None or from_day <= decision_date)
+        and (to_day is None or to_day >= decision_date)
+    )
 
-    prior_kwargs: dict[str, Any] = {
-        "as_of": as_of_iso,
-        "code": code,
-        "from_event": from_event,
-        "to_event": to_event,
-        "codes": codes,
-        "db_path": db_path,
-    }
-    if latest_n is not None:
-        prior_kwargs["latest_n"] = latest_n
-    prior = get_equity_bars_daily(**prior_kwargs)
-    prior_rows = [
-        row for row in prior.rows if str(row.get("date") or "") < decision_date
-    ]
+    prior_rows: list[dict[str, Any]] = []
+    # An exact D-only read cannot contribute a date < D. Keep the canonical
+    # D reader below for storage/argument validation and the AM allowlist.
+    if from_day != decision_date or to_day != decision_date:
+        prior_kwargs: dict[str, Any] = {
+            "as_of": as_of_iso,
+            "code": code,
+            "from_event": from_event,
+            "to_event": to_event,
+            "codes": codes,
+            "db_path": db_path,
+        }
+        if latest_n is not None:
+            prior_kwargs["latest_n"] = latest_n
+        prior = get_equity_bars_daily(**prior_kwargs)
+        prior_rows = [
+            row for row in prior.rows if str(row.get("date") or "") < decision_date
+        ]
     if include_morning_turnover_history:
         prior_rows = [_consistent_morning_turnover_row(row) for row in prior_rows]
 

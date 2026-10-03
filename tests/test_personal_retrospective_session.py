@@ -75,7 +75,7 @@ def test_am_signal_view_masks_d_and_keeps_prior_full_rows(tmp_path):
     assert result.metadata["field_time_reconstruction"] is True
 
 
-def test_am_signal_latest_n_and_date_bounds_and_ordering(tmp_path):
+def test_am_signal_latest_n_and_date_bounds_and_ordering(tmp_path, monkeypatch):
     by_code = {code: {day: 10.0 for day in TRADING_DAYS} for code in CODES}
     db = seed_db(
         tmp_path,
@@ -89,6 +89,14 @@ def test_am_signal_latest_n_and_date_bounds_and_ordering(tmp_path):
             code: {day: 80.0 for day in TRADING_DAYS} for code in CODES
         },
     )
+    reads = []
+    reader = session_mod.get_equity_bars_daily
+
+    def counted_reader(**kwargs):
+        reads.append(kwargs)
+        return reader(**kwargs)
+
+    monkeypatch.setattr(session_mod, "get_equity_bars_daily", counted_reader)
     latest = pit.get_personal_retrospective_am_signal_equity_bars_daily(
         as_of=morning_close_as_of(D3),
         code=CODE,
@@ -97,16 +105,39 @@ def test_am_signal_latest_n_and_date_bounds_and_ordering(tmp_path):
     )
     assert [row["date"] for row in latest.rows] == [D2, D3]
     assert latest.metadata["latest_n"] == 2
+    assert len(reads) == 2
 
+    reads.clear()
     bounded = pit.get_personal_retrospective_am_signal_equity_bars_daily(
         as_of=morning_close_as_of(D2),
         codes=CODES,
-        from_event=D2,
-        to_event=D2,
+        from_event=" " + D2.replace("-", "/") + " ",
+        to_event=" " + D2 + " ",
         db_path=db,
     )
     assert [row["date"] for row in bounded.rows] == [D2, D2]
     assert [row["code"] for row in bounded.rows] == sorted(CODES)
+    assert len(reads) == 1
+    assert reads[0]["as_of"] == bounded.metadata["retrospective_reconstruction"][
+        "d_row_source_read_as_of"
+    ]
+    assert [row["adjustment_close"] for row in bounded.rows] == [50.0, 50.0]
+    assert all("afternoon_adjustment_close" not in row for row in bounded.rows)
+    with pytest.raises(ValueError, match="code.*codes"):
+        pit.get_personal_retrospective_am_signal_equity_bars_daily(
+            as_of=morning_close_as_of(D2), code=CODE, codes=CODES,
+            from_event=D2, to_event=D2, db_path=db,
+        )
+    reads.clear()
+    prior_only = pit.get_personal_retrospective_am_signal_equity_bars_daily(
+        as_of=morning_close_as_of(D2), code=CODE,
+        from_event=D0, to_event=D1, db_path=db,
+    )
+    assert [row["date"] for row in prior_only.rows] == [D0, D1]
+    assert [row["adjustment_close"] for row in prior_only.rows] == [999.0, 999.0]
+    assert len(reads) == 1
+    assert reads[0]["as_of"] == morning_close_as_of(D2)
+    assert prior_only.metadata["retrospective_reconstruction"]["d_row_source_read_as_of"] is None
 
 
 def test_am_signal_d_row_does_not_fall_back_to_full_adjc(tmp_path):
