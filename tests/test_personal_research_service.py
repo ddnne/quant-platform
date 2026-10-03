@@ -435,14 +435,27 @@ def test_prepared_frame_temp_sqlite_is_removed_after_exception(
 ) -> None:
     source, _start, _end = personal_db
     cache_path: Path | None = None
-    with pytest.raises(RuntimeError, match="test abort"):
+    with sqlite3.connect(source) as connection:
+        connection.execute("PRAGMA journal_mode=DELETE")
+    source.chmod(0o444)
+    with pytest.raises(RuntimeError, match="snapshot changed"):
         with _personal_prepared_frame_scope(
             db_path=source,
             snapshot_id=data_snapshot_id(source),
         ) as frame:
             cache_path = frame.cache_path
             assert cache_path.is_file()
-            raise RuntimeError("test abort")
+            assert frame.verified_readonly_snapshot_id() == frame.snapshot_id
+            wal = source.with_name(source.name + "-wal")
+            wal.touch()
+            with pytest.raises(RuntimeError, match="snapshot changed"):
+                frame.verified_readonly_snapshot_id()
+            wal.unlink()
+            source.chmod(0o644)
+            with source.open("ab") as output:
+                output.write(b"changed-after-identity-reuse")
+            source.chmod(0o444)
+            frame.verified_readonly_snapshot_id()
     assert cache_path is not None
     assert not cache_path.exists()
 
@@ -522,11 +535,33 @@ def test_personal_prepared_frame_matches_uncached_price_fundamental_and_ls(
     personal_db: tuple[Path, str, str],
     tmp_path: Path,
     case: str,
+    monkeypatch,
 ) -> None:
     source, start, end = personal_db
     universe, period = _prepared_frame_case(source, start, end)
     spec = _prepared_frame_spec(case)
+    with sqlite3.connect(source) as connection:
+        connection.execute("PRAGMA journal_mode=DELETE")
+    source.chmod(0o444)
     snapshot_id = data_snapshot_id(source)
+    views = {
+        name: _bound_view(source, tmp_path / f"{case}-{name}")
+        for name in ("uncached", "cached", "replay")
+    }
+    import pit.sqlite_identity as identity_module
+
+    identity_queries: list[str] = []
+    connect_identity = identity_module._connect_readonly
+
+    def traced_identity_connection(*args, **kwargs):
+        connection = connect_identity(*args, **kwargs)
+        connection.set_trace_callback(
+            lambda statement: identity_queries.append(statement)
+            if "COUNT(*) AS row_count" in statement else None
+        )
+        return connection
+
+    monkeypatch.setattr(identity_module, "_connect_readonly", traced_identity_connection)
     common = {
         "universe": universe,
         "period": period,
@@ -542,9 +577,11 @@ def test_personal_prepared_frame_matches_uncached_price_fundamental_and_ls(
     baseline = _run_one(
         PersonalPaperExecutionService(),
         spec,
-        view=_bound_view(source, tmp_path / f"{case}-uncached"),
+        view=views["uncached"],
         **common,
     )[3]
+    baseline_identity_queries = len(identity_queries)
+    identity_queries.clear()
 
     with _personal_prepared_frame_scope(
         db_path=source,
@@ -554,19 +591,21 @@ def test_personal_prepared_frame_matches_uncached_price_fundamental_and_ls(
         first = _run_one(
             PersonalPaperExecutionService(),
             spec,
-            view=_bound_view(source, tmp_path / f"{case}-cached"),
+            view=views["cached"],
             **common,
         )[3]
         replay = _run_one(
             PersonalPaperExecutionService(),
             spec,
-            view=_bound_view(source, tmp_path / f"{case}-replay"),
+            view=views["replay"],
             **common,
         )[3]
         stats = frame.stats()
 
     assert first == baseline
     assert replay == baseline
+    assert len(identity_queries) > 0
+    assert len(identity_queries) * 2 == baseline_identity_queries
     assert int(stats["feature_hits"]) > 0
     assert int(stats["price_window_hits"]) > 0
     assert not cache_path.exists()

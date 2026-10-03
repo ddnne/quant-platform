@@ -3,8 +3,8 @@
 The frame is deliberately small in authority and lifetime.  It owns only an
 ephemeral SQLite file containing already-computed :class:`FeatureOutput`
 documents.  Source facts still enter through the PIT API on a cache miss, and
-the personal execution service continues to verify the immutable source
-snapshot before and after every paper run.
+the personal execution service checks source-file stability before and after
+every paper run and verifies the artifact bytes at job completion.
 
 The cache key binds the logical data snapshot and the complete, exact feature
 contract.  It can therefore reuse a value across validation folds, cost
@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import stat
 import tempfile
 import threading
 import zlib
@@ -215,6 +216,7 @@ class PersonalPreparedFrame:
     def __init__(self, *, db_path: str | Path, snapshot_id: str) -> None:
         self.db_path = Path(db_path).resolve()
         self.snapshot_id = _require_snapshot_id(snapshot_id)
+        self._identity_stat: tuple[int, ...] | None = None
         self._temporary_directory = tempfile.TemporaryDirectory(
             prefix="qp-personal-prepared-frame-"
         )
@@ -262,6 +264,40 @@ class PersonalPreparedFrame:
 
     def matches_db(self, db_path: str | Path) -> bool:
         return Path(db_path).resolve() == self.db_path
+
+    def _readonly_source_state(self) -> tuple[int, ...] | None:
+        info = self.db_path.stat()
+        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o222:
+            return None
+        if any(
+            self.db_path.with_name(self.db_path.name + suffix).exists()
+            for suffix in ("-wal", "-journal")
+        ):
+            return None
+        return (
+            info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns,
+            info.st_ctime_ns, info.st_mode,
+        )
+
+    def verified_readonly_snapshot_id(self) -> str | None:
+        """Reuse the measured identity only while a standalone file is unchanged."""
+
+        state = self._readonly_source_state()
+        if self._identity_stat is not None:
+            if state != self._identity_stat:
+                raise RuntimeError("personal paper snapshot changed during the job")
+            return self.snapshot_id
+        if state is None:
+            return None  # Mutable/WAL fixtures retain per-run identity measurements.
+        from pit.sqlite_identity import data_snapshot_id
+
+        actual = data_snapshot_id(self.db_path)
+        if actual != self.snapshot_id:
+            raise RuntimeError("database snapshot does not match prepared frame")
+        if self._readonly_source_state() != state:
+            raise RuntimeError("personal paper snapshot changed during identity read")
+        self._identity_stat = state
+        return actual
 
     def definition_digest(
         self,

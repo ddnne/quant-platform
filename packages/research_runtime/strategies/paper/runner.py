@@ -23,6 +23,7 @@ from paper_runtime import (
     git_commit,
     strategy_definition_hash,
 )
+from paper_runtime.personal_prepared_frame import _active_personal_prepared_frame
 from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED
 
 from .store import JsonPaperStore
@@ -349,6 +350,16 @@ def execute_paper_backtest(
     commit = git_commit()
     identity = getattr(am_session_data_view, "logical_snapshot_id", None)
     format_attr = getattr(am_session_data_view, "data_snapshot_format", None)
+    frame = (
+        _active_personal_prepared_frame(configured_path)
+        if config.lifecycle is Lifecycle.DRAFT and am_session_data_view is None
+        else None
+    )
+
+    def draft_snapshot_id() -> str:
+        reused = None if frame is None else frame.verified_readonly_snapshot_id()
+        return reused if reused is not None else data_snapshot_id(configured_path)
+
     if callable(identity):
         if not callable(format_attr):
             raise RuntimeError(
@@ -357,7 +368,7 @@ def execute_paper_backtest(
         before = str(identity())
         snapshot_format = str(format_attr())
     else:
-        before = data_snapshot_id(configured_path)
+        before = draft_snapshot_id()
         snapshot_format = DATA_SNAPSHOT_FORMAT
     if expected_snapshot_id is not None and before != expected_snapshot_id:
         raise RuntimeError("database snapshot does not match expected_snapshot_id")
@@ -384,7 +395,7 @@ def execute_paper_backtest(
     after = (
         str(identity())
         if callable(identity)
-        else data_snapshot_id(configured_path)
+        else draft_snapshot_id()
     )
     if before != after:
         raise RuntimeError(
@@ -414,8 +425,10 @@ def run_paper(
 ) -> PaperRunResult:
     """Run an offline DRAFT through ``core.run_backtest`` and optionally persist it.
 
-    The logical snapshot id is computed once before and once after the run. A
-    concurrent mutation fails closed rather than emitting reproduction
+    Mutable input recomputes identity before and after each run. An unchanged
+    read-only artifact reuses its measured identity within the existing job
+    frame; the service verifies artifact bytes at completion. Concurrent
+    mutation fails closed rather than emitting reproduction
     metadata for a mixed snapshot. When supplied, the caller's expected id is
     checked before calculation without another identity read in the adapter.
     For this deterministic pure-backtest runner, ``run_id == experiment_id``

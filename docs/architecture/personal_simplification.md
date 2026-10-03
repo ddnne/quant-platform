@@ -107,6 +107,14 @@ instead of stopping before warmup; compact coverage keeps its missing-price case
 Corporate-action AM-tip evidence can still be UNKNOWN and remains an explicit
 report limitation, not a fictitious PASS.
 
+The existing job-local prepared frame also reuses a measured logical snapshot
+ID for an unchanged, standalone read-only DRAFT file. Initial ID comparison is
+real; run boundaries check file identity/stat/permissions and sidecars. Mutable
+input keeps its before/after measurements, Controlled is unchanged, and the
+service's final raw-byte hash/catalog/SQLite verification remains. This removes
+repeated whole-history COUNT/MAX work across folds without a new cache store.
+It does not establish a particular speed, disk-read or invoice reduction.
+
 ## First batch (source only)
 
 - Remove the legacy D1 availability scan after R2 persistence; measure current
