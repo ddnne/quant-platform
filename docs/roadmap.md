@@ -4,15 +4,15 @@
 
 ## 1. ソースとデータ所有者、スコープ
 
-スコープコンパイラ、財務 compact state、complete-master 所有者は既にあります。残るのは共有の bar / 財務スコープを、認証済み候補・READY・runtime・Trader まで通すことです。通常配布の除外対象は architecture の方針どおりで、ledger 受理前に達成とは言いません。ソース受理はロールアウトを自動にしません。
+予定の price-master 四案は runtime の共有 bar scope と DRAFT 入口の closure 拘束を使い、READY 候補経路は通りません。正本 Controlled の v3 bar / 財務スコープは compiler、候補、READY、runtime へ接続済みで、master seed、財務期首状態、split anchor、必須列は既存 DataPlane 所有者が選択します。残るのは実データの全必要スコープを同じクラウド snapshot で証明することです。全 feature / 全 DRAFT の詳細スコープ完了とは言わず、旧版の互換経路も区別します。ソース受理はロールアウトを自動にしません。
 
 ## 2. Receipt、クラウドスナップショット、READY、Trader
 
-全セグメント receipt、不変 READY、Trader の署名済み実行許可と Budget を、同じ Pilot 実行に載せる経路が未接続です。欠けた証拠は止めます。DRAFT の署名や汎用 JSON は証明になりません。候補準備から既存署名者、Trader 本番接続までは開いています。
+既存 Container の receipt-bound 候補から Premium の READY / Trader 署名者、verify-only 評価 Worker までのソース経路は接続済みです。未受入なのは、本番で同じ snapshot / scope / B0・B4 / plan・profile・closure を束縛した証拠と実行許可です。欠けた証拠は止めます。DRAFT の署名や汎用 JSON は証明にならず、ソース接続だけでは研究 GO を出しません。
 
 ## 3. 単純化、テスト、文書
 
-入口から現行でない案内を外し、Coverage は契約と receipt からドメインを導きます。T01 の replay 階層化は未完です。不変条件の対応は [ci/invariant_test_audit.md](ci/invariant_test_audit.md) と [operations/test_reduction_ledger.json](operations/test_reduction_ledger.json) です。CI 入口は [../scripts/verify_ci.sh](../scripts/verify_ci.sh) です。件数目標ではありません。
+旧 Mass 実装、offline / unique_logic の並行経路と専用 replay lane は退役済みです。再現に必要なコードは Git 履歴、凍結カタログと過去成果は既存 artifact に残し、通常 install / active bundle へ戻しません。全体の単純化は継続課題で、コード半減や全テスト削減の完了とは言いません。不変条件の対応は [ci/invariant_test_audit.md](ci/invariant_test_audit.md) と [operations/test_reduction_ledger.json](operations/test_reduction_ledger.json) です。CI 入口は [../scripts/verify_ci.sh](../scripts/verify_ci.sh) です。件数目標ではありません。
 
 ## 4. 個別に認可した staging、そのあと production
 
