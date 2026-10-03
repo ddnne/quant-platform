@@ -2378,8 +2378,14 @@ class PersonalHistoryHydrator:
                 official = str(row["available_at"])
                 stamp = str(row["ingested_at"])
                 latest = self._latest_compact_bar(code, day)
-                if stored_clocks:
-                    exact = self._connection.execute(
+                # An empty history cannot contain this exact vintage. The
+                # latest row also answers an exact lookup when its clocks match;
+                # older vintages still need their own conflict check.
+                if stored_clocks and latest is not None:
+                    exact = latest if (
+                        latest["available_at"] == official
+                        and latest["ingested_at"] == stamp
+                    ) else self._connection.execute(
                         "SELECT * FROM personal_history_compact_bars "
                         "WHERE code=? AND date=? AND available_at=? AND ingested_at=?",
                         (code, day, official, stamp),

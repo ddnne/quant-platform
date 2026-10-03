@@ -132,6 +132,24 @@ range reuse and phase progress when a hard deadline prevents a terminal manifest
 they are neither snapshot completion nor permission for another paid attempt.
 It does not establish a particular speed, disk-read or invoice reduction.
 
+Compact stored-bar insertion reuses its latest-vintage lookup when that row has
+the requested clocks, and skips an exact-vintage query when no prior row exists.
+An older requested vintage still receives its exact conflict check before any
+content-idempotence shortcut. No clock, digest, schema or transaction changes.
+The existing real hydration regression covers replay and rejects changed values
+at both latest and older clocks. A synthetic 4,000-row/two-vintage preparation
+retained identical stored values, source-response digest and facts digest, while
+price lookup SELECTs fell from 8,000 to 6,000. This measures scratch SQLite work,
+not D1 RowsRead, full cloud runtime or invoice savings.
+
+The existing month-window regression also covers a positive small reuse bound:
+the full object with an out-of-period prefix cannot fit, but both requested
+month windows fit. The real client receives `reuse_start`; both months survive
+scratch reset without an additional R2 GET, with unchanged ordinals, rows and
+source/span digests. Zero-cache and overlapping-window fallback cases remain
+in the same regression. This does not close the observed 180-minute a4 timeout:
+its historical logs do not establish phase timings or cache saturation.
+
 ## First batch (source only)
 
 - Remove the legacy D1 availability scan after R2 persistence; measure current
