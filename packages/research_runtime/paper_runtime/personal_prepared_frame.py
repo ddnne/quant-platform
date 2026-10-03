@@ -1,8 +1,9 @@
 """Job-scoped prepared feature frame for personal DRAFT research.
 
 The frame is deliberately small in authority and lifetime.  It owns only an
-ephemeral SQLite file containing already-computed :class:`FeatureOutput`
-documents.  Source facts still enter through the PIT API on a cache miss, and
+ephemeral SQLite file containing computed :class:`FeatureOutput` documents
+and compact PIT-selected financial state. Source facts enter through the PIT
+API on a cache miss, and
 the personal execution service checks source-file stability before and after
 every paper run and verifies the artifact bytes at job completion.
 
@@ -251,6 +252,11 @@ class PersonalPreparedFrame:
             "feature_misses": 0,
             "feature_writes": 0,
             "feature_uncacheable": 0,
+            "financial_state_requests": 0,
+            "financial_state_hits": 0,
+            "financial_state_misses": 0,
+            "financial_state_writes": 0,
+            "financial_state_uncacheable": 0,
             "price_window_requests": 0,
             "price_window_hits": 0,
             "price_window_misses": 0,
@@ -343,9 +349,33 @@ class PersonalPreparedFrame:
         digest = "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
         return digest, encoded
 
-    def load_feature(
+    def load_feature(self, **kwargs: Any) -> PreparedFeatureValue | object:
+        return self._load_cell(stat_prefix="feature", **kwargs)
+
+    @staticmethod
+    def _financial_state_key(*, as_of: str, dataset: str, code: str,
+                             initial_visible_state: str, observed_through: str) -> dict[str, Any]:
+        return {
+            "as_of": as_of,
+            "feature_id": "@pit-financial-state",
+            "feature_version": "1",
+            "definition_digest": "financial-ratio-selection/v1",
+            "inputs": {"code": code, "dataset": dataset,
+                       "initial_visible_state": initial_visible_state,
+                       "observed_through": observed_through},
+        }
+
+    def load_financial_state(self, **kwargs: Any) -> PreparedFeatureValue | object:
+        return self._load_cell(stat_prefix="financial_state", **self._financial_state_key(**kwargs))
+
+    def store_financial_state(self, *, metadata: Mapping[str, Any], **kwargs: Any) -> None:
+        self._store_cell(stat_prefix="financial_state", value=None, metadata=metadata,
+                         **self._financial_state_key(**kwargs))
+
+    def _load_cell(
         self,
         *,
+        stat_prefix: str,
         as_of: str,
         feature_id: str,
         feature_version: str,
@@ -355,7 +385,7 @@ class PersonalPreparedFrame:
     ) -> PreparedFeatureValue | object:
         if self._closed:
             raise RuntimeError("personal prepared frame is closed")
-        self._stats["feature_requests"] += 1
+        self._stats[stat_prefix + "_requests"] += 1
         digest, encoded_key = self._key(
             as_of=as_of,
             feature_id=feature_id,
@@ -369,7 +399,7 @@ class PersonalPreparedFrame:
             (digest,),
         ).fetchone()
         if row is None:
-            self._stats["feature_misses"] += 1
+            self._stats[stat_prefix + "_misses"] += 1
             return _CACHE_MISS
         if str(row[0]) != encoded_key:
             raise RuntimeError("personal prepared frame key digest collision")
@@ -383,15 +413,19 @@ class PersonalPreparedFrame:
             document.get("metadata"), dict
         ):
             raise RuntimeError("invalid personal prepared feature document")
-        self._stats["feature_hits"] += 1
+        self._stats[stat_prefix + "_hits"] += 1
         return PreparedFeatureValue(
             value=document.get("value"),
             metadata=dict(document["metadata"]),
         )
 
-    def store_feature(
+    def store_feature(self, **kwargs: Any) -> None:
+        self._store_cell(stat_prefix="feature", **kwargs)
+
+    def _store_cell(
         self,
         *,
+        stat_prefix: str,
         as_of: str,
         feature_id: str,
         feature_version: str,
@@ -405,7 +439,7 @@ class PersonalPreparedFrame:
             raise RuntimeError("personal prepared frame is closed")
         if (
             self._stats["cache_saturated"]
-            or self._stats["feature_writes"]
+            or self._stats["feature_writes"] + self._stats["financial_state_writes"]
             >= PERSONAL_PREPARED_FRAME_MAX_FEATURE_CELLS
         ):
             self._stats["cache_saturated"] = 1
@@ -414,7 +448,7 @@ class PersonalPreparedFrame:
             {"value": value, "metadata": metadata},
             limit=PERSONAL_PREPARED_FRAME_MAX_ENTRY_BYTES,
         ):
-            self._stats["feature_uncacheable"] += 1
+            self._stats[stat_prefix + "_uncacheable"] += 1
             return
         document = {"value": value, "metadata": dict(metadata)}
         digest, encoded_key = self._key(
@@ -430,10 +464,10 @@ class PersonalPreparedFrame:
         except (TypeError, ValueError):
             # A future exotic FeatureOutput must retain its exact live value;
             # skipping the cache is safer than lossy coercion.
-            self._stats["feature_uncacheable"] += 1
+            self._stats[stat_prefix + "_uncacheable"] += 1
             return
         if len(payload) > PERSONAL_PREPARED_FRAME_MAX_ENTRY_BYTES:
-            self._stats["feature_uncacheable"] += 1
+            self._stats[stat_prefix + "_uncacheable"] += 1
             return
         compressed = zlib.compress(payload, level=1)
         self._insert_cache_row(
@@ -441,7 +475,7 @@ class PersonalPreparedFrame:
             digest=digest,
             encoded_key=encoded_key,
             compressed=compressed,
-            stat="feature_writes",
+            stat=stat_prefix + "_writes",
         )
 
     def _price_key(
@@ -605,6 +639,7 @@ class PersonalPreparedFrame:
             **self._stats,
             "source_feature_computations_avoided": self._stats["feature_hits"],
             "source_price_queries_avoided": self._stats["price_window_hits"],
+            "source_financial_selections_avoided": self._stats["financial_state_hits"],
         }
 
     def close(self) -> None:

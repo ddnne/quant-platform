@@ -14,8 +14,9 @@ from features import (
     RetrospectivePriceRatio,
     compute,
 )
-from _coreseed import close_iso, seed_db
+from _coreseed import close_iso, seed_db, write_snapshot_observation_clock
 from storage.sqlite_store import SqliteStore
+from pit.financial_observations import statement_ratio_state
 
 
 class _Context:
@@ -39,9 +40,9 @@ class _Context:
             rows = rows[-int(kwargs["latest_n"]) :]
         return SimpleNamespace(rows=rows)
 
-    def get_jquants_records(self, **kwargs):
+    def get_financial_state(self, **kwargs):
         assert kwargs["dataset"] == "fins_summary"
-        return SimpleNamespace(rows=list(self._fins))
+        return statement_ratio_state(iter(self._fins), code=kwargs["code"])
 
 
 def _bars(prices, *, turnovers=None, raw_prices=None, start_day=1):
@@ -320,7 +321,7 @@ def test_fundamental_ratios_support_short_and_long_jquants_names(
     }
 
 
-def test_fundamental_ratio_does_not_mix_statement_rows() -> None:
+def test_fundamental_ratio_does_not_mix_statement_rows(tmp_path) -> None:
     older = _fins_row(
         {
             "DiscDate": "2024-11-01",
@@ -345,6 +346,31 @@ def test_fundamental_ratio_does_not_mix_statement_rows() -> None:
     assert output.metadata["numerator"] == 20.0
     assert output.metadata["denominator"] is None
     assert output.metadata["disclosure_date"] == "2025-02-01"
+
+    # Equal disclosure/availability/natural-key tuples preserve canonical
+    # SQL source order: the last tied row wins, not an older complete row.
+    path = tmp_path / "statement-tie.sqlite"
+    store = SqliteStore(path)
+    facts = []
+    for source, row in (("jquants", older), ("a", latest), ("z", latest)):
+        payload = {**row["payload"], "Code": "8697"}
+        if source == "a":
+            payload.update({"Sales": 100.0, "NP": 999.0})
+        encoded = json.dumps(payload)
+        facts.append({
+            **row, "source": source, "dataset": "fins_summary",
+            "natural_key": json.dumps({"Code": "8697", "Date": row["event_time"][:10]}),
+            "ingested_at": row["available_at"], "payload": encoded, "raw_payload": encoded,
+        })
+    store.upsert("jquants_records", facts)
+    write_snapshot_observation_clock(store, close_iso("2025-02-02"))
+    store.close()
+    actual = compute(PitFundamentalRatio, as_of=close_iso("2025-02-02"),
+                     db_path=path, code="8697", mode="net_margin")
+    assert actual.value is None
+    assert actual.metadata["numerator"] == 20.0
+    assert actual.metadata["denominator"] is None
+    assert actual.metadata["rows_seen"] == actual.metadata["statement_rows_seen"] == 3
 
 
 @pytest.mark.parametrize(

@@ -25,6 +25,11 @@ from statistics import median
 from typing import Any, Callable, Mapping
 
 from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED
+from pit.financial_observations import (
+    STATEMENT_RATIO_STATE,
+    financial_value as _pick,
+    financial_text as _pick_text,
+)
 
 from .complete21_min_parsers import (
     _retrospective_split_safety,
@@ -63,39 +68,6 @@ FUNDAMENTAL_RATIO_MODES = frozenset(
 _PRICE_DATASETS = ("equities_bars_daily",)
 _FUNDAMENTAL_DATASETS = ("equities_bars_daily", "fins_summary")
 
-_FINS_ALIASES: dict[str, tuple[str, ...]] = {
-    # J-Quants v2 short names followed by v1 long names.
-    "book_value_per_share": ("BPS", "BookValuePerShare"),
-    "earnings_per_share": ("EPS", "EarningsPerShare"),
-    "roe": ("ROE", "ReturnOnEquity"),
-    "sales": ("Sales", "NetSales"),
-    "profit": ("NP", "Profit"),
-    "total_assets": ("TA", "TotalAssets"),
-    "equity": ("Eq", "Equity"),
-    "equity_ratio": ("EqAR", "EquityToAssetRatio"),
-    "period_type": ("CurPerType", "TypeOfCurrentPeriod"),
-    "period_end": ("CurPerEn", "CurrentPeriodEndDate"),
-    "document_type": ("DocType", "TypeOfDocument"),
-    "disclosed_date": ("DiscDate", "DisclosedDate"),
-    "disclosed_time": ("DiscTime", "DisclosedTime"),
-}
-
-_STATEMENT_VALUE_KEYS = tuple(
-    key
-    for name in (
-        "book_value_per_share",
-        "earnings_per_share",
-        "roe",
-        "sales",
-        "profit",
-        "total_assets",
-        "equity",
-        "equity_ratio",
-    )
-    for key in _FINS_ALIASES[name]
-)
-
-
 def _finite_number(value: Any) -> float | None:
     if value is None or value == "":
         return None
@@ -104,26 +76,6 @@ def _finite_number(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
-
-
-def _pick(
-    payload: Mapping[str, Any], alias_name: str
-) -> tuple[float | None, str | None]:
-    for key in _FINS_ALIASES[alias_name]:
-        if key not in payload:
-            continue
-        value = _finite_number(payload.get(key))
-        if value is not None:
-            return value, key
-    return None, None
-
-
-def _pick_text(payload: Mapping[str, Any], alias_name: str) -> str | None:
-    for key in _FINS_ALIASES[alias_name]:
-        value = payload.get(key)
-        if value is not None and str(value).strip():
-            return str(value).strip()
-    return None
 
 
 def _validate_windows(short_n: Any, long_n: Any) -> tuple[int, int]:
@@ -382,57 +334,6 @@ def _retrospective_price_ratio(ctx: Any) -> FeatureOutput:
     )
 
 
-def _statement_sort_key(
-    row: Mapping[str, Any], payload: Mapping[str, Any]
-) -> tuple[str, str, str, str]:
-    disclosed_date = _pick_text(payload, "disclosed_date") or str(
-        row.get("event_time") or ""
-    )[:10]
-    disclosed_time = _pick_text(payload, "disclosed_time") or ""
-    return (
-        disclosed_date[:10],
-        disclosed_time,
-        str(row.get("available_at") or row.get("event_time") or ""),
-        str(row.get("natural_key") or ""),
-    )
-
-
-def _statement_observations(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    observations: list[dict[str, Any]] = []
-    for row in rows:
-        payload = _row_payload(row)
-        if not payload or not any(
-            _finite_number(payload.get(key)) is not None
-            for key in _STATEMENT_VALUE_KEYS
-        ):
-            continue
-        observations.append(
-            {
-                "payload": payload,
-                "sort_key": _statement_sort_key(row, payload),
-                "available_at": str(row.get("available_at") or "") or None,
-            }
-        )
-    observations.sort(key=lambda item: item["sort_key"])
-    return observations
-
-
-def _consolidation_kind(payload: Mapping[str, Any]) -> str:
-    value = (_pick_text(payload, "document_type") or "").lower().replace("-", "")
-    if "nonconsolidated" in value:
-        return "nonconsolidated"
-    if "consolidated" in value:
-        return "consolidated"
-    return "unspecified"
-
-
-def _comparable_key(payload: Mapping[str, Any]) -> tuple[str, str] | None:
-    period_type = _pick_text(payload, "period_type")
-    if not period_type:
-        return None
-    return period_type.lower(), _consolidation_kind(payload)
-
-
 def _ratio_or_none(
     numerator: float | None, denominator: float | None
 ) -> tuple[float | None, str | None]:
@@ -530,14 +431,14 @@ def _pit_fundamental_ratio(
         raise ValueError(
             f"mode must be one of {sorted(FUNDAMENTAL_RATIO_MODES)!r}, got {mode!r}"
         )
-    result = ctx.get_jquants_records(dataset="fins_summary", code=code)
-    rows = list(result.rows) if result is not None and result.rows else []
-    observations = _statement_observations(rows)
+    state = ctx.get_financial_state(
+        dataset="fins_summary", code=code, initial_visible_state=STATEMENT_RATIO_STATE
+    )
     common: dict[str, Any] = {
         "code": code,
         "mode": mode,
-        "rows_seen": len(rows),
-        "statement_rows_seen": len(observations),
+        "rows_seen": state.visible_row_count,
+        "statement_rows_seen": state.parsed_row_count,
         "datasets": list(_FUNDAMENTAL_DATASETS),
         "time_semantics": "retrospective_not_point_in_time",
         "lifecycle": "DRAFT_only",
@@ -545,12 +446,12 @@ def _pit_fundamental_ratio(
     }
     if session_view is not None:
         common["session_view"] = session_view
-    if not observations:
+    if state.observation is None:
         return FeatureOutput(
             value=None,
             metadata={**common, "reason": "no PIT-visible financial statement"},
         )
-    current = observations[-1]
+    current = state.observation
     payload = current["payload"]
     current_meta = {
         **common,
@@ -626,9 +527,8 @@ def _pit_fundamental_ratio(
     if mode in {"sales_growth", "assets_growth"}:
         alias_name = "sales" if mode == "sales_growth" else "total_assets"
         current_value, current_field = _pick(payload, alias_name)
-        comparable = _comparable_key(payload)
         period_end = _pick_text(payload, "period_end")
-        if comparable is None or not period_end:
+        if _pick_text(payload, "period_type") is None or not period_end:
             return FeatureOutput(
                 value=None,
                 metadata={
@@ -636,14 +536,7 @@ def _pit_fundamental_ratio(
                     "reason": "current statement lacks comparable period identity",
                 },
             )
-        prior: Mapping[str, Any] | None = None
-        for candidate in reversed(observations[:-1]):
-            prior_payload = candidate["payload"]
-            if _pick_text(prior_payload, "period_end") == period_end:
-                continue
-            if _comparable_key(prior_payload) == comparable:
-                prior = candidate
-                break
+        prior = state.prior_observation
         if prior is None:
             return FeatureOutput(
                 value=None,

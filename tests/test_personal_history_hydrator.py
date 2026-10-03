@@ -25,7 +25,7 @@ from data_contracts.personal_history_compact import (
 )
 from data_contracts.source_capability import source_capability_contract_for
 from features import FUNDAMENTAL_RATIO_MODES, PitFundamentalRatio
-from features.ratio_features import _FINS_ALIASES
+from pit.financial_observations import FINS_ALIASES, statement_ratio_state
 from ingestion.jquants.normalize import normalize_generic
 from ingestion.personal_history import (
     DEFAULT_COMPACT_STORAGE_BYTES_PER_ROW,
@@ -2092,7 +2092,7 @@ def _ratio_from_stored(mode: str, stored: list[dict], bars: Sequence[dict]):
                 "mode": mode,
             }.get(name, default),
             get_equity_bars_daily=_bars,
-            get_jquants_records=lambda **kwargs: SimpleNamespace(rows=list(fins)),
+            get_financial_state=lambda **kwargs: statement_ratio_state(iter(fins), code=kwargs["code"]),
         )
     )
 
@@ -2100,7 +2100,7 @@ def _ratio_from_stored(mode: str, stored: list[dict], bars: Sequence[dict]):
 def test_compact_fins_keeps_research_surface_and_drops_source_bloat() -> None:
     kept = {key for aliases in _PERSONAL_FINS_FEATURE_ALIASES for key in aliases}
     kept.update({"Code", "DiscDate", "DiscTime", "DiscNo"})
-    assert {key for aliases in _FINS_ALIASES.values() for key in aliases} <= kept
+    assert {key for aliases in FINS_ALIASES.values() for key in aliases} <= kept
 
     entropy = "".join(f"{index:08x}" for index in range(25_000))
     source = _fat_fins(Narrative=entropy)

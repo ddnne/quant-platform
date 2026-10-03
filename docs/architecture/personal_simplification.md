@@ -127,6 +127,20 @@ matching cached value cannot skip Controlled current-plan validation. The
 existing Controlled numeric/foreign-consumer regression warms real cells first;
 DRAFT cache reuse remains covered by its existing query-count regression.
 
+Financial ratio selection belongs to the existing DataPlane financial owner.
+It selects the latest broadly qualifying finite statement and the latest prior
+comparable distinct period, retaining stable tie order, counts and same-row
+ratios. It is deliberately not the older BPS-preferred state. The selected
+current/prior pair is compact; initial history is still traversed for PIT and
+owner evidence, without a full statement sort. The existing ephemeral prepared
+frame shares this state across modes only for a verified unchanged readonly
+DRAFT snapshot and the same decision/observation clock. Mutable inputs and
+Controlled sealed selection do not use it. Financial selection hits are counted
+separately from completed feature hits. The existing numeric/SQL regression
+observes four cold mode reads becoming one, with identical results; this does
+not prove cloud runtime or billing savings, nor close detailed AM/financial
+read scopes or DRAFT closure-to-runtime binding.
+
 Scalar canonical encoding reuses the existing JSON encoder and directly renders
 safe integers; binary64 coercion outside that range and finite/Unicode guards
 are unchanged. New compact facts do not hash content for a comparison when no

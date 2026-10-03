@@ -1,9 +1,11 @@
-"""Pure catalog payload extraction and latest per-share financial observation.
+"""DataPlane-owned compact financial selection and payload aliases.
 
 PIT owns input order and revision selection. Payload values are accepted only
 as ``dict`` (not a general Mapping). An empty payload dict stops raw-payload
 fallback. Numeric conversion matches the historical helper: non-finite floats
-are not rejected here.
+are not rejected by the legacy per-share selector. The ratio selector uses
+finite values and latest-statement/comparable-prior semantics instead; the
+two policies are not interchangeable.
 
 Compact financial catalog state is accumulated from a PIT-owned raw-row
 stream. Raw source identity/text is hashed incrementally before
@@ -16,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -30,7 +33,29 @@ from .query import _decode_row
 FINANCIAL_SELECTION_EVIDENCE_FORMAT = "financial-selection-evidence/v1"
 _COUNT_ONLY_STATE = "all_visible_existence_and_count"
 _PER_SHARE_STATE = "latest_qualifying_bps_preferred_else_eps"
-_FINANCIAL_STATES = frozenset({_COUNT_ONLY_STATE, _PER_SHARE_STATE})
+STATEMENT_RATIO_STATE = "latest_statement_plus_comparable_prior"
+_FINANCIAL_STATES = frozenset({_COUNT_ONLY_STATE, _PER_SHARE_STATE, STATEMENT_RATIO_STATE})
+FINS_ALIASES = {
+    "book_value_per_share": ("BPS", "BookValuePerShare"),
+    "earnings_per_share": ("EPS", "EarningsPerShare"),
+    "roe": ("ROE", "ReturnOnEquity"),
+    "sales": ("Sales", "NetSales"),
+    "profit": ("NP", "Profit"),
+    "total_assets": ("TA", "TotalAssets"),
+    "equity": ("Eq", "Equity"),
+    "equity_ratio": ("EqAR", "EquityToAssetRatio"),
+    "period_type": ("CurPerType", "TypeOfCurrentPeriod"),
+    "period_end": ("CurPerEn", "CurrentPeriodEndDate"),
+    "document_type": ("DocType", "TypeOfDocument"),
+    "disclosed_date": ("DiscDate", "DisclosedDate"),
+    "disclosed_time": ("DiscTime", "DisclosedTime"),
+}
+_STATEMENT_VALUE_KEYS = tuple(
+    key for name in ("book_value_per_share", "earnings_per_share", "roe", "sales",
+                     "profit", "total_assets", "equity", "equity_ratio")
+    for key in FINS_ALIASES[name]
+)
+_STATEMENT_FIELDS = frozenset(key for aliases in FINS_ALIASES.values() for key in aliases)
 _SOURCE_IDENTITY_FIELDS = (
     "available_at",
     "event_time",
@@ -65,6 +90,126 @@ def catalog_row_payload(row: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError, json.JSONDecodeError):
             pass
     return {}
+
+
+def financial_number(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def financial_value(payload: Mapping[str, Any], alias_name: str) -> tuple[float | None, str | None]:
+    for key in FINS_ALIASES[alias_name]:
+        if key in payload and (value := financial_number(payload[key])) is not None:
+            return value, key
+    return None, None
+
+
+def financial_text(payload: Mapping[str, Any], alias_name: str) -> str | None:
+    for key in FINS_ALIASES[alias_name]:
+        value = payload.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def _comparable_statement(payload: Mapping[str, Any]) -> tuple[str, str] | None:
+    period_type = financial_text(payload, "period_type")
+    if not period_type:
+        return None
+    document = (financial_text(payload, "document_type") or "").lower().replace("-", "")
+    consolidation = ("nonconsolidated" if "nonconsolidated" in document else
+                     "consolidated" if "consolidated" in document else "unspecified")
+    return period_type.lower(), consolidation
+
+
+class _StatementRatioAccumulator:
+    """Exact latest statement plus prior comparable period, without a history sort.
+
+    Same-period corrections cannot become a growth denominator. Retaining the
+    latest two distinct periods per comparison class suffices, including a
+    missing prior period end (the historical ratio policy permits that row).
+    """
+
+    def __init__(self) -> None:
+        self.parsed_rows = 0
+        self.latest: dict[str, Any] | None = None
+        self.comparable: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        self.selected_natural_key: str | None = None
+
+    def add(self, row: dict[str, Any]) -> bool:
+        payload = catalog_row_payload(row)
+        if not payload or not any(financial_number(payload.get(key)) is not None
+                                  for key in _STATEMENT_VALUE_KEYS):
+            return False
+        self.parsed_rows += 1
+        disclosed_date = financial_text(payload, "disclosed_date") or str(row.get("event_time") or "")[:10]
+        sort_key = (
+            disclosed_date[:10], financial_text(payload, "disclosed_time") or "",
+            str(row.get("available_at") or row.get("event_time") or ""),
+            str(row.get("natural_key") or ""), self.parsed_rows,
+        )
+        observation = {
+            "payload": MappingProxyType({key: value for key, value in payload.items()
+                                         if key in _STATEMENT_FIELDS}),
+            "available_at": str(row.get("available_at") or "") or None,
+            "sort_key": sort_key,
+        }
+        comparable = _comparable_statement(payload)
+        if comparable is not None:
+            previous = self.comparable.get(comparable, [])
+            # Keep an older correction only if it outranks the retained row.
+            ranked = sorted([*previous, observation], key=lambda item: item["sort_key"], reverse=True)
+            retained: list[dict[str, Any]] = []
+            seen: set[str | None] = set()
+            for candidate in ranked:
+                candidate_period = financial_text(candidate["payload"], "period_end")
+                if candidate_period not in seen:
+                    retained.append(candidate)
+                    seen.add(candidate_period)
+            self.comparable[comparable] = retained[:2]
+        changed = self.latest is None or sort_key > self.latest["sort_key"]
+        if changed:
+            self.latest = observation
+            self.selected_natural_key = str(row.get("natural_key") or "") or None
+        return changed
+
+    def result(self) -> dict[str, Any] | None:
+        if self.latest is None:
+            return None
+        return {key: value for key, value in self.latest.items() if key != "sort_key"}
+
+    def prior(self) -> dict[str, Any] | None:
+        if self.latest is None:
+            return None
+        payload = self.latest["payload"]
+        comparable = _comparable_statement(payload)
+        period = financial_text(payload, "period_end")
+        if comparable is None or not period:
+            return None
+        for candidate in self.comparable.get(comparable, ()):
+            if financial_text(candidate["payload"], "period_end") != period:
+                return {key: value for key, value in candidate.items() if key != "sort_key"}
+        return None
+
+
+def statement_ratio_state(rows: Iterator[dict[str, Any]], *, code: str) -> FinancialCatalogState:
+    """Pure selector for already PIT-visible fixtures; production uses the owned API."""
+    accumulator = _StatementRatioAccumulator()
+    count = 0
+    for row in rows:
+        count += 1
+        accumulator.add(row)
+    return FinancialCatalogState(
+        dataset="fins_summary", code=code, initial_visible_state=STATEMENT_RATIO_STATE,
+        visible_row_count=count, parsed_row_count=accumulator.parsed_rows,
+        observation=accumulator.result(), prior_observation=accumulator.prior(),
+        no_value_reason=None if accumulator.latest else "no PIT-visible financial statement",
+    )
 
 
 def _as_float_or_none(x: Any) -> float | None:
@@ -190,6 +335,16 @@ class FinancialCatalogState:
     parsed_row_count: int | None
     observation: Mapping[str, Any] | None
     no_value_reason: str | None
+    prior_observation: Mapping[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("observation", "prior_observation"):
+            observation = getattr(self, name)
+            if observation is not None:
+                frozen = dict(observation)
+                if isinstance(frozen.get("payload"), Mapping):
+                    frozen["payload"] = MappingProxyType(dict(frozen["payload"]))
+                object.__setattr__(self, name, MappingProxyType(frozen))
 
 
 @dataclass(frozen=True, slots=True)
@@ -357,7 +512,9 @@ def _owned_selection_from_raw_rows(
         code=code,
         initial_visible_state=initial_visible_state,
     )
-    accumulator = None if count_only else _PerShareObservationAccumulator()
+    accumulator = (None if count_only else _StatementRatioAccumulator()
+                   if initial_visible_state == STATEMENT_RATIO_STATE
+                   else _PerShareObservationAccumulator())
     selected_product_digest: str | None = None
     payload_column_evidence: dict[str, str] | None = None
     last_column_evidence: dict[str, str] | None = None
@@ -392,9 +549,12 @@ def _owned_selection_from_raw_rows(
     )
     no_value_reason = None
     if not count_only and observation is None:
-        no_value_reason = "no BPS or EPS"
+        no_value_reason = ("no PIT-visible financial statement"
+                           if initial_visible_state == STATEMENT_RATIO_STATE else "no BPS or EPS")
         selected_product_digest = None
         payload_column_evidence = last_column_evidence
+    prior_observation = (accumulator.prior()
+                         if isinstance(accumulator, _StatementRatioAccumulator) else None)
     state = FinancialCatalogState(
         dataset=dataset,
         code=code,
@@ -405,6 +565,7 @@ def _owned_selection_from_raw_rows(
             None if observation is None else MappingProxyType(observation)
         ),
         no_value_reason=no_value_reason,
+        prior_observation=prior_observation,
     )
     return _OwnedFinancialSelection(
         state=state,
@@ -423,6 +584,12 @@ def _owned_selection_from_raw_rows(
 __all__ = [
     "FINANCIAL_SELECTION_EVIDENCE_FORMAT",
     "FinancialCatalogState",
+    "STATEMENT_RATIO_STATE",
+    "FINS_ALIASES",
+    "financial_number",
+    "financial_value",
+    "financial_text",
+    "statement_ratio_state",
     "catalog_row_payload",
     "latest_fins_per_share_observation",
 ]
