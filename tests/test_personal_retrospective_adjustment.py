@@ -83,6 +83,13 @@ def test_adjusted_momentum_crosses_split_in_one_price_unit(tmp_path) -> None:
     assert output.value == pytest.approx(0.0)
     assert output.metadata["price_basis"] == PERSONAL_RETROSPECTIVE_ADJUSTED
     assert output.metadata["time_semantics"] == "retrospective_not_point_in_time"
+    # The legacy no-read guard remains a no-value result, not a scope/job error.
+    invalid = features.compute(
+        "retrospective_split_adjusted_momentum_n", as_of=close_as_of(TRADING_DAYS[-1]),
+        code="1332", n=0, db_path=tmp_path / "absent.sqlite",
+    )
+    assert invalid.value is None
+    assert invalid.metadata["reason"] == "n must be >= 1"
 
 
 def test_adjusted_close_missing_fails_without_raw_fallback(tmp_path) -> None:

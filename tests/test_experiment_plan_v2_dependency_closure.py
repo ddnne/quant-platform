@@ -508,7 +508,7 @@ def test_scope_enabled_named_input_resolution_ignores_unrelated_param() -> None:
         version=features.FeatureVersion(1, 0, 0),
         inputs=features.FeatureInput(
             required_kwargs=("code",),
-            optional_kwargs={"n": 20, "note": 0},
+            optional_kwargs={"n": 20, "note": 0, "mode": "window"},
         ),
         description="synthetic count fixture",
         compute=lambda ctx: features.FeatureOutput(value=None),
@@ -517,11 +517,14 @@ def test_scope_enabled_named_input_resolution_ignores_unrelated_param() -> None:
         dataset_dependencies=("equities_bars_daily",),
         read_scopes=(
             DatasetReadScope(
-                dataset_id="equities_bars_daily",
-                observation_count=VisibleObservationCount.named_integer_input_plus(
-                    "n", add=1
-                ),
-                fields=("adjustment_close", "date"),
+                dataset_id="equities_bars_daily", input_name="mode",
+                cases=(("window", DatasetReadScope(
+                    dataset_id="equities_bars_daily",
+                    observation_count=VisibleObservationCount.named_integer_input_plus("n", add=1),
+                    fields=("adjustment_close", "date"),
+                )), ("unused", DatasetReadScope(
+                    dataset_id="equities_bars_daily", unconsumed_membership=True,
+                ))),
             ),
         ),
     )
@@ -539,7 +542,7 @@ def test_scope_enabled_named_input_resolution_ignores_unrelated_param() -> None:
                 k=3,
             ),
         )
-        closure = build_strategy_dependency_closure(
+        compilation = dict(
             plan_id="scoped-count-fixture-plan",
             plan_digest="sha256:" + "a" * 64,
             spec=spec,
@@ -574,6 +577,15 @@ def test_scope_enabled_named_input_resolution_ignores_unrelated_param() -> None:
             extra_requirements=(),
             closure_version=PLAN_DEPENDENCY_CLOSURE_VERSION_V2,
         )
+        closure = build_strategy_dependency_closure(**compilation)
+        unused_spec = replace(spec, rule=replace(spec.rule, feature=replace(
+            spec.rule.feature, params={"mode": "unused"},
+        )))
+        unused = build_strategy_dependency_closure(**{**compilation, "spec": unused_spec})
+        unused_profile = profile_from_dependency_closure(unused)
+        consumer = next(iter(unused_profile.feature_consumers().values()))
+        assert consumer[0].scope.unconsumed_membership
+        assert unused.required_lookback_trading_days == 0
     finally:
         FEATURES_REGISTRY.pop((fixture.id, str(fixture.version)), None)
     bars = next(

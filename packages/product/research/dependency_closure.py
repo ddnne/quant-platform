@@ -458,6 +458,8 @@ def _require_literal_observation_counts(
     where: str,
 ) -> None:
     for scope in scopes:
+        if scope.input_name is not None:
+            raise PlanDependencyClosureError(f"{where} has unresolved scope cases")
         count = scope.observation_count
         if count is not None and count.kind != "literal":
             raise PlanDependencyClosureError(

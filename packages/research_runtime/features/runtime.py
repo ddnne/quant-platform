@@ -29,7 +29,7 @@ from .am_session_features import AM_SESSION_FEATURE_IDS
 from .dataset_guard import master_pit_history_start, require_feature_dataset
 from .types import FeatureDefinition, FeatureOutput
 
-FEATURES_RUNTIME_VERSION = "0.8.2"
+FEATURES_RUNTIME_VERSION = "0.8.3"
 
 
 class AsOfRequired(ValueError):
@@ -448,6 +448,7 @@ def _compute(
 
     selected_by_dataset: dict[tuple[str, str], Any] = {}
     read_scopes = {scope.dataset_id: scope for scope in feature.read_scopes}
+    effective_inputs = {**feature.inputs.optional_kwargs, **inputs}
 
     def _declared_selected(
         dataset_id: str, code: str, *, split_anchor: str | None = None
@@ -472,11 +473,21 @@ def _compute(
         if dataset_id not in feature.dataset_dependencies:
             raise ValueError(f"undeclared {dataset_id or resource} read for feature {feature.id!r}")
         scope = read_scopes.get(dataset_id)
+        if scope is not None:
+            # Resolve on first read, before guards/cache. A legacy no-read
+            # compute may intentionally return None for an invalid window.
+            scope = scope.resolve(effective_inputs)
+            read_scopes[dataset_id] = scope
         if scope is not None and (
             scope.unconsumed_membership
             or (dataset_id == "equities_bars_daily" and resource != "equity_bars_daily")
         ):
             raise ValueError(f"declared {dataset_id} scope does not permit this reader")
+        if (dataset_id == "fins_summary" and scope is not None
+                and scope.initial_visible_state is not None):
+            if (resource != "financial_state"
+                    or kwargs.get("initial_visible_state") != scope.initial_visible_state):
+                raise ValueError("financial initial_visible_state does not match declared scope")
         if scoped_feature_reads is not None:
             declared = scoped_feature_reads.data_view._declared_feature_dataset_ids(
                 consumer_id=scoped_feature_reads.consumer_id
@@ -588,7 +599,6 @@ def _compute(
                 return state
         if resource != "equity_bars_daily" or scope is None:
             return read(dict(kwargs))
-        scope = scope.resolve({**feature.inputs.optional_kwargs, **inputs})
         arguments = dict(kwargs)
         # A split-safety interval includes a predecessor and the full anchor
         # interval; its observation count is not a total-row limit.

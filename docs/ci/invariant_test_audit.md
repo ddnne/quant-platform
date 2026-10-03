@@ -93,6 +93,19 @@ charter for extra hostile-Python tests.
 
 ## Consolidation decisions
 
+- Fundamental ratio modes share one closed scope declaration: the existing
+  latest-statement/comparable-prior selector, and price/split-anchor reads only
+  for per-share modes. Other modes retain dataset membership without reading
+  bars. Compiler and runtime resolve the same declared input before readers
+  or statement-cache lookup. Existing scope/compiler and SQLite boundary,
+  split-anchor and cached/uncached numerical tests are extended in place;
+  no new test functions, authority, DB or exhaustive mode matrix. Legacy v1
+  metadata bytes and no-read invalid-window outcomes stay unchanged. Remove
+  the frozen-dataclass probe and standalone canonical round-trip test; real
+  compiler/profile round trips already exercise persisted requirements.
+  DRAFT closure binding and AM scoped
+  projection remain separate incomplete work, not Pilot acceptance.
+
 - Remove the ratio-feature registry identity and copied mode-set test. Actual
   registry-backed computations, compiled dependencies and AM service tests
   exercise those entries; literal equality adds no numerical guarantee.

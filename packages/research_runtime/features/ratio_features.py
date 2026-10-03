@@ -25,6 +25,7 @@ from statistics import median
 from typing import Any, Callable, Mapping
 
 from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED
+from data_contracts.read_scopes import DatasetReadScope, VisibleObservationCount
 from pit.financial_observations import (
     STATEMENT_RATIO_STATE,
     financial_value as _pick,
@@ -67,6 +68,28 @@ FUNDAMENTAL_RATIO_MODES = frozenset(
 
 _PRICE_DATASETS = ("equities_bars_daily",)
 _FUNDAMENTAL_DATASETS = ("equities_bars_daily", "fins_summary")
+
+
+def _fundamental_read_scopes(*, latest_bars: int) -> tuple[DatasetReadScope, ...]:
+    per_share = DatasetReadScope(
+        dataset_id="equities_bars_daily",
+        observation_count=VisibleObservationCount.literal(latest_bars),
+        split_safety_anchor_interval=True,
+        fields=("date", "close", "adjustment_close"),
+        optional_fields=("volume", "adjustment_volume"),
+    )
+    unused = DatasetReadScope(dataset_id="equities_bars_daily", unconsumed_membership=True)
+    return (
+        DatasetReadScope(
+            dataset_id="equities_bars_daily", input_name="mode",
+            cases=tuple((mode, per_share if mode in {"book_to_price", "earnings_to_price"}
+                         else unused) for mode in FUNDAMENTAL_RATIO_MODES),
+        ),
+        DatasetReadScope(
+            dataset_id="fins_summary", initial_visible_state=STATEMENT_RATIO_STATE,
+            fields=("payload", "raw_payload"),
+        ),
+    )
 
 def _finite_number(value: Any) -> float | None:
     if value is None or value == "":
@@ -647,6 +670,7 @@ PitFundamentalRatio: FeatureDefinition = register(
         ),
         compute=_pit_fundamental_ratio,
         dataset_dependencies=_FUNDAMENTAL_DATASETS,
+        read_scopes=_fundamental_read_scopes(latest_bars=1),
         tags=("fundamentals", "ratio", "value", "quality", "growth", "personal"),
         intended_role="signal",
         status="approved",

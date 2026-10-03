@@ -543,6 +543,8 @@ def _select_compiled_dependency_scope(
                     fins_req = None
                     bars_req = None
                     for requirement in requirements:
+                        if requirement.scope.unconsumed_membership:
+                            continue
                         dataset_id = requirement.scope.dataset_id
                         if dataset_id == "fins_summary":
                             fins_req = requirement

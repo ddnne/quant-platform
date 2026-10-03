@@ -23,6 +23,8 @@ from storage.schema import CATALOG_CODE_SQL
 from .errors import PitError
 from .financial_observations import (
     FinancialCatalogState,
+    STATEMENT_RATIO_STATE,
+    financial_text,
     _owned_selection_from_raw_rows,
     _product_digest_from_raw,
 )
@@ -642,6 +644,10 @@ def _select_financial(
             evidence[field] = column_evidence.get(field, "missing")
     observation = owned.state.observation
     anchor = None if observation is None else observation.get("split_safety_anchor")
+    if observation is not None and state_name == STATEMENT_RATIO_STATE:
+        anchor = (financial_text(observation["payload"], "period_end")
+                  or financial_text(observation["payload"], "disclosed_date"))
+        anchor = None if anchor is None else anchor[:10]
     return ScopedFinancialView(
         state=owned.state,
         selected_natural_key=owned.evidence.selected_natural_key,

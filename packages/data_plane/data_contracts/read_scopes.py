@@ -19,7 +19,8 @@ all nonempty parsed payloads. Catalog fields are ``payload`` and
 
 Pure values only: no SQL, clocks, readers, parameter-name scanning, or
 expression evaluation. These declarations do not themselves enforce reader
-behavior.
+behavior. Closed input cases select one non-nested scope before compilation
+or execution; ordinary scopes keep their existing canonical bytes.
 """
 
 from __future__ import annotations
@@ -125,6 +126,7 @@ _INITIAL_STATES = frozenset(
     {
         "all_visible_existence_and_count",
         "latest_qualifying_bps_preferred_else_eps",
+        "latest_statement_plus_comparable_prior",
         "latest_complete_snapshot_plus_updates",
         "latest_complete_effective_snapshot",
     }
@@ -155,6 +157,8 @@ _SCOPE_KEYS = frozenset(
         "fields",
         "optional_fields",
         "unconsumed_membership",
+        "input_name",
+        "cases",
     }
 )
 
@@ -276,7 +280,7 @@ class VisibleObservationCount:
 
 @dataclass(frozen=True, slots=True)
 class DatasetReadScope:
-    """Declared read needs for one dataset of one feature version."""
+    """Declared read needs, optionally selected by one closed feature input."""
 
     dataset_id: str
     observation_count: VisibleObservationCount | None = None
@@ -285,6 +289,8 @@ class DatasetReadScope:
     fields: tuple[str, ...] = ()
     optional_fields: tuple[str, ...] = ()
     unconsumed_membership: bool = False
+    input_name: str | None = None
+    cases: tuple[tuple[str, "DatasetReadScope"], ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.dataset_id, str) or not self.dataset_id.strip():
@@ -318,6 +324,26 @@ class DatasetReadScope:
             "unconsumed_membership",
             _strict_bool(self.unconsumed_membership, "unconsumed_membership"),
         )
+        cases = tuple((value, scope) for value, scope in self.cases)
+        object.__setattr__(self, "cases", cases)
+        if self.input_name is not None or cases:
+            if not isinstance(self.input_name, str) or not self.input_name.strip() or not cases:
+                raise ValueError("scope cases require an input_name and closed cases")
+            if (count is not None or self.initial_visible_state is not None
+                    or self.split_safety_anchor_interval or fields or optional
+                    or self.unconsumed_membership):
+                raise ValueError("scope cases cannot also declare a read need")
+            seen = set()
+            for value, scope in cases:
+                if type(value) is not str or not value or value != value.strip() or value in seen:
+                    raise ValueError("scope cases require unique non-empty input values")
+                if (not isinstance(scope, DatasetReadScope) or scope.dataset_id != self.dataset_id
+                        or scope.input_name is not None):
+                    raise ValueError("scope cases must be non-nested scopes of the same dataset")
+                seen.add(value)
+            object.__setattr__(self, "input_name", self.input_name.strip())
+            object.__setattr__(self, "cases", tuple(sorted(cases)))
+            return
         if self.unconsumed_membership and (
             count is not None
             or self.initial_visible_state is not None
@@ -340,6 +366,9 @@ class DatasetReadScope:
     def from_mapping(cls, raw: Any) -> "DatasetReadScope":
         mapping = _mapping(raw, _SCOPE_KEYS, "dataset read scope")
         count_raw = mapping.get("observation_count")
+        cases = mapping.get("cases", {})
+        if not isinstance(cases, Mapping):
+            raise ValueError("scope cases must be an object")
         return cls(
             dataset_id=mapping.get("dataset_id"),
             observation_count=(
@@ -354,15 +383,28 @@ class DatasetReadScope:
             fields=mapping.get("fields", ()),
             optional_fields=mapping.get("optional_fields", ()),
             unconsumed_membership=mapping.get("unconsumed_membership", False),
+            input_name=mapping.get("input_name"),
+            cases=tuple((value, cls.from_mapping(scope)) for value, scope in cases.items()),
         )
 
     def referenced_input_names(self) -> tuple[str, ...]:
+        if self.input_name is not None:
+            return tuple(dict.fromkeys((self.input_name, *(
+                name for _, scope in self.cases for name in scope.referenced_input_names()
+            ))))
         count = self.observation_count
         if count is None or count.input_name is None:
             return ()
         return (count.input_name,)
 
     def resolve(self, effective_inputs: Mapping[str, Any]) -> "DatasetReadScope":
+        if self.input_name is not None:
+            value = effective_inputs.get(self.input_name)
+            if type(value) is str:
+                selected = dict(self.cases).get(value.strip())
+                if selected is not None:
+                    return selected.resolve(effective_inputs)
+            raise ValueError(f"unsupported effective input {self.input_name!r}: {value!r}")
         count = self.observation_count
         if count is None:
             return self
@@ -372,6 +414,12 @@ class DatasetReadScope:
         return replace(self, observation_count=resolved)
 
     def canonical_mapping(self) -> dict[str, Any]:
+        if self.input_name is not None:
+            return {
+                "dataset_id": self.dataset_id,
+                "input_name": self.input_name,
+                "cases": {value: scope.canonical_mapping() for value, scope in self.cases},
+            }
         return {
             "dataset_id": self.dataset_id,
             "fields": list(self.fields),
@@ -421,6 +469,8 @@ class DatasetReadRequirement:
             raise DatasetRequirementError(f"unsupported read clock {self.clock!r}")
         if not isinstance(self.scope, DatasetReadScope):
             raise DatasetRequirementError("requirement scope must be DatasetReadScope")
+        if self.scope.input_name is not None:
+            raise DatasetRequirementError("read requirement contains unresolved scope cases")
         historical_master = self.clock == "snapshot_observed_effective_membership"
         historical_calendar = self.clock == "snapshot_observed_effective_calendar"
         if historical_calendar and not (
@@ -505,7 +555,7 @@ class DatasetReadRequirement:
                 raise DatasetRequirementError(
                     "unconsumed policy membership is only for evaluation or risk"
                 )
-        elif self.scope.unconsumed_membership:
+        elif self.scope.unconsumed_membership and self.consumer_kind != "feature":
             raise DatasetRequirementError(
                 "unconsumed membership requires unconsumed_policy_membership clock"
             )

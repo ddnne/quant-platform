@@ -617,6 +617,33 @@ def test_personal_prepared_frame_matches_uncached_price_fundamental_and_ls(
         )[3]
         first_financial_queries = len(financial_queries)
         financial_queries.clear()
+        if case == "fundamental":
+            import features
+            from pit.personal_draft import personal_paper_read_session
+
+            before_guard = frame.stats()["financial_state_requests"]
+            definition = features.get("am_session_fundamental_ratio", version="1.0.0")
+            cap = features.runtime.bind_personal_retrospective_am_session_daily_bars(
+                as_of=f"{period[1]}T11:30:00+09:00", db_path=source,
+            )
+            with personal_paper_read_session(
+                source, observed_through=views["cached"].snapshot_identity().observed_through,
+            ):
+                for bypass in (
+                    lambda ctx: ctx.get_jquants_records(dataset="fins_summary", code="1301"),
+                    lambda ctx: ctx.get_financial_state(
+                        dataset="fins_summary", code="1301",
+                        initial_visible_state="all_visible_existence_and_count",
+                    ),
+                ):
+                    with pytest.raises(ValueError, match="initial_visible_state.*declared scope"):
+                        features.runtime.compute_with_engine_daily_bars_capability(
+                            replace(definition, compute=bypass),
+                            as_of=cap.as_of, db_path=source, daily_bars_capability=cap,
+                            code="1301", mode="roe",
+                        )
+            assert frame.stats()["financial_state_requests"] == before_guard
+            assert financial_queries == []
         replay = _run_one(
             PersonalPaperExecutionService(),
             spec,
