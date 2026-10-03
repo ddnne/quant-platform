@@ -381,6 +381,7 @@ class AcquisitionSpool:
                 payload = envelope["payload"]
                 if isinstance(payload, str):
                     payload = json.loads(payload)
+                    envelope["payload"] = payload
                 # Indexes exist only after full verification; other inputs
                 # validate every row, including excluded months, before commit.
                 if prior is None and (month is None or payload["Date"][:7] == month):
