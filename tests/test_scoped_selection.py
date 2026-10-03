@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -372,6 +373,17 @@ def test_financial_sqlite_row_without_date_uses_event_time(tmp_path: Path) -> No
         assert selected.selected_product_digest == product_row_digest(
             _product_rows_from_tables(conn, "fins_summary")[0]
         )
+        ratio_requirement = replace(_fins_requirement(), scope=DatasetReadScope(
+            dataset_id="fins_summary", initial_visible_state="latest_statement_plus_comparable_prior",
+            fields=("payload", "raw_payload"),
+        ))
+        ratio = _pin_owner(conn, body).select_am_research_scope(
+            requirement=ratio_requirement, decision_as_of=DECISION,
+            observed_through=OBSERVED, codes=(CODE,),
+        )
+        assert ratio.state.observation["payload"]["BPS"] == 80.0
+        assert ratio.split_safety_anchor == "2025-03-31"
+        assert ratio.selected_natural_key == selected.selected_natural_key
     finally:
         conn.rollback()
         conn.close()

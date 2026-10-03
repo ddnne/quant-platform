@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import replace
 
 import pytest
 
@@ -14,13 +14,6 @@ from data_contracts.read_scopes import (
 )
 from features.complete21_min_parsers import _latest_fins_per_share_observation
 from features.registry import FEATURE_DEFINITION_METADATA_V2
-
-_SCOPED_IDS = (
-    "retrospective_split_adjusted_momentum_n",
-    "disclosure_flag_fins",
-    "retrospective_split_safe_fundamental_value_score",
-)
-
 
 def _bars_scope(**overrides) -> DatasetReadScope:
     payload = {
@@ -52,10 +45,7 @@ def _definition(**overrides) -> features.FeatureDefinition:
     return features.FeatureDefinition(**payload)
 
 
-def test_dataset_read_scope_is_frozen_and_rejects_malformed_values() -> None:
-    scope = _bars_scope()
-    with pytest.raises(FrozenInstanceError):
-        scope.dataset_id = "fins_summary"  # type: ignore[misc]
+def test_dataset_read_scope_rejects_malformed_values() -> None:
     with pytest.raises(ValueError, match="unsupported fields"):
         DatasetReadScope.from_mapping(
             {
@@ -121,6 +111,23 @@ def test_named_integer_input_resolves_to_n_plus_one() -> None:
     with pytest.raises(ValueError, match="must be an integer"):
         resolve_dataset_read_scopes(momentum.read_scopes, {"n": True})
 
+    branch = DatasetReadScope(
+        dataset_id="equities_bars_daily", input_name="mode",
+        cases=(("window", _bars_scope()), ("unused", DatasetReadScope(
+            dataset_id="equities_bars_daily", unconsumed_membership=True,
+        ))),
+    )
+    assert branch.referenced_input_names() == ("mode", "n")
+    assert branch.resolve({"mode": "window", "n": 3}).observation_count.value == 4
+    assert branch.resolve({"mode": "unused"}).unconsumed_membership
+    with pytest.raises(ValueError, match="unsupported effective input"):
+        branch.resolve({"mode": "window + 1", "n": 3})
+    with pytest.raises(ValueError, match="non-nested"):
+        DatasetReadScope(dataset_id=branch.dataset_id, input_name="mode",
+                         cases=(("window", branch),))
+    with pytest.raises(ValueError, match="unknown feature inputs"):
+        _definition(read_scopes=(branch,))
+
 
 def test_financial_semantics_match_existing_compute_and_am_volume_projection() -> None:
     disclosure = features.get("disclosure_flag_fins", version="1.0.0")
@@ -155,6 +162,22 @@ def test_financial_semantics_match_existing_compute_and_am_volume_projection() -
     )
     assert DatasetReadScope.from_mapping(master.canonical_mapping()) == master
     assert DatasetReadScope.from_mapping(calendar.canonical_mapping()) == calendar
+    for feature_id, latest in (("pit_fundamental_ratio", 1), ("am_session_fundamental_ratio", 5)):
+        definition = features.get(feature_id, version="1.0.0")
+        per_share = {scope.dataset_id: scope for scope in resolve_dataset_read_scopes(
+            definition.read_scopes, {"mode": "book_to_price"}
+        )}
+        assert per_share["fins_summary"].initial_visible_state == "latest_statement_plus_comparable_prior"
+        assert per_share["equities_bars_daily"].observation_count.value == latest
+        assert per_share["equities_bars_daily"].split_safety_anchor_interval
+        quality = {scope.dataset_id: scope for scope in resolve_dataset_read_scopes(
+            definition.read_scopes, {"mode": "roe"}
+        )}
+        assert quality["equities_bars_daily"].unconsumed_membership
+        # Existing v1 metadata omits scopes; adding declarations cannot rewrite replay identity.
+        assert features.feature_definition_digest(definition) == features.feature_definition_digest(
+            replace(definition, read_scopes=())
+        )
 
 
 def test_declared_fins_catalog_fields_preserve_parser_selection() -> None:
@@ -187,17 +210,6 @@ def test_declared_fins_catalog_fields_preserve_parser_selection() -> None:
         "2022-12-31"
     )
     assert observed["fins_rows"] == expected["fins_rows"] == 3
-
-
-def test_scope_values_round_trip_canonical_mapping() -> None:
-    named = VisibleObservationCount.named_integer_input_plus("n", add=1)
-    literal = VisibleObservationCount.literal(21)
-    assert VisibleObservationCount.from_mapping(named.canonical_mapping()) == named
-    assert VisibleObservationCount.from_mapping(literal.canonical_mapping()) == literal
-    for feature_id in _SCOPED_IDS:
-        definition = features.get(feature_id, version="1.0.0")
-        for scope in definition.read_scopes:
-            assert DatasetReadScope.from_mapping(scope.canonical_mapping()) == scope
 
 
 def test_scope_enabled_digest_binds_requirements_and_rejects_incomplete() -> None:

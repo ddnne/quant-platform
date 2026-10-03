@@ -112,3 +112,21 @@ def test_feature_context_reads_declared_fields_and_latest_visible_tail(
             as_of=f"{TRADING_DAYS[-1]}T15:30:00+09:00",
             code=code, n=1, db_path=tmp_path / "absent.sqlite",
         )
+
+    fundamental = features.get("pit_fundamental_ratio", version="1.0.0")
+    for bypass in (
+        lambda ctx: ctx.get_jquants_records(dataset="fins_summary", code=code),
+        lambda ctx: ctx.get_financial_state(dataset="fins_summary", code=code,
+                                           initial_visible_state="all_visible_existence_and_count"),
+    ):
+        with pytest.raises(ValueError, match="initial_visible_state.*declared scope"):
+            features.compute(
+                replace(fundamental, compute=bypass), as_of=f"{TRADING_DAYS[-1]}T15:30:00+09:00",
+                code=code, mode="roe", db_path=tmp_path / "absent.sqlite",
+            )
+    with pytest.raises(ValueError, match="scope does not permit this reader"):
+        features.compute(
+            replace(fundamental, compute=lambda ctx: ctx.get_equity_bars_daily(code=code)),
+            as_of=f"{TRADING_DAYS[-1]}T15:30:00+09:00", code=code, mode="roe",
+            db_path=tmp_path / "absent.sqlite",
+        )

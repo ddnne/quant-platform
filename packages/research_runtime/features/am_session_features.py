@@ -25,6 +25,7 @@ from .ratio_features import (
     _PRICE_DATASETS,
     _adjusted_closes,
     _finite_number,
+    _fundamental_read_scopes,
     _pick_text,
     _pit_fundamental_ratio,
     _sample_volatility,
@@ -477,6 +478,7 @@ AmSessionFundamentalRatio: FeatureDefinition = register(
         ),
         compute=_am_session_fundamental_ratio,
         dataset_dependencies=_FUNDAMENTAL_DATASETS,
+        read_scopes=_fundamental_read_scopes(latest_bars=5),
         tags=(
             "fundamentals",
             "ratio",

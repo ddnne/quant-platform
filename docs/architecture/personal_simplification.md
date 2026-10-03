@@ -89,18 +89,25 @@ unbounded retry reuses that tail, and undeclared datasets/oversized reads are
 refused before storage access. Split-safety scopes retain their predecessor plus
 anchor interval rather than incorrectly truncating the whole interval to N.
 
-This is not complete DRAFT plan binding: AM/other legacy definitions without
-read scopes, financial-state selection and DRAFT closure-to-runtime identity
-remain separate open work. Do not add READY/Receipt authorities to close that
-DRAFT gap. One real SQLite boundary/numeric regression replaces the previous
-getter-routing spy and context-shape-only tests.
+Fundamental ratio scopes use one closed `mode` branch: the existing latest
+statement plus comparable prior, per-share bars plus the selected statement's
+split anchor, and unread bar membership for the other modes. Compiler and
+runtime resolve the same effective inputs; state mismatch or catalog bypass
+is refused before statement-cache lookup. Non-nested cases do not change
+ordinary scope bytes or legacy v1 feature hashes. No calculation is changed.
+
+This is not complete DRAFT plan binding: price-ratio/other legacy declarations,
+AM scoped field/session projection and DRAFT closure-to-runtime identity remain
+open work. Do not add READY/Receipt authorities to close that DRAFT gap.
+Existing real SQLite boundary/numeric regressions cover these guards rather
+than new getter-routing spies or context-shape-only tests.
 
 Dataset membership is now checked at the same runtime entry for every feature,
 including legacy definitions without field/window scopes. Generic catalog and
 financial-state reads use the requested dataset identity, and an undeclared read
 is refused before storage. The existing boundary regression covers this without
-new test functions or authorities. This closes membership bypass only; it does
-not establish missing AM/financial scopes or DRAFT closure binding.
+new test functions or authorities. This does not establish complete AM scope
+projection or DRAFT closure binding.
 Package and result metadata derive the feature runtime version from one value.
 
 Personal `am_signal_pm_close` uses historical morning fields inside daily bars,
@@ -138,8 +145,8 @@ DRAFT snapshot and the same decision/observation clock. Mutable inputs and
 Controlled sealed selection do not use it. Financial selection hits are counted
 separately from completed feature hits. The existing numeric/SQL regression
 observes four cold mode reads becoming one, with identical results; this does
-not prove cloud runtime or billing savings, nor close detailed AM/financial
-read scopes or DRAFT closure-to-runtime binding.
+not prove cloud runtime or billing savings or complete DRAFT closure-to-runtime
+binding. Ratio financial/anchor declarations above use this same selector.
 
 Scalar canonical encoding reuses the existing JSON encoder and directly renders
 safe integers; binary64 coercion outside that range and finite/Unicode guards
