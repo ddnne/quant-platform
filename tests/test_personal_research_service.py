@@ -361,7 +361,13 @@ def _prepared_frame_spec(case: str):
     )
     legs = {
         "price": (price,),
-        "fundamental": (fundamental,),
+        "fundamental": tuple(
+            FactorLeg(
+                feature=FeatureRef(id="pit_fundamental_ratio", version="1.0.0",
+                                   params={"mode": mode}),
+                weight=0.25, direction="high_good",
+            ) for mode in ("roe", "net_margin", "asset_turnover", "equity_ratio")
+        ),
         "long_short": (price, fundamental),
     }[case]
     return build_factor_rank_strategy_spec(
@@ -562,6 +568,19 @@ def test_personal_prepared_frame_matches_uncached_price_fundamental_and_ls(
         return connection
 
     monkeypatch.setattr(identity_module, "_connect_readonly", traced_identity_connection)
+    import pit.query as query_module
+    financial_queries: list[str] = []
+    real_connect = query_module.connect_readonly
+
+    def traced_pit_connection(*args, **kwargs):
+        connection = real_connect(*args, **kwargs)
+        connection.set_trace_callback(
+            lambda sql: financial_queries.append(sql)
+            if "dataset = 'fins_summary'" in sql else None
+        )
+        return connection
+
+    monkeypatch.setattr(query_module, "connect_readonly", traced_pit_connection)
     common = {
         "universe": universe,
         "period": period,
@@ -581,6 +600,8 @@ def test_personal_prepared_frame_matches_uncached_price_fundamental_and_ls(
         **common,
     )[3]
     baseline_identity_queries = len(identity_queries)
+    baseline_financial_queries = len(financial_queries)
+    financial_queries.clear()
     identity_queries.clear()
 
     with _personal_prepared_frame_scope(
@@ -594,6 +615,8 @@ def test_personal_prepared_frame_matches_uncached_price_fundamental_and_ls(
             view=views["cached"],
             **common,
         )[3]
+        first_financial_queries = len(financial_queries)
+        financial_queries.clear()
         replay = _run_one(
             PersonalPaperExecutionService(),
             spec,
@@ -608,6 +631,13 @@ def test_personal_prepared_frame_matches_uncached_price_fundamental_and_ls(
     assert len(identity_queries) * 2 == baseline_identity_queries
     assert int(stats["feature_hits"]) > 0
     assert int(stats["price_window_hits"]) > 0
+    if case == "fundamental":
+        selections = int(stats["financial_state_writes"])
+        assert selections > 0
+        assert first_financial_queries == selections
+        assert baseline_financial_queries == selections * 4
+        assert int(stats["source_financial_selections_avoided"]) == selections * 3
+        assert financial_queries == []  # Replay uses the final feature cells.
     assert not cache_path.exists()
 
 

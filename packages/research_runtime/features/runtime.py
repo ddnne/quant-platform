@@ -29,7 +29,7 @@ from .am_session_features import AM_SESSION_FEATURE_IDS
 from .dataset_guard import master_pit_history_start, require_feature_dataset
 from .types import FeatureDefinition, FeatureOutput
 
-FEATURES_RUNTIME_VERSION = "0.8.1"
+FEATURES_RUNTIME_VERSION = "0.8.2"
 
 
 class AsOfRequired(ValueError):
@@ -559,6 +559,33 @@ def _compute(
                 return daily_bars_capability.reader(**arguments)
             return reader(as_of=as_of_iso, db_path=resolved_db, **arguments)
 
+        if resource == "financial_state":
+            from pit.financial_observations import FinancialCatalogState, STATEMENT_RATIO_STATE
+            from pit.read_clock import DRAFT_OBSERVATION_LABEL, bound_read_clock
+            from paper_runtime.personal_prepared_frame import (
+                _active_personal_prepared_frame, _is_cache_miss,
+            )
+
+            # The Controlled branch above always owns its sealed selection.
+            # Share only compact statement state, never session price outputs,
+            # and only within an unchanged readonly DRAFT job snapshot.
+            clock = bound_read_clock()
+            frame = _active_personal_prepared_frame(resolved_db)
+            if (kwargs.get("initial_visible_state") == STATEMENT_RATIO_STATE
+                    and clock is not None and not clock.promotable
+                    and clock.observation_label == DRAFT_OBSERVATION_LABEL
+                    and frame is not None and frame.verified_readonly_snapshot_id() is not None):
+                key = {"as_of": as_of_iso, **kwargs,
+                       "observed_through": clock.observed_through}
+                cached = frame.load_financial_state(**key)
+                if not _is_cache_miss(cached):
+                    return FinancialCatalogState(**cached.metadata)
+                state = read(dict(kwargs))
+                frame.store_financial_state(
+                    **key, metadata={name: getattr(state, name)
+                                     for name in state.__dataclass_fields__},
+                )
+                return state
         if resource != "equity_bars_daily" or scope is None:
             return read(dict(kwargs))
         scope = scope.resolve({**feature.inputs.optional_kwargs, **inputs})
