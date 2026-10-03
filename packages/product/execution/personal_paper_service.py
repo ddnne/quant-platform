@@ -2,27 +2,27 @@
 
 The service accepts only the inputs needed to reproduce one local backtest:
 an exact ``StrategySpec``, a pathless DRAFT ``PaperRunConfig``, a bound
-``PersonalResearchDataView``, the expected logical snapshot id, and the exact
-approved ``FeatureRef`` objects.  Storage path, connection, and read-session
+``PersonalResearchDataView``, the expected logical snapshot id, and its compiled
+dependency closure. Storage path, connection, and read-session
 lifetime stay in the paper-runtime bind.  It has no READY, Trader, promotion,
 broker, or authority DTO surface.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from datetime import date
 
 from core.universe import RawFixedUniverseError, ResolvedDailyUniverse
 from paper_runtime.personal_draft_bind import run_bound_personal_paper
 from pit.personal_research_view import PersonalResearchDataView
-from strategies.paper import Lifecycle, PaperRunConfig, PaperRunResult
-from strategies.spec import (
-    FeatureRef,
-    StrategySpec,
-    iter_feature_refs,
-    resolve_feature_ref,
+from research.dependency_closure import (
+    PlanDependencyClosure,
+    PlanDependencyClosureError,
+    validate_strategy_dependency_binding,
 )
+from strategies.paper import Lifecycle, PaperRunConfig, PaperRunResult
+from strategies.spec import StrategySpec
 
 
 class PersonalPaperExecutionRejected(ValueError):
@@ -84,32 +84,6 @@ def _require_resolved_daily_universe(
         ) from exc
 
 
-def _require_exact_approved_features(
-    spec: StrategySpec,
-    approved_feature_refs: Sequence[FeatureRef],
-) -> tuple[FeatureRef, ...]:
-    declared = iter_feature_refs(spec)
-    approved = tuple(approved_feature_refs)
-    if not approved or any(type(ref) is not FeatureRef for ref in approved):
-        raise PersonalPaperExecutionRejected(
-            "approved_feature_refs must contain exact FeatureRef objects"
-        )
-    if tuple(ref.to_dict() for ref in approved) != tuple(
-        ref.to_dict() for ref in declared
-    ):
-        raise PersonalPaperExecutionRejected(
-            "approved FeatureRefs do not exactly match the StrategySpec"
-        )
-    for ref in declared:
-        try:
-            resolve_feature_ref(ref)
-        except (KeyError, ValueError) as exc:
-            raise PersonalPaperExecutionRejected(
-                f"FeatureRef {ref.id!r}@{ref.version!r} is not an approved signal"
-            ) from exc
-    return declared
-
-
 class PersonalPaperExecutionService:
     """Execute one reproducible, local, DRAFT-only paper run."""
 
@@ -121,7 +95,7 @@ class PersonalPaperExecutionService:
         config: PaperRunConfig,
         *,
         expected_snapshot_id: str,
-        approved_feature_refs: Sequence[FeatureRef],
+        dependency_closure: PlanDependencyClosure,
         view: PersonalResearchDataView | None = None,
     ) -> PaperRunResult:
         if type(spec) is not StrategySpec:
@@ -144,21 +118,41 @@ class PersonalPaperExecutionService:
         _require_explicit_period(config)
         resolved_universe = _require_resolved_daily_universe(config)
         expected_snapshot = _require_snapshot_id(expected_snapshot_id)
-        feature_refs = _require_exact_approved_features(
-            spec, approved_feature_refs
-        )
         if not isinstance(view, PersonalResearchDataView):
             raise PersonalPaperExecutionRejected(
                 "personal paper execution requires a bound PersonalResearchDataView"
             )
         try:
+            feature_refs = validate_strategy_dependency_binding(
+                spec, dependency_closure
+            )
+            identity = view.snapshot_identity()
+            if identity.logical_data_snapshot_id != expected_snapshot:
+                raise PersonalPaperExecutionRejected(
+                    "snapshot identity does not match expected_snapshot_id"
+                )
+            if (
+                dependency_closure.closure_digest not in identity.closure_digests
+                or not set(dependency_closure.required_datasets).issubset(
+                    identity.required_datasets
+                )
+                or not (
+                    identity.period_start
+                    <= dependency_closure.period_start
+                    <= config.start
+                    <= config.end <= dependency_closure.period_end <= identity.period_end
+                )
+            ):
+                raise PersonalPaperExecutionRejected(
+                    "dependency closure is outside the bound snapshot or run period"
+                )
             result = run_bound_personal_paper(
                 spec,
                 config,
                 view=view,
                 expected_snapshot_id=expected_snapshot,
             )
-        except (FileNotFoundError, RuntimeError) as exc:
+        except (FileNotFoundError, RuntimeError, PlanDependencyClosureError) as exc:
             raise PersonalPaperExecutionRejected(str(exc)) from exc
         if (
             type(result) is not PaperRunResult

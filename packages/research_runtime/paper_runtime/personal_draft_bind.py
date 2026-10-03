@@ -37,7 +37,7 @@ from pit.personal_research_view import (
     SnapshotIdentity,
 )
 from strategies.paper import Lifecycle, PaperRunConfig, PaperRunResult, run_paper
-from strategies.spec import StrategySpec, interpret_strategy_spec, iter_feature_refs
+from strategies.spec import StrategySpec, interpret_strategy_spec
 
 
 def prepare_draft_snapshot(
@@ -186,6 +186,7 @@ def execute_personal_draft(
     executor: Any,
     spec: StrategySpec,
     *,
+    dependency_closure: Any,
     view: PersonalResearchDataView,
     universe: Any,
     period: tuple[str, str],
@@ -223,7 +224,7 @@ def execute_personal_draft(
         spec,
         config,
         expected_snapshot_id=identity.logical_data_snapshot_id,
-        approved_feature_refs=iter_feature_refs(spec),
+        dependency_closure=dependency_closure,
         view=view,
     )
 

@@ -22,9 +22,11 @@ from paper_runtime.personal_draft_bind import (
 from paper_runtime.personal_prepared_frame import _personal_prepared_frame_scope
 from pit._draft_storage import draft_sqlite_path
 from pit.personal_research_view import OfflineFixtureDataView, SnapshotIdentity
+from research.personal_service import _closures, PersonalResearchPolicy
+from research.personal_universe import personal_universe_selector
 from research.universe_contract import ResolvedUniverseMembership
 from strategies.paper import Lifecycle, PaperRunConfig, run_paper
-from strategies.spec import FeatureRef, interpret_strategy_spec, iter_feature_refs
+from strategies.spec import interpret_strategy_spec
 
 
 def _weekdays(count: int) -> list[str]:
@@ -67,6 +69,11 @@ def _case(tmp_path):
         lifecycle=Lifecycle.DRAFT,
     )
     snapshot_id = data_snapshot_id(db_path)
+    closure = _closures(
+        (spec,), start=days[0], end=days[-1],
+        policy=PersonalResearchPolicy(),
+        universe_selector=personal_universe_selector("topix_all"),
+    )[0]
     view = OfflineFixtureDataView.bind(
         db_path,
         artifact_root=tmp_path / "personal-paper-artifacts",
@@ -77,31 +84,31 @@ def _case(tmp_path):
             snapshot_id=snapshot_id,
             logical_data_snapshot_id=snapshot_id,
             database_sha256=snapshot_id,
-            required_datasets=("equities_bars_daily",),
+            required_datasets=closure.required_datasets,
             period_start=days[0],
             period_end=days[-1],
-            closure_digests=("sha256:" + "0" * 64,),
+            closure_digests=(closure.closure_digest,),
             manifest={},
         )
     )
-    return spec, config, snapshot_id, iter_feature_refs(spec), view, db_path
+    return spec, config, snapshot_id, closure, view, db_path
 
 
-def _execute(service, spec, config, snapshot_id, refs, view):
+def _execute(service, spec, config, snapshot_id, closure, view):
     return service.execute(
         spec,
         config,
         expected_snapshot_id=snapshot_id,
-        approved_feature_refs=refs,
+        dependency_closure=closure,
         view=view,
     )
 
 
 def test_personal_service_executes_exact_draft_against_pinned_snapshot(tmp_path):
-    spec, config, snapshot_id, refs, view, _db_path = _case(tmp_path)
+    spec, config, snapshot_id, closure, view, _db_path = _case(tmp_path)
 
     result = _execute(
-        PersonalPaperExecutionService(), spec, config, snapshot_id, refs, view
+        PersonalPaperExecutionService(), spec, config, snapshot_id, closure, view
     )
 
     assert result.lifecycle is Lifecycle.DRAFT
@@ -110,7 +117,7 @@ def test_personal_service_executes_exact_draft_against_pinned_snapshot(tmp_path)
     assert "db_path" not in result.backtest.metadata
     assert result.reproducibility.get("db_locator") == "logical_data_snapshot_id"
     assert result.reproducibility["feature_versions"] == {
-        ref.id: ref.version for ref in refs
+        ref.feature_id: ref.feature_version for ref in closure.feature_dependencies
     }
 
 
@@ -118,7 +125,7 @@ def test_personal_service_reuses_one_pit_connection_without_changing_result(
     tmp_path,
     monkeypatch,
 ):
-    spec, config, snapshot_id, refs, view, db_path = _case(tmp_path)
+    spec, config, snapshot_id, closure, view, db_path = _case(tmp_path)
     bound_path = draft_sqlite_path(view)
     baseline = query_module._scoped_read_connection(bound_path)
     assert baseline is None
@@ -148,7 +155,7 @@ def test_personal_service_reuses_one_pit_connection_without_changing_result(
     monkeypatch.setattr(query_module, "connect_readonly", counting_connect)
     monkeypatch.setattr(sqlite_identity, "_connect_readonly", counting_identity_connect)
     actual = _execute(
-        PersonalPaperExecutionService(), spec, config, snapshot_id, refs, view
+        PersonalPaperExecutionService(), spec, config, snapshot_id, closure, view
     )
 
     assert connection_count == 1
@@ -180,12 +187,12 @@ def test_personal_service_reuses_one_pit_connection_without_changing_result(
 
 
 def test_personal_service_rejects_non_draft(tmp_path):
-    spec, config, snapshot_id, refs, view, _db_path = _case(tmp_path)
+    spec, config, snapshot_id, closure, view, _db_path = _case(tmp_path)
     config = replace(config, lifecycle=Lifecycle.PAPER)
 
     with pytest.raises(PersonalPaperExecutionRejected, match="DRAFT-only"):
         _execute(
-            PersonalPaperExecutionService(), spec, config, snapshot_id, refs, view
+            PersonalPaperExecutionService(), spec, config, snapshot_id, closure, view
         )
     with pytest.raises(PermissionError, match="DRAFT-only"):
         run_bound_personal_paper(
@@ -197,14 +204,14 @@ def test_personal_service_rejects_non_draft(tmp_path):
 
 
 def test_personal_service_rejects_database_path(tmp_path):
-    spec, config, snapshot_id, refs, view, db_path = _case(tmp_path)
+    spec, config, snapshot_id, closure, view, db_path = _case(tmp_path)
     config = replace(config, db_path=db_path)
 
     with pytest.raises(
         PersonalPaperExecutionRejected, match="does not accept a database path"
     ):
         _execute(
-            PersonalPaperExecutionService(), spec, config, snapshot_id, refs, view
+            PersonalPaperExecutionService(), spec, config, snapshot_id, closure, view
         )
 
 
@@ -212,7 +219,7 @@ def test_personal_service_rejects_database_path(tmp_path):
 def test_personal_service_rejects_unavailable_or_mismatched_snapshot(
     tmp_path, monkeypatch, missing,
 ):
-    spec, config, _snapshot_id, refs, view, db_path = _case(tmp_path)
+    spec, config, _snapshot_id, closure, view, db_path = _case(tmp_path)
     if missing:
         db_path.unlink()
 
@@ -228,14 +235,14 @@ def test_personal_service_rejects_unavailable_or_mismatched_snapshot(
             PersonalPaperExecutionService(),
             spec,
             config,
-            "sha256:" + "0" * 64,
-            refs,
+            _snapshot_id if missing else "sha256:" + "0" * 64,
+            closure,
             view,
         )
 
 
 def test_personal_service_rejects_miskeyed_prepared_frame(tmp_path):
-    spec, config, snapshot_id, refs, view, _db_path = _case(tmp_path)
+    spec, config, snapshot_id, closure, view, _db_path = _case(tmp_path)
     with _personal_prepared_frame_scope(
         db_path=draft_sqlite_path(view),
         snapshot_id="sha256:" + "0" * 64,
@@ -249,7 +256,7 @@ def test_personal_service_rejects_miskeyed_prepared_frame(tmp_path):
                 spec,
                 config,
                 snapshot_id,
-                refs,
+                closure,
                 view,
             )
 
@@ -257,7 +264,7 @@ def test_personal_service_rejects_miskeyed_prepared_frame(tmp_path):
 def test_personal_service_rejects_snapshot_tamper_after_run(tmp_path, monkeypatch):
     from strategies.paper import runner
 
-    spec, config, snapshot_id, refs, view, db_path = _case(tmp_path)
+    spec, config, snapshot_id, closure, view, db_path = _case(tmp_path)
     real_backtest = runner.run_backtest
 
     def mutate_after_calculation(*args, **kwargs):
@@ -270,34 +277,48 @@ def test_personal_service_rejects_snapshot_tamper_after_run(tmp_path, monkeypatc
 
     with pytest.raises(PersonalPaperExecutionRejected, match="changed during"):
         _execute(
-            PersonalPaperExecutionService(), spec, config, snapshot_id, refs, view
+            PersonalPaperExecutionService(), spec, config, snapshot_id, closure, view
         )
 
 
-def test_personal_service_rejects_approved_feature_ref_mismatch(tmp_path):
-    spec, config, snapshot_id, refs, view, _db_path = _case(tmp_path)
-    mismatched = FeatureRef(
-        id=refs[0].id,
-        version="9.9.9",
-        params=refs[0].params,
+def test_personal_service_rejects_dependency_mismatch_before_calculation(tmp_path, monkeypatch):
+    spec, config, snapshot_id, closure, view, _db_path = _case(tmp_path)
+    dependency = closure.feature_dependencies[0]
+    mismatches = (
+        replace(closure, strategy_spec_hash="sha256:" + "0" * 64),
+        replace(closure, feature_dependencies=(replace(dependency, params={"n": 3.0}),)),
+        replace(closure, feature_dependencies=(replace(dependency, definition_digest="sha256:" + "0" * 64),)),
+        replace(closure, plan_digest="sha256:" + "0" * 64),
     )
-
-    with pytest.raises(
-        PersonalPaperExecutionRejected,
-        match="do not exactly match",
-    ):
+    monkeypatch.setattr(
+        "execution.personal_paper_service.run_bound_personal_paper",
+        lambda *args, **kwargs: pytest.fail("dependency mismatch reached calculation"),
+    )
+    for closure in mismatches:
+        with pytest.raises(PersonalPaperExecutionRejected):
+            _execute(PersonalPaperExecutionService(), spec, config, snapshot_id, closure, view)
+    with pytest.raises(PersonalPaperExecutionRejected, match="run period"):
         _execute(
-            PersonalPaperExecutionService(),
-            spec,
-            config,
-            snapshot_id,
-            (mismatched,),
-            view,
+            PersonalPaperExecutionService(), spec,
+            replace(config, start="2025-03-31", universe=replace(
+                config.universe, period_start="2025-03-31", resolved_membership_digest="",
+            )),
+            snapshot_id, closure, view,
         )
+    # A feature edit without a version bump must not reuse the snapshot's closure.
+    from features.registry import FEATURES_REGISTRY
+
+    key = (dependency.feature_id, dependency.feature_version)
+    monkeypatch.setitem(
+        FEATURES_REGISTRY, key,
+        replace(FEATURES_REGISTRY[key], description="changed without version bump"),
+    )
+    with pytest.raises(PersonalPaperExecutionRejected, match="definition digest mismatch"):
+        _execute(PersonalPaperExecutionService(), spec, config, snapshot_id, closure, view)
 
 
 def test_personal_service_rejects_consumed_feature_mismatch(tmp_path, monkeypatch):
-    spec, config, snapshot_id, refs, view, _db_path = _case(tmp_path)
+    spec, config, snapshot_id, closure, view, _db_path = _case(tmp_path)
     from paper_runtime import personal_draft_bind as module
 
     real_run_paper = module.run_paper
@@ -305,7 +326,7 @@ def test_personal_service_rejects_consumed_feature_mismatch(tmp_path, monkeypatc
     def mismatched_run(*args, **kwargs):
         result = real_run_paper(*args, **kwargs)
         reproduction = dict(result.reproducibility)
-        reproduction["feature_versions"] = {refs[0].id: "9.9.9"}
+        reproduction["feature_versions"] = {closure.feature_dependencies[0].feature_id: "9.9.9"}
         return replace(result, reproducibility=reproduction)
 
     monkeypatch.setattr(module, "run_paper", mismatched_run)
@@ -315,7 +336,7 @@ def test_personal_service_rejects_consumed_feature_mismatch(tmp_path, monkeypatc
         match="FeatureRefs do not match",
     ):
         _execute(
-            PersonalPaperExecutionService(), spec, config, snapshot_id, refs, view
+            PersonalPaperExecutionService(), spec, config, snapshot_id, closure, view
         )
 
 
@@ -323,7 +344,7 @@ def test_personal_service_rejects_consumed_feature_mismatch(tmp_path, monkeypatc
 def test_personal_service_rejects_strategy_result_tamper(
     tmp_path, monkeypatch, tamper
 ):
-    spec, config, snapshot_id, refs, view, _db_path = _case(tmp_path)
+    spec, config, snapshot_id, closure, view, _db_path = _case(tmp_path)
     from paper_runtime import personal_draft_bind as module
 
     real_run_paper = module.run_paper
@@ -349,7 +370,7 @@ def test_personal_service_rejects_strategy_result_tamper(
         match="exact StrategySpec",
     ):
         _execute(
-            PersonalPaperExecutionService(), spec, config, snapshot_id, refs, view
+            PersonalPaperExecutionService(), spec, config, snapshot_id, closure, view
         )
 
 
@@ -360,7 +381,7 @@ def test_personal_service_rejects_strategy_result_tamper(
 def test_personal_service_rejects_universe_result_tamper(
     tmp_path, monkeypatch, field
 ):
-    spec, config, snapshot_id, refs, view, _db_path = _case(tmp_path)
+    spec, config, snapshot_id, closure, view, _db_path = _case(tmp_path)
     from paper_runtime import personal_draft_bind as module
 
     real_run_paper = module.run_paper
@@ -378,13 +399,13 @@ def test_personal_service_rejects_universe_result_tamper(
         match="resolved daily universe",
     ):
         _execute(
-            PersonalPaperExecutionService(), spec, config, snapshot_id, refs, view
+            PersonalPaperExecutionService(), spec, config, snapshot_id, closure, view
         )
 
 
 @pytest.mark.parametrize("universe", [None, ("1332", "8697")])
 def test_personal_service_requires_resolved_daily_universe(tmp_path, universe):
-    spec, config, snapshot_id, refs, view, _db_path = _case(tmp_path)
+    spec, config, snapshot_id, closure, view, _db_path = _case(tmp_path)
     config = replace(config, universe=universe)
 
     with pytest.raises(
@@ -392,5 +413,5 @@ def test_personal_service_requires_resolved_daily_universe(tmp_path, universe):
         match="resolved daily universe",
     ):
         _execute(
-            PersonalPaperExecutionService(), spec, config, snapshot_id, refs, view
+            PersonalPaperExecutionService(), spec, config, snapshot_id, closure, view
         )

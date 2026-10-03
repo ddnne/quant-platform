@@ -106,10 +106,16 @@ stays `absent_am_allowlist` and the consumer uses strictly-prior size. Scoped AM
 result metadata comes from the existing trusted session capability. Legacy v1
 hashes and formulas are unchanged; new scope-enabled metadata binds these needs.
 
-This is not complete DRAFT plan binding: other legacy declarations and DRAFT
-closure-to-runtime identity remain open work. Raw v0 features whose null-tail
-fallback can inspect older history are not falsely assigned a fixed count.
-Do not add READY/Receipt authorities to close that DRAFT gap.
+The DRAFT execution entry now requires the existing compiled closure instead
+of a feature-ref list derived from the same spec. The compiler owner rebinds
+exact spec/hash, ordered feature refs including duplicate legs, metadata and
+datasets once per paper run. Scoped v2/v3 also use the existing consumer-scope
+binding. The entry checks closure membership in the snapshot, dataset subset
+and run-period containment so shared snapshots and fold runs remain valid.
+No per-decision authority, new cache, READY or Receipt layer is added.
+Legacy v1 hashes and metadata meaning stay unchanged; this does not complete
+all detailed DRAFT read scopes. Raw v0 features whose null-tail fallback can
+inspect older history are not falsely assigned a fixed count.
 Existing real SQLite boundary/numeric regressions cover these guards rather
 than new getter-routing spies or context-shape-only tests.
 

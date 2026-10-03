@@ -423,5 +423,5 @@ def test_personal_paper_service_rejects_paper_lifecycle(tmp_path) -> None:
             spec,
             config,
             expected_snapshot_id="sha256:" + ("11" * 32),
-            approved_feature_refs=(),
+            dependency_closure=None,
         )
