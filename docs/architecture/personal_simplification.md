@@ -178,7 +178,11 @@ or secrets for diagnosis. Object-key `dt` names only the first row date and must
 not be reported as the current hydration month. Logs help distinguish parsing,
 range reuse and phase progress when a hard deadline prevents a terminal manifest;
 they are neither snapshot completion nor permission for another paid attempt.
-It does not establish a particular speed, disk-read or invoice reduction.
+Private scratch keeps decoded bar payloads instead of parsing them again on daily
+selection. Acquisition-cache expansion hashes its bounded output chunks while
+writing, removing the subsequent whole-file hash read. Original object/span/raw
+digests, vintage checks, gzip bounds and SQLite validation remain unchanged.
+These removed passes do not establish full cloud runtime or invoice savings.
 
 Compact stored-bar insertion reuses its latest-vintage lookup when that row has
 the requested clocks, and skips an exact-vintage query when no prior row exists.

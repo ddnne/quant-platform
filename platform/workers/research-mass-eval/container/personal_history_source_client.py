@@ -1353,12 +1353,7 @@ class PersonalHistorySourceClient:
                 delete=False,
             ) as handle:
                 sqlite_path = Path(handle.name)
-            gunzip_to_path(body, sqlite_path)
-            raw_hasher = hashlib.sha256()
-            with sqlite_path.open("rb") as sqlite_handle:
-                for chunk in iter(lambda: sqlite_handle.read(1024 * 1024), b""):
-                    raw_hasher.update(chunk)
-            raw_actual = "sha256:" + raw_hasher.hexdigest()
+            raw_actual = gunzip_to_path(body, sqlite_path)
             if raw_declared != raw_actual:
                 raise AcquisitionCacheInvalid("cache raw digest does not match sqlite")
             cached = verify_month_shard(
