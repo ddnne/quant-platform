@@ -480,6 +480,7 @@ def _feature_consumer_id(dependency: ResolvedFeatureDependency) -> str:
 
 
 def _bind_resolved_feature(dependency: ResolvedFeatureDependency) -> None:
+    scoped = dependency.metadata_version == FEATURE_DEFINITION_METADATA_V2
     try:
         ref = FeatureRef(
             id=dependency.feature_id,
@@ -487,24 +488,25 @@ def _bind_resolved_feature(dependency: ResolvedFeatureDependency) -> None:
             params=dict(dependency.params),
         )
         definition = resolve_feature_ref(ref)
-        require_complete_feature_read_scopes(
-            definition.dataset_dependencies, definition.read_scopes
+        digest = features.feature_definition_digest(
+            definition, metadata_version=dependency.metadata_version
         )
-        resolved = resolve_dataset_read_scopes(
-            definition.read_scopes, _effective_feature_params(definition, ref)
-        )
-        digest = features.feature_definition_digest(definition, metadata_version="v2")
+        if scoped:
+            resolved = resolve_dataset_read_scopes(
+                definition.read_scopes, _effective_feature_params(definition, ref)
+            )
     except Exception as exc:
         raise PlanDependencyClosureError(
-            f"cannot bind scoped feature {dependency.feature_id!r}@"
+            f"cannot bind feature {dependency.feature_id!r}@"
             f"{dependency.feature_version!r}: {exc}"
         ) from exc
     if dependency.definition_digest != digest:
         raise PlanDependencyClosureError(
             f"feature {dependency.feature_id!r} definition digest mismatch"
         )
-    if tuple(scope.canonical_mapping() for scope in dependency.resolved_read_scopes) != (
-        tuple(scope.canonical_mapping() for scope in resolved)
+    if scoped and (
+        tuple(scope.canonical_mapping() for scope in dependency.resolved_read_scopes)
+        != tuple(scope.canonical_mapping() for scope in resolved)
     ):
         raise PlanDependencyClosureError(
             f"feature {dependency.feature_id!r} resolved read scopes mismatch"
@@ -565,6 +567,59 @@ def validate_scoped_feature_binding(
         raise PlanDependencyClosureError(
             "feature requirements must match each feature consumer exactly"
         )
+
+
+def validate_strategy_dependency_binding(
+    spec: StrategySpec, closure: PlanDependencyClosure
+) -> tuple[FeatureRef, ...]:
+    """Rebind exact spec/feature metadata once at an execution entry.
+
+    Ref order and duplicate legs are significant. Legacy v1 binds its original
+    metadata only; v2/v3 also bind the existing per-consumer read scopes.
+    """
+    if type(spec) is not StrategySpec or type(closure) is not PlanDependencyClosure:
+        raise PlanDependencyClosureError(
+            "exact StrategySpec and PlanDependencyClosure required"
+        )
+    if (
+        closure.strategy_spec_id != spec.strategy_id
+        or closure.strategy_spec_version != spec.version
+        or closure.strategy_spec_hash != strategy_spec_digest(spec)
+    ):
+        raise PlanDependencyClosureError("closure does not match the exact StrategySpec")
+    refs = iter_feature_refs(spec)
+    if len(refs) != len(closure.feature_dependencies):
+        raise PlanDependencyClosureError(
+            "closure FeatureRefs do not exactly match the StrategySpec"
+        )
+    scoped = closure.version in SCOPED_CLOSURE_VERSIONS
+    metadata_version = (
+        FEATURE_DEFINITION_METADATA_V2 if scoped else FEATURE_DEFINITION_METADATA_V1
+    )
+    for ordinal, (ref, dependency) in enumerate(
+        zip(refs, closure.feature_dependencies, strict=True)
+    ):
+        if (
+            dependency.ordinal != ordinal
+            or _canonical_digest(ref.to_dict()) != _canonical_digest(
+                {
+                    "id": dependency.feature_id,
+                    "version": dependency.feature_version,
+                    "params": dict(dependency.params),
+                }
+            )
+            or dependency.metadata_version != metadata_version
+        ):
+            raise PlanDependencyClosureError(
+                "closure FeatureRefs do not exactly match the StrategySpec"
+            )
+        if not scoped:
+            _bind_resolved_feature(dependency)
+    if scoped:
+        validate_scoped_feature_binding(
+            closure.feature_dependencies, closure.dataset_scopes
+        )
+    return refs
 
 
 def _universe_requirements(
@@ -1117,6 +1172,7 @@ __all__ = [
     "PlanDependencyClosureError",
     "ResolvedFeatureDependency",
     "validate_scoped_feature_binding",
+    "validate_strategy_dependency_binding",
     "build_plan_dependency_closure",
     "build_strategy_dependency_closure",
     "experiment_plan_digest",

@@ -104,7 +104,14 @@ _observed_market_bar_coverage = observed_market_bar_coverage
 _universe_corporate_action_check = universe_corporate_action_check
 
 
-def _bound_view(source: Path, output_root: Path, *, cutoff: str = "session_close"):
+def _fixture_closure(spec, period):
+    return _closures(
+        (spec,), start=period[0], end=period[1], policy=_policy(),
+        universe_selector=personal_universe_selector("topix_all"),
+    )[0]
+
+
+def _bound_view(source: Path, output_root: Path, *, closure, cutoff: str = "session_close"):
     view = OfflineFixtureDataView.bind(
         source, artifact_root=output_root, decision_cutoff=cutoff
     )
@@ -114,10 +121,10 @@ def _bound_view(source: Path, output_root: Path, *, cutoff: str = "session_close
             snapshot_id=snapshot_id,
             logical_data_snapshot_id=snapshot_id,
             database_sha256=snapshot_id,
-            required_datasets=("equities_bars_daily",),
-            period_start="2000-01-01",
-            period_end="2100-01-01",
-            closure_digests=("sha256:" + "0" * 64,),
+            required_datasets=closure.required_datasets,
+            period_start=closure.period_start,
+            period_end=closure.period_end,
+            closure_digests=(closure.closure_digest,),
             manifest={},
         )
     )
@@ -549,12 +556,13 @@ def test_personal_prepared_frame_matches_uncached_price_fundamental_and_ls(
     source, start, end = personal_db
     universe, period = _prepared_frame_case(source, start, end)
     spec = _prepared_frame_spec(case)
+    closure = _fixture_closure(spec, period)
     with sqlite3.connect(source) as connection:
         connection.execute("PRAGMA journal_mode=DELETE")
     source.chmod(0o444)
     snapshot_id = data_snapshot_id(source)
     views = {
-        name: _bound_view(source, tmp_path / f"{case}-{name}")
+        name: _bound_view(source, tmp_path / f"{case}-{name}", closure=closure)
         for name in ("uncached", "cached", "replay")
     }
     import pit.sqlite_identity as identity_module
@@ -585,6 +593,7 @@ def test_personal_prepared_frame_matches_uncached_price_fundamental_and_ls(
 
     monkeypatch.setattr(query_module, "connect_readonly", traced_pit_connection)
     common = {
+        "dependency_closure": closure,
         "universe": universe,
         "period": period,
         "cost_bps": 10.0,
@@ -679,6 +688,7 @@ def test_prepared_first_pass_stores_only_exact_session_bar_rows(
     source, start, end = personal_db
     universe, period = _prepared_frame_case(source, start, end)
     spec = _prepared_frame_spec("price")
+    closure = _fixture_closure(spec, period)
     snapshot_id = data_snapshot_id(source)
     real_get_bars = pit.get_equity_bars_daily
     engine_reads: list[tuple[str, str, int]] = []
@@ -698,6 +708,7 @@ def test_prepared_first_pass_stores_only_exact_session_bar_rows(
 
     monkeypatch.setattr(pit, "get_equity_bars_daily", tracked_get_bars)
     common = {
+        "dependency_closure": closure,
         "universe": universe,
         "period": period,
         "cost_bps": 10.0,
@@ -707,7 +718,7 @@ def test_prepared_first_pass_stores_only_exact_session_bar_rows(
     uncached = _run_one(
         PersonalPaperExecutionService(),
         spec,
-        view=_bound_view(source, tmp_path / "bar-shape-uncached"),
+        view=_bound_view(source, tmp_path / "bar-shape-uncached", closure=closure),
         **common,
     )[3]
     uncached_reads = tuple(engine_reads)
@@ -720,7 +731,7 @@ def test_prepared_first_pass_stores_only_exact_session_bar_rows(
         prepared = _run_one(
             PersonalPaperExecutionService(),
             spec,
-            view=_bound_view(source, tmp_path / "bar-shape-prepared"),
+            view=_bound_view(source, tmp_path / "bar-shape-prepared", closure=closure),
             **common,
         )[3]
         prepared_reads = tuple(engine_reads)
@@ -752,6 +763,7 @@ def test_prepared_frame_preserves_missing_reason_and_halves_pit_queries(
     source, start, end = personal_db
     universe, period = _prepared_frame_case(source, start, end)
     spec = _prepared_frame_spec("price")
+    closure = _fixture_closure(spec, period)
     snapshot_id = data_snapshot_id(source)
     real_run_query = pit_api_module.run_query
     query_count = 0
@@ -792,11 +804,12 @@ def test_prepared_frame_preserves_missing_reason_and_halves_pit_queries(
         _run_one(
             PersonalPaperExecutionService(),
             spec,
+            dependency_closure=closure,
             universe=universe,
             period=period,
             cost_bps=10.0,
             lookback_days=3,
-            view=_bound_view(source, tmp_path / "query-count-first"),
+            view=_bound_view(source, tmp_path / "query-count-first", closure=closure),
             max_drawdown=1.0,
         )
         first_queries = query_count - before_first
@@ -804,11 +817,12 @@ def test_prepared_frame_preserves_missing_reason_and_halves_pit_queries(
         _run_one(
             PersonalPaperExecutionService(),
             spec,
+            dependency_closure=closure,
             universe=universe,
             period=period,
             cost_bps=10.0,
             lookback_days=3,
-            view=_bound_view(source, tmp_path / "query-count-replay"),
+            view=_bound_view(source, tmp_path / "query-count-replay", closure=closure),
             max_drawdown=1.0,
         )
         replay_queries = query_count - before_replay
@@ -890,7 +904,9 @@ def test_prepared_frame_preserves_late_revision_fallback_and_departed_holding(
         momentum_feature_id="retrospective_split_adjusted_momentum_n",
         sticky=False,
     )
+    closure = _fixture_closure(spec, period)
     common = {
+        "dependency_closure": closure,
         "universe": departed_universe,
         "period": period,
         "cost_bps": 10.0,
@@ -901,7 +917,7 @@ def test_prepared_frame_preserves_late_revision_fallback_and_departed_holding(
     baseline = _run_one(
         PersonalPaperExecutionService(),
         spec,
-        view=_bound_view(source, tmp_path / "adversarial-uncached"),
+        view=_bound_view(source, tmp_path / "adversarial-uncached", closure=closure),
         **common,
     )[3]
     with _personal_prepared_frame_scope(
@@ -911,13 +927,13 @@ def test_prepared_frame_preserves_late_revision_fallback_and_departed_holding(
         prepared = _run_one(
             PersonalPaperExecutionService(),
             spec,
-            view=_bound_view(source, tmp_path / "adversarial-cached"),
+            view=_bound_view(source, tmp_path / "adversarial-cached", closure=closure),
             **common,
         )[3]
         replay = _run_one(
             PersonalPaperExecutionService(),
             spec,
-            view=_bound_view(source, tmp_path / "adversarial-replay"),
+            view=_bound_view(source, tmp_path / "adversarial-replay", closure=closure),
             **common,
         )[3]
         stats = frame.stats()
@@ -976,11 +992,13 @@ def test_compact_path_matches_historical_adjustment_failure(
         "max_drawdown": 1.0,
     }
     spec = _prepared_frame_spec("fundamental")
+    closure = _fixture_closure(spec, common["period"])
+    common["dependency_closure"] = closure
     with pytest.raises(ValueError) as uncached_error:
         _run_one(
             PersonalPaperExecutionService(),
             spec,
-            view=_bound_view(source, tmp_path / "invalid-adjustment-uncached"),
+            view=_bound_view(source, tmp_path / "invalid-adjustment-uncached", closure=closure),
             **common,
         )
     with _personal_prepared_frame_scope(
@@ -991,7 +1009,7 @@ def test_compact_path_matches_historical_adjustment_failure(
             _run_one(
                 PersonalPaperExecutionService(),
                 spec,
-                view=_bound_view(source, tmp_path / "invalid-adjustment-prepared"),
+                view=_bound_view(source, tmp_path / "invalid-adjustment-prepared", closure=closure),
                 **common,
             )
 
@@ -1342,14 +1360,16 @@ def test_fixed_short_financing_monotonically_lowers_return(
         rationale="Deterministic fixture long-short financing sensitivity.",
     )
     output_root = tmp_path / "short-financing"
+    closure = _fixture_closure(spec, (start, end))
     evidence, _daily, _dates_used, paper_result = _run_one(
         PersonalPaperExecutionService(),
         spec,
+        dependency_closure=closure,
         universe=universe,
         period=(start, end),
         cost_bps=10.0,
         lookback_days=3,
-        view=_bound_view(source, output_root),
+        view=_bound_view(source, output_root, closure=closure),
         max_drawdown=1.0,
         short_financing_annual_rate=(
             PERSONAL_SHORT_FINANCING_BASELINE_ANNUAL_RATE
@@ -1489,7 +1509,7 @@ def test_continuous_base_sleeve_is_content_addressed_and_not_a_candidate(
         rule_digest=universe.rule_digest,
     )
 
-    view = _bound_view(source, output_root)
+    view = _bound_view(source, output_root, closure=closure)
     reference, artifact_ref, artifact_digest = (
         _write_continuous_base_sleeve_artifact(
             PersonalPaperExecutionService(),

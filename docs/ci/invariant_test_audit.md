@@ -103,7 +103,13 @@ charter for extra hostile-Python tests.
   metadata bytes and no-read invalid-window outcomes stay unchanged. Remove
   the frozen-dataclass probe and standalone canonical round-trip test; real
   compiler/profile round trips already exercise persisted requirements.
-  DRAFT closure binding remains incomplete, not Pilot acceptance.
+  Detailed DRAFT read scopes remain incomplete, not Pilot acceptance.
+
+- DRAFT entry now receives its existing closure instead of self-derived
+  approved refs. Reuse the compiler binding and existing actual SQLite entry,
+  registry drift, ordered duplicate-leg, fold and cached/uncached numeric tests.
+  Fixtures compile real closures rather than a fake zero digest. No new test
+  functions or authority; v1 metadata/hash replay remains unchanged.
 
 - Price-ratio scopes share closed mode/count declarations and the existing
   DataPlane scalar normalization/compact size projection. The owner alone

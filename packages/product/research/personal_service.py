@@ -1146,6 +1146,7 @@ def _run_one(
     executor: PersonalPaperExecutionService,
     spec: StrategySpec,
     *,
+    dependency_closure: PlanDependencyClosure,
     view: PersonalResearchDataView,
     universe: PersonalResolvedUniverseMembership,
     period: tuple[str, str],
@@ -1177,6 +1178,7 @@ def _run_one(
     result = execute_personal_draft(
         executor,
         spec,
+        dependency_closure=dependency_closure,
         view=view,
         universe=period_universe,
         period=period,
@@ -1236,6 +1238,7 @@ def _write_continuous_base_sleeve_artifact(
     evidence, _returns, _dates, paper_result = _run_one(
         executor,
         spec,
+        dependency_closure=closure,
         view=view,
         universe=universe,
         period=source_period,
@@ -1384,6 +1387,7 @@ def _candidate_evaluation(
         evidence, returns, dates, paper_result = _run_one(
             executor,
             spec,
+            dependency_closure=closure,
             view=view,
             universe=universe,
             period=period,
@@ -1499,6 +1503,7 @@ def _candidate_evaluation(
     stress, _, _, _ = _run_one(
         executor,
         spec,
+        dependency_closure=closure,
         view=view,
         universe=universe,
         period=(fold_periods[0][0], fold_periods[-1][1]),
@@ -1535,6 +1540,7 @@ def _candidate_evaluation(
     holdout, _, _, _ = _run_one(
         executor,
         spec,
+        dependency_closure=closure,
         view=view,
         universe=universe,
         period=holdout_period,
