@@ -9,17 +9,12 @@ from types import SimpleNamespace
 import pytest
 
 from features import (
-    AM_SESSION_FUNDAMENTAL_RATIO_ID,
-    AM_SESSION_PRICE_RATIO_ID,
-    FUNDAMENTAL_RATIO_MODES,
-    PRICE_RATIO_MODES,
+    AmSessionFundamentalRatio,
     PitFundamentalRatio,
     RetrospectivePriceRatio,
     compute,
-    get,
 )
 from _coreseed import close_iso, seed_db
-from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED
 from storage.sqlite_store import SqliteStore
 
 
@@ -99,40 +94,6 @@ def _fundamental(mode, fins, *, bars=None):
             fins=fins,
         )
     )
-
-
-def test_ratio_features_are_registered_with_closed_v1_contracts() -> None:
-    assert get("retrospective_price_ratio", "1.0.0") is RetrospectivePriceRatio
-    assert get("pit_fundamental_ratio", "1.0.0") is PitFundamentalRatio
-    assert RetrospectivePriceRatio.price_basis == PERSONAL_RETROSPECTIVE_ADJUSTED
-    assert PitFundamentalRatio.price_basis == PERSONAL_RETROSPECTIVE_ADJUSTED
-    assert PRICE_RATIO_MODES == {
-        "return_ratio",
-        "short_long_momentum",
-        "realized_vol_ratio",
-        "turnover_ratio",
-        "market_cap",
-    }
-    assert FUNDAMENTAL_RATIO_MODES == {
-        "book_to_price",
-        "earnings_to_price",
-        "roe",
-        "net_margin",
-        "asset_turnover",
-        "equity_ratio",
-        "sales_growth",
-        "assets_growth",
-        "total_assets",
-        "net_sales",
-    }
-    am_price = get(AM_SESSION_PRICE_RATIO_ID, "1.0.0")
-    am_fund = get(AM_SESSION_FUNDAMENTAL_RATIO_ID, "1.0.0")
-    assert am_price is not RetrospectivePriceRatio
-    assert am_fund is not PitFundamentalRatio
-    assert am_price.dataset_dependencies == RetrospectivePriceRatio.dataset_dependencies
-    assert am_fund.dataset_dependencies == PitFundamentalRatio.dataset_dependencies
-    assert "equities_bars_daily_am" not in am_price.dataset_dependencies
-    assert "equities_bars_daily_am" not in am_fund.dataset_dependencies
 
 
 def test_return_and_short_long_momentum_are_zero_centered() -> None:
@@ -347,6 +308,16 @@ def test_fundamental_ratios_support_short_and_long_jquants_names(
 
     assert output.value == pytest.approx(expected)
     assert output.metadata["ratio_source"] in {"reported", "same_statement_row"}
+    am_output = AmSessionFundamentalRatio.compute(
+        _Context(
+            inputs={"code": "8697", "mode": mode},
+            fins=[_fins_row(values)],
+        )
+    )
+    assert am_output.value == pytest.approx(expected)
+    assert am_output.metadata == {
+        **output.metadata, "session_view": "personal_retrospective_am_signal",
+    }
 
 
 def test_fundamental_ratio_does_not_mix_statement_rows() -> None:

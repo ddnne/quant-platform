@@ -79,6 +79,22 @@ Legacy compatibility must name its remaining caller and removal condition;
 "just in case" is not a reason to retain it. Do not delete persisted history as
 a side effect of source cleanup; identify consumers and recovery first.
 
+### Feature read scopes
+
+The existing feature runtime projects declared bar fields for both Controlled
+selection and DRAFT PIT/AM readers. Pure observation-count scopes select the
+latest decision-visible N rows once per compute, then apply caller date filters;
+an older `to_event` cannot shift that declared tail into old history. An
+unbounded retry reuses that tail, and undeclared datasets/oversized reads are
+refused before storage access. Split-safety scopes retain their predecessor plus
+anchor interval rather than incorrectly truncating the whole interval to N.
+
+This is not complete DRAFT plan binding: AM/other legacy definitions without
+read scopes, financial-state selection and DRAFT closure-to-runtime identity
+remain separate open work. Do not add READY/Receipt authorities to close that
+DRAFT gap. One real SQLite boundary/numeric regression replaces the previous
+getter-routing spy and context-shape-only tests.
+
 ## First batch (source only)
 
 - Remove the legacy D1 availability scan after R2 persistence; measure current
@@ -307,6 +323,16 @@ reads become two per backtest), without caching mutable identity or removing
 the final artifact check. A freshly materialized snapshot already returns
 verified, so its caller no longer immediately repeats the full hash/catalog
 verification. These savings concern cloud scratch SQLite/CPU, not D1 billing.
+
+Financial statement selection, alias handling, comparable-period growth and
+ratios now have one calculation owner for ordinary and AM-session DRAFT
+features. AM capability checks, strict-prior price selection and split blackout
+stay in the existing session-specific price callback. Dataset reads, original
+clocks and result metadata are unchanged; this is not full dependency-scope
+closure, READY acceptance or measured cloud cost reduction. Remove the copied
+registry/mode constant test; the existing known-value alias cases now exercise
+both feature entries and compare metadata apart from the explicit session tag.
+Existing statement-revision, missing-value, AM causality and split tests remain.
 
 ## Next acceptance work
 
