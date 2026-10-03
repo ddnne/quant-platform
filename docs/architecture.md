@@ -12,7 +12,7 @@
 | research_runtime | 与えられたスライスで計算するだけ | research-mass-eval の Container（一時 SQLite） |
 | product | 経路の組み立てと認可境界 | 既存 Worker 契約。Worker や authority を増やさない |
 
-計算は閉じた DSL に限り、生成 Python も `eval` / `exec` も使いません。Risk は独立です。スコープコンパイラ、財務の compact state、complete-master 所有者は既にあります。未完なのは共有の bar / 財務スコープと、認証済み候補・READY・runtime・Trader の接続です。データベース境界が閉じた、とは言いません。ソース受理はロールアウトを自動にしません。
+計算は閉じた DSL に限り、生成 Python も `eval` / `exec` も使いません。Risk は独立です。予定の price-master 四案は runtime の共有 bar scope と DRAFT 入口の closure 拘束を使い、READY 候補経路は通りません。正本 Controlled は v3 scope と既存 DataPlane selector を compiler、候補、READY、runtime で使います。Controlled の master seed、財務期首状態、split anchor、必須列、宣言外読取の拒否も接続済みです。これは全 feature / 全 DRAFT の詳細スコープや、実データの全必要スコープの証明ではありません。ソース受理はロールアウトを自動にしません。
 
 ## 時刻と PIT
 
@@ -22,7 +22,7 @@
 
 ## 信頼と配布
 
-Controlled Pilot は `controlled_pilot_v1` の正確に四本です。実行には、その計画に対する正確な ExperimentPlan / StrategySpec / FeatureRef / プロファイル / closure / snapshot、信頼できる全セグメント receipt、B0 / B4、現行の source / export / applied generation、不変 READY、Trader の署名済み実行許可と Budget ゲートが要ります。欠けた証拠は実行を止めます。必須 closure は [../specs/ready/controlled_pilot_v1.generated.json](../specs/ready/controlled_pilot_v1.generated.json) と [../specs/experiment_plans/](../specs/experiment_plans/) が指すソースに従い、そこに無い履歴を必須にしません。汎用 caller JSON や DRAFT への署名は証明になりません。ソース実装は運用起動ではありません。READY 候補の準備から既存署名者、Trader 本番接続までは開いたままです。政策入力は [../specs/policy/controlled_pilot_policy.json](../specs/policy/controlled_pilot_policy.json)、ドリフト確認は [../scripts/verify_controlled_pilot_v1_drift.py](../scripts/verify_controlled_pilot_v1_drift.py) です。
+Controlled Pilot は `controlled_pilot_v1` の正確に四本です。実行には、その計画に対する正確な ExperimentPlan / StrategySpec / FeatureRef / プロファイル / closure / snapshot、信頼できる全セグメント receipt、B0 / B4、現行の source / export / applied generation、不変 READY、Trader の署名済み実行許可と Budget ゲートが要ります。欠けた証拠は実行を止めます。必須 closure は [../specs/ready/controlled_pilot_v1.generated.json](../specs/ready/controlled_pilot_v1.generated.json) と [../specs/experiment_plans/](../specs/experiment_plans/) が指すソースに従い、そこに無い履歴を必須にしません。汎用 caller JSON や DRAFT への署名は証明になりません。既存 Container の候補から Premium の READY / Trader 署名者、verify-only 評価 Worker までのソース経路は接続済みですが、同一 snapshot / scope / quality / plan・profile・closure の本番証拠と authority 有効化は未受入です。新しい署名者を追加して解決する段階ではありません。政策入力は [../specs/policy/controlled_pilot_policy.json](../specs/policy/controlled_pilot_policy.json)、ドリフト確認は [../scripts/verify_controlled_pilot_v1_drift.py](../scripts/verify_controlled_pilot_v1_drift.py) です。
 
 個人 DRAFT の結果は研究用です。同じ規約の下で完備なら比較してよいですが、READY や Live ではありません。Mass は無効で、Pilot の証跡では Mass を有効化できません。凍結リプレイは通常実行ではありません。
 
