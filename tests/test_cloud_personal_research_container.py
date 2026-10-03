@@ -145,7 +145,8 @@ def _job(
         "universe_id": universe_id,
         "universe_rule_digest": universe_rule_digest
         or personal_research_universe_rule_digest(
-            universe_id, am_pm=is_am_pm_factor_cohort(cohort_id)
+            universe_id, am_pm=is_am_pm_factor_cohort(cohort_id),
+            data_profile=service.personal_data_profile_for_cohort(cohort_id),
         ),
     }
     request_digest = "sha256:" + hashlib.sha256(
@@ -2990,6 +2991,19 @@ def test_cache_only_snapshot_flag_is_digest_bound() -> None:
     document["cache_only"] = False
     with pytest.raises(service.JobInputError, match="requires a sha256 and cache_only"):
         service.SnapshotJobSpec.from_document(document)
+    price = replace(original, data_profile="price_only")
+    document = asdict(price)
+    with pytest.raises(service.JobInputError, match="request_digest mismatch"):
+        service.SnapshotJobSpec.from_document(document)
+    document["request_digest"] = price.derived_request_digest()
+    assert service.SnapshotJobSpec.from_document(document).data_profile == "price_only"
+    assert "fins_summary" not in service._snapshot_manifest_base(
+        price, started_at="2026-01-01", finished_at="2026-01-01"
+    )["dataset_dependencies"]
+    document["data_profile"] = "with_fins"
+    with pytest.raises(service.JobInputError, match="request_digest mismatch"):
+        service.SnapshotJobSpec.from_document(document)
+    _job("a" * 64, cohort_id="price-master-am-pm-v1").validate()
 
 
 def _snapshot_spec(job_id: str) -> service.SnapshotJobSpec:

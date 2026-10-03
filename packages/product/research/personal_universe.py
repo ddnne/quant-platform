@@ -29,6 +29,8 @@ from data_contracts.membership_runs import (
     validate_membership_runs,
 )
 from data_contracts.personal_universe import (
+    PERSONAL_WITH_FINS_PROFILE,
+    personal_history_datasets,
     TOPIX_CORE30,
     TOPIX_LARGE70,
     TOPIX_MID400,
@@ -43,6 +45,7 @@ from pit.universe_pit import UniverseDaySlice
 
 
 PERSONAL_UNIVERSE_RULE_VERSION = "personal-topix-scale-with-fins/v1"
+PERSONAL_MASTER_ONLY_RULE_VERSION = "personal-topix-scale-master-only/v1"
 PERSONAL_UNIVERSE_BREADTH_FORMAT = "personal-topix-with-fins-breadth/v1"
 DEFAULT_PERSONAL_UNIVERSE_ID = "topix_all"
 PersonalUniverseDecisionCutoff = Literal["session_close", "morning_close"]
@@ -83,13 +86,14 @@ def personal_research_universe_decision_cutoff(
 
 
 def personal_research_universe_rule_digest(
-    universe_id: str, *, am_pm: bool
+    universe_id: str, *, am_pm: bool, data_profile: str = PERSONAL_WITH_FINS_PROFILE
 ) -> str:
     """Rule digest for one closed universe at the cohort execution cutoff."""
 
     return personal_universe_selector(
         universe_id,
         decision_cutoff=personal_research_universe_decision_cutoff(am_pm=am_pm),
+        data_profile=data_profile,
     ).rule_digest
 
 
@@ -113,8 +117,10 @@ class PersonalUniverseSelector:
     selector_id: str
     scale_categories: tuple[str, ...]
     decision_cutoff: str = DEFAULT_PERSONAL_UNIVERSE_DECISION_CUTOFF
+    data_profile: str = PERSONAL_WITH_FINS_PROFILE
 
     def __post_init__(self) -> None:
+        personal_history_datasets(self.data_profile)
         categories = tuple(dict.fromkeys(self.scale_categories))
         if (
             not self.selector_id
@@ -129,11 +135,19 @@ class PersonalUniverseSelector:
 
     @property
     def rule_id(self) -> str:
-        return f"{self.selector_id}_with_fins"
+        return f"{self.selector_id}_{'with_fins' if self.requires_financials else 'master_only'}"
 
     @property
     def rule_version(self) -> str:
-        return PERSONAL_UNIVERSE_RULE_VERSION
+        return PERSONAL_UNIVERSE_RULE_VERSION if self.requires_financials else PERSONAL_MASTER_ONLY_RULE_VERSION
+
+    @property
+    def requires_financials(self) -> bool:
+        return self.data_profile == PERSONAL_WITH_FINS_PROFILE
+
+    @property
+    def dataset_dependencies(self) -> tuple[str, ...]:
+        return ("equities_master", "fins_summary") if self.requires_financials else ("equities_master",)
 
     def with_decision_cutoff(self, decision_cutoff: str) -> PersonalUniverseSelector:
         cutoff = _require_decision_cutoff(decision_cutoff)
@@ -142,7 +156,7 @@ class PersonalUniverseSelector:
         return replace(self, decision_cutoff=cutoff)
 
     def to_canonical_dict(self) -> dict[str, Any]:
-        return {
+        body = {
             "rule_id": self.rule_id,
             "rule_version": self.rule_version,
             "decision_clock": _DECISION_CUTOFF_CLOCK_IDS[self.decision_cutoff],
@@ -159,6 +173,10 @@ class PersonalUniverseSelector:
             "research_state": "PERSONAL_DRAFT",
             "controlled_live_eligibility": "FORBIDDEN",
         }
+        if not self.requires_financials:
+            del body["financials_rule"]
+            body["data_profile"] = self.data_profile
+        return body
 
     @property
     def rule_digest(self) -> str:
@@ -206,6 +224,7 @@ def personal_universe_selector(
     selector_id: str,
     *,
     decision_cutoff: str = DEFAULT_PERSONAL_UNIVERSE_DECISION_CUTOFF,
+    data_profile: str = PERSONAL_WITH_FINS_PROFILE,
 ) -> PersonalUniverseSelector:
     try:
         selector = _SELECTORS[str(selector_id)]
@@ -213,7 +232,7 @@ def personal_universe_selector(
         raise PersonalUniverseError(
             f"universe_id must be one of {list(PERSONAL_UNIVERSE_IDS)}"
         ) from exc
-    return selector.with_decision_cutoff(decision_cutoff)
+    return replace(selector.with_decision_cutoff(decision_cutoff), data_profile=data_profile)
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,7 +251,7 @@ class PersonalResolvedUniverseMembership:
     def __post_init__(self) -> None:
         if (
             not self.rule_id
-            or self.rule_version != PERSONAL_UNIVERSE_RULE_VERSION
+            or self.rule_version not in {PERSONAL_UNIVERSE_RULE_VERSION, PERSONAL_MASTER_ONLY_RULE_VERSION}
             or not self.rule_digest.startswith("sha256:")
             or not self.period_start
             or self.period_start > self.period_end
@@ -406,7 +425,7 @@ def _apply_personal_selector(
                 f"{selector.selector_id} resolves no master members at {slice.decision_date}"
             )
         resolved = tuple(
-            sorted(code for code in selected if code in slice.fins_codes)
+            sorted(code for code in selected if not selector.requires_financials or code in slice.fins_codes)
         )
         if not resolved:
             raise PersonalUniverseError(
@@ -416,14 +435,13 @@ def _apply_personal_selector(
         if memberships and memberships[-1][1] == resolved:
             resolved = memberships[-1][1]
         memberships.append((slice.decision_date, resolved))
-        daily_observations.append(
-            {
-                "decision_date": slice.decision_date,
-                "selector_master_count": len(selected),
-                "resolved_fins_intersection_count": len(resolved),
-                "resolved_fins_intersection_ratio": len(resolved) / len(selected),
-            }
-        )
+        daily_observations.append({
+            "decision_date": slice.decision_date,
+            "selector_master_count": len(selected),
+            **({"resolved_fins_intersection_count": len(resolved),
+                "resolved_fins_intersection_ratio": len(resolved) / len(selected)}
+               if selector.requires_financials else {"resolved_master_count": len(resolved)}),
+        })
     membership = PersonalResolvedUniverseMembership(
         period_start=period_start,
         period_end=period_end,
@@ -435,6 +453,16 @@ def _apply_personal_selector(
     total_master = sum(
         int(item["selector_master_count"]) for item in daily_observations
     )
+    if not selector.requires_financials:
+        return membership, {
+            "format": "personal-topix-master-breadth/v1", "evidence_kind": "OBSERVED",
+            "selector": selector.to_dict(), "decision_cutoff": selector.decision_cutoff,
+            "period_start": period_start, "period_end": period_end,
+            "daily_observations": daily_observations,
+            "total_selector_master_observations": total_master,
+            "status": "NOT_APPLICABLE", "reason": "no_financial_membership_filter",
+            "research_state": "PERSONAL_DRAFT", "controlled_live_eligibility": "FORBIDDEN",
+        }
     total_resolved = sum(
         int(item["resolved_fins_intersection_count"])
         for item in daily_observations
@@ -474,19 +502,21 @@ def resolve_personal_universe_with_evidence(
     period_end: str,
     universe_id: str = DEFAULT_PERSONAL_UNIVERSE_ID,
     decision_cutoff: str | None = None,
+    data_profile: str = PERSONAL_WITH_FINS_PROFILE,
 ) -> tuple[PersonalResolvedUniverseMembership, dict[str, Any]]:
     """Resolve one closed selector from the latest PIT-visible dated master."""
     if not isinstance(view, PersonalResearchDataView):
         raise PersonalUniverseError("personal universe requires a typed research data view")
     cutoff = str(decision_cutoff or view.decision_cutoff)
-    selector = personal_universe_selector(universe_id, decision_cutoff=cutoff)
+    selector = personal_universe_selector(universe_id, decision_cutoff=cutoff, data_profile=data_profile)
     if selector.decision_cutoff != view.decision_cutoff:
         raise PersonalUniverseError(
             "personal universe decision_cutoff must match the research view"
         )
     try:
         slices = view.universe_slices(
-            period_start=period_start, period_end=period_end
+            period_start=period_start, period_end=period_end,
+            require_financials=selector.requires_financials,
         )
     except PitError as exc:
         raise _map_universe_pit_error(exc) from exc
@@ -505,6 +535,7 @@ def resolve_personal_universe(
     period_end: str,
     universe_id: str = DEFAULT_PERSONAL_UNIVERSE_ID,
     decision_cutoff: str | None = None,
+    data_profile: str = PERSONAL_WITH_FINS_PROFILE,
 ) -> PersonalResolvedUniverseMembership:
     membership, _evidence = resolve_personal_universe_with_evidence(
         view,
@@ -512,6 +543,7 @@ def resolve_personal_universe(
         period_end=period_end,
         universe_id=universe_id,
         decision_cutoff=decision_cutoff,
+        data_profile=data_profile,
     )
     return membership
 

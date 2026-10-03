@@ -438,6 +438,11 @@ def test_hydrator_pit_timing_compression_compaction_and_draft_boundary(tmp_path)
 
 
 def test_resume_is_idempotent_and_refetches_only_failed_segment(tmp_path):
+    import hashlib
+    # Captured from main 9b01c1a, not recomputed from this implementation.
+    assert hashlib.sha256(canonical_json(_plan().to_dict()).encode()).hexdigest() == (
+        "964b238a879ad52669b009b13d308a031b9e696459dea16b2e7f6725747e4468"
+    )
     db = tmp_path / "resume.sqlite"
     store = SqliteStore(db)
     client = _HistoryClient(
@@ -482,6 +487,11 @@ def test_resume_is_idempotent_and_refetches_only_failed_segment(tmp_path):
     assert store.count("jquants_records") == row_count_after
     assert len(_compact_bar_rows(store)) == compact_count_after
     assert row_count_after + compact_count_after >= row_count_before
+    from dataclasses import replace
+    with pytest.raises(PersonalHistoryError, match="bound to a different plan"):
+        PersonalHistoryHydrator(client=client, store=store,
+                               plan=replace(_plan(), data_profile="price_only"))
+    assert client.calls == calls_before_noop
     store.close()
 
 
@@ -1668,6 +1678,7 @@ def test_2008_jan1_request_truncates_lookback_to_profile_floor(tmp_path):
     stored_plan = json.loads(manifest["plan_json"])
     assert stored_plan["period_start"] == "2008-01-01"
     assert stored_plan["lookback_sessions"] == 252
+    assert "data_profile" not in stored_plan
     assert summary.status == "COMPLETE_DRAFT"
     assert summary.period_start == "2008-01-01"
     assert summary.actual_lookback_sessions == 0
@@ -1697,6 +1708,22 @@ def test_2008_jan1_request_truncates_lookback_to_profile_floor(tmp_path):
     assert resumed.lookback_truncated is True
     assert client.calls == calls_after
     store.close()
+    price_plan = build_personal_history_plan(
+        period_start="2008-01-01", period_end="2008-05-08",
+        lookback_sessions=252, calendar_window_days=366,
+        today=date(2008, 8, 1), data_profile="price_only",
+    )
+    assert personal_snapshot_data_floor("price_only") == master_floor
+    price_store = SqliteStore(tmp_path / "price-floor-2008.sqlite")
+    price_client = _FloorHistoryClient()
+    price_client.profile_floor = personal_snapshot_data_floor("price_only")
+    price_summary = PersonalHistoryHydrator(
+        client=price_client, store=price_store, plan=price_plan,
+    ).hydrate()
+    assert price_summary.bar_start == "2008-05-07"
+    assert price_summary.actual_lookback_sessions == 0
+    assert not any(dataset == "fins_summary" for dataset, _ in price_client.calls)
+    price_store.close()
 
 
 def test_later_lookback_zero_starts_at_requested_period(tmp_path):
@@ -1775,6 +1802,35 @@ def test_leading_empty_fins_membership_is_skipped_then_fail_closed(tmp_path):
         "SELECT status FROM personal_history_manifest"
     ).fetchone()[0] == "BUILDING"
     store.close()
+    from dataclasses import replace
+    price_store = SqliteStore(tmp_path / "price-only.sqlite")
+    price_client = _HistoryClient()
+    plan = replace(_plan(), data_profile="price_only")
+    hydrator = PersonalHistoryHydrator(client=price_client, store=price_store, plan=plan)
+    summary = hydrator.hydrate()
+    assert not any(dataset == "fins_summary" for dataset, _ in price_client.calls)
+    assert "fins_summary" not in summary.segment_counts
+    assert "fins_summary" not in plan.to_dict()["dataset_dependencies"]
+    assert {row["code"] for row in _compact_bar_rows(price_store)} == {"1001", "1002", "1003"}
+    from pit.personal_research_view import OfflineFixtureDataView
+    view = OfflineFixtureDataView.bind(price_store.path, artifact_root=tmp_path / "price-artifacts")
+    slices = view.universe_slices(
+        period_start=plan.period_start, period_end=plan.period_end,
+        require_financials=False,
+    )
+    assert {member.code for member in slices[0].members} == {"1001", "1002"}
+    assert {member.code for member in slices[-1].members} == {"1001", "1002", "1003"}
+    assert all(not item.fins_codes for item in slices)
+    from pit.errors import PitError
+    with pytest.raises(PitError, match="data_profile does not match"):
+        view.universe_slices(period_start=plan.period_start, period_end=plan.period_end)
+    # Full master membership remains, including symbols without any disclosure.
+    calls = Counter(price_client.calls)
+    hydrator.hydrate()
+    assert price_client.calls == calls
+    with pytest.raises(PersonalHistoryError, match="bound to a different plan"):
+        PersonalHistoryHydrator(client=price_client, store=price_store, plan=_plan())
+    price_store.close()
 
 
 class _RedundantLaterFinsClient(_HistoryClient):

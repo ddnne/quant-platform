@@ -416,7 +416,7 @@ class PersonalResearchDataView(ABC):
 
     @abstractmethod
     def universe_slices(
-        self, *, period_start: str, period_end: str
+        self, *, period_start: str, period_end: str, require_financials: bool = True
     ) -> tuple[UniverseDaySlice, ...]:
         """PIT master/fins slices at this view's decision cutoff."""
 
@@ -893,7 +893,7 @@ class _SqliteDraftDataView(PersonalResearchDataView):
         return object_digest
 
     def universe_slices(
-        self, *, period_start: str, period_end: str
+        self, *, period_start: str, period_end: str, require_financials: bool = True
     ) -> tuple[UniverseDaySlice, ...]:
         check_deadline()
         days = _calendar_dates(period_start, period_end)
@@ -907,6 +907,7 @@ class _SqliteDraftDataView(PersonalResearchDataView):
                 period_start=period_start,
                 period_end=period_end,
                 as_of_for_day=as_of_for_day,
+                require_financials=require_financials,
             )
 
     def write_artifact(

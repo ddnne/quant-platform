@@ -80,6 +80,7 @@ from research.factor_cohorts import (
     execution_contract_for_cohort,
     get_research_cohort,
     is_personal_short_financing_cohort,
+    personal_data_profile_for_cohort,
     personal_specs_for_cohort,
 )
 from research.personal_metrics import (
@@ -539,18 +540,19 @@ def _closures(
     cohort_ref: dict[str, str] | None = None,
     execution_contract: Mapping[str, Any] | None = None,
 ) -> tuple[PlanDependencyClosure, ...]:
+    data_profile_id = PERSONAL_DATA_PROFILE if universe_selector.requires_financials else "personal-japan-equities-price-only/v1"
     universe_dependency = ContractDependency(
         kind="universe",
         dependency_id=universe_selector.rule_id,
         version=universe_selector.rule_version,
-        dataset_dependencies=("equities_master", "fins_summary"),
+        dataset_dependencies=universe_selector.dataset_dependencies,
     )
     closures: list[PlanDependencyClosure] = []
     for spec in specs:
         spec_hash = strategy_spec_digest(spec)
         uses_short = bool(getattr(spec.rule, "allow_short", False))
         plan_body = {
-            "profile": PERSONAL_DATA_PROFILE,
+            "profile": data_profile_id,
             "strategy_spec": spec.to_dict(),
             "period_start": start,
             "period_end": end,
@@ -582,11 +584,16 @@ def _closures(
                 evaluation_dependency=_EVALUATION,
                 risk_dependency=_RISK,
                 cost_dependency=_SHORT_COST if uses_short else _COST,
-                research_data_profile_id=PERSONAL_DATA_PROFILE,
+                research_data_profile_id=data_profile_id,
                 period_start=start,
                 period_end=end,
             )
         )
+    if not universe_selector.requires_financials:
+        from data_contracts.personal_universe import personal_history_datasets
+        supported = set(personal_history_datasets(universe_selector.data_profile))
+        if any(set(closure.required_datasets) - supported for closure in closures):
+            raise PersonalResearchInputError("price_only profile cannot supply financial or other non-price features")
     return tuple(closures)
 
 
@@ -2040,7 +2047,10 @@ class PersonalResearchService:
         if start_day >= end_day:
             raise PersonalResearchInputError("period_start must precede period_end")
         try:
-            universe_selector = personal_universe_selector(request.universe_id)
+            universe_selector = personal_universe_selector(
+                request.universe_id,
+                data_profile=personal_data_profile_for_cohort(request.cohort_id),
+            )
         except PersonalUniverseError as exc:
             raise PersonalResearchInputError(str(exc)) from exc
         specs, cohort = _validated_specs(
@@ -2160,22 +2170,26 @@ class PersonalResearchService:
                 period_end=end_day.isoformat(),
                 universe_id=universe_selector.selector_id,
                 decision_cutoff=universe_selector.decision_cutoff,
+                data_profile=universe_selector.data_profile,
             )
         except PersonalUniverseError as exc:
             raise PersonalResearchInputError(str(exc)) from exc
-        universe_breadth = {
-            **universe_breadth,
-            "minimum_ratio": self.policy.min_universe_fins_breadth,
-            "status": (
-                "PASS"
-                if universe_breadth["minimum_daily_ratio"]
-                >= self.policy.min_universe_fins_breadth
-                else "FAIL"
-            ),
-        }
+        if universe_selector.requires_financials:
+            universe_breadth = {
+                **universe_breadth,
+                "minimum_ratio": self.policy.min_universe_fins_breadth,
+                "status": (
+                    "PASS"
+                    if universe_breadth["minimum_daily_ratio"] >= self.policy.min_universe_fins_breadth
+                    else "FAIL"
+                ),
+            }
         bar_coverage = view.observed_bar_coverage(
             universe,
             minimum_ratio=self.policy.min_observed_bar_coverage,
+        )
+        breadth_usable = universe_breadth["status"] == (
+            "PASS" if universe_selector.requires_financials else "NOT_APPLICABLE"
         )
         corporate_actions = view.corporate_action_check(
             universe=universe,
@@ -2214,7 +2228,7 @@ class PersonalResearchService:
         if (
             bar_coverage["status"] != "PASS"
             or not source_sync.get("execution_allowed")
-            or universe_breadth["status"] != "PASS"
+            or not breadth_usable
             or periods is None
         ):
             reason = (
@@ -2225,7 +2239,7 @@ class PersonalResearchService:
                     if not source_sync.get("execution_allowed")
                     else (
                         "universe_fins_breadth_below_threshold"
-                        if universe_breadth["status"] != "PASS"
+                        if not breadth_usable
                         else (
                             "insufficient_post_warmup_sessions"
                             if evaluation_start is None
@@ -2339,7 +2353,7 @@ class PersonalResearchService:
         body: dict[str, Any] = {
             "version": PERSONAL_RESEARCH_REPORT_VERSION,
             "decision_policy": PERSONAL_DECISION_POLICY,
-            "profile_id": PERSONAL_DATA_PROFILE,
+            "profile_id": closures[0].research_data_profile_id,
             "period": {
                 "start": start_day.isoformat(),
                 "data_start": start_day.isoformat(),

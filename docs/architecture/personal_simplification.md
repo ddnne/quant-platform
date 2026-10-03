@@ -14,6 +14,27 @@ should not inherit financial/volatility history limits. Aim for approximately
 trial, not the final research horizon. Do not invent coverage or use future data.
 Keep a common-period comparison and per-strategy longest-period results.
 
+### Explicit price-only history
+
+The snapshot builder accepts `data_profile: "price_only"`; omission retains the
+historical `with_fins` profile and its canonical request/checkpoint bytes.
+The closed profile owns calendar, daily master and daily bars only. It skips
+financial acquisition, financial scans and the financial membership intersection.
+Its SQLite plan and scope bind the profile so resume cannot reuse a with-fins
+checkpoint. The PIT reader checks the stored profile before resolving membership.
+The declared bar/master floor is 2008-05-07; actual stored coverage, warmup and
+publication vintages still determine the usable evaluation period.
+
+Research selects `price-master-am-pm-v1` explicitly. It reuses the existing four
+AM price/realized-volatility/turnover formulas, but its daily TOPIX master-only
+rule and dependency closure differ from the old with-fins cohort. No new Worker,
+DB, cache, signing authority, trading permission or automatic job is added.
+Financial breadth is `NOT_APPLICABLE`, never a fabricated PASS. Old cohorts keep
+their economic membership, digests and replay behavior; their financial/IV data
+requirements cannot use a price-only snapshot. Source acceptance does not authorize
+deploying or rerunning the consumed a5 job, prove 2008–2026 coverage, or produce
+new market-performance results.
+
 Do not wait for a repo-wide rewrite before running a useful experiment. Keep
 logical changes separate in commits, but batch completed fixes into pushes to
 avoid repeated paid full builds. Main agent implements; reviewers only critique.

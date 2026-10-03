@@ -299,10 +299,12 @@ describe("personal research request contract", () => {
     );
   });
 
-  it("admits the five frozen AM cohorts with exact repo digests", async () => {
+  it("admits closed AM cohorts with exact repo digests", async () => {
     const expected = {
       "price-relative-am-pm-v1":
         "sha256:f1ed5dda6f4b8afe502a2b71a8ae3e5d3157caa69e5380fc97c9e7447ab181ce",
+      "price-master-am-pm-v1":
+        "sha256:4c51e03858935378821c86facf65aa5cbee304b13e0825d70760a9956f1dc0a5",
       "fundamental-relative-am-pm-v1":
         "sha256:127d5558da094e0751a3d6c81d103d65d88e6549fe69bd3a9ef560dd6929248e",
       "diverse-core-am-pm-v1":
@@ -326,6 +328,12 @@ describe("personal research request contract", () => {
       expect(parsed.ok).toBe(true);
       if (!parsed.ok) throw new Error(parsed.error);
       expect(personalResearchCohortDigest(cohortId)).toBe(expected[cohortId]);
+      if (cohortId === "price-master-am-pm-v1") {
+        expect(personalResearchUniverseRuleDigest(universeId, cohortId)).toBe(
+          "sha256:3b7c4c63e2bcc55ab41568e3ee11241814f36900b69cff7c047a07ca3bab5a9f");
+        expect(personalResearchUniverseRuleDigest(universeId, cohortId)).not.toBe(
+          personalResearchUniverseRuleDigest(universeId, "price-relative-am-pm-v1"));
+      }
       const digest = await personalResearchRequestDigest(parsed.value);
       expect(digest.startsWith("sha256:")).toBe(true);
     }

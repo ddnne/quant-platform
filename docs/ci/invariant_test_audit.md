@@ -4,6 +4,15 @@ This is a personal single-user Cloudflare quant research product on a trusted
 host. Tests catch real current failures; they do not simulate an untrusted
 multi-tenant enterprise.
 
+## Price-only research regression coverage
+
+Existing hydrator/resume/universe/AM-service/request tests cover the new closed
+price profile: no financial calls, full dated master membership, AM time wall,
+stored profile mismatch, original canonical plan hash and actual AM price
+calculations without financial records. No new case matrix or test function is
+needed. The standalone PaperRunConfig string-assignment test is removed: the
+same AM configuration is exercised by actual paper runs in the service test.
+
 ## Retired research deploy adapter
 
 The unused `deploy_cf_mass_eval_worker` adapter, its environment toggle and

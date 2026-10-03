@@ -25,7 +25,10 @@ from data_contracts.personal_history_compact import (
     compact_history_state,
     compact_rebuild_reason,
 )
-from data_contracts.personal_universe import canonical_topix_scale_category
+from data_contracts.personal_universe import (
+    PERSONAL_PRICE_ONLY_PROFILE, PERSONAL_WITH_FINS_PROFILE,
+    canonical_topix_scale_category, personal_history_scope,
+)
 from storage.schema import CATALOG_CODE_SQL
 
 from .cooperative_deadline import check_deadline
@@ -584,6 +587,7 @@ def _universe_day_slices_from_connection(
     product_fields: bool = False,
     historical_master: bool = False,
     historical_calendar: bool = False,
+    require_financials: bool = True,
 ) -> tuple[UniverseDaySlice, ...]:
     """Resolve universe slices on an already-open verifier or READY connection.
 
@@ -607,6 +611,26 @@ def _universe_day_slices_from_connection(
     try:
         check_deadline()
         compact = _compact_flag_from_connection(conn)
+        if compact:
+            columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(personal_history_manifest)")}
+            profile = PERSONAL_WITH_FINS_PROFILE
+            plan = {}
+            if "plan_json" in columns:
+                row = conn.execute("SELECT * FROM personal_history_manifest WHERE singleton=1").fetchone()
+                try:
+                    plan = json.loads(row["plan_json"]) if row else {}
+                    profile = plan.get("data_profile", PERSONAL_WITH_FINS_PROFILE)
+                except (TypeError, ValueError, AttributeError) as error:
+                    raise PitError("personal snapshot plan is invalid") from error
+            expected_profile = PERSONAL_WITH_FINS_PROFILE if require_financials else PERSONAL_PRICE_ONLY_PROFILE
+            if profile != expected_profile:
+                raise PitError("personal snapshot data_profile does not match universe rule")
+            if not require_financials:
+                scope = personal_history_scope(profile)
+                if (plan.get("history_scope_digest") != scope["scope_digest"]
+                        or row["history_scope_digest"] != scope["scope_digest"]
+                        or plan.get("dataset_dependencies") != list(scope["dataset_dependencies"])):
+                    raise PitError("personal snapshot data_profile scope mismatch")
         clock = resolve_read_clock(last_as_of, conn=conn)
         observed_through = clock.observed_through
         _require_catalog(conn, "jquants_records")
@@ -646,12 +670,13 @@ def _universe_day_slices_from_connection(
         check_deadline()
         fins_eligible_at: dict[str, datetime] = {}
         latest_fins: dict[_VersionIdentity, tuple[datetime, datetime]] = {}
-        for raw in _iter_fins_rows(
-            conn, last_as_of=last_as_of, observed_through=observed_through
-        ):
-            _activate_fins_row(
-                raw, latest=latest_fins, eligible_at=fins_eligible_at
-            )
+        if require_financials:
+            for raw in _iter_fins_rows(
+                conn, last_as_of=last_as_of, observed_through=observed_through
+            ):
+                _activate_fins_row(
+                    raw, latest=latest_fins, eligible_at=fins_eligible_at
+                )
         latest_fins.clear()
         master_iter = iter(
             _iter_master_events(
@@ -828,6 +853,7 @@ def resolve_universe_day_slices(
     period_start: str,
     period_end: str,
     as_of_for_day: Mapping[str, str],
+    require_financials: bool = True,
 ) -> tuple[UniverseDaySlice, ...]:
     """Return PIT-visible trading-day master/fins facts for one period."""
 
@@ -844,6 +870,7 @@ def resolve_universe_day_slices(
             period_start=period_start,
             period_end=period_end,
             as_of_for_day=as_of_for_day,
+            require_financials=require_financials,
         )
     finally:
         if close_connection and conn is not None:

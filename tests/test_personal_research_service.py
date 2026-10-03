@@ -2044,19 +2044,6 @@ def test_unexpected_candidate_error_keeps_bounded_diagnostic(
     }
 
 
-def test_paper_run_config_admits_am_signal_pm_close_routing_string() -> None:
-    from strategies.paper import PaperRunConfig
-
-    config = PaperRunConfig(
-        start="2024-01-04",
-        end="2024-01-05",
-        execution_mode=AM_SIGNAL_PM_CLOSE_EXECUTION_MODE,
-        price_basis=PERSONAL_RETROSPECTIVE_ADJUSTED,
-    )
-    assert config.execution_mode == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
-    assert config.price_basis == PERSONAL_RETROSPECTIVE_ADJUSTED
-
-
 def test_default_specs_and_am_cohort_use_am_pm_legacy_stays_next_close() -> None:
     default_specs, default_cohort = _validated_specs(None, _policy())
     assert default_cohort is None
@@ -2234,6 +2221,24 @@ def test_am_pm_cohort_report_uses_daily_history_without_tip_am_product(
     assert contract["label"] == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
     assert contract["execution_mode"] == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
     assert report["strategy_cohort"]["cohort_id"] == "diverse-core-am-pm-v1"
+    # Same AM/PM surface and price math, explicitly master-only membership.
+    with sqlite3.connect(source) as connection:
+        connection.execute("DELETE FROM jquants_records WHERE dataset='fins_summary'")
+        connection.execute("DELETE FROM jquants_records_revisions WHERE dataset='fins_summary'")
+    price_result = PersonalResearchService(policy=_policy()).run(
+        PersonalResearchRequest(
+            data_view=bind_container_ephemeral(source, artifact_root=tmp_path / "price-only-report"),
+            period_start=start, period_end=end, cohort_id="price-master-am-pm-v1",
+        )
+    )
+    price_report = json.loads(price_result.report_json_path.read_text(encoding="utf-8"))
+    assert price_result.exit_code == 0
+    assert price_report["summary"]["analysis_status"] == "COMPLETED"
+    assert price_report["summary"]["evaluated_count"] == 4
+    assert all(candidate["validation"]["runs"] for candidate in price_report["candidates"])
+    assert price_report["data_quality"]["universe_breadth"]["status"] == "NOT_APPLICABLE"
+    assert "financials_rule" not in price_report["universe"]
+    assert "fins_summary" not in price_report["snapshot"]["manifest"]["required_datasets"]
     assert report["universe"]["decision_clock"] == "tse_morning_close_jst"
     assert result.universe_rule_digest == personal_research_universe_rule_digest(
         "topix_all", am_pm=True
