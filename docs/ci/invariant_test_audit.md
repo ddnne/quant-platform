@@ -148,6 +148,14 @@ charter for extra hostile-Python tests.
   already rejects duplicate/gapped lists. Retain the actual DB gap test;
   remove the redundant duplicate-page GROUP BY and duplicate row-count branch.
 
+- Cache import uses the real verifier inside the spool owner, not a hand-built
+  verified DTO. Extend existing shard roundtrip/WAL tests with one decode per
+  row, copied-row loss rollback and failed post-commit capacity registration.
+  Keep corruption rejection, source/selection proof equality and general
+  COMPLETE payload checks. Delete two internal verifier-call spy helpers and
+  their redundant call assertions; the existing financial selection test checks
+  actual row decode work instead. No new test function or mock framework.
+
 - Retire unused archive-cold and changelog-prune handlers with their dedicated
   fake-DB/R2 tests. The prune code could delete the intended retained tail and
   both paths added legacy D1 scan/delete capabilities without a current repo

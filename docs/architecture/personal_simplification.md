@@ -295,6 +295,15 @@ rows once, and compares total observed rows against the table count. This
 covers foreign/orphan rows without separate ownership scans or per-page COUNTs.
 Cache bytes, schema, provenance and completion digests are unchanged. Import
 remains one rollback-capable transaction; no new database, format or authority.
+The spool importer owns real shard verification and consumes its result directly;
+callers cannot supply a mutable `VerifiedCacheMonth`. Before commit it checks
+the copied identity, pagination, completion, row counts and ordinal bounds. SQL
+primary-key uniqueness plus count/min/max replaces a second transfer/decode of
+every row payload. Only after the post-commit capacity guard succeeds are pages
+registered in the existing instance-local cache. Ordinary reopened COMPLETE
+months still validate all row JSON. Synthetic work-count checks show one rather
+than two full-row decodes at import; this does not establish cloud runtime,
+billing savings or the cause of a prior timeout.
 Six unused spool convenience/read methods are removed with test-only callers
 redirected to the real verifier. Existing cache corruption/reuse tests retain
 their guarantees; foreign-month and fractional-page cases plus a real SQLite

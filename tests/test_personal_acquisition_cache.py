@@ -272,17 +272,26 @@ def test_live_and_cache_restored_page_evidence_match(tmp_path: Path) -> None:
     assert len(cached.pages) == 2
     assert cached.pages[0].pagination_out == live.pages[0].pagination_out
     assert cached.pages[-1].pagination_out is None
-    # A failure after some batch inserts must restore the prior complete month.
-    second.spool._conn.execute("""
-        CREATE TEMP TRIGGER interrupt_import BEFORE INSERT ON source_rows
-        WHEN NEW.page_ordinal = 1
-        BEGIN SELECT RAISE(ABORT, 'synthetic import interruption'); END
-    """)
-    with pytest.raises(sqlite3.IntegrityError, match="synthetic import interruption"):
-        second._load_month_from_cache("equities_bars_daily", "2024-03")
-    second.spool._conn.execute("DROP TRIGGER interrupt_import")
-    restored = second.fetch_dataset_evidenced("equities_bars_daily", date="2024-03-01")
-    assert restored == cached and second.fetch_calls == 0
+    # Both interrupted inserts and a silently missing copied row must roll
+    # back to the prior COMPLETE month, without registering a failed import.
+    for action, error, match in (
+        ("BEFORE INSERT", sqlite3.IntegrityError, "synthetic import interruption"),
+        ("AFTER INSERT", client_mod.PersonalHistoryError, "rows do not match descriptor"),
+    ):
+        body = ("SELECT RAISE(ABORT, 'synthetic import interruption');"
+                if action == "BEFORE INSERT" else
+                "DELETE FROM source_rows WHERE page_ordinal=1;")
+        second.spool._conn.execute(f"""
+            CREATE TEMP TRIGGER interrupt_import {action} ON source_rows
+            WHEN NEW.page_ordinal = 1 BEGIN {body} END
+        """)
+        with pytest.raises(error, match=match):
+            second._load_month_from_cache("equities_bars_daily", "2024-03")
+        assert ("equities_bars_daily", "2024-03") not in second.spool._verified_pages
+        assert second.spool.verified_complete_month("equities_bars_daily", "2024-03") == cached.pages
+        second.spool._conn.execute("DROP TRIGGER interrupt_import")
+        restored = second.fetch_dataset_evidenced("equities_bars_daily", date="2024-03-01")
+        assert restored == cached and second.fetch_calls == 0
     second.close()
 
 
@@ -468,6 +477,8 @@ def test_corrupt_cache_is_rejected_without_live_fallback(
             "markets_calendar", **{"from": "2024-03-10", "to": "2024-03-12"}
         )
     assert second.fetch_calls == 0
+    assert ("markets_calendar", "2024-03") not in second.spool._verified_pages
+    assert second.spool.verified_complete_month("markets_calendar", "2024-03") is None
     second.close()
 
 

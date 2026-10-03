@@ -45,7 +45,6 @@ from personal_acquisition_cache import (
     AcquisitionCacheInvalid,
     AcquisitionCacheMiss,
     AcquisitionCacheUnavailable,
-    VerifiedCacheMonth,
     build_cache_get_request,
     build_cache_put_request,
     cache_identity_document,
@@ -495,6 +494,15 @@ class AcquisitionSpool:
     def verified_complete_month(
         self, dataset: str, month: str
     ) -> tuple[SourcePage, ...] | None:
+        try:
+            return self._verify_stored_month(dataset, month)
+        except PersonalHistoryError:
+            self.clear_month(dataset, month)
+            return None
+
+    def _verify_stored_month(
+        self, dataset: str, month: str, *, validate_row_json: bool = True
+    ) -> tuple[SourcePage, ...] | None:
         state = self._conn.execute(
             "SELECT * FROM month_state WHERE dataset=? AND month=?",
             (dataset, month),
@@ -512,12 +520,9 @@ class AcquisitionSpool:
             """,
             (dataset, month),
         ).fetchall()
-        try:
-            self._assert_verified_complete(state, pages, dataset, month)
-        except PersonalHistoryError:
-            self.clear_month(dataset, month)
-            return None
-        return tuple(self._page_from_row(page) for page in pages)
+        return self._assert_verified_complete(
+            state, pages, dataset, month, validate_row_json=validate_row_json
+        )
 
     def _cached_verified_month(
         self, dataset: str, month: str
@@ -538,7 +543,9 @@ class AcquisitionSpool:
         pages: Sequence[sqlite3.Row],
         dataset: str,
         month: str,
-    ) -> None:
+        *,
+        validate_row_json: bool = True,
+    ) -> tuple[SourcePage, ...]:
         count = len(pages)
         declared = int(state["page_count"])
         if count < 1 or declared != count:
@@ -586,27 +593,43 @@ class AcquisitionSpool:
         for page in pages:
             ordinal = int(page["page_ordinal"])
             stored_count = int(page["row_count"])
-            rows = self._conn.execute(
-                """
-                SELECT row_index, row_json FROM source_rows
-                WHERE dataset=? AND month=? AND page_ordinal=?
-                ORDER BY row_index
-                """,
-                (dataset, month, ordinal),
-            )
-            observed_count = 0
-            for row in rows:
-                if int(row["row_index"]) != observed_count:
+            if validate_row_json:
+                rows = self._conn.execute(
+                    """
+                    SELECT row_index, row_json FROM source_rows
+                    WHERE dataset=? AND month=? AND page_ordinal=?
+                    ORDER BY row_index
+                    """,
+                    (dataset, month, ordinal),
+                )
+                observed_count = 0
+                for row in rows:
+                    if int(row["row_index"]) != observed_count:
+                        raise PersonalHistoryError(
+                            f"{dataset} {month} page {ordinal} rows do not match descriptor"
+                        )
+                    try:
+                        json.loads(str(row["row_json"]))
+                    except json.JSONDecodeError as error:
+                        raise PersonalHistoryError(
+                            f"{dataset} {month} page {ordinal} row is not JSON"
+                        ) from error
+                    observed_count += 1
+            else:
+                # Only the owned shard import has already decoded these exact
+                # rows. The primary key plus count/min/max proves contiguity
+                # without transferring and decoding their payloads again.
+                observed_count, first, last = self._conn.execute(
+                    """
+                    SELECT COUNT(*), MIN(row_index), MAX(row_index) FROM source_rows
+                    WHERE dataset=? AND month=? AND page_ordinal=?
+                    """,
+                    (dataset, month, ordinal),
+                ).fetchone()
+                if observed_count and (first != 0 or last != observed_count - 1):
                     raise PersonalHistoryError(
                         f"{dataset} {month} page {ordinal} rows do not match descriptor"
                     )
-                try:
-                    json.loads(str(row["row_json"]))
-                except json.JSONDecodeError as error:
-                    raise PersonalHistoryError(
-                        f"{dataset} {month} page {ordinal} row is not JSON"
-                    ) from error
-                observed_count += 1
             if observed_count != stored_count:
                 raise PersonalHistoryError(
                     f"{dataset} {month} page {ordinal} rows do not match descriptor"
@@ -618,6 +641,7 @@ class AcquisitionSpool:
             raise PersonalHistoryError(
                 f"{dataset} {month} completion digest does not match stored pages"
             )
+        return tuple(reconstructed)
 
     def clear_month(self, dataset: str, month: str) -> None:
         self._verified_pages.pop((dataset, month), None)
@@ -676,7 +700,16 @@ class AcquisitionSpool:
             )
         self._conn.commit()
 
-    def import_complete_month(self, cached: VerifiedCacheMonth) -> None:
+    def import_complete_month(
+        self, path: Path, *, expected_identity: Mapping[str, Any]
+    ) -> None:
+        # Keep the verifier result inside the importer: callers cannot supply
+        # or mutate a purportedly verified month before its atomic copy.
+        cached = verify_month_shard(
+            path,
+            expected_identity=expected_identity,
+            expected_identity_hex=cache_identity_hex(expected_identity),
+        )
         extra_bytes = sum(len(str(row["row_json"]).encode("utf-8")) for row in cached.rows) + 512
         self.guard_bounds(extra_pages=len(cached.pages), extra_bytes=extra_bytes)
         self._verified_pages.pop((cached.dataset, cached.month), None)
@@ -729,11 +762,17 @@ class AcquisitionSpool:
                 """,
                 cached.rows,
             )
+            pages = self._verify_stored_month(
+                cached.dataset, cached.month, validate_row_json=False
+            )
+            if pages is None:
+                raise AcquisitionCacheInvalid("cache import did not store a COMPLETE month")
             self._conn.commit()
         except Exception:
             self._conn.rollback()
             raise
         self.guard_bounds()
+        self._verified_pages[(cached.dataset, cached.month)] = pages
 
     def record_page(
         self,
@@ -1342,7 +1381,6 @@ class PersonalHistorySourceClient:
             self.cache_unavailable += 1
             return False
         _content_digest, raw_declared = require_cache_get_contract(headers, body)
-        identity_hex = cache_identity_hex(identity)
         work = Path(self.spool.path).parent
         sqlite_path = None
         try:
@@ -1356,22 +1394,10 @@ class PersonalHistorySourceClient:
             raw_actual = gunzip_to_path(body, sqlite_path)
             if raw_declared != raw_actual:
                 raise AcquisitionCacheInvalid("cache raw digest does not match sqlite")
-            cached = verify_month_shard(
-                sqlite_path,
-                expected_identity=identity,
-                expected_identity_hex=identity_hex,
-            )
-            if cached.dataset != dataset or cached.month != month:
-                raise AcquisitionCacheInvalid("cache month does not match request")
-            self.spool.import_complete_month(cached)
+            self.spool.import_complete_month(sqlite_path, expected_identity=identity)
         finally:
             if sqlite_path is not None:
                 sqlite_path.unlink(missing_ok=True)
-        verified = self.spool._cached_verified_month(dataset, month)
-        if verified is None:
-            raise AcquisitionCacheInvalid(
-                f"{dataset} {month} cache import failed verified COMPLETE validation"
-            )
         self.cache_hits += 1
         return True
 
