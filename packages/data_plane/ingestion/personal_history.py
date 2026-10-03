@@ -2333,8 +2333,9 @@ class PersonalHistoryHydrator:
                 official = str(row["available_at"])
                 stamp = str(row["ingested_at"])
                 latest = self._latest_compact_master(snapshot_date, code)
-                digest = _fact_content_digest(dataset, payload)
-                if latest is not None and _stored_master_content_digest(latest) == digest:
+                if latest is not None and (
+                    _stored_master_content_digest(latest) == _fact_content_digest(dataset, payload)
+                ):
                     continue
                 available_at, ingested_at = _vintage_clocks(
                     official=official,
@@ -2377,7 +2378,6 @@ class PersonalHistoryHydrator:
                 official = str(row["available_at"])
                 stamp = str(row["ingested_at"])
                 latest = self._latest_compact_bar(code, day)
-                digest = _fact_content_digest(dataset, payload)
                 if stored_clocks:
                     exact = self._connection.execute(
                         "SELECT * FROM personal_history_compact_bars "
@@ -2385,10 +2385,12 @@ class PersonalHistoryHydrator:
                         (code, day, official, stamp),
                     ).fetchone()
                     if exact is not None:
-                        if _stored_bar_content_digest(exact) != digest:
+                        if _stored_bar_content_digest(exact) != _fact_content_digest(dataset, payload):
                             raise PersonalHistoryError("stored bar vintage conflicts with committed content")
                         continue
-                if latest is not None and _stored_bar_content_digest(latest) == digest:
+                if latest is not None and (
+                    _stored_bar_content_digest(latest) == _fact_content_digest(dataset, payload)
+                ):
                     continue
                 available_at, ingested_at = (official, stamp) if stored_clocks else _vintage_clocks(
                     official=official,

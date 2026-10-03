@@ -1012,11 +1012,15 @@ class PersonalHistorySourceClient:
     def _load_structured_bar_month(self, month: str) -> None:
         if self.structured_bar_sources is not None and "*" in self.structured_bar_sources:
             indexed: dict[str, list[StructuredBarsObject]] = {}
-            for source in self.structured_bar_sources["*"]:
+            sources = self.structured_bar_sources["*"]
+            self._report_structured_progress("index", None, 0, len(sources))
+            for completed, source in enumerate(sources, 1):
                 body, _ = self._download_structured_bar_object(source)
                 months = self._index_structured_bar_object(body, source)
                 for observed_month in months:
                     indexed.setdefault(observed_month, []).append(source)
+                if completed % 32 == 0 or completed == len(sources):
+                    self._report_structured_progress("index", None, completed, len(sources))
             self.structured_bar_sources = {key: tuple(value) for key, value in indexed.items()}
         if month in self._structured_months_loaded:
             return
@@ -1046,6 +1050,19 @@ class PersonalHistorySourceClient:
                 index=index, body_offset=body_offset,
             )
         self._structured_months_loaded.add(month)
+        self._report_structured_progress("month_staged", month, len(sources), len(sources))
+
+    def _report_structured_progress(
+        self, phase: str, month: str | None, completed: int, total: int,
+    ) -> None:
+        # Flush bounded metadata before a hard stop can prevent a terminal.
+        # No keys, payloads, additional storage reads or progress authority.
+        print(json.dumps({
+            "event": "personal_stored_bars_progress", "phase": phase, "month": month,
+            "objects_complete": completed, "objects_total": total,
+            "elapsed_s": round(time.monotonic() - self._started_at, 3),
+            "reuse_bytes": self._structured_reuse_bytes, **self.cache_metrics(),
+        }, separators=(",", ":")), file=sys.stderr, flush=True)
 
     def _index_structured_bar_object(self, body: bytes, source: StructuredBarsObject) -> set[str]:
         months, index = index_structured_bars(
