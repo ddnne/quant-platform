@@ -184,9 +184,16 @@ def test_stored_bars_reader_preserves_multiday_vintages_and_checks_bytes(tmp_pat
         reuse_root = Path(client._structured_reuse.name)
         cached = client._structured_reuse_entries[(source, "2020-01")]
         assert sum(p.stat().st_size for p in reuse_root.iterdir()) <= client_mod.STRUCTURED_REUSE_MAX_BYTES
+        # Same-size corruption reaches the canonical index hash check; keeping
+        # a second transport hash must not be necessary to reject these bytes.
+        cached.write_bytes(client_mod.gzip.compress(body.replace(b"101", b"102"), mtime=0))
+        client.release_acquired_raw()
+        with pytest.raises(PersonalHistoryError, match="identity mismatch"):
+            client.fetch_dataset_evidenced("equities_bars_daily", date="2020-01-06")
+        assert client.spool.usage()[0] == 0
         cached.write_bytes(client_mod.gzip.compress(b"corrupt", mtime=0))
         client.release_acquired_raw()
-        with pytest.raises(PersonalHistoryError, match="reuse size/digest"):
+        with pytest.raises(PersonalHistoryError, match="reuse size mismatch"):
             client.fetch_dataset_evidenced("equities_bars_daily", date="2020-01-06")
         assert len(downloads) == 2  # corruption must not silently select different bytes
     finally:
@@ -227,6 +234,10 @@ def test_stored_bars_month_scope_retains_only_requested_rows_but_validates_all(t
             "structured/jsonl/equities_bars_daily/dt=2020-01-06/two-months.jsonl",
             hashlib.sha256(body).hexdigest(), len(body), len(rows),
         )
+    # The producer's string payload stays unchanged, and month selection uses
+    # the normalized event date, not the textual prefix of an ISO week clock.
+    rows[1]["payload"] = json.dumps(rows[1]["payload"])
+    rows[1]["event_time"] = "2020-W06-1T15:00:00+09:00"
     body, source = encode()
     months, index = index_structured_bars(body, source, max_object_bytes=len(body), max_spans=3)
     assert months == {"2020-01", "2020-02"} and index is not None
@@ -258,6 +269,7 @@ def test_stored_bars_month_scope_retains_only_requested_rows_but_validates_all(t
 
     # Use one enclosing range, not one GET per span. Original ordinals, vintages
     # and row selection survive interleaved months and spool resets.
+    rows[1]["payload"] = json.loads(rows[1]["payload"])
     rows[1]["natural_key"]["Code"] = "12340"
     padding = {
         **rows[1], "natural_key": {"Code": "12340", "Date": "2020-03-03"},

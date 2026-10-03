@@ -1133,8 +1133,8 @@ class PersonalHistorySourceClient:
                 # Same span digest/ordinals as the R2 range path; checked inside
                 # the scratch transaction before selected rows are committed.
                 return body, window[0]
-            if len(body) != source.size or hashlib.sha256(body).hexdigest() != source.sha256:
-                raise PersonalHistoryError("stored bars reuse size/digest mismatch")
+            if len(body) != source.size:
+                raise PersonalHistoryError("stored bars reuse size mismatch")
             return body, None
         headers = {"accept-encoding": "identity"}
         if window is not None:
@@ -1152,8 +1152,11 @@ class PersonalHistorySourceClient:
             # The indexed reader checks the original verified selected-span digest
             # inside the scratch transaction, before any rows are committed.
             return body, start
-        if len(body) != source.size or hashlib.sha256(body).hexdigest() != source.sha256:
-            raise PersonalHistoryError("stored bars object size/digest mismatch")
+        if len(body) != source.size:
+            raise PersonalHistoryError("stored bars object size mismatch")
+        # Both callers immediately enter the whole-object verifier or the
+        # verified index reader before staging. That owner checks the pinned
+        # whole hash (or selected-span hash); transport does not hash it again.
         return body, None
 
     def _governed_request(

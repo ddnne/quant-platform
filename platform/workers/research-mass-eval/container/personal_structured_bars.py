@@ -88,10 +88,10 @@ def index_structured_bars(
         while not stream.readline().strip():
             start = stream.tell()
         end = stream.tell()
-        payload = envelope["payload"]
-        if isinstance(payload, str):
-            payload = json.loads(payload)
-        month = payload["Date"][:7]
+        # The verifier already checked payload.Date against this parsed clock.
+        # Stored payloads are strings: do not decode their complete JSON again
+        # just to recover the month. Normalize, since ISO week dates are valid.
+        month = _clock(envelope["event_time"], "event_time").date().isoformat()[:7]
         months.add(month)
         if span_count <= max_spans:
             if month == previous_month:
