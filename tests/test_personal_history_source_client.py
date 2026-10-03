@@ -265,8 +265,27 @@ def test_stored_bars_month_scope_retains_only_requested_rows_but_validates_all(t
         "available_at": "2020-03-03T15:00:00+09:00",
         "payload": {**rows[1]["payload"], "Date": "2020-03-03"},
     }
-    rows = [padding, *rows, padding]
+    prefix = {
+        **padding, "natural_key": {"Code": "12340", "Date": "2019-12-03"},
+        "event_time": "2019-12-03T15:00:00+09:00",
+        "available_at": "2019-12-03T15:00:00+09:00",
+        "payload": {
+            **padding["payload"], "Date": "2019-12-03",
+            "unused_history": "".join(hashlib.sha256(str(n).encode()).hexdigest() for n in range(128)),
+        },
+    }
+    base_rows = [padding, *rows, padding]
+    rows = [prefix, *base_rows]
     body, source = encode()
+    _, bounded_index = index_structured_bars(
+        body, source, max_object_bytes=len(body), max_spans=10,
+    )
+    target_windows = [bounded_index.window(month) for month in ("2020-01", "2020-02")]
+    tight_reuse_bytes = sum(
+        len(client_mod.gzip.compress(body[start:end], compresslevel=1, mtime=0))
+        for start, end in target_windows
+    )
+    assert tight_reuse_bytes < len(client_mod.gzip.compress(body, compresslevel=1, mtime=0))
     downloaded = []
     corrupt_range = False
     class RangeResponse(io.BytesIO):
@@ -289,8 +308,13 @@ def test_stored_bars_month_scope_retains_only_requested_rows_but_validates_all(t
             response.headers = response_headers
             response.url = request.full_url
             return response
-    for reuse_bytes, period_end in ((0, "2020-02-28"), (1024 ** 3, "2020-02-28"),
-                                  (1024 ** 3, "2020-03-31")):
+    # The last case fits only the requested months, not the historical prefix.
+    for reuse_bytes, period_end, bounded in (
+        (0, "2020-02-28", False), (1024 ** 3, "2020-02-28", False),
+        (1024 ** 3, "2020-03-31", False), (tight_reuse_bytes, "2020-02-28", True),
+    ):
+        rows = [prefix, *base_rows] if bounded else base_rows
+        body, source = encode()
         monkeypatch.setattr(client_mod, "STRUCTURED_REUSE_MAX_BYTES", reuse_bytes)
         downloaded.clear()
         corrupt_range = False
@@ -298,6 +322,7 @@ def test_stored_bars_month_scope_retains_only_requested_rows_but_validates_all(t
             environment="staging", period_end=period_end, cache_only=True,
             spool_path=tmp_path / "range-reader.sqlite", r2_opener=R2(),
             structured_bar_sources={"*": (source,)},
+            reuse_start="2020-01-01",
         )
         try:
             for day in ("2020-01-06", "2020-02-03"):
@@ -1992,6 +2017,15 @@ def test_stored_bars_hydrate_through_compact_store_without_retimestamping(tmp_pa
         )
         hydrator = PersonalHistoryHydrator(client=client, store=store, plan=plan)
         assert hydrator._insert_compact_facts("equities_bars_daily", replay_rows, stored_clocks=True) == 0
+        # Both the latest vintage and an older corrected vintage reject a
+        # different value at the same clocks; replay never overwrites either.
+        for stamp in ("2025-02-01", "2025-02-02"):
+            original = next(row for row in replay_rows if row["ingested_at"].startswith(stamp))
+            payload = json.loads(original["payload"])
+            conflict = {**original, "payload": json.dumps({**payload, "Close": payload["Close"] + 10})}
+            with pytest.raises(PersonalHistoryError, match="vintage conflicts"):
+                hydrator._insert_compact_facts("equities_bars_daily", [conflict], stored_clocks=True)
+        assert store._conn.execute("SELECT * FROM personal_history_compact_bars").fetchall() == rows
         client.release_acquired_raw()
         evidence = store._conn.execute("SELECT page_evidence_json FROM personal_history_segments WHERE dataset='equities_bars_daily'").fetchall()
         assert evidence and all(json.loads(row[0])[0]["kind"] == "stored_structured_object" for row in evidence)
