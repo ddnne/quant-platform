@@ -251,14 +251,25 @@ Initial whole-object verification is retained; selected-span hashes are derived
 from that verified body, without rehashing overlapping monthly windows. The
 reader keeps original ordinals, vintages and full-object provenance, and rejects
 short responses or changed selected spans without a second full GET. Interleaved
-input uses one enclosing range, not a request per span. Cached gzip reads seek
-to that range rather than returning and hashing the whole object every month;
-gzip still decompresses the preceding prefix. Inputs without a retained index
-keep full verification. No new persistent cache or cloud resource is added.
-Existing tests cover both transports, month scratch resets and corrupt spans.
-GET count is unchanged; smaller selected buffers and synthetic timings are not
-whole-snapshot, production runtime or invoice savings. Interleaved layouts can
-save less. Changes do not retroactively improve a failed research run.
+input uses one enclosing range, not a request per span. The same 1 GiB cache now
+stores verified month-window gzip files within the planned calendar range,
+avoiding prefix reinflation for each month. If enclosing windows together exceed
+the object size, retain one shared full gzip instead of duplicating them; this
+fallback still seeks/decompresses the prefix. Inputs without a retained index
+keep full verification and one shared gzip only when a requested month exists.
+No new persistent cache, format or cloud resource is added. Existing behavior
+tests cover both transports, month resets, shared fallback and corrupt spans;
+no new test function or source-text check is added.
+
+A synthetic 48 MiB body with 24 equal 2 MiB month windows gave a final-window
+read median of 6.62 ms with full-gzip seeking versus 0.179 ms with month gzip;
+returned bytes matched. Total compressed bytes rose from 376,902 to 385,104,
+showing the per-window dictionary/header tradeoff. These are isolated synthetic
+reads, not whole-snapshot or invoice savings. Initial flat-input validation
+still reads all 927 objects (26,859,132,390 bytes for the pinned trial manifest).
+Capacity fallback can still require R2 rereads. Actual runtime, transferred bytes
+and billing must be measured from completed jobs; this source change does not
+alter the already-running a4 image or retroactively improve a failed run.
 
 Coverage refresh used to verify each signed receipt for observed history,
 candidate ranking, segment evaluation and selected-run persistence. It now

@@ -2633,6 +2633,7 @@ def execute_snapshot_job(
                     r2_opener=urllib.request,
                     cache_only=job.cache_only,
                     structured_bar_manifest_sha256=job.structured_bar_manifest_sha256,
+                    reuse_start=plan.calendar_start,
                 )
             ))(spec)
             hydrator = PersonalHistoryHydrator(

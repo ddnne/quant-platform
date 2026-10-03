@@ -182,7 +182,7 @@ def test_stored_bars_reader_preserves_multiday_vintages_and_checks_bytes(tmp_pat
         assert client.cache_metrics()["structured_full_object_scans"] == 1
         assert client.cache_metrics()["structured_indexed_month_reads"] == 2
         reuse_root = Path(client._structured_reuse.name)
-        cached = client._structured_reuse_entries[source]
+        cached = client._structured_reuse_entries[(source, "2020-01")]
         assert sum(p.stat().st_size for p in reuse_root.iterdir()) <= client_mod.STRUCTURED_REUSE_MAX_BYTES
         cached.write_bytes(client_mod.gzip.compress(b"corrupt", mtime=0))
         client.release_acquired_raw()
@@ -289,12 +289,13 @@ def test_stored_bars_month_scope_retains_only_requested_rows_but_validates_all(t
             response.headers = response_headers
             response.url = request.full_url
             return response
-    for reuse_bytes in (0, 1024 ** 3):
+    for reuse_bytes, period_end in ((0, "2020-02-28"), (1024 ** 3, "2020-02-28"),
+                                  (1024 ** 3, "2020-03-31")):
         monkeypatch.setattr(client_mod, "STRUCTURED_REUSE_MAX_BYTES", reuse_bytes)
         downloaded.clear()
         corrupt_range = False
         client = client_mod.PersonalHistorySourceClient(
-            environment="staging", period_end="2020-02-28", cache_only=True,
+            environment="staging", period_end=period_end, cache_only=True,
             spool_path=tmp_path / "range-reader.sqlite", r2_opener=R2(),
             structured_bar_sources={"*": (source,)},
         )
@@ -307,8 +308,14 @@ def test_stored_bars_month_scope_retains_only_requested_rows_but_validates_all(t
             assert downloaded[0] == len(body)
             if reuse_bytes:
                 assert len(downloaded) == 1  # no refetch after month scratch reset
-                cached = client._structured_reuse_entries[source]
-                cached.write_bytes(client_mod.gzip.compress(body.replace(b"101", b"102"), mtime=0))
+                months = {"2020-01", "2020-02"} if period_end == "2020-02-28" else {None}
+                assert {month for _, month in client._structured_reuse_entries} == months
+                cache_month = "2020-02" if period_end == "2020-02-28" else None
+                cached = client._structured_reuse_entries[(source, cache_month)]
+                start, end = client._structured_indexes[source].window("2020-02")
+                selected = client_mod.gzip.decompress(cached.read_bytes())
+                assert selected == (body[start:end] if cache_month else body)
+                cached.write_bytes(client_mod.gzip.compress(selected.replace(b"101", b"102"), mtime=0))
             else:
                 assert len(downloaded) == 3  # first verification + two monthly ranges
                 assert 0 < downloaded[2] < downloaded[1] < len(body)
