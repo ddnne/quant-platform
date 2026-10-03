@@ -24,13 +24,10 @@ from .ratio_features import (
     _FUNDAMENTAL_DATASETS,
     _PRICE_DATASETS,
     _adjusted_closes,
-    _comparable_key,
     _finite_number,
-    _pick,
     _pick_text,
-    _ratio_or_none,
+    _pit_fundamental_ratio,
     _sample_volatility,
-    _statement_observations,
     _validate_windows,
 )
 from .registry import register
@@ -426,174 +423,8 @@ def _am_session_fundamental_ratio(ctx: Any) -> FeatureOutput:
     if mode in {"book_to_price", "earnings_to_price"}:
         probe = ctx.get_equity_bars_daily(code=code, latest_n=2)
         _require_am_session_bars(probe)
-    result = ctx.get_jquants_records(dataset="fins_summary", code=code)
-    rows = list(result.rows) if result is not None and result.rows else []
-    observations = _statement_observations(rows)
-    common: dict[str, Any] = {
-        "code": code,
-        "mode": mode,
-        "rows_seen": len(rows),
-        "statement_rows_seen": len(observations),
-        "datasets": list(_FUNDAMENTAL_DATASETS),
-        "time_semantics": "retrospective_not_point_in_time",
-        "lifecycle": "DRAFT_only",
-        "live_trading_eligible": False,
-        "session_view": AM_SESSION_VIEW,
-    }
-    if not observations:
-        return FeatureOutput(
-            value=None,
-            metadata={**common, "reason": "no PIT-visible financial statement"},
-        )
-    current = observations[-1]
-    payload = current["payload"]
-    current_meta = {
-        **common,
-        "statement_period_end": _pick_text(payload, "period_end"),
-        "statement_period_type": _pick_text(payload, "period_type"),
-        "statement_document_type": _pick_text(payload, "document_type"),
-        "disclosure_date": _pick_text(payload, "disclosed_date"),
-        "statement_available_at": current.get("available_at"),
-    }
-
-    if mode in {"book_to_price", "earnings_to_price"}:
-        alias_name = (
-            "book_value_per_share"
-            if mode == "book_to_price"
-            else "earnings_per_share"
-        )
-        numerator, key = _pick(payload, alias_name)
-        if numerator is None or key is None:
-            return FeatureOutput(
-                value=None,
-                metadata={**current_meta, "reason": f"{alias_name} missing"},
-            )
-        return _am_per_share_ratio(
-            ctx,
-            code=code,
-            observation=current,
-            numerator=numerator,
-            numerator_key=key,
-            mode=mode,
-        )
-
-    if mode == "roe":
-        value, field = _pick(payload, "roe")
-        return FeatureOutput(
-            value=value,
-            metadata={
-                **current_meta,
-                "value_field": field,
-                "ratio_source": "reported",
-                **({"reason": "roe missing or invalid"} if value is None else {}),
-            },
-        )
-
-    if mode in {"total_assets", "net_sales"}:
-        alias_name = "total_assets" if mode == "total_assets" else "sales"
-        value, field = _pick(payload, alias_name)
-        if value is None or value <= 0.0:
-            return FeatureOutput(
-                value=None,
-                metadata={
-                    **current_meta,
-                    "reason": f"{alias_name} missing, zero, or invalid",
-                    "relative_size_semantics": (
-                        "level_only; relative size exists only after "
-                        "sector33 percentile ranking by FactorRankRule"
-                    ),
-                },
-            )
-        return FeatureOutput(
-            value=value,
-            metadata={
-                **current_meta,
-                "value_field": field,
-                "ratio_source": "same_statement_row_level",
-                "relative_size_semantics": (
-                    "level_only; relative size exists only after sector33 "
-                    "percentile ranking by FactorRankRule"
-                ),
-                "market_cap_proxy": False,
-            },
-        )
-
-    if mode in {"sales_growth", "assets_growth"}:
-        alias_name = "sales" if mode == "sales_growth" else "total_assets"
-        current_value, current_field = _pick(payload, alias_name)
-        comparable = _comparable_key(payload)
-        period_end = _pick_text(payload, "period_end")
-        if comparable is None or not period_end:
-            return FeatureOutput(
-                value=None,
-                metadata={
-                    **current_meta,
-                    "reason": "current statement lacks comparable period identity",
-                },
-            )
-        prior: Mapping[str, Any] | None = None
-        for candidate in reversed(observations[:-1]):
-            prior_payload = candidate["payload"]
-            if _pick_text(prior_payload, "period_end") == period_end:
-                continue
-            if _comparable_key(prior_payload) == comparable:
-                prior = candidate
-                break
-        if prior is None:
-            return FeatureOutput(
-                value=None,
-                metadata={**current_meta, "reason": "no prior comparable statement"},
-            )
-        prior_payload = prior["payload"]
-        prior_value, prior_field = _pick(prior_payload, alias_name)
-        ratio, reason = _ratio_or_none(current_value, prior_value)
-        return FeatureOutput(
-            value=None if ratio is None else ratio - 1.0,
-            metadata={
-                **current_meta,
-                "current_value": current_value,
-                "current_field": current_field,
-                "prior_value": prior_value,
-                "prior_field": prior_field,
-                "prior_period_end": _pick_text(prior_payload, "period_end"),
-                "prior_disclosure_date": _pick_text(
-                    prior_payload, "disclosed_date"
-                ),
-                **({"reason": reason} if reason else {}),
-            },
-        )
-
-    if mode == "net_margin":
-        numerator_name, denominator_name = "profit", "sales"
-    elif mode == "asset_turnover":
-        numerator_name, denominator_name = "sales", "total_assets"
-    else:
-        direct, direct_field = _pick(payload, "equity_ratio")
-        if direct is not None:
-            return FeatureOutput(
-                value=direct,
-                metadata={
-                    **current_meta,
-                    "value_field": direct_field,
-                    "ratio_source": "reported",
-                },
-            )
-        numerator_name, denominator_name = "equity", "total_assets"
-
-    numerator, numerator_field = _pick(payload, numerator_name)
-    denominator, denominator_field = _pick(payload, denominator_name)
-    value, reason = _ratio_or_none(numerator, denominator)
-    return FeatureOutput(
-        value=value,
-        metadata={
-            **current_meta,
-            "numerator": numerator,
-            "numerator_field": numerator_field,
-            "denominator": denominator,
-            "denominator_field": denominator_field,
-            "ratio_source": "same_statement_row",
-            **({"reason": reason} if reason else {}),
-        },
+    return _pit_fundamental_ratio(
+        ctx, per_share_ratio=_am_per_share_ratio, session_view=AM_SESSION_VIEW,
     )
 
 

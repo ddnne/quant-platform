@@ -324,6 +324,16 @@ the final artifact check. A freshly materialized snapshot already returns
 verified, so its caller no longer immediately repeats the full hash/catalog
 verification. These savings concern cloud scratch SQLite/CPU, not D1 billing.
 
+Financial statement selection, alias handling, comparable-period growth and
+ratios now have one calculation owner for ordinary and AM-session DRAFT
+features. AM capability checks, strict-prior price selection and split blackout
+stay in the existing session-specific price callback. Dataset reads, original
+clocks and result metadata are unchanged; this is not full dependency-scope
+closure, READY acceptance or measured cloud cost reduction. Remove the copied
+registry/mode constant test; the existing known-value alias cases now exercise
+both feature entries and compare metadata apart from the explicit session tag.
+Existing statement-revision, missing-value, AM causality and split tests remain.
+
 ## Next acceptance work
 
 Ops projection no longer mints legacy B0/B4 attestations. That producer always

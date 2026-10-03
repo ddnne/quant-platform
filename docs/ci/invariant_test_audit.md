@@ -93,6 +93,15 @@ charter for extra hostile-Python tests.
 
 ## Consolidation decisions
 
+- Remove the ratio-feature registry identity and copied mode-set test. Actual
+  registry-backed computations, compiled dependencies and AM service tests
+  exercise those entries; literal equality adds no numerical guarantee.
+  Shared financial math replaces the copied AM body, and the existing
+  known-input ratio test now calls both entries and checks values/metadata.
+  Keep prior-statement selection, missing data, strict-prior AM prices and
+  split-blackout behavior tests. Do not add a helper-source or catalog-count
+  test to replace the removed constant assertions.
+
 - Lease takeover uses the existing held timer and injected lease clock to
   drive the callback actually scheduled by the manager, before and after
   expiry. Keep the real child execution, terminal result, execution count and

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import math
 from statistics import median
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from price_basis import PERSONAL_RETROSPECTIVE_ADJUSTED
 
@@ -514,7 +514,13 @@ def _per_share_ratio(
     return FeatureOutput(value=numerator / close, metadata=metadata)
 
 
-def _pit_fundamental_ratio(ctx: Any) -> FeatureOutput:
+def _pit_fundamental_ratio(
+    ctx: Any,
+    *,
+    per_share_ratio: Callable[..., FeatureOutput] = _per_share_ratio,
+    session_view: str | None = None,
+) -> FeatureOutput:
+    """One statement-selection/calculation owner; session price policy stays separate."""
     require_feature_datasets(
         _FUNDAMENTAL_DATASETS, context="feature pit_fundamental_ratio"
     )
@@ -537,6 +543,8 @@ def _pit_fundamental_ratio(ctx: Any) -> FeatureOutput:
         "lifecycle": "DRAFT_only",
         "live_trading_eligible": False,
     }
+    if session_view is not None:
+        common["session_view"] = session_view
     if not observations:
         return FeatureOutput(
             value=None,
@@ -565,7 +573,7 @@ def _pit_fundamental_ratio(ctx: Any) -> FeatureOutput:
                 value=None,
                 metadata={**current_meta, "reason": f"{alias_name} missing"},
             )
-        return _per_share_ratio(
+        return per_share_ratio(
             ctx,
             code=code,
             observation=current,
