@@ -95,6 +95,13 @@ remain separate open work. Do not add READY/Receipt authorities to close that
 DRAFT gap. One real SQLite boundary/numeric regression replaces the previous
 getter-routing spy and context-shape-only tests.
 
+Dataset membership is now checked at the same runtime entry for every feature,
+including legacy definitions without field/window scopes. Generic catalog and
+financial-state reads use the requested dataset identity, and an undeclared read
+is refused before storage. The existing boundary regression covers this without
+new test functions or authorities. This closes membership bypass only; it does
+not establish missing AM/financial scopes or DRAFT closure binding.
+
 Personal `am_signal_pm_close` uses historical morning fields inside daily bars,
 not the tip-only AM endpoint. Its closure and coverage read use that same daily
 source and canonical retrospective field mask. A nonpositive/missing morning
