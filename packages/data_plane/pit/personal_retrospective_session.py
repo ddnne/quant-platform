@@ -22,7 +22,12 @@ from ingestion.jquants.normalize import CLOSE_CHANGE_DATE
 from .api import get_equity_bars_daily
 from .models import PIT_API_VERSION
 from .query import snapshot_observed_through
-from .read_clock import _NOT_GIVEN, normalize_as_of
+from .read_clock import (
+    DRAFT_OBSERVATION_LABEL,
+    _NOT_GIVEN,
+    bound_read_clock,
+    normalize_as_of,
+)
 from ops.receipt_product import _aware_instant
 
 _MORNING_CLOSE_SUFFIX = "T11:30:00+09:00"
@@ -209,6 +214,17 @@ def _source_row_visible_at(row: Mapping[str, Any], as_of: str) -> bool:
     return available <= decision and event <= decision
 
 
+def _session_observed_through(db_path: Any) -> str:
+    clock = bound_read_clock()
+    if (
+        clock is not None
+        and not clock.promotable
+        and clock.observation_label == DRAFT_OBSERVATION_LABEL
+    ):
+        return clock.observed_through
+    return snapshot_observed_through(db_path)
+
+
 def personal_retrospective_am_signal_from_source_rows(
     source_rows: Sequence[Mapping[str, Any]],
     *,
@@ -355,7 +371,7 @@ def get_personal_retrospective_am_signal_equity_bars_daily(
         )
     _require_latest_n(latest_n, code=code, codes=codes)
     decision_date = as_of_iso[:10]
-    d_source_read_as_of = snapshot_observed_through(db_path)
+    d_source_read_as_of = _session_observed_through(db_path)
     if as_of_iso > d_source_read_as_of:
         raise ValueError(
             "personal retrospective AM signal as_of must not be later than "
@@ -441,7 +457,7 @@ def get_personal_retrospective_pm_fill_equity_bars_daily(
 ) -> PersonalRetrospectiveSessionResult:
     """D PM adjusted close (AAdjC) only; no fallback to full close/AdjC."""
     day = _as_day(session_date)
-    observed = snapshot_observed_through(db_path)
+    observed = _session_observed_through(db_path)
     as_of_iso = normalize_as_of(as_of)
     official = _official_pm_close(day)
     if as_of_iso < official or as_of_iso > observed:

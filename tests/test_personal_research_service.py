@@ -1995,7 +1995,7 @@ def test_am_pm_closures_bind_contract_and_keep_full_daily_bars() -> None:
     assert legacy_selector.to_dict()["decision_clock"] == "tse_session_close_jst"
     assert am[0].plan_digest != legacy[0].plan_digest
     assert "equities_bars_daily" in am[0].required_datasets
-    assert "equities_bars_daily_am" in am[0].required_datasets
+    assert "equities_bars_daily_am" not in am[0].required_datasets
 
 
 def test_comparison_carries_contract_identity_and_refuses_cross_contract_rank() -> None:
@@ -2071,19 +2071,38 @@ def test_comparison_carries_contract_identity_and_refuses_cross_contract_rank() 
         pool_or_rank_personal_comparison(mixed)
 
 
-def test_am_pm_cohort_report_binds_execution_contract_without_core_mode(
+@pytest.mark.parametrize("personal_db", ["2025-06-30"], indirect=True)
+def test_am_pm_cohort_report_uses_daily_history_without_tip_am_product(
     personal_db: tuple[Path, str, str], tmp_path: Path
 ) -> None:
     source, start, end = personal_db
+    with sqlite3.connect(source) as connection:
+        connection.execute(
+            "DELETE FROM jquants_records WHERE dataset='equities_bars_daily_am'"
+        )
+    with sqlite3.connect(source) as connection:
+        connection.execute(
+            "UPDATE jquants_daily_bars SET "
+            "morning_adjustment_close=adjustment_close, "
+            "raw_payload=json_object('MC',close)"
+        )
+    from cf_platform.container_data_view import bind_container_ephemeral
+
     result = PersonalResearchService(policy=_policy()).run(
         PersonalResearchRequest(
-            data_view=OfflineFixture(artifact_root=tmp_path / "am-pm-report").bind(source, decision_cutoff="morning_close"),
+            data_view=bind_container_ephemeral(
+                source, artifact_root=tmp_path / "am-pm-report"
+            ),
             period_start=start,
             period_end=end,
             cohort_id="diverse-core-am-pm-v1",
         )
     )
     report = json.loads(result.report_json_path.read_text(encoding="utf-8"))
+    assert result.exit_code == 0
+    assert report["summary"]["analysis_status"] == "COMPLETED"
+    assert report["summary"]["evaluated_count"] == 4
+    assert all(candidate["validation"]["runs"] for candidate in report["candidates"])
     contract = report["execution_contract"]
     assert result.execution_mode == AM_SIGNAL_PM_CLOSE_EXECUTION_MODE
     assert result.execution_contract_digest == contract["contract_digest"]
@@ -2114,7 +2133,7 @@ def test_am_pm_cohort_report_binds_execution_contract_without_core_mode(
     assert "Cohort: `diverse-core-am-pm-v1`" in markdown
     assert "am_signal_pm_close" in markdown
     assert "Execution contract" in markdown
-    assert any(
+    assert not any(
         "equities_bars_daily_am" in closure["required_datasets"]
         for closure in report["dependency_closures"]
     )
@@ -2122,6 +2141,10 @@ def test_am_pm_cohort_report_binds_execution_contract_without_core_mode(
         "equities_bars_daily" in closure["required_datasets"]
         for closure in report["dependency_closures"]
     )
+    assert report["data_quality"]["market_bar_coverage"]["evidence_kind"] == (
+        "RETROSPECTIVE_FIELD_TIME"
+    )
+    assert report["data_quality"]["market_bar_coverage"]["publication_claim"] is False
 
 
 def _direct_universe(*days: str, codes: tuple[str, ...] = ("1301",)):
@@ -2157,6 +2180,7 @@ def _install_compact_v7_bars(
                 "event_time",
                 "available_at",
                 "ingested_at",
+                "morning_adjustment_close",
             ):
                 if key in row and row[key] is not None:
                     kwargs[key] = row[key]
@@ -2201,10 +2225,10 @@ def test_compact_v7_observed_bar_breadth_counts_exact_schema_rows(
     _install_compact_v7_bars(
         path,
         (
-            _compact_bar("1301", days[0]),
-            _compact_bar("1301", days[1]),
-            _compact_bar("1302", days[0]),
-            _compact_bar("1302", days[1]),
+            {**_compact_bar("1301", days[0]), "morning_adjustment_close": 99.0},
+            {**_compact_bar("1301", days[1]), "morning_adjustment_close": 101.0},
+            {**_compact_bar("1302", days[0]), "morning_adjustment_close": 102.0},
+            {**_compact_bar("1302", days[1]), "morning_adjustment_close": 103.0},
         ),
     )
     universe = _direct_universe(*days, codes=("1301", "1302"))
@@ -2215,6 +2239,32 @@ def test_compact_v7_observed_bar_breadth_counts_exact_schema_rows(
     assert coverage["version"] == PERSONAL_BAR_COVERAGE_EVIDENCE
     assert coverage["observed_rows"] == 4
     assert coverage["missing_rows"] == 0
+
+    view = OfflineFixture(artifact_root=tmp_path / "am-coverage").bind(
+        path, decision_cutoff="morning_close"
+    )
+    am_coverage = view.observed_bar_coverage(universe, minimum_ratio=1.0)
+    assert am_coverage["status"] == "PASS"
+    assert am_coverage["observed_rows"] == 4
+    assert am_coverage["bar_dataset"] == "equities_bars_daily"
+    assert am_coverage["evidence_kind"] == "RETROSPECTIVE_FIELD_TIME"
+    assert am_coverage["publication_claim"] is False
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            f"SELECT MIN(available_at) FROM {PERSONAL_HISTORY_COMPACT_BARS_TABLE}"
+        ).fetchone()[0] == f"{days[0]}T15:00:00+09:00"
+        connection.execute(
+            f"UPDATE {PERSONAL_HISTORY_COMPACT_BARS_TABLE} "
+            "SET morning_adjustment_close=0 WHERE code='1302' AND date=?",
+            (days[1],),
+        )
+    missing_view = OfflineFixture(artifact_root=tmp_path / "am-missing").bind(
+        path, decision_cutoff="morning_close"
+    )
+    missing = missing_view.observed_bar_coverage(universe, minimum_ratio=1.0)
+    assert missing["status"] == "FAIL"
+    assert missing["observed_rows"] == 3
+    assert missing["missing_sample"] == [{"date": days[1], "code": "1302"}]
 
 
 def _thin_topix_coverage_fixture(

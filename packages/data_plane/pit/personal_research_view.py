@@ -19,7 +19,7 @@ import sys
 import tempfile
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -45,6 +45,7 @@ from .read_clock import (
     install_read_clock,
     read_snapshot_observed_through,
 )
+from .personal_retrospective_session import AM_SIGNAL_SESSION_VIEW
 from .personal_draft import (
     _compact_fail_reason,
     _corporate_fail,
@@ -632,13 +633,18 @@ class _SqliteDraftDataView(PersonalResearchDataView):
             raise PersonalResearchViewError(
                 "DRAFT snapshot observation cannot be promotable"
             )
-        self._identity = identity
         if identity.observed_through:
             self._observed_through = identity.observed_through
             self._observation_label = (
                 identity.observation_label or SNAPSHOT_OBSERVATION_LABEL
             )
             self._observation_promotable = bool(identity.observation_promotable)
+        self._identity = replace(
+            identity,
+            observed_through=self._observed_through,
+            observation_label=self._observation_label,
+            observation_promotable=self._observation_promotable,
+        )
 
     def snapshot_identity(self) -> SnapshotIdentity:
         if self._identity is None:
@@ -931,36 +937,34 @@ class _SqliteDraftDataView(PersonalResearchDataView):
     ) -> dict[str, Any]:
         check_deadline()
         memberships = tuple(getattr(universe, "decision_memberships", ()) or ())
-        if not memberships:
-            return observed_market_bar_coverage(
-                self._source,
-                universe,
-                minimum_ratio=minimum_ratio,
-                bar_dataset=(
-                    "equities_bars_daily_am"
-                    if self._cutoff == DEFAULT_DECISION_CUTOFF
-                    else "equities_bars_daily"
-                ),
-                as_of_for_day={},
-            )
         as_of_for_day = {
             str(day)[:10]: decision_cutoff_as_of(str(day)[:10], self._cutoff)
             for day, _codes in memberships
         }
-        last_as_of = as_of_for_day[str(memberships[-1][0])[:10]]
-        bar_dataset = (
-            "equities_bars_daily_am"
-            if self._cutoff == DEFAULT_DECISION_CUTOFF
-            else "equities_bars_daily"
+        last_as_of = (
+            as_of_for_day[str(memberships[-1][0])[:10]]
+            if memberships else self._observed_through
         )
+        retrospective_am = self._cutoff == DEFAULT_DECISION_CUTOFF
         with install_read_clock(self._decision_clock(last_as_of)):
-            return observed_market_bar_coverage(
+            evidence = observed_market_bar_coverage(
                 self._source,
                 universe,
                 minimum_ratio=minimum_ratio,
-                bar_dataset=bar_dataset,
+                bar_dataset="equities_bars_daily",
                 as_of_for_day=as_of_for_day,
+                session_view=AM_SIGNAL_SESSION_VIEW if retrospective_am else None,
             )
+        if retrospective_am:
+            evidence = {
+                **evidence,
+                "evidence_kind": "RETROSPECTIVE_FIELD_TIME",
+                "session_view": AM_SIGNAL_SESSION_VIEW,
+                "historical_source": "equities_bars_daily",
+                "publication_claim": False,
+                "contemporaneous_observation_unproven": True,
+            }
+        return evidence
 
     def source_sync_evidence(
         self,

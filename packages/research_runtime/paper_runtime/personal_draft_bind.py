@@ -81,7 +81,7 @@ def prepare_draft_snapshot(
     if callable(bind):
         bind(identity)
     view._prepared_snapshot = snapshot  # type: ignore[attr-defined]
-    return identity
+    return view.snapshot_identity()
 
 
 def verify_draft_snapshot(view: PersonalResearchDataView) -> SnapshotIdentity:
@@ -150,7 +150,9 @@ def run_bound_personal_paper(
     strategy = interpret_strategy_spec(spec)
     bound = replace(config, db_path=db_path)
     try:
-        with personal_paper_read_session(db_path):
+        with personal_paper_read_session(
+            db_path, observed_through=view.snapshot_identity().observed_through
+        ):
             result = run_paper(
                 strategy, bound, store=None, expected_snapshot_id=expected_snapshot_id,
             )

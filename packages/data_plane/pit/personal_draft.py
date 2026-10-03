@@ -30,13 +30,25 @@ from .api import (
 from .errors import PitError
 from .governed_am_view import am_product_row_matches_session
 from .query import (
+    _require_unmanaged_draft,
     _readonly_connection_scope,
     _scoped_read_connection,
     connect_readonly,
     normalize_as_of,
     run_query,
 )
-from .read_clock import bound_read_clock, resolve_read_clock
+from .read_clock import (
+    DRAFT_OBSERVATION_LABEL,
+    bound_read_clock,
+    install_read_clock,
+    resolve_read_clock,
+)
+from .history_reads import HISTORY_CODE_BATCH
+from .personal_retrospective_session import (
+    AM_SIGNAL_SESSION_VIEW,
+    _positive_price,
+    get_personal_retrospective_am_signal_equity_bars_daily,
+)
 
 PERSONAL_BAR_COVERAGE_EVIDENCE = "observed-pit-market-breadth/v1"
 UNMANAGED_DRAFT_BASIS = "unmanaged_draft"
@@ -55,11 +67,24 @@ _AM_SIGNAL_PRICE_SQL = """COALESCE(
 
 
 @contextmanager
-def personal_paper_read_session(db_path: str | Path) -> Iterator[None]:
+def personal_paper_read_session(
+    db_path: str | Path, *, observed_through: str
+) -> Iterator[None]:
     """Reuse one data-plane read-only market connection for a DRAFT paper run."""
 
     with _readonly_connection_scope(db_path):
-        yield
+        connection = _scoped_read_connection(db_path)
+        if connection is None:
+            raise PitError("DRAFT paper read connection is missing")
+        _require_unmanaged_draft(connection)
+        clock = resolve_read_clock(
+            observed_through,
+            observed_through=observed_through,
+            observation_label=DRAFT_OBSERVATION_LABEL,
+            promotable=False,
+        )
+        with install_read_clock(clock):
+            yield
 
 
 def _session_close_as_of(day: str) -> str:
@@ -371,9 +396,15 @@ def observed_market_bar_coverage(
     minimum_ratio: float,
     bar_dataset: str = "equities_bars_daily",
     as_of_for_day: Mapping[str, str] | None = None,
+    session_view: str | None = None,
 ) -> dict[str, Any]:
     """Measure PIT-visible bar breadth for one resolved daily universe."""
 
+    retrospective_am = session_view == AM_SIGNAL_SESSION_VIEW
+    if session_view not in {None, AM_SIGNAL_SESSION_VIEW} or (
+        retrospective_am and bar_dataset != "equities_bars_daily"
+    ):
+        raise ValueError("retrospective AM coverage requires daily history")
     expected_by_day = dict(universe.decision_memberships)
     expected_total = sum(len(codes) for codes in expected_by_day.values())
     if expected_total == 0:
@@ -442,8 +473,26 @@ def observed_market_bar_coverage(
                 from .cooperative_deadline import check_deadline
 
                 check_deadline()
-                for chunk in _code_chunks(tuple(expected_today)):
+                for chunk in _code_chunks(
+                    tuple(expected_today),
+                    size=HISTORY_CODE_BATCH if retrospective_am else None,
+                ):
                     check_deadline()
+                    if retrospective_am:
+                        result = get_personal_retrospective_am_signal_equity_bars_daily(
+                            as_of=information_as_of,
+                            from_event=day,
+                            to_event=day,
+                            codes=chunk,
+                            db_path=db_path,
+                        )
+                        seen.update(
+                            str(row.get("code") or "")
+                            for row in result.rows
+                            if str(row.get("date") or "")[:10] == day
+                            and _positive_price(row.get("adjustment_close")) is not None
+                        )
+                        continue
                     iterator = (
                         _iter_catalog_bar_presence(
                             db_path,
