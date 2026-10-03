@@ -1,8 +1,7 @@
-FROM ghcr.io/astral-sh/uv:0.11.26 AS uv
-
 FROM python:3.12.11-slim-bookworm
 
-COPY --from=uv /uv /uvx /bin/
+# Match the pinned CI bootstrap without another image-registry dependency.
+RUN python -m pip install --no-cache-dir --only-binary=:all: uv==0.11.26
 
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \

@@ -100,6 +100,11 @@ asdf rebuild.
 - Validates the pinned finding ledger and reports OPEN operational P0 rows.
   This merge check is not the production finding-ledger release gate.
 - Uses pinned `uv 0.11.26` and `uv sync --frozen --extra dev` with the tracked lockfile.
+- The research Container installs the same pinned uv from its official PyPI
+  wheel, as the CI bootstrap does. The extra GHCR build stage was removed after
+  two native builds failed on registry HTTP 429 before building the image.
+  Python and frozen project dependencies are unchanged; the actual Container
+  build remains required, with no skip or new registry credential.
 - the complete `pytest tests/` suite using two file-scoped workers, catalog freeze, Evaluation IR schema/codec.
 - Eight active workers still all run, fail-closed: `package-lock.json` required, `npm ci`, `npm test`, `npm run typecheck`, generated types `--check`, and Wrangler dry-runs for base, production, and isolated staging. At most two Worker lanes execute at once via the standalone process `scripts/ci_bounded_jobs.sh` so eight Vitest/workerd stacks do not start together on the two-CPU Workers Builds image. Each lane is a new bash process, so a parent `if !` cannot disable errexit and mask an intermediate `npm test` failure. This bound is CI process scheduling only; it does not change Paper/backtest runtime parallelism or product budget/time limits. Remaining lanes still run after a failure, and the aggregate exit is nonzero if any lane failed.
 - [`active_worker_bindings.json`](../../specs/cloudflare/active_worker_bindings.json) freezes D1, R2, Queue/DLQ, Durable Object, Service Binding, Cron, vars, and secret names. Values of secrets are never read or stored.
