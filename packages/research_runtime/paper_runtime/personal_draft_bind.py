@@ -18,6 +18,9 @@ from paper_runtime.personal_prepared_frame import (
 )
 from paper_runtime.personal_snapshot import (
     PersonalSnapshot,
+    _closure_ids,
+    _dataset_ids,
+    _iso_date,
     materialize_personal_snapshot,
     verify_personal_snapshot,
 )
@@ -49,6 +52,20 @@ def prepare_draft_snapshot(
         raise PersonalResearchViewError("PersonalResearchDataView required")
     existing = getattr(view, "_prepared_snapshot", None)
     if isinstance(existing, PersonalSnapshot):
+        requested = (
+            _dataset_ids(required_datasets),
+            _iso_date(period_start, "period_start"),
+            _iso_date(period_end, "period_end"),
+            _closure_ids(closure_digests),
+        )
+        prepared = (
+            existing.required_datasets, existing.period_start,
+            existing.period_end, existing.closure_digests,
+        )
+        if requested != prepared:
+            raise PersonalResearchViewError(
+                "prepared DRAFT snapshot does not match the current request"
+            )
         verify_personal_snapshot(existing)
         return view.snapshot_identity()
     source = draft_sqlite_path(view)
