@@ -136,6 +136,8 @@ _REQUIRED_FIELDS = frozenset(
         "date",
         "close",
         "adjustment_close",
+        "turnover_value",
+        "morning_turnover_value",
         "payload",
         "raw_payload",
         "holiday_division",
@@ -145,7 +147,7 @@ _REQUIRED_FIELDS = frozenset(
         "scale_category",
     }
 )
-_OPTIONAL_FIELDS = frozenset({"volume", "adjustment_volume"})
+_OPTIONAL_FIELDS = frozenset({"volume", "adjustment_volume", "market_cap", "payload"})
 _COUNT_LITERAL_KEYS = frozenset({"kind", "value"})
 _COUNT_NAMED_KEYS = frozenset({"kind", "input_name", "add"})
 _SCOPE_KEYS = frozenset(

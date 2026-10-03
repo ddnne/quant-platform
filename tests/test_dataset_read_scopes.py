@@ -127,6 +127,21 @@ def test_named_integer_input_resolves_to_n_plus_one() -> None:
                          cases=(("window", branch),))
     with pytest.raises(ValueError, match="unknown feature inputs"):
         _definition(read_scopes=(branch,))
+    for feature_id, size_count, turnover_field in (
+        ("retrospective_price_ratio", 1, "turnover_value"),
+        ("am_session_price_ratio", 2, "morning_turnover_value"),
+    ):
+        definition = features.get(feature_id, version="1.0.0")
+        resolve = lambda mode: resolve_dataset_read_scopes(
+            definition.read_scopes, {"mode": mode, "long_n": 20}
+        )[0]
+        assert resolve("market_cap").observation_count.value == size_count
+        assert resolve("turnover_ratio").observation_count.value == 20
+        assert turnover_field in resolve("turnover_ratio").fields
+        assert resolve("return_ratio").observation_count.value == 21
+        assert features.feature_definition_digest(definition) == features.feature_definition_digest(
+            replace(definition, read_scopes=())
+        )
 
 
 def test_financial_semantics_match_existing_compute_and_am_volume_projection() -> None:

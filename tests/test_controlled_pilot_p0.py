@@ -1915,6 +1915,9 @@ def test_controlled_ctx_feature_sees_d_morning_reconstruction(
     from research.ready_manifest import load_exact_four_pilot_ready_binding
     import features
     from features.runtime import _BoundScopedFeatureReads, _compute
+    from features.runtime import bind_verified_controlled_am_session_daily_bars
+    from data_contracts.read_scopes import DatasetReadRequirement, resolve_dataset_read_scopes
+    import sqlite3
 
     code = "1332"
     days = [
@@ -1933,6 +1936,24 @@ def test_controlled_ctx_feature_sees_d_morning_reconstruction(
         morning_prices={code: {day: 100.0 for day in days}},
         afternoon_prices={code: {day: 150.0 for day in days}},
     )
+    # Seed the synthetic initial product before its evidence is minted; do not
+    # create an unrelated archived revision with the same observation clocks.
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        bars = conn.execute("SELECT natural_key, payload FROM jquants_records WHERE dataset = ?",
+                            ("equities_bars_daily",)).fetchall()
+        for natural_key, raw_payload in bars:
+            payload = json.loads(raw_payload)
+            payload.update(
+                MVa=0.0 if payload["Date"] == days[-2] else 10.0,
+                Va=9000.0,
+                MarketCap=777.0 if payload["Date"] == days[-1] else 333.0,
+            )
+            conn.execute("UPDATE jquants_records SET payload = ? WHERE dataset = ? AND natural_key = ?",
+                         (json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                          "equities_bars_daily", natural_key))
+        _reseal_daily_catalog(conn)
+    conn.close()
     universe = membership_at(morning_close_as_of(days[0]), db_path=db, codes=(code,))
     ready = load_exact_four_pilot_ready_binding()
     xs = next(
@@ -2037,6 +2058,36 @@ def test_controlled_ctx_feature_sees_d_morning_reconstruction(
             cost_model=standard_cost(bps=0.0),
             am_session_data_view=view,
         )
+        # Reuse the verified synthetic product for the new compact price
+        # inputs. Real runtime reads must retain MVa=0, prior size aliases and
+        # trusted AM metadata; no new authority or getter mock is needed.
+        definition = features.get("am_session_price_ratio", version="1.0.0")
+        ratio_consumer = "am_session_price_ratio@1.0.0#0"
+        for mode, expected in (("turnover_ratio", 0.5), ("market_cap", 333.0),
+                               ("return_ratio", 100.0 / 150.0 - 1.0)):
+            inputs = {"code": code, "mode": mode, "short_n": 2, "long_n": 3}
+            requirements = tuple(DatasetReadRequirement(
+                consumer_kind="feature", consumer_id=ratio_consumer,
+                clock="bound_decision_visible_view", scope=scope,
+            ) for scope in resolve_dataset_read_scopes(definition.read_scopes, inputs))
+            handle._bind_current_plan_feature_consumers(
+                plan_id=xs.plan_id, profile_version=xs.profile_version,
+                profile_set_digest=handle.session_profile_digest,
+                consumers={ratio_consumer: requirements},
+                feature_dependencies=({"id": definition.id, "version": "1.0.0", "ordinal": 0},),
+            )
+            output = _compute(
+                definition, as_of=morning_close_as_of(days[-1]), db_path=db,
+                daily_bars_capability=bind_verified_controlled_am_session_daily_bars(
+                    as_of=morning_close_as_of(days[-1]), db_path=db, data_view=view,
+                ),
+                scoped_feature_reads=_BoundScopedFeatureReads(data_view=view, consumer_id=ratio_consumer),
+                **inputs,
+            )
+            assert output.value == pytest.approx(expected)
+            if mode == "market_cap":
+                assert output.metadata["market_cap_date"] == days[-2]
+                assert output.metadata["value_field"] == "MarketCap"
     finally:
         handle._end_controlled_batch_reads()
         handle.close()

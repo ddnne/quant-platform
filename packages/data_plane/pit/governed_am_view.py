@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -83,6 +84,15 @@ def _canonical_payload_text(payload: Any) -> str:
             allow_nan=False,
         )
     return ""
+
+
+def _payload_number(payload: Mapping[str, Any], keys: tuple[str, ...]) -> float | None:
+    from ingestion.jquants.normalize import _pick_num
+
+    # Match curated normalization: first present nonempty alias, including 0.
+    # An invalid preferred value must not be rescued by a later alias.
+    value = _pick_num(payload, *keys)
+    return value if value is not None and math.isfinite(value) else None
 
 
 def _payload_price(payload: Mapping[str, Any], keys: tuple[str, ...]) -> float | None:
@@ -185,25 +195,27 @@ def _sealed_catalog_daily_bar(
         "morning_close": _payload_price(
             payload, ("MC", "MorningClose", "morning_close")
         ),
-        "volume": _payload_price(payload, ("Volume", "Vo")),
+        "volume": _payload_number(payload, ("Volume", "Vo")),
+        "turnover_value": _payload_number(payload, ("TurnoverValue", "Va")),
+        "market_cap": _payload_number(payload, ("market_cap",)),
         "adjustment_close": _payload_price(
             payload, ("AdjustmentClose", "AdjClose", "AdjC")
         ),
-        "adjustment_volume": _payload_price(
+        "adjustment_volume": _payload_number(
             payload, ("AdjustmentVolume", "AdjVolume", "AdjVo")
         ),
         "morning_adjustment_close": _am_payload_price(payload),
         "afternoon_adjustment_close": _pm_payload_price(payload),
-        "morning_turnover_value": _payload_price(
+        "morning_turnover_value": _payload_number(
             payload, ("MorningTurnoverValue", "MVa")
         ),
-        "afternoon_turnover_value": _payload_price(
+        "afternoon_turnover_value": _payload_number(
             payload, ("AfternoonTurnoverValue", "AVa")
         ),
-        "morning_adjustment_volume": _payload_price(
+        "morning_adjustment_volume": _payload_number(
             payload, ("MorningAdjustmentVolume", "MAdjVo")
         ),
-        "afternoon_adjustment_volume": _payload_price(
+        "afternoon_adjustment_volume": _payload_number(
             payload, ("AfternoonAdjustmentVolume", "AAdjVo")
         ),
         "raw_payload": dict(payload),

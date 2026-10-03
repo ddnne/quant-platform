@@ -28,6 +28,7 @@ from .ratio_features import (
     _fundamental_read_scopes,
     _pick_text,
     _pit_fundamental_ratio,
+    _price_read_scopes,
     _sample_volatility,
     _validate_windows,
 )
@@ -446,6 +447,7 @@ AmSessionPriceRatio: FeatureDefinition = register(
         ),
         compute=_am_session_price_ratio,
         dataset_dependencies=_PRICE_DATASETS,
+        read_scopes=_price_read_scopes(am_session=True),
         tags=(
             "price",
             "ratio",

@@ -391,6 +391,18 @@ def test_am_size_uses_d1_market_cap_not_current_d(tmp_path):
     assert out.value == pytest.approx(333.0)
     assert out.metadata["market_cap_lag"] == "D-1"
     assert out.metadata["market_cap_date"] == D2
+    # Curated typed size may be absent on old rows. Keep the existing payload
+    # alias fallback through runtime projection without exposing D payload.
+    store = SqliteStore(db)
+    prior = store.fetch_where("jquants_daily_bars", "code = ? AND date = ?", (CODE, D2))
+    prior[0]["market_cap"] = None
+    prior[0]["raw_payload"] = json.dumps({"MarketCap": 555.0, "AAdjC": 999.0})
+    store.upsert("jquants_daily_bars", prior)
+    store.close()
+    fallback = _am_compute(db, "am_session_price_ratio", code=CODE,
+                           mode="market_cap", short_n=2, long_n=3)
+    assert fallback.value == pytest.approx(555.0)
+    assert fallback.metadata["value_field"] == "MarketCap"
 
 
 def test_am_per_share_uses_strictly_prior_raw_close(tmp_path):

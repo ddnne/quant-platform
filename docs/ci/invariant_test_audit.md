@@ -103,8 +103,18 @@ charter for extra hostile-Python tests.
   metadata bytes and no-read invalid-window outcomes stay unchanged. Remove
   the frozen-dataclass probe and standalone canonical round-trip test; real
   compiler/profile round trips already exercise persisted requirements.
-  DRAFT closure binding and AM scoped
-  projection remain separate incomplete work, not Pilot acceptance.
+  DRAFT closure binding remains incomplete, not Pilot acceptance.
+
+- Price-ratio scopes share closed mode/count declarations and the existing
+  DataPlane scalar normalization/compact size projection. The owner alone
+  omits D full-day turnover, size and payload; runtime session metadata comes
+  from the trusted AM capability. Extend the existing real SQLite owner,
+  ordinary AM runtime and verified scoped-runtime regressions for zero MVa,
+  prior alias size, source clocks and D masking. Remove two identical alias
+  parameter variants from the pure size test; real runtime fallback coverage
+  replaces them. No new test function, mock framework or exhaustive mode matrix.
+  Original formulas and v1 replay hashes remain unchanged; DRAFT closure/live
+  research acceptance is still separate.
 
 - Remove the ratio-feature registry identity and copied mode-set test. Actual
   registry-backed computations, compiled dependencies and AM service tests
