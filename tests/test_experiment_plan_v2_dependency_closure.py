@@ -25,6 +25,7 @@ from research.dependency_closure import (
     build_strategy_dependency_closure,
     experiment_plan_digest,
     resolve_strategy_spec,
+    validate_strategy_dependency_binding,
     verify_plan_dependency_closure,
 )
 from research.experiment_plans import (
@@ -51,7 +52,9 @@ from execution.controlled_fill_contract import (
     CONTROLLED_FILL_CONTRACT_VERSION,
 )
 from features.registry import FEATURES_REGISTRY, register
+from research.paper_candidate_specs import build_factor_rank_strategy_spec
 from strategies.spec import (
+    FactorLeg,
     FeatureRef,
     StrategySpec,
     TopKRule,
@@ -200,6 +203,10 @@ def test_closure_is_deterministic_transitive_and_profile_bound() -> None:
             "sha256:"
         )
         assert "collection-coverage/v2" not in profile.contract_versions.values()
+        spec = resolve_strategy_spec(
+            closure.strategy_spec_id, closure.strategy_spec_version, closure.strategy_spec_hash,
+        )
+        assert validate_strategy_dependency_binding(spec, closure) == iter_feature_refs(spec)
 
 
 def test_feature_lookback_is_machine_readable_and_digest_bound() -> None:
@@ -578,6 +585,26 @@ def test_scope_enabled_named_input_resolution_ignores_unrelated_param() -> None:
             closure_version=PLAN_DEPENDENCY_CLOSURE_VERSION_V2,
         )
         closure = build_strategy_dependency_closure(**compilation)
+        assert validate_strategy_dependency_binding(spec, closure) == iter_feature_refs(spec)
+        # Same id/version can be used twice: each leg retains its own ordinal/params.
+        repeated = build_factor_rank_strategy_spec(
+            strategy_id="scoped-repeated-legs", legs=(
+                FactorLeg(feature=spec.rule.feature, weight=1.0),
+                FactorLeg(feature=spec.rule.feature, weight=2.0),
+                FactorLeg(feature=replace(spec.rule.feature, params={"n": 20, "note": 999}), weight=1.0),
+            ),
+        )
+        repeated_closure = build_strategy_dependency_closure(**{**compilation, "spec": repeated})
+        assert validate_strategy_dependency_binding(repeated, repeated_closure) == iter_feature_refs(repeated)
+        legacy_repeated = build_strategy_dependency_closure(**{
+            **compilation, "spec": repeated, "closure_version": PLAN_DEPENDENCY_CLOSURE_VERSION,
+        })
+        assert validate_strategy_dependency_binding(repeated, legacy_repeated) == iter_feature_refs(repeated)
+        with pytest.raises(PlanDependencyClosureError, match="exactly match"):
+            validate_strategy_dependency_binding(repeated, replace(
+                legacy_repeated,
+                feature_dependencies=tuple(reversed(legacy_repeated.feature_dependencies)),
+            ))
         unused_spec = replace(spec, rule=replace(spec.rule, feature=replace(
             spec.rule.feature, params={"mode": "unused"},
         )))
