@@ -101,6 +101,7 @@ financial-state reads use the requested dataset identity, and an undeclared read
 is refused before storage. The existing boundary regression covers this without
 new test functions or authorities. This closes membership bypass only; it does
 not establish missing AM/financial scopes or DRAFT closure binding.
+Package and result metadata derive the feature runtime version from one value.
 
 Personal `am_signal_pm_close` uses historical morning fields inside daily bars,
 not the tip-only AM endpoint. Its closure and coverage read use that same daily
