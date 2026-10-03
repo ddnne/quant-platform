@@ -31,6 +31,7 @@ from .query import _decode_row
 
 
 FINANCIAL_SELECTION_EVIDENCE_FORMAT = "financial-selection-evidence/v1"
+MARKET_CAP_ALIASES = ("MarketCapitalization", "MarketCap", "MktCap")
 _COUNT_ONLY_STATE = "all_visible_existence_and_count"
 _PER_SHARE_STATE = "latest_qualifying_bps_preferred_else_eps"
 STATEMENT_RATIO_STATE = "latest_statement_plus_comparable_prior"
@@ -90,6 +91,12 @@ def catalog_row_payload(row: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError, json.JSONDecodeError):
             pass
     return {}
+
+
+def bar_size_payload(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Preserve size alias priority without exposing unrelated vendor fields."""
+    payload = catalog_row_payload(row)
+    return {key: payload[key] for key in MARKET_CAP_ALIASES if key in payload}
 
 
 def financial_number(value: Any) -> float | None:

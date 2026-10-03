@@ -57,9 +57,9 @@ def _feature_bar_rows(rows, *, scope, filters):
     for row in rows:
         projected = {key: value for key, value in row.items() if key in allowed}
         if "payload" in allowed and ("payload" in row or "raw_payload" in row):
-            from pit.scoped_selection import _bar_size_payload
+            from pit.financial_observations import bar_size_payload
 
-            projected["payload"] = _bar_size_payload(row)
+            projected["payload"] = bar_size_payload(row)
         selected.append(projected)
     for argument, predicate in (
         ("from_event", lambda day, limit: day >= limit),

@@ -25,7 +25,8 @@ from .financial_observations import (
     FinancialCatalogState,
     STATEMENT_RATIO_STATE,
     financial_text,
-    catalog_row_payload,
+    bar_size_payload,
+    MARKET_CAP_ALIASES,
     _owned_selection_from_raw_rows,
     _product_digest_from_raw,
 )
@@ -41,7 +42,6 @@ _MASTER_DATASET = "equities_master"
 _PAGE_ASC = "event_time, natural_key, source"
 _PAGE_DESC = "event_time DESC, natural_key DESC, source DESC"
 _OWNER_TOKEN = object()
-_MARKET_CAP_ALIASES = ("MarketCapitalization", "MarketCap", "MktCap")
 _AM_ALIASES: Mapping[str, tuple[str, ...]] = MappingProxyType(
     {
         "close": ("MC", "MorningClose", "morning_close"),
@@ -69,7 +69,7 @@ _DAILY_ALIASES: Mapping[str, tuple[str, ...]] = MappingProxyType(
         "turnover_value": ("TurnoverValue", "Va"),
         "morning_turnover_value": ("MorningTurnoverValue", "MVa"),
         "market_cap": ("market_cap",),
-        "payload": _MARKET_CAP_ALIASES,
+        "payload": MARKET_CAP_ALIASES,
         "date": ("Date", "date"),
         "code": ("Code", "code"),
     }
@@ -78,12 +78,6 @@ _DAILY_ALIASES: Mapping[str, tuple[str, ...]] = MappingProxyType(
 
 class ScopedSelectionError(PitError):
     """Declared-scope selection failed closed."""
-
-
-def _bar_size_payload(row: Mapping[str, Any]) -> dict[str, Any]:
-    """Preserve size alias priority without exposing unrelated vendor fields."""
-    payload = catalog_row_payload(row)
-    return {key: payload[key] for key in _MARKET_CAP_ALIASES if key in payload}
 
 
 def _require_active_sqlite_transaction(conn: sqlite3.Connection) -> None:
@@ -384,7 +378,7 @@ def _public_bar_view(
         turnover_value=None if same_day else source_bar.get("turnover_value"),
         morning_turnover_value=source_bar.get("morning_turnover_value"),
         market_cap=None if same_day else source_bar.get("market_cap"),
-        payload=MappingProxyType({} if same_day else _bar_size_payload({"payload": payload or {}})),
+        payload=MappingProxyType({} if same_day else bar_size_payload({"payload": payload or {}})),
         field_evidence=MappingProxyType(evidence),
         contemporaneous_observation_unproven=same_day,
         product_row_digest=digest,
