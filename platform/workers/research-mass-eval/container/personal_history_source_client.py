@@ -905,6 +905,7 @@ class PersonalHistorySourceClient:
         cache_only: bool = False,
         structured_bar_sources: Mapping[str, Sequence[StructuredBarsObject]] | None = None,
         structured_bar_manifest_sha256: str | None = None,
+        reuse_start: str | None = None,
         utc_today: Callable[[], date] | None = None,
         _sleep: Any = None,
         _max_attempts: int | None = None,
@@ -924,6 +925,7 @@ class PersonalHistorySourceClient:
         self._structured_index_reads = 0
         self._structured_download_bytes = 0
         self.period_end = period_end
+        self._reuse_start_month = reuse_start[:7] if reuse_start else ""
         self.origin = origin.rstrip("/")
         self.r2_origin = r2_origin.rstrip("/")
         self._opener = opener
@@ -946,7 +948,7 @@ class PersonalHistorySourceClient:
         self._structured_reuse = tempfile.TemporaryDirectory(
             prefix="stored-bars-reuse-", dir=self.spool.path.parent,
         )
-        self._structured_reuse_entries: dict[StructuredBarsObject, Path] = {}
+        self._structured_reuse_entries: dict[tuple[StructuredBarsObject, str | None], Path] = {}
         self._structured_reuse_bytes = 0
         self.fetch_calls = 0
         self.cache_hits = 0
@@ -1054,6 +1056,30 @@ class PersonalHistorySourceClient:
         self._structured_indexes[source] = index
         if index is not None:
             self._structured_index_spans += sum(len(spans) for spans in index.months.values())
+        # Keep verified month windows, not a full gzip that must be inflated
+        # from byte zero again for every month. This is the same bounded,
+        # job-local reuse cache; initial full-object validation is unchanged.
+        reuse_months = sorted(month for month in months
+                              if self._reuse_start_month <= month <= self.period_end[:7])
+        windows = (
+            {month: index.window(month) for month in reuse_months}
+            if index is not None else ({None: (0, source.size)} if reuse_months else {})
+        )
+        # Interleaved months can have overlapping enclosing windows. Keep one
+        # shared full gzip when splitting would duplicate more than the object.
+        if sum(end - start for start, end in windows.values()) > source.size:
+            windows = {None: (0, source.size)}
+        for month, (start, end) in windows.items():
+            remaining = STRUCTURED_REUSE_MAX_BYTES - self._structured_reuse_bytes
+            if remaining <= 0:
+                break
+            compressed = gzip.compress(memoryview(body)[start:end], compresslevel=1, mtime=0)
+            free = shutil.disk_usage(self.spool.path.parent).free
+            if len(compressed) <= remaining and free - len(compressed) >= STRUCTURED_REUSE_MIN_FREE_BYTES:
+                path = Path(self._structured_reuse.name) / str(len(self._structured_reuse_entries))
+                path.write_bytes(compressed)
+                self._structured_reuse_entries[(source, month)] = path
+                self._structured_reuse_bytes += len(compressed)
         return months
 
     def _download_structured_bar_object(
@@ -1074,15 +1100,22 @@ class PersonalHistorySourceClient:
         if window == (0, source.size):
             window = None
         length = source.size if window is None else window[1] - window[0]
-        cached = self._structured_reuse_entries.get(source)
+        cache_month = month if index is not None else None
+        cached = self._structured_reuse_entries.get((source, cache_month))
+        if cached is None:
+            cached = self._structured_reuse_entries.get((source, None))
+            cache_month = None
         if cached is not None:
             with gzip.open(cached, "rb") as stream:
-                if window is not None:
-                    # Reuse the same verified month spans as the R2 range path.
-                    # The scratch transaction checks selected bytes before commit.
+                if window is not None and cache_month is None:
                     stream.seek(window[0])
-                    return stream.read(length), window[0]
-                body = stream.read(source.size + 1)
+                    body = stream.read(length)
+                else:
+                    body = stream.read(length + 1)
+            if window is not None:
+                # Same span digest/ordinals as the R2 range path; checked inside
+                # the scratch transaction before selected rows are committed.
+                return body, window[0]
             if len(body) != source.size or hashlib.sha256(body).hexdigest() != source.sha256:
                 raise PersonalHistoryError("stored bars reuse size/digest mismatch")
             return body, None
@@ -1104,17 +1137,6 @@ class PersonalHistorySourceClient:
             return body, start
         if len(body) != source.size or hashlib.sha256(body).hexdigest() != source.sha256:
             raise PersonalHistoryError("stored bars object size/digest mismatch")
-        remaining = STRUCTURED_REUSE_MAX_BYTES - self._structured_reuse_bytes
-        # Preserve early objects when full: cycling during indexing would evict
-        # them before the first month is consumed. Uncached objects use R2.
-        if remaining > 0:
-            compressed = gzip.compress(body, compresslevel=1, mtime=0)
-            free = shutil.disk_usage(self.spool.path.parent).free
-            if len(compressed) <= remaining and free - len(compressed) >= STRUCTURED_REUSE_MIN_FREE_BYTES:
-                path = Path(self._structured_reuse.name) / str(len(self._structured_reuse_entries))
-                path.write_bytes(compressed)
-                self._structured_reuse_entries[source] = path
-                self._structured_reuse_bytes += len(compressed)
         return body, None
 
     def _governed_request(
