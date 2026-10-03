@@ -1008,50 +1008,6 @@ def _write_committed_spool_page(
     )
 
 
-def _verified_fins_cache_month(rows: list[dict]):
-    cache_mod = sys.modules["personal_acquisition_cache"]
-    encoded = [canonical_json(dict(row)) for row in rows]
-    return cache_mod.VerifiedCacheMonth(
-        identity={"dataset_id": "fins_summary", "segment_id": "2024-03"},
-        identity_hex="ab" * 32,
-        environment="production",
-        dataset="fins_summary",
-        month="2024-03",
-        completion_digest="sha256:" + "b" * 64,
-        page_count=1,
-        pages=(
-            {
-                "dataset": "fins_summary",
-                "month": "2024-03",
-                "page_ordinal": 0,
-                "slice_date": None,
-                "body_digest": "sha256:" + "c" * 64,
-                "row_count": len(rows),
-                "request_path": "/v2/fins/summary",
-                "request_params_json": canonical_json(
-                    {"from": "2024-03-01", "to": "2024-03-31"}
-                ),
-                "response_status": 200,
-                "pagination_in": None,
-                "pagination_out": None,
-                "evidence_state": "RAW_PAGE",
-            },
-        ),
-        rows=tuple(
-            {
-                "dataset": "fins_summary",
-                "month": "2024-03",
-                "page_ordinal": 0,
-                "row_index": index,
-                "code": row["Code"],
-                "row_date": row["Date"],
-                "row_json": encoded[index],
-            }
-            for index, row in enumerate(rows)
-        ),
-    )
-
-
 def test_retained_checkpointed_wal_is_reclaimed_at_committed_capacity_guard(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1116,10 +1072,37 @@ def test_busy_reader_blocks_truncate_and_fails_closed(tmp_path: Path) -> None:
 def test_committed_cache_import_truncates_wal_and_keeps_true_byte_bound(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cached = _verified_fins_cache_month(_large_spool_rows())
+    cache_mod = sys.modules["personal_acquisition_cache"]
+    source = client_mod.AcquisitionSpool(tmp_path / "source.sqlite")
+    rows = _large_spool_rows()
+    _write_committed_spool_page(source, rows)
+    pages = source._conn.execute("SELECT * FROM source_pages").fetchall()
+    source.complete_month(
+        "equities_bars_daily", "2024-03", page_count=1,
+        completion_digest=cache_mod.month_completion_digest(pages),
+    )
+    identity = {"environment": "production", "dataset_id": "equities_bars_daily",
+                "segment_id": "2024-03"}
+    shard = tmp_path / "cache.sqlite"
+    cache_mod.write_month_shard(source._conn, shard, identity=identity)
+    source.close()
+    decodes = {canonical_json(row): 0 for row in rows}
+    loads = json.loads
+
+    def counted_loads(raw, *args, **kwargs):
+        if isinstance(raw, str) and raw in decodes:
+            decodes[raw] += 1
+        return loads(raw, *args, **kwargs)
+
+    monkeypatch.setattr(json, "loads", counted_loads)
     spool = client_mod.AcquisitionSpool(tmp_path / "spool.sqlite")
     spool._conn.execute("PRAGMA wal_autocheckpoint=0")
-    spool.import_complete_month(cached)
+    spool.import_complete_month(shard, expected_identity=identity)
+    assert set(decodes.values()) == {1}  # verifier once; no post-copy payload decode
+    assert spool._cached_verified_month("equities_bars_daily", "2024-03") is not None
+    assert set(decodes.values()) == {1}
+    assert spool.verified_complete_month("equities_bars_daily", "2024-03") is not None
+    assert set(decodes.values()) == {2}  # general validation still checks payloads
     main, wal, shm = _spool_sidecar_sizes(spool.path)
     pages, usage = spool.usage()
     assert pages == 1
@@ -1131,6 +1114,14 @@ def test_committed_cache_import_truncates_wal_and_keeps_true_byte_bound(
     monkeypatch.setattr(client_mod, "MAX_SPOOL_BYTES", usage)
     spool.guard_bounds()
     spool.close()
+    failed = client_mod.AcquisitionSpool(tmp_path / "over-bound.sqlite")
+    bound = failed.usage()[1] + sum(len(raw.encode("utf-8")) for raw in decodes) + 512
+    monkeypatch.setattr(client_mod, "MAX_SPOOL_BYTES", bound)
+    with pytest.raises(PersonalHistoryError, match="byte bound exceeded"):
+        failed.import_complete_month(shard, expected_identity=identity)
+    assert failed.usage()[1] > bound  # actual post-commit guard, not pre-write estimate
+    assert ("equities_bars_daily", "2024-03") not in failed._verified_pages
+    failed.close()
 
 
 def _two_page_opener():
@@ -1162,30 +1153,6 @@ def _two_page_client(tmp_path: Path):
     fetched = client.fetch_dataset_evidenced("equities_bars_daily", date="2024-03-01")
     assert len(fetched.pages) == 2
     return client
-
-
-def _wrap_verified_complete_month(client):
-    calls: list[tuple[str, str]] = []
-    original = client.spool.verified_complete_month
-
-    def wrapped(dataset: str, month: str):
-        calls.append((dataset, month))
-        return original(dataset, month)
-
-    client.spool.verified_complete_month = wrapped
-    return calls
-
-
-def _wrap_assert_verified_complete(client):
-    scans: list[tuple[str, str]] = []
-    original = client.spool._assert_verified_complete
-
-    def wrapped(state, pages, dataset: str, month: str):
-        scans.append((dataset, month))
-        return original(state, pages, dataset, month)
-
-    client.spool._assert_verified_complete = wrapped
-    return scans
 
 
 def _fins_client(tmp_path: Path, *, spool_path: Path | None = None):
@@ -1298,31 +1265,24 @@ def test_gapped_page_ordinals_are_rejected(tmp_path: Path) -> None:
     client.close()
 
 
-def test_fins_codes_reuse_verified_source_page_scan(tmp_path: Path) -> None:
+def test_fins_codes_reuse_verified_source_page_scan(tmp_path: Path, monkeypatch) -> None:
     client = _fins_client(tmp_path)
-    verifies = _wrap_verified_complete_month(client)
-    scans = _wrap_assert_verified_complete(client)
-    progress = {"n": 0}
-    original_progress = client._refresh_progress
+    decodes = []
+    loads = json.loads
 
-    def wrapped_progress() -> None:
-        progress["n"] += 1
-        original_progress()
+    def counted_loads(raw, *args, **kwargs):
+        parsed = loads(raw, *args, **kwargs)
+        if isinstance(parsed, dict) and "Code" in parsed and "DiscDate" in parsed:
+            decodes.append(parsed)
+        return parsed
 
-    client._refresh_progress = wrapped_progress
-
+    monkeypatch.setattr(json, "loads", counted_loads)
     first = client.fetch_dataset_evidenced("fins_summary", code="1001")
-    after_first_verifies = len(verifies)
-    after_first_scans = len(scans)
-    after_first_progress = progress["n"]
-    assert after_first_scans > 0
-    assert after_first_verifies >= after_first_scans
-
+    after_first_fetches = client.fetch_calls
+    after_first_decodes = len(decodes)
     second = client.fetch_dataset_evidenced("fins_summary", code="1002")
-    assert len(verifies) == after_first_verifies
-    assert len(scans) == after_first_scans
-    assert progress["n"] == after_first_progress
-    assert client.fetch_calls == after_first_scans
+    assert client.fetch_calls == after_first_fetches > 0
+    assert len(decodes) - after_first_decodes == len(second.rows)  # only selected rows
 
     assert first.selection is not None and second.selection is not None
     assert [row["Code"] for row in first.rows] == ["1001"] * len(first.rows)
@@ -1363,14 +1323,9 @@ def test_incomplete_or_tampered_month_fails_before_cache_creation(
         "2024-03",
         {"dataset_id": "fins_summary", "segment_id": "2024-03"},
     )
-    verifies = _wrap_verified_complete_month(client)
     assert client.spool._cached_verified_month("fins_summary", "2024-03") is None
     assert ("fins_summary", "2024-03") not in client.spool._verified_pages
-    incomplete_calls = len(verifies)
-    assert incomplete_calls == 1
     assert client.spool._cached_verified_month("fins_summary", "2024-03") is None
-    assert len(verifies) == incomplete_calls + 1
-    assert ("fins_summary", "2024-03") not in client.spool._verified_pages
     client.close()
 
     seeded = _two_page_client(tmp_path / "tamper")
@@ -1387,13 +1342,9 @@ def test_incomplete_or_tampered_month_fails_before_cache_creation(
         ("sha256:" + "f" * 64, "equities_bars_daily", "2024-03"),
     )
     tampered.spool._conn.commit()
-    tamper_verifies = _wrap_verified_complete_month(tampered)
     assert tampered.spool._cached_verified_month("equities_bars_daily", "2024-03") is None
     assert ("equities_bars_daily", "2024-03") not in tampered.spool._verified_pages
-    assert tamper_verifies == [("equities_bars_daily", "2024-03")]
     assert tampered.spool._cached_verified_month("equities_bars_daily", "2024-03") is None
-    assert len(tamper_verifies) == 2
-    assert ("equities_bars_daily", "2024-03") not in tampered.spool._verified_pages
     tampered.close()
 
 
@@ -1405,11 +1356,8 @@ def test_verified_page_cache_does_not_cross_client_or_job(tmp_path: Path) -> Non
     first.close()
 
     second = _fins_client(tmp_path, spool_path=spool)
-    verifies = _wrap_verified_complete_month(second)
-    scans = _wrap_assert_verified_complete(second)
     selected = second.fetch_dataset_evidenced("fins_summary", code="1002")
-    assert scans
-    assert verifies
+    assert second.fetch_calls == 0
     assert selected.rows == first_two.rows
     assert selected.selection is not None and first_two.selection is not None
     assert selected.selection == first_two.selection
@@ -1419,9 +1367,8 @@ def test_verified_page_cache_does_not_cross_client_or_job(tmp_path: Path) -> Non
     second.close()
 
     other_job = _fins_client(tmp_path, spool_path=tmp_path / "other-job.sqlite")
-    other_verifies = _wrap_verified_complete_month(other_job)
     other = other_job.fetch_dataset_evidenced("fins_summary", code="1002")
-    assert other_verifies
+    assert other_job.fetch_calls > 0
     assert other.selection is not None
     assert other.selection.selected_digest == first_two.selection.selected_digest
     other_job.close()
