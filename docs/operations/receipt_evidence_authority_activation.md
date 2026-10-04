@@ -101,12 +101,15 @@ Before either deployment:
 6. Queue/DLQ backlog and current ingestion state have been recorded.
 7. Production and staging wrapping secrets and Durable Object namespaces are
    treated as distinct authority domains.
-8. Before the staging observer is accepted, its Access manifest must be
-   reviewed from `PENDING` to `ACTIVE` with the immutable Worker ID, its exact
-   enabled non-preview Workers Beta `subdomain.url`, the exact worker
-   destination, application ID/AUD, one `non_identity` Service Auth
-   policy, and one exact service-token ID. An Access API error `9999` is an
-   operational hold, not authorization to substitute bearer-header auth.
+
+The separate JSDA release-observation HOLD has an additional observer condition,
+not a Receipt or Paper prerequisite. Before accepting that staging observer,
+review its Access manifest from `PENDING` to `ACTIVE` with the immutable Worker
+ID, exact enabled non-preview Workers Beta `subdomain.url`, worker destination,
+application ID/AUD, one `non_identity` Service Auth policy, and one exact
+service-token ID. An Access API error `9999` remains a hold for that observer;
+it does not authorize substituting bearer-header auth. The Receipt ACTIVE gate
+instead uses management-collected signed runtime recovery evidence.
 
 The PENDING ceremony is a three-Worker deployment, not an authority-only
 upload. `ingestion-secrets` supplies the closed acquisition RPC,
